@@ -373,6 +373,7 @@ describe('activeAgentIdsFromCacheEntries', () => {
     overrides: Partial<CachedRuntimeEntry> & Pick<CachedRuntimeEntry, 'agentId'>,
   ): CachedRuntimeEntry => ({
     conversationId: 'conv-1',
+    runtimeGeneration: 1,
     phase: 'ready',
     pid: 1,
     startedAt: 1,

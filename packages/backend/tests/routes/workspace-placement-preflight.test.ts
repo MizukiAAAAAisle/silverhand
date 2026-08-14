@@ -190,8 +190,8 @@ describe('D4.c C3 — workspace route preflights (standalone guard lift)', () =>
       .run(agentId, 'cross-host', teammateHost.id, 'teammate', now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(ws.onboarding_channel_id, agentId, now);
 
@@ -234,8 +234,8 @@ describe('D4.c C3 — workspace route preflights (standalone guard lift)', () =>
       .run(agentId, 'delete-cross', teammateHost.id, 'teammate', now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(ws.onboarding_channel_id, agentId, now);
 
@@ -311,8 +311,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       .run(agentId, 'cross-host-th', teammateHost.id, 'teammate', now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(dmId, agentId, now);
 

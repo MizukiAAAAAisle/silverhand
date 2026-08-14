@@ -18,6 +18,7 @@ import { WorkspaceRepo } from './workspace-repo.js';
 import { ConversationRepo } from './conversation-repo.js';
 import { AttachmentRepo, rowToStoredRef } from './attachment-repo.js';
 import { HostRepo } from './host-repo.js';
+import { RuntimeSlotRepo } from './runtime-slot-repo.js';
 
 /** The ONE agent projection both axes and the pre-flight read share. Physical
  *  rows and DTOs stop here (R4): a column added to `agents` cannot reach a
@@ -41,6 +42,7 @@ interface TeardownRepos {
   conversations: ConversationRepo;
   attachments: AttachmentRepo;
   hosts: HostRepo;
+  runtimeSlots: RuntimeSlotRepo;
 }
 
 /**
@@ -66,6 +68,11 @@ function agentTeardownFace(
         .map(session => ({
           conversationId: session.conversation_id,
           status: session.status,
+          runtimeGeneration:
+            repos.runtimeSlots.getConversation(
+              session.conversation_id,
+              agentId,
+            )?.generation ?? 0,
         }));
       // The agent's own home is the ONLY discovery path for its DM blobs: the
       // `attachments` rows hang off those channels and cascade away with the
@@ -122,6 +129,7 @@ export function createSqliteAgentTeardownPersistence(
     conversations: new ConversationRepo(db),
     attachments: new AttachmentRepo(db),
     hosts: new HostRepo(db),
+    runtimeSlots: new RuntimeSlotRepo(db),
   };
 
   const assertRoot = (): void => {
@@ -145,6 +153,11 @@ export function createSqliteAgentTeardownPersistence(
       return repos.agents.listRuntimeConversations(agentId).map(session => ({
         conversationId: session.conversation_id,
         status: session.status,
+        runtimeGeneration:
+          repos.runtimeSlots.getConversation(
+            session.conversation_id,
+            agentId,
+          )?.generation ?? 0,
       }));
     },
     readComputerFacts(hostId: string): ComputerTeardownFacts | null {

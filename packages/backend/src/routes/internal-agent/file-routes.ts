@@ -13,9 +13,9 @@ import {
   canViewConversation,
 } from '../../permissions.js';
 import { updateAttachment, uploadAttachment } from '../attachment-upload.js';
-import { internalPaths } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 import { requireAgentConversationCapability } from './capability-scope.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 export function registerFileRoutes(
   app: Hono<AppEnv>,
@@ -23,7 +23,7 @@ export function registerFileRoutes(
 ): void {
   const { ctx, agents, conversations } = deps;
 
-  app.post(internalPaths.agentUploadAttachment(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.attachments, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -59,7 +59,7 @@ export function registerFileRoutes(
   // `requireCallerChannelOf` (the caller may only touch attachments in its own
   // channel); the service also re-checks agent creator ownership.
   app.patch(
-    internalPaths.agentUpdateAttachment(':cid', ':aid', ':attachmentId'),
+    internalAgentRoutePaths.attachment(':attachmentId'),
     async c => {
       const cid = c.req.param('cid');
       const aid = c.req.param('aid');
@@ -96,7 +96,7 @@ export function registerFileRoutes(
   );
 
   app.get(
-    internalPaths.agentLocateAttachment(':cid', ':aid', ':attachmentId'),
+    internalAgentRoutePaths.attachmentLocate(':attachmentId'),
     async c => {
       const cid = c.req.param('cid');
       const aid = c.req.param('aid');
@@ -141,7 +141,7 @@ export function registerFileRoutes(
   );
 
   app.get(
-    internalPaths.agentDownloadAttachment(':cid', ':aid', ':attachmentId'),
+    internalAgentRoutePaths.attachmentDownload(':attachmentId'),
     async c => {
       const cid = c.req.param('cid');
       const aid = c.req.param('aid');

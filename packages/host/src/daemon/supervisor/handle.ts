@@ -114,10 +114,8 @@ export interface DeferredEntry {
   readonly deliveredUpToSeq?: number;
   readonly deliveries?: readonly RuntimeDelivery[];
   readonly text: string;
-  /** Delivery-owner token (§11.4.1) — the connection this batch arrived
-   *  on. Stamped by `deliver()` from the injected `DeliveryOwnerContext`;
-   *  the sole key for owner-scoped cleanup on that connection's drop. */
-  readonly owner: string;
+  /** Custody owner is per id, independent of this presentation/ack group. */
+  readonly owners: ReadonlyMap<number, string>;
 }
 
 export type ActivitySnippetKind = 'thinking' | 'text';
@@ -228,6 +226,8 @@ export type DefaultReplyTarget =
 export interface RuntimeHandle {
   readonly conversationId: string;
   readonly agentId: string;
+  /** Backend-issued runtime custody generation for this exact child. */
+  readonly runtimeGeneration: number;
   /** OS process id. Stable for the lifetime of the handle; `null` is
    *  not legal — if we don't have a pid the handle never gets
    *  created. */

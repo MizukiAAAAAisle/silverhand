@@ -63,6 +63,7 @@ import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { MessageReactionRepo } from '../repos/message-reaction-repo.js';
+import { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import { MessageRepo } from '../repos/message-repo.js';
 import { NotificationRepo } from '../repos/notification-repo.js';
 import { SavedMessageRepo } from '../repos/saved-message-repo.js';
@@ -144,6 +145,7 @@ export interface BackendRepos {
   readonly messages: MessageRepo;
   readonly notifications: NotificationRepo;
   readonly reactions: MessageReactionRepo;
+  readonly runtimeSlots: RuntimeSlotRepo;
   readonly saved: SavedMessageRepo;
   readonly schedules: ScheduleRepo;
   readonly search: SearchRepo;
@@ -225,6 +227,7 @@ export function createBackendPersistence(db: Db): BackendPersistence {
     messages: new MessageRepo(db),
     notifications: new NotificationRepo(db),
     reactions: new MessageReactionRepo(db),
+    runtimeSlots: new RuntimeSlotRepo(db),
     saved: new SavedMessageRepo(db),
     schedules: new ScheduleRepo(db),
     search: new SearchRepo(db),

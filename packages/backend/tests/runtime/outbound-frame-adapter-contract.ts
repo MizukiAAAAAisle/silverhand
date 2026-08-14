@@ -92,6 +92,7 @@ export function runOutboundFrameAdapterContract(
           {
             conversation_id: 'c1',
             agent_id: 'a1',
+            runtime_generation: 1,
             pid: null,
             phase: 'idle',
             run_state: null,

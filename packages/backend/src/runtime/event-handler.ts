@@ -60,10 +60,15 @@ import type {
   ParsedEventKind,
 } from '@silverhand/shared';
 import type { ActivityLogWriter } from './activity-log-writer.js';
+import type { RuntimePrincipal } from '../auth/runtime-principal.js';
 import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
-import { NOOP_STATUS_PROJECTOR, type RuntimeStatusProjector } from './status-projector.js';
+import {
+  NOOP_STATUS_PROJECTOR,
+  type RuntimeProjectionCustody,
+  type RuntimeStatusProjector,
+} from './status-projector.js';
 
 /**
  * Backend-side SSE publisher contract — matches the existing
@@ -252,12 +257,43 @@ export interface RuntimeEventHandlerDeps {
   cache: RunStateCache;
   events: EventPublisher;
   inboxAck: InboxAckSink;
-  /** Sink for events that mutate `conversation_agents` AND
+  /** Sink for events that mutate the scoped runtime slot AND
    *  publish `agent_status` SSE. Default is the noop projector — tests
    *  that don't exercise DB projection don't need to inject one.
    *  Production wires `DbRuntimeStatusProjector` in `index.ts`. See
    *  `runtime/status-projector.ts` for the rationale. */
   statusProjector?: RuntimeStatusProjector;
+  /** Current daemon custody identity. Runtime projection events are
+   * rejected when it is unavailable; a connection id is not a custody
+   * identity and must never be substituted here. */
+  daemonInstanceId?: () => string | null;
+  /** Live slot gate for generation-tagged daemon events. It runs before any
+   * cache/SSE/coordinator side effect so a superseded runtime cannot leak
+   * activity or lifecycle signals after a successor claim. */
+  acceptRuntimeCustody?: (input: {
+    conversationId: string;
+    agentId: string;
+    custody: RuntimeProjectionCustody;
+  }) => boolean;
+  /** Bearer-secret continuity gate for a hydrated live child. A matching DB
+   * slot cannot recreate the token injected into an already-running process. */
+  hasRuntimeCredential?: (input: {
+    conversationId: string;
+    agentId: string;
+    custody: RuntimeProjectionCustody;
+  }) => boolean;
+  /** Remove an unadoptable snapshot row by its exact generation. Resolve only
+   * after the destructive command has a determinate result; hydrate retries a
+   * fresh snapshot before cache/liveness/replay becomes authoritative. */
+  onHydrateRuntimeRejected?: (input: {
+    conversationId: string;
+    agentId: string;
+    custody: RuntimeProjectionCustody;
+    reason: 'custody_stale' | 'credential_missing';
+  }) => Promise<void>;
+  /** Revoke every bearer credential minted for the generation after
+   * the named finalizer has successfully ended its custody. */
+  onRuntimeCustodyFinalized?: (principal: RuntimePrincipal) => void;
   /** Fires on `runtime_ready_for_drain`. Optional in commit 4 since
    *  the drain coordinator may not be wired yet. */
   onReadyForDrain?: ReadyForDrainHandler;
@@ -288,6 +324,7 @@ export interface RuntimeEventHandlerDeps {
    */
   onHydrateComplete?: (
     trigger: 'initial' | 'reconnect' | 'daemon_ready',
+    snapshot: RuntimeStatusResult,
   ) => void | Promise<void>;
   /** Optional backend-owned JSONL sink for `agent_activity` parity
    * with the original ConversationManager runtime contract. Writing
@@ -342,12 +379,20 @@ export class RuntimeEventHandler {
   private readonly events: EventPublisher;
   private readonly inboxAck: InboxAckSink;
   private readonly statusProjector: RuntimeStatusProjector;
+  private readonly daemonInstanceId: () => string | null;
+  private readonly acceptRuntimeCustody: NonNullable<
+    RuntimeEventHandlerDeps['acceptRuntimeCustody']
+  >;
+  private readonly hasRuntimeCredential?: RuntimeEventHandlerDeps['hasRuntimeCredential'];
+  private readonly onHydrateRuntimeRejected?: RuntimeEventHandlerDeps['onHydrateRuntimeRejected'];
+  private readonly onRuntimeCustodyFinalized?: (principal: RuntimePrincipal) => void;
   private readonly onReadyForDrain?: ReadyForDrainHandler;
   private readonly onParsedEventCb?: ParsedEventHandler;
   private readonly onRuntimeExitCb?: RuntimeExitHandler;
   private readonly onInitTimeoutCb?: RuntimeInitTimeoutHandler;
   private readonly onHydrateCompleteCb?: (
     trigger: 'initial' | 'reconnect' | 'daemon_ready',
+    snapshot: RuntimeStatusResult,
   ) => void | Promise<void>;
   private readonly activityLog?: ActivityLogWriter;
   private readonly conversationActivity?: ConversationActivitySink;
@@ -413,6 +458,11 @@ export class RuntimeEventHandler {
     this.events = deps.events;
     this.inboxAck = deps.inboxAck;
     this.statusProjector = deps.statusProjector ?? NOOP_STATUS_PROJECTOR;
+    this.daemonInstanceId = deps.daemonInstanceId ?? (() => null);
+    this.acceptRuntimeCustody = deps.acceptRuntimeCustody ?? (() => true);
+    this.hasRuntimeCredential = deps.hasRuntimeCredential;
+    this.onHydrateRuntimeRejected = deps.onHydrateRuntimeRejected;
+    this.onRuntimeCustodyFinalized = deps.onRuntimeCustodyFinalized;
     this.onReadyForDrain = deps.onReadyForDrain;
     this.onParsedEventCb = deps.onParsedEvent;
     this.onRuntimeExitCb = deps.onRuntimeExit;
@@ -421,6 +471,20 @@ export class RuntimeEventHandler {
     this.activityLog = deps.activityLog;
     this.conversationActivity = deps.conversationActivity;
     this.logger = deps.logger ?? NOOP_LOGGER;
+  }
+
+  private projectionCustody(frame: { runtime_generation?: number }): RuntimeProjectionCustody | null {
+    const daemonInstanceId = this.daemonInstanceId();
+    if (!frame.runtime_generation || !daemonInstanceId) return null;
+    return { generation: frame.runtime_generation, daemonInstanceId };
+  }
+
+  private runtimeLifecycleKey(frame: {
+    conversation_id: string;
+    agent_id: string;
+    runtime_generation?: number;
+  }): string {
+    return `${frame.conversation_id}|${frame.agent_id}|${frame.runtime_generation ?? 'legacy'}`;
   }
 
   /**
@@ -470,6 +534,38 @@ export class RuntimeEventHandler {
    * drive it.
    */
   dispatch(frame: EventFrame): void {
+    if (
+      'runtime_generation' in frame
+      && frame.runtime_generation !== undefined
+      && 'conversation_id' in frame
+      && 'agent_id' in frame
+    ) {
+      const custody = this.projectionCustody(frame);
+      const identity = custody
+        ? {
+            conversationId: frame.conversation_id,
+            agentId: frame.agent_id,
+            custody,
+          }
+        : null;
+      if (
+        !identity
+        || !this.acceptRuntimeCustody(identity)
+        || (this.hasRuntimeCredential && !this.hasRuntimeCredential(identity))
+      ) {
+        this.logger.warn(
+          {
+            kind: 'event',
+            event: frame.event,
+            conversationId: frame.conversation_id,
+            agent_id: frame.agent_id,
+            runtime_generation: frame.runtime_generation,
+          },
+          'dropped event: runtime custody or bearer is not current',
+        );
+        return;
+      }
+    }
     switch (frame.event) {
       case 'ready':
         this.onDaemonReady(frame.daemon_pid, frame.started_at);
@@ -507,10 +603,11 @@ export class RuntimeEventHandler {
           // BEFORE the matching `runtime_exit`, so clearing here would
           // strip the flag the coordinator needs at exit-time (Cindy
           // `rrF2L1RmWq5JFH3m` B1).
-          this.lastTimeoutReason.delete(`${frame.conversation_id}|${frame.agent_id}`);
-          this.initFailureFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
-          this.fatalErrorFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
-          this.clearCliSessionOnExitFlag.delete(`${frame.conversation_id}|${frame.agent_id}`);
+          const lifecycleKey = this.runtimeLifecycleKey(frame);
+          this.lastTimeoutReason.delete(lifecycleKey);
+          this.initFailureFlag.delete(lifecycleKey);
+          this.fatalErrorFlag.delete(lifecycleKey);
+          this.clearCliSessionOnExitFlag.delete(lifecycleKey);
         }
         this.onRuntimeState(frame);
         return;
@@ -542,18 +639,19 @@ export class RuntimeEventHandler {
           'delivery failed',
         );
         return;
-      case 'runtime_init_timeout':
+      case 'runtime_init_timeout': {
         this.forwardInitTimeout(frame.conversation_id, frame.agent_id, frame.event);
         // Stash the timeout_reason so a follow-up runtime_init_retrying
         // can join it into the `agent_status starting reason=init_timeout_retrying`
         // projection (contract preserved from the original
         // ConversationManager runtime).
-        this.lastTimeoutReason.set(`${frame.conversation_id}|${frame.agent_id}`, frame.timeout_reason);
+        const lifecycleKey = this.runtimeLifecycleKey(frame);
+        this.lastTimeoutReason.set(lifecycleKey, frame.timeout_reason);
         // If the daemon won't retry, this is a terminal init failure
         // that the next runtime_exit will follow. Mark so the
         // coordinator suppresses oneShot auto-respawn.
         if (!frame.retrying) {
-          this.initFailureFlag.add(`${frame.conversation_id}|${frame.agent_id}`);
+          this.initFailureFlag.add(lifecycleKey);
         }
         this.events.publishSide(frame.conversation_id, {
           kind: 'agent_init_timeout',
@@ -569,6 +667,7 @@ export class RuntimeEventHandler {
           },
         });
         return;
+      }
       case 'runtime_init_retrying': {
         // CM's contract: project to `agent_status` (status=starting,
         // reason=init_timeout_retrying) — NOT a separate SSE kind.
@@ -579,35 +678,45 @@ export class RuntimeEventHandler {
         // B1 (Cindy `usjxj8AxX4AvJ5E-`): the projector owns BOTH the
         // DB write (`status='starting', pid=null`) AND the SSE — status
         // mapping in one place. Handler only fans out the wire fields.
-        const key = `${frame.conversation_id}|${frame.agent_id}`;
+        const key = this.runtimeLifecycleKey(frame);
         const timeoutReason = this.lastTimeoutReason.get(key);
-        this.statusProjector.initRetrying({
-          conversationId: frame.conversation_id,
-          agentId: frame.agent_id,
-          retryAttempt: frame.retry_attempt,
-          maxRetries: frame.max_retries,
-          timeoutReason,
-        });
+        const custody = this.projectionCustody(frame);
+        if (custody) {
+          this.statusProjector.initRetrying({
+            conversationId: frame.conversation_id,
+            agentId: frame.agent_id,
+            retryAttempt: frame.retry_attempt,
+            maxRetries: frame.max_retries,
+            timeoutReason,
+            custody,
+          });
+        }
         return;
       }
-      case 'runtime_init_cooldown':
+      case 'runtime_init_cooldown': {
         this.forwardInitTimeout(frame.conversation_id, frame.agent_id, frame.event);
         // Terminal init failure — clear the timeout-reason stash so a
         // future fresh start doesn't accidentally inherit it.
-        this.lastTimeoutReason.delete(`${frame.conversation_id}|${frame.agent_id}`);
+        const lifecycleKey = this.runtimeLifecycleKey(frame);
+        this.lastTimeoutReason.delete(lifecycleKey);
         // Mark the init-failure flag so the next runtime_exit suppresses
         // oneShot auto-respawn (Cindy `BYHZJI9ALSVmmlFr` pin c — don't
         // thrash a runtime the daemon has already given up on).
-        this.initFailureFlag.add(`${frame.conversation_id}|${frame.agent_id}`);
+        this.initFailureFlag.add(lifecycleKey);
         // B1 (Cindy `usjxj8AxX4AvJ5E-`): projector owns DB +
         // `agent_status` SSE for the cooldown projection.
-        this.statusProjector.initCooldown({
-          conversationId: frame.conversation_id,
-          agentId: frame.agent_id,
-          cooldownUntil: frame.cooldown_until,
-          attemptsExhausted: frame.attempts_exhausted,
-        });
+        const custody = this.projectionCustody(frame);
+        if (custody) {
+          this.statusProjector.initCooldown({
+            conversationId: frame.conversation_id,
+            agentId: frame.agent_id,
+            cooldownUntil: frame.cooldown_until,
+            attemptsExhausted: frame.attempts_exhausted,
+            custody,
+          });
+        }
         return;
+      }
       case 'runtime_compaction_stale':
         this.events.publishSide(frame.conversation_id, {
           kind: 'compaction_stale',
@@ -674,18 +783,22 @@ export class RuntimeEventHandler {
         // dedup of NON-idempotent side effects (init-pending inbox
         // ack, drainInbox) via its own `initObserved` state (B3).
         if (frame.parsed.kind === 'session_init') {
-          this.statusProjector.sessionInit({
-            conversationId: frame.conversation_id,
-            agentId: frame.agent_id,
-            cliSessionId: frame.parsed.sessionId,
-          });
+          const custody = this.projectionCustody(frame);
+          if (custody) {
+            this.statusProjector.sessionInit({
+              conversationId: frame.conversation_id,
+              agentId: frame.agent_id,
+              cliSessionId: frame.parsed.sessionId,
+              custody,
+            });
+          }
         }
         // Mark fatal-error flag for the coordinator's exit gate (Cindy
         // `BYHZJI9ALSVmmlFr` pin c). Only fatal errors suppress
         // oneShot auto-respawn; non-fatal `error` events (e.g.
         // recoverable tool errors) leave the gate open.
         if (frame.parsed.kind === 'error' && frame.parsed.fatal === true) {
-          const flagKey = `${frame.conversation_id}|${frame.agent_id}`;
+          const flagKey = this.runtimeLifecycleKey(frame);
           this.fatalErrorFlag.add(flagKey);
           if (shouldClearCliSessionAfterFatalError(frame.parsed)) {
             this.clearCliSessionOnExitFlag.add(flagKey);
@@ -1044,7 +1157,13 @@ export class RuntimeEventHandler {
       );
       return;
     }
-    this.cache.applyRuntimeState(key, frame.conversation_id, frame.agent_id, frame.state);
+    this.cache.applyRuntimeState(
+      key,
+      frame.conversation_id,
+      frame.agent_id,
+      frame.runtime_generation,
+      frame.state,
+    );
     this.events.publishSide(frame.conversation_id, {
       kind: 'agent_activity',
       payload: frame.state,
@@ -1060,13 +1179,13 @@ export class RuntimeEventHandler {
     // reason would otherwise wait forever for a matching
     // runtime_init_retrying that never comes. Cindy
     // `dMNdrYH0KK1VbDqs` cleanup.
-    this.lastTimeoutReason.delete(`${frame.conversation_id}|${frame.agent_id}`);
+    const flagKey = this.runtimeLifecycleKey(frame);
+    this.lastTimeoutReason.delete(flagKey);
     // Snapshot the gating flags BEFORE clearing them — coordinator
     // needs them on the callback. (Clearing after the snapshot keeps
     // the next runtime's gate clean: a fresh start under the same
     // (conv, agent) must not inherit the dead runtime's failure
     // markers.)
-    const flagKey = `${frame.conversation_id}|${frame.agent_id}`;
     const initTimedOut = this.initFailureFlag.has(flagKey);
     const fatalError = this.fatalErrorFlag.has(flagKey);
     const clearCliSessionId = this.clearCliSessionOnExitFlag.has(flagKey);
@@ -1094,7 +1213,14 @@ export class RuntimeEventHandler {
     // daemon's tracked set. Dropping the publish would permanently
     // strand the renderer's status at "active" / "starting".
     // Cindy `ch9ZsU0v0ATr6tr8` blocker 3.
-    const entry = key ? this.cache.applyRuntimeExit(key, frame.conversation_id, frame.agent_id) : null;
+    const entry = key
+      ? this.cache.applyRuntimeExit(
+          key,
+          frame.conversation_id,
+          frame.agent_id,
+          frame.runtime_generation,
+        )
+      : null;
     // B1 (Cindy `usjxj8AxX4AvJ5E-`): projector owns the DB write
     // (`status='idle'|'crashed', pid=null`) AND the `agent_status`
     // SSE. Status mapping (initTimedOut/fatalError -> 'crashed';
@@ -1102,16 +1228,21 @@ export class RuntimeEventHandler {
     // projector — see status-projector.ts:runtimeExit. Handler still
     // owns the cache update above + the gating-flag snapshot below
     // because those depend on EventHandler-local state.
-    this.statusProjector.runtimeExit({
-      conversationId: frame.conversation_id,
-      agentId: frame.agent_id,
-      intentional: frame.intentional,
-      code: frame.code,
-      initTimedOut,
-      fatalError,
-      ...(clearCliSessionId ? { clearCliSessionId: true } : {}),
-      runState: entry?.runState ?? null,
-    });
+    const custody = this.projectionCustody(frame);
+    if (custody) {
+      const finalized = this.statusProjector.runtimeExit({
+        conversationId: frame.conversation_id,
+        agentId: frame.agent_id,
+        intentional: frame.intentional,
+        code: frame.code,
+        initTimedOut,
+        fatalError,
+        ...(clearCliSessionId ? { clearCliSessionId: true } : {}),
+        runState: entry?.runState ?? null,
+        custody,
+      });
+      if (finalized) this.onRuntimeCustodyFinalized?.(finalized);
+    }
     // Forward to the coordinator AFTER cache+SSE updates, so the
     // coordinator's auto-respawn doesn't race a stale projection. The
     // callback contract is forward-only — coordinator decides whether
@@ -1144,12 +1275,22 @@ export class RuntimeEventHandler {
     if (key) {
       // Cache hint: daemon just told us this runtime is `ready`.
       // Phase-only patch so we don't clobber the existing runState.
-      this.cache.applyPhase(key, frame.conversation_id, frame.agent_id, 'ready');
+      this.cache.applyPhase(
+        key,
+        frame.conversation_id,
+        frame.agent_id,
+        frame.runtime_generation,
+        'ready',
+      );
     }
-    this.statusProjector.runtimeReady({
-      conversationId: frame.conversation_id,
-      agentId: frame.agent_id,
-    });
+    const custody = this.projectionCustody(frame);
+    if (custody) {
+      this.statusProjector.runtimeReady({
+        conversationId: frame.conversation_id,
+        agentId: frame.agent_id,
+        custody,
+      });
+    }
     if (this.onReadyForDrain) {
       try {
         const result = this.onReadyForDrain(frame.conversation_id, frame.agent_id);
@@ -1232,7 +1373,82 @@ export class RuntimeEventHandler {
         daemonPid !== undefined && startedAt !== undefined
           ? makeDaemonInstanceKey(daemonPid, startedAt)
           : this.cache.daemonInstanceKey ?? `unknown@${Date.now()}`;
-      this.cache.applyRuntimeStatus(key, snapshot.runtimes);
+      const daemonInstanceId = this.daemonInstanceId();
+      const accepted: RuntimeStatusResult['runtimes'] = [];
+      const rejected: Array<{
+        conversationId: string;
+        agentId: string;
+        custody: RuntimeProjectionCustody;
+        reason: 'custody_stale' | 'credential_missing';
+      }> = [];
+      for (const runtime of snapshot.runtimes) {
+        // The supervisor retains exited handles for diagnostics. They are not
+        // live custody and need neither bearer adoption nor destructive
+        // cleanup; treating them as live makes an exact stop converge to an
+        // endless status/stop loop because stopping an exited handle is a
+        // deliberate no-op.
+        if (runtime.phase === 'exited') continue;
+        const custody = {
+          generation: runtime.runtime_generation,
+          daemonInstanceId: daemonInstanceId ?? key,
+        };
+        const identity = {
+          conversationId: runtime.conversation_id,
+          agentId: runtime.agent_id,
+          custody,
+        };
+        if (!this.acceptRuntimeCustody(identity)) {
+          rejected.push({ ...identity, reason: 'custody_stale' });
+          continue;
+        }
+        if (this.hasRuntimeCredential && !this.hasRuntimeCredential(identity)) {
+          rejected.push({ ...identity, reason: 'credential_missing' });
+          continue;
+        }
+        accepted.push(runtime);
+      }
+      if (rejected.length > 0) {
+        if (!this.onHydrateRuntimeRejected) {
+          throw new Error('runtime_status contains unadoptable custody');
+        }
+        const cleanup = await Promise.allSettled(
+          rejected.map(input => this.onHydrateRuntimeRejected!(input)),
+        );
+        // A destructive cleanup changes the daemon snapshot. Never publish a
+        // mixed pre-cleanup view; immediately read the determinate result again.
+        // The outbound fanout drives this handler by direct dispatch rather
+        // than `start()`, so the ordinary subscription retry timer is not its
+        // recovery authority.
+        if (attempt >= HYDRATE_RETRY_DELAYS_MS.length) {
+          throw new Error('runtime_status cleanup did not converge');
+        }
+        if (cleanup.some(result => result.status === 'rejected')) {
+          const delayMs = HYDRATE_RETRY_DELAYS_MS[attempt]!;
+          this.logger.warn(
+            {
+              kind: 'event',
+              action: 'hydrate_runtime_cleanup_ambiguous',
+              trigger,
+              attempt,
+              retry_in_ms: delayMs,
+            },
+            'hydrate runtime cleanup was ambiguous; status will decide from a fresh snapshot',
+          );
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, delayMs);
+            timer.unref?.();
+          });
+        }
+        await this.hydrateAttempt(
+          trigger,
+          epoch,
+          attempt + 1,
+          daemonPid,
+          startedAt,
+        );
+        return;
+      }
+      this.cache.applyRuntimeStatus(key, accepted);
       this.logger.info(
         {
           kind: 'event',
@@ -1251,7 +1467,7 @@ export class RuntimeEventHandler {
       // post-hydrate so the live-runtime check sees the right state.
       if (this.onHydrateCompleteCb) {
         try {
-          await this.onHydrateCompleteCb(trigger);
+          await this.onHydrateCompleteCb(trigger, snapshot);
         } catch (err) {
           this.logger.warn(
             {

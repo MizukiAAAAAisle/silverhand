@@ -10,9 +10,9 @@ import {
 } from '../../auth/principal.js';
 import {
   CliTraceInputSchema,
-  internalPaths,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 export function registerDiagnosticsRoutes(
   app: Hono<AppEnv>,
@@ -20,7 +20,7 @@ export function registerDiagnosticsRoutes(
 ): void {
   const { ctx } = deps;
 
-  app.post(internalPaths.agentCliTrace(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.cliTrace, async c => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = CliTraceInputSchema.safeParse(body);
     if (!parsed.success) {

@@ -100,6 +100,7 @@ describe('outbound protocol — command catalogue', () => {
       id: 'cmd-1',
       kind: 'runtime_deliver',
       params: {
+        runtime_generation: 1,
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1, 2],
@@ -407,6 +408,7 @@ describe('outbound protocol — daemon event catalogue', () => {
 
   it('parses runtime events with kind as the event discriminator', () => {
     const parsed = OutboundDaemonToServerEventFrameSchema.safeParse({
+      runtime_generation: 1,
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_state',
@@ -424,6 +426,7 @@ describe('outbound protocol — frame envelope', () => {
   it('uses direction/type/kind to reject wrong-way frames', () => {
     expect(
       OutboundFrameSchema.safeParse({
+        runtime_generation: 1,
         direction: 'server_to_daemon',
         type: 'event',
         kind: 'runtime_state',

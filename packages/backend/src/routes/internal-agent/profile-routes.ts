@@ -27,12 +27,12 @@ import {
 import {
   AgentPeerProfileQuerySchema,
   UpdateProfileInputSchema,
-  internalPaths,
   normalizeHandle,
   type AgentProfileDto,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 /**
  * The ONE profile projection, shared by the self read/write and the peer read
@@ -75,7 +75,7 @@ export function registerProfileRoutes(
   // for those fields is a future internal route, not implied by this
   // PR.
 
-  app.post(internalPaths.agentUploadAvatar(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.avatar, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -112,7 +112,7 @@ export function registerProfileRoutes(
     }
   });
 
-  app.delete(internalPaths.agentDeleteAvatar(':cid', ':aid'), async c => {
+  app.delete(internalAgentRoutePaths.avatar, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -162,7 +162,7 @@ export function registerProfileRoutes(
   // `file` part (never base64 in JSON); the avatar service stays the single
   // MIME/size/storage validator.
 
-  app.get(internalPaths.agentProfileGet(':cid', ':aid'), async c => {
+  app.get(internalAgentRoutePaths.profile, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -178,7 +178,7 @@ export function registerProfileRoutes(
     return c.json({ profile: toAgentProfileDto(agent) });
   });
 
-  app.post(internalPaths.agentProfileUpdate(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.profile, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -285,7 +285,7 @@ export function registerProfileRoutes(
   // identical 404: a handle is globally unique across `users.name` ⊕
   // `agents.name`, so a distinguishable "that's a human" would answer a
   // cross-workspace existence question (§AP).
-  app.get(internalPaths.agentGetPeerProfile(':cid', ':aid'), c => {
+  app.get(internalAgentRoutePaths.peerProfile, c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {

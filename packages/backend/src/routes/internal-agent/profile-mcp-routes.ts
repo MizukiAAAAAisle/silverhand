@@ -22,9 +22,9 @@ import {
 import {
   McpProbeRequestSchema,
   parseMcpConfig,
-  internalPaths,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 export function registerProfileMcpRoutes(
   app: Hono<AppEnv>,
@@ -32,7 +32,7 @@ export function registerProfileMcpRoutes(
 ): void {
   const { ctx, agents, conversations } = deps;
 
-  app.get(internalPaths.agentProfileMcpGet(':cid', ':aid'), async c => {
+  app.get(internalAgentRoutePaths.profileMcp, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -64,7 +64,7 @@ export function registerProfileMcpRoutes(
     return c.json({ raw: mcp.result.raw });
   });
 
-  app.post(internalPaths.agentProfileMcpSet(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.profileMcp, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -112,7 +112,7 @@ export function registerProfileMcpRoutes(
   // (a probe connects to the user's endpoint with their secrets). The
   // connection's own success/failure rides in the `McpProbeResult` body; only
   // host-transport faults map to an HTTP error.
-  app.post(internalPaths.agentProfileMcpProbe(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.profileMcpProbe, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {

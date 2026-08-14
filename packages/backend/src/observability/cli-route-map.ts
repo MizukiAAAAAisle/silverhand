@@ -1,6 +1,6 @@
 /**
  * Maps each agent-facing internal route under
- * `/internal/conversations/:cid/agents/:aid/...` to the corresponding
+ * `/internal/agents/:aid/conversations/:cid/...` to the corresponding
  * `silverhand <noun> <verb>` CLI surface.
  *
  * Used by the cli-invoke middleware (`cli-invoke-middleware.ts`) to tag
@@ -21,7 +21,7 @@
 export interface CliInvokeRoute {
   /** HTTP method as registered with Hono. */
   method: 'GET' | 'POST' | 'PATCH';
-  /** Path suffix after `/internal/conversations/:cid/agents/:aid/`. */
+  /** Path suffix after `/internal/agents/:aid/conversations/:cid/`. */
   suffix: string;
   /** Logical CLI surface this route serves. */
   noun: string;

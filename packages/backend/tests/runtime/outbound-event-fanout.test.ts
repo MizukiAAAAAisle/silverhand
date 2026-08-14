@@ -17,10 +17,13 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationEventRepo } from '../../src/repos/conversation-event-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
+import { conversationRuntimePrincipal } from '../../src/auth/runtime-principal.js';
+import { RuntimePrincipalVerifier } from '../../src/auth/runtime-principal-verifier.js';
 import { RuntimeEventHandler, type EventPublisher } from '../../src/runtime/event-handler.js';
 import {
   ClearSessionExitTimeoutError,
@@ -35,10 +38,12 @@ import { AgentL2SeedEnsurer } from '../../src/runtime/agent-l2-seed-ensurer.js';
 import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { DbRuntimeStatusProjector } from '../../src/runtime/status-projector.js';
+import { makeDaemonInstanceKey } from '../../src/runtime/daemon-instance-key.js';
 import type {
   HostWsAttachment,
   HostWsServerController,
 } from '../../src/ws/host-ws-server.js';
+import { HostWsCommandTransportError } from '../../src/ws/host-ws-server.js';
 import { openTestDb } from '../utils/db.js';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 
@@ -68,6 +73,7 @@ describe('OutboundRuntimeEventFanout', () => {
     const outbound = makeFixture();
     try {
       const event: EventFrame = {
+        runtime_generation: 1,
         event: 'runtime_parsed_event',
         conversation_id: unix.channelId,
         agent_id: unix.agentId,
@@ -77,6 +83,7 @@ describe('OutboundRuntimeEventFanout', () => {
       makeUnixHandler(unix).dispatch(event);
 
       outbound.fanout.onEvent(outbound.hostId, {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_parsed_event',
@@ -289,7 +296,7 @@ describe('OutboundRuntimeEventFanout', () => {
   it('marks DB-active runtimes missing from a daemon hydrate snapshot as crashed', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
-      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, fix.agentId, {
+      new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(fix.channelId, fix.agentId, {
         status: 'active',
         pid: 999,
       });
@@ -308,6 +315,313 @@ describe('OutboundRuntimeEventFanout', () => {
           pid: null,
           reason: 'daemon_hydrate_missing',
         },
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('rejects snapshot generation N when DB custody is N+1 before cache, liveness, reconcile, or replay', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      const slots = new RuntimeSlotRepo(fix.db);
+      const successor = slots.claimGeneration({
+        scope: {
+          kind: 'conversation',
+          conversationId: fix.channelId,
+          agentId: fix.agentId,
+        },
+        daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+      });
+      expect(successor?.generation).toBe(2);
+      slots.compareAndSetProjection({
+        scope: {
+          kind: 'conversation',
+          conversationId: fix.channelId,
+          agentId: fix.agentId,
+        },
+        expectedGeneration: 2,
+        expectedDaemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+        patch: { status: 'active', pid: 222 },
+      });
+      fix.transport.snapshot = {
+        runtimes: [runtimeDto(
+          fix.channelId,
+          fix.agentId,
+          'ready',
+          { ...RUN_STATE, conversationId: fix.channelId, agentId: fix.agentId },
+        )],
+      };
+
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() => fix.transport.stopCalls().length === 1);
+      expect(fix.transport.stopCalls()[0]?.params).toMatchObject({
+        runtime_generation: 1,
+      });
+      expect(fix.fanout.getAgentRunStates(fix.channelId)).toEqual([]);
+      expect(fix.transport.deliverCalls()).toEqual([]);
+
+      await waitFor(() => slots.getConversation(
+        fix.channelId,
+        fix.agentId,
+      )?.claimed_by_daemon_instance_id === null, 2_500);
+      expect(slots.getConversation(fix.channelId, fix.agentId)).toMatchObject({
+        generation: 2,
+        observed_status: 'crashed',
+        observed_pid: null,
+      });
+      expect(
+        fix.fanout.hostRuntimeView(fix.hostId)?.activeAgentIds ?? [],
+      ).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('binds each reconcile baseline to its own overlapping status request in either response order', async () => {
+    for (const responseOrder of ['old-first', 'new-first'] as const) {
+      const fix = makeFixture({ runtime: 'codex' });
+      try {
+        const slots = new RuntimeSlotRepo(fix.db);
+        slots.compareAndSetProjection({
+          scope: {
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          },
+          expectedGeneration: 1,
+          expectedDaemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+          patch: { status: 'active', pid: 111 },
+        });
+        fix.transport.deferNextStatus();
+        fix.transport.deferNextStatus();
+
+        // Request A captures generation N, then remains in flight.
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        await waitFor(() => fix.transport.pendingStatusRequests() === 1);
+
+        // A successor is claimed before request B. B therefore captures N+1.
+        const successorDaemon = makeDaemonInstanceKey(123, 1700000001000);
+        const successor = slots.claimGeneration({
+          scope: {
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          },
+          daemonInstanceId: successorDaemon,
+        });
+        expect(successor?.generation).toBe(2);
+        slots.compareAndSetProjection({
+          scope: {
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          },
+          expectedGeneration: 2,
+          expectedDaemonInstanceId: successorDaemon,
+          patch: { status: 'active', pid: 222 },
+        });
+        fix.agentTokens.issue(conversationRuntimePrincipal({
+          conversationId: fix.channelId,
+          agentId: fix.agentId,
+          generation: 2,
+          daemonInstanceId: successorDaemon,
+        }));
+        fix.fanout.onEvent(
+          fix.hostId,
+          readyEvent({ started_at: 1700000001000 }),
+          'conn-1',
+        );
+        await waitFor(() => fix.transport.pendingStatusRequests() === 2);
+
+        const oldEmpty = { runtimes: [] };
+        const currentLive = {
+          runtimes: [{
+            ...runtimeDto(
+              fix.channelId,
+              fix.agentId,
+              'ready',
+              { ...RUN_STATE, conversationId: fix.channelId, agentId: fix.agentId },
+            ),
+            runtime_generation: 2,
+          }],
+        };
+        if (responseOrder === 'old-first') {
+          fix.transport.resolveDeferredStatusAt(0, oldEmpty);
+          await wait(10);
+          fix.transport.resolveDeferredStatusAt(0, currentLive);
+        } else {
+          fix.transport.resolveDeferredStatusAt(1, currentLive);
+          await waitFor(() =>
+            fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon
+              === true,
+          );
+          fix.transport.resolveDeferredStatusAt(0, oldEmpty);
+        }
+        await waitFor(() =>
+          fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon
+            === true,
+        );
+        await wait(10);
+
+        expect(slots.getConversation(fix.channelId, fix.agentId)).toMatchObject({
+          generation: 2,
+          claimed_by_daemon_instance_id: successorDaemon,
+          observed_status: 'active',
+          observed_pid: 222,
+        });
+        expect(fix.transport.stopCalls()).toEqual([]);
+      } finally {
+        fix.cleanup();
+      }
+    }
+  });
+
+  it('backend restart replaces a live child whose bearer secret was lost, then issues a usable successor credential', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
+    try {
+      const slots = new RuntimeSlotRepo(fix.db);
+      const current = slots.getConversation(fix.channelId, fix.agentId)!;
+      const oldPrincipal = conversationRuntimePrincipal({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        generation: current.generation,
+        daemonInstanceId: current.claimed_by_daemon_instance_id!,
+      });
+      // Losing every in-memory bearer models a fresh backend process while the
+      // daemon child (and its now-unknown env token) remains alive.
+      fix.agentTokens.revokeFor(oldPrincipal);
+      fix.transport.snapshot = {
+        runtimes: [runtimeDto(
+          fix.channelId,
+          fix.agentId,
+          'ready',
+          { ...RUN_STATE, conversationId: fix.channelId, agentId: fix.agentId },
+        )],
+      };
+
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() => fix.transport.stopCalls().length === 1);
+      expect(fix.transport.stopCalls()[0]?.params).toMatchObject({
+        runtime_generation: current.generation,
+      });
+      await waitFor(() => slots.getConversation(
+        fix.channelId,
+        fix.agentId,
+      )?.claimed_by_daemon_instance_id === null, 2_500);
+      expect(fix.fanout.getAgentRunStates(fix.channelId)).toEqual([]);
+
+      enqueueMessage(fix, 'run one CLI turn after restart recovery');
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      const delivery = fix.transport.deliverCalls().at(-1)!;
+      const params = delivery.params as {
+        runtime_generation: number;
+        spawn_options: {
+          env_policy: { silverhand: { auth_token: string } };
+        };
+      };
+      expect(params.runtime_generation).toBeGreaterThan(current.generation);
+      const verifier = new RuntimePrincipalVerifier(
+        fix.agentTokens,
+        slots,
+        fix.conversations,
+      );
+      expect(verifier.verify({
+        token: params.spawn_options.env_policy.silverhand.auth_token,
+        routeAgentId: fix.agentId,
+        targetConversationId: fix.channelId,
+      })).toMatchObject({ ok: true });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('fresh backend drops missing-bearer events while status hydrate is held, before every business side effect', async () => {
+    const liveness: unknown[] = [];
+    const fix = makeFixture({
+      runtime: 'codex',
+      publishHostScopeEvent: (_owner, _kind, payload) => liveness.push(payload),
+    });
+    try {
+      const current = new RuntimeSlotRepo(fix.db).getConversation(
+        fix.channelId,
+        fix.agentId,
+      )!;
+      fix.agentTokens.revokeFor(conversationRuntimePrincipal({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        generation: current.generation,
+        daemonInstanceId: current.claimed_by_daemon_instance_id!,
+      }));
+      const liveSnapshot = {
+        runtimes: [runtimeDto(
+          fix.channelId,
+          fix.agentId,
+          'ready',
+          { ...RUN_STATE, conversationId: fix.channelId, agentId: fix.agentId },
+        )],
+      };
+      fix.transport.snapshot = liveSnapshot;
+      fix.transport.deferNextStatus();
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_status'),
+      );
+
+      const pending = enqueueMessage(fix, 'must not reach old bearer child');
+      fix.events.length = 0;
+      liveness.length = 0;
+      fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: current.generation,
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_state',
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        state: {
+          ...RUN_STATE,
+          conversationId: fix.channelId,
+          agentId: fix.agentId,
+          status: 'thinking',
+        },
+        ts: 1700000000100,
+      }, 'conn-1');
+      fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: current.generation,
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_parsed_event',
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        parsed: { kind: 'text', text: 'must stay invisible' },
+        ts: 1700000000200,
+      }, 'conn-1');
+      fix.fanout.onEvent(
+        fix.hostId,
+        readyForDrainEvent(fix),
+        'conn-1',
+      );
+      await wait(25);
+
+      expect(fix.fanout.getAgentRunStates(fix.channelId)).toEqual([]);
+      expect(fix.events).toEqual([]);
+      expect(liveness).toEqual([]);
+      expect(fix.transport.deliverCalls()).toEqual([]);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toMatchObject([
+        { inboxId: pending.inboxId },
+      ]);
+      expect(new ConversationEventRepo(fix.db).listForConversationAgent({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        limit: 10,
+      }).events).toEqual([]);
+
+      fix.transport.resolveDeferredStatus(liveSnapshot);
+      await waitFor(() => fix.transport.stopCalls().length === 1);
+      expect(fix.transport.stopCalls()[0]?.params).toMatchObject({
+        runtime_generation: current.generation,
       });
     } finally {
       fix.cleanup();
@@ -350,6 +664,59 @@ describe('OutboundRuntimeEventFanout', () => {
       );
       const deliver = fix.transport.deliverCalls()[0];
       expect(deliver?.opts?.expectedConnectionId).toBe('conn-2');
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('drops stale-generation ready_for_drain at the fanout perimeter before cache, liveness, replay, or coordinator effects', async () => {
+    const liveness: unknown[] = [];
+    const fix = makeFixture({
+      runtime: 'codex',
+      publishHostScopeEvent: (_owner, _kind, payload) => liveness.push(payload),
+    });
+    try {
+      fix.transport.snapshot = {
+        runtimes: [runtimeDto(
+          fix.channelId,
+          fix.agentId,
+          'draining',
+          { ...RUN_STATE, conversationId: fix.channelId, agentId: fix.agentId },
+        )],
+      };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon === true,
+      );
+      const viewBefore = fix.fanout.hostRuntimeView(fix.hostId);
+      const livenessBefore = liveness.length;
+      const pending = enqueueMessage(fix, 'must not replay from stale ready');
+      const successor = new RuntimeSlotRepo(fix.db).claimGeneration({
+        scope: {
+          kind: 'conversation',
+          conversationId: fix.channelId,
+          agentId: fix.agentId,
+        },
+        daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+      });
+      expect(successor?.generation).toBe(2);
+
+      fix.fanout.onEvent(
+        fix.hostId,
+        readyForDrainEvent(fix),
+        'conn-1',
+      );
+      await wait(25);
+
+      expect(fix.fanout.hostRuntimeView(fix.hostId)).toEqual(viewBefore);
+      expect(liveness).toHaveLength(livenessBefore);
+      expect(fix.transport.deliverCalls()).toEqual([]);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toMatchObject([
+        { inboxId: pending.inboxId },
+      ]);
+      expect(
+        fix.events.filter(event => event.kind === 'agent_status'),
+      ).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -560,11 +927,11 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('delivers via runtime_deliver even while the hydrate is still in flight (cache not latched)', async () => {
-    // Stage 2b: because delivery no longer consults the cache, the
-    // ready→hydrate race window that used to need a `runtime_start` reroute
-    // is a non-issue — deliverMessage dispatches runtime_deliver regardless of
-    // whether the cache has latched a daemon key.
+  it('holds runtime_deliver behind the ready hydrate, then dispatches after the snapshot converges', async () => {
+    // A backend restart can leave an old live child whose bearer disappeared
+    // with backend memory. Dispatching a fresh generation while its status
+    // hydrate/cleanup is unresolved would drop early events in the pre-hydrate
+    // window. The connection becomes a command authority only after hydrate.
     const fix = makeFixture({ runtime: 'codex' });
     try {
       // Hold the hydrate open so the cache NEVER latches a daemon key.
@@ -582,7 +949,17 @@ describe('OutboundRuntimeEventFanout', () => {
       const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
 
       fix.transport.setNextDeliverDisposition('admitted');
-      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+      const pending = fix.fanout.deliverMessage(
+        fix.channelId,
+        fix.agentId,
+        msg.id,
+      );
+
+      await new Promise(resolve => setImmediate(resolve));
+      expect(fix.transport.deliverCalls()).toEqual([]);
+
+      fix.transport.resolveDeferredStatus({ runtimes: [] });
+      await pending;
 
       expect(fix.transport.deliverCalls()).toHaveLength(1);
       expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
@@ -590,9 +967,6 @@ describe('OutboundRuntimeEventFanout', () => {
       });
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
 
-      // Let the deferred hydrate settle so teardown doesn't leave a dangling
-      // promise.
-      fix.transport.resolveDeferredStatus({ runtimes: [] });
     } finally {
       fix.cleanup();
     }
@@ -789,6 +1163,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
       await waitFor(() => fix.transport.calls.some(call => call.kind === 'runtime_status'));
       fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_parsed_event',
@@ -976,6 +1351,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(
         fix.hostId,
         {
+          runtime_generation: 1,
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_exit',
@@ -1067,6 +1443,7 @@ describe('OutboundRuntimeEventFanout', () => {
             fatal: true,
             message: 'No conversation found with session ID: stale',
           },
+          runtime_generation: 1,
           ts: 1700000001000,
         },
         'conn-1',
@@ -1095,6 +1472,7 @@ describe('OutboundRuntimeEventFanout', () => {
           agent_id: fix.agentId,
           code: 1,
           intentional: false,
+          runtime_generation: 1,
           ts: 1700000001002,
         },
         'conn-1',
@@ -1132,6 +1510,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(
         fix.hostId,
         {
+          runtime_generation: 1,
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_exit',
@@ -1213,6 +1592,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(
         fix.hostId,
         {
+          runtime_generation: 1,
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_parsed_event',
@@ -1258,6 +1638,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(
         fix.hostId,
         {
+          runtime_generation: 1,
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_exit',
@@ -1585,6 +1966,156 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(start).toBeDefined();
       expect(start?.opts?.expectedConnectionId).toBe('conn-1');
       expect(start?.params).not.toHaveProperty('startup_delivery');
+      const params = start!.params as {
+        runtime_generation: number;
+        options: { env_policy: { silverhand: { auth_token: string } } };
+      };
+      const slot = new RuntimeSlotRepo(fix.db).getConversation(
+        fix.channelId,
+        fix.agentId,
+      );
+      expect(slot).not.toBeNull();
+      expect(params.runtime_generation).toBe(slot!.generation);
+      expect(fix.agentTokens.verify(
+        params.options.env_policy.silverhand.auth_token,
+      )).toMatchObject({
+        ok: true,
+        principal: {
+          kind: 'conversation_slot',
+          conversationId: fix.channelId,
+          agentId: fix.agentId,
+          custody: {
+            generation: params.runtime_generation,
+            daemonInstanceId: slot!.claimed_by_daemon_instance_id,
+          },
+        },
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('terminalizes a newly claimed generation only when runtime_start is proven not dispatched', async () => {
+    const fix = makeFixture({ runtime: 'codex', preclaimRuntime: false });
+    try {
+      fix.transport.rejectNextStart(new HostWsCommandTransportError(
+        'transport_no_connection',
+        'spawn was never dispatched',
+        { hostId: fix.hostId, commandKind: 'runtime_start' },
+      ));
+      await expect(
+        fix.fanout.start(fix.channelId, fix.agentId),
+      ).rejects.toThrow('spawn was never dispatched');
+      const start = fix.transport.startCalls()[0]!;
+      const params = start.params as {
+        options: { env_policy: { silverhand: { auth_token: string } } };
+      };
+      const slot = new RuntimeSlotRepo(fix.db).getConversation(
+        fix.channelId,
+        fix.agentId,
+      );
+      expect(slot).toMatchObject({
+        observed_status: 'crashed',
+        observed_pid: null,
+        claimed_by_daemon_instance_id: null,
+      });
+      expect(fix.agentTokens.verify(
+        params.options.env_policy.silverhand.auth_token,
+      )).toEqual({ ok: false, reason: 'revoked' });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('keeps an ambiguously dispatched start claim live so status/next delivery can recover it', async () => {
+    const fix = makeFixture({ runtime: 'codex', preclaimRuntime: false });
+    try {
+      fix.transport.rejectNextStart(new HostWsCommandTransportError(
+        'transport_timeout',
+        'response was lost after dispatch',
+        {
+          hostId: fix.hostId,
+          commandKind: 'runtime_start',
+          requestId: 'req-start-1',
+        },
+      ));
+      await expect(
+        fix.fanout.start(fix.channelId, fix.agentId),
+      ).rejects.toThrow('response was lost after dispatch');
+      const first = fix.transport.startCalls()[0]!.params as {
+        runtime_generation: number;
+        options: { env_policy: { silverhand: { auth_token: string } } };
+      };
+      const afterTimeout = new RuntimeSlotRepo(fix.db).getConversation(
+        fix.channelId,
+        fix.agentId,
+      );
+      expect(afterTimeout).toMatchObject({
+        generation: first.runtime_generation,
+        claimed_by_daemon_instance_id: makeDaemonInstanceKey(
+          123,
+          1700000000000,
+        ),
+      });
+      expect(fix.agentTokens.verify(
+        first.options.env_policy.silverhand.auth_token,
+      )).toMatchObject({ ok: true });
+
+      await expect(
+        fix.fanout.start(fix.channelId, fix.agentId),
+      ).resolves.toBeUndefined();
+      const second = fix.transport.startCalls()[1]!.params as {
+        runtime_generation: number;
+      };
+      expect(second.runtime_generation).toBe(first.runtime_generation);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('keeps an ambiguously dispatched delivery claim and recovers on the same generation', async () => {
+    const fix = makeFixture({ runtime: 'codex', preclaimRuntime: false });
+    try {
+      enqueueMessage(fix, 'delivery response will be lost');
+      fix.transport.rejectNextDeliver(new HostWsCommandTransportError(
+        'transport_timeout',
+        'delivery response was lost after dispatch',
+        {
+          hostId: fix.hostId,
+          commandKind: 'runtime_deliver',
+          requestId: 'req-deliver-1',
+        },
+      ));
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).rejects.toThrow('delivery response was lost after dispatch');
+      const first = fix.transport.deliverCalls()[0]!.params as {
+        runtime_generation: number;
+        spawn_options: {
+          env_policy: { silverhand: { auth_token: string } };
+        };
+      };
+      expect(new RuntimeSlotRepo(fix.db).getConversation(
+        fix.channelId,
+        fix.agentId,
+      )).toMatchObject({
+        generation: first.runtime_generation,
+        claimed_by_daemon_instance_id: makeDaemonInstanceKey(
+          123,
+          1700000000000,
+        ),
+      });
+      expect(fix.agentTokens.verify(
+        first.spawn_options.env_policy.silverhand.auth_token,
+      )).toMatchObject({ ok: true });
+
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      const second = fix.transport.deliverCalls()[1]!.params as {
+        runtime_generation: number;
+      };
+      expect(second.runtime_generation).toBe(first.runtime_generation);
     } finally {
       fix.cleanup();
     }
@@ -1694,7 +2225,7 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(stops[0]!.params).toEqual({
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
-        mode: 'hard',
+        runtime_generation: 1, mode: 'hard',
       });
       expect('soft_directive' in stops[0]!.params).toBe(false);
     } finally {
@@ -1720,6 +2251,7 @@ describe('OutboundRuntimeEventFanout', () => {
 
       await fix.fanout.stop(fix.channelId, fix.agentId, {
         hostId: capturedHostId,
+        runtimeGeneration: 1,
       });
 
       const stops = fix.transport.calls.filter(c => c.kind === 'runtime_stop');
@@ -1728,7 +2260,7 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(stops[0]!.params).toEqual({
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
-        mode: 'hard',
+        runtime_generation: 1, mode: 'hard',
       });
     } finally {
       fix.cleanup();
@@ -1779,7 +2311,7 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(stop.params).toEqual({
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
-        mode: 'hard',
+        runtime_generation: 1, mode: 'hard',
       });
       expect(stop.opts?.expectedConnectionId).toBe('conn-1');
     } finally {
@@ -1886,9 +2418,25 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.viewerUserId,
       );
       new ConversationRepo(fix.db).addAgent(fix.channelId, secondAgent.id);
-      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, secondAgent.id, {
+      const secondRuntimeSlots = new RuntimeSlotRepo(fix.db);
+      secondRuntimeSlots.updateCurrentConversationProjection(fix.channelId, secondAgent.id, {
         status: 'active',
       });
+      const secondClaim = secondRuntimeSlots.claimGeneration({
+        scope: {
+          kind: 'conversation',
+          conversationId: fix.channelId,
+          agentId: secondAgent.id,
+        },
+        daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+      });
+      expect(secondClaim).not.toBeNull();
+      fix.agentTokens.issue(conversationRuntimePrincipal({
+        conversationId: fix.channelId,
+        agentId: secondAgent.id,
+        generation: secondClaim!.generation,
+        daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+      }));
       fix.transport.snapshot = {
         runtimes: [
           runtimeDto(fix.channelId, fix.agentId, 'ready', {
@@ -1920,6 +2468,7 @@ describe('OutboundRuntimeEventFanout', () => {
       fix.fanout.onEvent(
         fix.hostId,
         {
+          runtime_generation: 1,
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_state',
@@ -1963,9 +2512,25 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.viewerUserId,
       );
       new ConversationRepo(fix.db).addAgent(fix.channelId, secondAgent.id);
-      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, secondAgent.id, {
+      const secondRuntimeSlots = new RuntimeSlotRepo(fix.db);
+      secondRuntimeSlots.updateCurrentConversationProjection(fix.channelId, secondAgent.id, {
         status: 'active',
       });
+      const secondClaim = secondRuntimeSlots.claimGeneration({
+        scope: {
+          kind: 'conversation',
+          conversationId: fix.channelId,
+          agentId: secondAgent.id,
+        },
+        daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+      });
+      expect(secondClaim).not.toBeNull();
+      fix.agentTokens.issue(conversationRuntimePrincipal({
+        conversationId: fix.channelId,
+        agentId: secondAgent.id,
+        generation: secondClaim!.generation,
+        daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+      }));
       fix.transport.snapshot = {
         runtimes: [
           runtimeDto(fix.channelId, fix.agentId, 'ready', {
@@ -2042,11 +2607,7 @@ describe('OutboundRuntimeEventFanout', () => {
         );
 
         // 2. Seed a known cli_session_id so the audit row fires.
-        new ConversationRepo(fix.db).updateAgentRuntime(
-          fix.channelId,
-          fix.agentId,
-          { cliSessionId: 'sess-abcdef-12345' },
-        );
+        setFixtureCliSession(fix, 'sess-abcdef-12345');
 
         // 3. Capture only post-clearSession events.
         fix.events.length = 0;
@@ -2075,6 +2636,7 @@ describe('OutboundRuntimeEventFanout', () => {
         expect(clearCalls[0]!.params).toEqual({
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
+          runtime_generation: 1,
         });
 
         // 6. DB tx landed.
@@ -2130,11 +2692,7 @@ describe('OutboundRuntimeEventFanout', () => {
           () => fix.fanout.getAgentRunStates(fix.channelId).length === 1,
         );
 
-        new ConversationRepo(fix.db).updateAgentRuntime(
-          fix.channelId,
-          fix.agentId,
-          { cliSessionId: 'sess-old' },
-        );
+        setFixtureCliSession(fix, 'sess-old');
 
         fix.events.length = 0;
 
@@ -2168,16 +2726,12 @@ describe('OutboundRuntimeEventFanout', () => {
     it('skips bounded wait when cache shows runtime is not running; DB tx still fires audit if prevCliSessionId !== null', async () => {
       const fix = makeFixture({ clearSessionExitTimeoutMs: 5_000 });
       try {
+        setFixtureCliSession(fix, 'sess-orphan');
+
         // Hydrate empty snapshot — cache stays empty so wasRunning=false.
         fix.transport.snapshot = { runtimes: [] };
         fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
         // No need to wait — empty hydrate is a no-op for cache.
-
-        new ConversationRepo(fix.db).updateAgentRuntime(
-          fix.channelId,
-          fix.agentId,
-          { cliSessionId: 'sess-orphan' },
-        );
 
         // Daemon authoritatively reports `cleared:false` — handle
         // absent on its side. Backend's fast path skips the bounded
@@ -2235,11 +2789,7 @@ describe('OutboundRuntimeEventFanout', () => {
         // be trusted as a "no live runtime" oracle.
         fix.transport.snapshot = { runtimes: [] };
 
-        new ConversationRepo(fix.db).updateAgentRuntime(
-          fix.channelId,
-          fix.agentId,
-          { cliSessionId: 'sess-pre-restart' },
-        );
+        setFixtureCliSession(fix, 'sess-pre-restart');
 
         // Daemon authoritatively says it DID hold a handle and
         // triggered the kill — a `runtime_exit` is on its way.
@@ -2328,9 +2878,17 @@ describe('OutboundRuntimeEventFanout', () => {
 });
 
 function emitRuntimeExit(fix: Fixture): void {
+  const slot = new RuntimeSlotRepo(fix.db).getConversation(
+    fix.channelId,
+    fix.agentId,
+  );
+  if (!slot?.claimed_by_daemon_instance_id) {
+    throw new Error('emitRuntimeExit requires active runtime custody');
+  }
   fix.fanout.onEvent(
     fix.hostId,
     {
+      runtime_generation: slot.generation,
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_exit',
@@ -2342,6 +2900,45 @@ function emitRuntimeExit(fix: Fixture): void {
     },
     'conn-1',
   );
+}
+
+function setFixtureCliSession(fix: Fixture, cliSessionId: string): void {
+  const repo = new RuntimeSlotRepo(fix.db);
+  const slot = repo.getConversation(fix.channelId, fix.agentId);
+  if (!slot?.claimed_by_daemon_instance_id) {
+    throw new Error('setFixtureCliSession requires active runtime custody');
+  }
+  const updated = repo.compareAndSetProjection({
+    scope: {
+      kind: 'conversation',
+      conversationId: fix.channelId,
+      agentId: fix.agentId,
+    },
+    expectedGeneration: slot.generation,
+    expectedDaemonInstanceId: slot.claimed_by_daemon_instance_id,
+    patch: { cliSessionId },
+  });
+  if (!updated) throw new Error('failed to seed cli session');
+}
+
+function claimFixtureRuntime(fix: Fixture): number {
+  const daemonInstanceId = makeDaemonInstanceKey(123, 1700000000000);
+  const claimed = new RuntimeSlotRepo(fix.db).claimGeneration({
+    scope: {
+      kind: 'conversation',
+      conversationId: fix.channelId,
+      agentId: fix.agentId,
+    },
+    daemonInstanceId,
+  });
+  if (!claimed) throw new Error('failed to claim fixture runtime');
+  fix.agentTokens.issue(conversationRuntimePrincipal({
+    conversationId: fix.channelId,
+    agentId: fix.agentId,
+    generation: claimed.generation,
+    daemonInstanceId,
+  }));
+  return claimed.generation;
 }
 
 /**
@@ -2387,6 +2984,7 @@ interface Fixture {
   inbox: ConversationInboxRepo;
   conversations: ConversationRepo;
   transport: FakeTransport;
+  agentTokens: AgentTokenStore;
   fanout: OutboundRuntimeEventFanout;
   row(): { status: string; pid: number | null; cli_session_id: string | null };
   cleanup(): void;
@@ -2407,6 +3005,9 @@ function makeFixture(
       payload: unknown,
     ) => void;
     onHostReady?: (hostId: string) => void;
+    /** Most event fixtures model an already-running generation. Tests that
+     * prove first-claim failure semantics opt out explicitly. */
+    preclaimRuntime?: boolean;
   } = {},
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
@@ -2426,9 +3027,16 @@ function makeFixture(
     viewerUserId,
   );
   conversations.addAgent(channel.id, agent.id);
-  conversations.updateAgentRuntime(channel.id, agent.id, {
+  const runtimeSlots = new RuntimeSlotRepo(db);
+  runtimeSlots.updateCurrentConversationProjection(channel.id, agent.id, {
     status: 'starting',
   });
+  if (opts.preclaimRuntime !== false) {
+    runtimeSlots.claimGeneration({
+      scope: { kind: 'conversation', conversationId: channel.id, agentId: agent.id },
+      daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+    });
+  }
 
   const events: Fixture['events'] = [];
   const publisher: EventPublisher = {
@@ -2449,6 +3057,16 @@ function makeFixture(
         ({
           ensure: async () => ({ ok: true }),
         } as unknown as AgentL2SeedEnsurer);
+  const agentTokens = new AgentTokenStore();
+  const preclaimed = runtimeSlots.getConversation(channel.id, agent.id);
+  if (preclaimed?.claimed_by_daemon_instance_id) {
+    agentTokens.issue(conversationRuntimePrincipal({
+      conversationId: channel.id,
+      agentId: agent.id,
+      generation: preclaimed.generation,
+      daemonInstanceId: preclaimed.claimed_by_daemon_instance_id,
+    }));
+  }
   const fanout = new OutboundRuntimeEventFanout({
     ...createRuntimeFanoutDbDeps({
       db,
@@ -2462,7 +3080,7 @@ function makeFixture(
     ...(opts.coLocatedHostId === null
       ? {}
       : { coLocatedHostId: opts.coLocatedHostId ?? localHostId }),
-    agentTokens: new AgentTokenStore(),
+    agentTokens,
     activityLog: null,
     ...(seedEnsurer ? { agentL2SeedEnsurer: seedEnsurer } : {}),
     ...(opts.clearSessionExitTimeoutMs !== undefined
@@ -2488,6 +3106,7 @@ function makeFixture(
     inbox,
     conversations,
     transport,
+    agentTokens,
     fanout,
     row: () => {
       const row = conversations.getAgent(channel.id, agent.id);
@@ -2517,7 +3136,7 @@ function makeUnixHandler(fix: Fixture): RuntimeEventHandler {
     },
     inboxAck: { markDelivered: () => {}, markUndelivered: () => {} },
     statusProjector: new DbRuntimeStatusProjector(
-      new ConversationRepo(fix.db),
+      new RuntimeSlotRepo(fix.db),
       {
         publish: (conv, payload) =>
           fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
@@ -2525,6 +3144,8 @@ function makeUnixHandler(fix: Fixture): RuntimeEventHandler {
           fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
       },
     ),
+    daemonInstanceId: () => makeDaemonInstanceKey(123, 1700000000000),
+    acceptRuntimeCustody: () => true,
     conversationActivity: new ConversationEventRepo(fix.db),
     logger: SILENT_LOGGER,
   });
@@ -2589,6 +3210,7 @@ class FakeTransport implements HostWsServerController {
   private nextDeliverDisposition: 'spawning' | 'admitted' | 'deferred' | null = null;
   private nextClearResult: { cleared: boolean } | null = null;
   private nextStopError: Error | null = null;
+  private nextStartError: Error | null = null;
   private deferredStop:
     | {
         resolve: (value: unknown) => void;
@@ -2599,12 +3221,11 @@ class FakeTransport implements HostWsServerController {
   // — models the fire-and-forget ready→hydrate window during which the daemon is
   // connected (`currentDaemonKey` set) but `RunStateCache` has NOT yet latched a
   // daemon key. Lets a test drive a `runtime_start` reply into that exact gap.
-  private deferredStatus:
-    | {
-        resolve: (value: unknown) => void;
-        reject: (err: Error) => void;
-      }
-    | null = null;
+  private statusDeferralsRemaining = 0;
+  private readonly deferredStatusRequests: Array<{
+    resolve: (value: unknown) => void;
+    reject: (err: Error) => void;
+  }> = [];
 
   activeConnectionCount(): number {
     return 1;
@@ -2619,16 +3240,16 @@ class FakeTransport implements HostWsServerController {
   }
 
   getAttachment(hostId: string): HostWsAttachment | null {
-    // Fanout-coordinator tests don't depend on boot-readiness wiring, so the
-    // default is null. A #task:1486 send-gate test sets `attachmentCapabilities`
-    // to model the live daemon's advertised capability set.
-    if (this.attachmentCapabilities === null) return null;
+    // The fixture represents a ready daemon attachment. Capability tests vary
+    // only the advertised set; custody always has a boot identity distinct
+    // from the websocket connection coordinate.
     return {
       hostId,
       connectionId: this.connectionId,
+      daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
       attachedAt: 0,
       hostname: null,
-      capabilities: this.attachmentCapabilities,
+      capabilities: this.attachmentCapabilities ?? [],
     };
   }
 
@@ -2654,12 +3275,13 @@ class FakeTransport implements HostWsServerController {
       ...(opts ? { opts: { expectedConnectionId: opts.expectedConnectionId } } : {}),
     });
     if (kind === 'runtime_status') {
-      if (this.deferredStatus) {
+      if (this.statusDeferralsRemaining > 0) {
+        this.statusDeferralsRemaining -= 1;
         return new Promise<OutboundServerCommandResult<K>>((resolve, reject) => {
-          this.deferredStatus = {
+          this.deferredStatusRequests.push({
             resolve: value => resolve(value as OutboundServerCommandResult<K>),
             reject,
-          };
+          });
         });
       }
       return Promise.resolve(this.snapshot) as Promise<OutboundServerCommandResult<K>>;
@@ -2706,6 +3328,11 @@ class FakeTransport implements HostWsServerController {
       // #task:1417 Stage 2b — `runtime_start` is now a PURE lifecycle spawn
       // (no `startup_delivery`; delivery goes through `runtime_deliver`). Used
       // only by `startDirect` for an explicit start with an empty inbox.
+      if (this.nextStartError) {
+        const err = this.nextStartError;
+        this.nextStartError = null;
+        return Promise.reject(err);
+      }
       return Promise.resolve({
         started: true,
         pid: 123,
@@ -2741,6 +3368,30 @@ class FakeTransport implements HostWsServerController {
           reject,
         };
       });
+    }
+    if (kind === 'runtime_stop') {
+      const stop = params as OutboundServerCommandParams<'runtime_stop'>;
+      const matched = this.snapshot.runtimes.some(
+        runtime =>
+          runtime.conversation_id === stop.conversation_id
+          && runtime.agent_id === stop.agent_id
+          && runtime.runtime_generation === stop.runtime_generation,
+      );
+      if (matched) {
+        this.snapshot = {
+          runtimes: this.snapshot.runtimes.filter(
+            runtime =>
+              runtime.conversation_id !== stop.conversation_id
+              || runtime.agent_id !== stop.agent_id
+              || runtime.runtime_generation !== stop.runtime_generation,
+          ),
+        };
+      }
+      return Promise.resolve({
+        mode: 'hard',
+        stopped: matched,
+        exit_code: matched ? 0 : null,
+      }) as Promise<OutboundServerCommandResult<K>>;
     }
     return Promise.resolve({}) as Promise<OutboundServerCommandResult<K>>;
   }
@@ -2791,6 +3442,10 @@ class FakeTransport implements HostWsServerController {
     this.nextStopError = err;
   }
 
+  rejectNextStart(err: Error): void {
+    this.nextStartError = err;
+  }
+
   deferNextStop(): void {
     this.deferredStop = {
       resolve: () => {},
@@ -2805,16 +3460,20 @@ class FakeTransport implements HostWsServerController {
   }
 
   deferNextStatus(): void {
-    this.deferredStatus = {
-      resolve: () => {},
-      reject: () => {},
-    };
+    this.statusDeferralsRemaining += 1;
   }
 
   resolveDeferredStatus(value: unknown): void {
-    const deferred = this.deferredStatus;
-    this.deferredStatus = null;
+    this.resolveDeferredStatusAt(0, value);
+  }
+
+  resolveDeferredStatusAt(index: number, value: unknown): void {
+    const [deferred] = this.deferredStatusRequests.splice(index, 1);
     deferred?.resolve(value);
+  }
+
+  pendingStatusRequests(): number {
+    return this.deferredStatusRequests.length;
   }
 
   /** Next `runtime_deliver` refuses custody with this reason (rows roll
@@ -2871,6 +3530,7 @@ function runtimeDto(
   return {
     conversation_id: conversationId,
     agent_id: agentId,
+    runtime_generation: 1,
     pid: 123,
     phase,
     run_state: runState,
@@ -2899,6 +3559,7 @@ function readyEvent(overrides?: {
 
 function readyForDrainEvent(fix: Fixture): OutboundDaemonToServerEventFrame {
   return {
+    runtime_generation: 1,
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_ready_for_drain',
@@ -2921,6 +3582,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_state':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
@@ -2942,6 +3604,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_exit':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
@@ -2953,6 +3616,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_ready_for_drain':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
@@ -2983,6 +3647,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_init_timeout':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
@@ -2998,6 +3663,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_init_retrying':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
@@ -3010,6 +3676,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_init_cooldown':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
@@ -3051,6 +3718,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_parsed_event':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
@@ -3237,6 +3905,10 @@ describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
     ts: number,
   ): OutboundDaemonToServerEventFrame {
     return {
+      runtime_generation: new RuntimeSlotRepo(fix.db).getConversation(
+        fix.channelId,
+        fix.agentId,
+      )!.generation,
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_state',
@@ -3256,6 +3928,10 @@ describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
 
   function exitEvent(fix: Fixture, ts: number): OutboundDaemonToServerEventFrame {
     return {
+      runtime_generation: new RuntimeSlotRepo(fix.db).getConversation(
+        fix.channelId,
+        fix.agentId,
+      )!.generation,
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_exit',
@@ -3311,6 +3987,7 @@ describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
       kind: 'host_agent_liveness_changed',
       payload: { host_id: fix.hostId },
     });
+    claimFixtureRuntime(fix);
 
     // First live runtime → set gains the agent → ONE event.
     fix.fanout.onEvent(fix.hostId, stateEvent(fix, 'thinking', 1700000001000), 'conn-1');
@@ -3367,6 +4044,7 @@ describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
         fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon ===
         true,
     );
+    claimFixtureRuntime(fix);
     // 1 forced hydrate publish + 1 for the runtime coming up.
     fix.fanout.onEvent(fix.hostId, stateEvent(fix, 'thinking', 1700000001000), 'conn-1');
     expect(published).toHaveLength(2);

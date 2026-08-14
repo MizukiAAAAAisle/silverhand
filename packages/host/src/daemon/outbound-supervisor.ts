@@ -62,6 +62,7 @@
  */
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
+import type { DaemonHostConfig } from '@silverhand/shared';
 import type { EventFrame } from '../protocol.js';
 import type {
   HostOutboundAttachFailureReason,
@@ -101,6 +102,7 @@ export interface OutboundSupervisorDeps {
     readyEvent: () => Extract<EventFrame, { event: 'ready' }>;
     dispatchCommand: OutboundCommandDispatcher;
     cleanupDeferredForOwner: OwnerCleanup;
+    onConfigLoaded: (config: DaemonHostConfig) => void;
   }) => OutboundClientLike;
 }
 
@@ -541,6 +543,12 @@ export class OutboundSupervisor {
   }
 
   private spawnClient(configPath: string): OutboundClientLike {
+    const onConfigLoaded = (config: DaemonHostConfig): void => {
+      const current = this.current;
+      if (!current || current.configPath !== configPath) return;
+      current.fingerprint = daemonHostConfigFingerprint(config);
+      current.binding = deriveOutboundBinding(config);
+    };
     const factory = this.deps.outboundClientFactory;
     if (factory) {
       return factory(configPath, {
@@ -548,6 +556,7 @@ export class OutboundSupervisor {
         readyEvent: this.deps.readyEvent,
         dispatchCommand: this.deps.dispatchCommand,
         cleanupDeferredForOwner: this.deps.cleanupDeferredForOwner,
+        onConfigLoaded,
       });
     }
     return new OutboundDaemonClient({
@@ -556,6 +565,7 @@ export class OutboundSupervisor {
       readyEvent: this.deps.readyEvent,
       dispatchCommand: this.deps.dispatchCommand,
       cleanupDeferredForOwner: this.deps.cleanupDeferredForOwner,
+      onConfigLoaded,
     });
   }
 }

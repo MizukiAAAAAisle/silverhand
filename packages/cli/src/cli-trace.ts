@@ -8,7 +8,7 @@
  * before any HTTP request is made.
  *
  * To recover that observability, the CLI fires a single best-effort
- * `POST /internal/conversations/:cid/agents/:aid/cli-trace` whenever
+ * `POST /internal/agents/:aid/conversations/:cid/cli-trace` whenever
  * it errors out before sending any business request. The endpoint:
  *
  *   - is excluded from the cli.invoke middleware (logged separately
@@ -136,4 +136,3 @@ export function sanitizeTraceErrorMessage(input: string): string {
   if (s.length > 500) s = s.slice(0, 500);
   return s;
 }
-

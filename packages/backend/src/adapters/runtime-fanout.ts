@@ -43,6 +43,7 @@ import { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { MessageRepo } from '../repos/message-repo.js';
+import { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { MembershipService } from '../services/membership-service.js';
@@ -63,6 +64,7 @@ import type {
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import type { BackendLogger } from '../context.js';
 import type { EventPublisher } from '../runtime/event-handler.js';
+import { conversationRuntimePrincipal } from '../auth/runtime-principal.js';
 
 /**
  * Everything `OutboundRuntimeEventFanout` needs that is DB-backed. Spread into
@@ -122,6 +124,7 @@ export function createRuntimeFanoutDbDeps(deps: {
   const hosts = new HostRepo(deps.db);
   const inbox = new ConversationInboxRepo(deps.db);
   const messages = new MessageRepo(deps.db);
+  const runtimeSlots = new RuntimeSlotRepo(deps.db);
   const users = new UserRepo(deps.db);
   const workspaces = new WorkspaceRepo(deps.db);
 
@@ -192,19 +195,83 @@ export function createRuntimeFanoutDbDeps(deps: {
         return view;
       },
     },
+    runtimeCustody: {
+      currentConversation: (conversationId, agentId) => {
+        const row = runtimeSlots.getConversation(conversationId, agentId);
+        if (!row || !row.claimed_by_daemon_instance_id) return null;
+        return conversationRuntimePrincipal({
+          conversationId,
+          agentId,
+          generation: row.generation,
+          daemonInstanceId: row.claimed_by_daemon_instance_id,
+        });
+      },
+      claimConversation: ({ conversationId, agentId, daemonInstanceId }) => {
+        const row = runtimeSlots.claimGeneration({
+          scope: { kind: 'conversation', conversationId, agentId },
+          daemonInstanceId,
+        });
+        return row
+          ? conversationRuntimePrincipal({
+              conversationId,
+              agentId,
+              generation: row.generation,
+              daemonInstanceId,
+            })
+          : null;
+      },
+      finalizeConversation: input => {
+        const row = runtimeSlots.finalizeGeneration({
+          scope: {
+            kind: 'conversation',
+            conversationId: input.conversationId,
+            agentId: input.agentId,
+          },
+          expectedGeneration: input.generation,
+          expectedDaemonInstanceId: input.daemonInstanceId,
+          status: input.status,
+        });
+        return row
+          ? conversationRuntimePrincipal({
+              conversationId: input.conversationId,
+              agentId: input.agentId,
+              generation: row.generation,
+              daemonInstanceId: input.daemonInstanceId,
+            })
+          : null;
+      },
+    },
     hydrateReconcile: {
       listDbLiveRuntimesForHost: hostId =>
-        conversations.listLiveRuntimesForHost(hostId).map<DbLiveRuntime>(row => ({
-          conversationId: row.conversation_id,
+        runtimeSlots.listLiveConversationSlotsForHost(hostId).map<DbLiveRuntime>(row => ({
+          conversationId: row.conversation_id!,
           agentId: row.agent_id,
-          status: row.status,
-          pid: row.pid,
+          generation: row.generation,
+          daemonInstanceId: row.claimed_by_daemon_instance_id,
+          status: row.observed_status as 'active' | 'starting',
+          pid: row.observed_pid,
         })),
-      markCrashed: (conversationId, agentId) =>
-        conversations.updateAgentRuntime(conversationId, agentId, {
-          status: 'crashed',
-          pid: null,
-        }),
+      markCrashed: runtime => {
+        const scope = {
+          kind: 'conversation' as const,
+          conversationId: runtime.conversationId,
+          agentId: runtime.agentId,
+        };
+        const updated = runtime.daemonInstanceId
+          ? runtimeSlots.finalizeGeneration({
+              scope,
+              expectedGeneration: runtime.generation,
+              expectedDaemonInstanceId: runtime.daemonInstanceId,
+              status: 'crashed',
+            })
+          : runtimeSlots.updateCurrentProjection(scope, {
+              status: 'crashed',
+              pid: null,
+            });
+        return updated
+          ? conversations.getAgent(runtime.conversationId, runtime.agentId)
+          : null;
+      },
     },
     session: {
       // Plain deferred transaction: both statements are writes, so the write
@@ -216,9 +283,13 @@ export function createRuntimeFanoutDbDeps(deps: {
         deps.db.transaction(() =>
           fn({
             clearCliSession: (conversationId, agentId) =>
-              conversations.updateAgentRuntime(conversationId, agentId, {
-                cliSessionId: null,
-              }),
+              runtimeSlots.clearCliSession({
+                kind: 'conversation',
+                conversationId,
+                agentId,
+              })
+                ? conversations.getAgent(conversationId, agentId)
+                : null,
             insertSystemMessage: input =>
               messages.insertForConversation({
                 conversationId: input.conversationId,
@@ -248,7 +319,7 @@ export function createRuntimeFanoutDbDeps(deps: {
     }),
     // DB-backed but stateless — the whole runtime-event → status mapping lives
     // in the projector, so ONE instance serves every host the fanout tracks.
-    statusProjector: new DbRuntimeStatusProjector(conversations, deps.events),
+    statusProjector: new DbRuntimeStatusProjector(runtimeSlots, deps.events),
     conversationActivity: conversationEvents,
   };
 }

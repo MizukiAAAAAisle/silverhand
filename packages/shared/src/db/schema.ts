@@ -10,6 +10,10 @@ export const RuntimeKindSchema = z.enum([
 ]);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
+/** Immutable cognitive/runtime ownership selected when an Agent is created. */
+export const AgentSessionScopeSchema = z.enum(['conversation', 'agent']);
+export type AgentSessionScope = z.infer<typeof AgentSessionScopeSchema>;
+
 // Reasoning effort is a bounded, opaque, lowercase TOKEN — one shape shared by
 // persistence, the HTTP DTOs, and the daemon `runtime_start` wire. It has NO
 // global legality semantics: this schema only bounds the STRUCTURE (charset +
@@ -239,6 +243,8 @@ export interface AgentRow {
   name: string;
   display_name: string;
   runtime: RuntimeKind;
+  /** P0-d dormant authority; product creation activates `agent` in P2. */
+  session_scope: AgentSessionScope;
   model: string | null;
   reasoning_effort: ReasoningEffort | null;
   fast_mode: FastMode | null;
@@ -488,18 +494,48 @@ export interface ConversationRow {
 export interface ConversationAgentRow {
   conversation_id: string;
   agent_id: string;
-  cli_session_id: string | null;
-  pid: number | null;
-  status: ConversationAgentStatus;
   joined_at: number;
 }
 
 /**
- * Human membership row for `conversation_users` (v25). Mirrors
- * `ConversationAgentRow` minus the agent-only process-lifecycle
- * columns (cli_session_id / pid / status); humans don't run as
- * processes, so those fields don't apply.
+ * Current runtime slot authority. Scope is discriminated structurally:
+ * `conversation_id IS NULL` is Agent scope; non-NULL is Conversation scope.
+ * Process fields are observations, while `cli_session_id` is durable resume
+ * state and survives ordinary process exit.
  */
+export interface AgentRuntimeSlotRow {
+  id: number;
+  agent_id: string;
+  conversation_id: string | null;
+  generation: number;
+  claimed_by_daemon_instance_id: string | null;
+  observed_status: ConversationAgentStatus;
+  observed_pid: number | null;
+  cli_session_id: string | null;
+}
+
+export type AgentRuntimeEventKind =
+  | 'slot_migrated'
+  | 'generation_claimed'
+  | 'projection_updated'
+  | 'generation_finalized';
+
+/** Append-only history; current authority is always AgentRuntimeSlotRow. */
+export interface AgentRuntimeEventRow {
+  id: number;
+  slot_id: number;
+  agent_id: string;
+  conversation_id: string | null;
+  generation: number;
+  event_kind: AgentRuntimeEventKind;
+  daemon_instance_id: string | null;
+  observed_status: ConversationAgentStatus;
+  observed_pid: number | null;
+  cli_session_id: string | null;
+  occurred_at: number;
+}
+
+/** Human membership row for `conversation_users` (v25). */
 export interface ConversationUserMemberRow {
   conversation_id: string;
   user_id: string;

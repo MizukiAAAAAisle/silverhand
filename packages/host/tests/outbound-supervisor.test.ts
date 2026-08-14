@@ -35,12 +35,14 @@ import { OutboundSupervisor, type OutboundClientLike } from '../src/daemon/outbo
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import { daemonHostConfigFingerprint } from '../src/daemon/outbound-client.js';
 import type { EventFrame, ResponseFrame } from '../src/protocol.js';
+import type { DaemonHostConfig } from '@silverhand/shared';
 
 interface FakeClient extends OutboundClientLike {
   readonly configPath: string;
   startCalls: number;
   stopCalls: { reason: string | undefined }[];
   sentEvents: EventFrame[];
+  onConfigLoaded(config: DaemonHostConfig): void;
 }
 
 function silentLogger(): DaemonLogger {
@@ -55,12 +57,16 @@ function silentLogger(): DaemonLogger {
   };
 }
 
-function makeFakeClient(configPath: string): FakeClient {
+function makeFakeClient(
+  configPath: string,
+  onConfigLoaded: (config: DaemonHostConfig) => void,
+): FakeClient {
   const fake: FakeClient = {
     configPath,
     startCalls: 0,
     stopCalls: [],
     sentEvents: [],
+    onConfigLoaded,
     start() {
       this.startCalls += 1;
     },
@@ -109,8 +115,8 @@ function makeFixture(): SupervisorFixture {
     readyEvent,
     dispatchCommand: async () => ({ id: 'unused', result: {} } as ResponseFrame),
     cleanupDeferredForOwner: () => {},
-    outboundClientFactory: (configPath) => {
-      const fake = makeFakeClient(configPath);
+    outboundClientFactory: (configPath, deps) => {
+      const fake = makeFakeClient(configPath, deps.onConfigLoaded);
       spawned.push(fake);
       return fake;
     },
@@ -1111,6 +1117,21 @@ describe('OutboundSupervisor — currentBinding() (D4.e-1 registry namespace sou
     if (b) b.host_id = 'tampered';
     expect(f.supervisor.currentBinding()).toEqual({
       server_origin: 'http://127.0.0.1:8765',
+      host_id: 'host-1',
+    });
+  });
+
+  it('tracks the config accepted by the live client after same-path polling changes the server origin', () => {
+    f = makeFixture();
+    const path = f.writeValidConfig();
+    f.supervisor.attach({ config_path: path });
+    f.spawned[0]!.onConfigLoaded({
+      server_url: 'http://127.0.0.1:9876',
+      host_id: 'host-1',
+      host_token: 'rotated-token',
+    });
+    expect(f.supervisor.currentBinding()).toEqual({
+      server_origin: 'http://127.0.0.1:9876',
       host_id: 'host-1',
     });
   });

@@ -233,7 +233,14 @@ const FrameIdSchema = z.string().min(1);
 // auto-follow (so a thread reply can miss the person it names), no CC, and
 // undirected framing — with no error on either side.
 // Bumps alongside HOST_PROTOCOL_VERSION (11→12). No shim.
-export const OUTBOUND_PROTOCOL_VERSION = 11;
+//
+// v12 (#task:2015): server commands carry the claimed runtime generation and
+// status-mutating daemon events echo it back. Without the field the backend
+// cannot bind projection/finalize to one custody token, so old outbound peers
+// are rejected at ready admission rather than bridged.
+// v13 (#task:2015 review): runtime_status rows and destructive stop/clear
+// commands are generation-bound. Older peers must fail at attach.
+export const OUTBOUND_PROTOCOL_VERSION = 13;
 
 // ── server → daemon command catalogue ──────────────────────────────
 
@@ -728,6 +735,7 @@ export const OutboundRuntimeStateEventFrameSchema = z
     kind: z.literal('runtime_state'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     state: AgentRunStateSchema,
     ts: z.number().int(),
   })
@@ -753,6 +761,7 @@ export const OutboundRuntimeExitEventFrameSchema = z
     kind: z.literal('runtime_exit'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     code: z.number().int().nullable(),
     intentional: z.boolean(),
     ts: z.number().int(),
@@ -766,6 +775,7 @@ export const OutboundRuntimeReadyForDrainEventFrameSchema = z
     kind: z.literal('runtime_ready_for_drain'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     ts: z.number().int(),
   })
   .strict();
@@ -807,6 +817,7 @@ export const OutboundRuntimeInitTimeoutEventFrameSchema = z
     kind: z.literal('runtime_init_timeout'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     timeout_reason: z.enum(['silence', 'pre_protocol_cap', 'post_protocol']),
     elapsed_ms: z.number().int().nonnegative(),
     timeout_ms: z.number().int().nonnegative(),
@@ -825,6 +836,7 @@ export const OutboundRuntimeInitRetryingEventFrameSchema = z
     kind: z.literal('runtime_init_retrying'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     retry_attempt: z.number().int().positive(),
     max_retries: z.number().int().nonnegative(),
     delay_ms: z.number().int().nonnegative(),
@@ -839,6 +851,7 @@ export const OutboundRuntimeInitCooldownEventFrameSchema = z
     kind: z.literal('runtime_init_cooldown'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     cooldown_until: z.number().int().positive(),
     attempts_exhausted: z.number().int().nonnegative(),
     ts: z.number().int(),
@@ -897,6 +910,7 @@ export const OutboundRuntimeParsedEventFrameSchema = z
     kind: z.literal('runtime_parsed_event'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     parsed: ParsedEventSchema,
     ts: z.number().int(),
   })

@@ -121,8 +121,8 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       .run(agentId, 'cascade-agent', hostId, now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(channelId, agentId, now);
     const msg = (await (
@@ -218,8 +218,8 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       .run(agentId, 'stop-failure-agent', hostId, now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(channelId, agentId, now);
 
@@ -288,8 +288,8 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       .run(guestAgentId, 'guest-agent', guestHostId, now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(channelId, guestAgentId, now);
 

@@ -387,7 +387,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       expect(r.code, r.stderr).toBe(0);
       expect(captured.length).toBe(2);
       const upload = captured[0]!;
-      expect(upload.path).toBe('/internal/conversations/conv-1/agents/agent-1/attachments');
+      expect(upload.path).toBe('/internal/agents/agent-1/conversations/conv-1/attachments');
       // Multipart body carries the original bytes verbatim.
       expect(upload.bodyBytes.includes(bytes)).toBe(true);
       const send = captured[1]!;

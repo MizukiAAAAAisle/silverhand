@@ -6,19 +6,19 @@
  * SIGTERM the fixture child, the supervisor's exit handler fires,
  * a `runtime_exit` event flows back over the outbound WS, and the
  * backend's `RuntimeStatusProjector.runtimeExit` updates the
- * conversation_agents row.
+ * scoped runtime-slot row.
  *
  * **What this test pins (Cindy `QiUQ1IvQSRA4zOnw` boundary —
  * "runtimeExit projection contract")**, per
  * `packages/backend/src/runtime/status-projector.ts:170-203`:
  *
- *   1. `conversation_agents.status` → `'idle'` (intentional stop /
+ *   1. `agent_runtime_slots.observed_status` → `'idle'` (intentional stop /
  *      exit code 0). `'crashed'` is the other arm, reserved for
  *      `initTimedOut` / `fatalError` / non-zero non-intentional
  *      exit — none of which fire on a clean hard stop.
- *   2. `conversation_agents.pid` → `NULL`. Cleared on exit
+ *   2. `agent_runtime_slots.observed_pid` → `NULL`. Cleared on exit
  *      unconditionally.
- *   3. `conversation_agents.cli_session_id` → **preserved**,
+ *   3. `agent_runtime_slots.cli_session_id` → **preserved**,
  *      unchanged from the value `sessionInit` projected. Production
  *      contract (Cindy `BYHZJI9ALSVmmlFr`): the row keeps the last
  *      session id so the next start can `--resume`.
@@ -166,8 +166,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     ).run(conversationId, harness.userId, now);
     db.prepare(
       `INSERT INTO conversation_agents
-        (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-        VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+        (conversation_id, agent_id, joined_at)
+       VALUES (?, ?, ?)`,
     ).run(conversationId, agentId, now);
 
     const messageId = 'msg-g2-b4';
@@ -198,7 +198,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     // post-stop assertion can prove preservation, not just
     // "happens to equal expectedSessionId".
     //
-    // Note: `conversation_agents.pid` is NOT populated by
+    // Note: `agent_runtime_slots.observed_pid` is NOT populated by
     // `sessionInit()` in the current daemon wiring (see
     // `status-projector.ts:120-133`). pid is only ever written as
     // `NULL` on exit / init-retry / delivery-failure projections. So
@@ -215,8 +215,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
             [string, string],
             { status: string; pid: number | null; cli_session_id: string | null }
           >(
-            `SELECT status, pid, cli_session_id
-               FROM conversation_agents
+            `SELECT observed_status AS status, observed_pid AS pid, cli_session_id
+               FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(conversationId, agentId);
@@ -287,8 +287,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
                 cli_session_id: string | null;
               }
             >(
-              `SELECT status, pid, cli_session_id
-                 FROM conversation_agents
+              `SELECT observed_status AS status, observed_pid AS pid, cli_session_id
+                 FROM agent_runtime_slots
                 WHERE conversation_id = ? AND agent_id = ?`,
             )
             .get(conversationId, agentId);

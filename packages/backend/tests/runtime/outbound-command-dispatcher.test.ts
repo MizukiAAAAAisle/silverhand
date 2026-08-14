@@ -27,7 +27,7 @@ describe('OutboundRuntimeCommandDispatcher', () => {
       dispatcher.runtimeStop({
         conversation_id: 'c1',
         agent_id: 'a1',
-        mode: 'hard',
+        runtime_generation: 1, mode: 'hard',
       }),
     ).resolves.toEqual({ mode: 'hard', stopped: true, exit_code: 0 });
 
@@ -39,7 +39,7 @@ describe('OutboundRuntimeCommandDispatcher', () => {
         params: {
           conversation_id: 'c1',
           agent_id: 'a1',
-          mode: 'hard',
+          runtime_generation: 1, mode: 'hard',
         },
       },
     ]);
@@ -60,7 +60,7 @@ describe('OutboundRuntimeCommandDispatcher', () => {
       dispatcher.runtimeStop({
         conversation_id: 'c1',
         agent_id: 'a1',
-        mode: 'hard',
+        runtime_generation: 1, mode: 'hard',
       }),
     ).rejects.toMatchObject({ code: 'host_revoked' });
     expect(transport.calls).toEqual([]);

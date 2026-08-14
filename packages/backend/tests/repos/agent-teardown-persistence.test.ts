@@ -40,6 +40,7 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
@@ -89,7 +90,19 @@ function bootstrap() {
     capabilities.seedDefaults(workspace.id, agent.id);
     conversations.addAgent(channel.id, agent.id);
   }
-  conversations.updateAgentRuntime(channel.id, subject.id, { status: 'active' });
+  const runtimeSlots = new RuntimeSlotRepo(db);
+  runtimeSlots.updateCurrentConversationProjection(channel.id, subject.id, {
+    status: 'active',
+  });
+  runtimeSlots.claimGeneration({
+    scope: {
+      kind: 'conversation',
+      conversationId: channel.id,
+      agentId: subject.id,
+    },
+    daemonInstanceId: 'daemon-agent-teardown',
+    status: 'active',
+  });
 
   // History authored by the subject, with a pending delivery for it.
   const authored = messages.insertForConversation({
@@ -342,8 +355,16 @@ describe('AgentTeardownUnitOfWork (SQLite adapter) — FK cascade contract', () 
       a.conversationId.localeCompare(b.conversationId),
     )).toEqual(
       [
-        { conversationId: t.channelId, status: 'active' },
-        { conversationId: t.dmChannelId, status: 'idle' },
+        {
+          conversationId: t.channelId,
+          status: 'active',
+          runtimeGeneration: 1,
+        },
+        {
+          conversationId: t.dmChannelId,
+          status: 'idle',
+          runtimeGeneration: 0,
+        },
       ].sort((a, b) => a.conversationId.localeCompare(b.conversationId)),
     );
     expect(capture.regularWorkspaceCount).toBe(1);

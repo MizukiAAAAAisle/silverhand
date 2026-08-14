@@ -34,6 +34,7 @@ import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { COMMAND_GROUPS } from '@silverhand/cli';
 import { internalPaths } from '@silverhand/shared';
+import { internalAgentRoutePaths } from '../../src/routes/internal-agent/paths.js';
 import {
   CLI_INVOKE_ROUTES,
   lookupCliRoute,
@@ -71,6 +72,8 @@ for (const g of COMMAND_GROUPS) {
  *  suffix the middleware actually compares against. */
 function suffixOf(path: string): string {
   const m = path.match(
+    /^\/internal\/agents\/[^/]+\/conversations\/[^/]+\/(.+)$/,
+  ) ?? path.match(
     /^\/internal\/conversations\/[^/]+\/agents\/[^/]+\/(.+)$/,
   );
   return m ? m[1]! : '';
@@ -116,7 +119,7 @@ function collectRouteSources(dir: string): string[] {
   return out;
 }
 
-function buildRegistrationMap(): Map<string, 'GET' | 'POST' | 'PATCH'> {
+function buildRegistrationSet(): Set<string> {
   const here = dirname(fileURLToPath(import.meta.url));
   const srcDir = resolve(here, '../../src');
   const routesDir = resolve(srcDir, 'routes');
@@ -124,25 +127,21 @@ function buildRegistrationMap(): Map<string, 'GET' | 'POST' | 'PATCH'> {
     resolve(srcDir, 'routes.ts'),
     ...collectRouteSources(routesDir),
   ];
-  const re = /app\.(get|post|patch)\(\s*internalPaths\.(\w+)\s*\(/g;
-  const map = new Map<string, 'GET' | 'POST' | 'PATCH'>();
+  const re = /app\.(get|post|patch|delete)\(\s*internalAgentRoutePaths\.(\w+)/g;
+  const registrations = new Set<string>();
   for (const file of files) {
     const src = readFileSync(file, 'utf8');
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) {
-      const method = m[1]!.toUpperCase() as 'GET' | 'POST' | 'PATCH';
-      const name = m[2]!;
-      // First registration wins. There should never be duplicates; if a
-      // name shows up twice we fail loudly below.
-      if (map.has(name) && map.get(name) !== method) {
-        throw new Error(
-          `internalPaths.${name} registered with both ${map.get(name)} and ${method}`,
-        );
-      }
-      map.set(name, method);
+      const method = m[1]!.toUpperCase();
+      const name = m[2]! as keyof typeof internalAgentRoutePaths;
+      const route = internalAgentRoutePaths[name];
+      if (route === undefined) continue;
+      const raw = typeof route === 'function' ? route('ATT') : route;
+      registrations.add(`${method} ${normalizeProbedSuffix(raw.replace(/^\//, ''))}`);
     }
   }
-  return map;
+  return registrations;
 }
 
 function isAttachmentWildcardRoute(name: string): boolean {
@@ -169,7 +168,7 @@ describe('CLI invoke route map', () => {
     const builders = Object.entries(internalPaths).filter(
       ([name]) => !NON_CLI_INTERNAL_ROUTES.has(name),
     );
-    const registered = buildRegistrationMap();
+    const registered = buildRegistrationSet();
     for (const [name, fn] of builders) {
       // Each helper is `(cid, aid, ...rest) => string`. Probe with
       // placeholder ids; collapse `:attachmentId` to `*` for the
@@ -180,22 +179,15 @@ describe('CLI invoke route map', () => {
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
       const suffix = normalizeProbedSuffix(suffixOf(probed));
-      // Strict match: the test must know the exact registered method.
-      // Without this the previous `GET ?? POST` fallback masked the
-      // 5/14 `schedules/list` regression — the map said GET, the route
-      // was POST, and the test still passed because POST happened to
-      // hit. Now: ground-truth method must be registered AND must
-      // match the route-map's declared method.
-      const expectedMethod = registered.get(name);
-      expect(
-        expectedMethod,
-        `internalPaths.${name} is not registered in any backend route source (no app.get/app.post call)`,
-      ).toBeDefined();
-      const hit = lookupCliRoute(expectedMethod!, suffix);
+      const hit = CLI_INVOKE_ROUTES.find(route => route.suffix === suffix);
       expect(
         hit,
-        `internalPaths.${name} (${expectedMethod} ${probed}) has no CLI_INVOKE_ROUTES entry — middleware will log noun=null,verb=null`,
-      ).not.toBeNull();
+        `internalPaths.${name} (${probed}) has no CLI_INVOKE_ROUTES entry — middleware will log noun=null,verb=null`,
+      ).toBeDefined();
+      expect(
+        registered,
+        `internalPaths.${name} points to ${hit!.method} ${suffix}, which is absent from the shared handler graph`,
+      ).toContain(`${hit!.method} ${suffix}`);
     }
   });
 
@@ -206,31 +198,29 @@ describe('CLI invoke route map', () => {
     // single resource can expose two methods on one suffix (e.g.
     // `profile/mcp` GET=get / POST=set), and a suffix-only map would
     // collapse them and mis-attribute the method.
-    const registered = buildRegistrationMap();
+    const registered = buildRegistrationSet();
     const builders = Object.entries(internalPaths).filter(
       ([name]) => !NON_CLI_INTERNAL_ROUTES.has(name),
     );
-    const keyToName = new Map<string, string>();
+    const suffixToName = new Map<string, string>();
     for (const [name, fn] of builders) {
       const probed =
         isAttachmentWildcardRoute(name)
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
       const suffix = normalizeProbedSuffix(suffixOf(probed));
-      const method = registered.get(name);
-      if (method) keyToName.set(`${method} ${suffix}`, name);
+      suffixToName.set(suffix, name);
     }
     for (const r of CLI_INVOKE_ROUTES) {
-      const name = keyToName.get(`${r.method} ${r.suffix}`);
+      const name = suffixToName.get(r.suffix);
       expect(
         name,
-        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} has no internalPaths helper registered as ${r.method} (the map will produce None.None in cli-*.log)`,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} has no internalPaths helper (the map will produce None.None in cli-*.log)`,
       ).toBeDefined();
-      const actualMethod = registered.get(name!);
       expect(
-        actualMethod,
-        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} → backend route sources register ${actualMethod} for internalPaths.${name}; the map will produce None.None in cli-*.log`,
-      ).toBe(r.method);
+        registered,
+        `CLI_INVOKE_ROUTES entry ${r.method} ${r.suffix} is absent from the shared handler graph`,
+      ).toContain(`${r.method} ${r.suffix}`);
     }
   });
 

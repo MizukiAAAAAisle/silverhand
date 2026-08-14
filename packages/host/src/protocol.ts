@@ -69,6 +69,7 @@ import {
   ParsedEventKindSchema,
   ParsedEventSchema,
   ReasoningEffortTokenSchema,
+  RUNTIME_DELIVERY_INSTRUCTION_SIGNALS,
   RuntimeCatalogResponseSchema,
   RuntimeKindSchema,
   SendMessageTargetSchema,
@@ -221,12 +222,21 @@ import {
 // upgraded by its own install step. So v11 counts as released here and this
 // change may not join it.
 //
+// v13 (#task:2015): runtime start/deliver and every status-mutating runtime
+// event carry the backend-claimed custody generation. A pre-v13 daemon cannot
+// prove that an event belongs to the live slot generation, so exact hello
+// admission rejects it before any runtime is started. The outbound epoch bumps
+// 11→12 for the same generation field.
+//
 // Disjoint from the desktop API epoch (`desktop-server-api-epoch.ts`), which
-// bumps in the same commit: that gate guards `/api/*` (renderer ↔ server) and
-// exempts `/internal/*`, so it never classifies a daemon — and this constant
-// never classifies a renderer. Two boundaries, two admission facts.
+// does not bump here: that gate guards `/api/*` (renderer ↔ server) and exempts
+// `/internal/*`, so it never classifies a daemon — and this constant never
+// classifies a renderer. Two boundaries, two admission facts.
 
-export const HOST_PROTOCOL_VERSION = 12;
+// v14 (#task:2015 review): every runtime snapshot and destructive runtime
+// command carries the generation it describes. This closes cross-generation
+// races and therefore has no compatibility shim.
+export const HOST_PROTOCOL_VERSION = 14;
 
 // ── capability tokens ────────────────────────────────────────────────
 //
@@ -988,6 +998,8 @@ export function isHostActiveRuntimePhase(phase: string): boolean {
 export const RuntimeStateDtoSchema = z.object({
   conversation_id: z.string().min(1),
   agent_id: z.string().min(1),
+  /** Exact supervised generation represented by this snapshot row. */
+  runtime_generation: z.number().int().positive(),
   pid: z.number().int().nullable(),
   /** Daemon's view of where this runtime is in its lifecycle. The
    *  enum mirrors the §3.2.1 startup/live exclusivity state machine
@@ -1026,6 +1038,13 @@ export const RuntimeDeliverySchema = z
     seq: z.number().int().nonnegative(),
     thread_root_id: z.string().min(1).nullable(),
     delivery_kind: z.enum(['turn', 'observe']),
+    /** Presentation fragment for canonical novel-remainder reconstruction. */
+    presentation: z
+      .object({
+        body: RuntimeMessageTextSchema,
+        instruction: z.enum(RUNTIME_DELIVERY_INSTRUCTION_SIGNALS),
+      })
+      .strict(),
   })
   .strict();
 export type RuntimeDelivery = z.infer<typeof RuntimeDeliverySchema>;
@@ -1034,6 +1053,7 @@ export const RuntimeStartParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     options: StartOptionsSchema,
   })
   .strict();
@@ -1099,6 +1119,7 @@ export const RuntimeStopParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     mode: z.literal('hard'),
   })
   .strict();
@@ -1141,9 +1162,10 @@ export const RuntimeDeliverParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     delivery_ids: z.array(z.number().int()).min(1),
     delivered_up_to_seq: z.number().int().nonnegative().optional(),
-    deliveries: z.array(RuntimeDeliverySchema).optional(),
+    deliveries: z.array(RuntimeDeliverySchema).min(1).optional(),
     /** Distinguishes a normal message from a schedule fire, exactly as
      *  the retired `runtime_wake` did — the daemon's driver needs it to
      *  frame the payload. Spawn-time startup delivery had no `kind`
@@ -1350,6 +1372,7 @@ export const RuntimeClearSessionParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
   })
   .strict();
 export type RuntimeClearSessionParams = z.infer<
@@ -2823,6 +2846,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     event: z.literal('runtime_state'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     state: AgentRunStateSchema,
     ts: z.number().int(),
   }),
@@ -2841,6 +2865,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     event: z.literal('runtime_exit'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     code: z.number().int().nullable(),
     intentional: z.boolean(),
     ts: z.number().int(),
@@ -2849,6 +2874,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     event: z.literal('runtime_ready_for_drain'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     ts: z.number().int(),
   }),
   // ── unified delivery ack events (Stage 2, #task:1417) ───────────
@@ -2888,6 +2914,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     event: z.literal('runtime_init_timeout'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     /** Which watchdog tier tripped (mirrors CM's three-tier
      *  PR-A watchdog: silence between bytes / pre-protocol cap /
      *  post-protocol stall). Names match CM's `InitTimeoutReason` so
@@ -2925,6 +2952,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     event: z.literal('runtime_init_retrying'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     /** The attempt number about to start (= the previous timeout's
      *  retry_attempt + 1). */
     retry_attempt: z.number().int().positive(),
@@ -2937,6 +2965,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
     event: z.literal('runtime_init_cooldown'),
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     /** Wall-clock epoch ms after which backend / user may attempt a
      *  fresh start. Daemon will NOT auto-retry past this point. */
     cooldown_until: z.number().int().positive(),
@@ -3014,6 +3043,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
       event: z.literal('runtime_parsed_event'),
       conversation_id: z.string().min(1),
       agent_id: z.string().min(1),
+      runtime_generation: z.number().int().positive(),
       parsed: ParsedEventSchema,
       ts: z.number().int(),
     })

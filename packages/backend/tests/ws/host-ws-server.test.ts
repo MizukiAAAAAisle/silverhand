@@ -1753,13 +1753,19 @@ function commandCases(hostId: string): CommandCase[] {
       params: {
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         options: runtimeStartOptions(),
       },
       result: { started: true, pid: 123, started_at: 1700000000000 },
     },
     {
       kind: 'runtime_stop',
-      params: { conversation_id: 'c1', agent_id: 'a1', mode: 'hard' },
+      params: {
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        runtime_generation: 1,
+        mode: 'hard',
+      },
       result: { mode: 'hard', stopped: true, exit_code: 0 },
     },
     {
@@ -1767,6 +1773,7 @@ function commandCases(hostId: string): CommandCase[] {
       params: {
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         delivery_ids: [1],
         kind: 'message',
         text: 'hello',
@@ -1781,7 +1788,11 @@ function commandCases(hostId: string): CommandCase[] {
     },
     {
       kind: 'runtime_clear_session',
-      params: { conversation_id: 'c1', agent_id: 'a1' },
+      params: {
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        runtime_generation: 1,
+      },
       result: { cleared: true },
     },
     {
@@ -1898,6 +1909,7 @@ function runtimeStatusResponse(id: string, agentId: string): string {
         {
           conversation_id: 'c1',
           agent_id: agentId,
+          runtime_generation: 1,
           pid: null,
           phase: 'idle',
           run_state: null,
