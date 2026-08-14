@@ -610,6 +610,13 @@ export class ChannelService {
     if (input.archived) {
       this.runtimeHost.resolveConversationRuns(updated.id, 'conversation_closed');
       for (const ca of this.channels.listAgents(updated.id)) {
+        // A ConversationSlot is owned by this conversation edge; closing the
+        // conversation terminates that process. An AgentSlot is owned by the
+        // Agent aggregate and may still be serving other target conversations,
+        // so archiving one target must not kill the shared process.
+        if (this.agents.get(ca.agent_id)?.session_scope !== 'conversation') {
+          continue;
+        }
         void this.runtimeHost.stop(updated.id, ca.agent_id).catch(err =>
           this.logger.warn(
             { channelId: updated.id, agentId: ca.agent_id, err },

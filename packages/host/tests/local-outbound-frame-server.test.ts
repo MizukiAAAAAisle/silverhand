@@ -265,6 +265,11 @@ describe('LocalOutboundFrameServer', () => {
       result: {
         runtimes: [
           {
+            runtime_scope: {
+              kind: 'conversation',
+              conversation_id: 'c1',
+              agent_id: 'a1',
+            },
             conversation_id: 'c1',
             agent_id: 'a1',
             runtime_generation: 1,
@@ -447,6 +452,11 @@ describe('LocalOutboundFrameServer', () => {
     // slow/stuck backend.
     server.broadcast({
       event: 'runtime_ready_for_drain',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
       runtime_generation: 1,
@@ -468,6 +478,11 @@ describe('LocalOutboundFrameServer', () => {
 
     const event: EventFrame = {
       event: 'runtime_ready_for_drain',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
       runtime_generation: 1,
@@ -481,6 +496,11 @@ describe('LocalOutboundFrameServer', () => {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_ready_for_drain',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
       ts: 1717000000,

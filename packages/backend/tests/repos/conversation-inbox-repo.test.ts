@@ -23,7 +23,7 @@ function bootstrap() {
   const agents = new AgentRepo(db);
   const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
   const b = agents.create({ name: 'b', runtime: 'claude' }, localHostId, 'local');
-  return { channel, messages, inbox, agentA: a.id, agentB: b.id };
+  return { db, channel, messages, inbox, agentA: a.id, agentB: b.id };
 }
 
 describe('ConversationInboxRepo', () => {
@@ -93,7 +93,7 @@ describe('ConversationInboxRepo', () => {
     expect(inbox.listPending(channel.id, agentA)).toHaveLength(1);
   });
 
-  it('markDelivered removes items from listPending; empty input is a no-op', () => {
+  it('settleDelivered requires the exact origin and lease; empty input is a no-op', () => {
     const { channel, messages, inbox, agentA } = bootstrap();
     const m1 = messages.insertForConversation({
       conversationId: channel.id,
@@ -108,11 +108,22 @@ describe('ConversationInboxRepo', () => {
     inbox.enqueue(channel.id, agentA, m1.id);
     inbox.enqueue(channel.id, agentA, m2.id);
 
-    inbox.markDelivered([]);
+    expect(inbox.settleDelivered({
+      conversationId: channel.id,
+      agentId: agentA,
+      inFlightOwner: 'conn-1',
+      inboxIds: [],
+    })).toBe(false);
     expect(inbox.listPending(channel.id, agentA)).toHaveLength(2);
 
-    const ids = inbox.listPending(channel.id, agentA).map(p => p.inboxId);
-    inbox.markDelivered([ids[0]!]);
+    const claimed = inbox.claimPending(channel.id, agentA, 'conn-1');
+    expect(inbox.settleDelivered({
+      conversationId: channel.id,
+      agentId: agentA,
+      inFlightOwner: 'conn-1',
+      inboxIds: [claimed[0]!.inboxId],
+    })).toBe(true);
+    inbox.rollbackInFlight([claimed[1]!.inboxId], 'conn-1');
     const remaining = inbox.listPending(channel.id, agentA);
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.message.content).toBe('2');
@@ -143,7 +154,12 @@ describe('ConversationInboxRepo', () => {
       '1',
     ]);
 
-    inbox.markDelivered([claimed[1]!.inboxId]);
+    expect(inbox.settleDelivered({
+      conversationId: channel.id,
+      agentId: agentA,
+      inFlightOwner: 'conn-1',
+      inboxIds: [claimed[1]!.inboxId],
+    })).toBe(true);
     expect(inbox.listInFlightForOwner('conn-1')).toEqual([]);
   });
 
@@ -195,7 +211,79 @@ describe('ConversationInboxRepo', () => {
     expect(inbox.listPending(channel.id, agentA)).toEqual([]);
     expect(inbox.hasUndeliveredForPair(channel.id, agentA)).toBe(true);
 
-    inbox.markDelivered([claimed!.inboxId]);
+    expect(inbox.settleDelivered({
+      conversationId: channel.id,
+      agentId: agentA,
+      inFlightOwner: 'conn-1',
+      inboxIds: [claimed!.inboxId],
+    })).toBe(true);
     expect(inbox.hasUndeliveredForPair(channel.id, agentA)).toBe(false);
+  });
+
+  it('settles an all-or-nothing set only under the exact origin, agent, and lease', () => {
+    const { db, channel, messages, inbox, agentA, agentB } = bootstrap();
+    const channelB = new ConversationRepo(db).insertChannel({
+      workspaceId: channel.workspace_id!,
+      title: 'second',
+    });
+    const enqueue = (conversationId: string, agentId: string, content: string) => {
+      const message = messages.insertForConversation({
+        conversationId,
+        fromKind: 'user',
+        content,
+      });
+      return inbox.ensureDelivery(conversationId, agentId, message.id).inboxId;
+    };
+    const aId = enqueue(channel.id, agentA, 'origin A');
+    const bId = enqueue(channelB.id, agentA, 'origin B');
+    const otherAgentId = enqueue(channelB.id, agentB, 'other agent');
+    inbox.claimPending(channel.id, agentA, 'conn-1');
+    inbox.claimPending(channelB.id, agentA, 'conn-1');
+    inbox.claimPending(channelB.id, agentB, 'conn-1');
+
+    const row = (id: number) => db.prepare(
+      `SELECT id, conversation_id, agent_id, delivered_at, failed_at,
+              in_flight_owner, in_flight_at
+         FROM conversation_inboxes WHERE id = ?`,
+    ).get(id);
+    const before = new Map([
+      [aId, row(aId)],
+      [bId, row(bId)],
+      [otherAgentId, row(otherAgentId)],
+    ]);
+    const authority = (inboxIds: readonly number[], inFlightOwner = 'conn-1') => ({
+      conversationId: channelB.id,
+      agentId: agentA,
+      inFlightOwner,
+      inboxIds,
+    });
+
+    expect(inbox.settleDelivered(authority([aId]))).toBe(false);
+    expect(inbox.settleDelivered(authority([bId, aId]))).toBe(false);
+    expect(inbox.settleDelivered(authority([bId, otherAgentId]))).toBe(false);
+    expect(inbox.settleDelivered(authority([bId], 'conn-2'))).toBe(false);
+    expect(row(aId)).toEqual(before.get(aId));
+    expect(row(bId)).toEqual(before.get(bId));
+    expect(row(otherAgentId)).toEqual(before.get(otherAgentId));
+
+    expect(inbox.settleDelivered(authority([bId]))).toBe(true);
+    expect(row(bId)).toMatchObject({
+      delivered_at: expect.any(Number),
+      failed_at: null,
+      in_flight_owner: null,
+      in_flight_at: null,
+    });
+    expect(row(aId)).toEqual(before.get(aId));
+    expect(row(otherAgentId)).toEqual(before.get(otherAgentId));
+
+    const retryId = enqueue(channelB.id, agentA, 'retry B');
+    inbox.claimPending(channelB.id, agentA, 'conn-1');
+    expect(inbox.settleUndelivered(authority([retryId]))).toBe(true);
+    expect(row(retryId)).toMatchObject({
+      delivered_at: null,
+      failed_at: null,
+      in_flight_owner: null,
+      in_flight_at: null,
+    });
   });
 });

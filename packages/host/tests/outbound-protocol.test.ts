@@ -102,6 +102,7 @@ describe('outbound protocol — command catalogue', () => {
       params: {
         runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [1, 2],
         kind: 'message',
@@ -381,7 +382,7 @@ describe('outbound protocol — daemon event catalogue', () => {
   });
 
   it('keeps outbound event names in lockstep with the daemon event surface', () => {
-    const daemonEventNames = EventFrameSchema.options
+    const daemonEventNames = EventFrameSchema.innerType().options
       .map(option => option.shape.event.value)
       .sort();
 
@@ -412,6 +413,11 @@ describe('outbound protocol — daemon event catalogue', () => {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_state',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
       state: RUN_STATE,

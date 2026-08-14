@@ -185,6 +185,10 @@ export function AgentProfileCard({
           items={[
             { label: 'Computer', value: computerName },
             {
+              label: 'Session scope',
+              value: agent.session_scope === 'agent' ? 'Agent' : 'Conversation',
+            },
+            {
               label: 'Created',
               value: dayjs(agent.created_at).format('YYYY-MM-DD'),
               title: dayjs(agent.created_at).format('YYYY-MM-DD HH:mm:ss'),

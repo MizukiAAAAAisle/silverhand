@@ -352,15 +352,25 @@ describe('AgentTeardownUnitOfWork (SQLite adapter) — FK cascade contract', () 
     // capture that only carried `active` rows would hide that decision from the
     // layer that owns it.
     expect([...capture.runtimeSessions].sort((a, b) =>
-      a.conversationId.localeCompare(b.conversationId),
+      (a.conversationId ?? '').localeCompare(b.conversationId ?? ''),
     )).toEqual(
       [
         {
+          runtimeScope: {
+            kind: 'conversation',
+            conversationId: t.channelId,
+            agentId: t.subjectId,
+          },
           conversationId: t.channelId,
           status: 'active',
           runtimeGeneration: 1,
         },
         {
+          runtimeScope: {
+            kind: 'conversation',
+            conversationId: t.dmChannelId,
+            agentId: t.subjectId,
+          },
           conversationId: t.dmChannelId,
           status: 'idle',
           runtimeGeneration: 0,
@@ -368,6 +378,36 @@ describe('AgentTeardownUnitOfWork (SQLite adapter) — FK cascade contract', () 
       ].sort((a, b) => a.conversationId.localeCompare(b.conversationId)),
     );
     expect(capture.regularWorkspaceCount).toBe(1);
+  });
+
+  it('captures one AgentSlot by semantic scope even when no conversation roster row names the running child', () => {
+    const { db, localHostId } = openTestDb({ seedAllFixtureMemberships: false });
+    const agent = new AgentRepo(db).create(
+      {
+        name: 'agent-slot-teardown',
+        runtime: 'claude',
+        session_scope: 'agent',
+      },
+      localHostId,
+      'local',
+    );
+    const slots = new RuntimeSlotRepo(db);
+    slots.claimGeneration({
+      scope: { kind: 'agent', agentId: agent.id },
+      daemonInstanceId: 'daemon-agent-slot-teardown',
+      status: 'active',
+    });
+
+    expect(
+      createSqliteAgentTeardownPersistence(db).read.listRuntimeSessions(agent.id),
+    ).toEqual([
+      {
+        runtimeScope: { kind: 'agent', agentId: agent.id },
+        conversationId: null,
+        status: 'active',
+        runtimeGeneration: 1,
+      },
+    ]);
   });
 
   // The falsifier for THIS FILE: with enforcement off, the identical delete

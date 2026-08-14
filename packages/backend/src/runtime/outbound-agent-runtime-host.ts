@@ -35,7 +35,7 @@ export interface OutboundAgentRuntimeProjection {
    * agent/host rows are already gone (see {@link StopOptions}).
    */
   stop(
-    conversationId: string,
+    conversationId: string | null,
     agentId: string,
     opts?: StopOptions,
   ): Promise<void>;
@@ -143,7 +143,7 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
   }
 
   async stop(
-    conversationId: string,
+    conversationId: string | null,
     agentId: string,
     opts?: StopOptions,
   ): Promise<void> {
@@ -246,7 +246,7 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
 
   private unavailable(
     method: string,
-    meta: { conversationId?: string; agentId?: string; messageId?: string },
+    meta: { conversationId?: string | null; agentId?: string; messageId?: string },
   ): Error {
     this.logger.warn(
       { runtime: 'control-plane', method, ...meta },

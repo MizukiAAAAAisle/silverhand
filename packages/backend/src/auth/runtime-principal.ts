@@ -102,3 +102,22 @@ export function agentRuntimePrincipal(input: {
     },
   };
 }
+
+export function runtimePrincipalForScope(input: {
+  scope: RuntimePrincipalScope;
+  generation: number;
+  daemonInstanceId: string;
+}): RuntimePrincipal {
+  return input.scope.kind === 'agent'
+    ? agentRuntimePrincipal({
+        agentId: input.scope.agentId,
+        generation: input.generation,
+        daemonInstanceId: input.daemonInstanceId,
+      })
+    : conversationRuntimePrincipal({
+        conversationId: input.scope.conversationId,
+        agentId: input.scope.agentId,
+        generation: input.generation,
+        daemonInstanceId: input.daemonInstanceId,
+      });
+}

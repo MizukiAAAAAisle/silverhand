@@ -32,6 +32,7 @@ export function agentRowToDto(row: AgentRow): AgentDto {
       fast === null || fast === undefined ? null : Boolean(fast),
     host_id: row.host_id,
     description: row.description,
+    session_scope: row.session_scope,
     created_by_user_id: row.created_by_user_id,
     // Mirror UserDto: present when the row has an avatar blob set;
     // cache-busted via `updated_at` so the renderer's HTTP cache
@@ -117,8 +118,8 @@ export class AgentRepo {
       .prepare(
         `INSERT INTO agents
          (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
-          host_id, description, created_by_user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          host_id, description, session_scope, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -130,6 +131,7 @@ export class AgentRepo {
         input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
         input.host_id ?? defaultHostId,
         input.description ?? null,
+        input.session_scope ?? 'conversation',
         createdByUserId,
         now,
         now,
@@ -222,10 +224,10 @@ export class AgentRepo {
       .prepare(
         `INSERT INTO agents
          (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
-          host_id, description, created_by_user_id,
+          host_id, description, session_scope, created_by_user_id,
           materialization_status, idempotency_key,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  'pending_materialization', ?,
                  ?, ?)`,
       )
@@ -239,6 +241,7 @@ export class AgentRepo {
         input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
         input.host_id ?? defaultHostId,
         input.description ?? null,
+        input.session_scope ?? 'conversation',
         createdByUserId,
         idempotencyKey,
         now,

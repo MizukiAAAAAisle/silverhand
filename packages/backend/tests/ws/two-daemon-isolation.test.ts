@@ -368,6 +368,7 @@ function legitimateParsedEvent(
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',
+    runtime_scope: { kind: 'conversation', conversation_id: conversationId, agent_id: agentId },
     conversation_id: conversationId,
     agent_id: agentId,
     parsed: { kind: 'session_init', sessionId },
@@ -639,6 +640,11 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
         result: {
           runtimes: [
             {
+              runtime_scope: {
+                kind: 'conversation',
+                conversation_id: fix.hostX.channelId,
+                agent_id: fix.hostX.agentId,
+              },
               conversation_id: fix.hostX.channelId,
               agent_id: fix.hostX.agentId,
               runtime_generation: 1,

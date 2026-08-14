@@ -354,6 +354,11 @@ function readyForDrainEvent(
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_ready_for_drain',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversationId,
+      agent_id: agentId,
+    },
     conversation_id: conversationId,
     agent_id: agentId,
     ts: 1700000001000,
@@ -369,6 +374,11 @@ function parsedEventFrame(
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversationId,
+      agent_id: agentId,
+    },
     conversation_id: conversationId,
     agent_id: agentId,
     parsed: { kind: 'session_init', sessionId: 'sess-perimeter' },

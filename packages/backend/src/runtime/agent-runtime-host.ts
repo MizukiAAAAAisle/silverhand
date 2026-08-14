@@ -21,6 +21,7 @@ import type {
   AgentRunTerminalReason,
   RuntimeKind,
 } from '@silverhand/shared';
+import type { RuntimePrincipalScope } from '../auth/runtime-principal.js';
 
 /** Optional `start()` overrides. Kept thin — only fields services
  *  actually pass at call time. */
@@ -68,6 +69,9 @@ export interface StopOptions {
   /** Captured destructive-command authority for post-delete teardown paths.
    * Normal live-row callers omit it and the runtime slot is read directly. */
   runtimeGeneration?: number;
+  /** Captured semantic slot identity for post-delete teardown. Live-row
+   * callers omit it and derive the scope from the Agent aggregate. */
+  runtimeScope?: RuntimePrincipalScope;
 }
 
 /** Pre-clear snapshot returned by `clearSession()`. Callers use this
@@ -166,7 +170,7 @@ export class ClearSessionInProgressError extends Error {
  */
 export interface AgentRuntimeHost {
   // ── lifecycle ───────────────────────────────────────────────────
-  /** Spawn (or no-op if already running) the (conv, agent) runtime. */
+  /** Spawn the target's semantic slot (or no-op if that slot already runs). */
   start(
     conversationId: string,
     agentId: string,
@@ -174,19 +178,19 @@ export interface AgentRuntimeHost {
   ): Promise<void>;
 
   /**
-   * Stop the (conv, agent) runtime: SIGTERM then SIGKILL.
+   * Stop the selected semantic runtime slot: SIGTERM then SIGKILL.
    *
    * Routing is derived from the DB unless {@link StopOptions.hostId} names it —
    * see `StopOptions` for the post-delete case that requires the override.
    */
   stop(
-    conversationId: string,
+    conversationId: string | null,
     agentId: string,
     opts?: StopOptions,
   ): Promise<void>;
 
   /**
-   * Clear the persisted `cli_session_id` for (conv, agent) so the next
+   * Clear the persisted `cli_session_id` for the selected slot so the next
    * spawn starts a fresh CLI session (no `--resume`). Hard-stops the
    * runtime if it is currently active. Writes an audit row and
    * publishes the resulting state.
@@ -224,11 +228,11 @@ export interface AgentRuntimeHost {
 
   // ── delivery ────────────────────────────────────────────────────
   /**
-   * Hand a message to the (conv, agent) runtime. Persists to inbox if
+   * Hand a message to the target through its semantic runtime slot. Persists to inbox if
    * the runtime is offline; injects via `runtime_deliver` if running.
    */
   /**
-   * Drive delivery of EVERYTHING currently pending for (conv, agent)
+   * Drive delivery of everything currently pending for the named origin target
    * through the live delivery plane (`runtime_deliver`). Returns true if
    * a batch was submitted. Used when durable rows were created outside
    * the normal send fan-out (e.g. thread-window materialization on a

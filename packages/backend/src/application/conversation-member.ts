@@ -1091,17 +1091,19 @@ export async function removeConversationMember(
     return { ok: true, members: deps.membership.listMembers(conversation.id) };
   }
 
-  // Pre-commit best-effort: stop the runtime BEFORE the DB write (spec §2.1).
-  // The success path awaits until stop settles; a failure is caught and we
-  // continue to the removal.
-  await deps.ctx.runtimeHost
-    .stop(conversation.id, agent.id)
-    .catch(err =>
-      deps.ctx.logger.warn(
-        { conversationId: conversation.id, agentId: agent.id, err },
-        'conversation member remove: stop failed',
-      ),
-    );
+  // ConversationSlot is owned by this membership edge, so removal stops it.
+  // AgentSlot belongs to the Agent aggregate and merely loses this target;
+  // stopping it would kill unrelated work in every other conversation.
+  if (agent.session_scope === 'conversation') {
+    await deps.ctx.runtimeHost
+      .stop(conversation.id, agent.id)
+      .catch(err =>
+        deps.ctx.logger.warn(
+          { conversationId: conversation.id, agentId: agent.id, err },
+          'conversation member remove: stop failed',
+        ),
+      );
+  }
 
   // The IMMUTABLE half of the removal authority: `canEditAgent` is the agent's
   // creator (or the agent itself), which no roster write can change. The

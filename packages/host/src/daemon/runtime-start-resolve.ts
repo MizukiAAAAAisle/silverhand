@@ -48,18 +48,42 @@
  * unspawnable-cwd case surfaces as `workspace_bundle_missing` from the
  * supervisor's post-resolve cwd hard-ensure.
  */
-import type { RuntimeStartErrorCode, StartOptions } from '../protocol.js';
+import type {
+  AgentStartOptions,
+  ConversationStartOptions,
+  RuntimeActionTarget,
+  RuntimeStartErrorCode,
+  StartOptions,
+} from '../protocol.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 import {
   bundleL2Present,
   resolveAgentDir,
   resolveAgentWorkspaceBundleDir,
 } from './agent-materialize/handler.js';
-import { WorkspaceIdSegmentError } from './workspace-path-authority.js';
+import {
+  assertSafeWorkspaceIdSegment,
+  WorkspaceIdSegmentError,
+} from './workspace-path-authority.js';
+import { join } from 'node:path';
 import { DaemonTypedError } from './typed-error.js';
 
+export function isAgentStartOptions(
+  options: StartOptions,
+): options is AgentStartOptions {
+  return options.runtime_scope.kind === 'agent';
+}
+
+export function isResolvedAgentStartOptions(
+  options: ResolvedStartOptions,
+): options is ResolvedAgentStartOptions {
+  return options.runtime_scope.kind === 'agent';
+}
+
 /** A workspace ref with the daemon-resolved absolute `path` attached. */
-export type ResolvedWorkspaceRef = StartOptions['workspace'] & {
+export type ResolvedWorkspaceRef = NonNullable<
+  ConversationStartOptions['workspace']
+> & {
   path: string;
 };
 
@@ -76,7 +100,9 @@ export type ResolvedWorkspaceRef = StartOptions['workspace'] & {
  * (relocation-v1 §3.3). This is a memory-path fact, NOT the cwd-usability fact
  * `list_workspaces.agent_dir` reports.
  */
-export type ResolvedWorkspaceIndexRef = StartOptions['workspace'] & {
+export type ResolvedWorkspaceIndexRef = NonNullable<
+  ConversationStartOptions['workspace']
+> & {
   path: string | null;
 };
 
@@ -88,18 +114,31 @@ export type ResolvedAgentRef = StartOptions['agent'] & { home_dir: string };
  * to the pre-D4.e-6 `StartOptions`, but produced daemon-side from the
  * semantic wire options rather than received over the wire.
  */
-export type ResolvedStartOptions = Omit<
-  StartOptions,
-  'agent' | 'workspace' | 'workspace_memory_index'
-> & {
+interface ResolvedCommon {
   agent: ResolvedAgentRef;
-  workspace: ResolvedWorkspaceRef;
-  workspace_memory_index: ResolvedWorkspaceIndexRef[];
   /** The daemon-authenticated computer id this runtime spawns on (the
    *  control-plane binding's `host_id`). Injected into the prompt's This
    *  Context block; never received over the wire. */
   computer_id: string;
-};
+  /** The one hard-ensured process base selected by RuntimeScope. */
+  cwd: string;
+}
+
+export type ResolvedConversationStartOptions = Omit<
+  ConversationStartOptions,
+  'agent' | 'workspace' | 'workspace_memory_index'
+> &
+  ResolvedCommon & {
+    workspace: ResolvedWorkspaceRef | null;
+    workspace_memory_index: ResolvedWorkspaceIndexRef[];
+  };
+
+export type ResolvedAgentStartOptions = Omit<AgentStartOptions, 'agent'> &
+  ResolvedCommon;
+
+export type ResolvedStartOptions =
+  | ResolvedConversationStartOptions
+  | ResolvedAgentStartOptions;
 
 /** Typed, dispatcher-projectable failure to resolve a runtime_start path. */
 export class RuntimeStartResolveError extends DaemonTypedError {
@@ -144,6 +183,50 @@ export interface RuntimeStartResolveDeps {
   resolveComputerId: () => string;
 }
 
+/** Resolve one delivery origin to its absolute action workdir. This is distinct
+ * from the process cwd: AgentSlot stays rooted at Agent home while each action
+ * points at the semantic target's workspace bundle (or the stable
+ * workspace-less conversation directory). */
+export function resolveRuntimeActionWorkdir(
+  agentId: string,
+  target: RuntimeActionTarget,
+  deps: RuntimeStartResolveDeps,
+): string {
+  const homeDir = resolveAgentDir(agentId, deps);
+  if (target.workspace === null) {
+    try {
+      return join(
+        homeDir,
+        'conversations',
+        assertSafeWorkspaceIdSegment(target.conversation_id),
+      );
+    } catch (err) {
+      if (err instanceof WorkspaceIdSegmentError) {
+        throw new RuntimeStartResolveError('registry_unavailable', err.message);
+      }
+      throw err;
+    }
+  }
+  if (target.workspace.kind === 'agent_home') {
+    const expected = agentHomeWorkspaceId(agentId);
+    if (target.workspace.id !== expected) {
+      throw new RuntimeStartResolveError(
+        'workspace_not_provisioned',
+        `agent_home workspace ref '${target.workspace.id}' does not belong to agent '${agentId}' (expected '${expected}')`,
+      );
+    }
+    return homeDir;
+  }
+  try {
+    return resolveAgentWorkspaceBundleDir(agentId, target.workspace.id, deps);
+  } catch (err) {
+    if (err instanceof WorkspaceIdSegmentError) {
+      throw new RuntimeStartResolveError('registry_unavailable', err.message);
+    }
+    throw err;
+  }
+}
+
 /**
  * The single computer-id authority for prompt provenance: the host id of an
  * AUTHENTICATED control-plane binding, or a typed fail-closed error. Null
@@ -180,6 +263,18 @@ export function resolveAuthenticatedComputerId(
  * the prompt offers no memory path, never a fabricated one. This is the
  * memory-path decision only; it never blocks a spawn.
  */
+export function resolveRuntimeStartPaths(
+  options: ConversationStartOptions,
+  deps: RuntimeStartResolveDeps,
+): Promise<ResolvedConversationStartOptions>;
+export function resolveRuntimeStartPaths(
+  options: AgentStartOptions,
+  deps: RuntimeStartResolveDeps,
+): Promise<ResolvedAgentStartOptions>;
+export function resolveRuntimeStartPaths(
+  options: StartOptions,
+  deps: RuntimeStartResolveDeps,
+): Promise<ResolvedStartOptions>;
 export async function resolveRuntimeStartPaths(
   options: StartOptions,
   deps: RuntimeStartResolveDeps,
@@ -189,11 +284,22 @@ export async function resolveRuntimeStartPaths(
   const ownHomeWorkspaceId = agentHomeWorkspaceId(agentId);
   const memoryReadable = deps.bundleL2Present ?? bundleL2Present;
 
+  if (isAgentStartOptions(options)) {
+    return {
+      ...options,
+      agent: { ...options.agent, home_dir: homeDir },
+      computer_id: deps.resolveComputerId(),
+      cwd: homeDir,
+    };
+  }
+
   // Deterministic path for a ref — no availability judgment (that is the
   // caller's, and differs for the active workspace vs an index entry). Throws
   // a typed `RuntimeStartResolveError` for a foreign/corrupt `agent_home` ref
   // or an unsafe regular id segment.
-  const resolvePath = (workspace: StartOptions['workspace']): string => {
+  const resolvePath = (
+    workspace: NonNullable<ConversationStartOptions['workspace']>,
+  ): string => {
     if (workspace.kind === 'agent_home') {
       // I4 / single-source guard: an `agent_home` ref must be THIS agent's own
       // home workspace id. Never trust `kind` alone — a mismatched id is a
@@ -226,7 +332,7 @@ export async function resolveRuntimeStartPaths(
   // right after by the supervisor's `ensureRuntimeStartWorkspaceCwd`. No memory
   // gate here — a missing/half-seeded L2 still spawns.
   const resolveActive = (
-    workspace: StartOptions['workspace'],
+    workspace: NonNullable<ConversationStartOptions['workspace']>,
   ): ResolvedWorkspaceRef => ({ ...workspace, path: resolvePath(workspace) });
 
   // A memory-INDEX entry offers a memory path only when MEMORY.md is readable.
@@ -234,7 +340,7 @@ export async function resolveRuntimeStartPaths(
   // with no readable memory (lazy window / half-seed / unreadable) resolves to
   // `path: null` — never a guessed path, never blocking the spawn.
   const resolveIndexEntry = async (
-    workspace: StartOptions['workspace'],
+    workspace: NonNullable<ConversationStartOptions['workspace']>,
   ): Promise<ResolvedWorkspaceIndexRef> => {
     let path: string;
     try {
@@ -251,13 +357,34 @@ export async function resolveRuntimeStartPaths(
     };
   };
 
+  const workspace = options.workspace === null
+    ? null
+    : resolveActive(options.workspace);
+  let cwd: string;
+  if (workspace === null) {
+    try {
+      cwd = join(
+        homeDir,
+        'conversations',
+        assertSafeWorkspaceIdSegment(options.runtime_scope.conversation_id),
+      );
+    } catch (err) {
+      if (err instanceof WorkspaceIdSegmentError) {
+        throw new RuntimeStartResolveError('registry_unavailable', err.message);
+      }
+      throw err;
+    }
+  } else {
+    cwd = workspace.path;
+  }
   return {
     ...options,
     agent: { ...options.agent, home_dir: homeDir },
-    workspace: resolveActive(options.workspace),
+    workspace,
     workspace_memory_index: await Promise.all(
       options.workspace_memory_index.map(resolveIndexEntry),
     ),
     computer_id: deps.resolveComputerId(),
+    cwd,
   };
 }

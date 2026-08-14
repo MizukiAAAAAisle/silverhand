@@ -20,6 +20,22 @@ describe('loadEnv', () => {
     });
   });
 
+  it('uses an explicit conversation target when AgentSlot has no ambient conversation', () => {
+    const { SILVERHAND_CONVERSATION_ID: _ambient, ...agentSlotEnv } = happyEnv;
+    expect(loadEnv(agentSlotEnv, 'c-explicit')).toEqual({
+      conversationId: 'c-explicit',
+      agentId: 'a-1',
+      serverUrl: 'http://127.0.0.1:8080',
+      authToken: 'tok-abc',
+    });
+  });
+
+  it('keeps ConversationSlot ambient route when a command has its own conversation selector', () => {
+    expect(loadEnv({ ...happyEnv }, 'c-other')).toMatchObject({
+      conversationId: 'c-1',
+    });
+  });
+
   it('throws a single validation_error listing every missing var', () => {
     let caught: unknown;
     try {

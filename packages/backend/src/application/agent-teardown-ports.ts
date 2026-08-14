@@ -76,6 +76,7 @@ import type {
   HostProvisioningSource,
   RuntimeKind,
 } from '@silverhand/shared';
+import type { RuntimePrincipalScope } from '../auth/runtime-principal.js';
 import type { StoredFileRef } from '../storage/blob-file-storage.js';
 
 /**
@@ -135,14 +136,17 @@ export interface AgentDeletionLifecyclePort {
 }
 
 /**
- * One `(conversation, agent)` runtime row, with its RAW status. The adapter must
+ * One semantic runtime slot, with its RAW status. The adapter must
  * not filter: "which statuses are still running" is a domain rule (the control
  * view deliberately includes archived channels — see
  * `AgentRepo.listRuntimeConversations`), and a persistence-side filter would put
  * that rule where no test of the use case can see it.
  */
 export interface AgentRuntimeSessionFacts {
-  conversationId: string;
+  /** The stable custody identity. AgentSlot deliberately has no conversation. */
+  runtimeScope: RuntimePrincipalScope;
+  /** Diagnostic target for the legacy conversation slot; null for AgentSlot. */
+  conversationId: string | null;
   status: ConversationAgentStatus;
   /** Captured before cascade so post-commit stop cannot target a successor. */
   runtimeGeneration: number;

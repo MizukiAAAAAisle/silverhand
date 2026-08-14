@@ -9,6 +9,7 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { switchAgentRuntime } from '../../src/application/switch-agent-runtime.js';
 import {
   HostWsCommandResponseError,
@@ -1642,6 +1643,36 @@ describe('POST /api/agents/:id/stop', () => {
     const body = await res.json() as any;
     expect(body.stopped).toBe(0);
     expect(t.fake.stops).toHaveLength(0);
+  });
+
+  it('hard-stops one AgentSlot exactly once, independent of target count', async () => {
+    t = buildTestApp();
+    const created = (await (
+      await http(t).post('/api/agents', {
+        name: 'agent-slot-stop',
+        runtime: 'claude',
+        session_scope: 'agent',
+      })
+    ).json()) as any;
+    expect(
+      new RuntimeSlotRepo(t.ctx.db).updateCurrentProjection(
+        { kind: 'agent', agentId: created.agent.id },
+        { status: 'active', pid: 123 },
+      ),
+    ).not.toBeNull();
+
+    t.fake.stops = [];
+    const res = await http(t).post(`/api/agents/${created.agent.id}/stop`);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ stopped: 1 });
+    expect(t.fake.stops).toEqual([
+      {
+        conversationId: null,
+        agentId: created.agent.id,
+        runtimeScope: { kind: 'agent', agentId: created.agent.id },
+      },
+    ]);
   });
 
   it('keeps stop owner-only even when the agent is workspace-visible', async () => {

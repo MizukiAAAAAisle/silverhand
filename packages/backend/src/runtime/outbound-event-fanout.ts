@@ -8,6 +8,7 @@ import {
   type RuntimeStartParams,
   type RuntimeStatusResult,
   type RuntimeStopParams,
+  type RuntimeScope,
 } from '@silverhand/host';
 import { getDriver } from '@silverhand/host/drivers';
 import type {
@@ -23,8 +24,10 @@ import {
 } from '@silverhand/shared';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import {
-  conversationRuntimePrincipal,
+  runtimePrincipalForScope,
+  runtimePrincipalScope,
   type RuntimePrincipal,
+  type RuntimePrincipalScope,
 } from '../auth/runtime-principal.js';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
 import { systemSubtype } from '@silverhand/shared';
@@ -53,6 +56,32 @@ import {
   type ReapIdleRuntimesResult,
   type StopOptions,
 } from './agent-runtime-host.js';
+
+function wireRuntimeScope(scope: RuntimePrincipalScope): RuntimeScope {
+  return scope.kind === 'agent'
+    ? { kind: 'agent', agent_id: scope.agentId }
+    : {
+        kind: 'conversation',
+        conversation_id: scope.conversationId,
+        agent_id: scope.agentId,
+      };
+}
+
+function runtimeScopeKey(scope: RuntimePrincipalScope): string {
+  return scope.kind === 'agent'
+    ? `agent\u0000${scope.agentId}`
+    : `conversation\u0000${scope.conversationId}\u0000${scope.agentId}`;
+}
+
+function principalScopeFromWire(scope: RuntimeScope): RuntimePrincipalScope {
+  return scope.kind === 'agent'
+    ? { kind: 'agent', agentId: scope.agent_id }
+    : {
+        kind: 'conversation',
+        conversationId: scope.conversation_id,
+        agentId: scope.agent_id,
+      };
+}
 import { RuntimeDeliveryCoordinator, type RuntimeDelivery } from './delivery-coordinator.js';
 import {
   RuntimeEventHandler,
@@ -71,6 +100,7 @@ import {
 } from './stdin-format.js';
 import { createReferenceMemo } from './reference-memo.js';
 import {
+  buildRuntimeActionTarget,
   buildRuntimeStartOptions,
 } from './runtime-start-options.js';
 import { type AgentL2SeedEnsurer } from './agent-l2-seed-ensurer.js';
@@ -264,12 +294,26 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     );
     this.perimeter = opts.perimeter;
     this.inboxAck = {
-      markDelivered: ids => this.inbox.markDelivered([...ids]),
-      markUndelivered: (ids, reason) => {
-        this.inbox.rollbackInFlightAnyOwner(ids);
+      markDelivered: settlement => {
+        if (this.inbox.settleDelivered({
+          ...settlement,
+          inboxIds: settlement.deliveryIds,
+        })) return;
         opts.logger.warn(
-          { kind: 'inbox', delivery_ids: [...ids], reason },
-          'outbound startup delivery failed; rows remain pending',
+          { kind: 'inbox', ...settlement },
+          'delivery settlement rejected: rows do not match origin and owner',
+        );
+      },
+      markUndelivered: (settlement, reason) => {
+        const settled = this.inbox.settleUndelivered({
+          ...settlement,
+          inboxIds: settlement.deliveryIds,
+        });
+        opts.logger.warn(
+          { kind: 'inbox', ...settlement, reason, settled },
+          settled
+            ? 'outbound delivery failed; rows remain pending'
+            : 'delivery rollback rejected: rows do not match origin and owner',
         );
       },
     };
@@ -546,11 +590,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     // runtime_status snapshot is authoritative. If DB still says a runtime
     // on this host is active/starting but the snapshot omits it, project a
     // terminal state so the UI does not keep showing a stale live agent.
-    const livePairs = new Set(
-      state.cache
-        .list()
-        .filter(entry => entry.phase !== 'exited')
-        .map(entry => clearSessionKey(entry.conversationId, entry.agentId)),
+    const liveScopes = new Set(
+      snapshot.runtimes
+        .filter(runtime => runtime.phase !== 'exited')
+        .map(runtime => runtimeScopeKey(
+          principalScopeFromWire(runtime.runtime_scope),
+        )),
     );
 
     const staleRows = (
@@ -558,20 +603,22 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     )[HYDRATE_RECONCILE_BASELINE] ?? [];
 
     for (const row of staleRows) {
-      if (livePairs.has(clearSessionKey(row.conversationId, row.agentId))) {
+      if (liveScopes.has(runtimeScopeKey(row.scope))) {
         continue;
       }
-      const updated = this.hydrateReconcile.markCrashed(row);
-      if (!updated) continue;
+      if (!this.hydrateReconcile.markCrashed(row)) continue;
       if (row.daemonInstanceId) {
-        this.opts.agentTokens.revokeFor(conversationRuntimePrincipal({
-          conversationId: row.conversationId,
-          agentId: row.agentId,
+        this.opts.agentTokens.revokeFor(runtimePrincipalForScope({
+          scope: row.scope,
           generation: row.generation,
           daemonInstanceId: row.daemonInstanceId,
         }));
       }
-      this.opts.events.publishSide(row.conversationId, {
+      const eventConversationId = row.scope.kind === 'conversation'
+        ? row.scope.conversationId
+        : row.focusConversationId;
+      if (!eventConversationId) continue;
+      this.opts.events.publishSide(eventConversationId, {
         kind: 'agent_status',
         payload: {
           agent_id: row.agentId,
@@ -585,7 +632,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           kind: 'runtime',
           action: 'stale_runtime_reconciled_after_hydrate',
           hostId,
-          conversationId: row.conversationId,
+          runtimeScope: row.scope,
+          conversationId: eventConversationId,
           agent_id: row.agentId,
           previous_status: row.status,
           previous_pid: row.pid,
@@ -600,6 +648,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
     messageId: string,
   ): Promise<void> {
+    this.assertTargetParticipant(conversationId, agentId);
     const delivery = this.inbox.ensureDelivery(
       conversationId,
       agentId,
@@ -636,25 +685,32 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    * warning — a silent no-op leaving the daemon's child alive (#task:1616).
    */
   async stop(
-    conversationId: string,
+    conversationId: string | null,
     agentId: string,
     opts?: StopOptions,
   ): Promise<void> {
     const hostId = opts?.hostId ?? this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_stop');
-    const current = this.runtimeCustody.currentConversation(conversationId, agentId);
+    const scope = opts?.runtimeScope
+      ?? (conversationId === null
+        ? (() => {
+            throw new Error('runtime_stop requires a captured scope without a conversation');
+          })()
+        : this.runtimeScopeForTarget(conversationId, agentId));
+    const current = this.runtimeCustody.current(scope);
     const runtimeGeneration = opts?.runtimeGeneration
       ?? current?.custody.generation
-      ?? this.states.get(hostId)?.cache.get(
-        conversationId,
-        agentId,
-      )?.runtimeGeneration;
+      ?? (conversationId === null
+        ? undefined
+        : this.states.get(hostId)?.cache.get(
+            conversationId,
+            agentId,
+          )?.runtimeGeneration);
     if (!runtimeGeneration) return;
     await this.dispatchStop(
       hostId,
       connectionId,
-      conversationId,
-      agentId,
+      scope,
       runtimeGeneration,
     );
   }
@@ -662,13 +718,11 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private async dispatchStop(
     hostId: string,
     expectedConnectionId: string,
-    conversationId: string,
-    agentId: string,
+    scope: RuntimePrincipalScope,
     runtimeGeneration: number,
   ): Promise<void> {
     const params: RuntimeStopParams = {
-      conversation_id: conversationId,
-      agent_id: agentId,
+      runtime_scope: wireRuntimeScope(scope),
       runtime_generation: runtimeGeneration,
       mode: 'hard',
     };
@@ -738,8 +792,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           await this.dispatchStop(
             hostId,
             selectedConnectionId,
-            entry.conversationId,
-            entry.agentId,
+            principalScopeFromWire(entry.runtimeScope),
             entry.runtimeGeneration,
           );
           result.reaped++;
@@ -857,15 +910,15 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
-    const existing = this.conversations.getAgent(conversationId, agentId);
-    if (!existing) {
+    if (!this.conversations.isAgentParticipant(conversationId, agentId)) {
       throw new Error(
         `agent ${agentId} is not a member of conversation ${conversationId}`,
       );
     }
 
     // 2. Concurrent guard.
-    if (this.clearSessions.inProgress(conversationId, agentId)) {
+    const runtimeScope = this.runtimeScopeForTarget(conversationId, agentId);
+    if (this.clearSessions.inProgress(runtimeScope)) {
       throw new ClearSessionInProgressError(conversationId, agentId);
     }
 
@@ -873,17 +926,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const state = this.stateForHost(hostId);
 
     // 3. Snapshot pre-state.
-    const prevCliSessionId = existing.cli_session_id;
+    const prevCliSessionId = this.runtimeCustody.cliSessionId(runtimeScope);
     const cacheEntryBefore = state.cache.get(conversationId, agentId);
     const wasRunning =
       cacheEntryBefore !== undefined && cacheEntryBefore.phase !== 'exited';
-    const currentCustody = this.runtimeCustody.currentConversation(
-      conversationId,
-      agentId,
-    );
+    const currentCustody = this.runtimeCustody.current(runtimeScope);
 
     // 4. Register waiter BEFORE dispatch.
-    this.clearSessions.begin(conversationId, agentId);
+    this.clearSessions.begin(runtimeScope);
 
     try {
       // 5. Dispatch over WS. Connection must exist; outbound
@@ -895,8 +945,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
             hostId,
             'runtime_clear_session',
             {
-              conversation_id: conversationId,
-              agent_id: agentId,
+              runtime_scope: wireRuntimeScope(runtimeScope),
               runtime_generation: currentCustody.custody.generation,
             },
             {
@@ -932,7 +981,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       //        for this pair; skip wait. This is the legitimate
       //        fast path for already-exited / orphan-row clears.
       if (result.cleared) {
-        await this.clearSessions.awaitExit(conversationId, agentId);
+        await this.clearSessions.awaitExit(runtimeScope, conversationId, agentId);
       }
 
       // 7. Coordinator-side cleanup.
@@ -941,7 +990,11 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // 8. DB tx — audit insert + cli_session_id clear in one shot.
       const shouldAudit = wasRunning || prevCliSessionId !== null;
       const { updated, auditMessage } = this.session.atomically(scope => {
-        const updated = scope.clearCliSession(conversationId, agentId);
+        const updated = scope.clearCliSession({
+          scope: runtimeScope,
+          targetConversationId: conversationId,
+          agentId,
+        });
         if (!updated) {
           throw new Error(
             `agent ${agentId} is not a member of conversation ${conversationId}`,
@@ -1007,7 +1060,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       return { prevCliSessionId, wasRunning };
     } finally {
       // 10. Finally cleanup — Cindy `nPqEVJjCLjuNDH-6` #2.
-      this.clearSessions.end(conversationId, agentId);
+      this.clearSessions.end(runtimeScope);
     }
   }
 
@@ -1068,6 +1121,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
   ): Promise<boolean> {
     if (this.runtimeTransitioning(agentId)) return false;
+    this.assertTargetParticipant(conversationId, agentId);
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_deliver');
     await this.awaitHydratedConnection(hostId, connectionId);
@@ -1250,15 +1304,17 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
     const conversation = this.conversations.get(conversationId);
     if (!conversation) throw new Error(`conversation ${conversationId} not found`);
-    const workspace = this.workspaces.get(conversation.workspace_id);
-    if (!workspace) {
-      throw new Error(`workspace ${conversation.workspace_id} not found`);
-    }
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
     this.assertReasoningEffortSendable(hostId, agent);
+    const workspace = conversation.workspace_id === null
+      ? null
+      : this.workspaces.get(conversation.workspace_id);
     const sessionAgent = this.conversations.getAgent(conversationId, agentId);
-    if (!sessionAgent) {
+    if (
+      agent.session_scope === 'conversation'
+      && !this.conversations.isAgentParticipant(conversationId, agentId)
+    ) {
       throw new Error(
         `conversation_agent row missing for ${conversationId}/${agentId}`,
       );
@@ -1268,12 +1324,37 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       workspace,
       agent,
       sessionAgent,
-      members: this.members.listMembers(conversation.id),
-      workspacesForAgent: this.workspaces.listForAgent(agent.id),
+      cliSessionId: this.runtimeCustody.cliSessionId(
+        this.runtimeScopeForTarget(conversationId, agentId),
+      ),
+      // AgentSlot has no ambient workspace projection. Do not even read the
+      // target roster or the agent's workspace catalog while composing its
+      // spawn frame: leaving those reads here would make the wire clean only
+      // accidentally and would fail for placement-derived participants.
+      members:
+        agent.session_scope === 'agent'
+          ? []
+          : this.members.listMembers(conversation.id),
+      workspacesForAgent:
+        agent.session_scope === 'agent'
+          ? []
+          : this.workspaces.listForAgent(agent.id),
       silverhandCli:
         this.opts.coLocatedHostId === hostId ? this.opts.silverhandCli : null,
       agentToken,
     });
+  }
+
+  private runtimeActionTarget(conversationId: string) {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) throw new Error(`conversation ${conversationId} not found`);
+    const workspace = conversation.workspace_id === null
+      ? null
+      : this.workspaces.get(conversation.workspace_id);
+    if (conversation.workspace_id !== null && !workspace) {
+      throw new Error(`workspace ${conversation.workspace_id} not found`);
+    }
+    return buildRuntimeActionTarget(conversation, workspace);
   }
 
   private prepareRuntimeCredential(
@@ -1289,15 +1370,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (!daemonInstanceId) {
       throw new Error('runtime credential requires a ready daemon instance');
     }
-    const current = this.runtimeCustody.currentConversation(
-      conversationId,
-      agentId,
-    );
+    const scope = this.runtimeScopeForTarget(conversationId, agentId);
+    const current = this.runtimeCustody.current(scope);
     const principal = current?.custody.daemonInstanceId === daemonInstanceId
       ? current
-      : this.runtimeCustody.claimConversation({
-          conversationId,
-          agentId,
+      : this.runtimeCustody.claim({
+          scope,
           daemonInstanceId,
         });
     if (!principal) {
@@ -1311,15 +1389,35 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   private abandonRuntimeCredential(principal: RuntimePrincipal): void {
-    if (principal.kind !== 'conversation_slot') return;
-    const finalized = this.runtimeCustody.finalizeConversation({
-      conversationId: principal.conversationId,
-      agentId: principal.agentId,
+    const finalized = this.runtimeCustody.finalize({
+      scope: runtimePrincipalScope(principal),
       generation: principal.custody.generation,
       daemonInstanceId: principal.custody.daemonInstanceId,
       status: 'crashed',
     });
     if (finalized) this.opts.agentTokens.revokeFor(principal);
+  }
+
+  private runtimeScopeForTarget(
+    conversationId: string,
+    agentId: string,
+  ): RuntimePrincipalScope {
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error(`agent ${agentId} not found`);
+    return agent.session_scope === 'agent'
+      ? { kind: 'agent', agentId }
+      : { kind: 'conversation', conversationId, agentId };
+  }
+
+  private assertTargetParticipant(
+    conversationId: string,
+    agentId: string,
+  ): void {
+    if (!this.conversations.isAgentParticipant(conversationId, agentId)) {
+      throw new Error(
+        `agent ${agentId} is not a participant of conversation ${conversationId}`,
+      );
+    }
   }
 
   /** Finalizing after an ambiguous transport error can orphan a child that did
@@ -1395,10 +1493,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     conversationId: string,
     agentId: string,
   ): Promise<void> {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.session_scope === 'agent') return;
     const conversation = this.conversations.get(conversationId);
     if (!conversation) return;
     const plan = planRuntimeStartFilesystemEnsure(
-      this.workspaces.get(conversation.workspace_id) ?? undefined,
+      conversation.workspace_id === null
+        ? undefined
+        : this.workspaces.get(conversation.workspace_id) ?? undefined,
     );
     if (!plan.seedWorkspaceId) return;
 
@@ -1650,6 +1752,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
               params.agent_id,
               credential.token,
             );
+            const target = this.runtimeActionTarget(params.conversation_id);
             const transport = this.requireTransport();
             if (this.runtimeTransitioning(params.agent_id)) {
               throw new Error(`agent ${params.agent_id} is switching runtime`);
@@ -1661,6 +1764,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
               {
                 ...params,
                 runtime_generation: credential.principal.custody.generation,
+                target,
                 spawn_options,
               },
               { timeoutMs: 60_000, expectedConnectionId: connectionId },
@@ -1696,11 +1800,15 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         // duplicate call is a benign no-op. Mapped to `Promise<void>` so
         // any rejection still reaches the coordinator's best-effort
         // `.catch`.
-        respawn: (cid, aid) =>
-          this.deliverPending(cid, aid).then(() => undefined),
+        respawn: (cid, aid) => {
+          const origin = this.pendingOriginsForRuntime(cid, aid)[0];
+          return origin
+            ? this.deliverPending(origin, aid).then(() => undefined)
+            : undefined;
+        },
         hasPendingInbox: (cid, aid) =>
           !this.runtimeTransitioning(aid)
-          && this.inbox.listPending(cid, aid).length > 0,
+          && this.pendingOriginsForRuntime(cid, aid).length > 0,
         publishActivity: runState => {
           this.opts.events.publishSide(runState.conversationId, {
             kind: 'agent_activity',
@@ -1722,20 +1830,16 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         state.currentDaemonKey
         ?? this.opts.transport()?.getAttachment(hostId)?.daemonInstanceId
         ?? null,
+      deliveryOwner: () => state.dispatchConnectionId,
       acceptRuntimeCustody: input => {
-        const current = this.runtimeCustody.currentConversation(
-          input.conversationId,
-          input.agentId,
-        );
-        return current?.kind === 'conversation_slot'
-          && current.custody.generation === input.custody.generation
+        const current = this.runtimeCustody.current(input.scope);
+        return current?.custody.generation === input.custody.generation
           && current.custody.daemonInstanceId
             === input.custody.daemonInstanceId;
       },
       hasRuntimeCredential: input =>
-        this.opts.agentTokens.hasActiveFor(conversationRuntimePrincipal({
-          conversationId: input.conversationId,
-          agentId: input.agentId,
+        this.opts.agentTokens.hasActiveFor(runtimePrincipalForScope({
+          scope: input.scope,
           generation: input.custody.generation,
           daemonInstanceId: input.custody.daemonInstanceId,
         })),
@@ -1759,8 +1863,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         await this.dispatchStop(
           hostId,
           connectionId,
-          input.conversationId,
-          input.agentId,
+          input.scope,
           input.custody.generation,
         );
       },
@@ -1775,7 +1878,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         // own respawn-gate logic doesn't care whether a clear-session
         // is awaiting; the waiter does. Order: waiter first so a
         // synchronous resolve cannot race the next microtask.
-        this.clearSessions.notifyExit(cid, aid);
+        this.clearSessions.notifyExit(meta.scope);
         coordinator.onRuntimeExit(cid, aid, meta);
       },
       onInitTimeout: (cid, aid) =>
@@ -1789,7 +1892,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           );
           return;
         }
-        return this.replayPendingForAgent(hostId, connectionId, cid, aid);
+        return this.replayPendingForRuntime(
+          hostId,
+          connectionId,
+          cid,
+          aid,
+        );
       },
       // Reattach re-drive. Fires AFTER the daemon's `runtime_status`
       // snapshot has hydrated the cache, scoped (in
@@ -1886,39 +1994,49 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const liveReady = state.cache
       .list()
       .filter(entry => entry.phase === 'ready');
-    for (const { conversationId, agentId } of liveReady) {
-      if (
-        !this.states.get(hostId) ||
-        this.states.get(hostId)?.currentConnectionId !== expectedConnectionId
-      ) {
-        // Connection bounced between scheduling and execution. Bail —
-        // the newer connection's hydrate will replay.
-        this.opts.logger.info(
-          {
+    for (const entry of liveReady) {
+      const agentId = entry.agentId;
+      // A status row exposes one presentation focus. ConversationSlot has
+      // exactly that origin; AgentSlot may simultaneously hold daemon custody
+      // for many origins, so reconnect replay enumerates every durable pending
+      // origin for the already-live slot. This never spawns a cold runtime.
+      const conversationIds = entry.runtimeScope.kind === 'agent'
+        ? this.inbox.listPendingConversationIdsForAgent(agentId)
+        : [entry.conversationId];
+      for (const conversationId of conversationIds) {
+        if (
+          !this.states.get(hostId) ||
+          this.states.get(hostId)?.currentConnectionId !== expectedConnectionId
+        ) {
+          // Connection bounced between scheduling and execution. Bail —
+          // the newer connection's hydrate will replay.
+          this.opts.logger.info(
+            {
+              hostId,
+              expectedConnectionId,
+              currentConnectionId:
+                this.states.get(hostId)?.currentConnectionId ?? null,
+            },
+            'outbound replay-on-reattach: connection changed mid-drain, aborting',
+          );
+          return;
+        }
+        if (this.inbox.listPending(conversationId, agentId).length === 0) {
+          continue;
+        }
+        try {
+          await this.replayPendingForAgent(
             hostId,
             expectedConnectionId,
-            currentConnectionId:
-              this.states.get(hostId)?.currentConnectionId ?? null,
-          },
-          'outbound replay-on-reattach: connection changed mid-drain, aborting',
-        );
-        return;
-      }
-      if (this.inbox.listPending(conversationId, agentId).length === 0) {
-        continue;
-      }
-      try {
-        await this.replayPendingForAgent(
-          hostId,
-          expectedConnectionId,
-          conversationId,
-          agentId,
-        );
-      } catch (err) {
-        this.opts.logger.warn(
-          { hostId, conversationId, agentId, err },
-          'outbound replay-on-reattach pair failed',
-        );
+            conversationId,
+            agentId,
+          );
+        } catch (err) {
+          this.opts.logger.warn(
+            { hostId, conversationId, agentId, err },
+            'outbound replay-on-reattach pair failed',
+          );
+        }
       }
     }
   }
@@ -1930,6 +2048,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
   ): Promise<void> {
     if (this.runtimeTransitioning(agentId)) return;
+    this.assertTargetParticipant(conversationId, agentId);
     const claimed = this.inbox.claimPending(
       conversationId,
       agentId,
@@ -1969,6 +2088,40 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
       throw err;
     }
+  }
+
+  /** Re-drive only the runtime aggregate proven live/just-ready by the event.
+   * AgentSlot enumerates its origins in global MIN(inbox.id) order;
+   * ConversationSlot remains the single event origin. */
+  private async replayPendingForRuntime(
+    hostId: string,
+    connectionId: string,
+    focusConversationId: string,
+    agentId: string,
+  ): Promise<void> {
+    for (const conversationId of this.pendingOriginsForRuntime(
+      focusConversationId,
+      agentId,
+    )) {
+      await this.replayPendingForAgent(
+        hostId,
+        connectionId,
+        conversationId,
+        agentId,
+      );
+    }
+  }
+
+  private pendingOriginsForRuntime(
+    focusConversationId: string,
+    agentId: string,
+  ): string[] {
+    const agent = this.agents.get(agentId);
+    return agent?.session_scope === 'agent'
+      ? this.inbox.listPendingConversationIdsForAgent(agentId)
+      : this.inbox.listPending(focusConversationId, agentId).length > 0
+        ? [focusConversationId]
+        : [];
   }
 
   private cacheEntryForLiveConnection(
@@ -2063,6 +2216,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
   ): Promise<void> {
     if (this.runtimeTransitioning(agentId)) return;
+    this.assertTargetParticipant(conversationId, agentId);
     const claimed = this.inbox.claimPending(
       conversationId,
       agentId,
@@ -2230,10 +2384,6 @@ function noopRuntimeEventSource(): RuntimeEventSource {
     subscribe: () => () => {},
     onReconnect: () => () => {},
   };
-}
-
-function clearSessionKey(conversationId: string, agentId: string): string {
-  return `${conversationId}|${agentId}`;
 }
 
 function idleReapRuntimeEnabled(_runtime: RuntimeKind): boolean {

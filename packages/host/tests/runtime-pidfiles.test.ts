@@ -93,6 +93,24 @@ describe('runtime pidfile orphan reconcile', () => {
     }
   });
 
+  it('keeps AgentSlot and ConversationSlot pidfiles in disjoint namespaces', () => {
+    const f = makeFixture();
+    fixtures.push(f);
+    const agentPath = runtimePidFilePath(f.rootDir, 'self', {
+      kind: 'agent',
+      agent_id: 'same-agent',
+    });
+    const conversationPath = runtimePidFilePath(f.rootDir, 'self', {
+      kind: 'conversation',
+      conversation_id: 'same-agent',
+      agent_id: 'same-agent',
+    });
+
+    expect(agentPath).not.toBe(conversationPath);
+    expect(agentPath).toContain('/agent/');
+    expect(conversationPath).toContain('/conv/');
+  });
+
   it('skips scanning when the root dir does not exist and does not kill unrelated live children', () => {
     const f = makeFixture();
     fixtures.push(f);
@@ -119,8 +137,11 @@ describe('runtime pidfile orphan reconcile', () => {
     const filePath = writeRuntimePidfile({
       rootDir: f.rootDir,
       daemonInstanceId: 'self',
-      conversationId: 'conv',
-      agentId: 'agent',
+      runtimeScope: {
+        kind: 'conversation',
+        conversation_id: 'conv',
+        agent_id: 'agent',
+      },
       pid: child.pid!,
       startedAt: 100,
       runtime: 'claude',
@@ -146,8 +167,11 @@ describe('runtime pidfile orphan reconcile', () => {
     const filePath = writeRuntimePidfile({
       rootDir: f.rootDir,
       daemonInstanceId: 'old',
-      conversationId: 'conv',
-      agentId: 'agent',
+      runtimeScope: {
+        kind: 'conversation',
+        conversation_id: 'conv',
+        agent_id: 'agent',
+      },
       pid: child.pid!,
       startedAt: 100,
       runtime: 'claude',
@@ -178,8 +202,11 @@ describe('runtime pidfile orphan reconcile', () => {
     const filePath = writeRuntimePidfile({
       rootDir: f.rootDir,
       daemonInstanceId: 'old',
-      conversationId: 'conv',
-      agentId: 'agent',
+      runtimeScope: {
+        kind: 'conversation',
+        conversation_id: 'conv',
+        agent_id: 'agent',
+      },
       pid: 123_456,
       startedAt: 100,
       runtime: 'claude',
@@ -227,8 +254,11 @@ describe('runtime pidfile orphan reconcile', () => {
     const filePath = writeRuntimePidfile({
       rootDir: f.rootDir,
       daemonInstanceId: 'old',
-      conversationId: 'conv',
-      agentId: 'agent',
+      runtimeScope: {
+        kind: 'conversation',
+        conversation_id: 'conv',
+        agent_id: 'agent',
+      },
       pid: 1234,
       startedAt: 100,
       runtime: 'claude',
@@ -258,20 +288,31 @@ describe('runtime pidfile orphan reconcile', () => {
     const filePath = writeRuntimePidfile({
       rootDir: f.rootDir,
       daemonInstanceId: 'self',
-      conversationId: 'conv/unsafe',
-      agentId: 'agent',
+      runtimeScope: {
+        kind: 'conversation',
+        conversation_id: 'conv/unsafe',
+        agent_id: 'agent',
+      },
       pid: 42,
       startedAt: 100,
       runtime: 'claude',
       cmd: execPath,
     });
 
-    expect(filePath).toBe(runtimePidFilePath(f.rootDir, 'self', 'conv/unsafe', 'agent'));
+    expect(filePath).toBe(runtimePidFilePath(f.rootDir, 'self', {
+      kind: 'conversation',
+      conversation_id: 'conv/unsafe',
+      agent_id: 'agent',
+    }));
     const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
     expect(parsed).toMatchObject({
       pid: 42,
       started_at: 100,
-      conv: 'conv/unsafe',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'conv/unsafe',
+        agent_id: 'agent',
+      },
       agent: 'agent',
       runtime: 'claude',
       cmd: execPath,

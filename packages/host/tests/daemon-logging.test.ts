@@ -260,6 +260,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     await d.dispatch('req-1', 'runtime_deliver', {
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
@@ -325,6 +326,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     await d.dispatch('req-3', 'runtime_deliver', {
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',

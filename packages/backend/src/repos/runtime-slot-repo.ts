@@ -251,14 +251,13 @@ export class RuntimeSlotRepo {
     })();
   }
 
-  listLiveConversationSlotsForHost(hostId: string): AgentRuntimeSlotRow[] {
+  listLiveSlotsForHost(hostId: string): AgentRuntimeSlotRow[] {
     return this.db
       .prepare<[string], AgentRuntimeSlotRow>(
         `SELECT s.*
            FROM agent_runtime_slots s
            JOIN agents a ON a.id = s.agent_id
           WHERE a.host_id = ?
-            AND s.conversation_id IS NOT NULL
             AND s.observed_status IN ('active', 'starting')`,
       )
       .all(hostId);

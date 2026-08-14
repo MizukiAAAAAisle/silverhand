@@ -70,8 +70,11 @@ describe('DeletionAwareOutboundFrameAdapter', () => {
       'host-1',
       'runtime_stop',
       {
-        conversation_id: 'conversation-1',
-        agent_id: 'agent-1',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'conversation-1',
+          agent_id: 'agent-1',
+        },
         runtime_generation: 1,
         mode: 'hard',
       },

@@ -52,7 +52,7 @@
  *     rows back to the inbox sink (rollback to pending) so a later deliver
  *     replays them.
  */
-import type { EventFrame, RuntimeStatusResult } from '@silverhand/host';
+import type { EventFrame, RuntimeScope, RuntimeStatusResult } from '@silverhand/host';
 import type {
   AgentRunState,
   ConversationActivityEvent,
@@ -60,7 +60,10 @@ import type {
   ParsedEventKind,
 } from '@silverhand/shared';
 import type { ActivityLogWriter } from './activity-log-writer.js';
-import type { RuntimePrincipal } from '../auth/runtime-principal.js';
+import type {
+  RuntimePrincipal,
+  RuntimePrincipalScope,
+} from '../auth/runtime-principal.js';
 import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import type { RunStateCache } from './run-state-cache.js';
 import { sanitizeParsedEventForBroadcast } from './event-sanitize.js';
@@ -94,11 +97,18 @@ export interface EventPublisher {
  * `ConversationInboxRepo`.
  */
 export interface InboxAckSink {
-  markDelivered(deliveryIds: readonly number[]): void;
+  markDelivered(settlement: InboxSettlementAuthority): void;
   markUndelivered(
-    deliveryIds: readonly number[],
+    settlement: InboxSettlementAuthority,
     reason: 'child_exit' | 'init_watchdog' | 'write_failed' | 'driver_refused',
   ): void;
+}
+
+export interface InboxSettlementAuthority {
+  conversationId: string;
+  agentId: string;
+  inFlightOwner: string;
+  deliveryIds: readonly number[];
 }
 
 export interface RuntimeStatusBridge {
@@ -165,6 +175,7 @@ export type RuntimeExitHandler = (
   conversationId: string,
   agentId: string,
   meta: {
+    scope: RuntimePrincipalScope;
     intentional: boolean;
     code: number | null;
     initTimedOut: boolean;
@@ -267,10 +278,15 @@ export interface RuntimeEventHandlerDeps {
    * rejected when it is unavailable; a connection id is not a custody
    * identity and must never be substituted here. */
   daemonInstanceId?: () => string | null;
+  /** Connection lease that owns inbox rows admitted by the daemon currently
+   * dispatching this event. Generation protects runtime custody; this owner
+   * closes the independent durable-delivery custody axis. */
+  deliveryOwner?: () => string | null;
   /** Live slot gate for generation-tagged daemon events. It runs before any
    * cache/SSE/coordinator side effect so a superseded runtime cannot leak
    * activity or lifecycle signals after a successor claim. */
   acceptRuntimeCustody?: (input: {
+    scope: RuntimePrincipalScope;
     conversationId: string;
     agentId: string;
     custody: RuntimeProjectionCustody;
@@ -278,6 +294,7 @@ export interface RuntimeEventHandlerDeps {
   /** Bearer-secret continuity gate for a hydrated live child. A matching DB
    * slot cannot recreate the token injected into an already-running process. */
   hasRuntimeCredential?: (input: {
+    scope: RuntimePrincipalScope;
     conversationId: string;
     agentId: string;
     custody: RuntimeProjectionCustody;
@@ -286,6 +303,7 @@ export interface RuntimeEventHandlerDeps {
    * after the destructive command has a determinate result; hydrate retries a
    * fresh snapshot before cache/liveness/replay becomes authoritative. */
   onHydrateRuntimeRejected?: (input: {
+    scope: RuntimePrincipalScope;
     conversationId: string;
     agentId: string;
     custody: RuntimeProjectionCustody;
@@ -337,6 +355,25 @@ export interface RuntimeEventHandlerDeps {
   logger?: RuntimeEventHandlerLogger;
 }
 
+function principalScopeFromWire(scope: RuntimeScope): RuntimePrincipalScope {
+  return scope.kind === 'agent'
+    ? { kind: 'agent', agentId: scope.agent_id }
+    : {
+        kind: 'conversation',
+        conversationId: scope.conversation_id,
+        agentId: scope.agent_id,
+      };
+}
+
+function wireScopeMatchesTarget(
+  scope: RuntimeScope,
+  conversationId: string,
+  agentId: string,
+): boolean {
+  return scope.agent_id === agentId
+    && (scope.kind === 'agent' || scope.conversation_id === conversationId);
+}
+
 function activityBlockKey(conversationId: string, agentId: string): string {
   return `${conversationId}|${agentId}`;
 }
@@ -378,6 +415,7 @@ export class RuntimeEventHandler {
   private readonly cache: RunStateCache;
   private readonly events: EventPublisher;
   private readonly inboxAck: InboxAckSink;
+  private readonly deliveryOwner: () => string | null;
   private readonly statusProjector: RuntimeStatusProjector;
   private readonly daemonInstanceId: () => string | null;
   private readonly acceptRuntimeCustody: NonNullable<
@@ -457,6 +495,7 @@ export class RuntimeEventHandler {
     this.cache = deps.cache;
     this.events = deps.events;
     this.inboxAck = deps.inboxAck;
+    this.deliveryOwner = deps.deliveryOwner ?? (() => null);
     this.statusProjector = deps.statusProjector ?? NOOP_STATUS_PROJECTOR;
     this.daemonInstanceId = deps.daemonInstanceId ?? (() => null);
     this.acceptRuntimeCustody = deps.acceptRuntimeCustody ?? (() => true);
@@ -480,11 +519,16 @@ export class RuntimeEventHandler {
   }
 
   private runtimeLifecycleKey(frame: {
+    runtime_scope: RuntimeScope;
     conversation_id: string;
     agent_id: string;
     runtime_generation?: number;
   }): string {
-    return `${frame.conversation_id}|${frame.agent_id}|${frame.runtime_generation ?? 'legacy'}`;
+    const scope = principalScopeFromWire(frame.runtime_scope);
+    const identity = scope.kind === 'agent'
+      ? `agent|${scope.agentId}`
+      : `conversation|${scope.conversationId}|${scope.agentId}`;
+    return `${identity}|${frame.runtime_generation ?? 'legacy'}`;
   }
 
   /**
@@ -535,6 +579,28 @@ export class RuntimeEventHandler {
    */
   dispatch(frame: EventFrame): void {
     if (
+      'runtime_scope' in frame
+      && 'conversation_id' in frame
+      && 'agent_id' in frame
+      && !wireScopeMatchesTarget(
+        frame.runtime_scope,
+        frame.conversation_id,
+        frame.agent_id,
+      )
+    ) {
+      this.logger.warn(
+        {
+          kind: 'event',
+          event: frame.event,
+          runtime_scope: frame.runtime_scope,
+          conversationId: frame.conversation_id,
+          agent_id: frame.agent_id,
+        },
+        'dropped event: runtime scope does not authorize the origin target',
+      );
+      return;
+    }
+    if (
       'runtime_generation' in frame
       && frame.runtime_generation !== undefined
       && 'conversation_id' in frame
@@ -543,6 +609,7 @@ export class RuntimeEventHandler {
       const custody = this.projectionCustody(frame);
       const identity = custody
         ? {
+            scope: principalScopeFromWire(frame.runtime_scope),
             conversationId: frame.conversation_id,
             agentId: frame.agent_id,
             custody,
@@ -623,11 +690,16 @@ export class RuntimeEventHandler {
       // `delivered_at`. `consumed` → markDelivered; `failed` → roll the
       // batch back to pending (retriable) or mark failed
       // (`driver_refused`), exactly as `markUndelivered` classifies.
-      case 'runtime_delivery_consumed':
-        this.inboxAck.markDelivered(frame.delivery_ids);
+      case 'runtime_delivery_consumed': {
+        const settlement = this.inboxSettlementAuthority(frame);
+        if (!settlement) return;
+        this.inboxAck.markDelivered(settlement);
         return;
-      case 'runtime_delivery_failed':
-        this.inboxAck.markUndelivered(frame.delivery_ids, frame.reason);
+      }
+      case 'runtime_delivery_failed': {
+        const settlement = this.inboxSettlementAuthority(frame);
+        if (!settlement) return;
+        this.inboxAck.markUndelivered(settlement, frame.reason);
         this.logger.warn(
           {
             kind: 'inbox',
@@ -639,6 +711,7 @@ export class RuntimeEventHandler {
           'delivery failed',
         );
         return;
+      }
       case 'runtime_init_timeout': {
         this.forwardInitTimeout(frame.conversation_id, frame.agent_id, frame.event);
         // Stash the timeout_reason so a follow-up runtime_init_retrying
@@ -683,6 +756,7 @@ export class RuntimeEventHandler {
         const custody = this.projectionCustody(frame);
         if (custody) {
           this.statusProjector.initRetrying({
+            scope: principalScopeFromWire(frame.runtime_scope),
             conversationId: frame.conversation_id,
             agentId: frame.agent_id,
             retryAttempt: frame.retry_attempt,
@@ -708,6 +782,7 @@ export class RuntimeEventHandler {
         const custody = this.projectionCustody(frame);
         if (custody) {
           this.statusProjector.initCooldown({
+            scope: principalScopeFromWire(frame.runtime_scope),
             conversationId: frame.conversation_id,
             agentId: frame.agent_id,
             cooldownUntil: frame.cooldown_until,
@@ -786,6 +861,7 @@ export class RuntimeEventHandler {
           const custody = this.projectionCustody(frame);
           if (custody) {
             this.statusProjector.sessionInit({
+              scope: principalScopeFromWire(frame.runtime_scope),
               conversationId: frame.conversation_id,
               agentId: frame.agent_id,
               cliSessionId: frame.parsed.sessionId,
@@ -854,6 +930,34 @@ export class RuntimeEventHandler {
     }
   }
 
+  private inboxSettlementAuthority(frame: {
+    conversation_id: string;
+    agent_id: string;
+    delivery_ids: readonly number[];
+    event: 'runtime_delivery_consumed' | 'runtime_delivery_failed';
+  }): InboxSettlementAuthority | null {
+    const inFlightOwner = this.deliveryOwner();
+    if (!inFlightOwner) {
+      this.logger.warn(
+        {
+          kind: 'inbox',
+          event: frame.event,
+          conversationId: frame.conversation_id,
+          agent_id: frame.agent_id,
+          delivery_ids: [...frame.delivery_ids],
+        },
+        'dropped delivery settlement: no active dispatch owner',
+      );
+      return null;
+    }
+    return {
+      conversationId: frame.conversation_id,
+      agentId: frame.agent_id,
+      inFlightOwner,
+      deliveryIds: frame.delivery_ids,
+    };
+  }
+
   private onParsedEventDropped(
     frame: Extract<EventFrame, { event: 'runtime_parsed_event_dropped' }>,
   ): void {
@@ -862,6 +966,7 @@ export class RuntimeEventHandler {
     if (key) {
       state = this.cache.applyParsedEventDropped(
         key,
+        frame.runtime_scope,
         frame.conversation_id,
         frame.agent_id,
         {
@@ -1159,6 +1264,7 @@ export class RuntimeEventHandler {
     }
     this.cache.applyRuntimeState(
       key,
+      frame.runtime_scope,
       frame.conversation_id,
       frame.agent_id,
       frame.runtime_generation,
@@ -1216,6 +1322,7 @@ export class RuntimeEventHandler {
     const entry = key
       ? this.cache.applyRuntimeExit(
           key,
+          frame.runtime_scope,
           frame.conversation_id,
           frame.agent_id,
           frame.runtime_generation,
@@ -1231,6 +1338,7 @@ export class RuntimeEventHandler {
     const custody = this.projectionCustody(frame);
     if (custody) {
       const finalized = this.statusProjector.runtimeExit({
+        scope: principalScopeFromWire(frame.runtime_scope),
         conversationId: frame.conversation_id,
         agentId: frame.agent_id,
         intentional: frame.intentional,
@@ -1250,6 +1358,7 @@ export class RuntimeEventHandler {
     if (this.onRuntimeExitCb) {
       try {
         this.onRuntimeExitCb(frame.conversation_id, frame.agent_id, {
+          scope: principalScopeFromWire(frame.runtime_scope),
           intentional: frame.intentional,
           code: frame.code,
           initTimedOut,
@@ -1277,6 +1386,7 @@ export class RuntimeEventHandler {
       // Phase-only patch so we don't clobber the existing runState.
       this.cache.applyPhase(
         key,
+        frame.runtime_scope,
         frame.conversation_id,
         frame.agent_id,
         frame.runtime_generation,
@@ -1286,6 +1396,7 @@ export class RuntimeEventHandler {
     const custody = this.projectionCustody(frame);
     if (custody) {
       this.statusProjector.runtimeReady({
+        scope: principalScopeFromWire(frame.runtime_scope),
         conversationId: frame.conversation_id,
         agentId: frame.agent_id,
         custody,
@@ -1376,6 +1487,7 @@ export class RuntimeEventHandler {
       const daemonInstanceId = this.daemonInstanceId();
       const accepted: RuntimeStatusResult['runtimes'] = [];
       const rejected: Array<{
+        scope: RuntimePrincipalScope;
         conversationId: string;
         agentId: string;
         custody: RuntimeProjectionCustody;
@@ -1393,6 +1505,7 @@ export class RuntimeEventHandler {
           daemonInstanceId: daemonInstanceId ?? key,
         };
         const identity = {
+          scope: principalScopeFromWire(runtime.runtime_scope),
           conversationId: runtime.conversation_id,
           agentId: runtime.agent_id,
           custody,

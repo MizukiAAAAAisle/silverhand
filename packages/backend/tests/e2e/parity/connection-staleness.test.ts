@@ -99,6 +99,7 @@ function sessionInitEvent(
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',
+    runtime_scope: { kind: 'conversation', conversation_id: conversationId, agent_id: agentId },
     conversation_id: conversationId,
     agent_id: agentId,
     runtime_generation: runtimeGeneration,

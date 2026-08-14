@@ -2,6 +2,7 @@
 // Bounded context: agent. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import {
+  AgentSessionScopeSchema,
   AgentMaterializationStatusSchema,
   ConversationAgentStatusSchema,
   ConversationKindSchema,
@@ -27,6 +28,8 @@ export const AgentDtoSchema = z.object({
   fast_mode: FastModeSchema.nullable(),
   host_id: z.string(),
   description: z.string().nullable(),
+  /** Immutable runtime-session identity selected when the Agent is created. */
+  session_scope: AgentSessionScopeSchema,
   /** v26: id of the user who created this agent. The renderer uses it
    *  to decide whether to surface profile-edit affordances (Edit
    *  button, avatar upload). Backend `canEditAgent` is the source of
@@ -78,6 +81,8 @@ export const CreateAgentInputSchema = z
     fast_mode: FastModeSchema.optional(),
     host_id: z.string().optional(), // defaults to the current user's owned local host
     description: z.string().optional(),
+    /** Defaults to the established one-runtime-per-conversation model. */
+    session_scope: AgentSessionScopeSchema.optional(),
   })
   // reasoning_effort is a bounded opaque token (see ReasoningEffortTokenSchema):
   // the schema accepts ANY structurally-valid token, and the SOLE legality gate

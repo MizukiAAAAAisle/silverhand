@@ -372,6 +372,11 @@ describe('deleteComputer destruction boundaries', () => {
         agentId: f.agentId,
         hostId: f.hostId,
         runtimeGeneration: 1,
+        runtimeScope: {
+          kind: 'conversation',
+          conversationId: f.channelId,
+          agentId: f.agentId,
+        },
       },
     ]);
   });

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readChannelContextMetadata } from '@silverhand/shared';
+import {
+  readChannelContextMetadata,
+  type AgentRunState,
+  type AgentRunTerminalReason,
+} from '@silverhand/shared';
+import type { RuntimeScope } from '@silverhand/host';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -20,6 +25,7 @@ import type {
   WorkspaceChannelTxScope,
 } from '../../src/services/channel/ports.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
+import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { overrideScope, twoAxisUowWithScopeWrap } from '../utils/tx-fault.js';
@@ -43,9 +49,45 @@ class FakeConversationManager {
   }
 
   resolveRun(): void {}
-  resolvedConversations: Array<{ conversationId: string; reason?: string }> = [];
-  resolveConversationRuns(conversationId: string, reason?: string): void {
+  readonly runStateCache = new RunStateCache();
+  readonly terminalPublications: AgentRunState[] = [];
+  resolvedConversations: Array<{
+    conversationId: string;
+    reason?: AgentRunTerminalReason;
+  }> = [];
+  seedLiveRun(
+    runtimeScope: RuntimeScope,
+    conversationId: string,
+    agentId: string,
+    runId: string,
+  ): void {
+    const now = 1700000000000;
+    this.runStateCache.applyRuntimeState(
+      'daemon:archive-test',
+      runtimeScope,
+      conversationId,
+      agentId,
+      1,
+      {
+        runId,
+        agentId,
+        conversationId,
+        status: 'thinking',
+        startedAt: now,
+        updatedAt: now,
+        lastActivityAt: now,
+      },
+      now,
+    );
+  }
+  resolveConversationRuns(
+    conversationId: string,
+    reason: AgentRunTerminalReason = 'conversation_closed',
+  ): void {
     this.resolvedConversations.push({ conversationId, reason });
+    this.terminalPublications.push(
+      ...this.runStateCache.resolveConversationRuns(conversationId, reason),
+    );
   }
   getAgentRunStates(): never[] {
     return [];
@@ -64,7 +106,7 @@ class FakeConversationManager {
   }
 }
 
-function bootstrap() {
+function bootstrap(opts?: { aliceSessionScope?: 'conversation' | 'agent' }) {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   const hosts = new HostRepo(db);
@@ -112,7 +154,15 @@ function bootstrap() {
     name: 'eng',
     description: null,
   });
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
+  const alice = agents.create(
+    {
+      name: 'alice',
+      runtime: 'claude',
+      session_scope: opts?.aliceSessionScope ?? 'conversation',
+    },
+    localHostId,
+    'local',
+  );
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
   workspaces.insertMembership(workspace.id, alice.id);
   workspaces.insertMembership(workspace.id, bob.id);
@@ -633,6 +683,47 @@ describe('ChannelService.setArchived', () => {
       expect(new Set(t.fake.stops.map(s => s.agentId))).toEqual(
         new Set([t.alice.id, t.bob.id]),
       );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('archiving one target does not stop an AgentSlot shared by other conversations', async () => {
+    const t = bootstrap({ aliceSessionScope: 'agent' });
+    try {
+      t.fake.seedLiveRun(
+        { kind: 'agent', agent_id: t.alice.id },
+        t.source.id,
+        t.alice.id,
+        'alice-agent-slot-run',
+      );
+      t.fake.seedLiveRun(
+        {
+          kind: 'conversation',
+          conversation_id: t.source.id,
+          agent_id: t.bob.id,
+        },
+        t.source.id,
+        t.bob.id,
+        'bob-conversation-slot-run',
+      );
+      await t.service.setArchived({ channelId: t.source.id, archived: true });
+
+      expect(t.fake.resolvedConversations).toEqual([
+        { conversationId: t.source.id, reason: 'conversation_closed' },
+      ]);
+      expect(t.fake.stops).toEqual([
+        { conversationId: t.source.id, agentId: t.bob.id },
+      ]);
+      expect(
+        t.fake.runStateCache.get(t.source.id, t.alice.id)?.runState?.runId,
+      ).toBe('alice-agent-slot-run');
+      expect(
+        t.fake.runStateCache.get(t.source.id, t.bob.id)?.runState,
+      ).toBeNull();
+      expect(t.fake.terminalPublications.map(state => state.runId)).toEqual([
+        'bob-conversation-slot-run',
+      ]);
     } finally {
       t.cleanup();
     }

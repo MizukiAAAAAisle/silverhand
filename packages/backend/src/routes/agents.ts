@@ -42,6 +42,7 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import {
   type WorkspaceRepo,
@@ -82,6 +83,7 @@ export interface AgentsRouteDeps {
   conversations: ConversationRepo;
   messages: MessageRepo;
   conversationInboxes: ConversationInboxRepo;
+  runtimeSlots: RuntimeSlotRepo;
   users: UserRepo;
   /** #task:1990 — the L3a dependent-row transaction scope (wired at
    *  composition root; the use case never receives `BackendContext`). */
@@ -239,6 +241,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     conversations,
     messages,
     conversationInboxes,
+    runtimeSlots,
     users,
     agentProvisioning,
     agentTeardown,
@@ -975,9 +978,9 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     }
   });
 
-  // POST /stop — hard-stop every running conversation_agent for this
-  // agent. Returns the count we actually attempted to stop. No-op
-  // (200 with stopped: 0) when nothing is running.
+  // POST /stop — hard-stop every running semantic slot for this agent:
+  // one aggregate-owned AgentSlot, or each live ConversationSlot. Returns the
+  // count actually stopped. No-op (200 with stopped: 0) when none is live.
   app.post('/api/agents/:id/stop', async c => {
     const id = c.req.param('id');
     const agent = agents.get(id);
@@ -1010,27 +1013,44 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     //     stays a 200 because the bulk endpoint historically reports
     //     a count, not all-or-nothing; the unsuccessful conversations
     //     stay in `status='active'` and the user can retry.
-    const live = agents
-      .listRuntimeConversations(id)
-      .filter(s => s.status === 'starting' || s.status === 'active');
-    if (live.length === 0) {
+    const stops = agent.session_scope === 'agent'
+      ? (() => {
+          const slot = runtimeSlots.getAgent(id);
+          return slot?.observed_status === 'starting'
+            || slot?.observed_status === 'active'
+            ? [{ conversationId: null }]
+            : [];
+        })()
+      : agents
+          .listRuntimeConversations(id)
+          .filter(s => s.status === 'starting' || s.status === 'active')
+          .map(s => ({ conversationId: s.conversation_id }));
+    if (stops.length === 0) {
       return c.json({ stopped: 0 });
     }
     const settled = await Promise.allSettled(
-      live.map(s => ctx.runtimeHost.stop(s.conversation_id, id)),
+      stops.map(stop =>
+        ctx.runtimeHost.stop(
+          stop.conversationId,
+          id,
+          agent.session_scope === 'agent'
+            ? { runtimeScope: { kind: 'agent', agentId: id } }
+            : undefined,
+        ),
+      ),
     );
-    const failures: { conversationId: string; err: unknown }[] = [];
+    const failures: { conversationId: string | null; err: unknown }[] = [];
     let successCount = 0;
     settled.forEach((r, idx) => {
       if (r.status === 'fulfilled') {
         successCount += 1;
       } else {
         failures.push({
-          conversationId: live[idx]!.conversation_id,
+          conversationId: stops[idx]!.conversationId,
           err: r.reason,
         });
         ctx.logger.warn(
-          { conversationId: live[idx]!.conversation_id, agentId: id, err: r.reason },
+          { conversationId: stops[idx]!.conversationId, agentId: id, err: r.reason },
           'agent bulk stop: conversation stop failed',
         );
       }

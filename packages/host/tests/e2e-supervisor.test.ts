@@ -117,7 +117,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       runtime_generation: 1,
       conversation_id: 'conv-1',
       agent_id: 'agent-1',
-      options: testStartOptions(),
+      options: testStartOptions({ conversationId: 'conv-1', agentId: 'agent-1' }),
     });
     assertStarted(r);
     expect(r.pid).toBeGreaterThan(0);
@@ -144,11 +144,12 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const r = await client.runtimeDeliver({
       runtime_generation: 1,
       conversation_id: 'conv-2',
+      target: { conversation_id: 'conv-2', workspace: null },
       agent_id: 'agent-2',
       delivery_ids: [101, 102],
       kind: 'message',
       text: 'hello',
-      spawn_options: testStartOptions(),
+      spawn_options: testStartOptions({ conversationId: 'conv-2', agentId: 'agent-2' }),
     });
     expect(r.disposition).toBe('spawning');
 
@@ -173,11 +174,12 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeDeliver({
       runtime_generation: 1,
       conversation_id: 'conv-3',
+      target: { conversation_id: 'conv-3', workspace: null },
       agent_id: 'agent-3',
       delivery_ids: [200],
       kind: 'message',
       text: 'stub',
-      spawn_options: testStartOptions(),
+      spawn_options: testStartOptions({ conversationId: 'conv-3', agentId: 'agent-3' }),
     });
     const failed = await waitForEvent(
       events,
@@ -203,7 +205,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       runtime_generation: 1,
       conversation_id: 'conv-4',
       agent_id: 'agent-4',
-      options: testStartOptions(),
+      options: testStartOptions({ conversationId: 'conv-4', agentId: 'agent-4' }),
     });
     await waitForEvent(
       events,
@@ -213,11 +215,12 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const r = await client.runtimeDeliver({
       runtime_generation: 1,
       conversation_id: 'conv-4',
+      target: { conversation_id: 'conv-4', workspace: null },
       agent_id: 'agent-4',
       delivery_ids: [50, 51, 52],
       kind: 'message',
       text: 'batch',
-      spawn_options: testStartOptions(),
+      spawn_options: testStartOptions({ conversationId: 'conv-4', agentId: 'agent-4' }),
     });
     expect(r.disposition).toBe('admitted');
     const consumed = await waitForEvent(
@@ -237,11 +240,12 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const r = await client.runtimeDeliver({
       runtime_generation: 1,
       conversation_id: 'no-such-conv',
+      target: { conversation_id: 'no-such-conv', workspace: null },
       agent_id: 'no-such-agent',
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
-      spawn_options: testStartOptions(),
+      spawn_options: testStartOptions({ conversationId: 'no-such-conv', agentId: 'no-such-agent' }),
     });
     // Unlike the retired `runtime_wake` (which refused not_running), the
     // unified deliver command spawns a fresh runtime with the batch.
@@ -254,8 +258,8 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const client = new HostClient({ socketPath: f.socketPath });
     clients.push(client);
     await client.connect();
-    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-A', agent_id: 'ag-A', options: testStartOptions() });
-    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-B', agent_id: 'ag-B', options: testStartOptions() });
+    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-A', agent_id: 'ag-A', options: testStartOptions({ conversationId: 'c-A', agentId: 'ag-A' }) });
+    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-B', agent_id: 'ag-B', options: testStartOptions({ conversationId: 'c-B', agentId: 'ag-B' }) });
     const snap = await client.runtimeStatus();
     expect(snap.runtimes).toHaveLength(2);
     const convs = snap.runtimes.map(r => r.conversation_id).sort();
@@ -270,15 +274,18 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.connect();
     const events: EventFrame[] = [];
     client.subscribe(e => events.push(e));
-    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-X', agent_id: 'ag-X', options: testStartOptions() });
+    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-X', agent_id: 'ag-X', options: testStartOptions({ conversationId: 'c-X', agentId: 'ag-X' }) });
     await waitForEvent(
       events,
       (e): e is Extract<EventFrame, { event: 'runtime_ready_for_drain' }> =>
         e.event === 'runtime_ready_for_drain' && e.conversation_id === 'c-X',
     );
     const r = await client.runtimeStop({
-      conversation_id: 'c-X',
-      agent_id: 'ag-X',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c-X',
+        agent_id: 'ag-X',
+      },
       runtime_generation: 1, mode: 'hard',
     });
     if (r.mode !== 'hard') throw new Error('expected hard stop result');
@@ -302,7 +309,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const evB: EventFrame[] = [];
     a.subscribe(e => evA.push(e));
     b.subscribe(e => evB.push(e));
-    await a.runtimeStart({ runtime_generation: 1, conversation_id: 'c-Y', agent_id: 'ag-Y', options: testStartOptions() });
+    await a.runtimeStart({ runtime_generation: 1, conversation_id: 'c-Y', agent_id: 'ag-Y', options: testStartOptions({ conversationId: 'c-Y', agentId: 'ag-Y' }) });
     const has = (events: EventFrame[]): boolean =>
       events.some(
         e => e.event === 'runtime_ready_for_drain' && e.conversation_id === 'c-Y',
@@ -330,7 +337,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       runtime_generation: 1,
       conversation_id: 'c-state',
       agent_id: 'ag-state',
-      options: testStartOptions(),
+      options: testStartOptions({ conversationId: 'c-state', agentId: 'ag-state' }),
     });
     // Wait for ready so we know both starting + idle states have been
     // emitted (FakeSupervisor emits state(starting) on start() and
@@ -352,8 +359,11 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     expect(stateEvents[0]?.state.runId).toBe(stateEvents[1]?.state.runId);
 
     await client.runtimeStop({
-      conversation_id: 'c-state',
-      agent_id: 'ag-state',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c-state',
+        agent_id: 'ag-state',
+      },
       runtime_generation: 1, mode: 'hard',
     });
     await waitForEvent(
@@ -386,11 +396,12 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeDeliver({
       runtime_generation: 1,
       conversation_id: 'c-crash',
+      target: { conversation_id: 'c-crash', workspace: null },
       agent_id: 'ag-crash',
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
-      spawn_options: testStartOptions(),
+      spawn_options: testStartOptions({ conversationId: 'c-crash', agentId: 'ag-crash' }),
     });
     await waitForEvent(
       events,
@@ -424,7 +435,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       runtime_generation: 1,
       conversation_id: 'c-flow',
       agent_id: 'ag-flow',
-      options: testStartOptions(),
+      options: testStartOptions({ conversationId: 'c-flow', agentId: 'ag-flow' }),
     });
     await waitForEvent(
       events,
@@ -433,8 +444,11 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     );
 
     const pause = await client.call('runtime_output_pause', {
-      conversation_id: 'c-flow',
-      agent_id: 'ag-flow',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c-flow',
+        agent_id: 'ag-flow',
+      },
     });
     expect(pause).toEqual({ paused: true });
     await waitForEvent(
@@ -444,8 +458,11 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     );
 
     const resume = await client.call('runtime_output_resume', {
-      conversation_id: 'c-flow',
-      agent_id: 'ag-flow',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c-flow',
+        agent_id: 'ag-flow',
+      },
     });
     expect(resume).toEqual({ resumed: true });
     await waitForEvent(
@@ -465,8 +482,11 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     const r = await client.call('runtime_output_pause', {
-      conversation_id: 'no-such-conv',
-      agent_id: 'no-such-agent',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'no-such-conv',
+        agent_id: 'no-such-agent',
+      },
     });
     expect(r).toEqual({ paused: false });
     // Settle the event loop briefly; assert no paused event arrived.

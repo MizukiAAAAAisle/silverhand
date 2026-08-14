@@ -15,13 +15,14 @@ import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 
 import type { RuntimeKind } from '@silverhand/shared';
+import { RuntimeScopeSchema, type RuntimeScope } from '../protocol.js';
 
 import type { DaemonLogger } from './logger.js';
 
 export interface RuntimePidfileRecord {
   pid: number;
   started_at: number;
-  conv: string;
+  runtime_scope: RuntimeScope;
   agent: string;
   runtime: RuntimeKind;
   cmd: string;
@@ -30,8 +31,7 @@ export interface RuntimePidfileRecord {
 export interface RuntimePidfileWriteParams {
   rootDir: string;
   daemonInstanceId: string;
-  conversationId: string;
-  agentId: string;
+  runtimeScope: RuntimeScope;
   pid: number;
   startedAt: number;
   runtime: RuntimeKind;
@@ -67,30 +67,36 @@ export function buildDaemonInstanceId(startedAtMs: number, pid = process.pid): s
 export function runtimePidFilePath(
   rootDir: string,
   daemonInstanceId: string,
-  conversationId: string,
-  agentId: string,
+  runtimeScope: RuntimeScope,
 ): string {
-  return join(
-    rootDir,
-    daemonInstanceId,
-    `${encodeURIComponent(conversationId)}-${encodeURIComponent(agentId)}.json`,
-  );
+  return runtimeScope.kind === 'agent'
+    ? join(
+        rootDir,
+        daemonInstanceId,
+        'agent',
+        `${encodeURIComponent(runtimeScope.agent_id)}.json`,
+      )
+    : join(
+        rootDir,
+        daemonInstanceId,
+        'conv',
+        `${encodeURIComponent(runtimeScope.conversation_id)}-${encodeURIComponent(runtimeScope.agent_id)}.json`,
+      );
 }
 
 export function writeRuntimePidfile(params: RuntimePidfileWriteParams): string {
   const filePath = runtimePidFilePath(
     params.rootDir,
     params.daemonInstanceId,
-    params.conversationId,
-    params.agentId,
+    params.runtimeScope,
   );
   mkdirSync(dirname(filePath), { recursive: true });
 
   const record: RuntimePidfileRecord = {
     pid: params.pid,
     started_at: params.startedAt,
-    conv: params.conversationId,
-    agent: params.agentId,
+    runtime_scope: params.runtimeScope,
+    agent: params.runtimeScope.agent_id,
     runtime: params.runtime,
     cmd: params.cmd,
   };
@@ -115,14 +121,12 @@ export function writeRuntimePidfile(params: RuntimePidfileWriteParams): string {
 export function unlinkRuntimePidfile(params: {
   rootDir: string;
   daemonInstanceId: string;
-  conversationId: string;
-  agentId: string;
+  runtimeScope: RuntimeScope;
 }): void {
   const filePath = runtimePidFilePath(
     params.rootDir,
     params.daemonInstanceId,
-    params.conversationId,
-    params.agentId,
+    params.runtimeScope,
   );
   unlinkIfExists(filePath);
 }
@@ -188,9 +192,38 @@ export function reconcileRuntimePidfiles(params: {
       continue;
     }
 
+    const filePaths: string[] = [];
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      const filePath = join(instanceDir, entry.name);
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        // Pre-P2 files remain reconcilable during the protocol cutover.
+        filePaths.push(join(instanceDir, entry.name));
+        continue;
+      }
+      if (!entry.isDirectory() || !['agent', 'conv'].includes(entry.name)) {
+        continue;
+      }
+      const namespaceDir = join(instanceDir, entry.name);
+      try {
+        for (const scopedEntry of readdirSync(namespaceDir, {
+          withFileTypes: true,
+        })) {
+          if (scopedEntry.isFile() && scopedEntry.name.endsWith('.json')) {
+            filePaths.push(join(namespaceDir, scopedEntry.name));
+          }
+        }
+      } catch (err) {
+        result.errors++;
+        params.logger.warn(
+          {
+            runtime_pid_dir: namespaceDir,
+            err: (err as Error).message,
+          },
+          'failed to read runtime pidfile namespace; continuing',
+        );
+      }
+    }
+
+    for (const filePath of filePaths) {
       result.scanned++;
       try {
         const record = readRuntimePidfile(filePath);
@@ -312,11 +345,25 @@ function readRuntimePidfile(filePath: string): RuntimePidfileRecord | null {
     ) {
       return null;
     }
-    if (typeof parsed.conv !== 'string' || parsed.conv.length === 0) return null;
+    const scope = RuntimeScopeSchema.safeParse(parsed.runtime_scope);
+    const legacy = parsed as Partial<RuntimePidfileRecord> & { conv?: unknown };
+    const runtimeScope = scope.success
+      ? scope.data
+      : typeof legacy.conv === 'string'
+          && legacy.conv.length > 0
+          && typeof parsed.agent === 'string'
+          && parsed.agent.length > 0
+        ? {
+            kind: 'conversation' as const,
+            conversation_id: legacy.conv,
+            agent_id: parsed.agent,
+          }
+        : null;
+    if (!runtimeScope) return null;
     if (typeof parsed.agent !== 'string' || parsed.agent.length === 0) return null;
     if (typeof parsed.runtime !== 'string' || parsed.runtime.length === 0) return null;
     if (typeof parsed.cmd !== 'string' || parsed.cmd.length === 0) return null;
-    return parsed as RuntimePidfileRecord;
+    return { ...parsed, runtime_scope: runtimeScope } as RuntimePidfileRecord;
   } catch {
     return null;
   }

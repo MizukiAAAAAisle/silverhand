@@ -169,9 +169,9 @@ export function useCreateAgent() {
       const idempotencyKey = crypto.randomUUID();
       const res = await api<{
         agent: AgentDto;
-        agent_home_workspace_id: string;
-        dm_channel_id: string;
-        onboarding_message_id: string;
+        agent_home_workspace_id: string | null;
+        dm_channel_id: string | null;
+        onboarding_message_id: string | null;
       }>('/api/agents', {
         method: 'POST',
         body: JSON.stringify(input),

@@ -45,6 +45,37 @@ interface TeardownRepos {
   runtimeSlots: RuntimeSlotRepo;
 }
 
+function runtimeSessionsForAgent(
+  repos: TeardownRepos,
+  agentId: string,
+) {
+  const agent = repos.agents.get(agentId);
+  if (!agent) return [];
+  if (agent.session_scope === 'agent') {
+    const slot = repos.runtimeSlots.getAgent(agentId);
+    return slot
+      ? [{
+          runtimeScope: { kind: 'agent' as const, agentId },
+          conversationId: null,
+          status: slot.observed_status,
+          runtimeGeneration: slot.generation,
+        }]
+      : [];
+  }
+  return repos.agents.listRuntimeConversations(agentId).map(session => ({
+    runtimeScope: {
+      kind: 'conversation' as const,
+      conversationId: session.conversation_id,
+      agentId,
+    },
+    conversationId: session.conversation_id,
+    status: session.status,
+    runtimeGeneration:
+      repos.runtimeSlots.getConversation(session.conversation_id, agentId)
+        ?.generation ?? 0,
+  }));
+}
+
 /**
  * The SINGLE implementation of the per-agent teardown face, bound to `agentId`.
  * Both axes mint it from here — the computer cascade cannot capture or delete
@@ -63,17 +94,7 @@ function agentTeardownFace(
     capture(): AgentTeardownCapture {
       // RAW statuses — the "which of these is still running" rule is the use
       // case's (see the port doc); filtering here would hide it from its tests.
-      const runtimeSessions = agents
-        .listRuntimeConversations(agentId)
-        .map(session => ({
-          conversationId: session.conversation_id,
-          status: session.status,
-          runtimeGeneration:
-            repos.runtimeSlots.getConversation(
-              session.conversation_id,
-              agentId,
-            )?.generation ?? 0,
-        }));
+      const runtimeSessions = runtimeSessionsForAgent(repos, agentId);
       // The agent's own home is the ONLY discovery path for its DM blobs: the
       // `attachments` rows hang off those channels and cascade away with the
       // home, so a post-commit sweep could not find them again.
@@ -150,15 +171,7 @@ export function createSqliteAgentTeardownPersistence(
       return deletionMarkerRead.isDeletionPending(agentId);
     },
     listRuntimeSessions(agentId: string) {
-      return repos.agents.listRuntimeConversations(agentId).map(session => ({
-        conversationId: session.conversation_id,
-        status: session.status,
-        runtimeGeneration:
-          repos.runtimeSlots.getConversation(
-            session.conversation_id,
-            agentId,
-          )?.generation ?? 0,
-      }));
+      return runtimeSessionsForAgent(repos, agentId);
     },
     readComputerFacts(hostId: string): ComputerTeardownFacts | null {
       const row = repos.hosts.get(hostId);

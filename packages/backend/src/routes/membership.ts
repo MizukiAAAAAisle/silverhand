@@ -466,9 +466,14 @@ export function createWorkspaceMembershipApp(
     const result = await removeWorkspaceMember(
       {
         persistence: deps.membershipPersistence,
-        // Agents run a process per conversation: stopped before the commit on a
-        // hint and again after it on the authoritative set (see the use case).
-        stopRuntime: (conversationId, id) => ctx.runtimeHost.stop(conversationId, id),
+        // ConversationSlot is owned by this membership edge. AgentSlot is
+        // owned by the Agent aggregate and survives losing one workspace.
+        ...(agent.session_scope === 'conversation'
+          ? {
+              stopRuntime: (conversationId: string, id: string) =>
+                ctx.runtimeHost.stop(conversationId, id),
+            }
+          : {}),
         logger: ctx.logger,
       },
       {

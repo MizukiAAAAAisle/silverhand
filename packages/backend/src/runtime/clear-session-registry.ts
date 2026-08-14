@@ -5,7 +5,7 @@
 // before it commits `cli_session_id=null` + the audit row. This registry
 // is the self-contained state machine behind that wait: it owns its own
 // waiter map + lifecycle (register → notify → bounded await → cleanup),
-// keyed by `(conversationId, agentId)`, and depends on nothing in the
+// keyed by semantic RuntimeScope, and depends on nothing in the
 // fanout's per-host `states` map. Extracting it keeps the fanout core from
 // carrying the waiter mechanics while avoiding a second runtime-state map.
 //
@@ -23,6 +23,7 @@
 //   4. `end` (the caller's `finally`, Cindy `nPqEVJjCLjuNDH-6` #2) removes
 //      the entry regardless of success/timeout/dispatch-fail/DB-tx-fail.
 import { ClearSessionExitTimeoutError } from './agent-runtime-host.js';
+import type { RuntimePrincipalScope } from '../auth/runtime-principal.js';
 
 /**
  * One-shot waiter for the bounded wait on `runtime_exit` projection
@@ -35,8 +36,8 @@ interface ClearSessionWaiter {
 
 export class ClearSessionWaiterRegistry {
   /**
-   * Keyed by `${conversationId}|${agentId}`. Presence of an entry
-   * means a `clearSession` is awaiting `runtime_exit` for that pair.
+   * Keyed by AgentSlot or ConversationSlot identity. Presence of an entry
+   * means a `clearSession` is awaiting `runtime_exit` for that slot.
    */
   private readonly waiters = new Map<string, ClearSessionWaiter>();
   private readonly timeoutMs: number;
@@ -45,22 +46,24 @@ export class ClearSessionWaiterRegistry {
     this.timeoutMs = timeoutMs;
   }
 
-  private key(conversationId: string, agentId: string): string {
-    return `${conversationId}|${agentId}`;
+  private key(scope: RuntimePrincipalScope): string {
+    return scope.kind === 'agent'
+      ? `agent|${scope.agentId}`
+      : `conversation|${scope.conversationId}|${scope.agentId}`;
   }
 
   /**
-   * True while a `clearSession` for this pair is in flight. The caller
+   * True while a `clearSession` for this slot is in flight. The caller
    * uses this to fail fast (`ClearSessionInProgressError`) on concurrent
    * dispatch for the same pair.
    */
-  inProgress(conversationId: string, agentId: string): boolean {
-    return this.waiters.has(this.key(conversationId, agentId));
+  inProgress(scope: RuntimePrincipalScope): boolean {
+    return this.waiters.has(this.key(scope));
   }
 
   /** Register a one-shot waiter BEFORE dispatch. */
-  begin(conversationId: string, agentId: string): void {
-    this.waiters.set(this.key(conversationId, agentId), {
+  begin(scope: RuntimePrincipalScope): void {
+    this.waiters.set(this.key(scope), {
       exited: false,
       resolveExited: null,
     });
@@ -73,8 +76,12 @@ export class ClearSessionWaiterRegistry {
    * the waiter is already latched). Does NOT remove the entry — the
    * caller's `finally` (`end`) does that for both branches.
    */
-  awaitExit(conversationId: string, agentId: string): Promise<void> {
-    const waiter = this.waiters.get(this.key(conversationId, agentId));
+  awaitExit(
+    scope: RuntimePrincipalScope,
+    conversationId: string,
+    agentId: string,
+  ): Promise<void> {
+    const waiter = this.waiters.get(this.key(scope));
     if (!waiter || waiter.exited) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
@@ -98,12 +105,12 @@ export class ClearSessionWaiterRegistry {
   /**
    * Invoked from the `RuntimeEventHandler.onRuntimeExit` callback wrapper
    * after the cache and SSE have already updated. Latches `exited = true`
-   * on any in-flight waiter for this pair and resolves the awaiter (if one
-   * is parked). Idempotent: a second `runtime_exit` for the same pair is a
+   * on any in-flight waiter for this slot and resolves the awaiter (if one
+   * is parked). Idempotent: a second `runtime_exit` for the same slot is a
    * no-op (the resolver is null after first fire).
    */
-  notifyExit(conversationId: string, agentId: string): void {
-    const waiter = this.waiters.get(this.key(conversationId, agentId));
+  notifyExit(scope: RuntimePrincipalScope): void {
+    const waiter = this.waiters.get(this.key(scope));
     if (!waiter) return;
     waiter.exited = true;
     const resolve = waiter.resolveExited;
@@ -111,7 +118,7 @@ export class ClearSessionWaiterRegistry {
   }
 
   /** Finally cleanup — remove the waiter regardless of outcome. */
-  end(conversationId: string, agentId: string): void {
-    this.waiters.delete(this.key(conversationId, agentId));
+  end(scope: RuntimePrincipalScope): void {
+    this.waiters.delete(this.key(scope));
   }
 }

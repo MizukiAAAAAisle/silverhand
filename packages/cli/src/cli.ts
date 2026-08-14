@@ -232,7 +232,28 @@ async function executeCommand(
 
   // Lazy: only load env when we're actually about to make a request.
   // Help/version never reach this line.
-  const env = loadEnv();
+  const explicitConversationId = args.flags['route-conversation-id'];
+  if (
+    explicitConversationId !== undefined
+    && typeof explicitConversationId !== 'string'
+  ) {
+    throw new CliError({
+      code: 'validation_error',
+      message: '--route-conversation-id requires a non-empty conversation id',
+      retriable: false,
+    });
+  }
+  // ConversationSlot keeps its immutable ambient route coordinate even when a
+  // command uses --conversation-id as a request-local range/destination. An
+  // AgentSlot has no ambient coordinate, so --route-conversation-id is the
+  // required canonical route fallback for that invocation. The two flags are
+  // intentionally independent axes.
+  const env = loadEnv(
+    process.env,
+    typeof explicitConversationId === 'string'
+      ? explicitConversationId
+      : undefined,
+  );
   const client = new BackendClient(env);
   const result = await cmd.run({ env, client, args });
   if (result !== undefined && result !== null) {

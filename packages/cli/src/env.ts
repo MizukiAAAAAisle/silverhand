@@ -1,14 +1,15 @@
 /**
- * Per-process environment context the CLI operates within. Populated
- * once at startup from the four `SILVERHAND_*` env vars the backend
- * injects when it spawns the agent (see backend `conversation-manager`
- * for the spawn-side wiring, phase 1A/C).
+ * Per-process environment context the CLI operates within. The Agent identity,
+ * server and bearer come from immutable spawn env. The conversation coordinate
+ * route target comes from the ConversationSlot env when present. Only an
+ * AgentSlot (which deliberately has no ambient conversation env) may use the
+ * command's explicit `--route-conversation-id` as its canonical route fallback.
+ * Command-local conversation selectors remain request coordinates and never
+ * retarget a ConversationSlot bearer.
  *
- * Treating these as immutable inputs is deliberate: the per-(cid, aid)
- * auth token is the integrity boundary. Agents must not pass these as
- * flags and the CLI does not accept overrides — if an agent tries to
- * point at a different (cid, aid), the backend's middleware will reject
- * the request because the token is bound to one specific tuple.
+ * RuntimePrincipal is the integrity boundary: a ConversationSlot bearer admits
+ * only its one conversation, while an AgentSlot bearer admits explicit live
+ * participant targets under the same generation custody.
  */
 import {
   SILVERHAND_AGENT_ID_ENV,
@@ -29,12 +30,17 @@ export interface CliEnv {
   lastDeliveredSeqFile?: string;
 }
 
-/** Reads the four required env vars. Throws a `CliError` (validation_error,
+/** Resolves the four command inputs. Throws a `CliError` (validation_error,
  *  exit 1) listing every missing key when any is absent — agents see one
  *  actionable error on stderr instead of trial-and-error. */
-export function loadEnv(env: NodeJS.ProcessEnv = process.env): CliEnv {
+export function loadEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  agentSlotConversationFallback?: string,
+): CliEnv {
   const missing: string[] = [];
-  const conversationId = env[SILVERHAND_CONVERSATION_ID_ENV];
+  const ambientConversationId = env[SILVERHAND_CONVERSATION_ID_ENV]?.trim();
+  const explicitRouteConversationId = agentSlotConversationFallback?.trim();
+  const conversationId = ambientConversationId || explicitRouteConversationId;
   const agentId = env[SILVERHAND_AGENT_ID_ENV];
   const serverUrl = env[SILVERHAND_SERVER_URL_ENV];
   const authToken = env[SILVERHAND_AUTH_TOKEN_ENV];
