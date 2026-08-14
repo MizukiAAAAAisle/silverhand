@@ -29,9 +29,14 @@
 // oracle over every conversation id in the installation: an id is 16 random
 // characters, so it cannot be guessed, but it CAN be pasted from a place the
 // reader was authorized to see and later removed from — and "does this still
-// exist" is not a question a non-participant may ask. The operator-facing reason
-// is carried separately ({@link DeliveryTargetRefusal.operatorReason}) so a log
-// can still say which branch fired; it must never cross to the actor.
+// exist" is not a question a non-participant may ask. The branch that fired
+// leaves through a DIFFERENT EXIT ({@link DeliveryTargetObserverPort}), not
+// through a second field on the answer: an operator reason that travelled inside
+// the returned object would be one `json(refusal)` away from the actor at every
+// route, and no call-site discipline can make that safe (@Cindy B4). The answer
+// therefore carries the code and nothing else — two refusals sharing a code are
+// byte-identical objects, so there is no field a serializer must remember to
+// strip.
 //
 // READS NEVER ALLOCATE. `dm:@handle` on a WRITE may open the pair — that is what
 // makes a DM reachable without a prior invitation — while every read surface
@@ -46,6 +51,12 @@
 // this", posting answers "may I post there", and collapsing them would mean an
 // address stops resolving because a channel was archived, so an agent could no
 // longer even name the conversation it is quoting.
+//
+// Consequently A RESOLVED TARGET IS A SNAPSHOT, NOT A CAPABILITY TOKEN: the
+// participation this module read can be revoked between here and the effect, so
+// the write transaction re-checks participation and postability inside itself.
+// That is the transaction's own gate, not a second one here — see #task:2021's
+// merge acceptance.
 import {
   parseDeliveryTargetInput,
   requireAddressableId,
@@ -117,6 +128,10 @@ export interface DeliveryTargetPorts {
   messages: DeliveryTargetMessagesPort;
   agents: DeliveryTargetPrincipalsPort;
   users: DeliveryTargetPrincipalsPort;
+  /** Where a refusal's BRANCH goes. Required: the alternative is an optional sink
+   *  that a surface forgets to pass, which loses the operator's only account of
+   *  why an address was refused. */
+  observer: DeliveryTargetObserverPort;
 }
 
 /**
@@ -155,12 +170,13 @@ export type DeliveryTargetRefusalCode =
   | 'self_pair_not_addressable';
 
 /**
- * The branch that actually fired — FOR LOGS AND TESTS ONLY.
+ * The branch that actually fired — FOR OPERATORS, and unreachable from the answer.
  *
- * Separate field, and named for its audience, because the collapse above is only
- * real if the distinction cannot reach the actor by accident: a route that
- * serializes a refusal object wholesale is then visibly wrong at the call site
- * rather than silently leaking an existence signal.
+ * It leaves through {@link DeliveryTargetObserverPort} rather than riding on the
+ * refusal, because the collapse is only real if the distinction CANNOT reach the
+ * actor: a field on the returned object survives every `json(refusal)`, spread and
+ * generic error serializer, and "the call site would look obviously wrong" is a
+ * review habit, not a boundary.
  */
 export type DeliveryTargetOperatorReason =
   | 'grammar'
@@ -173,10 +189,41 @@ export type DeliveryTargetOperatorReason =
   | 'thread_root_not_found'
   | 'thread_root_not_a_root';
 
+/**
+ * What the actor is told, IN ITS ENTIRETY.
+ *
+ * One field, so two refusals that share a code are the same object down to the
+ * bytes and a route can serialize this wholesale without knowing anything about
+ * existence collapse. Widening it is how the oracle comes back, which is why the
+ * suite asserts the key set and not just the values.
+ */
 export interface DeliveryTargetRefusal {
   code: DeliveryTargetRefusalCode;
-  /** Operator-only. Never rendered to the actor — see the type's docblock. */
+}
+
+/** The operator's record of ONE refusal: the branch, plus the request that
+ *  produced it, so a log line needs nothing from the actor-facing object. */
+export interface DeliveryTargetRefusalReport {
+  code: DeliveryTargetRefusalCode;
   operatorReason: DeliveryTargetOperatorReason;
+  /** The address exactly as received, unrepaired. */
+  address: string;
+  principalId: string;
+  intent: DeliveryIntent;
+}
+
+/**
+ * The operator-only exit for refusals — a capability like any other port, so a
+ * surface has to WIRE observability rather than inherit it, and cannot instead
+ * reach for the actor's object.
+ *
+ * Called exactly once per refusal, before it is returned; never on success. A
+ * throwing sink turns a typed refusal into a fault, and that is deliberately not
+ * swallowed: a logging boundary that fails is an operator bug, and hiding it here
+ * would silently cost the very records the collapse depends on.
+ */
+export interface DeliveryTargetObserverPort {
+  refused(report: DeliveryTargetRefusalReport): void;
 }
 
 export interface ResolvedDeliveryTarget {
@@ -208,13 +255,6 @@ export interface DeliveryTargetRequest {
   now: number;
 }
 
-function refuse(
-  code: DeliveryTargetRefusalCode,
-  operatorReason: DeliveryTargetOperatorReason,
-): DeliveryTargetResolution {
-  return { ok: false, refusal: { code, operatorReason } };
-}
-
 /**
  * The principal a handle names, as a DM endpoint — or `null` for a handle nobody
  * holds.
@@ -238,14 +278,33 @@ function resolveHandleEndpoint(
 /**
  * Resolve an address to the stream it names, for this principal, at this intent.
  *
- * Total: every input produces either a stream or a typed refusal. The only throw
- * is `requireAddressableId` on a resolved conversation's own id, which is
- * corruption rather than input (a row whose id no address can carry).
+ * Total: every input produces either a stream or a typed refusal, and every
+ * refusal is reported once through `ports.observer`. The only throw is
+ * `requireAddressableId` on a resolved conversation's own id, which is corruption
+ * rather than input (a row whose id no address can carry) — plus whatever the
+ * observer itself raises, which is not swallowed on purpose.
  */
 export function resolveDeliveryTarget(
   ports: DeliveryTargetPorts,
   request: DeliveryTargetRequest,
 ): DeliveryTargetResolution {
+  // The ONE place a refusal is built, which is what makes "every refusal is
+  // reported to the operator, and only the code is returned" a property of the
+  // function rather than of nine call sites.
+  const refuse = (
+    code: DeliveryTargetRefusalCode,
+    operatorReason: DeliveryTargetOperatorReason,
+  ): DeliveryTargetResolution => {
+    ports.observer.refused({
+      code,
+      operatorReason,
+      address: request.address,
+      principalId: request.principal.id,
+      intent: request.intent,
+    });
+    return { ok: false, refusal: { code } };
+  };
+
   // ── 1. Grammar ────────────────────────────────────────────────
   const input = parseDeliveryTargetInput(request.address);
   if (input === null) return refuse('target_malformed', 'grammar');

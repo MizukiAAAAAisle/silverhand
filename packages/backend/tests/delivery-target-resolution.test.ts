@@ -6,7 +6,9 @@
  * be WRONG rather than a feature it has:
  *
  *   1. UNKNOWN AND UNAUTHORIZED ARE ONE OUTCOME. A resolver that distinguishes
- *      them is an existence oracle over every conversation in the installation.
+ *      them is an existence oracle over every conversation in the installation —
+ *      so the answer holds the code ALONE (two refusals sharing a code are
+ *      byte-identical) and the branch leaves through an operator-only port.
  *   2. READS NEVER ALLOCATE. `dm:@handle` on a write may open the pair; a read
  *      that created its subject would turn a typo into a permanent empty
  *      conversation and make "no such stream" unobservable on the retry.
@@ -19,6 +21,11 @@
  *   5. THE ADDRESS ROUND-TRIPS, for every placement, main line and thread — the
  *      property the delivery header depends on (an agent copies the token it
  *      received back into `--target`).
+ *
+ * Property 1 is enforced on EVERY case rather than in one block: `expectRefusal`
+ * asserts the actor-facing key set and reads the branch from the recorded operator
+ * report, so a test cannot even name a reason without going through the port that
+ * the actor has no access to.
  *
  * The ports are satisfied by the PRODUCTION repositories, passed directly: the
  * structural port shapes are only worth having if the real adapters fit them, and
@@ -33,6 +40,7 @@ import {
   resolveDeliveryTarget,
   type DeliveryIntent,
   type DeliveryTargetPorts,
+  type DeliveryTargetRefusalReport,
   type DeliveryTargetResolution,
 } from '../src/application/delivery-target-resolution.js';
 import { AgentRepo } from '../src/repos/agent-repo.js';
@@ -52,6 +60,10 @@ const MISSING_ID = 'zzzzMISSINGzzz01';
 interface Fixture {
   readonly t: TestApp;
   readonly ports: DeliveryTargetPorts;
+  /** Every refusal the resolver reported to the OPERATOR, in order. Drained one
+   *  at a time by `expectRefusal`: the actor's object cannot answer "which
+   *  branch", so this queue is the only place a test can read it. */
+  readonly observed: DeliveryTargetRefusalReport[];
   readonly conversations: ConversationRepo;
   readonly messages: MessageRepo;
   /** The authenticated principal of every resolution below. */
@@ -106,9 +118,22 @@ function setup(): Fixture {
   }).id;
   conversations.addAgent(secret, bob.id);
 
+  const observed: DeliveryTargetRefusalReport[] = [];
+
   return {
     t,
-    ports: { conversations, messages, agents, users },
+    ports: {
+      conversations,
+      messages,
+      agents,
+      users,
+      observer: {
+        refused: (report) => {
+          observed.push(report);
+        },
+      },
+    },
+    observed,
     conversations,
     messages,
     alice,
@@ -144,11 +169,29 @@ function expectResolved(result: DeliveryTargetResolution) {
   return result.target;
 }
 
-function expectRefusal(result: DeliveryTargetResolution) {
+/**
+ * A refusal, read the way the two audiences read it: the CODE from the answer and
+ * the BRANCH from the operator report, joined only here in the test.
+ *
+ * Asserts on the way through that the actor's object holds nothing but the code,
+ * and that the refusal produced exactly one operator record — so every case in
+ * this file re-proves the collapse instead of trusting one dedicated block.
+ */
+function expectRefusal(
+  f: Fixture,
+  result: DeliveryTargetResolution,
+): Pick<DeliveryTargetRefusalReport, 'code' | 'operatorReason'> {
   if (result.ok) {
     throw new Error(`expected a refusal, got ${JSON.stringify(result.target)}`);
   }
-  return result.refusal;
+  expect(Object.keys(result.refusal)).toEqual(['code']);
+  const report = f.observed.shift();
+  if (report === undefined) {
+    throw new Error(`refused ${result.refusal.code} without telling the operator`);
+  }
+  expect(f.observed, 'one refusal, one operator record').toHaveLength(0);
+  expect(report.code).toBe(result.refusal.code);
+  return { code: result.refusal.code, operatorReason: report.operatorReason };
 }
 
 /** How many conversations exist at all — the "a read allocated nothing" oracle.
@@ -178,6 +221,9 @@ describe('the grammar decides first, before any lookup', () => {
     const forbidden = (name: string) => (): never => {
       throw new Error(`the resolver reached ${name} for a malformed address`);
     };
+    // The observer is the one port a refusal DOES reach: it is not a lookup, it is
+    // where the branch goes instead of into the answer.
+    const observed: DeliveryTargetRefusalReport[] = [];
     const throwing: DeliveryTargetPorts = {
       conversations: {
         getIdentity: forbidden('getIdentity'),
@@ -188,6 +234,11 @@ describe('the grammar decides first, before any lookup', () => {
       messages: { getInConversation: forbidden('getInConversation') },
       agents: { getByName: forbidden('agents.getByName') },
       users: { getByName: forbidden('users.getByName') },
+      observer: {
+        refused: (report) => {
+          observed.push(report);
+        },
+      },
     };
     for (const address of [
       '',
@@ -198,20 +249,28 @@ describe('the grammar decides first, before any lookup', () => {
       `#conv:${MISSING_ID} `,
     ]) {
       for (const intent of ['read', 'write'] as const) {
-        const refusal = expectRefusal(
-          resolveDeliveryTarget(throwing, {
-            address,
-            principal: { kind: 'agent', id: 'dt-agent' },
-            intent,
-            now: NOW,
-          }),
-        );
-        expect(refusal, `${address} @ ${intent}`).toEqual({
+        const result = resolveDeliveryTarget(throwing, {
+          address,
+          principal: { kind: 'agent', id: 'dt-agent' },
+          intent,
+          now: NOW,
+        });
+        expect(result.ok, `${address} @ ${intent}`).toBe(false);
+        if (result.ok) continue;
+        // Malformed stays DISTINCT from unresolved: telling the actor their string
+        // is not an address is the only way they can fix it, and it is exactly the
+        // case where nothing was looked up.
+        expect(result.refusal, `${address} @ ${intent}`).toEqual({ code: 'target_malformed' });
+        expect(observed.shift(), `${address} @ ${intent}`).toEqual({
           code: 'target_malformed',
           operatorReason: 'grammar',
+          address,
+          principalId: 'dt-agent',
+          intent,
         });
       }
     }
+    expect(observed).toHaveLength(0);
   });
 });
 
@@ -219,19 +278,82 @@ describe('unknown and unauthorized are one outcome', () => {
   it('gives the actor the same refusal for a missing id and for someone else’s channel', () => {
     const f = setup();
     try {
-      const unknown = expectRefusal(resolveAs(f, `#conv:${MISSING_ID}`, 'read'));
-      const unauthorized = expectRefusal(resolveAs(f, `#conv:${f.secret}`, 'read'));
-      // The ACTOR-facing part is the code, and it is identical. Asserted together
-      // with the refusal's SHAPE: the collapse is only real if a route cannot
-      // serialize a second distinguishing field by accident, so a new field would
-      // fail here and have to be justified.
-      expect(Object.keys(unknown).sort()).toEqual(['code', 'operatorReason']);
-      expect(unknown.code).toBe('target_unresolved');
-      expect(unauthorized.code).toBe(unknown.code);
-      // The OPERATOR can still tell them apart in a log — that is what the second
-      // field is for, and it is why the first assertion is not vacuous.
-      expect(unknown.operatorReason).toBe('conversation_not_found');
-      expect(unauthorized.operatorReason).toBe('not_participant');
+      const unknown = resolveAs(f, `#conv:${MISSING_ID}`, 'read');
+      const unauthorized = resolveAs(f, `#conv:${f.secret}`, 'read');
+      // (1) The two ANSWERS are the same object, not merely the same code: no
+      // field distinguishes them, so a route cannot leak the distinction by
+      // serializing what it was given, and nobody has to remember to strip
+      // anything. Compared as JSON as well, because that is literally what a
+      // route does with it.
+      expect(unknown).toEqual(unauthorized);
+      expect(JSON.stringify(unknown)).toBe(JSON.stringify(unauthorized));
+      expect(unknown.ok).toBe(false);
+      if (unknown.ok) return;
+      expect(Object.keys(unknown.refusal)).toEqual(['code']);
+      expect(unknown.refusal.code).toBe('target_unresolved');
+      // (2) The OPERATOR still gets the branch, through the port — which is why
+      // the collapse above costs no observability.
+      expect(f.observed.map((r) => r.operatorReason)).toEqual([
+        'conversation_not_found',
+        'not_participant',
+      ]);
+      expect(f.observed.map((r) => r.address)).toEqual([
+        `#conv:${MISSING_ID}`,
+        `#conv:${f.secret}`,
+      ]);
+      f.observed.length = 0;
+    } finally {
+      f.t.cleanup();
+    }
+  });
+
+  it('makes every pair of branches that share a code indistinguishable to the actor', () => {
+    const f = setup();
+    try {
+      const rootId = root(f, f.room);
+      const reply = f.messages.insertForConversation({
+        conversationId: f.room,
+        fromKind: 'agent',
+        fromAgentId: f.alice.id,
+        content: 'reply',
+        threadRootId: rootId,
+      }).id;
+      // Every branch the resolver has, addressed by the way it is reached. The
+      // collapse is a property of the RETURN TYPE, so it has to hold for all of
+      // them at once — not just for the conversation lookup that motivated it.
+      const branches: Array<[string, DeliveryIntent, string]> = [
+        [`#conv:${MISSING_ID}`, 'read', 'conversation_not_found'],
+        [`#conv:${f.secret}`, 'read', 'not_participant'],
+        ['dm:@nobody', 'write', 'unknown_handle'],
+        [`dm:@${f.stranger.handle}`, 'read', 'direct_pair_not_found'],
+        [`#conv:${f.room}/thread:${MISSING_ID}`, 'read', 'thread_root_not_found'],
+        [`#conv:${f.room}/thread:${reply}`, 'read', 'thread_root_not_a_root'],
+        [`#conv:${f.aliceInbox}`, 'write', 'inbox_write'],
+        [`dm:@${f.alice.handle}`, 'write', 'self_pair'],
+      ];
+      const answers = new Map<string, string[]>();
+      for (const [address, intent, operatorReason] of branches) {
+        const result = resolveAs(f, address, intent);
+        const refusal = expectRefusal(f, result);
+        expect(refusal.operatorReason, address).toBe(operatorReason);
+        const serialized = JSON.stringify(result);
+        const seen = answers.get(refusal.code) ?? [];
+        seen.push(serialized);
+        answers.set(refusal.code, seen);
+      }
+      // Four branches answer `target_unresolved` and two answer
+      // `thread_not_in_target`; within a code every answer is byte-identical.
+      expect([...answers.keys()].sort()).toEqual([
+        'inbox_not_writable',
+        'self_pair_not_addressable',
+        'target_unresolved',
+        'thread_not_in_target',
+      ]);
+      expect(answers.get('target_unresolved')).toHaveLength(4);
+      expect(answers.get('thread_not_in_target')).toHaveLength(2);
+      for (const [code, serialized] of answers) {
+        expect(new Set(serialized).size, code).toBe(1);
+      }
     } finally {
       f.t.cleanup();
     }
@@ -248,7 +370,7 @@ describe('unknown and unauthorized are one outcome', () => {
       // A DM's id is as pasteable as a channel's, and its participant rule is a
       // different SQL arm — so the arm, not just the code path, has to collapse.
       for (const intent of ['read', 'write'] as const) {
-        expect(expectRefusal(resolveAs(f, `#conv:${theirs}`, intent))).toEqual({
+        expect(expectRefusal(f, resolveAs(f, `#conv:${theirs}`, intent))).toEqual({
           code: 'target_unresolved',
           operatorReason: 'not_participant',
         });
@@ -303,7 +425,7 @@ describe('a write may open a direct pair; a read never allocates', () => {
     const f = setup();
     try {
       const before = conversationCount(f);
-      expect(expectRefusal(resolveAs(f, `dm:@${f.stranger.handle}`, 'read'))).toEqual({
+      expect(expectRefusal(f, resolveAs(f, `dm:@${f.stranger.handle}`, 'read'))).toEqual({
         code: 'target_unresolved',
         operatorReason: 'direct_pair_not_found',
       });
@@ -311,7 +433,7 @@ describe('a write may open a direct pair; a read never allocates', () => {
       // And the refusal is not a one-shot: a resolver that allocated would let the
       // second attempt succeed, which is precisely how "no such stream" would stop
       // being observable.
-      expect(expectRefusal(resolveAs(f, `dm:@${f.stranger.handle}`, 'read')).operatorReason)
+      expect(expectRefusal(f, resolveAs(f, `dm:@${f.stranger.handle}`, 'read')).operatorReason)
         .toBe('direct_pair_not_found');
       expect(conversationCount(f)).toBe(before);
     } finally {
@@ -327,7 +449,7 @@ describe('a write may open a direct pair; a read never allocates', () => {
       // conversation behind a refusal: the resolver's one side effect must not
       // outlive a rejected resolution.
       expect(
-        expectRefusal(resolveAs(f, `dm:@${f.stranger.handle}/thread:${MISSING_ID}`, 'write')),
+        expectRefusal(f, resolveAs(f, `dm:@${f.stranger.handle}/thread:${MISSING_ID}`, 'write')),
       ).toEqual({ code: 'target_unresolved', operatorReason: 'direct_pair_not_found' });
       expect(conversationCount(f)).toBe(before);
     } finally {
@@ -339,11 +461,11 @@ describe('a write may open a direct pair; a read never allocates', () => {
     const f = setup();
     try {
       const before = conversationCount(f);
-      expect(expectRefusal(resolveAs(f, `dm:@${f.alice.handle}`, 'write'))).toEqual({
+      expect(expectRefusal(f, resolveAs(f, `dm:@${f.alice.handle}`, 'write'))).toEqual({
         code: 'self_pair_not_addressable',
         operatorReason: 'self_pair',
       });
-      expect(expectRefusal(resolveAs(f, 'dm:@nobody', 'write'))).toEqual({
+      expect(expectRefusal(f, resolveAs(f, 'dm:@nobody', 'write'))).toEqual({
         code: 'target_unresolved',
         operatorReason: 'unknown_handle',
       });
@@ -364,7 +486,7 @@ describe('an inbox is a read face, not a write destination', () => {
         created: false,
       });
       const before = conversationCount(f);
-      expect(expectRefusal(resolveAs(f, `#conv:${f.aliceInbox}`, 'write'))).toEqual({
+      expect(expectRefusal(f, resolveAs(f, `#conv:${f.aliceInbox}`, 'write'))).toEqual({
         code: 'inbox_not_writable',
         operatorReason: 'inbox_write',
       });
@@ -383,7 +505,7 @@ describe('an inbox is a read face, not a write destination', () => {
       // If a non-participant got `inbox_not_writable` here, the refusal code would
       // report "this id is an inbox" about a row they may not see.
       for (const intent of ['read', 'write'] as const) {
-        expect(expectRefusal(resolveAs(f, `#conv:${f.bobInbox}`, intent))).toEqual({
+        expect(expectRefusal(f, resolveAs(f, `#conv:${f.bobInbox}`, intent))).toEqual({
           code: 'target_unresolved',
           operatorReason: 'not_participant',
         });
@@ -415,7 +537,7 @@ describe('a thread suffix names a root of the resolved conversation', () => {
       const elsewhere = root(f, f.secret, 'not alice’s room');
       for (const rootId of [elsewhere, MISSING_ID]) {
         expect(
-          expectRefusal(resolveAs(f, `#conv:${f.room}/thread:${rootId}`, 'write')),
+          expectRefusal(f, resolveAs(f, `#conv:${f.room}/thread:${rootId}`, 'write')),
           rootId,
         ).toEqual({ code: 'thread_not_in_target', operatorReason: 'thread_root_not_found' });
       }
@@ -438,7 +560,7 @@ describe('a thread suffix names a root of the resolved conversation', () => {
         content: 'reply',
         threadRootId: rootId,
       }).id;
-      expect(expectRefusal(resolveAs(f, `#conv:${f.room}/thread:${reply}`, 'write'))).toEqual({
+      expect(expectRefusal(f, resolveAs(f, `#conv:${f.room}/thread:${reply}`, 'write'))).toEqual({
         code: 'thread_not_in_target',
         operatorReason: 'thread_root_not_a_root',
       });
