@@ -36,17 +36,18 @@
 // performs what cannot be committed: the runtime wake, the WS frames, and the
 // skip log the decision half returned as data.
 //
-// RESIDUAL, stated so it is not mistaken for a live gap: the
-// `RuntimePlacementUnsupportedError` arm in `dispatchMentionCcEffects` has NO
-// PRODUCER. It was written in v71 for an inbox with no session cwd; #task:2019
-// landed that scope, `buildRuntimeStartOptions` emits `workspace: null` with an
-// agent-scoped `runtime_scope`, and no production site throws the error any
-// more. The arm survives as dead defensive code pending its removal — it is not
-// a rule other callers should mirror (#task:2021 P4-5 round 2, @Cindy B11).
+// A WAKE FAILURE IS NEVER A LOST MENTION, and there is exactly ONE arm saying so.
+// v71 gave this module a second, typed arm for "the host refused the placement
+// because the inbox has no session cwd"; #task:2019 landed the agent-scoped
+// RuntimeScope, which made that refusal impossible, and #task:2021 P4-5 round 2
+// (@Cindy B12) deleted it rather than keeping it as defensive contract — a failure
+// shape only a test fake can construct reads to the next caller as a supported
+// host semantics to mirror. Any throw from `start` now lands in the generic arm
+// below: the copy and its durable inbox delivery row are already committed, so the
+// next spawn drains them.
 import { formatReferenceToken, inlineCode } from '@silverhand/shared';
 import { systemSubtype } from '@silverhand/shared';
 import type { ConversationDto, MessageDto, Reference } from '@silverhand/shared';
-import { RuntimePlacementUnsupportedError } from '../runtime/agent-runtime-host.js';
 import type {
   AgentMessageDeliveryPort,
   AgentRuntimeStartPort,
@@ -340,25 +341,6 @@ export async function dispatchMentionCcEffects(
     try {
       await deps.runtimeStart.start(copy.inboxConversationId, copy.agentId);
     } catch (err) {
-      if (err instanceof RuntimePlacementUnsupportedError) {
-        // Dead defensive arm: nothing throws this any more (see the module
-        // docblock's RESIDUAL note). Kept only so a host that DID refuse would
-        // not be reported as a lost delivery; the committed row is authoritative.
-        deps.logger.warn(
-          {
-            event: 'mention_cc.wake_deferred',
-            reason: 'runtime_placement_unsupported',
-            agentId: copy.agentId,
-            handle: copy.agentHandle,
-            inboxConversationId: copy.inboxConversationId,
-            wrappedMessageId: copy.wrapped.id,
-            sourceConversationId: report.source.conversationId,
-            sourceMessageId: report.source.messageId,
-          },
-          'mention-cc: host refused the placement (no producer today); the copy and its durable inbox row are committed and kept',
-        );
-        continue;
-      }
       deps.logger.warn(
         {
           event: 'mention_cc.wake_failed',

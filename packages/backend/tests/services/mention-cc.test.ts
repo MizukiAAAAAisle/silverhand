@@ -50,7 +50,6 @@ import type { MentionCcReport } from '../../src/application/mention-cc.js';
 import type { MessageTxScope } from '../../src/services/conversation-message/ports.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
-import { RuntimePlacementUnsupportedError } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
@@ -60,14 +59,13 @@ import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
  *
  * It used to throw `RuntimePlacementUnsupportedError` for a workspace-less
  * conversation, on the stated grounds that "production applies the same rule".
- * Production does not, and did not for the life of this file: the only
- * `throw` sites in the repo are in this test, while
- * `buildRuntimeStartOptions` emits `workspace: null` with an agent-scoped
- * `runtime_scope` (#task:2019). A fake that refuses what production performs
- * does not assert today's end state — it MANUFACTURES a defect, and every
- * deferral the integration cases below observed was its own (#task:2021 P4-5
- * round 2, @Cindy B11). The error class and the mention-CC branch that catches
- * it survive as a residual with no producer; nothing here pretends otherwise.
+ * Production never did: the only `throw` sites in the repo were in this file,
+ * while `buildRuntimeStartOptions` emits `workspace: null` with an agent-scoped
+ * `runtime_scope` (#task:2019). A fake that refuses what production performs does
+ * not assert today's end state — it MANUFACTURES a defect, and every deferral the
+ * integration cases below observed was its own (#task:2021 P4-5 round 2, @Cindy
+ * B11). Round 2's B12 finished it: the error class and the branch that caught it
+ * are DELETED, so refusing nothing is now the only shape a fake can have.
  */
 class FakeRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -809,35 +807,21 @@ describe('mention CC v71 — the post-commit half is the only best-effort part',
     };
   };
 
-  it('still defers rather than reporting a failure if a host ever refuses a placement (residual branch, no producer)', async () => {
-    const h = deps(async (conversationId: string) => {
-      throw new RuntimePlacementUnsupportedError(conversationId);
-    });
-    await dispatchMentionCcEffects(report(), h.deps);
-
-    // FAULT INJECTION, not a production path: nothing in the repo throws this
-    // error (#task:2021 P4-5 round 2 / @Cindy B11). The branch and this case
-    // document a residual left from v71 — the durable row is kept and no delivery
-    // failure is claimed — and neither is evidence that a caller should grow one.
-    expect(logCalls(h.logger.warn)).toHaveLength(1);
-    expect(logCalls(h.logger.warn)[0]).toMatchObject({
-      event: 'mention_cc.wake_deferred',
-      reason: 'runtime_placement_unsupported',
-      agentId: 'agent-1',
-      inboxConversationId: 'inbox-1',
-      wrappedMessageId: 'copy-1',
-      sourceConversationId: 'channel-1',
-      sourceMessageId: 'source-1',
-    });
-    expect(h.delivered).toEqual([]);
-  });
-
-  it('keeps the durable row when the wake fails for any other reason', async () => {
+  it('keeps the durable row when the wake fails — one arm, for every reason', async () => {
     const h = deps(async () => {
       throw new Error('spawn refused');
     });
     await dispatchMentionCcEffects(report(), h.deps);
 
+    // ONE arm on purpose (@Cindy B12). v71 also had a typed
+    // `runtime_placement_unsupported` deferral here, and its only `throw` site in
+    // the whole repo was a fake in THIS file — a failure shape no production host
+    // can produce, asserted by manufacturing it. #task:2019 made the refusal
+    // impossible and P4-5 round 2 deleted the class, the branch and that case
+    // rather than keeping them as defensive contract, because a caller reading
+    // them would take the shape for supported host semantics. What survives is the
+    // claim that actually holds for every refusal: the copy and its durable inbox
+    // row are already committed, so a failed wake is a delayed wake.
     expect(logEvents(h.logger.warn)).toEqual(['mention_cc.wake_failed']);
     expect(h.delivered).toEqual([]);
   });

@@ -2998,7 +2998,7 @@ describe('the follower funnels — follower ⊆ live participant (P4-5 round 2)'
     }
   });
 
-  it('commits a thread reply whose root author was deleted, and delivers it to the live followers', async () => {
+  it('commits a thread reply whose root author was deleted, and still delivers it to the live follower', async () => {
     const t = bootstrap();
     try {
       // The send-shaped twin of the first case, on the arm a route can actually
@@ -3018,6 +3018,19 @@ describe('the follower funnels — follower ⊆ live participant (P4-5 round 2)'
       );
       t.workspaces.insertMembership(t.workspace.id, carol.id);
       t.conversations.addAgent(t.channel.id, carol.id);
+      // A LIVE FOLLOWER, and the reason this case has one (@Cindy B13): without
+      // carol the only follower is alice, who is the SENDER and therefore excluded
+      // from her own plan — so "delivers to the live followers" would have been
+      // asserted by an EMPTY delivery list, which any broken plan also produces.
+      // The claim is that a dead principal is skipped WITHOUT taking the live ones
+      // down with it, and that needs a live one to survive.
+      expect(
+        t.service.followThread({
+          conversationId: t.channel.id,
+          rootMessageId: root.id,
+          agentId: carol.id,
+        }).changed,
+      ).toBe(true);
       t.agents.delete(t.bob.id);
 
       const reply = await t.service.sendMessage({
@@ -3033,12 +3046,14 @@ describe('the follower funnels — follower ⊆ live participant (P4-5 round 2)'
       expect(
         t.threadFollowers.listFollowers(root.id).map(f => f.principal_id),
       ).not.toContain(t.bob.id);
-      // carol is referenced by nothing and authored nothing, so she is not a
-      // follower — the delivery that proves the send survived is alice's own
-      // follower row being turned into the reply's plan, minus the sender. The
-      // observable end state: the reply exists, and nothing was delivered to the
-      // deleted principal.
-      expect(t.fake.delivered.some(d => d.agentId === t.bob.id)).toBe(false);
+      // The whole plan, as a set: carol and ONLY carol. bob is dead, alice is the
+      // sender — so this single assertion carries both the positive control and
+      // the two exclusions, and it cannot be satisfied by delivering nothing.
+      expect(
+        t.fake.delivered
+          .filter(d => d.messageId === reply.committed.message.id)
+          .map(d => d.agentId),
+      ).toEqual([carol.id]);
     } finally {
       t.cleanup();
     }

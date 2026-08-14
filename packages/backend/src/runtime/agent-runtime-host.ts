@@ -141,39 +141,6 @@ export class ClearSessionExitTimeoutError extends Error {
 }
 
 /**
- * A spawn was requested for a conversation whose PLACEMENT carries no workspace
- * (v71, agent-scoped-session-v1 §7.3 / #task:2014).
- *
- * A runtime needs a session cwd, and the cwd IS the vendor session's identity
- * (claude/codex address their session store by a hash of it), so there is
- * exactly ONE admissible answer for a workspace-less placement: the
- * deterministic agent-scoped coordinate that the agent-scoped RuntimeScope
- * introduces (#task:2019). Substituting any workspace's path in the meantime
- * would fork the agent's vendor session into a second history — silently, and
- * unrecoverably, since the DB cannot re-associate what the vendor keyed by path.
- *
- * So this fails LOUD, and the failure is a DEFERRAL rather than a loss: whatever
- * made the runtime worth waking (today: the mention CC copy) is committed with
- * its durable inbox delivery row, so the message is drained by the next spawn
- * that DOES have a scope. Callers that can honestly defer catch this and log it;
- * they must not translate it into "delivery failed".
- */
-export class RuntimePlacementUnsupportedError extends Error {
-  readonly code = 'runtime_placement_unsupported' as const;
-  readonly conversationId: string;
-
-  constructor(conversationId: string) {
-    super(
-      `runtime start/deliver for conversation ${conversationId} has no workspace `
-        + 'placement to derive a session cwd from; the agent-scoped RuntimeScope '
-        + 'lands in #task:2019 — the durable inbox row is kept for the next spawn',
-    );
-    this.name = 'RuntimePlacementUnsupportedError';
-    this.conversationId = conversationId;
-  }
-}
-
-/**
  * D4.c C7 — typed error thrown when a second `clearSession` arrives
  * for the same `(conversation, agent)` pair while the first is still
  * waiting on the `runtime_exit` projection. Clear-session is a
