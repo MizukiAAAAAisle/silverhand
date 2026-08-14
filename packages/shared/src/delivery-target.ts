@@ -10,12 +10,13 @@ import { ENTITY_NAME_MAX_LENGTH, PARTICIPANT_HANDLE_PATTERN } from './api/name.j
  * owns the ADDRESS — the readable form a delivery header carries and a CLI flag
  * accepts back — and nothing else.
  *
- * Why an address at all: today's header says `target=channel`, which only means
- * anything because the runtime is pinned to exactly one conversation. An
- * agent-scoped runtime serves N, so `channel` stops naming a stream and starts
- * naming whichever one the reader assumes. The fix is not a second format but a
- * value object: the target becomes something the message carries and the reply
- * copies verbatim, instead of ambient process state.
+ * Why an address at all: the header used to say `target=channel`, which only
+ * meant anything because the runtime was pinned to exactly one conversation. An
+ * agent-scoped runtime serves N, so `channel` stopped naming a stream and
+ * started naming whichever one the reader assumed. The fix was not a second
+ * format but a value object: the target is something the message carries (P4-3
+ * derives it from the row's own `conversation_id`) and the reply copies
+ * verbatim, instead of ambient process state.
  *
  * **The canonical form is the conversation's own id, for every placement.** That
  * is the whole grammar, and the reason is identity rather than convenience

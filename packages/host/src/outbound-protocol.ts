@@ -246,7 +246,14 @@ const FrameIdSchema = z.string().min(1);
 // v15 (#task:2019 review): delivery consumed/failed settlements are generation-
 // bound too. Without it, a delayed N ack can settle a durable inbox row that
 // the backend already reclaimed for N+1.
-export const OUTBOUND_PROTOCOL_VERSION = 15;
+// v16 (#task:2021 P4-3): the delivery header's `target` is an absolute
+// `#conv:<id>[/thread:<root>]` derived per row, and `channel` is retired.
+// Framing is unchanged; the incompatibility is the same one v11 had — the daemon
+// teaches the target form from its own bundled `@silverhand/shared` while the
+// backend emits it, so a mixed pair sends an agent's reply into whichever
+// conversation it assumed instead of the one the message arrived on, with no
+// error on either side. Bumps alongside HOST_PROTOCOL_VERSION (16→17). No shim.
+export const OUTBOUND_PROTOCOL_VERSION = 16;
 
 // ── server → daemon command catalogue ──────────────────────────────
 

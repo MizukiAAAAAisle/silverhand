@@ -7214,8 +7214,8 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     async mode => {
       const h = makeDriven(mode);
       const presentations = [
-        { body: '[msg_id=mA sender=system type=system target=channel time=2026-01-01T00:00:00+00:00]\nA', instruction: 'system' as const },
-        { body: '[msg_id=mB sender=system type=system target=channel time=2026-01-01T00:00:01+00:00]\nB', instruction: 'system' as const },
+        { body: '[msg_id=mA sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:00+00:00]\nA', instruction: 'system' as const },
+        { body: '[msg_id=mB sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:01+00:00]\nB', instruction: 'system' as const },
       ];
       const canonical = composeRuntimeDeliveryPresentation(
         presentations,

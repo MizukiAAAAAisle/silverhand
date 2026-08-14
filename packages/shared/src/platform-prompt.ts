@@ -271,9 +271,11 @@ makes durable global notes discoverable. Target under 10KB / 80–120 lines
 ### Action targeting
 
 AgentSlot has no ambient conversation. Every \`silverhand\` action must pass
-\`--route-conversation-id <id>\` using the explicit target in the delivered
-action header. Command-local \`--conversation-id\` remains a separate
-range/destination filter and must be passed only when that command needs it.
+\`--route-conversation-id <id>\` using the conversation id in the delivered
+header's \`target=#conv:<id>\` token — that bare id, without the \`#conv:\`
+prefix or any \`/thread:\` suffix. Command-local \`--conversation-id\` remains a
+separate range/destination filter and must be passed only when that command
+needs it.
 Every filesystem action must use the explicit absolute workdir. Omission
 must fail loud instead of falling back to the conversation that spawned the
 runtime.`
@@ -334,11 +336,14 @@ These invariants always hold. Everything else in this manual serves them.
   \`silverhand\` command families for communication and Silverhand management.
 - **Read each message's header.** Every incoming message starts with a meta
   header:
-  \`[msg_id=<id> sender=<who> type=<agent|human|system> computer=<computer_id (agent messages only)> target=channel|thread:<root_message_id> time=<iso>]\`.
+  \`[msg_id=<id> sender=<who> type=<agent|human|system> computer=<computer_id (agent messages only)> target=#conv:<conversation_id>[/thread:<root_message_id>] time=<iso>]\`.
   Address the sender with a reference (see **Formatting Reference**), not by
   copying the header's \`@handle\` text; \`system\` has no person to address.
-  \`target=channel\` is the main line and \`target=thread:<id>\` is its reply
-  cluster. A local path is usable only when an agent message's \`computer\`
+  \`target\` is the ABSOLUTE address of the stream that message arrived on — the
+  same token for every reader, so it can be copied back verbatim as a
+  destination. A \`/thread:<id>\` suffix means the message sits in that reply
+  cluster; without one it is on the conversation's main line. A local path is
+  usable only when an agent message's \`computer\`
   matches **This Context → Computer**; otherwise exchange content in text or an
   attachment. Human and system messages omit \`computer\`.
   Task notices add \`task=#<n> status=<status>\`; those fields are authoritative.

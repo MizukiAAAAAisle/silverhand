@@ -37,6 +37,7 @@
  *      reconnect) and is referenced from the embedded file's notes.
  */
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -169,7 +170,11 @@ async function seedRuntimePair(rig: ParityRig): Promise<SeededRuntimePair> {
   const suffix = `${rig.name}-${now}`;
   const workspaceId = `ws-parity-${suffix}`;
   const agentId = `agent-parity-${suffix}`;
-  const conversationId = `conv-parity-${suffix}`;
+  // Minted with the production generator, not a readable suffix
+  // (#task:2021 P4-3): a delivery header renders this id as the stream's
+  // absolute `target`, whose domain is exactly 16 base64url chars. The
+  // per-transport suffix stays on the channel's NAME below.
+  const conversationId = randomBytes(12).toString('base64url');
   const workspacePath = join(rig.silverhandDir, 'workspaces', workspaceId);
   mkdirSync(workspacePath, { recursive: true });
 

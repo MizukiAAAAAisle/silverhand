@@ -246,7 +246,24 @@ import {
 // generation whose daemon custody performed the write. Inbox rows can be
 // rolled back and reclaimed by a successor generation, so delivery id alone is
 // not a sufficient settlement token.
-export const HOST_PROTOCOL_VERSION = 16;
+//
+// v17 (#task:2021 P4-3): the delivery header's `target` becomes an ABSOLUTE
+// address — `#conv:<conversation_id>[/thread:<root_id>]`, derived per ROW —
+// and the relative token `channel` is retired. Byte-identical framing again
+// (the shape of v12, and for the same reason): the daemon composes the platform
+// prompt itself, so ITS generation decides which target form every agent it
+// spawns is TAUGHT, while the backend decides which form is EMITTED. A mixed
+// pair is silently wrong in both directions — an old daemon teaches
+// `target=channel|thread:<id>` to agents that receive `#conv:<id>`, and a new
+// daemon teaches "copy the absolute token back" to agents whose backend still
+// emits the ambient one. An agent-scoped runtime is woken for N conversations,
+// so what breaks is not a parse but the DESTINATION: the agent replies into
+// whichever conversation it assumed, i.e. it answers the right message in the
+// wrong stream, with no error on either side. Exact hello matching refuses the
+// pair before any agent is spawned. `OUTBOUND_PROTOCOL_VERSION` bumps alongside
+// (15→16). No shim — a prompt is composed fresh at every spawn and a header is
+// rendered fresh at every delivery, so admission is the whole migration.
+export const HOST_PROTOCOL_VERSION = 17;
 
 // ── capability tokens ────────────────────────────────────────────────
 //

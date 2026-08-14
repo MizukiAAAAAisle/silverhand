@@ -112,6 +112,7 @@ function toRuntimeInboxMessage(row: RuntimeInboxMessage): RuntimeInboxMessage {
   return {
     id: row.id,
     seq: row.seq,
+    conversation_id: row.conversation_id,
     thread_root_id: row.thread_root_id,
     from_kind: row.from_kind,
     from_agent_id: row.from_agent_id,

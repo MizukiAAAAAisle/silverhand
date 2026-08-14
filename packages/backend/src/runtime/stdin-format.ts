@@ -23,8 +23,11 @@
  */
 import {
   composeRuntimeDeliveryPresentation,
+  formatDeliveryTarget,
+  requireAddressableId,
   resolveAttachmentLabels,
   type AttachmentSnapshot,
+  type DeliveryTarget,
   type FromKind,
   type Reference,
   type RuntimeDeliveryInstructionSignal,
@@ -46,6 +49,12 @@ export function sendMessageToolName(): string {
  *  the canonical stdin header carries. */
 export interface MessageLite {
   id: string;
+  /** The stream this message belongs to, as the header's absolute `target`
+   *  (#task:2021 P4-3). Carried by the MESSAGE rather than passed in per batch:
+   *  the target is a fact about the row, and an agent-scoped runtime is woken for
+   *  N conversations, so a per-call conversation parameter would mislabel every
+   *  row of any batch that ever spans two of them. */
+  conversation_id: string;
   thread_root_id: string | null;
   from_kind: FromKind;
   from_agent_id: string | null;
@@ -190,6 +199,31 @@ function deliveryInstructionSignal(
 }
 
 /**
+ * The absolute address of the stream a message row belongs to — the one place a
+ * `MessageLite` becomes a {@link DeliveryTarget}.
+ *
+ * `requireAddressableId` rather than a fail-closed check: both ids come from our
+ * own store (`conversations.id` and a `messages.id` used as a thread root are
+ * both `randomBytes(12).toString('base64url')`, i.e. exactly the addressable
+ * domain), so an id that cannot be spelled is corruption, and a stream with no
+ * address has no header token to fall back to. Omitting `target=` instead would
+ * hand the reader back the ambient guess this slice exists to remove; throwing
+ * names the coordinate that is broken.
+ */
+export function deliveryTargetOfMessage(msg: MessageLite): DeliveryTarget {
+  return {
+    conversationId: requireAddressableId(
+      msg.conversation_id,
+      'messages.conversation_id',
+    ),
+    threadRootId:
+      msg.thread_root_id === null
+        ? null
+        : requireAddressableId(msg.thread_root_id, 'messages.thread_root_id'),
+  };
+}
+
+/**
  * Single-line canonical meta header for a message delivered to an
  * agent's stdin (replaces the older two-segment form, #task:394).
  *
@@ -197,7 +231,7 @@ function deliveryInstructionSignal(
  * in `[...]` so it is visually distinct from the body, which follows on the
  * next line):
  *
- *     [msg_id=<full-id> sender=@<handle>|system type=agent|human|system computer=<host-id (agent rows only)> target=channel|thread:<root-id> time=<ISO8601>]
+ *     [msg_id=<full-id> sender=@<handle>|system type=agent|human|system computer=<host-id (agent rows only)> target=#conv:<conversation-id>[/thread:<root-id>] time=<ISO8601>]
  *
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
@@ -216,10 +250,18 @@ function deliveryInstructionSignal(
  *   as "same computer" (the prompt behavior contract says exactly
  *   this). Receivers compare it against their own Computer id to
  *   decide whether the sender shares this filesystem.
- * - `target` names the stream this message belongs to: `channel` for
- *   main-line messages, or `thread:<root-id>` for a reply cluster.
- *   The message's own `msg_id` remains the relation handle agents pass
- *   to `silverhand message send --reply-to` to answer in the same thread.
+ * - `target` is the ABSOLUTE address of the stream this message belongs
+ *   to (#task:2021 P4-3), rendered by the one codec
+ *   (`shared/delivery-target.ts`): `#conv:<conversation-id>` for the
+ *   main line, with a `/thread:<root-id>` suffix inside a reply
+ *   cluster. It replaced the relative token `channel`, which only
+ *   meant anything while a runtime was pinned to exactly one
+ *   conversation — an agent-scoped runtime serves N, so `channel`
+ *   named whichever one the reader assumed. Being absolute, the token
+ *   is the same for every reader and can be copied back verbatim as a
+ *   destination. The message's own `msg_id` remains the relation
+ *   handle agents pass to `silverhand message send --reply-to` to
+ *   answer in the same thread.
  * - `time` is ISO 8601 in the local timezone (offset preserved) so
  *   the agent sees both an absolute instant and the wall clock the
  *   user experienced.
@@ -232,9 +274,7 @@ export function formatStdinMessageHeader(
   defaultUserHandle: string | undefined,
 ): string {
   const time = formatStdinTimestamp(msg.created_at);
-  const target = msg.thread_root_id
-    ? `thread:${msg.thread_root_id}`
-    : 'channel';
+  const target = formatDeliveryTarget(deliveryTargetOfMessage(msg));
   // Task suffix — appended to every kind's header when the row is a task
   // system event, so an agent sees `task=#<n> status=<status>` regardless of
   // who sent it. Derived from the event's immutable metadata snapshot (v60:

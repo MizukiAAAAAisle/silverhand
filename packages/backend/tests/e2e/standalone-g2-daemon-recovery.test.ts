@@ -161,7 +161,10 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
     const now = Date.now();
     const workspaceId = 'ws-g2-recovery';
     const agentId = 'agent-g2-recovery';
-    const conversationId = 'conv-g2-recovery';
+    // Production-shaped (#task:2021 P4-3): a delivery header renders this id as
+    // the stream's absolute `target`, so it must be spellable — 16 base64url
+    // chars, exactly what `conversations.id` is minted as.
+    const conversationId = 'g2RecoveryConvId';
     const firstSessionId = `g2-recovery-first-${now}`;
     const secondSessionId = `g2-recovery-second-${now}`;
     const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);

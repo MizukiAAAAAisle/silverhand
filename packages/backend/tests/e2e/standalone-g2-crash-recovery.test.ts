@@ -147,7 +147,10 @@ describe('Standalone G2 — unintentional crash recovery + crashed projection', 
     const now = Date.now();
     const workspaceId = 'ws-g2-b5';
     const agentId = 'agent-g2-b5';
-    const conversationId = 'conv-g2-b5';
+    // Production-shaped (#task:2021 P4-3): a delivery header renders this id as
+    // the stream's absolute `target`, so it must be spellable — 16 base64url
+    // chars, exactly what `conversations.id` is minted as.
+    const conversationId = 'g2b5CrashRecover';
     const expectedSessionId = `g2-b5-session-${now}`;
     const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);
     mkdirSync(workspacePath, { recursive: true });

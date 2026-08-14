@@ -17,6 +17,7 @@ import {
   AUTH_TOKEN_HEADER,
   buildSystemPromptFor,
   composeRuntimeDeliveryPresentation,
+  CONVERSATION_ADDRESS_PREFIX,
   type AgentActivitySnippetKind,
   type AgentRunState,
   decodeObservedSeq,
@@ -341,8 +342,14 @@ function runtimeActionText(
   text: string,
 ): string {
   if (scope.kind === 'conversation') return text;
+  // Same prefix constant the stdin header's codec uses (#task:2021 P4-3), so
+  // the two agent-facing spellings of a conversation address cannot drift. The
+  // full codec is deliberately NOT used: it takes branded, validated ids, and
+  // this id arrives over the wire, where the frame schema does not constrain id
+  // shape — a compose-time throw here would turn a peer's bad coordinate into a
+  // dead AgentSlot rather than a routed delivery.
   return (
-    `[runtime_scope=agent target=#conv:${conversationId} `
+    `[runtime_scope=agent target=${CONVERSATION_ADDRESS_PREFIX}${conversationId} `
     + `workdir=${JSON.stringify(cwd)}]\n\n${text}`
   );
 }

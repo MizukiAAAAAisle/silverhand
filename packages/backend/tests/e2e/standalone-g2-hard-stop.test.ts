@@ -115,7 +115,10 @@ describe('Standalone G2 — hard stop + runtime_exit projection', () => {
     const now = Date.now();
     const workspaceId = 'ws-g2-b4';
     const agentId = 'agent-g2-b4';
-    const conversationId = 'conv-g2-b4';
+    // Production-shaped (#task:2021 P4-3): a delivery header renders this id as
+    // the stream's absolute `target`, so it must be spellable — 16 base64url
+    // chars, exactly what `conversations.id` is minted as.
+    const conversationId = 'g2b4HardStopConv';
     const expectedSessionId = `g2-b4-session-${now}`;
     const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);
     mkdirSync(workspacePath, { recursive: true });

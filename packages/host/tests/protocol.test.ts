@@ -1359,7 +1359,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
         thread_root_id: null,
         delivery_kind: 'turn',
         presentation: {
-          body: '[msg_id=m1 sender=system type=system target=channel time=2026-01-01T00:00:00+00:00]\nmessage one',
+          body: '[msg_id=m1 sender=system type=system target=#conv:protocolConvId01 time=2026-01-01T00:00:00+00:00]\nmessage one',
           instruction: 'system',
         },
       }],

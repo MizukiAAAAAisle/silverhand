@@ -41,6 +41,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
 import type { RuntimeKind } from '@silverhand/shared';
 import { AuthSessionService } from '../../src/auth/session.js';
@@ -119,7 +120,11 @@ async function seedRouteEnv(harness: G2Harness, suffix: string): Promise<RouteEn
   const now = Date.now();
   const workspaceId = `ws-g2-route-${suffix}`;
   const agentId = `agent-g2-route-${suffix}`;
-  const conversationId = `conv-g2-route-${suffix}`;
+  // Minted with the production generator, not a readable suffix
+  // (#task:2021 P4-3): a delivery header renders this id as the stream's
+  // absolute `target`, whose domain is exactly 16 base64url chars. The
+  // run-distinguishing suffix stays on the channel's NAME below.
+  const conversationId = randomBytes(12).toString('base64url');
   const sessionId = `g2-route-${suffix}-${now}`;
   const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);
   mkdirSync(workspacePath, { recursive: true });

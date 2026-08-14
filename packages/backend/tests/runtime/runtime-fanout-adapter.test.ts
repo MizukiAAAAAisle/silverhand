@@ -9,10 +9,10 @@
  *    a boundary: `{...row} as RuntimeInboxMessage` type-checks while the
  *    surplus columns keep flowing. So the assertions are on the RUNTIME KEY SET
  *    of what each facet returns, plus an explicit "this specific physical
- *    column is absent" check per projection — `messages.conversation_id`,
- *    `hosts.installation_id`, the snake_case reconcile columns. Add a column to
- *    one of those tables and these tests still pass; write a projection that
- *    spreads the row and they fail.
+ *    column is absent" check per projection — the inbox join's own bookkeeping
+ *    columns, `hosts.installation_id`, the snake_case reconcile columns. Add a
+ *    column to one of those tables and these tests still pass; write a
+ *    projection that spreads the row and they fail.
  *  - **Atomicity of the clear-session pair.** `RuntimeSessionUnitOfWork` claims
  *    atomicity only (no isolation level — see its R5 note), so what has to hold
  *    is that a throw anywhere in the callback leaves NEITHER the
@@ -46,6 +46,7 @@ const NOOP_PUBLISHER: EventPublisher = {
 /** Exactly the fields `RuntimeInboxMessage` declares. */
 const RUNTIME_INBOX_MESSAGE_KEYS = [
   'content',
+  'conversation_id',
   'created_at',
   'from_agent_id',
   'from_kind',
@@ -125,9 +126,13 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     );
     // The joined row this came from HAS these columns; the projection drops
     // them, so no runtime decision can start reading one by accident.
-    for (const surplus of ['conversation_id', 'inbox_id', 'delivery_kind']) {
+    for (const surplus of ['inbox_id', 'delivery_kind']) {
       expect(pending[0]!.message, surplus).not.toHaveProperty(surplus);
     }
+    // `conversation_id` is IN the projection (#task:2021 P4-3) and carries the
+    // row's OWN stream, because the stdin header renders it as an absolute
+    // target and an agent-scoped runtime drains more than one conversation.
+    expect(pending[0]!.message.conversation_id).toBe(f.channelId);
 
     const claimed = f.persistence.inbox.claimPending(
       f.channelId,

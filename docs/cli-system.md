@@ -572,11 +572,18 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
 (see the maintenance checklist).
 
 ```
-[msg_id=<id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root_message_id> time=<iso>]
+[msg_id=<id> sender=@<handle>|system type=agent|human|system target=#conv:<conversation_id>[/thread:<root_message_id>] time=<iso>]
 ```
 
-- `target=channel` is the main line; `target=thread:<root_message_id>` is a
-  reply inside that message's cluster.
+- `target` is the **absolute** address of the stream the row belongs to
+  (#task:2021 P4-3), rendered by the one codec
+  (`packages/shared/src/delivery-target.ts`): `#conv:<conversation_id>` on the
+  main line, with a `/thread:<root_message_id>` suffix inside that message's
+  reply cluster. It is derived from the ROW, so one batch may legitimately carry
+  two different targets — an agent-scoped runtime is woken for N conversations.
+  Being absolute it is viewer-independent and can be copied back verbatim as a
+  destination; it replaced the relative token `channel`, which only named
+  whichever conversation the reader assumed.
 - **Task notice suffix.** When the delivered row is a task **system
   event** (task created, claimed, status-changed, or **edited**), the header
   gains a trailing ` task=#<number> status=<status>` **inside the brackets**

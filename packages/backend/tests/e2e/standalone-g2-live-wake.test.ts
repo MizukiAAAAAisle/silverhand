@@ -131,7 +131,10 @@ describe('Standalone G2 — live deliver + inbox delivery marker', () => {
     const now = Date.now();
     const workspaceId = 'ws-g2-b3';
     const agentId = 'agent-g2-b3';
-    const conversationId = 'conv-g2-b3';
+    // Production-shaped (#task:2021 P4-3): a delivery header renders this id as
+    // the stream's absolute `target`, so it must be spellable — 16 base64url
+    // chars, exactly what `conversations.id` is minted as.
+    const conversationId = 'g2b3LiveWakeConv';
     const expectedSessionId = `g2-b3-session-${now}`;
     const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);
     mkdirSync(workspacePath, { recursive: true });
