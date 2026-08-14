@@ -151,6 +151,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     description: null,
   });
   const channelX = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: wsXRow.id,
     title: 'c6-x',
   });
@@ -166,6 +167,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     description: null,
   });
   const channelY = conversations.insertChannel({
+    name: 'ch-2',
     workspaceId: wsYRow.id,
     title: 'c6-y',
   });

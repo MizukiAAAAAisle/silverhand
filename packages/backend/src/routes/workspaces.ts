@@ -503,6 +503,10 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       const result = await ctx.channelService.createChannel({
         workspaceId: id,
         title: parsed.data.title,
+        // #task:2016 — the caller MAY choose the address; omitted means "derive it
+        // from the title with the one shared deriver". A conflict is a 409, never a
+        // silent suffix: the name the caller asked for is the one they will publish.
+        name: parsed.data.name,
         memberAgentIds: parsed.data.member_agent_ids,
         memberUserIds: parsed.data.member_user_ids,
         visibility: parsed.data.visibility,

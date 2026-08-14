@@ -4,6 +4,7 @@ import {
   type CreateAgentInput,
   formatReferenceToken,
   runtimeDefaultModel,
+  slugifyConversationTitle,
   systemSubtype,
 } from '@silverhand/shared';
 import { agentHomeWorkspaceId } from '../repos/workspace-repo.js';
@@ -314,6 +315,10 @@ function insertProvisioningDependents(
     const dm = tx.conversations.insertDmChannel({
       workspaceId: home.id,
       title: 'Onboarding',
+      // The address, derived from the title by the ONE deriver every creation
+      // path and the v72 backfill share (#task:2016). The home namespace was
+      // created empty two statements ago, so this cannot conflict.
+      name: slugifyConversationTitle('Onboarding'),
       agentId: agentRow.id,
     });
     tx.conversations.addAgent(dm.id, agentRow.id);

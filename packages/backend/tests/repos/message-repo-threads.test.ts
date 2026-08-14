@@ -26,6 +26,7 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 't',
   });

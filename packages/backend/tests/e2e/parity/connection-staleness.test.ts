@@ -132,6 +132,7 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     description: null,
   });
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: wsRow.id,
     title: 'd5a4-stale',
   });

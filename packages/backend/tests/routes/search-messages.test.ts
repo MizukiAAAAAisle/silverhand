@@ -154,6 +154,7 @@ describe('agent list_channels / search_messages routes', () => {
     // arm is kind='channel' only, so a DM never enters via discovery, and alice
     // is not a member so the member arm skips it too).
     const unjoinedDm = new ConversationRepo(t.ctx.db).insertDmChannel({
+      name: 'ch-1',
       workspaceId,
       title: 'unjoined-dm',
     });

@@ -12,6 +12,7 @@
  * fixture empire.
  */
 import type { AgentDto, ConversationDto, RuntimeKind, WorkspaceDto } from '@silverhand/shared';
+import { slugifyConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
@@ -47,6 +48,16 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
     'UPDATE conversation_users SET joined_at = ? WHERE conversation_id = ? AND user_id = ?',
   );
 
+  /**
+   * Per-context ordinal for fixture channel ADDRESSES (#task:2016). A workspace
+   * conversation must hold a name allocation to exist, and callers of
+   * `createChannel` pass a title (often the same default twice). Production
+   * answers a colliding address with a 409; a fixture has no such intent, so the
+   * address is the derived slug plus an ordinal — unique by construction, and
+   * still readable in a failure message.
+   */
+  let channelOrdinal = 0;
+
   return {
     repos,
     localHostId,
@@ -59,7 +70,12 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
     },
 
     createChannel(workspace: WorkspaceDto, title = 'general'): ConversationDto {
-      return repos.conversations.insertChannel({ workspaceId: workspace.id, title });
+      channelOrdinal += 1;
+      return repos.conversations.insertChannel({
+        workspaceId: workspace.id,
+        title,
+        name: `${slugifyConversationTitle(title)}-${channelOrdinal}`,
+      });
     },
 
     createAgent(name: string, opts: CreateAgentOptions = {}): AgentDto {

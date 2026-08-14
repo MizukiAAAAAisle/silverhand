@@ -132,6 +132,7 @@ function makePerimeterFixture(opts?: {
     description: null,
   });
   const channelX = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: wsX.id,
     title: 'perimeter-x',
   });
@@ -150,6 +151,7 @@ function makePerimeterFixture(opts?: {
     description: null,
   });
   const channelY = conversations.insertChannel({
+    name: 'ch-2',
     workspaceId: wsY.id,
     title: 'perimeter-y',
   });
@@ -212,6 +214,7 @@ function makePerimeterFixture(opts?: {
       // the perimeter rejects events whose `(cid, aid)` claim has no
       // membership backing.
       const channel = conversations.insertChannel({
+        name: 'ch-3',
         workspaceId: wsX.id,
         title,
       });

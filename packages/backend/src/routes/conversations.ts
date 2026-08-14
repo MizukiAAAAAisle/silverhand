@@ -663,12 +663,19 @@ export function createConversationMessagingApp(
     }
   });
 
-  // Update a top-level channel's title OR visibility (EXACTLY ONE per request —
-  // the schema rejects both/neither). Both mutations share the workspace `admin`
-  // gate (agents fail it, so `public` stays human-only) and the same error
-  // mapping; the service owns each write + its post-commit broadcast. Splitting
-  // the dispatch here (not a combined service call) keeps each mutation atomic —
-  // there is no half-committed title+visibility state.
+  // Update a top-level channel's title OR visibility OR name (EXACTLY ONE per
+  // request — the schema rejects more than one and neither). All three mutations
+  // share the workspace `admin` gate (agents fail it, so `public` stays
+  // human-only) and the same error mapping; the service owns each write + its
+  // post-commit broadcast. Splitting the dispatch here (not a combined service
+  // call) keeps each mutation atomic — there is no half-committed
+  // title+visibility state, and no request in which a display rename half-happens
+  // alongside an address change.
+  //
+  // `name` is a DIFFERENT KIND of change from `title` (#task:2016): it retires an
+  // address permanently. Keeping it a third arm of the same exactly-one schema is
+  // what makes that visible at the protocol level rather than hidden behind a
+  // field that looks like another rename.
   app.patch(apiPaths.conversationChannel(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
@@ -690,10 +697,15 @@ export function createConversationMessagingApp(
             visibility: parsed.data.visibility,
             actor: principal,
           })
+        : parsed.data.name !== undefined
+        ? await ctx.channelService.setChannelName({
+            channelId: id,
+            name: parsed.data.name,
+          })
         : await ctx.channelService.renameChannel({
             channelId: id,
-            // `title` is present whenever `visibility` is absent (schema
-            // exactly-one refinement).
+            // `title` is present whenever `visibility` and `name` are absent
+            // (schema exactly-one refinement).
             title: parsed.data.title as string,
           });
       return c.json({ channel: result.channel });

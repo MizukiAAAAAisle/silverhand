@@ -81,6 +81,7 @@ function bootstrap() {
   // therefore outside what an agent delete may reach.
   const workspace = workspaces.insert({ name: 'Shared', description: null });
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'general',
   });
@@ -114,6 +115,7 @@ function bootstrap() {
   // it — home workspace → DM channel → that channel's attachment rows.
   const home = workspaces.insertAgentHome({ agent: subject });
   const dm = conversations.insertDmChannel({
+    name: 'ch-2',
     workspaceId: home.id,
     title: subject.name,
     agentId: subject.id,

@@ -245,6 +245,7 @@ describe('createAgent provisioning failure (application integration)', () => {
           if (outcome.status !== 'transitioned') throw new Error('setup lost');
           const home = tx.workspaces.insertAgentHome({ agent: outcome.row });
           const dm = tx.conversations.insertDmChannel({
+            name: 'ch-1',
             workspaceId: home.id,
             title: 'Onboarding',
             agentId,

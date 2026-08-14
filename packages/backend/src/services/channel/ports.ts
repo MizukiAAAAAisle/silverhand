@@ -89,8 +89,44 @@ export interface ChannelTxChannelsPort {
    * mechanism. Otherwise two concurrent renames both read the same old title and
    * one writes a from-title that never existed. The method name carries the
    * obligation — plain `get` is NOT a substitute.
+   *
+   * Carries the keyed conversation's ADDRESS too (`name`, #task:2016), under the
+   * same obligation and for the same reason: the re-address audit names the
+   * address it replaced.
    */
   getChannelLikeForUpdate(): ChannelConversationDto | DmChannelDto | null;
+  /**
+   * Is `name` already allocated in the keyed conversation's WORKSPACE NAMESPACE
+   * — currently held or retired (#task:2016)?
+   *
+   * Takes no workspace: the adapter derives it from the key, so a re-address
+   * cannot be checked against the wrong namespace. `true` for a name this very
+   * conversation holds, which is what makes a no-op re-address a refusal rather
+   * than a retire-and-reallocate that would burn the name and leave the channel
+   * addressed by a fresh copy of it.
+   *
+   * Authoritative only under the transaction's write lock — same obligation as
+   * {@link getChannelLikeForUpdate}. Outside it this is a stale hint, which is
+   * why no read port exposes it.
+   */
+  isNameAllocated(name: string): boolean;
+  /**
+   * Retire the keyed conversation's current allocation, returning the name that
+   * was retired (or `null` when it held none).
+   *
+   * Retire-then-allocate, never an update: the old address stays in the
+   * namespace forever, un-takeable and still pointing here, so a reference to it
+   * can say what succeeded it. There is no `unretire`.
+   */
+  retireCurrentName(retiredAt: number): string | null;
+  /**
+   * Allocate `name` to the keyed conversation. Aborts the transaction if the
+   * namespace already holds it, or if the keyed conversation has no namespace
+   * (an inbox) — both are the adapter's/schema's backstop for a caller that
+   * skipped {@link isNameAllocated} or the `not_addressable` gate, not the
+   * intended error path.
+   */
+  allocateName(name: string, assignedAt: number): void;
 }
 
 /**
@@ -118,12 +154,35 @@ export interface ChannelTxChannelsPort {
  * throws — aborting the whole transaction — on a pointer into another one.
  */
 export interface WorkspaceChannelTxChannelsPort {
+  /**
+   * Create a channel in the coordinated workspace, AT an address.
+   *
+   * `name` is required and there is no unnamed form (#task:2016): a
+   * workspace-placed conversation and its allocation are mutually prerequisite,
+   * so a port that could create the row alone would let a caller commit a channel
+   * no `#reference` can reach — and no constraint would notice, since totality is
+   * a property of this unit of work rather than a DB fact. The caller decides the
+   * name (requested, or derived from the title) and refuses a conflict via
+   * {@link isNameAllocated} first; the namespace key is the backstop.
+   */
   insertChannel(args: {
     title: string;
+    name: string;
     spawnedByAgentId?: string | null;
     visibility?: ConversationVisibility;
   }): ChannelConversationDto;
-  insertDmChannel(args: { title: string; agentId?: string | null }): DmChannelDto;
+  /** The DM twin of {@link insertChannel}, addressed by the same rules — a DM
+   *  channel is a workspace placement today, so it holds an allocation too. */
+  insertDmChannel(args: {
+    title: string;
+    name: string;
+    agentId?: string | null;
+  }): DmChannelDto;
+  /** Is `name` already allocated in the COORDINATED workspace's namespace —
+   *  currently held or retired? Takes no workspace for the same reason the insert
+   *  faces do not: it comes from the key. Authoritative under this
+   *  transaction's write lock; a pre-lock probe would be a stale hint. */
+  isNameAllocated(name: string): boolean;
   addAgent(conversationId: string, agentId: string): ConversationAgentDto;
   addUser(conversationId: string, userId: string): ConversationUserMemberDto;
   /** Source-conversation snapshot for the seed system message. */

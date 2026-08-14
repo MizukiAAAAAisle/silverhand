@@ -1026,6 +1026,7 @@ describe('host routes', () => {
       workspaces.insertMembership(workspace.id, agentId);
       const conversations = new ConversationRepo(t.ctx.db);
       const channel = conversations.insertChannel({
+        name: 'ch-1',
         workspaceId: workspace.id,
         title: 'general',
       });

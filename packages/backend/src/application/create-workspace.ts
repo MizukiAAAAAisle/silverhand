@@ -2,6 +2,7 @@ import {
   type AgentDto,
   formatReferenceToken,
   inlineCode,
+  slugifyConversationTitle,
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
@@ -167,6 +168,11 @@ export async function createWorkspace(
   const onboarding = conversations.insertChannel({
     workspaceId: workspace.id,
     title: 'Onboarding',
+    // The channel's ADDRESS, derived from the title by the ONE deriver every
+    // creation path and the v72 backfill share (#task:2016). This workspace's
+    // namespace was created empty a few statements ago, so the derived name
+    // cannot conflict and there is no 409 arm on this saga.
+    name: slugifyConversationTitle('Onboarding'),
   });
   for (const userId of workspaces.listUserMemberIds(workspace.id)) {
     conversations.addUser(onboarding.id, userId);

@@ -124,6 +124,7 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
     const dm = conversations.insertDmChannel({
+      name: 'ch-1',
       workspaceId,
       title: 'dm',
     });
@@ -147,6 +148,7 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
     const dm = conversations.insertDmChannel({
+      name: 'ch-2',
       workspaceId,
       title: 'dm',
     });

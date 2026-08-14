@@ -21,6 +21,61 @@ export const ENTITY_NAME_MAX_LENGTH = 64;
 export const PARTICIPANT_HANDLE_PATTERN = '[a-zA-Z][a-zA-Z0-9_-]*';
 
 /**
+ * The conversation-NAME character grammar (#task:2016), as an unanchored regex
+ * source fragment with no capture group — same shape and same reason as
+ * {@link PARTICIPANT_HANDLE_PATTERN} above.
+ *
+ * A conversation name is an ADDRESS, not a label: `conversations.title` keeps
+ * the display half and may be renamed freely, while the name is the stable
+ * coordinate a `#<name>` reference resolves through. Three properties are
+ * load-bearing, and each one is a constraint the title deliberately does not
+ * carry:
+ *
+ *  - **Lowercase only.** Uniqueness is enforced by a DB index, so binary
+ *    equality has to mean visual equality. Admitting `Design` next to `design`
+ *    would need `COLLATE NOCASE` — which is ASCII-only in SQLite and therefore
+ *    silently inconsistent the moment the domain grows — so the domain excludes
+ *    the confusion instead of folding it.
+ *  - **First character a LETTER, last character alphanumeric.** Not cosmetic:
+ *    the chat tokenizer (`REF_RE`, renderer `Markdown.tsx`) spells the channel
+ *    form as `#[a-zA-Z][a-zA-Z0-9_-]*` and reserves bare `#<number ≥ 11>` for
+ *    tasks. A digit-leading name is therefore either inert (`#2`) or resolves to
+ *    a TASK (`#42`) — an address that silently points at another entity kind.
+ *    Admitting one would require settling that collision and changing the target
+ *    grammar, which is a different ticket (@Cindy, B4). A separator on either
+ *    end is barred for the milder reason that it is invisible in a chip.
+ *  - **A subset of the tokenizer's character class.** A name the tokenizer
+ *    cannot capture is a name nobody can reference, so an admissible name is
+ *    always spellable — and, with the rule above, always spellable AS A CHANNEL.
+ *
+ * The LENGTH half of the domain is {@link ENTITY_NAME_MAX_LENGTH}, shared with
+ * the other entity names; a consumer that needs the full stored domain must
+ * apply both, or just use {@link ConversationNameSchema}.
+ */
+export const CONVERSATION_NAME_PATTERN = '[a-z](?:[a-z0-9_-]*[a-z0-9])?';
+
+/**
+ * Stored conversation-name grammar: FORMAT only.
+ *
+ * Uniqueness is a database fact, not a schema fact — a name is allocated in the
+ * `conversation_names` registry, whose primary key spans current AND retired
+ * names so a retired name can never be reallocated. This schema therefore says
+ * nothing about availability, and passing it is not permission to write.
+ *
+ * Kept separate from `ChannelTitleSchema` on purpose: they are two concepts with
+ * two rules (freeform display text vs. addressable identity), and the whole
+ * point of #task:2016 is that renaming the first does not touch the second.
+ */
+export const ConversationNameSchema = z
+  .string()
+  .min(1)
+  .max(ENTITY_NAME_MAX_LENGTH)
+  .regex(
+    new RegExp(`^${CONVERSATION_NAME_PATTERN}$`),
+    'conversation name must be lowercase letters, numbers, dash or underscore, starting with a letter and ending alphanumeric',
+  );
+
+/**
  * Stored participant-name grammar. A participant name is a durable mention
  * handle, so every name admitted here must also be representable by the
  * message and renderer `@mention` parsers. The optional display `@` belongs to

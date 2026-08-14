@@ -28,6 +28,7 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 't',
   });
@@ -200,6 +201,7 @@ describe('AttachmentService.locateForAgent', () => {
         description: null,
       });
       const otherChannel = conversations.insertChannel({
+        name: 'ch-2',
         workspaceId: otherWorkspace.id,
         title: 'o',
       });
@@ -519,6 +521,7 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
         description: null,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({
+        name: 'ch-3',
         workspaceId: otherWorkspace.id,
         title: 'o',
       });
@@ -829,6 +832,7 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
         description: null,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({
+        name: 'ch-4',
         workspaceId: otherWorkspace.id,
         title: 'o',
       });

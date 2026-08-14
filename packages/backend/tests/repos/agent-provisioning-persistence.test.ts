@@ -44,6 +44,7 @@ function runProvisioningSequence(
     const flipped = outcome.row;
     const home = tx.workspaces.insertAgentHome({ agent: flipped });
     const dm = tx.conversations.insertDmChannel({
+      name: 'ch-1',
       workspaceId: home.id,
       title: 'Onboarding',
       agentId: args.agentId,

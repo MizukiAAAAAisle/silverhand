@@ -704,6 +704,59 @@ describe('SystemMessage channel refs', () => {
         .not.toContain('data-system-layout=');
     }
   });
+
+  // #task:2016 (@Cindy review, B3) — a SEMANTIC NAME is not the namespace this
+  // renderer reads. `conversation_name_changed` falls through to
+  // `GenericNarrationFallback`, which runs `message.content` through `<Markdown>`
+  // WITH `channelsByName` — and that map is keyed by channel TITLE. So a `#name`
+  // sigil written by a producer that means an ADDRESS resolves against titles and
+  // can land on a different channel. v72's re-address audit is the first producer
+  // of such a sigil, which makes this the whole chain that must not mis-target:
+  // real subtype → real fallback → real tokenizer.
+  //
+  // Both cases are asserted by whether the OTHER channel's id reaches the output
+  // at all: the id appears only when this body would navigate there.
+  describe('an address sigil in the re-address audit (#task:2016)', () => {
+    /** A channel whose TITLE happens to equal the address being announced.
+     *  Nothing forbids this — titles are free text, names are a separate
+     *  namespace — so the collision is ordinary, not adversarial. */
+    const colliding = new Map<string, ChannelReference | null>([
+      ['roadmap', { id: 'ch-titled-roadmap', title: 'roadmap' }],
+    ]);
+
+    it('would navigate to the wrong channel if the address were written bare', () => {
+      const msg = makeSystemMessage(
+        'conversation_name_changed',
+        { old_name: 'planning', new_name: 'roadmap' },
+        "This channel's address changed from #planning to #roadmap.",
+      );
+      // The hazard is real rather than theoretical: a live link to a channel this
+      // message is not about.
+      expect(renderSystem(msg, colliding)).toContain('ch-titled-roadmap');
+    });
+
+    it('does not, because the producer writes both addresses as inline code', () => {
+      // The body shape `ChannelService.setChannelName` writes
+      // (packages/backend/src/services/channel-service.ts). A backend test pins
+      // that the real producer keeps every sigil inside a code span; this pins
+      // what that buys — `remarkRefs` returns from an `inlineCode` node without
+      // splitting it, so there is no resolution and no navigation.
+      const msg = makeSystemMessage(
+        'conversation_name_changed',
+        { old_name: 'planning', new_name: 'roadmap' },
+        "This channel's address changed from `#planning` to `#roadmap`. "
+          + '`#planning` will never point anywhere else, so old references fail '
+          + 'rather than reach the wrong channel — update any in your MEMORY.md '
+          + 'when you next edit it.',
+      );
+      const html = renderSystem(msg, colliding);
+      expect(html).not.toContain('ch-titled-roadmap');
+      // And the token stays literally visible, so an agent still reads its new
+      // address off this message.
+      expect(html).toContain('#roadmap');
+      expect(html).toContain('#planning');
+    });
+  });
 });
 
 describe('SystemMessage task event rows (PR-2)', () => {

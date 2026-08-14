@@ -65,6 +65,7 @@ function makeFixture() {
     description: null,
   });
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'fanout-adapter',
   });

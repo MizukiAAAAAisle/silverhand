@@ -62,10 +62,18 @@ function bootstrap() {
   const eng = workspaces.insert({ name: 'eng', description: null });
   workspaces.addUserMember(eng.id, viewerUserId, 'owner');
 
-  const general = conversations.insertChannel({ workspaceId: eng.id, title: 'general' });
+  const general = conversations.insertChannel({
+    name: 'general',
+    workspaceId: eng.id,
+    title: 'general',
+  });
   // The CONTROL for every DM-shaped face: workspace-placed, `roster_policy`
   // fixed, so it reports `kind='dm_channel'` exactly like an inbox does.
-  const dm = conversations.insertDmChannel({ workspaceId: eng.id, title: 'dm-control' });
+  const dm = conversations.insertDmChannel({
+    name: 'dm-control',
+    workspaceId: eng.id,
+    title: 'dm-control',
+  });
   conversations.addUser(general.id, viewerUserId);
   conversations.addUser(dm.id, viewerUserId);
 

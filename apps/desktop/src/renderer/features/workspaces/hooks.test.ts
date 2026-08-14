@@ -44,6 +44,7 @@ function channel(
     workspace_id: 'w1',
     kind: 'channel',
     title: id,
+    name: id,
     status: 'idle',
     spawned_by_agent_id: null,
     closed_at: null,

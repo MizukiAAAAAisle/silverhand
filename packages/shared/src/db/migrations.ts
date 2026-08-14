@@ -1,4 +1,8 @@
 import { randomBytes } from 'node:crypto';
+import {
+  disambiguateConversationName,
+  slugifyConversationTitle,
+} from '../conversation-name.js';
 import { BASELINE_SCHEMA_SQL, BASELINE_SCHEMA_VERSION } from './baseline-schema.js';
 
 /**
@@ -1590,6 +1594,245 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX idx_messages_cc_dedupe
         ON messages(cc_source_message_id, conversation_id)
         WHERE cc_source_message_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 72,
+    name: 'conversation_names',
+    // agent-scoped-session-v1 §8 P0-c (#task:2016) — a workspace conversation
+    // gains a STABLE ADDRESS, distinct from its display title. `title` keeps the
+    // display half and may be renamed freely; the name is the coordinate a
+    // `#<name>` reference resolves through, and renaming the title must not
+    // change what an address resolves to (the doc's falsifier).
+    //
+    // The name is NOT a column on `conversations`. It is an ALLOCATION in a
+    // workspace namespace, and the table below is the whole namespace — current
+    // names and retired ones in ONE relation, so `PRIMARY KEY (workspace_id,
+    // name)` alone proves the load-bearing property: a name that has ever been
+    // allocated can never be allocated again, to any conversation, ever. A
+    // column plus a separate reservation table would spread that uniqueness
+    // across two relations, leaving a trigger to maintain what a key would
+    // otherwise decide — two authorities for one fact.
+    //
+    // `conversation_id` carries NO foreign key, for the same reason
+    // `messages.cc_source_message_id` (v71) carries none: it is a HISTORICAL
+    // COORDINATE. A retired row must survive its conversation's deletion, or the
+    // deletion would hand the name back. Dropping the FK is what removes birth
+    // validation, so the trigger below performs it explicitly — and more
+    // narrowly than an FK could, since it also pins the placement and the
+    // workspace.
+    //
+    // Three triggers, created BEFORE the backfill so the backfill itself passes
+    // through them. Without them the key proves far less than it looks:
+    // `PRIMARY KEY` only blocks a conflicting INSERT, while `UPDATE name`,
+    // `UPDATE workspace_id`, a plain `DELETE`, or resetting `retired_at` back to
+    // NULL all release an allocated name.
+    //
+    //   - `_birth` — the INSERT-time validation the missing FK would not have
+    //     given anyway: the target must exist, be workspace-placed, and belong
+    //     to THIS workspace. Cross-workspace allocation is not merely dirty
+    //     data; combined with a resolver that joined on id alone it would be a
+    //     cross-workspace addressing hole.
+    //   - `_immutable` — the only legal UPDATE is retirement. Coordinates and
+    //     `assigned_at` are frozen, and `retired_at` may go NULL → timestamp
+    //     once: no resurrection, and no rewriting when a name died.
+    //   - `_permanent` — an ordinary DELETE fails loud. The one legitimate
+    //     removal is the namespace disappearing with its workspace, and the
+    //     `WHEN EXISTS (workspaces …)` guard admits exactly that: when SQLite
+    //     runs this trigger for an `ON DELETE CASCADE`, the parent row is
+    //     already gone, so the cascade passes and every direct DELETE aborts.
+    //
+    // Totality — "every live workspace conversation has exactly one current
+    // name" — is deliberately NOT claimed as a DB fact. `conversations` and its
+    // name are mutually prerequisite and SQLite has no deferred constraints, so
+    // the partial UNIQUE proves single-valuedness (AT MOST one current name per
+    // conversation) and the create / backfill / rename units of work provide the
+    // rest.
+    precondition: (db) => {
+      const handle = db as {
+        exec: (sql: string) => void;
+        prepare: (sql: string) => {
+          all: () => {
+            id: string;
+            workspace_id: string;
+            title: string;
+            created_at: number;
+          }[];
+          run: (...params: unknown[]) => void;
+        };
+      };
+      handle.exec(
+        `DROP TABLE IF EXISTS temp.conversation_name_backfill;
+         CREATE TEMP TABLE conversation_name_backfill (
+           conversation_id TEXT PRIMARY KEY,
+           workspace_id    TEXT NOT NULL,
+           name            TEXT NOT NULL,
+           assigned_at     INTEGER NOT NULL,
+           UNIQUE (workspace_id, name)
+         );`,
+      );
+      const stage = handle.prepare(
+        `INSERT INTO temp.conversation_name_backfill
+           (conversation_id, workspace_id, name, assigned_at)
+         VALUES (?, ?, ?, ?)`,
+      );
+      // SQL cannot derive a slug, so the names are minted here — inside the
+      // migration's own transaction, on the same connection, before `up` — with
+      // the SAME deriver channel creation uses (`slugifyConversationTitle`). A
+      // second copy of the algorithm would make an upgraded database and a
+      // freshly created channel disagree about the obvious name for a title.
+      //
+      // Collisions are inevitable (every CJK-only title derives `channel`) and
+      // are resolved by ordinal, in `(created_at, id)` order so the result
+      // depends only on the data, not on the scan order. Only the BACKFILL may
+      // suffix: it must cover every row and has no requester to refuse.
+      const taken = new Map<string, Set<string>>();
+      const rows = handle
+        .prepare(
+          `SELECT id, workspace_id, title, created_at
+             FROM conversations
+            WHERE placement_kind = 'workspace'
+            ORDER BY workspace_id, created_at, id`,
+        )
+        .all();
+      for (const row of rows) {
+        let namespace = taken.get(row.workspace_id);
+        if (!namespace) {
+          namespace = new Set<string>();
+          taken.set(row.workspace_id, namespace);
+        }
+        const stem = slugifyConversationTitle(row.title);
+        let name = stem;
+        for (let ordinal = 2; namespace.has(name); ordinal += 1) {
+          name = disambiguateConversationName(stem, ordinal);
+        }
+        namespace.add(name);
+        // `assigned_at` = the conversation's own `created_at`, the rule v71's
+        // inbox backfill established: the timestamp expresses when the addressed
+        // thing came into being, so an upgraded name and a freshly allocated one
+        // are indistinguishable.
+        stage.run(row.id, row.workspace_id, name, row.created_at);
+      }
+    },
+    up: `
+      -- The CHECK below is the NAME GRAMMAR as a database fact (@Cindy,
+      -- #task:2016 review): the SQLite GLOB transcription of shared's
+      -- CONVERSATION_NAME_PATTERN = '[a-z](?:[a-z0-9_-]*[a-z0-9])?' plus
+      -- ENTITY_NAME_MAX_LENGTH. First character a lowercase letter, last
+      -- character alphanumeric ('*' matches the empty string, so a one-letter
+      -- name passes both predicates), and no character outside the class
+      -- anywhere (the '-' sits last inside the negated set, where GLOB reads it
+      -- literally). The transcription is not trusted by eye: a test asserts it
+      -- decides exactly what ConversationNameSchema decides, over a corpus that
+      -- includes GLOB's own metacharacters.
+      --
+      -- Why the domain is closed HERE and not only in the writer: a name is an
+      -- address and an allocation can never be released, so a value the chat
+      -- tokenizer cannot spell is a permanent, un-referenceable hole in the
+      -- namespace — the one class of bad write no later fix can undo.
+      -- ConversationNameRepo.allocate asserts the same domain to produce a
+      -- legible error; this is what makes the claim true of every connection,
+      -- including one that never goes through that repo.
+      --
+      -- The 64 is a FROZEN COPY of ENTITY_NAME_MAX_LENGTH as of v72, not a
+      -- reference to it: migration text is history and must not change meaning
+      -- when a constant is edited. Widening the stored domain later therefore
+      -- needs its own migration, which is the right amount of friction.
+      --
+      -- Comments live OUTSIDE the statements in this migration on purpose:
+      -- SQLite keeps a statement's text verbatim from CREATE onward in the schema
+      -- catalog, so a rationale written inside the parentheses would be replayed
+      -- into the normalized schema oracle.
+      CREATE TABLE conversation_names (
+        workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name            TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        assigned_at     INTEGER NOT NULL,
+        retired_at      INTEGER,
+        PRIMARY KEY (workspace_id, name),
+        CHECK (
+          length(name) BETWEEN 1 AND 64
+          AND name GLOB '[a-z]*'
+          AND name GLOB '*[a-z0-9]'
+          AND NOT name GLOB '*[^a-z0-9_-]*'
+        )
+      );
+
+      CREATE UNIQUE INDEX idx_conversation_names_current
+        ON conversation_names(conversation_id) WHERE retired_at IS NULL;
+
+      CREATE TRIGGER trg_conversation_names_birth
+      BEFORE INSERT ON conversation_names
+      WHEN NOT EXISTS (
+        SELECT 1 FROM conversations c
+         WHERE c.id = NEW.conversation_id
+           AND c.placement_kind = 'workspace'
+           AND c.workspace_id = NEW.workspace_id
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: target must be a workspace-placed conversation of the same workspace'
+        );
+      END;
+
+      -- An allocation is BORN CURRENT (@Cindy, #task:2016 review). The legal
+      -- lifecycle has two states in one direction — current, then retired once,
+      -- forever — and trg_conversation_names_immutable already owns the
+      -- transition. Birth was the missing half: a row inserted with retired_at
+      -- already set slips past BOTH the partial unique index (which indexes
+      -- current rows only) and the immutability trigger (which sees no UPDATE),
+      -- and what it leaves behind is unrepairable by construction — it
+      -- permanently occupies a name nobody ever held, fabricates a retirement
+      -- that never happened, and, unconstrained by that index, may be one of
+      -- arbitrarily many such rows for a single conversation. Kept as its own
+      -- trigger rather than folded into the birth predicate above so the refusal
+      -- names which rule was broken.
+      CREATE TRIGGER trg_conversation_names_born_current
+      BEFORE INSERT ON conversation_names
+      WHEN NEW.retired_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: an allocation is born current; retire it in a later write'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversation_names_immutable
+      BEFORE UPDATE ON conversation_names
+      WHEN NOT (
+        NEW.workspace_id = OLD.workspace_id
+        AND NEW.name = OLD.name
+        AND NEW.conversation_id = OLD.conversation_id
+        AND NEW.assigned_at = OLD.assigned_at
+        AND OLD.retired_at IS NULL
+        AND NEW.retired_at IS NOT NULL
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: an allocation is immutable; only retirement may be written'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversation_names_permanent
+      BEFORE DELETE ON conversation_names
+      WHEN EXISTS (
+        SELECT 1 FROM workspaces w WHERE w.id = OLD.workspace_id
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: an allocation is permanent; retire it instead of deleting it'
+        );
+      END;
+
+      INSERT INTO conversation_names
+        (workspace_id, name, conversation_id, assigned_at, retired_at)
+        SELECT b.workspace_id, b.name, b.conversation_id, b.assigned_at, NULL
+          FROM temp.conversation_name_backfill b;
+
+      DROP TABLE temp.conversation_name_backfill;
     `,
   },
 ];

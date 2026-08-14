@@ -216,10 +216,12 @@ describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)',
     });
     workspaces.insertMembership(workspace.id, agent.id);
     const live = conversations.insertChannel({
+      name: 'ch-1',
       workspaceId: workspace.id,
       title: 'live',
     });
     const archived = conversations.insertChannel({
+      name: 'ch-2',
       workspaceId: workspace.id,
       title: 'archived',
     });

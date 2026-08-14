@@ -53,6 +53,7 @@ function makeFixture(
     viewerUserId,
   );
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: ws.id,
     title: 'ws-proj',
     spawnedByAgentId: null,

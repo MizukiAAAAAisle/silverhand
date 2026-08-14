@@ -146,7 +146,7 @@ function buildFixture(): Fixture {
   const wsB = workspaces.insert({ name: 'refs-b', description: null }).id;
 
   const channel = (workspaceId: string, title: string): string =>
-    conversations.insertChannel({ workspaceId, title }).id;
+    conversations.insertChannel({ name: title, workspaceId, title }).id;
   const chA1 = channel(wsA, 'a1');
   const chA2 = channel(wsA, 'a2');
   const chA3 = channel(wsA, 'a3-no-subject');
@@ -261,11 +261,19 @@ describe('#task:1987 membership cascade read shape — cost', () => {
    *  the old shape grow. */
   function grow(f: Fixture, withMember: number, bystanders: number): void {
     for (let i = 0; i < withMember; i += 1) {
-      const id = f.conversations.insertChannel({ workspaceId: f.wsA, title: `grow-${i}` }).id;
+      const id = f.conversations.insertChannel({
+        name: `grow-${i}`,
+        workspaceId: f.wsA,
+        title: `grow-${i}`,
+      }).id;
       f.conversations.addAgent(id, f.subjectAgent);
     }
     for (let i = 0; i < bystanders; i += 1) {
-      f.conversations.insertChannel({ workspaceId: f.wsB, title: `bystander-${i}` });
+      f.conversations.insertChannel({
+        name: `bystander-${i}`,
+        workspaceId: f.wsB,
+        title: `bystander-${i}`,
+      });
     }
   }
 

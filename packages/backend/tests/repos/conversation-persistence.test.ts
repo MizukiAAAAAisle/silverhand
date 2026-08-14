@@ -55,6 +55,7 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
       description: null,
     });
     const channel = new ConversationRepo(writer).insertChannel({
+      name: 'ch-1',
       workspaceId: workspace.id,
       title: 'before',
     });
@@ -139,8 +140,8 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
       name: 'keyed-axis',
       description: null,
     });
-    const a = conversations.insertChannel({ workspaceId: workspace.id, title: 'A' });
-    const b = conversations.insertChannel({ workspaceId: workspace.id, title: 'B' });
+    const a = conversations.insertChannel({ name: 'ch-2', workspaceId: workspace.id, title: 'A' });
+    const b = conversations.insertChannel({ name: 'ch-3', workspaceId: workspace.id, title: 'B' });
     const persistence = createSqliteConversationPersistence(db);
 
     const shape = persistence.channel.uow.atomicallyForChannel(a.id, tx => {
@@ -231,6 +232,7 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
     const mine = workspaces.insert({ name: 'coordinated-ws', description: null });
     const other = workspaces.insert({ name: 'another-ws', description: null });
     const foreignChannel = conversations.insertChannel({
+      name: 'ch-4',
       workspaceId: other.id,
       title: 'theirs',
     }).id;
@@ -270,14 +272,26 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
       channels: Object.keys(tx.channels).sort(),
     }));
 
-    // The rename scope structurally cannot place a member or create a channel…
+    // The rename/re-address scope structurally cannot place a member or create a
+    // channel. `retireCurrentName` + `allocateName` are the re-address pair
+    // (#task:2016): they are channel-keyed because moving an ADDRESS is a fact
+    // about one conversation, and the namespace they write into is derived from
+    // that conversation — a callback cannot aim them at another workspace.
     expect(rename).toEqual({
       scope: ['channels', 'messages'],
-      channels: ['getChannelLikeForUpdate', 'updateTitle'],
+      channels: [
+        'allocateName',
+        'getChannelLikeForUpdate',
+        'isNameAllocated',
+        'retireCurrentName',
+        'updateTitle',
+      ],
     });
-    // …and the creation scope carries no title write and no locking read, so it
-    // cannot be used to perform a rename either. A wider single port would have
-    // handed every caller both.
+    // …and the creation scope carries no title write, no locking read, and no
+    // name retire/allocate pair, so it cannot be used to perform a rename or a
+    // re-address either. A wider single port would have handed every caller both.
+    // (Creation allocates its name INSIDE `insertChannel`/`insertDmChannel`,
+    // where `name` is a required argument — so there is nothing to expose.)
     expect(create).toEqual({
       scope: ['agents', 'channels', 'messages', 'workspace'],
       channels: [
@@ -287,9 +301,17 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
         'getAgent',
         'insertChannel',
         'insertDmChannel',
+        'isNameAllocated',
         'listUsers',
       ],
     });
+
+    // The disjointness that matters is over WRITES. Exactly ONE face is shared,
+    // and it is the read both axes need to refuse a colliding address in-lock
+    // (`conversation_name_taken`, never constraint-text decoding). Pinned as an
+    // intersection so a future write face cannot quietly join the shared set.
+    const shared = rename.channels.filter(face => create.channels.includes(face));
+    expect(shared).toEqual(['isNameAllocated']);
   });
 
   /** The in-lock fact projection (P1-1). Keyed like every other face on this
@@ -351,8 +373,8 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
     const { channel, dm } = t.persistence.channel.uow.atomicallyInWorkspace(
       t.mine,
       tx => ({
-        channel: tx.channels.insertChannel({ title: 'keyed' }),
-        dm: tx.channels.insertDmChannel({ title: 'Mentions', agentId: t.agentId }),
+        channel: tx.channels.insertChannel({ name: 'ch-5', title: 'keyed' }),
+        dm: tx.channels.insertDmChannel({ name: 'ch-6', title: 'Mentions', agentId: t.agentId }),
       }),
     );
     // Neither write face takes a `workspaceId` at all — "lock workspace A, create
@@ -365,7 +387,7 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
     // the scope is built per transaction precisely so it cannot be hoisted and
     // memoized, which is the mistake this asserts against.
     const second = t.persistence.channel.uow.atomicallyInWorkspace(t.other, tx =>
-      tx.channels.insertChannel({ title: 'other-keyed' }),
+      tx.channels.insertChannel({ name: 'ch-7', title: 'other-keyed' }),
     );
     expect(second.workspace_id).toBe(t.other);
   });
@@ -385,14 +407,19 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
       ],
     ];
 
-    for (const [label, use] of faces) {
+    for (const [index, [label, use]] of faces.entries()) {
       const created: string[] = [];
       expect(
         () =>
           t.persistence.channel.uow.atomicallyInWorkspace(t.mine, tx => {
             // A LEGITIMATE write first: the refusal has to UNDO this, or the
             // "lock A, write B" refusal would be a report rather than a rollback.
-            created.push(tx.channels.insertChannel({ title: `probe-${label}` }).id);
+            // The name is positional rather than derived from `label`, because a
+            // face identifier is not an admissible conversation name (#task:2016
+            // closed that domain); the title still carries the label.
+            created.push(
+              tx.channels.insertChannel({ name: `probe-${index + 1}`, title: `probe-${label}` }).id,
+            );
             use(tx, t.foreignChannel);
           }),
         label,
@@ -479,6 +506,113 @@ describe('SqliteConversationPersistence: both channel axes share ONE lock mechan
       contender.exec('ROLLBACK');
     }
     expect(callbackRan).toBe(false);
+  });
+});
+
+describe('SqliteConversationPersistence: one address, one winner (#task:2016)', () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const fn of cleanups.splice(0)) fn();
+  });
+
+  function fileBackedWorkspace(slug: string): {
+    writer: Db;
+    contender: Db;
+    workspaceId: string;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), `silverhand-conv-name-race-${slug}-`));
+    const dbPath = join(dir, 'silverhand.db');
+    const writer = openDatabase(dbPath, { busyTimeoutMs: 0 });
+    const contender = openDatabase(dbPath, { busyTimeoutMs: 0 });
+    cleanups.push(() => {
+      writer.close();
+      contender.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const workspace = new WorkspaceRepo(writer).insert({ name: slug, description: null });
+    return { writer, contender, workspaceId: workspace.id };
+  }
+
+  /**
+   * `isNameAllocated` decides the 409 and `insertChannel` acts on it. Between a
+   * check and an insert there is a classic TOCTOU window, and the service's
+   * refusal is only a policy — not a truth — if a rival can allocate inside it.
+   * What closes the window is not the check: it is that both statements run under
+   * ONE write lock taken at BEGIN. So the falsifier drives a rival that has
+   * ALREADY taken the address, uncommitted, and asserts the checking transaction
+   * never got to run a step.
+   */
+  it('a rival cannot take the address between the check and the insert', () => {
+    const { writer, contender, workspaceId } = fileBackedWorkspace('race-window');
+    const persistence = createSqliteConversationPersistence(writer);
+
+    // The rival holds the write lock AND has allocated `planning` — the exact
+    // state that would poison a check made outside the lock.
+    contender.exec('BEGIN IMMEDIATE');
+    new ConversationRepo(contender).insertChannel({
+      workspaceId,
+      title: 'Planning',
+      name: 'planning',
+    });
+
+    let observedFree: boolean | undefined;
+    let thrown: unknown;
+    try {
+      persistence.channel.uow.atomicallyInWorkspace(workspaceId, tx => {
+        observedFree = !tx.channels.isNameAllocated('planning');
+        tx.channels.insertChannel({ title: 'Planning', name: 'planning' });
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    // Locked out at BEGIN: the check never ran, so it could not read a stale
+    // "free" and commit a second holder. A deferred policy would let the check
+    // run, read `planning` as free (the rival is uncommitted), and then fail on
+    // the key — turning a 409 into an aborted transaction.
+    expect(thrown).toMatchObject({ code: 'SQLITE_BUSY' });
+    expect(observedFree).toBeUndefined();
+
+    contender.exec('COMMIT');
+
+    // Now the rival's allocation is visible, and the SAME code refuses by policy
+    // — the check answers correctly and the insert is never attempted.
+    const second = persistence.channel.uow.atomicallyInWorkspace(workspaceId, tx => {
+      if (tx.channels.isNameAllocated('planning')) return 'refused' as const;
+      tx.channels.insertChannel({ title: 'Planning', name: 'planning' });
+      return 'created' as const;
+    });
+    expect(second).toBe('refused');
+
+    const holders = new ConversationRepo(writer).listAllChannelsForWorkspace(workspaceId);
+    expect(holders.filter(ch => ch.name === 'planning')).toHaveLength(1);
+  });
+
+  /**
+   * The other half: the address is exclusive even against a caller that DOES
+   * bypass the check. The namespace primary key is the backstop the port doc
+   * points at, and a backstop nobody has fired is a claim, not a mechanism.
+   */
+  it('two committed holders of one address are impossible even with the check skipped', () => {
+    const { writer, workspaceId } = fileBackedWorkspace('race-backstop');
+    const persistence = createSqliteConversationPersistence(writer);
+
+    persistence.channel.uow.atomicallyInWorkspace(workspaceId, tx =>
+      tx.channels.insertChannel({ title: 'Planning', name: 'planning' }),
+    );
+
+    expect(() =>
+      persistence.channel.uow.atomicallyInWorkspace(workspaceId, tx =>
+        // No `isNameAllocated` gate on purpose.
+        tx.channels.insertChannel({ title: 'Rival', name: 'planning' }),
+      ),
+    ).toThrow(/UNIQUE|PRIMARY KEY/i);
+
+    // And the loser left nothing behind: the whole unit of work rolled back, so
+    // there is no addressless channel row either.
+    const channels = new ConversationRepo(writer).listAllChannelsForWorkspace(workspaceId);
+    expect(channels).toHaveLength(1);
+    expect(channels[0]?.title).toBe('Planning');
   });
 });
 

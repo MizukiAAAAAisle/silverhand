@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readChannelContextMetadata } from '@silverhand/shared';
+import {
+  readChannelContextMetadata,
+  readConversationNameChangedMetadata,
+} from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -117,6 +120,7 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, alice.id);
   workspaces.insertMembership(workspace.id, bob.id);
   const source = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'source',
   });
@@ -1143,6 +1147,360 @@ describe('ChannelService.createChannel — in-lock write eligibility (#task:1987
         code: 'workspace_not_found',
       });
       expect(t.conversations.list().filter(c => c.workspace_id === t.workspace.id)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * The ADDRESS half of the channel domain (#task:2016, P0-c).
+ *
+ * A channel's `name` is an allocation in its workspace's namespace, and the
+ * whole point of separating it from `title` is that the two move independently:
+ * a title is a label anyone may restyle, an address is what a reference resolves
+ * through. So the claims here are about which operation touches which, what a
+ * conflict does, and what a re-address tells the room.
+ */
+describe('ChannelService — addresses (#task:2016)', () => {
+  it('derives the address from the title when the caller names none', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Release Planning',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      expect(created.channel.title).toBe('Release Planning');
+      expect(created.channel.name).toBe('release-planning');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('honours an explicit address, which the title never has to agree with', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Release Planning',
+        name: 'q3',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      expect(created.channel.name).toBe('q3');
+      expect(created.channel.title).toBe('Release Planning');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a taken address with 409 and writes NOTHING — never a silent suffix', async () => {
+    const t = bootstrap();
+    try {
+      await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Planning',
+        name: 'planning',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      const before = t.conversations.list().filter(c => c.workspace_id === t.workspace.id).length;
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'Other Planning',
+          name: 'planning',
+          memberAgentIds: [t.alice.id],
+          actor: { kind: 'user', userId: 'local' },
+        }),
+      ).rejects.toMatchObject({ code: 'conversation_name_taken' });
+
+      // The refusal is the whole behavior: no second channel, and in particular
+      // no `planning-2`. An auto-suffix would hand the caller an address they
+      // never asked for and would publish it to everyone.
+      const after = t.conversations.list().filter(c => c.workspace_id === t.workspace.id);
+      expect(after).toHaveLength(before);
+      expect(after.map(c => t.conversations.getChannelLike(c.id)?.name)).not.toContain('planning-2');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses an address RETIRED by an earlier re-address, not just a current one', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Planning',
+        name: 'planning',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      await t.service.setChannelName({ channelId: created.channel.id, name: 'roadmap' });
+
+      // `planning` now points at nothing current, and must STAY unusable: the
+      // reason a stale reference fails loudly instead of reaching a new channel.
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'Planning Again',
+          name: 'planning',
+          memberAgentIds: [],
+          actor: { kind: 'user', userId: 'local' },
+        }),
+      ).rejects.toMatchObject({ code: 'conversation_name_taken' });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a title rename does NOT move the address (agent-scoped-session-v1 §8 falsifier)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Planning',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      expect(created.channel.name).toBe('planning');
+
+      const renamed = await t.service.renameChannel({
+        channelId: created.channel.id,
+        title: 'Something Else Entirely',
+      });
+
+      expect(renamed.channel.title).toBe('Something Else Entirely');
+      // THE falsifier for this whole ticket: the target survives the label.
+      expect(renamed.channel.name).toBe('planning');
+      expect(t.conversations.getChannelLike(created.channel.id)?.name).toBe('planning');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a re-address moves the address, leaves the title, audits both, and invalidates snapshots', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Planning',
+        name: 'planning',
+        memberAgentIds: [t.alice.id],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      t.fake.delivered = [];
+      const workspaceEvents: string[] = [];
+      const channelEvents: string[] = [];
+      const unsubWs = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
+        workspaceEvents.push(e.kind);
+      });
+      const unsubCh = t.events.subscribeScope(`conversation:${created.channel.id}`, e => {
+        channelEvents.push(e.kind);
+      });
+
+      const result = await t.service.setChannelName({
+        channelId: created.channel.id,
+        name: 'roadmap',
+      });
+      unsubWs();
+      unsubCh();
+
+      expect(result.channel.name).toBe('roadmap');
+      expect(result.channel.title).toBe('Planning');
+
+      const announce = t.messages
+        .listForConversation(created.channel.id)
+        .map(m => readConversationNameChangedMetadata(m.metadata as Record<string, unknown> | null))
+        .find(m => m !== null);
+      expect(announce).toEqual({
+        subtype: 'conversation_name_changed',
+        old_name: 'planning',
+        new_name: 'roadmap',
+      });
+
+      // Every member agent is told, because its MEMORY.md and its prompt carry
+      // the old address…
+      expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.alice.id]);
+      // …and every open UI must refetch: the channel lists it cached report a
+      // name that no longer belongs to this channel.
+      expect(workspaceEvents).toContain('workspace_channels_changed');
+      expect(channelEvents).toContain('message');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('writes both addresses as inline code, never as a bare #sigil', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Planning',
+        name: 'planning',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      // A channel whose TITLE is the address this re-address is about to take.
+      // Nothing forbids it — titles are free text and names are a different
+      // namespace — and it is what makes the sigil hazard concrete (@Cindy,
+      // #task:2016 review B3): the renderer's `#name` tokenizer resolves through
+      // a map keyed by TITLE, so a bare `#roadmap` in this audit message would
+      // navigate to THIS channel instead of the one being re-addressed.
+      await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'roadmap',
+        name: 'planning-adjacent',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      await t.service.setChannelName({ channelId: created.channel.id, name: 'roadmap' });
+
+      const body = t.messages
+        .listForConversation(created.channel.id)
+        .map(m => m.content)
+        .find(content => content.includes('address changed'))!;
+      // Both addresses are still LITERALLY present — plain-text read faces (stdin,
+      // CLI, export) carry the token an agent has to recognise in its MEMORY.md,
+      // so the fix must not paraphrase them away.
+      expect(body).toContain('`#planning`');
+      expect(body).toContain('`#roadmap`');
+      // And every sigil in the body is inside a code span. Asserted as a property
+      // over the whole body rather than as a fixed string so a later edit to the
+      // wording cannot silently reintroduce a bare one.
+      const bare = [...body.matchAll(/#[a-z][a-z0-9_-]*/g)].filter(m => {
+        const start = m.index;
+        const end = start + m[0].length;
+        return body[start - 1] !== '`' || body[end] !== '`';
+      });
+      expect(bare.map(m => m[0])).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('re-addressing to the SAME address is a no-op: no audit, no delivery, no publish', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Planning',
+        name: 'planning',
+        memberAgentIds: [t.alice.id],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      const messagesBefore = t.messages.listForConversation(created.channel.id).length;
+      t.fake.delivered = [];
+      const publishes: string[] = [];
+      const unsub = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
+        publishes.push(e.kind);
+      });
+
+      const result = await t.service.setChannelName({
+        channelId: created.channel.id,
+        name: 'planning',
+      });
+      unsub();
+
+      expect(result.channel.name).toBe('planning');
+      expect(t.messages.listForConversation(created.channel.id)).toHaveLength(messagesBefore);
+      expect(t.fake.delivered).toEqual([]);
+      expect(publishes).toEqual([]);
+      // A no-op must not consume the address either: retire-then-allocate on the
+      // same name would retire it and then abort on the primary key.
+      expect(t.conversations.getChannelLike(created.channel.id)?.name).toBe('planning');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a re-address onto an address another channel holds, changing nothing', async () => {
+    const t = bootstrap();
+    try {
+      const mine = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Planning',
+        name: 'planning',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'Roadmap',
+        name: 'roadmap',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      await expect(
+        t.service.setChannelName({ channelId: mine.channel.id, name: 'roadmap' }),
+      ).rejects.toMatchObject({ code: 'conversation_name_taken' });
+
+      // The refusal happens BEFORE the retire, so the channel still holds its own
+      // address — a check after retirement would strand it with none.
+      expect(t.conversations.getChannelLike(mine.channel.id)?.name).toBe('planning');
+      expect(t.messages.listForConversation(mine.channel.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses an inbox with not_addressable — reachable because `kind` is GENERATED', async () => {
+    const t = bootstrap();
+    try {
+      const inbox = t.conversations.insertAgentInbox(t.alice.id, Date.now());
+      // The inbox reports `kind='dm_channel'` (derived from `roster_policy`), so
+      // it reaches this door by id like any DM. It has no workspace, hence no
+      // namespace to hold an address — a 400, not a trigger-level 500.
+      expect(inbox.kind).toBe('dm_channel');
+
+      await expect(
+        t.service.setChannelName({ channelId: inbox.id, name: 'mentions' }),
+      ).rejects.toMatchObject({ code: 'not_addressable' });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects a missing channel with not_found', async () => {
+    const t = bootstrap();
+    try {
+      await expect(
+        t.service.setChannelName({ channelId: 'missing', name: 'x' }),
+      ).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the same address is legal in two workspaces and means a different channel in each', async () => {
+    const t = bootstrap();
+    try {
+      const other = t.workspaces.insert({ name: 'ops', description: null });
+      const a = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'General',
+        name: 'general',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      const b = await t.service.createChannel({
+        workspaceId: other.id,
+        title: 'General',
+        name: 'general',
+        memberAgentIds: [],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      expect(a.channel.name).toBe('general');
+      expect(b.channel.name).toBe('general');
+      expect(a.channel.id).not.toBe(b.channel.id);
     } finally {
       t.cleanup();
     }

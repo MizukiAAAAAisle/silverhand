@@ -90,6 +90,7 @@ function bootstrap(
   workspaces.insertMembership(workspace.id, alice.id);
   workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'main',
   });
@@ -227,6 +228,7 @@ describe('TaskService.createTasks', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-2',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -431,6 +433,7 @@ describe('TaskService.claimTask — agent actor', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-3',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -735,6 +738,7 @@ describe('TaskService.unclaimTask', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-4',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -967,6 +971,7 @@ describe('TaskService.updateStatus', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-5',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -1124,6 +1129,7 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
+        name: 'ch-6',
         workspaceId: ws2.id,
         title: 'ch2',
       });
@@ -1212,6 +1218,7 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
+        name: 'ch-7',
         workspaceId: ws2.id,
         title: 'ch2',
       });
@@ -1242,6 +1249,7 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
+        name: 'ch-8',
         workspaceId: ws2.id,
         title: 'ch2',
       });
@@ -1273,6 +1281,7 @@ describe('TaskService.list / getTaskDetail', () => {
     const t = bootstrap();
     try {
       const sibling = t.conversations.insertChannel({
+        name: 'ch-9',
         workspaceId: t.workspace.id,
         title: 'sibling',
       });
@@ -1303,6 +1312,7 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
+        name: 'ch-10',
         workspaceId: ws2.id,
         title: 'ch2',
       });
@@ -1331,6 +1341,7 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
+        name: 'ch-11',
         workspaceId: ws2.id,
         title: 'ch2',
       });
@@ -1364,6 +1375,7 @@ describe('TaskService agent-actor validation', () => {
       // sole service-level gate (the route holds the create-specific narrow
       // authorization). So this SUCCEEDS and the row belongs to the destination.
       const other = t.conversations.insertChannel({
+        name: 'ch-12',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -1966,6 +1978,7 @@ function bootstrapTwoWorkspaces() {
     description: null,
   });
   const ws2Channel = t.conversations.insertChannel({
+    name: 'ch-13',
     workspaceId: ws2.id,
     title: 'platform-main',
   });
@@ -2545,6 +2558,7 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
       // channel in the SAME workspace is not close enough — same-workspace is
       // not sufficient, only same-conversation is.
       const sibling = t.conversations.insertChannel({
+        name: 'ch-14',
         workspaceId: t.workspace.id,
         title: 'sibling',
       });
@@ -2664,6 +2678,7 @@ describe('TaskService.editTask', () => {
       });
       t.workspaces.insertMembership(otherWs.id, t.alice.id);
       const otherChannel = t.conversations.insertChannel({
+        name: 'ch-15',
         workspaceId: otherWs.id,
         title: 'other-main',
       });

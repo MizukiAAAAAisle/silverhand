@@ -15,6 +15,7 @@ function bootstrap() {
   });
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 's',
   });

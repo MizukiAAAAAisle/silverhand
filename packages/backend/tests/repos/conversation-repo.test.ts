@@ -36,6 +36,7 @@ describe('ConversationRepo canonical schema', () => {
       });
       t.workspaces.insertMembership(workspace.id, agent.id);
       const channel = t.conversations.insertChannel({
+        name: 'ch-1',
         workspaceId: workspace.id,
         title: 'Planning',
       });
@@ -91,12 +92,14 @@ describe('ConversationRepo canonical schema', () => {
         agent,
       });
       const dm = t.conversations.insertDmChannel({
+        name: 'ch-2',
         workspaceId: home.id,
         title: 'dm-cindy',
         agentId: agent.id,
       });
       t.conversations.addAgent(dm.id, agent.id);
       const mentions = t.conversations.insertDmChannel({
+        name: 'ch-3',
         workspaceId: home.id,
         title: 'Mentions',
         agentId: agent.id,

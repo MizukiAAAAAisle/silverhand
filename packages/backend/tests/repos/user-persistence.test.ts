@@ -152,7 +152,7 @@ describe('SqliteUserPersistence registration scope', () => {
     );
     const conversationIds = workspaceIds.map(
       workspaceId =>
-        conversations.insertChannel({ workspaceId, title: `${workspaceId}-room` })
+        conversations.insertChannel({ name: 'ch-1', workspaceId, title: `${workspaceId}-room` })
           .id,
     );
     return { db, workspaceIds, conversationIds };

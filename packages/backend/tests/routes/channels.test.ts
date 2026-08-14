@@ -1194,6 +1194,152 @@ describe('PATCH /api/channels/:id (rename)', () => {
   });
 });
 
+describe('PATCH /api/channels/:id (re-address) + name on create (#task:2016)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  /** A workspace with one member agent and a channel, by the human doors. */
+  async function seed(
+    workspaceName: string,
+    channel: { title: string; name?: string },
+  ): Promise<{ app: TestApp; workspaceId: string; agentId: string; created: any }> {
+    const app = buildTestApp();
+    t = app;
+    const agentId = await makeAgent(app, 'alice');
+    const workspace = await (
+      await http(app).post('/api/workspaces', {
+        name: workspaceName,
+        member_agent_ids: [agentId],
+      })
+    ).json() as any;
+    const res = await http(app).post(
+      `/api/workspaces/${workspace.workspace.id}/channels`,
+      { ...channel, member_agent_ids: [agentId] },
+    );
+    expect(res.status).toBe(201);
+    return {
+      app,
+      workspaceId: workspace.workspace.id,
+      agentId,
+      created: (await res.json()) as any,
+    };
+  }
+
+  it('creation carries the address on the wire — chosen or derived from the title', async () => {
+    const chosen = await seed('addrchosen', { title: 'Release Planning', name: 'q3' });
+    expect(chosen.created.channel.name).toBe('q3');
+    expect(chosen.created.channel.title).toBe('Release Planning');
+    chosen.app.cleanup();
+    t = null;
+
+    const derived = await seed('addrderived', { title: 'Release Planning' });
+    expect(derived.created.channel.name).toBe('release-planning');
+  });
+
+  it('a taken address is 409 conversation_name_taken, not a suffixed 201', async () => {
+    const s = await seed('addrtaken', { title: 'Planning', name: 'planning' });
+
+    const conflict = await http(s.app).post(`/api/workspaces/${s.workspaceId}/channels`, {
+      title: 'Other',
+      name: 'planning',
+      member_agent_ids: [],
+    });
+    expect(conflict.status).toBe(409);
+    expect(((await conflict.json()) as any).code).toBe('conversation_name_taken');
+  });
+
+  it('re-addresses a channel: 200, new name, same title, audited on the wire', async () => {
+    const s = await seed('addrmove', { title: 'Planning', name: 'planning' });
+    const channelId: string = s.created.channel.id;
+    s.app.fake.delivered = [];
+
+    const res = await http(s.app).patch(`/api/channels/${channelId}`, { name: 'roadmap' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.channel.name).toBe('roadmap');
+    expect(body.channel.title).toBe('Planning');
+
+    const msgs = await (
+      await http(s.app).get(`/api/channels/${channelId}/messages`)
+    ).json() as any;
+    const audit = msgs.messages.find(
+      (m: any) => m.metadata?.subtype === 'conversation_name_changed',
+    );
+    expect(audit).toBeTruthy();
+    expect(audit.metadata.old_name).toBe('planning');
+    expect(audit.metadata.new_name).toBe('roadmap');
+    expect(s.app.fake.delivered.some(d => d.messageId === audit.id)).toBe(true);
+  });
+
+  it('a re-address onto a taken address is 409 and leaves the channel where it was', async () => {
+    const s = await seed('addrconflict', { title: 'Planning', name: 'planning' });
+    const other = await http(s.app).post(`/api/workspaces/${s.workspaceId}/channels`, {
+      title: 'Roadmap',
+      name: 'roadmap',
+      member_agent_ids: [],
+    });
+    expect(other.status).toBe(201);
+
+    const res = await http(s.app).patch(`/api/channels/${s.created.channel.id}`, {
+      name: 'roadmap',
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as any).code).toBe('conversation_name_taken');
+
+    const still = await http(s.app).get(`/api/workspaces/${s.workspaceId}/channels`);
+    const listed = ((await still.json()) as any).channels
+      .find((c: any) => c.id === s.created.channel.id);
+    expect(listed.name).toBe('planning');
+  });
+
+  it('an addressless conversation is refused by AUTHORITY before addressability', async () => {
+    const app = buildTestApp();
+    t = app;
+    const agentId = await makeAgent(app, 'alice');
+    // Reached through the CHANNEL door on purpose: `kind` is GENERATED from
+    // `roster_policy`, so an inbox reads as `dm_channel` and passes every
+    // kind-shaped gate. What stops it is not the kind and not — here — the
+    // absence of a namespace: `canGovernConversationWorkspace(..., 'admin')`
+    // admits only a `system` principal for a workspace-less conversation, and
+    // this door cannot carry one. So the wire answer is 403, and the service's
+    // `not_addressable` (400) is unreachable through it; that refusal is pinned
+    // at the service face in `tests/services/channel-service.test.ts`. Asserted
+    // here so the LAYERING is the recorded fact rather than an assumption.
+    const inboxId = new ConversationRepo(app.ctx.db).getAgentInbox(agentId)!.id;
+
+    const res = await http(app).patch(`/api/channels/${inboxId}`, { name: 'alice-inbox' });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a body that asks for more than one thing, and an inadmissible name', async () => {
+    const s = await seed('addrbadbody', { title: 'Planning', name: 'planning' });
+    const channelId: string = s.created.channel.id;
+
+    // The PATCH body is EXACTLY-ONE-OF title | visibility | name: a request that
+    // renames and re-addresses at once has no defined order, and the whole point
+    // of the split is that the two are separate decisions.
+    const both = await http(s.app).patch(`/api/channels/${channelId}`, {
+      title: 'Roadmap',
+      name: 'roadmap',
+    });
+    expect(both.status).toBe(400);
+
+    const empty = await http(s.app).patch(`/api/channels/${channelId}`, {});
+    expect(empty.status).toBe(400);
+
+    // The grammar is enforced at the boundary, so an inadmissible address never
+    // reaches the namespace: no uppercase, no spaces, no leading digit or dash.
+    const inadmissible = ['Roadmap', 'road map', '-roadmap', '9roadmap', 'roadmap-', 'x'.repeat(65)];
+    for (const name of inadmissible) {
+      const res = await http(s.app).patch(`/api/channels/${channelId}`, { name });
+      expect(res.status, name).toBe(400);
+    }
+  });
+});
+
 describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
   let t: TestApp | null = null;
   afterEach(() => {

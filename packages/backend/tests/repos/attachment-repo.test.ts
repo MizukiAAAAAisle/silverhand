@@ -24,6 +24,7 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 't',
   });
@@ -98,6 +99,7 @@ describe('AttachmentRepo', () => {
   it('cascades on channel delete and SET NULL on source conversation delete', () => {
     const { db, channel, conversations, workspace } = bootstrap();
     const sourceConv = conversations.insertChannel({
+      name: 'ch-2',
       workspaceId: workspace.id,
       title: 'source',
     });
@@ -445,10 +447,12 @@ describe('AttachmentRepo.listChannelReferences', () => {
     // reassertion.
     const { db, workspace, conversations } = bootstrap();
     const channelA = conversations.insertChannel({
+      name: 'ch-3',
       workspaceId: workspace.id,
       title: 'A',
     });
     const channelB = conversations.insertChannel({
+      name: 'ch-4',
       workspaceId: workspace.id,
       title: 'B',
     });
@@ -819,9 +823,11 @@ describe('AttachmentRepo.listChannelSenderFacets', () => {
   it('reasserts the channel boundary — a cross-channel reference is not a facet', () => {
     const { db, workspace, conversations } = bootstrap();
     const channelA = conversations.insertChannel({
+      name: 'ch-5',
       workspaceId: workspace.id, title: 'A',
     });
     const channelB = conversations.insertChannel({
+      name: 'ch-6',
       workspaceId: workspace.id, title: 'B',
     });
     const attachments = new AttachmentRepo(db);

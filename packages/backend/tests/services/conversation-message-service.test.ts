@@ -162,6 +162,7 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, alice.id);
   workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'source',
   });
@@ -602,6 +603,7 @@ describe('ConversationMessageService.sendMessage', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-2',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -622,6 +624,7 @@ describe('ConversationMessageService.sendMessage', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-3',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -2089,6 +2092,7 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-4',
         workspaceId: t.workspace.id,
         title: 'other',
       });
@@ -2153,6 +2157,7 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
+        name: 'ch-5',
         workspaceId: t.workspace.id,
         title: 'other',
       });
