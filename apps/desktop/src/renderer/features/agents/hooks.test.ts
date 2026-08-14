@@ -29,8 +29,9 @@ describe('applySwitchAgentRuntimeSideEffects', () => {
     const qc = new QueryClient();
     qc.setQueryData(['agents', 'agent-1'], { id: 'agent-1' });
     qc.setQueryData(['agents', 'agent-1', 'runtime-state'], {
-      conversation_agents: [],
-      visible_conversation_agents: [],
+      participations: [],
+      visible_participations: [],
+      seats: [],
     });
     qc.setQueryData(['agents'], []);
 

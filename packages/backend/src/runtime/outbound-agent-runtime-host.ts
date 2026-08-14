@@ -60,6 +60,7 @@ export interface OutboundAgentRuntimeProjection {
     messageId: string,
   ): Promise<void>;
   getAgentRunStates(conversationId: string): AgentRunState[];
+  getAgentRuntimeFocus(agentId: string): string | null;
   resolveRun(
     conversationId: string,
     agentId: string,
@@ -225,6 +226,10 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
 
   getAgentRunStates(_conversationId: string): AgentRunState[] {
     return this.projection?.()?.getAgentRunStates(_conversationId) ?? [];
+  }
+
+  getAgentRuntimeFocus(agentId: string): string | null {
+    return this.projection?.()?.getAgentRuntimeFocus(agentId) ?? null;
   }
 
   resolveRun(

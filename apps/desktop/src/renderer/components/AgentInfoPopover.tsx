@@ -4,6 +4,7 @@ import { AlertTriangle, Eraser, Power, RefreshCw, UserMinus } from 'lucide-react
 import type { AgentDto, ConversationAgentStatus } from '@silverhand/shared';
 import {
   useChannelAgents,
+  useChannelAgentRuntime,
   useClearAgentSession,
   useRemoveAgentFromChannel,
   useStartAgent,
@@ -261,14 +262,16 @@ function PresenceInline({
   agentId: string;
   conversationId: string;
 }): JSX.Element {
-  const { data: sa = [] } = useChannelAgents(conversationId);
-  const row = sa.find(s => s.agent_id === agentId);
+  const { data: members = [] } = useChannelAgents(conversationId);
+  const { data: runtime = [] } = useChannelAgentRuntime(conversationId);
+  const member = members.find(s => s.agent_id === agentId);
+  const row = runtime.find(s => s.agent_id === agentId);
   // Rendered inline next to the display name (#task:912 review round 7
   // — was a standalone row below; the user noted it took a band of
   // vertical space without earning it). When the agent isn't in this
   // conversation we still want a faint hint, so we render the muted
   // dot + "Not here" rather than collapse silently.
-  if (!row) {
+  if (!member) {
     return (
       <span className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted">
         <span data-status-pip className="size-1.5 rounded-[var(--pill-radius)] bg-text-muted/40" />
@@ -276,13 +279,14 @@ function PresenceInline({
       </span>
     );
   }
+  const status = row?.status ?? 'idle';
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
-      title={PRESENCE_LABEL[row.status]}
+      title={PRESENCE_LABEL[status]}
     >
-      <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + PRESENCE_DOT[row.status]} />
-      {PRESENCE_LABEL[row.status]}
+      <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + PRESENCE_DOT[status]} />
+      {PRESENCE_LABEL[status]}
     </span>
   );
 }
@@ -297,6 +301,7 @@ function AgentManagementActions({
   onDialogOpenChange: (open: boolean) => void;
 }): JSX.Element | null {
   const { data: conversationAgents = [] } = useChannelAgents(conversationId);
+  const { data: conversationRuntime = [] } = useChannelAgentRuntime(conversationId);
   const start = useStartAgent(conversationId);
   const stop = useStopAgent(conversationId);
   const clearSession = useClearAgentSession(conversationId, agent.session_scope);
@@ -314,6 +319,7 @@ function AgentManagementActions({
   const [clearOpen, setClearOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const row = conversationAgents.find(s => s.agent_id === agent.id);
+  const runtimeRow = conversationRuntime.find(s => s.agent_id === agent.id);
   if (!row) return null;
   const viewerForPermissions =
     viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
@@ -398,7 +404,7 @@ function AgentManagementActions({
             <button
               type="button"
               onClick={stopAgent}
-              disabled={pending || row.status === 'idle'}
+              disabled={pending || !runtimeRow || runtimeRow.status === 'idle'}
               className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
               title={`Stop ${agentLabel}`}
               aria-label={`Stop ${agentLabel}`}

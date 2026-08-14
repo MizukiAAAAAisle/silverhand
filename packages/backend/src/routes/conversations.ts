@@ -35,6 +35,7 @@ import type { BackendContext } from '../context.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { SavedMessageRepo } from '../repos/saved-message-repo.js';
 import type { SortRepo } from '../repos/sort-repo.js';
@@ -511,6 +512,7 @@ export interface ConversationMessagingRouteDeps {
   conversationEvents: ConversationEventRepo;
   saved: SavedMessageRepo;
   sort: SortRepo;
+  runtimeSlots: RuntimeSlotRepo;
 }
 
 export function createConversationMessagingApp(
@@ -525,6 +527,7 @@ export function createConversationMessagingApp(
     conversationReads,
     conversationEvents,
     saved,
+    runtimeSlots,
   } = deps;
 
   app.get(apiPaths.conversationThreads(':id'), c => {
@@ -635,6 +638,20 @@ export function createConversationMessagingApp(
       result => ({ agentCount: result.length }),
     );
     return c.json({ agents: channelAgents });
+  });
+
+  app.get(apiPaths.channelAgentRuntime(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    // Population/authorization is a separate membership read. Runtime values
+    // below come only from the scope slot projection and never JOIN roster.
+    const agentIds = conversations.listAgents(channel.id).map(row => row.agent_id);
+    return c.json({ runtime: runtimeSlots.listConversationRuntime(channel.id, agentIds) });
   });
 
   app.patch(apiPaths.channelArchive(':id'), async c => {

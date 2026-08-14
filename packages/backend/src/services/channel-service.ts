@@ -1034,9 +1034,10 @@ export class ChannelService {
   }
 
   private async startAgentsBestEffort(conversationId: string): Promise<void> {
-    const recipients = this.channels
-      .listAgents(conversationId)
-      .filter(ca => ca.status !== 'active' && ca.status !== 'starting');
+    // Runtime start is idempotent at the semantic slot. Membership must not
+    // import a slot projection merely to optimize away this call: doing so
+    // makes a missing/stale runtime observation change who is a member.
+    const recipients = this.channels.listAgents(conversationId);
     try {
       await Promise.all(
         recipients.map(ca =>

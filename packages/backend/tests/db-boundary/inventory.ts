@@ -617,6 +617,7 @@ export const TEST_NATIVE_SQL_DEBT: TestDebtEntry[] = [
   {file: 'packages/backend/tests/routes/identity-created-event.test.ts',count: 3},
   {file: 'packages/backend/tests/routes/list-workspaces.test.ts',count: 5},
   {file: 'packages/backend/tests/routes/message-reactions.test.ts',count: 1},
+  {file: 'packages/backend/tests/routes/membership-runtime-projection.test.ts',count: 1,reason: '#task:2026 fault injection deletes a runtime slot without touching its participation edge, the exact half-state that proves membership is no longer projected through runtime; no production API should expose arbitrary slot deletion merely to make this state constructible'},
   {file: 'packages/backend/tests/routes/name-availability.test.ts',count: 1},
   {file: 'packages/backend/tests/routes/notifications.test.ts',count: 3},
   {file: 'packages/backend/tests/routes/pre-register-gate.test.ts',count: 2},

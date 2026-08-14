@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { ConversationAgentDtoSchema } from '@silverhand/shared';
 
 const backendRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -22,12 +23,26 @@ describe('runtime slot authority static guard (#task:2013)', () => {
       join(backendRoot, 'src/repos/conversation-repo.ts'),
       'utf8',
     );
+    const runtimeSlotRepo = readFileSync(
+      join(backendRoot, 'src/repos/runtime-slot-repo.ts'),
+      'utf8',
+    );
 
     expect(production).not.toMatch(/\bupdateAgentRuntime\s*\(/);
     expect(conversationRepo).not.toMatch(/UPDATE\s+conversation_agents/i);
     expect(conversationRepo).not.toMatch(
       /INSERT\s+INTO\s+conversation_agents\s*\([^)]*(?:status|pid|cli_session_id)/i,
     );
-    expect(conversationRepo).toContain('JOIN agent_runtime_slots');
+    const membershipProjection = conversationRepo.slice(
+      conversationRepo.indexOf('const CONVERSATION_AGENT_PROJECTION_SQL'),
+      conversationRepo.indexOf('function newId'),
+    );
+    expect(membershipProjection).not.toContain('agent_runtime_slots');
+    expect(runtimeSlotRepo).not.toContain('conversation_agents');
+    expect(Object.keys(ConversationAgentDtoSchema.shape)).toEqual([
+      'conversation_id',
+      'agent_id',
+      'joined_at',
+    ]);
   });
 });

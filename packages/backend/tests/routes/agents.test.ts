@@ -1756,7 +1756,7 @@ describe('GET /api/agents/:id/runtime-state', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
 
-  it('lists every conversation_agent for the agent with workspace/channel/thread names denormalized', async () => {
+  it('reports participation and runtime seats as separate read models', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
@@ -1764,18 +1764,27 @@ describe('GET /api/agents/:id/runtime-state', () => {
     const res = await (
       await http(t).get(`/api/agents/${created.agent.id}/runtime-state`)
     ).json() as any;
-    expect(Array.isArray(res.conversation_agents)).toBe(true);
-    expect(res.conversation_agents.length).toBeGreaterThan(0);
-    expect(Array.isArray(res.visible_conversation_agents)).toBe(true);
-    const dm = res.conversation_agents.find(
+    expect(Array.isArray(res.participations)).toBe(true);
+    expect(res.participations.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.visible_participations)).toBe(true);
+    expect(Array.isArray(res.seats)).toBe(true);
+    const dm = res.participations.find(
       (s: any) => s.conversation_kind === 'dm_channel',
     );
     expect(dm.workspace_kind).toBe('agent_home');
     expect(dm.channel_title).toBe('Onboarding');
-    expect(dm.status).toBe('idle'); // FakeConversationManager doesn't flip status
+    expect(dm).not.toHaveProperty('status');
+    expect(dm).not.toHaveProperty('pid');
+    expect(dm).not.toHaveProperty('cli_session_id');
+    expect(res.seats).toHaveLength(1);
+    expect(res.seats[0].scope).toEqual({
+      kind: 'conversation',
+      conversation_id: dm.conversation_id,
+    });
+    expect(res.seats[0].status).toBe('idle');
   });
 
-  it('conversation_agents keeps archived channels (control view) while visible_conversation_agents drops them (#task:1398)', async () => {
+  it('participations keep archived channels while visible_participations drops them (#task:1398)', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
@@ -1802,10 +1811,10 @@ describe('GET /api/agents/:id/runtime-state', () => {
     const res = await (
       await http(t).get(`/api/agents/${agentId}/runtime-state`)
     ).json() as any;
-    const inControl = res.conversation_agents.some(
+    const inControl = res.participations.some(
       (s: any) => s.conversation_id === channelId,
     );
-    const inVisible = res.visible_conversation_agents.some(
+    const inVisible = res.visible_participations.some(
       (s: any) => s.conversation_id === channelId,
     );
     // Control view must still reach the archived channel's runtime (best-effort

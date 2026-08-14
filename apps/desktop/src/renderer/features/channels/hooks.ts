@@ -25,6 +25,7 @@ import type {
   AttachmentSnapshot,
   ClearSessionResponse,
   ConversationAgentDto,
+  ConversationAgentRuntimeDto,
   ConversationMembersResponse,
   ConversationMessagesDto,
   MessageDto,
@@ -81,6 +82,7 @@ import {
   threadRootKey,
   threadFollowersKey,
   agentsKey,
+  agentRuntimeKey,
   MESSAGE_PAGE_LIMIT,
   AROUND_MESSAGE_LIMIT,
   makeMessagesCache,
@@ -134,9 +136,9 @@ export {
   retainAgentStatusBuffer,
   releaseAgentStatusBuffer,
   mergePendingAgentStatusPatches,
-  hasActiveChannelAgentsReader,
+  hasActiveChannelAgentRuntimeReader,
   applyAgentStatusToCache,
-  reconcileChannelAgentsOnSnapshotRequired,
+  reconcileChannelRuntimeOnSnapshotRequired,
 } from '@/features/channels/agent-status-cache';
 export type { ConversationAgentStatusPatch } from '@/features/channels/agent-status-cache';
 export {
@@ -904,9 +906,9 @@ export function usePrimeConversationMessages() {
   return { primeAround };
 }
 
-/** Initial GET + live update on `agent_status` realtime events (#task:1255 P1c:
- *  pure reader — the central ingestor patches the agents cache + buffers patches
- *  for the in-flight snapshot; this hook only reads + drains that buffer). */
+/** Pure membership snapshot. Runtime updates belong to
+ * {@link useChannelAgentRuntime}; this hook has no realtime interest because
+ * process state cannot mutate a membership row. */
 export function useChannelAgents(
   channelId: string | null,
 ) {
@@ -917,10 +919,25 @@ export function useChannelAgents(
       const res = await api<{ agents: ConversationAgentDto[] }>(
         apiPaths.channelAgents(channelId!),
       );
-      // Replay any `agent_status` patches that landed while this GET was in
-      // flight (the ingestor buffered them per channel) so the fresh snapshot
-      // doesn't clobber newer live state.
-      return mergePendingAgentStatusPatches(channelId!, res.agents);
+      return res.agents;
+    },
+  });
+
+  return query;
+}
+
+/** Scoped runtime projection for the channel's independently loaded roster. */
+export function useChannelAgentRuntime(channelId: string | null) {
+  const query = useQuery({
+    queryKey: channelId
+      ? agentRuntimeKey(channelId)
+      : ['channels', 'none', 'agent-runtime'],
+    enabled: !!channelId,
+    queryFn: async () => {
+      const res = await api<{ runtime: ConversationAgentRuntimeDto[] }>(
+        apiPaths.channelAgentRuntime(channelId!),
+      );
+      return mergePendingAgentStatusPatches(channelId!, res.runtime);
     },
   });
 

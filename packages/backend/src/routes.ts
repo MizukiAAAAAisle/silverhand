@@ -590,6 +590,7 @@ export function createApiRouter(
       conversationEvents,
       saved,
       sort,
+      runtimeSlots: persistence.repos.runtimeSlots,
     }),
   );
 

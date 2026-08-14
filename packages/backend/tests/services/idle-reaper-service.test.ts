@@ -35,6 +35,7 @@ function makeRuntimeHost(
     deliverMessage: async () => {},
     reconcileOnBoot: () => {},
     getAgentRunStates: () => [],
+    getAgentRuntimeFocus: () => null,
     resolveRun: () => {},
     resolveConversationRuns: () => {},
   };

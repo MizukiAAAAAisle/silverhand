@@ -10,6 +10,7 @@ import {
 } from '@silverhand/shared';
 import type {
   AgentRunState,
+  ConversationAgentRuntimeDto,
   MessageDto,
   ServerFrame,
   TaskSummaryDto,
@@ -477,7 +478,7 @@ describe('ingestConversationFrame — agent-run-states gate (#1255 P1c)', () => 
   });
 });
 
-const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
+const agentRuntimeKey = (cid: string) => ['channels', cid, 'agent-runtime'] as const;
 
 // The attachment blob cache is module-global; the ingestor only drives its
 // generation counters (precise per-id revision on `attachment_changed`, coarse
@@ -558,17 +559,20 @@ describe('ingestConversationFrame — attachment blob generation (#task:1769)', 
 });
 
 describe('ingestConversationFrame — agents (agent_status) gate (#1255 P1c)', () => {
-  afterEach(() => clearPendingAgentStatusPatches('c1'));
+  afterEach(() => {
+    clearPendingAgentStatusPatches('c1');
+    clearPendingAgentStatusPatches('c2');
+  });
 
   it('patches + buffers agent_status when a reader is mounted', () => {
     const qc = new QueryClient();
-    const unsub = mountReader(qc, agentsKey('c1'));
+    const unsub = mountReader(qc, agentRuntimeKey('c1'));
 
     ingestConversationFrame(qc, agentStatusFrame('c1', 'a1', 'active'));
 
     // Buffered for the in-flight snapshot replay.
     const merged = mergePendingAgentStatusPatches('c1', [
-      { conversation_id: 'c1', agent_id: 'a1', cli_session_id: null, pid: null, status: 'idle', joined_at: 0 },
+      { agent_id: 'a1', scope_kind: 'conversation', generation: 1, cli_session_id: null, pid: null, status: 'idle' },
     ]);
     expect(merged[0]?.status).toBe('active');
     unsub();
@@ -580,9 +584,51 @@ describe('ingestConversationFrame — agents (agent_status) gate (#1255 P1c)', (
     ingestConversationFrame(qc, agentStatusFrame('c1', 'a1', 'active'));
 
     const merged = mergePendingAgentStatusPatches('c1', [
-      { conversation_id: 'c1', agent_id: 'a1', cli_session_id: null, pid: null, status: 'idle', joined_at: 0 },
+      { agent_id: 'a1', scope_kind: 'conversation', generation: 1, cli_session_id: null, pid: null, status: 'idle' },
     ]);
     expect(merged[0]?.status).toBe('idle'); // untouched
+  });
+
+  it('converges mounted A/B AgentSlot projections while keeping ConversationSlot local', () => {
+    const qc = new QueryClient();
+    const runtime = (
+      agentId: string,
+      scopeKind: 'agent' | 'conversation',
+    ): ConversationAgentRuntimeDto => ({
+      agent_id: agentId,
+      scope_kind: scopeKind,
+      generation: 1,
+      cli_session_id: null,
+      pid: 42,
+      status: 'active',
+    });
+    qc.setQueryData(agentRuntimeKey('c1'), [
+      runtime('aggregate', 'agent'),
+      runtime('local', 'conversation'),
+    ]);
+    qc.setQueryData(agentRuntimeKey('c2'), [
+      runtime('aggregate', 'agent'),
+      runtime('local', 'conversation'),
+    ]);
+    const unsubA = mountReader(qc, agentRuntimeKey('c1'));
+    const unsubB = mountReader(qc, agentRuntimeKey('c2'));
+
+    // One aggregate runtime mutation is emitted by the backend once per
+    // authorized projection audience. Both mounted snapshots must converge.
+    ingestConversationFrame(qc, agentStatusFrame('c1', 'aggregate', 'crashed'));
+    ingestConversationFrame(qc, agentStatusFrame('c2', 'aggregate', 'crashed'));
+    // A ConversationSlot mutation remains scoped to its owning conversation.
+    ingestConversationFrame(qc, agentStatusFrame('c1', 'local', 'idle'));
+
+    const a = qc.getQueryData<ConversationAgentRuntimeDto[]>(agentRuntimeKey('c1'))!;
+    const b = qc.getQueryData<ConversationAgentRuntimeDto[]>(agentRuntimeKey('c2'))!;
+    expect(a.find(row => row.agent_id === 'aggregate')?.status).toBe('crashed');
+    expect(b.find(row => row.agent_id === 'aggregate')?.status).toBe('crashed');
+    expect(a.find(row => row.agent_id === 'local')?.status).toBe('idle');
+    expect(b.find(row => row.agent_id === 'local')?.status).toBe('active');
+
+    unsubA();
+    unsubB();
   });
 });
 
@@ -733,7 +779,7 @@ describe('ingestConversationFrame — cross-scope routing is disjoint (#1255 P2 
 
   it('an agent_status on the MESSAGE scope is ignored (not buffered)', () => {
     const qc = new QueryClient();
-    const unsub = mountReader(qc, agentsKey('c1'));
+    const unsub = mountReader(qc, agentRuntimeKey('c1'));
     // agent_status is a SIDE kind — deliver it on the wrong (message) scope.
     ingestConversationFrame(qc, {
       type: 'event',
@@ -745,7 +791,7 @@ describe('ingestConversationFrame — cross-scope routing is disjoint (#1255 P2 
     } as ServerFrame);
 
     const merged = mergePendingAgentStatusPatches('c1', [
-      { conversation_id: 'c1', agent_id: 'a1', cli_session_id: null, pid: null, status: 'idle', joined_at: 0 },
+      { agent_id: 'a1', scope_kind: 'conversation', generation: 1, cli_session_id: null, pid: null, status: 'idle' },
     ]);
     expect(merged[0]?.status).toBe('idle'); // untouched — wrong scope
     unsub();

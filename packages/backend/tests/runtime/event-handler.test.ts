@@ -182,6 +182,13 @@ function makeInboxAck(): {
  */
 function makeForwardingProjector(publisher: EventPublisher): RuntimeStatusProjector {
   return {
+    publishStatus({ conversationId, agentId, payload }) {
+      if (conversationId === null) return;
+      publisher.publish(conversationId, {
+        kind: 'agent_status',
+        payload: { agent_id: agentId, ...payload },
+      });
+    },
     sessionInit({ conversationId, agentId, cliSessionId }) {
       publisher.publish(conversationId, {
         kind: 'agent_status',
@@ -2443,6 +2450,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
   } {
     const calls: ProjectorCall[] = [];
     const projector: RuntimeStatusProjector = {
+      publishStatus: () => {},
       sessionInit: input => calls.push({ kind: 'sessionInit', input: { ...input } }),
       runtimeReady: input => calls.push({ kind: 'runtimeReady', input: { ...input } }),
       runtimeExit: input => {

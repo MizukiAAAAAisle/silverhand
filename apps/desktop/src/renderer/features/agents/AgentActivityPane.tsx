@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import type {
-  AgentRuntimeConversation,
+  AgentRuntimeParticipation,
+  AgentRuntimeSeatDto,
   AgentRuntimeStateDto,
 } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
@@ -12,12 +13,12 @@ interface AgentActivityPaneProps {
   agentId: string;
   state: AgentRuntimeStateDto | undefined;
   /** Jump the main view to this conversation (open in chat). */
-  onOpenConversation?: (s: AgentRuntimeConversation) => void;
+  onOpenConversation?: (s: AgentRuntimeParticipation) => void;
 }
 
 interface RosterGroups {
-  active: AgentRuntimeConversation[];
-  recent: AgentRuntimeConversation[];
+  active: AgentRuntimeParticipation[];
+  recent: AgentRuntimeParticipation[];
 }
 
 /**
@@ -37,16 +38,26 @@ interface RosterGroups {
  * Exported for the roster contract test.
  */
 export function partitionRoster(
-  rows: ReadonlyArray<AgentRuntimeConversation>,
+  rows: ReadonlyArray<AgentRuntimeParticipation>,
+  seats: ReadonlyArray<AgentRuntimeSeatDto>,
 ): RosterGroups {
   const channels = rows.filter(
     r =>
       r.conversation_kind === 'channel' || r.conversation_kind === 'dm_channel',
   );
-  const active: AgentRuntimeConversation[] = [];
-  const recent: AgentRuntimeConversation[] = [];
+  const active: AgentRuntimeParticipation[] = [];
+  const recent: AgentRuntimeParticipation[] = [];
   for (const r of channels) {
-    if (r.closed_at === null && (r.status === 'active' || r.status === 'starting')) {
+    const seat = seats.find(s =>
+      s.scope.kind === 'conversation'
+        ? s.scope.conversation_id === r.conversation_id
+        : s.focus?.kind === 'conversation'
+          && s.focus.conversation_id === r.conversation_id,
+    );
+    if (
+      r.closed_at === null
+      && (seat?.status === 'active' || seat?.status === 'starting')
+    ) {
       active.push(r);
     } else {
       recent.push(r);
@@ -76,8 +87,9 @@ export function AgentActivityPane({
   state,
   onOpenConversation,
 }: AgentActivityPaneProps): JSX.Element {
-  const rows = state?.visible_conversation_agents ?? [];
-  const groups = useMemo(() => partitionRoster(rows), [rows]);
+  const rows = state?.visible_participations ?? [];
+  const seats = state?.seats ?? [];
+  const groups = useMemo(() => partitionRoster(rows, seats), [rows, seats]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -158,10 +170,10 @@ function RosterGroup({
   onOpen,
 }: {
   label: string;
-  rows: AgentRuntimeConversation[];
+  rows: AgentRuntimeParticipation[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onOpen?: (s: AgentRuntimeConversation) => void;
+  onOpen?: (s: AgentRuntimeParticipation) => void;
 }): JSX.Element | null {
   if (rows.length === 0) return null;
   return (
@@ -177,6 +189,7 @@ function RosterGroup({
             selected={row.conversation_id === selectedId}
             onSelect={onSelect}
             onOpen={onOpen}
+            live={label === 'Active'}
           />
         ))}
       </ul>
@@ -189,13 +202,14 @@ function RosterItem({
   selected,
   onSelect,
   onOpen,
+  live,
 }: {
-  row: AgentRuntimeConversation;
+  row: AgentRuntimeParticipation;
   selected: boolean;
   onSelect: (id: string) => void;
-  onOpen?: (s: AgentRuntimeConversation) => void;
+  onOpen?: (s: AgentRuntimeParticipation) => void;
+  live: boolean;
 }): JSX.Element {
-  const live = row.closed_at === null && (row.status === 'active' || row.status === 'starting');
   const isDm =
     row.conversation_kind === 'dm_channel' || row.workspace_kind === 'agent_home';
   return (

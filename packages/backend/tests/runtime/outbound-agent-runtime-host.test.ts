@@ -45,6 +45,7 @@ function makeSpyProjection(): {
       calls.push('getAgentRunStates');
       return [];
     },
+    getAgentRuntimeFocus: () => null,
     resolveRun: (...a) => {
       calls.push(`resolveRun:${a.join(',')}`);
     },

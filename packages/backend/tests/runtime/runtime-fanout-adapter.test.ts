@@ -305,7 +305,7 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
       }),
     ).toThrow('boom');
     expect(
-      f.conversations.getAgent(f.channelId, f.agentId)?.cli_session_id,
+      f.runtimeSlots.getConversation(f.channelId, f.agentId)?.cli_session_id,
     ).toBe('session-2');
     expect(messageCount()).toBe(midpoint);
 
@@ -321,7 +321,7 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
       // swallowed on purpose — the point is the state left behind
     }
     expect(
-      f.conversations.getAgent(f.channelId, f.agentId)?.cli_session_id,
+      f.runtimeSlots.getConversation(f.channelId, f.agentId)?.cli_session_id,
     ).toBeNull();
     expect(messageCount()).toBe(midpoint);
   });

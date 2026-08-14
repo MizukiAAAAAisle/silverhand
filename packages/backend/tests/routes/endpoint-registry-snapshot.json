@@ -76,6 +76,7 @@
   "GET /api/conversations/:id/threads",
   "GET /api/conversations/:id/unread",
   "GET /api/channels/:id/agents",
+  "GET /api/channels/:id/agent-runtime",
   "PATCH /api/channels/:id/archive",
   "PATCH /api/channels/:id",
   "GET /api/channels/:id/agent-run-states",

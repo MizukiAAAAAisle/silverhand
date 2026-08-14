@@ -235,7 +235,7 @@ describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)',
     const t = seed();
     try {
       const ids = t.repo
-        .listRuntimeConversations(t.agent.id)
+        .listRuntimeParticipations(t.agent.id)
         .map(r => r.conversation_id);
       expect(new Set(ids)).toEqual(new Set([t.live.id, t.archived.id]));
     } finally {
@@ -247,7 +247,7 @@ describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)',
     const t = seed();
     try {
       const ids = t.repo
-        .listRuntimeConversations(t.agent.id, { excludeArchived: true })
+        .listRuntimeParticipations(t.agent.id, { excludeArchived: true })
         .map(r => r.conversation_id);
       expect(ids).toEqual([t.live.id]);
     } finally {

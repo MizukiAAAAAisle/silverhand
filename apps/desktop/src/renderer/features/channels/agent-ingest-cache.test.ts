@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import type { ConversationAgentDto } from '@silverhand/shared';
+import type { ConversationAgentRuntimeDto } from '@silverhand/shared';
 import {
   applyAgentStatusToCache,
   clearPendingAgentStatusPatches,
@@ -15,7 +15,7 @@ import {
 // behavior preserved exactly (patch-in-place + replay-onto-snapshot + invalidate
 // when the agent isn't a known row yet).
 
-const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
+const agentsKey = (cid: string) => ['channels', cid, 'agent-runtime'] as const;
 
 afterEach(() => {
   clearPendingAgentStatusPatches('c1');
@@ -29,7 +29,7 @@ describe('applyAgentStatusToCache', () => {
 
     applyAgentStatusToCache(qc, 'c1', { agent_id: 'a1', status: 'active' });
 
-    const rows = qc.getQueryData<ConversationAgentDto[]>(agentsKey('c1'));
+    const rows = qc.getQueryData<ConversationAgentRuntimeDto[]>(agentsKey('c1'));
     expect(rows?.find(a => a.agent_id === 'a1')?.status).toBe('active');
   });
 
@@ -93,14 +93,14 @@ describe('pending agent-status buffer — channel isolation / clear', () => {
 
 function agent(
   agentId: string,
-  status: ConversationAgentDto['status'],
-): ConversationAgentDto {
+  status: ConversationAgentRuntimeDto['status'],
+): ConversationAgentRuntimeDto {
   return {
-    conversation_id: 'c1',
     agent_id: agentId,
+    scope_kind: 'conversation',
+    generation: 1,
     cli_session_id: null,
     pid: null,
     status,
-    joined_at: 0,
   };
 }

@@ -656,11 +656,11 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       const eventConversationId = row.scope.kind === 'conversation'
         ? row.scope.conversationId
         : row.focusConversationId;
-      if (!eventConversationId) continue;
-      this.opts.events.publishSide(eventConversationId, {
-        kind: 'agent_status',
+      this.opts.statusProjector.publishStatus({
+        scope: row.scope,
+        conversationId: eventConversationId,
+        agentId: row.agentId,
         payload: {
-          agent_id: row.agentId,
           status: 'crashed',
           pid: null,
           reason: 'daemon_hydrate_missing',
@@ -1106,17 +1106,16 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       state.coordinator.settleClear(receipt);
 
       // 9. SSE + per-peer best-effort delivery (outside tx).
-      if (conversationId !== null) {
-        this.opts.events.publishSide(conversationId, {
-          kind: 'agent_status',
-          payload: {
-            agent_id: agentId,
-            status: receipt.projection.status,
-            pid: receipt.projection.pid,
-            cli_session_id: null,
-          },
-        });
-      }
+      this.opts.statusProjector.publishStatus({
+        scope: runtimeScope,
+        conversationId,
+        agentId,
+        payload: {
+          status: receipt.projection.status,
+          pid: receipt.projection.pid,
+          cli_session_id: null,
+        },
+      });
       if (auditMessage && conversationId !== null) {
         this.opts.events.publish(conversationId, {
           kind: 'message',
@@ -1651,6 +1650,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       }
     }
     return states;
+  }
+
+  getAgentRuntimeFocus(agentId: string): string | null {
+    const agent = this.opts.persistence.agents.get(agentId);
+    if (!agent) return null;
+    const state = this.states.get(agent.host_id);
+    const entry = state?.cache.getScope({ kind: 'agent', agent_id: agentId });
+    return entry?.conversationId ?? null;
   }
 
   resolveRun(

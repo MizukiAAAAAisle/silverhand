@@ -4,8 +4,7 @@ import {
   apiPaths,
   type AgentDto,
   type AgentRow,
-  type AgentRuntimeConversation,
-  type ConversationAgentStatus,
+  type AgentRuntimeParticipation,
   type ConversationKind,
   type CreateAgentInput,
   type RuntimeKind,
@@ -651,39 +650,21 @@ export class AgentRepo {
   }
 
   /**
-   * Every runtime seat this agent holds, joined to its conversation's display
-   * coordinates — the agent profile's "where it runs" table
-   * (`GET /api/agents/:id/runtime-state`). Includes closed conversations so the
-   * UI can show full history; the caller filters by `closed_at` if needed.
+   * Every conversation this agent participates in, with display coordinates for
+   * the profile. This is a PARTICIPATION projection and never reads runtime slots;
+   * the control/read-model unit for processes is `RuntimeSlotRepo.listSeats`.
    *
-   * THE DISPLAY FACE, and the only one of the two faces that is allowed to have a
-   * coordinate at all. The control-plane unit is a SEAT and lives on
-   * `RuntimeSlotRepo.listSeats` — see its docblock for why no join may reach it.
-   *
-   * The two arms differ, deliberately:
-   *
-   *   - A CONVERSATION-SCOPED agent has one slot per conversation it participates
-   *     in, so the row set IS the slot set — workspace channels, DMs and its inbox
-   *     alike. This is why the FROM is the slot table and not `conversation_agents`:
-   *     a DM has no roster row (§4.2), so a roster-driven query showed the user a
-   *     DM session it could not name, or nothing at all.
-   *   - An AGENT-SCOPED agent has exactly ONE slot serving every conversation.
-   *     Here the fan-out is the honest answer to "where does it run", so this face
-   *     joins the one slot to the conversations the agent PARTICIPATES in
-   *     (`agentParticipates`, §4.2, the one authority — not a second roster read).
-   *     Every such row therefore reports the SAME slot's status, which is true:
-   *     there is one process. The control plane must never see this shape, and
-   *     structurally cannot — it reads the slot table directly.
-   *
-   * Hence LEFT JOIN on `workspaces`, and hence the nullable workspace fields on
-   * the wire: the coordinate belongs to ONE placement arm (§4.1), so an INNER JOIN
-   * would not "filter" a DM seat, it would delete the row — the §1 failure mode
-   * this feature exists to remove, on a payload the Stop control reads.
+   * Participation is placement-aware (`agentParticipates`): workspace roster,
+   * AgentInbox ownership and DirectPair endpoints all flow through the same SQL
+   * authority. The LEFT workspace join is only a coordinate projection for
+   * workspace-less placements; it cannot filter participation or runtime state.
+   * Closed rows remain in the control list, while `excludeArchived` produces the
+   * renderer's narrower activity list.
    */
-  listRuntimeConversations(
+  listRuntimeParticipations(
     agentId: string,
     opts?: { excludeArchived?: boolean },
-  ): AgentRuntimeConversation[] {
+  ): AgentRuntimeParticipation[] {
     type Row = {
       conversation_id: string;
       workspace_id: string | null;
@@ -692,8 +673,6 @@ export class AgentRepo {
       conversation_kind: ConversationKind;
       channel_id: string;
       channel_title: string;
-      status: ConversationAgentStatus;
-      pid: number | null;
       closed_at: number | null;
     };
     // `excludeArchived` is a DISPLAY-only scope (the agent Activity roster hides
@@ -708,7 +687,7 @@ export class AgentRepo {
     // The participation params are spliced into the JOIN, so they precede the
     // WHERE's own `agent_id` — same ordering discipline as the other faces that
     // embed this fragment.
-    const params: string[] = [...participates.params, agentId];
+    const params: string[] = [...participates.params];
     const rows = this.db
       .prepare<string[], Row>(
         `SELECT
@@ -719,15 +698,10 @@ export class AgentRepo {
            c.kind             AS conversation_kind,
            c.id               AS channel_id,
            c.title            AS channel_title,
-           s.observed_status  AS status,
-           s.observed_pid     AS pid,
            c.closed_at        AS closed_at
-         FROM agent_runtime_slots s
-         JOIN conversations c
-           ON (s.conversation_id IS NOT NULL AND c.id = s.conversation_id)
-           OR (s.conversation_id IS NULL AND ${participates.sql})
+         FROM conversations c
          LEFT JOIN workspaces w ON w.id = c.workspace_id
-         WHERE s.agent_id = ? ${archivedFilter}
+         WHERE ${participates.sql} ${archivedFilter}
          ORDER BY c.closed_at IS NULL DESC, c.updated_at DESC`,
       )
       .all(...params);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
-  AgentRuntimeConversation,
+  AgentRuntimeParticipation,
+  AgentRuntimeSeatDto,
   ConversationActivityEvent,
   ConversationAgentStatus,
   ConversationKind,
@@ -10,8 +11,8 @@ import { mergeActivityById } from './AgentActivityTimeline';
 import { coalesceActivity, presentToolCall, taskNumberFromCommand } from './activityPresentation';
 
 function conv(
-  overrides: Partial<AgentRuntimeConversation> = {},
-): AgentRuntimeConversation {
+  overrides: Partial<AgentRuntimeParticipation> = {},
+): AgentRuntimeParticipation {
   return {
     conversation_id: 'c-1',
     workspace_id: 'w-1',
@@ -20,10 +21,23 @@ function conv(
     conversation_kind: 'channel' as ConversationKind,
     channel_id: 'c-1',
     channel_title: 'general',
-    status: 'idle' as ConversationAgentStatus,
-    pid: null,
     closed_at: null,
     ...overrides,
+  };
+}
+
+function seat(
+  conversationId: string,
+  status: ConversationAgentStatus,
+): AgentRuntimeSeatDto {
+  return {
+    scope: { kind: 'conversation', conversation_id: conversationId },
+    generation: 1,
+    status,
+    pid: null,
+    cli_session_id: null,
+    focus: { kind: 'conversation', conversation_id: conversationId },
+    queue_depth: 0,
   };
 }
 
@@ -54,7 +68,7 @@ describe('partitionRoster', () => {
         conversation_kind: 'thread' as unknown as ConversationKind,
       }),
     ];
-    const { active, recent } = partitionRoster(rows);
+    const { active, recent } = partitionRoster(rows, []);
     const ids = [...active, ...recent].map(r => r.conversation_id);
     expect(ids).toEqual(['ch', 'dm']);
     expect(ids).not.toContain('x');
@@ -62,13 +76,20 @@ describe('partitionRoster', () => {
 
   it('splits active (running, not closed) from recent', () => {
     const rows = [
-      conv({ conversation_id: 'a', status: 'active' }),
-      conv({ conversation_id: 's', status: 'starting' }),
-      conv({ conversation_id: 'i', status: 'idle' }),
-      conv({ conversation_id: 'cr', status: 'crashed' }),
-      conv({ conversation_id: 'cl', status: 'active', closed_at: 123 }),
+      conv({ conversation_id: 'a' }),
+      conv({ conversation_id: 's' }),
+      conv({ conversation_id: 'i' }),
+      conv({ conversation_id: 'cr' }),
+      conv({ conversation_id: 'cl', closed_at: 123 }),
     ];
-    const { active, recent } = partitionRoster(rows);
+    const seats = [
+      seat('a', 'active'),
+      seat('s', 'starting'),
+      seat('i', 'idle'),
+      seat('cr', 'crashed'),
+      seat('cl', 'active'),
+    ];
+    const { active, recent } = partitionRoster(rows, seats);
     expect(active.map(r => r.conversation_id)).toEqual(['a', 's']);
     // closed wins over status: an `active`-status but closed row is recent.
     expect(recent.map(r => r.conversation_id)).toEqual(['i', 'cr', 'cl']);

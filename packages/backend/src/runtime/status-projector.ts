@@ -40,7 +40,7 @@
  * rows delivered, calling drainInbox) is owned by the coordinator
  * (B3), not by this sink.
  */
-import type { AgentRunState } from '@silverhand/shared';
+import type { AgentRunState, ConversationAgentStatus } from '@silverhand/shared';
 import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { EventPublisher } from './event-handler.js';
 import {
@@ -112,6 +112,50 @@ export interface RuntimeStatusProjector {
   runtimeExit(input: RuntimeExitProjection): RuntimePrincipal | null;
   initRetrying(input: InitRetryingProjection): void;
   initCooldown(input: InitCooldownProjection): void;
+  /** Publish an already-committed slot projection into every conversation read
+   * model that represents the same semantic seat. */
+  publishStatus(input: RuntimeStatusRealtimeProjection): void;
+}
+
+export interface RuntimeStatusAudiencePort {
+  /** Placement-aware projection audiences for one AgentSlot. This is a
+   * participation read, not runtime ownership. */
+  listProjectionConversationIds(agentId: string): string[];
+}
+
+export interface RuntimeStatusRealtimeProjection {
+  scope: RuntimePrincipalScope;
+  /** Origin/focus is evidence for diagnostics only. ConversationSlot routing
+   * comes from `scope`; AgentSlot routing comes from the audience port. */
+  conversationId: string | null;
+  agentId: string;
+  payload: RuntimeStatusPayload;
+  /** Conversation-owned detail is delivered only to the exact origin side
+   * scope. It must never ride the AgentSlot aggregate fanout. */
+  originConversationPayload?: RuntimeStatusOriginPayload;
+}
+
+/** Placement-neutral process projection. `agent_id` is deliberately
+ * uninhabitable: the projector owns identity and writes it last on the wire. */
+export interface RuntimeStatusPayload {
+  agent_id?: never;
+  status: ConversationAgentStatus;
+  pid?: number | null;
+  cli_session_id?: string | null;
+  reason?: string;
+  exit_code?: number | null;
+  intentional?: boolean;
+  retry_attempt?: number;
+  max_retries?: number;
+  timeout_reason?: InitTimeoutReason;
+  cooldown_until?: number;
+  attempts_exhausted?: number;
+}
+
+/** Data owned by one conversation run, not by the aggregate runtime seat. */
+export interface RuntimeStatusOriginPayload {
+  agent_id?: never;
+  run_state: AgentRunState | null;
 }
 
 /**
@@ -124,7 +168,33 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
   constructor(
     private readonly runtimeSlots: RuntimeSlotRepo,
     private readonly events: EventPublisher,
+    private readonly audiences: RuntimeStatusAudiencePort,
   ) {}
+
+  publishStatus({
+    scope,
+    conversationId,
+    agentId,
+    payload,
+    originConversationPayload,
+  }: RuntimeStatusRealtimeProjection): void {
+    const conversationIds = scope.kind === 'conversation'
+      ? [scope.conversationId]
+      : this.audiences.listProjectionConversationIds(agentId);
+    for (const targetConversationId of new Set(conversationIds)) {
+      const originPayload = targetConversationId === conversationId
+        ? originConversationPayload
+        : undefined;
+      this.events.publishSide(targetConversationId, {
+        kind: 'agent_status',
+        payload: {
+          ...payload,
+          ...originPayload,
+          agent_id: agentId,
+        },
+      });
+    }
+  }
 
   /**
    * Claude's `system.init` arrives at the start of every turn. CM
@@ -148,10 +218,11 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       patch: { status: 'active', cliSessionId },
     });
     if (!updated) return;
-    this.events.publishSide(conversationId, {
-      kind: 'agent_status',
+    this.publishStatus({
+      scope,
+      conversationId,
+      agentId,
       payload: {
-        agent_id: agentId,
         status: 'active',
         cli_session_id: cliSessionId,
       },
@@ -175,10 +246,11 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       patch: { status: 'active' },
     });
     if (!updated) return;
-    this.events.publishSide(conversationId, {
-      kind: 'agent_status',
+    this.publishStatus({
+      scope,
+      conversationId,
+      agentId,
       payload: {
-        agent_id: agentId,
         status: 'active',
       },
     });
@@ -230,16 +302,17 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       ...(clearCliSessionId ? { clearCliSessionId: true } : {}),
     });
     if (!finalized) return null;
-    this.events.publishSide(conversationId, {
-      kind: 'agent_status',
+    this.publishStatus({
+      scope,
+      conversationId,
+      agentId,
       payload: {
-        agent_id: agentId,
         status,
         exit_code: code,
         intentional,
-        run_state: runState,
         ...(clearCliSessionId ? { cli_session_id: null } : {}),
       },
+      originConversationPayload: { run_state: runState },
     });
     return runtimePrincipalForScope({
       scope,
@@ -273,10 +346,11 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       patch: { status: 'starting', pid: null },
     });
     if (!updated) return;
-    this.events.publishSide(conversationId, {
-      kind: 'agent_status',
+    this.publishStatus({
+      scope,
+      conversationId,
+      agentId,
       payload: {
-        agent_id: agentId,
         status: 'starting',
         reason: 'init_timeout_retrying',
         retry_attempt: retryAttempt,
@@ -309,10 +383,11 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
       patch: { status: 'crashed', pid: null },
     });
     if (!updated) return;
-    this.events.publishSide(conversationId, {
-      kind: 'agent_status',
+    this.publishStatus({
+      scope,
+      conversationId,
+      agentId,
       payload: {
-        agent_id: agentId,
         status: 'crashed',
         reason: 'init_cooldown',
         cooldown_until: cooldownUntil,
@@ -330,4 +405,5 @@ export const NOOP_STATUS_PROJECTOR: RuntimeStatusProjector = {
   runtimeExit: () => null,
   initRetrying: () => {},
   initCooldown: () => {},
+  publishStatus: () => {},
 };

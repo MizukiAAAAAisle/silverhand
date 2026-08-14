@@ -359,6 +359,32 @@ export class ConversationInboxRepo {
     return row?.c ?? 0;
   }
 
+  countQueuedForAgent(agentId: string): number {
+    const row = this.db
+      .prepare<[string], { c: number }>(
+        `SELECT COUNT(*) AS c
+           FROM conversation_inboxes
+          WHERE agent_id = ?
+            AND delivered_at IS NULL
+            AND failed_at IS NULL`,
+      )
+      .get(agentId);
+    return row?.c ?? 0;
+  }
+
+  countQueuedForPair(conversationId: string, agentId: string): number {
+    const row = this.db
+      .prepare<[string, string], { c: number }>(
+        `SELECT COUNT(*) AS c
+           FROM conversation_inboxes
+          WHERE conversation_id = ? AND agent_id = ?
+            AND delivered_at IS NULL
+            AND failed_at IS NULL`,
+      )
+      .get(conversationId, agentId);
+    return row?.c ?? 0;
+  }
+
   /** Pending pairs created during a transition, excluding historical backlog. */
   listPendingConversationIdsForAgentSince(
     agentId: string,

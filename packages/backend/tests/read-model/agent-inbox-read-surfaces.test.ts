@@ -218,7 +218,7 @@ describe('agent inbox — workspace-scoped read faces exclude it by decision', (
 describe('agent inbox — the runtime faces DO carry it (a seat is not a roster row)', () => {
   it('has a seat with no roster row, and shows up in the runtime conversation list', () => {
     const t = bootstrap();
-    const seats = new AgentRepo(t.db).listRuntimeConversations(t.alpha.id);
+    const seats = new AgentRepo(t.db).listRuntimeParticipations(t.alpha.id);
     expect(seats.map(s => s.conversation_id).sort()).toEqual(
       [t.general.id, t.dm.id, t.inbox.id].sort(),
     );

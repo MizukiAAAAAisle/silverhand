@@ -51,7 +51,7 @@ import {
   applyTaskChangedToMessage,
   applyThreadFollowersMessage,
   applyThreadRootReplyBump,
-  hasActiveChannelAgentsReader,
+  hasActiveChannelAgentRuntimeReader,
   hasActiveMainlineReader,
   hasWarmInactiveMainline,
   invalidateThreadFollowers,
@@ -61,7 +61,7 @@ import {
   openThreadRootReaderRoots,
   patchMessageInActiveProjections,
   patchWarmInactiveMessageRow,
-  reconcileChannelAgentsOnSnapshotRequired,
+  reconcileChannelRuntimeOnSnapshotRequired,
   reconcileChannelMainlineOnSnapshotRequired,
   reconcileClusterOnSnapshotRequired,
   reconcileThreadRootOnSnapshotRequired,
@@ -173,7 +173,7 @@ export const REPLAY_SAFETY_CONTRACTS = {
   channel_agents: {
     cursor: 'cursor-inert',
     recovery: 'side-scope-self-healing',
-    summary: 'side scope agents cache with snapshot reconcile and pending patch buffer',
+    summary: 'side scope runtime cache with snapshot reconcile and pending patch buffer',
   },
   agent_activity_feed: {
     cursor: 'cursor-inert',
@@ -561,14 +561,14 @@ function ingestAgentActivity(
   }
 }
 
-/** Apply a live `agent_status` frame to the channel agents cache (#task:1255
- *  P1c), gated on a mounted `useChannelAgents` reader. */
+/** Apply a live `agent_status` frame to the channel runtime cache (#task:1255
+ * P1c), gated on a mounted runtime reader. */
 function ingestAgentStatus(
   qc: QueryClient,
   channelId: string,
   patch: ConversationAgentStatusPatch,
 ): void {
-  if (hasActiveChannelAgentsReader(qc, channelId)) {
+  if (hasActiveChannelAgentRuntimeReader(qc, channelId)) {
     cursorInertEffect('channel_agents');
     applyAgentStatusToCache(qc, channelId, patch);
   }
@@ -753,8 +753,8 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
   if (hasActiveAgentRunStatesReader(qc, channelId)) {
     void invalidateAgentRunStates(qc, channelId);
   }
-  if (hasActiveChannelAgentsReader(qc, channelId)) {
-    void reconcileChannelAgentsOnSnapshotRequired(qc, channelId);
+  if (hasActiveChannelAgentRuntimeReader(qc, channelId)) {
+    void reconcileChannelRuntimeOnSnapshotRequired(qc, channelId);
   }
   // Agent-activity feeds are per-agentId; invalidate the whole conversation
   // prefix so every mounted feed refetches (item-2 gap, §4.1 / P1c #2).

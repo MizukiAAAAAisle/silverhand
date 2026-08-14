@@ -168,12 +168,25 @@ export type ConversationRefResponse = z.infer<typeof ConversationRefResponseSche
 export const ConversationAgentDtoSchema = z.object({
   conversation_id: z.string(),
   agent_id: z.string(),
-  cli_session_id: z.string().nullable(),
-  pid: z.number().nullable(),
-  status: ConversationAgentStatusSchema,
   joined_at: z.number(),
 });
 export type ConversationAgentDto = z.infer<typeof ConversationAgentDtoSchema>;
+
+/** Runtime projection for one participating agent as viewed from one
+ * conversation. Membership is deliberately absent: callers obtain the roster
+ * from `ConversationAgentDto` and join the two read models by `agent_id` only at
+ * the presentation boundary. */
+export const ConversationAgentRuntimeDtoSchema = z.object({
+  agent_id: z.string(),
+  scope_kind: z.enum(['agent', 'conversation']),
+  generation: z.number().int().nonnegative(),
+  cli_session_id: z.string().nullable(),
+  pid: z.number().nullable(),
+  status: ConversationAgentStatusSchema,
+});
+export type ConversationAgentRuntimeDto = z.infer<
+  typeof ConversationAgentRuntimeDtoSchema
+>;
 
 /** Human membership in a conversation (v25). Parallel to
  *  `ConversationAgentDto` minus the process-lifecycle fields. */

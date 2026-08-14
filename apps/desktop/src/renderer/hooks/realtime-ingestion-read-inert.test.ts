@@ -323,7 +323,7 @@ describe('Activity mark-read callers — settle per-stream via the seam, no sing
 // #task:1255 P1c — the remaining conversation-scope onEvent consumers move into
 // the ingestor / become pure readers: useChannelThreads (threads-list
 // invalidate), useAgentRunStates (agent_activity + snapshot_required),
-// useChannelAgents (agent_status, refcounted buffer), and ChannelView (read
+// useChannelAgentRuntime (agent_status, refcounted buffer), and ChannelView (read
 // cursor → cache/visibility-driven, read stays on the read axis). The only one
 // still owning its own stream is AgentActivityTimeline (its own increment). Fence
 // each migrated reader: zero frame consumers, keep scope interest.
@@ -375,30 +375,39 @@ describe('useChannelThreads — pure reader / gate-(b) fence (#task:1255 P1c)', 
   });
 });
 
-describe('useChannelAgents — pure reader / gate-(b) fence (#task:1255 P1c)', () => {
+describe('channel membership/runtime readers — gate-(b) fence (#task:2026)', () => {
   const source = readFileSync(
     fileURLToPath(new URL('../features/channels/hooks.ts', import.meta.url)),
     'utf8',
   );
-  const body = sliceFunctionBody(source, 'export function useChannelAgents(');
+  const membershipBody = sliceFunctionBody(
+    source,
+    'export function useChannelAgents(',
+  );
+  const runtimeBody = sliceFunctionBody(
+    source,
+    'export function useChannelAgentRuntime(',
+  );
 
-  it('registers no frame consumer (no onWsFrame / useConversationStream)', () => {
-    expect(body).not.toContain('onWsFrame(');
-    expect(body).not.toContain('useConversationStream(');
+  it('keeps the membership reader free of runtime interest and buffers', () => {
+    expect(membershipBody).not.toContain('onWsFrame(');
+    expect(membershipBody).not.toContain('useConversationStream(');
+    expect(membershipBody).not.toContain('useInterest(');
+    expect(membershipBody).not.toContain('AgentStatus');
   });
 
-  it('declares scope interest via the registry + drains the ingestor buffer (positive)', () => {
+  it('lets only the runtime reader own scope interest and drain the status buffer', () => {
     // #task:1260 P2 slice 7: interest routes through the registry (`useInterest`);
     // the direct transport subscribe is gone (call-form deny, body-scoped). The
     // refcounted patch buffer is NOT interest — retain/release stay in their own
     // effect and must remain here untouched.
-    expect(body).toContain('useInterest(');
-    expect(body).not.toContain('subscribeWsScope(');
-    expect(body).toContain('mergePendingAgentStatusPatches(');
+    expect(runtimeBody).toContain('useInterest(');
+    expect(runtimeBody).not.toContain('subscribeWsScope(');
+    expect(runtimeBody).toContain('mergePendingAgentStatusPatches(');
     // Per-channel buffer is refcounted — released on leave, cleared only when
     // the last reader for the channel goes (multi-reader safe).
-    expect(body).toContain('retainAgentStatusBuffer(');
-    expect(body).toContain('releaseAgentStatusBuffer(');
+    expect(runtimeBody).toContain('retainAgentStatusBuffer(');
+    expect(runtimeBody).toContain('releaseAgentStatusBuffer(');
   });
 });
 
@@ -498,7 +507,7 @@ describe('conversation-scope subscribe whitelist (#task:1255 P2 step-3)', () => 
 
   // Side consumers living in hooks.ts (sliced bodies — the file holds many hooks).
   for (const decl of [
-    'export function useChannelAgents(',
+    'export function useChannelAgentRuntime(',
     'export function useAgentRunStates(',
   ]) {
     const name = decl.replace('export function ', '').replace('(', '');

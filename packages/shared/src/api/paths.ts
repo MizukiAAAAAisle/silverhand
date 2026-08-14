@@ -193,6 +193,7 @@ export const apiPaths = {
   channelThreadFollow: (id: string, rootMessageId: string) =>
     `/api/channels/${id}/threads/${rootMessageId}/follow`,
   channelAgents: (id: string) => `/api/channels/${id}/agents`,
+  channelAgentRuntime: (id: string) => `/api/channels/${id}/agent-runtime`,
   channelAgentStart: (id: string, agentId: string) =>
     `/api/channels/${id}/agents/${agentId}/start`,
   channelAgentStop: (id: string, agentId: string) =>

@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import type {
   AgentDto,
-  ConversationAgentDto,
+  ConversationAgentRuntimeDto,
+  ConversationAgentStatus,
   HumanMemberDto,
   MemberDto,
 } from '@silverhand/shared';
@@ -32,12 +33,12 @@ const MEMBER_STRIP_VISIBLE_CAP = 8;
 
 export function MemberStrip({
   channelId,
-  conversationAgents,
+  agentRuntime,
   agentAvatarUrls,
   onOpenMembers,
 }: {
   channelId: string;
-  conversationAgents: ConversationAgentDto[];
+  agentRuntime: ConversationAgentRuntimeDto[];
   agentAvatarUrls: Map<string, string | null>;
   /** Open the channel members modal — the `+N` chip's action (#task:1687). */
   onOpenMembers: () => void;
@@ -48,11 +49,11 @@ export function MemberStrip({
     for (const a of agents) m.set(a.id, a);
     return m;
   }, [agents]);
-  const conversationAgentById = useMemo(() => {
-    const m = new Map<string, ConversationAgentDto>();
-    for (const ca of conversationAgents) m.set(ca.agent_id, ca);
+  const runtimeByAgentId = useMemo(() => {
+    const m = new Map<string, ConversationAgentRuntimeDto>();
+    for (const ca of agentRuntime) m.set(ca.agent_id, ca);
     return m;
-  }, [conversationAgents]);
+  }, [agentRuntime]);
 
   // Members come from the same backend source-of-truth that the
   // platform prompt's "Channel members:" block renders, so
@@ -108,11 +109,8 @@ export function MemberStrip({
         if (member.kind === 'agent') {
           const agent = agentById.get(member.agent_id);
           if (!agent) return null;
-          const ca = conversationAgentById.get(member.agent_id);
-          // No conversation_agents row → agent is in `conversation_users`-style
-          // membership but never spawned in this conversation. Render
-          // a faint dot (idle) so the chip stays uniform shape.
-          const status: ConversationAgentDto['status'] = ca?.status ?? 'idle';
+          const runtime = runtimeByAgentId.get(member.agent_id);
+          const status: ConversationAgentStatus = runtime?.status ?? 'idle';
           return (
             <AgentInfoPopover
               key={`agent:${member.agent_id}`}
@@ -271,7 +269,7 @@ function MemberOverflowChip({
  *  because the members modal expresses the SAME state on the SAME dot — one
  *  recipe, two surfaces; the modal dropped its status column precisely because
  *  this dot already says it (shiki, #task:1687). */
-export const STATUS_DOT: Record<ConversationAgentDto['status'], string> = {
+export const STATUS_DOT: Record<ConversationAgentStatus, string> = {
   active: 'bg-success',
   starting: 'bg-warning',
   crashed: 'bg-error',

@@ -35,6 +35,7 @@ import {
 import { canEditAgentProfile } from '@/features/agents/permissions';
 import {
   useChannelAgents,
+  useChannelAgentRuntime,
   useChannelMessages,
   useConversationUnread,
   useMarkMessageChannelRead,
@@ -410,6 +411,9 @@ function ActiveChannelView({
   const { data: channelAgents = [] } = useChannelAgents(
     gate.allowMemberEffects ? conversation.id : null,
   );
+  const { data: channelAgentRuntime = [] } = useChannelAgentRuntime(
+    gate.allowMemberEffects ? conversation.id : null,
+  );
   const startAgent = useStartAgent(conversation.id);
   const stopAgent = useStopAgent(conversation.id);
   const agentIds = useMemo(
@@ -464,7 +468,7 @@ function ActiveChannelView({
   const memberStrip = gate.allowMemberEffects ? (
     <MemberStrip
       channelId={conversation.id}
-      conversationAgents={channelAgents}
+      agentRuntime={channelAgentRuntime}
       agentAvatarUrls={agentAvatarUrls}
       onOpenMembers={() => setMembersOpen(true)}
     />
@@ -849,7 +853,7 @@ function ActiveChannelView({
           open={membersOpen}
           onOpenChange={setMembersOpen}
           channelId={conversation.id}
-          conversationAgents={channelAgents}
+          agentRuntime={channelAgentRuntime}
           agentAvatarUrls={agentAvatarUrls}
           onRestartAllAgents={
             showBulkAgentActions ? () => void restartAgents() : undefined

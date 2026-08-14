@@ -15,7 +15,6 @@ import type {
   ChannelConversationDto,
   ConversationAgentDto,
   ConversationAgentRow,
-  ConversationAgentStatus,
   ConversationDto,
   ConversationEndpointIdentity,
   ConversationPlacementKind,
@@ -29,52 +28,13 @@ import type {
   WorkspaceChannelListItem,
 } from '@silverhand/shared';
 
-type ConversationAgentProjectionRow = ConversationAgentRow & {
-  cli_session_id: string | null;
-  pid: number | null;
-  status: ConversationAgentStatus;
-};
-
-/**
- * Membership stays on `conversation_agents`; runtime fields are joined from
- * the slot selected by the Agent's immutable session_scope. This is a read
- * projection only — no runtime writer may target the membership table.
- *
- * The join is LEFT, and that is load-bearing rather than defensive. v75 made the
- * seat belong to PARTICIPATION (placement-derived) instead of to the roster, so
- * the two tables no longer imply each other in either direction: a rosterless
- * placement has seats with no roster row, and a roster row injected on such a
- * placement — an INERT row by design, since the endpoints/inbox column decide
- * participation there — has no seat. Under an INNER JOIN that inert row
- * DISAPPEARED from the membership face, which made `addAgent` throw
- * "insert failed" on a row it had just written and made `getAgent` deny a row
- * that exists. Membership is not derived from runtime; a seatless member is a
- * member with no process, which is precisely what `idle` means (and the value a
- * freshly created seat carries anyway).
- *
- * The target form splits this DTO instead of coalescing — membership rows have no
- * process fields at all, and the runtime face is `agent_runtime_slots` — but the
- * three fields are on the wire (`/runtime-state`, the Stop gate), so that split
- * belongs to the read-surface ticket (#task:2022) with the renderer half.
- */
+/** Raw membership projection. Runtime state lives exclusively on
+ * `agent_runtime_slots`; even a missing slot cannot remove or alter this row. */
 const CONVERSATION_AGENT_PROJECTION_SQL = `
   SELECT ca.conversation_id,
          ca.agent_id,
-         ca.joined_at,
-         s.cli_session_id,
-         s.observed_pid AS pid,
-         COALESCE(s.observed_status, 'idle') AS status
-    FROM conversation_agents ca
-    JOIN agents a ON a.id = ca.agent_id
-    LEFT JOIN agent_runtime_slots s
-      ON s.agent_id = ca.agent_id
-     AND (
-       (a.session_scope = 'conversation'
-        AND s.conversation_id = ca.conversation_id)
-       OR
-       (a.session_scope = 'agent'
-        AND s.conversation_id IS NULL)
-     )`;
+         ca.joined_at
+    FROM conversation_agents ca`;
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -1145,7 +1105,7 @@ export class ConversationRepo {
       )
       .run(conversationId, agentId, now);
     const row = this.db
-      .prepare<[string, string], ConversationAgentProjectionRow>(
+      .prepare<[string, string], ConversationAgentRow>(
         `${CONVERSATION_AGENT_PROJECTION_SQL}
          WHERE ca.conversation_id = ? AND ca.agent_id = ?`,
       )
@@ -1156,7 +1116,7 @@ export class ConversationRepo {
 
   listAgents(conversationId: string): ConversationAgentDto[] {
     return this.db
-      .prepare<[string], ConversationAgentProjectionRow>(
+      .prepare<[string], ConversationAgentRow>(
         `${CONVERSATION_AGENT_PROJECTION_SQL}
          WHERE ca.conversation_id = ?
          ORDER BY ca.joined_at ASC`,
@@ -1176,7 +1136,7 @@ export class ConversationRepo {
 
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null {
     const row = this.db
-      .prepare<[string, string], ConversationAgentProjectionRow>(
+      .prepare<[string, string], ConversationAgentRow>(
         `${CONVERSATION_AGENT_PROJECTION_SQL}
          WHERE ca.conversation_id = ? AND ca.agent_id = ?`,
       )
@@ -1193,9 +1153,8 @@ export class ConversationRepo {
    * deliberately no roster row (§4.2, Cindy `SEfG0TUfDkOaB9xn`): the placement
    * itself names the participants — `inbox_agent_id` for the one, the two typed
    * endpoints for the other — so a caller asking about MEMBERSHIP must ask this,
-   * while a caller that needs the runtime seat's columns
-   * (`pid` / `status` / `cli_session_id`) must keep using `getAgent` — those
-   * facts exist only for a roster row and neither placement has one.
+   * while a caller that needs runtime state must query the scoped slot read
+   * model independently.
    *
    * The rosterless arms make this predicate STRICTLY WIDER than `getAgent`, which
    * is what P2's runtime target gate and the delivery faces need in order to

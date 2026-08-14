@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import type {
   AgentDto,
-  AgentRuntimeConversation,
+  AgentRuntimeParticipation,
   AgentRuntimeStateDto,
 } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
@@ -63,7 +63,7 @@ interface AgentViewProps {
   /** Click "Open" on a conversation row → switch the main view to that
    *  channel/thread. Optional: if not provided, the column is
    *  still shown but rows aren't actionable. */
-  onOpenConversation?: (s: AgentRuntimeConversation) => void;
+  onOpenConversation?: (s: AgentRuntimeParticipation) => void;
   /** `full` (default) = the members-section page with the vertical section
    *  rail + hero header. `side` = the compact right-pane panel docked beside
    *  a channel (#task:1189): horizontal tabs, no hero chrome, Activity locked
@@ -429,7 +429,7 @@ function AgentSidePanel({
   const runtimeLoaded = runtimeState !== undefined;
   const inThisChannel =
     contextConversationId !== null &&
-    (runtimeState?.conversation_agents ?? []).some(
+    (runtimeState?.participations ?? []).some(
       r => r.conversation_id === contextConversationId,
     );
 

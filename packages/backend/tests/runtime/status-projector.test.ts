@@ -14,7 +14,10 @@
  * an assertion to pass.
  */
 import { describe, expect, it } from 'vitest';
-import { DbRuntimeStatusProjector } from '../../src/runtime/status-projector.js';
+import {
+  DbRuntimeStatusProjector,
+  type RuntimeStatusPayload,
+} from '../../src/runtime/status-projector.js';
 import type { EventPublisher } from '../../src/runtime/event-handler.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -89,7 +92,9 @@ function makeFixture(
     publishSide: (conv, payload) =>
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
-  const projector = new DbRuntimeStatusProjector(runtimeSlots, publisher);
+  const projector = new DbRuntimeStatusProjector(runtimeSlots, publisher, {
+    listProjectionConversationIds: () => [channel.id],
+  });
   const daemonInstanceId = 'daemon-projector-test';
   const claimed = runtimeSlots.claimGeneration({
     scope: { kind: 'conversation', conversationId: channel.id, agentId: agent.id },
@@ -108,12 +113,41 @@ function makeFixture(
     custody: { generation: claimed.generation, daemonInstanceId },
     cleanup,
     row: () => {
-      const r = conversations.getAgent(channel.id, agent.id);
+      const r = runtimeSlots.getConversation(channel.id, agent.id);
       if (!r) throw new Error('runtime slot row missing');
-      return { status: r.status, pid: r.pid, cli_session_id: r.cli_session_id };
+      return {
+        status: r.observed_status,
+        pid: r.observed_pid,
+        cli_session_id: r.cli_session_id,
+      };
     },
   };
 }
+
+describe('DbRuntimeStatusProjector — wire identity boundary', () => {
+  it('rejects payload-owned agent_id statically and overwrites a cast spoof at runtime', () => {
+    const fix = makeFixture();
+    try {
+      const spoofed: RuntimeStatusPayload = {
+        status: 'active',
+        // @ts-expect-error `agent_id` is projector-owned, never caller-owned.
+        agent_id: 'spoofed-agent',
+      };
+      fix.projector.publishStatus({
+        scope: fixtureScope(fix),
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        payload: spoofed,
+      });
+      expect(fix.events[0]?.payload).toMatchObject({
+        agent_id: fix.agentId,
+        status: 'active',
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+});
 
 describe('DbRuntimeStatusProjector — sessionInit', () => {
   it('writes status=active + cli_session_id, publishes agent_status', () => {

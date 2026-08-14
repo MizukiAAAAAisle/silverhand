@@ -199,21 +199,18 @@ describe('DirectPair runtime seat: the seat face', () => {
     // row, and the renderer only reads `workspace_kind === 'agent_home'`, so a
     // null coordinate is a rendering question while a missing row is a lost
     // control.
-    const shown = f.agents.listRuntimeConversations(f.agentId);
+    const shown = f.agents.listRuntimeParticipations(f.agentId);
     expect(shown.find(row => row.conversation_id === f.pairId)).toMatchObject({
       conversation_id: f.pairId,
       channel_id: f.pairId,
       workspace_id: null,
       workspace_name: null,
       workspace_kind: null,
-      status: 'active',
-      pid: 4242,
     });
     // …and the workspace arm is unchanged, so the nullability is a property of
     // the placement rather than of the join having been loosened everywhere.
     expect(shown.find(row => row.conversation_id === homeDmId)).toMatchObject({
       workspace_kind: 'agent_home',
-      status: 'idle',
     });
   });
 
@@ -292,11 +289,10 @@ describe('DirectPair runtime seat: the seat face', () => {
       { kind: 'agent', agentId: f.agentId },
       { status: 'active', pid: 777 },
     );
-    const shown = f.agents.listRuntimeConversations(f.agentId);
+    const shown = f.agents.listRuntimeParticipations(f.agentId);
     expect(shown.map(row => row.conversation_id).sort())
       .toEqual([f.inboxId, f.pairId].sort());
-    expect(shown.every(row => row.status === 'active' && row.pid === 777))
-      .toBe(true);
+    expect(f.runtimeSlots.listSeats(f.agentId)).toHaveLength(1);
   });
 
   /**
@@ -549,16 +545,22 @@ describe('DirectPair runtime seat: the control planes reach it', () => {
     const res = await http(t).get(`/api/agents/${f.agentId}/runtime-state`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      conversation_agents: Array<{ conversation_id: string }>;
-      visible_conversation_agents: Array<{ conversation_id: string }>;
+      participations: Array<{ conversation_id: string }>;
+      visible_participations: Array<{ conversation_id: string }>;
+      seats: Array<{ scope: { kind: string; conversation_id?: string } }>;
     };
     // Both scopes: the complete control view AND the display roster. The Stop
     // button's membership gate reads the first, so a DM seat missing from it
     // makes a running session unstoppable from the UI even after the API can
     // reach it.
-    expect(body.conversation_agents.map(r => r.conversation_id)).toContain(f.pairId);
-    expect(body.visible_conversation_agents.map(r => r.conversation_id)).toContain(
+    expect(body.participations.map(r => r.conversation_id)).toContain(f.pairId);
+    expect(body.visible_participations.map(r => r.conversation_id)).toContain(
       f.pairId,
     );
+    expect(body.seats).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        scope: { kind: 'conversation', conversation_id: f.pairId },
+      }),
+    ]));
   });
 });

@@ -34,6 +34,7 @@ import type {
   AgentDto,
   AgentRuntimeControlEventRow,
   ConversationAgentDto,
+  ConversationAgentStatus,
   ConversationDto,
   FromKind,
   MemberDto,
@@ -228,8 +229,8 @@ export interface RuntimeCustodyPort {
   }): RuntimePrincipal | null;
 }
 
-/** A runtime the DB still claims is live. Projection of the
- *  `conversation_agents ⋈ agents` reconcile query. */
+/** A runtime the DB still claims is live. Projection of the scoped runtime-slot
+ * authority; participation is not part of this row. */
 export interface DbLiveRuntime {
   scope: RuntimePrincipalScope;
   /** Last presentation target when known. AgentSlot custody itself has no
@@ -306,7 +307,11 @@ export interface RuntimeSessionTxScope {
 export interface RuntimeSessionClearReceipt {
   scope: RuntimePrincipalScope;
   generation: number;
-  projection: Pick<ConversationAgentDto, 'status' | 'pid' | 'cli_session_id'>;
+  projection: {
+    status: ConversationAgentStatus;
+    pid: number | null;
+    cli_session_id: string | null;
+  };
 }
 
 /**

@@ -19,6 +19,7 @@ import { ConversationNameRepo } from './conversation-name-repo.js';
 import { ConversationRepo } from './conversation-repo.js';
 import { MessageRepo } from './message-repo.js';
 import { NotificationRepo } from './notification-repo.js';
+import { RuntimeSlotRepo } from './runtime-slot-repo.js';
 import { ThreadFollowerRepo } from './thread-follower-repo.js';
 import { UserRepo } from './user-repo.js';
 import { WorkspaceRepo } from './workspace-repo.js';
@@ -96,6 +97,7 @@ export function createSqliteConversationPersistence(
   const users = new UserRepo(db);
   const workspaces = new WorkspaceRepo(db);
   const notifications = new NotificationRepo(db);
+  const runtimeSlots = new RuntimeSlotRepo(db);
   const inboxes = new ConversationInboxRepo(db);
   const threadFollowers = new ThreadFollowerRepo(db);
   const attachments = new AttachmentRepo(db);
@@ -448,6 +450,14 @@ export function createSqliteConversationPersistence(
     getMessageById: id => messages.getById(id),
     getAgent: id => agents.get(id),
     getUser: id => toPrincipalNameSnapshot(users.get(id)),
+    runtimeStatus: (conversationId, agentId) => {
+      const agent = agents.get(agentId);
+      if (!agent) return null;
+      const slot = agent.session_scope === 'agent'
+        ? runtimeSlots.getAgent(agentId)
+        : runtimeSlots.getConversation(conversationId, agentId);
+      return slot?.observed_status ?? null;
+    },
     viewerUserIds: id => conversationViewerUserIds(conversations, id),
   };
 

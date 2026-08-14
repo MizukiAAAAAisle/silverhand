@@ -344,23 +344,10 @@ export type AgentWorkspaceFileRead = z.infer<
   typeof AgentWorkspaceFileReadSchema
 >;
 
-// GET /api/agents/:id/runtime-state — every RUNTIME SEAT this agent holds, with
-// workspace/channel names denormalized so the UI can render the "where it runs"
-// table without N+1 queries.
-//
-// The unit is the SEAT, not participation: this is where the agent RUNS, and
-// "who is in this conversation" is a different question with its own single
-// authority (`agentParticipates`, agent-scoped-session-v1 §4.2). A conversation
-// the agent participates in without a seat is absent by that definition, not by
-// a filter.
-//
-// The workspace coordinate is therefore NULLABLE, because a seat's conversation
-// need not be workspace-placed: `direct_pair` and `agent_inbox` carry no
-// `workspace_id` (§4.1). Before v69 this face resolved the coordinate through an
-// INNER JOIN, which would have dropped such a seat ENTIRELY — and this is a
-// control-plane payload (the Stop control reads it), so a dropped row is a
-// runtime the user can see running and cannot stop.
-export const AgentRuntimeConversationSchema = z.object({
+// One placement-aware participation projection for the Agent detail surface.
+// It carries display/navigation coordinates only; runtime ownership and process
+// state are represented independently by `AgentRuntimeSeatDtoSchema` below.
+export const AgentRuntimeParticipationSchema = z.object({
   conversation_id: z.string(),
   workspace_id: z.string().nullable(),
   workspace_name: z.string().nullable(),
@@ -368,32 +355,47 @@ export const AgentRuntimeConversationSchema = z.object({
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
   channel_title: z.string(),
-  status: ConversationAgentStatusSchema,
-  pid: z.number().nullable(),
   closed_at: z.number().nullable(),
 });
-export type AgentRuntimeConversation = z.infer<
-  typeof AgentRuntimeConversationSchema
+export type AgentRuntimeParticipation = z.infer<
+  typeof AgentRuntimeParticipationSchema
 >;
 
-// Two projections of the SAME agent-runtime data at two scopes — the split is
-// load-bearing, not cosmetic (#task:1398):
-//
-//   `conversation_agents`         — COMPLETE control view. Includes archived
-//     channels. Consumed by the Header Stop button / runningCount and the
-//     AgentView `inThisChannel` membership gate. Archive-stop is best-effort/
-//     async (the host may be offline), so a straggler runtime can linger
-//     `active` in an archived channel; the Stop control must still see it or
-//     the user cannot reach `/agents/:id/stop` for it. Filtering this array
-//     would gate a control-plane entry on display scope — a fail-closed leak.
-//
-//   `visible_conversation_agents` — DISPLAY roster. Excludes archived channels.
-//     Consumed ONLY by the Activity roster (AgentActivityPane). The backend
-//     owns this scope; the renderer renders it verbatim and must NOT re-derive
-//     archived-ness client-side.
+export const AgentRuntimeSeatScopeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('agent') }),
+  z.object({ kind: z.literal('conversation'), conversation_id: z.string() }),
+]);
+export type AgentRuntimeSeatScope = z.infer<typeof AgentRuntimeSeatScopeSchema>;
+
+export const AgentRuntimeFocusSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('conversation'), conversation_id: z.string() }),
+  z.object({ kind: z.literal('other') }),
+]);
+export type AgentRuntimeFocus = z.infer<typeof AgentRuntimeFocusSchema>;
+
+/** One semantic runtime identity. Agent scope remains one row no matter how
+ * many conversations it serves; `focus` is a viewer-redacted presentation
+ * coordinate, never part of ownership. */
+export const AgentRuntimeSeatDtoSchema = z.object({
+  scope: AgentRuntimeSeatScopeSchema,
+  generation: z.number().int().nonnegative(),
+  status: ConversationAgentStatusSchema,
+  pid: z.number().nullable(),
+  cli_session_id: z.string().nullable(),
+  focus: AgentRuntimeFocusSchema.nullable(),
+  queue_depth: z.number().int().nonnegative(),
+});
+export type AgentRuntimeSeatDto = z.infer<typeof AgentRuntimeSeatDtoSchema>;
+
+// GET /api/agents/:id/runtime-state deliberately returns two orthogonal read
+// models. `participations`/`visible_participations` answer where the agent is a
+// participant; `seats` answer which semantic runtimes exist. Neither is derived
+// from the other, so an absent slot cannot erase membership and AgentSlot cannot
+// fan out into one fake process row per conversation.
 export const AgentRuntimeStateDtoSchema = z.object({
-  conversation_agents: z.array(AgentRuntimeConversationSchema),
-  visible_conversation_agents: z.array(AgentRuntimeConversationSchema),
+  participations: z.array(AgentRuntimeParticipationSchema),
+  visible_participations: z.array(AgentRuntimeParticipationSchema),
+  seats: z.array(AgentRuntimeSeatDtoSchema),
 });
 export type AgentRuntimeStateDto = z.infer<typeof AgentRuntimeStateDtoSchema>;
 

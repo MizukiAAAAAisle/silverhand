@@ -26,6 +26,7 @@ import type {
   AgentDto,
   AttachmentSnapshot,
   ConversationAgentDto,
+  ConversationAgentStatus,
   ConversationDto,
   FromKind,
   MessageDto,
@@ -301,6 +302,13 @@ export interface DeliveryReadPort {
   getMessageById(messageId: string): MessageDto | null;
   getAgent(agentId: string): AgentDto | null;
   getUser(userId: string): PrincipalNameSnapshot | null;
+  /** Runtime projection for the semantic seat that serves this target. This is
+   *  deliberately separate from `ConversationAgentDto`: membership never
+   *  changes shape or disappears because a slot is absent. */
+  runtimeStatus(
+    conversationId: string,
+    agentId: string,
+  ): ConversationAgentStatus | null;
   /** Human viewers of a conversation (workspace-scoped resolution lives in
    *  the adapter). */
   viewerUserIds(conversationId: string): string[];

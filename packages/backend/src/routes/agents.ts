@@ -34,6 +34,7 @@ import {
 import type { BackendContext } from '../context.js';
 import {
   canEditAgent,
+  canViewConversation,
   canViewAgent,
   canViewAgentFiles,
   canViewWorkspace,
@@ -936,23 +937,52 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
       return c.json({ error: 'agent not found' }, 404);
     }
-    // Two scopes of the same runtime data (#task:1398):
-    //  - `conversation_agents` = COMPLETE control view (includes archived).
-    //    The Header Stop button + AgentView membership gate read this, so a
-    //    best-effort-stop straggler in an archived channel stays reachable.
-    //  - `visible_conversation_agents` = DISPLAY roster (excludes archived),
-    //    read only by the Activity pane. Filtering the *whole* response would
-    //    gate the Stop control on display scope — a fail-closed leak.
-    // Both arrays are SEATS with display coordinates attached, so a seat whose
-    // conversation carries no workspace (a DM, an inbox) is present here with
-    // null workspace fields rather than dropped. Stop-all (below) and the
-    // delete-agent purge take the coordinate-free `runtimeSlots.listSeats`
-    // instead — they act on the session, not on where it is displayed.
+    const principal = getUserPrincipal(c);
+    const canReadTarget = (conversationId: string): boolean =>
+      canViewConversation(ctx, principal, conversationId);
+    const participations = agents
+      .listRuntimeParticipations(agent.id)
+      .filter(row => canReadTarget(row.conversation_id));
+    const visibleParticipations = agents
+      .listRuntimeParticipations(agent.id, { excludeArchived: true })
+      .filter(row => canReadTarget(row.conversation_id));
+    const focusConversationId = ctx.runtimeHost.getAgentRuntimeFocus(agent.id);
+    const seats = runtimeSlots.listSeats(agent.id).flatMap(seat => {
+      if (
+        seat.scope.kind === 'conversation'
+        && !canReadTarget(seat.scope.conversationId)
+      ) return [];
+      const focus = seat.scope.kind === 'conversation'
+        ? { kind: 'conversation' as const, conversation_id: seat.scope.conversationId }
+        : focusConversationId === null
+          ? null
+          : canReadTarget(focusConversationId)
+            ? { kind: 'conversation' as const, conversation_id: focusConversationId }
+            : { kind: 'other' as const };
+      return [{
+        scope: seat.scope.kind === 'agent'
+          ? { kind: 'agent' as const }
+          : {
+              kind: 'conversation' as const,
+              conversation_id: seat.scope.conversationId,
+            },
+        generation: seat.generation,
+        status: seat.status,
+        pid: seat.pid,
+        cli_session_id: seat.cliSessionId,
+        focus,
+        queue_depth: seat.scope.kind === 'agent'
+          ? conversationInboxes.countQueuedForAgent(agent.id)
+          : conversationInboxes.countQueuedForPair(
+              seat.scope.conversationId,
+              agent.id,
+            ),
+      }];
+    });
     return c.json({
-      conversation_agents: agents.listRuntimeConversations(agent.id),
-      visible_conversation_agents: agents.listRuntimeConversations(agent.id, {
-        excludeArchived: true,
-      }),
+      participations,
+      visible_participations: visibleParticipations,
+      seats,
     });
   });
 

@@ -1,6 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import type {
   AgentRuntimeControlEventRow,
+  ConversationAgentRuntimeDto,
   AgentRuntimeEventKind,
   AgentRuntimeEventRow,
   AgentRuntimeSlotRow,
@@ -33,8 +34,8 @@ export type RuntimeSlotScope =
  * WHAT IT DOES NOT CARRY: any conversation metadata (workspace, title, archived
  * state). Every such field is a field a future edit could filter or join by, and
  * the workspace coordinate is precisely the join that used to make DM and inbox
- * seats vanish from these planes (@Cindy B3). The display face
- * (`AgentRepo.listRuntimeConversations`) is where coordinates belong.
+ * seats vanish from these planes (@Cindy B3). The participation display face
+ * (`AgentRepo.listRuntimeParticipations`) is where coordinates belong.
  *
  * NOT A PARTICIPATION FACE, in either direction: it neither answers "is this
  * agent in that conversation" (`agentParticipates`, §4.2, the one authority) nor
@@ -163,6 +164,39 @@ export class RuntimeSlotRepo {
       )
       .all(agentId)
       .map(rowToSeat);
+  }
+
+  /** Runtime projection for a conversation roster supplied by an independent
+   * participation authority. This query never reads or joins roster tables;
+   * `agentIds` is only the authorized population boundary. */
+  listConversationRuntime(
+    conversationId: string,
+    agentIds: readonly string[],
+  ): ConversationAgentRuntimeDto[] {
+    if (agentIds.length === 0) return [];
+    const placeholders = agentIds.map(() => '?').join(', ');
+    type Row = AgentRuntimeSlotRow & { session_scope: 'agent' | 'conversation' };
+    return this.db
+      .prepare<(string)[], Row>(
+        `SELECT s.*, a.session_scope
+           FROM agent_runtime_slots s
+           JOIN agents a ON a.id = s.agent_id
+          WHERE s.agent_id IN (${placeholders})
+            AND (
+              (a.session_scope = 'conversation' AND s.conversation_id = ?)
+              OR
+              (a.session_scope = 'agent' AND s.conversation_id IS NULL)
+            )`,
+      )
+      .all(...agentIds, conversationId)
+      .map(row => ({
+        agent_id: row.agent_id,
+        scope_kind: row.session_scope,
+        generation: row.generation,
+        cli_session_id: row.cli_session_id,
+        pid: row.observed_pid,
+        status: row.observed_status,
+      }));
   }
 
   /**

@@ -59,7 +59,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Loader2, LogOut, Plus, Power, RefreshCw, Search, UserMinus } from 'lucide-react';
 import type {
   ChannelLeaveBlockedReason,
-  ConversationAgentDto,
+  ConversationAgentRuntimeDto,
+  ConversationAgentStatus,
   ConversationVisibility,
   MemberDto,
 } from '@silverhand/shared';
@@ -119,7 +120,7 @@ interface ChannelMembersDialogProps {
   onOpenChange: (open: boolean) => void;
   channelId: string;
   /** Per-conversation agent rows — the source of each agent's run state dot. */
-  conversationAgents: ConversationAgentDto[];
+  agentRuntime: ConversationAgentRuntimeDto[];
   agentAvatarUrls: Map<string, string | null>;
   /** Restart / stop EVERY agent in this channel. Absent → not rendered (the
    *  viewer may not manage all of them, or the channel is closed / agentless). */
@@ -165,7 +166,7 @@ export function ChannelMembersDialog({
   open,
   onOpenChange,
   channelId,
-  conversationAgents,
+  agentRuntime,
   agentAvatarUrls,
   onRestartAllAgents,
   onStopAllAgents,
@@ -222,10 +223,10 @@ export function ChannelMembersDialog({
   const humanAvatarUrls = useUserAvatarObjectUrls(humanAvatarSources);
   const presenceById = usePresenceById();
   const agentStatusById = useMemo(() => {
-    const m = new Map<string, ConversationAgentDto['status']>();
-    for (const row of conversationAgents) m.set(row.agent_id, row.status);
+    const m = new Map<string, ConversationAgentStatus>();
+    for (const row of agentRuntime) m.set(row.agent_id, row.status);
     return m;
-  }, [conversationAgents]);
+  }, [agentRuntime]);
 
   // HUMANS first, then AGENTS: the viewer's own row lives in the human group and
   // carries Leave, so it must be the first thing found. (The workspace roster

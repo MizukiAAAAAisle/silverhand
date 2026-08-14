@@ -50,7 +50,7 @@ export function AgentHeader({
   // Stop targets conversation-running work, so it keeps the conversation
   // runtime-state predicate: count both `starting` and `active` so an agent
   // mid-spawn doesn't slip past the Stop button between exec and first message.
-  const running = (runtimeState?.conversation_agents ?? []).filter(
+  const running = (runtimeState?.seats ?? []).filter(
     s => s.status === 'starting' || s.status === 'active',
   );
   const runningCount = running.length;

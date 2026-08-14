@@ -657,11 +657,15 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('embeds valid attachment snapshots and does not auto-start active recipients', async () => {
+  it('embeds valid attachment snapshots and does not auto-start live recipients', async () => {
     const t = bootstrap();
     try {
-      t.db.prepare(`UPDATE agent_runtime_slots SET observed_status = 'active' WHERE conversation_id = ?`)
-        .run(t.channel.id);
+      const updateRuntimeStatus = t.db.prepare(
+        `UPDATE agent_runtime_slots
+            SET observed_status = ?
+          WHERE conversation_id = ?`,
+      );
+      updateRuntimeStatus.run('active', t.channel.id);
       const attachment = t.attachments.insert({
         channelId: t.channel.id,
         sourceConversationId: t.channel.id,
@@ -693,6 +697,14 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(
         [t.alice.id, t.bob.id].sort(),
       );
+      expect(t.fake.starts).toEqual([]);
+
+      updateRuntimeStatus.run('starting', t.channel.id);
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'still starting',
+      });
       expect(t.fake.starts).toEqual([]);
     } finally {
       t.cleanup();

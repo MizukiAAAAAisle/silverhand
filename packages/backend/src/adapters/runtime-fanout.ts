@@ -374,7 +374,10 @@ export function createRuntimeFanoutDbDeps(deps: {
     }),
     // DB-backed but stateless — the whole runtime-event → status mapping lives
     // in the projector, so ONE instance serves every host the fanout tracks.
-    statusProjector: new DbRuntimeStatusProjector(runtimeSlots, deps.events),
+    statusProjector: new DbRuntimeStatusProjector(runtimeSlots, deps.events, {
+      listProjectionConversationIds: agentId =>
+        agents.listRuntimeParticipations(agentId).map(row => row.conversation_id),
+    }),
     conversationActivity: conversationEvents,
   };
 }

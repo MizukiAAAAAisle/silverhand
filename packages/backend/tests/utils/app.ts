@@ -181,6 +181,9 @@ export class FakeConversationManager implements AgentRuntimeHost {
   getAgentRunStates(conversationId: string): AgentRunState[] {
     return this.agentRunStates.filter(s => s.conversationId === conversationId);
   }
+  getAgentRuntimeFocus(_agentId: string): string | null {
+    return this.clearSessionResult.focusConversationId;
+  }
   resolveRun(
     conversationId: string,
     agentId: string,

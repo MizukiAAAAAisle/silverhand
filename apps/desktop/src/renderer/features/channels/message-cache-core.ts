@@ -66,6 +66,8 @@ export const threadRootKey = (cid: string, rootId: string) =>
 export const threadFollowersKey = (cid: string, rootId: string) =>
   ['channels', cid, 'thread-followers', rootId] as const;
 export const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
+export const agentRuntimeKey = (cid: string) =>
+  ['channels', cid, 'agent-runtime'] as const;
 /** Per-window UI-affordance fact (#task:1255 Stage-2): a live mainline message
  *  arrived while this window was NOT at tail, so the UI offers "scroll to
  *  latest" instead of lying with an append. It is NOT the message cache and NOT

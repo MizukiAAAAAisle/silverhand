@@ -3170,7 +3170,16 @@ describe('OutboundRuntimeEventFanout', () => {
           }),
         ]);
         expect(fix.events.filter(event => event.kind === 'message')).toEqual([]);
-        expect(fix.events.filter(event => event.kind === 'agent_status')).toEqual([]);
+        expect(fix.events.filter(event => event.kind === 'agent_status')).toEqual([
+          expect.objectContaining({
+            conv: fix.channelId,
+            payload: expect.objectContaining({
+              agent_id: fix.agentId,
+              status: 'idle',
+              cli_session_id: null,
+            }),
+          }),
+        ]);
       } finally {
         fix.cleanup();
       }
@@ -4036,11 +4045,11 @@ function makeFixture(
     agentTokens,
     fanout,
     row: () => {
-      const row = conversations.getAgent(channel.id, agent.id);
-      if (!row) throw new Error('conversation agent row missing');
+      const row = runtimeSlots.get(runtimeScope);
+      if (!row) throw new Error('runtime slot row missing');
       return {
-        status: row.status,
-        pid: row.pid,
+        status: row.observed_status,
+        pid: row.observed_pid,
         cli_session_id: row.cli_session_id,
       };
     },
@@ -4070,6 +4079,7 @@ function makeUnixHandler(fix: Fixture): RuntimeEventHandler {
         publishSide: (conv, payload) =>
           fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),
       },
+      { listProjectionConversationIds: () => [fix.channelId] },
     ),
     daemonInstanceId: () => makeDaemonInstanceKey(123, 1700000000000),
     acceptRuntimeCustody: () => true,

@@ -295,7 +295,7 @@ export interface AgentRuntimeHost {
 
   // ── boot recovery ───────────────────────────────────────────────
   /**
-   * Backend boot: reconcile stale `conversation_agents` rows.
+   * Backend boot: reconcile stale scoped runtime-slot projections.
    *
    * `runtime_status` hydrate is the ground truth: snapshot-active
    * runtimes are NOT touched (daemon is supervising them); rows
@@ -309,6 +309,11 @@ export interface AgentRuntimeHost {
   // ── run-state surface (read-only views used by routes/services) ─
   /** All `AgentRunState`s belonging to the given conversation. */
   getAgentRunStates(conversationId: string): AgentRunState[];
+
+  /** Current presentation focus of the agent-scoped slot, when hydrated.
+   * Null is "no proven focus", never an invitation to infer one from
+   * participation. */
+  getAgentRuntimeFocus(agentId: string): string | null;
 
   /**
    * Resolve the active run for (conv, agent) with the given terminal

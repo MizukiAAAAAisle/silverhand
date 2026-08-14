@@ -336,7 +336,10 @@ export class MessageDeliveryCoordinator {
   ): Promise<void> {
     await Promise.all(
       recipients
-        .filter(ca => ca.status !== 'active' && ca.status !== 'starting')
+        .filter(ca => {
+          const status = this.read.runtimeStatus(conversation.id, ca.agent_id);
+          return status !== 'active' && status !== 'starting';
+        })
         .map(async ca => {
           try {
             await this.runtimeHost.start(conversation.id, ca.agent_id);
