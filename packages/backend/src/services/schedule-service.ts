@@ -303,6 +303,24 @@ export class ScheduleService {
     // into the TARGET conversation's workspace, so `manage_schedules` is
     // evaluated there (not the calling conversation's workspace). The
     // injected checker carries the agent_home exemption.
+    //
+    // A capability is granted IN a workspace, so a target placement without one
+    // has no scope in which the grant could exist — refused as
+    // `capability_denied` (the same answer as an ungranted bucket), never
+    // coerced onto the calling conversation's workspace: that would let an agent
+    // borrow authority from one board to schedule a wake somewhere else. The
+    // roster check above already rejects the only such placement that exists
+    // today (an agent inbox has no `conversation_agents` row — §4.2), so this is
+    // the second, authority-side statement of the same refusal rather than its
+    // only line of defense.
+    if (target.workspace_id === null) {
+      throw new ScheduleError(
+        'capability_denied',
+        `target conversation ${targetConversationId} belongs to no workspace, `
+          + 'so manage_schedules cannot be granted for it',
+        'manage_schedules',
+      );
+    }
     if (
       !this.canUseCapability(
         ownerAgentId,
@@ -451,9 +469,16 @@ export class ScheduleService {
     // create call was gated on. If the target conversation has since been
     // deleted the schedule is dangling; the owner-match above is the only
     // guard and we let the owner clean it up.
+    //
+    // A target with NO workspace is handled the same way as the deleted one, and
+    // deliberately NOT like the create path's refusal: cancel is the OWNER's
+    // cleanup verb, so a scope in which no `manage_schedules` grant can exist
+    // must not be able to strand the owner's own schedule. Withholding creation
+    // and withholding deletion are not the same conservative choice.
     const target = this.conversations.get(existing.target_conversation_id);
     if (
       target &&
+      target.workspace_id !== null &&
       !this.canUseCapability(
         ownerAgentId,
         target.workspace_id,

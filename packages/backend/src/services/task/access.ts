@@ -9,6 +9,7 @@ import type {
   TaskMutationResult,
   WorkspaceDto,
 } from '@silverhand/shared';
+import { isWorkspacePlaced } from '@silverhand/shared';
 import type { AgentRepo } from '../../repos/agent-repo.js';
 import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
 import type { TaskConversationAccessPort } from './ports.js';
@@ -139,6 +140,22 @@ export class TaskAccessControl {
       }
       ws = matches[0]!;
     } else {
+      // No selector ⇒ the default board is the SOURCE conversation's own
+      // workspace. A placement without one has no default (§4.2: the agent
+      // inbox has no board), which is a typed failure rather than an assertion
+      // here because this resolver's whole job is turning "no workspace could be
+      // resolved" into an actionable answer for the agent — the same code the
+      // deleted-workspace case below returns, with its own reason.
+      if (!isWorkspacePlaced(sourceConv)) {
+        return {
+          failure: fail({
+            code: 'unknown_workspace',
+            reason:
+              'current conversation belongs to no workspace, so it has no task board; ' +
+              'pass --workspace-id to name one',
+          }),
+        };
+      }
       ws = this.workspaces.get(sourceConv.workspace_id);
       if (!ws) {
         // Source conversation exists but its workspace was deleted —

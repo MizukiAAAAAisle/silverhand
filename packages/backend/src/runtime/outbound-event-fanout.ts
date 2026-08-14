@@ -39,6 +39,7 @@ import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import {
   CLEAR_SESSION_EXIT_TIMEOUT_MS,
   ClearSessionInProgressError,
+  RuntimePlacementUnsupportedError,
   type ClearSessionResult,
   type ReapIdleRuntimesOptions,
   type ReapIdleRuntimesResult,
@@ -1158,6 +1159,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
     const conversation = this.conversations.get(conversationId);
     if (!conversation) throw new Error(`conversation ${conversationId} not found`);
+    // Placement gate (v71 §7.3): every option below — the session cwd, the
+    // workspace memory index, the platform prompt's workspace section — is
+    // derived from the conversation's workspace. A placement without one has no
+    // spawn coordinate yet, and inventing one would fork the vendor session (see
+    // the error's doc). #task:2019 supplies the agent-scoped answer.
+    if (conversation.workspace_id === null) {
+      throw new RuntimePlacementUnsupportedError(conversationId);
+    }
     const workspace = this.workspaces.get(conversation.workspace_id);
     if (!workspace) {
       throw new Error(`workspace ${conversation.workspace_id} not found`);
@@ -1242,6 +1251,11 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   ): Promise<void> {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) return;
+    // A workspace-less placement has no L2 to seed (its memory IS L1) — and this
+    // whole method is best-effort enrichment, so the honest answer is "nothing to
+    // seed", not an error. The hard placement decision belongs to
+    // `runtimeStartOptions`, which is the one gate a spawn cannot pass.
+    if (conversation.workspace_id === null) return;
     const plan = planRuntimeStartFilesystemEnsure(
       this.workspaces.get(conversation.workspace_id) ?? undefined,
     );

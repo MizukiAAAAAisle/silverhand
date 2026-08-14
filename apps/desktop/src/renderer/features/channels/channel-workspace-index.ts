@@ -83,6 +83,14 @@ const conflicted = new Map<string, { first: string; second: string }>();
 
 /** Record one immutable binding.
  *
+ *  `workspaceId` is nullable because a conversation's workspace is a property of
+ *  ONE placement arm (agent-scoped-session-v1 §4.1): a placement without one has
+ *  no binding to record, and `null` here is a NO-OP rather than a caller-side
+ *  narrowing. That keeps the null out of every carrier and lands it in the state
+ *  this module already treats as harmless — an unattributed channel, whose caches
+ *  expire by gc instead of being swept. Guessing a workspace for it is the one
+ *  outcome that would be unsafe, and it is not available.
+ *
  *  Agreement is a no-op; a DISAGREEMENT is a bug, and the one response that is
  *  not available is "keep the first value". This index fuses several carriers
  *  into a single load-bearing judgment that decides which channel-keyed caches a
@@ -92,7 +100,10 @@ const conflicted = new Map<string, { first: string; second: string }>();
  *  every caller already treats as "skip this id" — and the disagreement is left
  *  observable rather than swallowed. Being unable to attribute a cache is
  *  harmless (it expires by gc); attributing it wrongly is not. */
-export function recordChannelWorkspace(channelId: string, workspaceId: string): void {
+export function recordChannelWorkspace(
+  channelId: string,
+  workspaceId: string | null,
+): void {
   if (!channelId || !workspaceId) return;
   if (conflicted.has(channelId)) return;
   const existing = channelWorkspace.get(channelId);

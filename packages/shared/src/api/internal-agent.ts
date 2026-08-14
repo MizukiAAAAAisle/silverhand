@@ -218,7 +218,12 @@ export type AgentReadHistoryInput = z.infer<typeof AgentReadHistoryInputSchema>;
 
 export const MessageRefSchema = z.object({
   id: z.string(),
-  workspace_id: z.string(),
+  /** `null` when the message lives in a conversation that is not workspace-placed
+   *  (an agent inbox — agent-scoped-session-v1 §4.1). A ref names WHERE a message
+   *  is, and for such a placement the honest answer is "no workspace", not a
+   *  borrowed coordinate: the alternative (echoing the reading session's
+   *  workspace) would make a CC copy look like it lived on someone's board. */
+  workspace_id: z.string().nullable(),
   conversation_id: z.string(),
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
@@ -303,7 +308,9 @@ export const ReadHistoryTargetRefSchema = z.object({
    *  replies (the root carries `id === thread_root_id`; replies do
    *  not) without exposing per-message `thread_root_id`. */
   thread_root_id: z.string().nullable(),
-  workspace_id: z.string(),
+  /** `null` for a target that is not workspace-placed (an agent inbox) — same
+   *  rule as {@link MessageRefSchema}. */
+  workspace_id: z.string().nullable(),
   title: z.string(),
 });
 export type ReadHistoryTargetRef = z.infer<typeof ReadHistoryTargetRefSchema>;

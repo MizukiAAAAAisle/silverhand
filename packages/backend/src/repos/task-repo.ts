@@ -21,6 +21,7 @@ import type {
   TaskStatus,
   TaskSummaryDto,
 } from '@silverhand/shared';
+import { requireWorkspacePlacement } from '@silverhand/shared';
 import {
   assigneeFrom,
   taskJoinedToSummary,
@@ -87,7 +88,12 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
       // workspace's board.
       const conv = this.conversations.get(filters.actor.conversationId);
       if (!conv) return [];
-      const effectiveWs = filters.workspaceId ?? conv.workspace_id;
+      // The DEFAULT board is the actor conversation's own workspace, so a
+      // placement without one has no default to fall back to (§4.2: the agent
+      // inbox has no board). Asserted rather than returned as an empty list — an
+      // empty board and "this conversation has no board" are different answers,
+      // and only one of them is true here.
+      const effectiveWs = filters.workspaceId ?? requireWorkspacePlacement(conv);
       clauses.push('t.workspace_id = ?');
       args.push(effectiveWs);
     } else {

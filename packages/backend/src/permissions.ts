@@ -205,6 +205,40 @@ export function canGovernWorkspace(
 }
 
 /**
+ * Workspace governance for the conversation-level mutations that read their
+ * workspace OFF the target (archive / rename / visibility / roster admin).
+ *
+ * Exists because those routes used to pass `conversation.workspace_id` straight
+ * into {@link canGovernWorkspace}, which since v69 can be NULL: the call would
+ * then resolve NO workspace and deny by ACCIDENT of a failed lookup. Governance
+ * of a workspace-less placement (§4.1) must be a stated rule instead —
+ *
+ *   - there is no workspace to hold a role IN, so no human can be its admin, and
+ *   - its mutability is a PLACEMENT fact, not a role: an `agent_inbox` has a
+ *     fixed roster, a title nobody may change and no archive affordance.
+ *
+ * so it fails closed for every principal except `system` (which passes every
+ * `canX` in this file). A caller that needs to distinguish "not governable" from
+ * "you are not an admin" must ask the placement, not this predicate.
+ */
+export function canGovernConversationWorkspace(
+  ctx: BackendContext,
+  principal: Principal,
+  conversationId: string,
+  minRole: WorkspaceRole,
+): boolean {
+  const conversation = ctx.authorizationReads.conversation(conversationId);
+  if (!conversation) return false;
+  if (conversation.workspace_id === null) return principal.kind === 'system';
+  return canGovernWorkspace(
+    ctx,
+    principal,
+    conversation.workspace_id,
+    minRole,
+  );
+}
+
+/**
  * Graded-permissions Layer A — the agent capability axis.
  *
  * The fine-grained, per-(workspace, agent) authority axis (doc §2 / §4).
@@ -266,6 +300,13 @@ export function canViewConversation(
   const reads = ctx.authorizationReads;
   const conversation = reads.conversation(conversationId);
   if (!conversation) return false;
+  // PLACEMENT decides who the participants are (agent-scoped-session-v1 §4.2).
+  // The workspace arm below derives them from workspace membership + the roster
+  // tables; a placement with no workspace has neither, so it gets its own rule
+  // instead of a workspace hop on a coordinate it does not have.
+  if (conversation.workspace_id === null) {
+    return canViewNonWorkspaceConversation(principal, conversation);
+  }
   if (!canViewWorkspace(ctx, principal, conversation.workspace_id)) return false;
   if (principal.kind === 'system') return true;
   if (principal.kind === 'user') {
@@ -280,6 +321,39 @@ export function canViewConversation(
   }
   if (principal.conversationId !== conversation.id) return false;
   return reads.isConversationAgent(conversation.id, principal.agentId);
+}
+
+/**
+ * The participant rule for a conversation with NO workspace (§4.2).
+ *
+ * `agent_inbox` has exactly ONE participant: the Agent named by
+ * `inbox_agent_id`. There is no roster row to read — the placement IS the
+ * membership — and no workspace to be a member of, so nothing about workspace
+ * roles or `conversation_agents` applies here.
+ *
+ * A HUMAN is never a participant, not even the person who created the agent:
+ * `agents.created_by_user_id` is MANAGEMENT authority (rename, capabilities,
+ * delete) and not a message ACL, so the human can govern the agent without
+ * reading its private line. Consequently the inbox is invisible on human read
+ * surfaces by DOMAIN RULE, not because a JOIN dropped it.
+ *
+ * The agent principal must additionally be RUNNING IN the inbox, exactly as the
+ * workspace arm requires `principal.conversationId === conversation.id`: a
+ * session in channel A does not act inside its inbox by reference.
+ *
+ * Every other workspace-less placement (`direct_pair`, P3) is not admitted yet
+ * — it fails closed here until its own rule lands, matching the DB CHECK that
+ * still refuses to store one.
+ */
+function canViewNonWorkspaceConversation(
+  principal: Principal,
+  conversation: AuthorizationConversationFacts,
+): boolean {
+  if (principal.kind === 'system') return true;
+  if (principal.kind !== 'agent') return false;
+  if (conversation.placement_kind !== 'agent_inbox') return false;
+  if (conversation.inbox_agent_id !== principal.agentId) return false;
+  return principal.conversationId === conversation.id;
 }
 
 /**
@@ -345,6 +419,11 @@ function isPublicChannelBranch(
   if (conversation.kind !== 'channel') return false;
   if (conversation.visibility !== 'public') return false;
   if (conversation.archived_at !== null) return false;
+  // The public branch is a widening of WORKSPACE membership ("any member of the
+  // owning workspace may browse"), so a placement with no owning workspace has
+  // no public surface to widen — and no non-workspace placement is a `channel`
+  // anyway (§4.1). Explicit rather than relying on the kind test above.
+  if (conversation.workspace_id === null) return false;
   return canViewWorkspace(ctx, principal, conversation.workspace_id);
 }
 

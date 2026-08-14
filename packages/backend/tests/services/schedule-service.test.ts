@@ -527,6 +527,53 @@ describe('ScheduleService.create', () => {
     expect(err?.code).toBe('target_conversation_not_found');
   });
 
+  it('rejects an agent inbox as the target: the placement has no roster seat', () => {
+    // Placement (agent-scoped-session-v1 §4.1/§4.2, #task:2014). An inbox is
+    // never a wake destination, and the refusal has to be a DOMAIN one: the
+    // inbox exists (so this is not `target_conversation_not_found`) and is open
+    // (so it is not `target_conversation_closed`), yet it has no
+    // `conversation_agents` row, because for that placement the placement IS the
+    // membership. `AgentRepo.create` writes the raw agent row without the
+    // aggregate's inbox, so the fixture makes one explicitly.
+    const f = setup();
+    const owner = f.agents.get(f.ownerAgentId)!;
+    const inbox = f.conversations.insertAgentInbox(owner.id, owner.created_at);
+    expect(f.conversations.get(inbox.id)?.closed_at).toBeNull();
+
+    let err: ScheduleError | undefined;
+    try {
+      f.service.create(
+        {
+          title: 'Inbox cron',
+          message: 'm',
+          target_conversation_id: inbox.id,
+          spec: { kind: 'once', delay_seconds: 60 },
+        },
+        f.ownerAgentId,
+        f.homeDmId,
+      );
+    } catch (e) {
+      err = e as ScheduleError;
+    }
+    expect(err?.code).toBe('agent_not_in_target_conversation');
+    expect(f.schedules.countActive(f.ownerAgentId)).toBe(0);
+    // The control: the identical call against a workspace-placed conversation
+    // the same agent owns a seat in succeeds, so the refusal above is about the
+    // placement and not about this agent or this spec.
+    expect(
+      f.service.create(
+        {
+          title: 'Inbox cron',
+          message: 'm',
+          target_conversation_id: f.homeDmId,
+          spec: { kind: 'once', delay_seconds: 60 },
+        },
+        f.ownerAgentId,
+        f.homeDmId,
+      ).target_conversation_id,
+    ).toBe(f.homeDmId);
+  });
+
   it('rejects when target conversation is closed', () => {
     const f = setup();
     const ws = f.workspaces.insert({

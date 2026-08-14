@@ -125,6 +125,16 @@ export function listFavorites(
   // conversation-level reachability from the header; archived conversations and
   // archived workspaces are excluded. `last_accessed_at` is the HOME-list
   // recent-opened stamp, so "recent" means recently-OPENED (from anywhere).
+  //
+  // Placement (§4.1/§6): this face is defined on a conversation's HOME LIST, and
+  // that list is `'channels:' || c.workspace_id` — a placement with no workspace
+  // has no home list (`'channels:' || NULL` is NULL, which matches no stored
+  // `list_key`), and the `workspace_users` join says the same thing from the
+  // viewer's side: a human is never a participant of a workspace-less placement
+  // (§4.2), so they can never have starred one. Both are DOMAIN predicates, so
+  // the `JOIN workspaces` here excludes nothing on its own — no extra
+  // `placement_kind` filter is added, because a fourth statement of the same
+  // rule would only make it look like the rule lives in the join.
   const conversationRows = db
     .prepare<{ viewer: string }, ConversationFavoriteRow>(
       `SELECT

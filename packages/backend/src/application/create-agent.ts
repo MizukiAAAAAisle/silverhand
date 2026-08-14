@@ -317,6 +317,13 @@ function insertProvisioningDependents(
       agentId: agentRow.id,
     });
     tx.conversations.addAgent(dm.id, agentRow.id);
+    // NO inbox insert here. The inbox is an invariant of the `agents` ROW, not of
+    // the materialized graph (`reserveAgentAggregate` writes the pair), for two
+    // reasons this transaction cannot satisfy: a `pending_materialization` or
+    // `failed` row is already addressable by handle, so a mention of it needs a
+    // destination BEFORE this point; and `?retry=true` re-enters here on the same
+    // row, where a second insert would hit `idx_conversations_inbox_agent` and
+    // roll the whole retry back into `dependent_row_insert_failed` forever.
     // v40 (graded-permissions): the human who creates an agent owns its home.
     tx.workspaces.addOwnerMember(home.id, creatorUserId);
     tx.workspaces.setOwnerUserId(home.id, creatorUserId);
@@ -767,18 +774,23 @@ export async function createAgent(
   }
 
   // ── L1 reserve ─────────────────────────────────────────────────
+  // The AGGREGATE factory, not the bare row insert: an Agent exists only together
+  // with its inbox (v71 §4.2), and from this commit on a mention of the handle has
+  // a destination even if materialization never succeeds. Retry re-enters through
+  // `flipFailedToReserveAgain` on this same row, so the inbox is written exactly
+  // once per agent — migration, fresh create and retry all obey one rule.
   let reservedRow: AgentRow;
   try {
-    reservedRow = agents.reserveForMaterialize(
+    reservedRow = deps.agentProvisioning.reserveAgentAggregate({
       input,
-      resolvedHostId,
-      creatorUserId,
+      defaultHostId: resolvedHostId,
+      createdByUserId: creatorUserId,
       idempotencyKey,
-    );
+    });
   } catch (err) {
     logger.warn(
       { err, agentName: input.name, idempotencyKey },
-      'reserveForMaterialize INSERT failed',
+      'agent aggregate reserve INSERT failed',
     );
     return {
       kind: 'nameTaken',

@@ -39,6 +39,7 @@ import type {
   AgentCapability,
   AgentDto,
   ConversationDto,
+  ConversationRow,
   WorkspaceDto,
   WorkspaceRole,
 } from '@silverhand/shared';
@@ -49,11 +50,23 @@ export type AuthorizationWorkspaceFacts = Pick<
   'workspace_kind' | 'owner_agent_id'
 >;
 
-/** Only what the public-channel branch and the workspace hop read. */
+/**
+ * Only what the public-channel branch, the workspace hop, and the PLACEMENT
+ * branch read.
+ *
+ * `placement_kind` / `inbox_agent_id` are row facts with no wire field: WHO the
+ * participants of a conversation are is derived from its placement
+ * (agent-scoped-session-v1 §4.2) — a `workspace` row derives them from workspace
+ * membership plus the roster tables, an `agent_inbox` row has exactly one
+ * participant and names it directly. An ACL that saw only `workspace_id: null`
+ * could tell "not workspace-placed" but not WHOSE line it is, and would have to
+ * fail closed on the agent's own inbox.
+ */
 export type AuthorizationConversationFacts = Pick<
   ConversationDto,
   'id' | 'workspace_id' | 'kind' | 'visibility' | 'archived_at'
->;
+> &
+  Pick<ConversationRow, 'placement_kind' | 'inbox_agent_id'>;
 
 /** Only what agent ownership and the `materialization_status` widener read. */
 export type AuthorizationAgentFacts = Pick<

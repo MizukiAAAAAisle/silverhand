@@ -13,6 +13,7 @@ import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { assertActorConversationMatch } from '../auth/principal.js';
+import { writeMentionCcCopies } from '../application/mention-cc.js';
 import { resolveSnapshotsFromSources } from './attachment/snapshot-resolution.js';
 import type { MessageTxScope, MessageUnitOfWork } from './conversation-message/ports.js';
 import {
@@ -116,7 +117,6 @@ export class ConversationMessageService {
     this.delivery = new MessageDeliveryCoordinator({
       read: opts.delivery.read,
       write: opts.delivery.write,
-      mentionCc: opts.mentionCc,
       unreadPublish: opts.unreadPublish,
       runtimeHost: opts.runtimeHost,
       events: opts.events,
@@ -247,6 +247,26 @@ export class ConversationMessageService {
           sourceConversation,
           targetConversation,
           message,
+          // Mention CC, IN THIS TRANSACTION (v71 §5, #task:2014). It was a
+          // post-commit `void ccMentionsBestEffort(...)`: a crash in the gap
+          // committed the human's message and lost the copy permanently, with
+          // nothing said to anyone. The copy, its durable inbox delivery row and
+          // the author's `mention_external` notification are all facts the domain
+          // cannot afford to lose, so they commit or roll back WITH the message
+          // that caused them. What is returned is the report the post-commit half
+          // needs (wake / WS frames / skip log) — no effect ran here.
+          //
+          // `sourceConversation`, not the target: the CC answers "who did this
+          // message address that cannot see the channel it was written in", and a
+          // user send never has a foreign target (`allowTarget: false`), so the
+          // two are the same conversation on this path anyway.
+          mentionCc: policy.ccMentions
+            ? writeMentionCcCopies(tx, {
+                message,
+                sourceConversation,
+                references,
+              })
+            : null,
           // Main-line recipients only; thread replies deliver via
           // `threadDelivery` (follower-gated), not the channel-wide fan-out.
           recipients:
@@ -426,12 +446,11 @@ export class ConversationMessageService {
       && !targetIsCrossConversation
         ? input.actor.agentId
         : null;
-    if (policy.ccMentions) {
-      void this.delivery.ccMentionsBestEffort(
-        txResult.sourceConversation,
-        txResult.message,
-        references,
-      );
+    if (txResult.mentionCc) {
+      // The copies are already committed; this drives only what cannot be —
+      // the wake, the WS frames, and the skip log the write half returned as
+      // data (a log emitted inside a transaction that later rolls back is a lie).
+      void this.delivery.dispatchMentionCcBestEffort(txResult.mentionCc);
     }
 
     // Thread reply: follower-gated delivery (§6). Recipients were narrowed

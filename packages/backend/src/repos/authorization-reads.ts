@@ -52,11 +52,16 @@ export function createSqliteAuthorizationReads(
     agentWorkspaceIds: agentId =>
       workspaces.listForAgent(agentId).map(workspace => workspace.id),
     conversation: (conversationId): AuthorizationConversationFacts | null => {
-      const row = conversations.get(conversationId);
+      // The PLACEMENT-aware identity read: the participant rule branches on
+      // `placement_kind` / `inbox_agent_id` (§4.2), which the wire DTO
+      // deliberately does not carry.
+      const row = conversations.getIdentity(conversationId);
       if (!row) return null;
       return {
         id: row.id,
         workspace_id: row.workspace_id,
+        placement_kind: row.placement_kind,
+        inbox_agent_id: row.inbox_agent_id,
         kind: row.kind,
         visibility: row.visibility,
         archived_at: row.archived_at,

@@ -23,6 +23,7 @@
 // to everything.
 import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from '../repos/conversation-repo.js';
+import { agentParticipates } from '../repos/conversation-placement-sql.js';
 import { loadMessageAuthors } from '../repos/message-author.js';
 import {
   LINKED_TASK_JOINS,
@@ -169,7 +170,20 @@ export function resolveAgentReadHistoryTarget(
     resolved = conversation;
   }
 
-  if (!conversations.getAgent(resolved.id, agentId)) {
+  // PARTICIPATION, not the roster table: `agent_inbox` has exactly one
+  // participant and the placement IS that membership (§4.2), so an agent reading
+  // its own inbox — the `self` target once it runs there, or by id from another
+  // session — must pass this gate with no `conversation_agents` row to show. The
+  // ONE definition of participation lives in `conversation-placement-sql.ts`;
+  // this is its boolean form.
+  //
+  // Deliberately NOT also requiring the caller's session to BE in the target
+  // (which `canViewConversation` does for interaction): cross-conversation READ
+  // is an established agent affordance — a session in channel A may read channel
+  // B it belongs to — and the inbox is the same agent's own line, so gating it on
+  // session identity would make the CC copies unreadable exactly where they are
+  // needed.
+  if (!conversations.isAgentParticipant(resolved.id, agentId)) {
     return {
       ok: false,
       status: 403,
@@ -733,8 +747,9 @@ export function buildAgentSearchMessagesDto(
     // conversation_id is globally unique. PR-B made list_channels return
     // channels from any workspace the agent has access to, so the
     // bottom guard is conversation-membership, not source-workspace
-    // identity.
-    if (!conversations.getAgent(conversation.id, agentId)) {
+    // identity — and membership means PARTICIPATION (§4.2), so the agent's own
+    // inbox is searchable by its one participant without a roster row.
+    if (!conversations.isAgentParticipant(conversation.id, agentId)) {
       return {
         ok: false,
         status: 403,
@@ -750,10 +765,27 @@ export function buildAgentSearchMessagesDto(
     // Cross-workspace handled by the route before we get here:
     // `canAgentAccessWorkspace` already gated `input.workspace_id`
     // when it differs from `sourceConversation.workspace_id`. Here we
-    // just pick the SQL filter; the conversation_agents JOIN below
+    // just pick the SQL filter; the participation predicate below
     // remains the bottom guard so unjoined channels in the target
     // workspace stay invisible.
-    workspaceId = input.workspace_id ?? sourceConversation.workspace_id;
+    //
+    // `current_workspace` means "the workspace I am in", and a workspace-less
+    // placement is in none: the caller must NAME one. Refused with the same
+    // `workspace_scope_required` code the route's `resolveAgentQueryWorkspaceId`
+    // uses, because it is the same answer to the same question — reached here
+    // only for the `current_workspace` form the route lets through.
+    const resolvedWorkspaceId = input.workspace_id ?? sourceConversation.workspace_id;
+    if (resolvedWorkspaceId === null) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'workspace_scope_required',
+        message:
+          'this conversation has no workspace, so a workspace-scoped query must '
+          + 'name one: pass workspace_id',
+      };
+    }
+    workspaceId = resolvedWorkspaceId;
     where.push(`conv.workspace_id = ?`);
     params.push(workspaceId);
   } else {
@@ -762,7 +794,19 @@ export function buildAgentSearchMessagesDto(
     params.push(sourceConversation.id);
   }
 
-  const sqlParams: Array<string | number> = [agentId, ...params, input.limit];
+  // The bottom guard, as a WHERE predicate rather than the former
+  // `JOIN conversation_agents` — participation is now a union of the roster edge
+  // and the inbox placement (§4.2), and a join cannot express the second arm.
+  // Behaviour-preserving for the roster arm: `(conversation_id, agent_id)` is
+  // unique, so the dropped join never multiplied rows and `ca` was not
+  // projected. It is stated FIRST (and its params first) so the parameter order
+  // still matches the former leading join parameter.
+  const participation = agentParticipates('conv', agentId);
+  const sqlParams: Array<string | number> = [
+    ...participation.params,
+    ...params,
+    input.limit,
+  ];
   const rows = db
     .prepare<Array<string | number>, AgentSearchMessageRow>(
       `SELECT
@@ -773,11 +817,9 @@ export function buildAgentSearchMessagesDto(
           conv.id AS channel_id
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id
-         JOIN conversation_agents ca
-           ON ca.conversation_id = conv.id
-          AND ca.agent_id = ?
          ${LINKED_TASK_JOINS}
-        WHERE ${where.join(' AND ')}
+        WHERE ${participation.sql}
+          AND ${where.join(' AND ')}
         ORDER BY m.created_at DESC, m.seq DESC
         LIMIT ?`,
     )

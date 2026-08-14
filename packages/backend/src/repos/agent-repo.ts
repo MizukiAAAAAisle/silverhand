@@ -97,6 +97,19 @@ export class AgentRepo {
     return row ? rowToDto(row) : null;
   }
 
+  /**
+   * FIXTURE-ONLY row factory: inserts an `active` `agents` row and NOTHING else.
+   *
+   * It has no production caller and must not gain one — production creates an
+   * Agent through `AgentProvisioningPersistence.reserveAgentAggregate`, which
+   * pairs {@link AgentRepo.reserveForMaterialize} with the agent's inbox
+   * placement in one transaction (v71 §4.2). A row written here is missing that
+   * inbox, so a mention of its handle would throw `AgentInboxMissingError`
+   * INSIDE the sender's message transaction. Tests that exercise a CC / inbox
+   * read face therefore insert the inbox explicitly; tests that do not, do not
+   * care. `tests/guard-agent-create-fixture-only.test.ts` pins the no-production-
+   * caller half of that rule.
+   */
   create(
     input: CreateAgentInput,
     defaultHostId: string,
@@ -209,6 +222,15 @@ export class AgentRepo {
    * for backfill rows; we explicitly set it to
    * `'pending_materialization'` here so the new lifecycle is
    * observable from the moment the row exists.
+   *
+   * NOT the aggregate factory (v71 §4.2): this writes the BARE row. An Agent is
+   * the row PLUS its inbox placement, and only
+   * `AgentProvisioningPersistence.reserveAgentAggregate` writes both in one
+   * transaction. Reserve is where that pairing belongs rather than the L3a
+   * dependent graph, because the handle is addressable from this INSERT onward —
+   * `getByName` has no `materialization_status` filter — so a `failed` row still
+   * owes a mention a destination, and a `?retry=true` that re-entered L3a on the
+   * same row would collide with the inbox its first attempt already committed.
    */
   reserveForMaterialize(
     input: CreateAgentInput,
@@ -655,6 +677,20 @@ export class AgentRepo {
     const archivedFilter = opts?.excludeArchived
       ? 'AND c.archived_at IS NULL'
       : '';
+    // PLACEMENT (§4.1): this query is driven by `conversation_agents`, so what it
+    // lists is ROSTER SEATS — and an `agent_inbox` deliberately has no roster row
+    // (the placement itself names its one participant), so the inbox is absent
+    // because of the driving table, NOT because `JOIN workspaces` dropped it.
+    // That join is load-bearing PROJECTION here (`w.name`, `w.workspace_kind` are
+    // returned), which is also why an inbox has no place in this shape: there is
+    // no workspace row to name. Nothing is lost — no runtime runs in an inbox, and
+    // the purge path does not need it listed because the inbox row cascades with
+    // the agent.
+    //
+    // P3 `direct_pair` is where this must change: it WILL have roster rows and no
+    // workspace, so its seats would vanish through this join. Splitting the
+    // projection (nullable workspace fields, or a second arm) is that ticket's
+    // work, not a filter to add here today.
     const rows = this.db
       .prepare<[string], Row>(
         `SELECT

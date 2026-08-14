@@ -97,7 +97,6 @@ import { createSqliteAgentProvisioningPersistence } from '../repos/agent-provisi
 import { createSqliteAgentTeardownPersistence } from '../repos/agent-teardown-persistence.js';
 import { createSqliteObservationPersistence } from '../repos/observation-persistence.js';
 import { createSqliteUserPersistence } from '../repos/user-persistence.js';
-import { createMentionCcAdapter } from '../adapters/mention-cc.js';
 import {
   createRuntimeFanoutDbDeps,
   type RuntimeFanoutDbDeps,
@@ -120,10 +119,8 @@ import type { AgentTeardownPersistence } from '../application/agent-teardown-por
 import type { MembershipPersistence } from '../application/membership-ports.js';
 import type { ObservationPersistence } from '../application/observation-ports.js';
 import type { BackendLogger } from '../context.js';
-import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { EventPublisher } from '../runtime/event-handler.js';
 import type { ConversationUnreadPublishPort } from '../services/conversation/unread-publish-port.js';
-import type { MentionCcPort } from '../services/conversation-message/ports.js';
 import type { UserPersistence } from '../services/user/ports.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 
@@ -168,12 +165,6 @@ export interface BackendPersistenceEffects {
   readonly unreadPublish: (deps: {
     events: ScopeEventBus;
   }) => ConversationUnreadPublishPort;
-  /** Cross-channel mention cc fan-out (#task:1982 W2). */
-  readonly mentionCc: (deps: {
-    runtimeHost: AgentRuntimeHost;
-    events: ScopeEventBus;
-    logger: BackendLogger;
-  }) => MentionCcPort;
   /** The outbound runtime fanout's durable facets (#task:1982 W3). */
   readonly runtimeFanout: (deps: {
     events: EventPublisher;
@@ -271,8 +262,6 @@ export function createBackendPersistence(db: Db): BackendPersistence {
     readModels: createReadModels(db),
     effects: {
       unreadPublish: ({ events }) => createUnreadPublishAdapter({ db, events }),
-      mentionCc: ({ runtimeHost, events, logger }) =>
-        createMentionCcAdapter({ db, runtimeHost, events, logger }),
       runtimeFanout: ({ events, logger }) =>
         createRuntimeFanoutDbDeps({ db, events, logger }),
     },

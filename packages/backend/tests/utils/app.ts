@@ -34,7 +34,6 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { createSqliteTaskPersistence } from '../../src/repos/task-persistence.js';
 import { createSqliteConversationPersistence } from '../../src/repos/conversation-persistence.js';
-import { createMentionCcAdapter } from '../../src/adapters/mention-cc.js';
 import { createUnreadPublishAdapter } from '../../src/adapters/unread-publish.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -1112,12 +1111,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     uow: conversationPersistence.message.uow,
     threadFollow: conversationPersistence.threadFollow,
     delivery: conversationPersistence.delivery,
-    mentionCc: createMentionCcAdapter({
-      db,
-      runtimeHost: ctx.runtimeHost,
-      events: ctx.events,
-      logger: silentLogger,
-    }),
     unreadPublish,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,

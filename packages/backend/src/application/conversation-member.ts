@@ -10,6 +10,8 @@ import {
   type WorkspaceRoleDto,
   type WorkspaceUserMemberDto,
   normalizeHandle,
+  isWorkspacePlaced,
+  requireWorkspacePlacement,
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
@@ -245,6 +247,17 @@ export async function addConversationMember(
   if (conversation.closed_at !== null) {
     return { ok: false, error: { code: 'conversation_closed' } };
   }
+  // Roster admission is WORKSPACE-scoped by definition: every gate below asks a
+  // workspace question (`canGovernWorkspace`, `workspaces.isMember`,
+  // auto-provisioning workspace membership) and the UoW below takes a WORKSPACE
+  // lock as its coordination anchor. A placement with no workspace has no such
+  // anchor, so this asserts the arm once here instead of coercing a null into
+  // ten workspace lookups (agent-scoped-session-v1 §4.1). Unreachable today —
+  // the `kind === 'channel'` guard above already implies workspace placement
+  // (only `roster_policy='open'` derives `channel`, and the DB's arc CHECK ties
+  // every non-workspace placement to `fixed`) — which is exactly why it must be
+  // an assertion and not a branch: there is no correct fallback to write.
+  const workspaceId = requireWorkspacePlacement(conversation);
 
   // Authorization (spec §3, constraint ①), in TWO stages, because the second
   // one is a property of the TARGET and the target may still be an unresolved
@@ -265,7 +278,7 @@ export async function addConversationMember(
   const isWorkspaceAdmin = canGovernWorkspace(
     deps.ctx,
     input.principal,
-    conversation.workspace_id,
+    workspaceId,
     'admin',
   );
   const callerIsHuman = input.principal.kind === 'user';
@@ -291,7 +304,7 @@ export async function addConversationMember(
     callerIsHuman && (isWorkspaceAdmin || canEnrollAgent(deps.ctx, input.principal, agentId));
 
   const resolved = resolveConversationMemberInput(deps, {
-    workspaceId: conversation.workspace_id,
+    workspaceId,
     member: input.member,
     mayAttemptNonWorkspaceCandidate: candidate =>
       candidate.kind === 'agent'
@@ -326,7 +339,7 @@ export async function addConversationMember(
     if (!agent) {
       return { ok: false, error: { code: 'candidate_not_found', message: 'agent not found' } };
     }
-    const workspaceWasMember = deps.workspaces.isMember(conversation.workspace_id, agent.id);
+    const workspaceWasMember = deps.workspaces.isMember(workspaceId, agent.id);
     if (!workspaceWasMember) {
       // Not "you are allowed to enroll" — only "the enrollment path can run for
       // this principal". The gate below owns the real answer and refuses anyone
@@ -340,8 +353,8 @@ export async function addConversationMember(
           },
         };
       }
-      if (!deps.workspaces.get(conversation.workspace_id)) {
-        throw new Error(`conversation ${conversation.id} references missing workspace ${conversation.workspace_id}`);
+      if (!deps.workspaces.get(workspaceId)) {
+        throw new Error(`conversation ${conversation.id} references missing workspace ${workspaceId}`);
       }
       // #task:1681 — this door auto-provisions WORKSPACE membership, so it is
       // bound by the same enrollment authority as the workspace member-add
@@ -373,7 +386,7 @@ export async function addConversationMember(
     let message: MessageDto | null;
     try {
       message = deps.membershipPersistence.uow.atomically(
-        { workspaceId: conversation.workspace_id, member: { kind: 'agent', id: agent.id } },
+        { workspaceId, member: { kind: 'agent', id: agent.id } },
         (tx, anchor) => {
           const { enrollmentRefusal } = authorizeAddInsideLock(tx.authority, {
             principal: input.principal,
@@ -409,7 +422,7 @@ export async function addConversationMember(
   if (!user) {
     return { ok: false, error: { code: 'candidate_not_found', message: 'user not found' } };
   }
-  const workspaceWasMember = deps.workspaces.isUserMember(conversation.workspace_id, user.id);
+  const workspaceWasMember = deps.workspaces.isUserMember(workspaceId, user.id);
   if (!workspaceWasMember && !canAutoProvisionHumanMember) {
     return {
       ok: false,
@@ -428,7 +441,7 @@ export async function addConversationMember(
   let write: { workspaceMember: WorkspaceUserMemberDto | null; message: MessageDto | null };
   try {
     write = deps.membershipPersistence.uow.atomically(
-      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: user.id } },
+      { workspaceId, member: { kind: 'human', id: user.id } },
       (tx, anchor) => {
         const { enrollmentRefusal } = authorizeAddInsideLock(tx.authority, {
           principal: input.principal,
@@ -465,7 +478,7 @@ export async function addConversationMember(
     effects.push(() =>
       publishViewerWorkspacesChanged(deps.ctx, user.id, {
         change: 'added',
-        workspace_id: conversation.workspace_id,
+        workspace_id: workspaceId,
         role: workspaceMember.role,
       }),
     );
@@ -513,23 +526,29 @@ function deliverSystemMessageToConversationAgents(
 function publishMemberAdded(
   ctx: BackendContext,
   conversations: ConversationRepo,
-  conversation: { id: string; workspace_id: string },
+  conversation: { id: string; workspace_id: string | null },
   message: MessageDto,
 ): void {
+  // The side frames below are addressed to a `workspace:` scope, so this helper
+  // is workspace-scoped by definition. It takes the nullable row/DTO shape and
+  // asserts here rather than demanding a narrowed object from each caller:
+  // interpolating a null into the scope key would publish to
+  // `workspace:null` — a frame nobody is subscribed to and no test would fail on.
+  const workspaceId = requireWorkspacePlacement(conversation);
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
   deliverSystemMessageToConversationAgents(ctx, conversations, conversation.id, message.id);
   ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {
       conversation_id: conversation.id,
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
     },
   });
   ctx.events.publishToScope(
-    `workspace:${conversation.workspace_id}`,
+    `workspace:${workspaceId}`,
     'workspace_channels_changed',
     {
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
       channel_id: conversation.id,
     },
   );
@@ -592,13 +611,18 @@ export async function joinPublicChannel(
   }
   // canJoinPublicChannel guarantees `principal.kind === 'user'`.
   const userId = (input.principal as UserPrincipal).userId;
+  // Workspace-scoped by definition (same reasoning as addConversationMember):
+  // the coordination key below is a workspace lock, and `canJoinPublicChannel`
+  // only ever admits a PUBLIC channel — which is workspace-placed by the DB's
+  // own CHECK (`visibility='public'` requires `roster_policy='open'`).
+  const workspaceId = requireWorkspacePlacement(conversation);
   // Self-join writes no workspace-membership row (the joiner is already a
   // workspace member) but it DOES write the same conversation-membership rows
   // a removal cascades over, so it coordinates on the same key.
   let joined: boolean;
   try {
     joined = deps.membershipPersistence.uow.atomically(
-      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: userId } },
+      { workspaceId, member: { kind: 'human', id: userId } },
       (tx, anchor) => {
         // An ABSENT anchor is the one case this path may NOT proceed on: unlike the
         // add path it has no enrollment authority to fall back on (a self-join never
@@ -633,20 +657,22 @@ export async function joinPublicChannel(
  */
 function publishSelfJoined(
   ctx: BackendContext,
-  conversation: { id: string; workspace_id: string },
+  conversation: { id: string; workspace_id: string | null },
 ): void {
+  // Workspace-scoped by definition — see publishMemberAdded.
+  const workspaceId = requireWorkspacePlacement(conversation);
   ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {
       conversation_id: conversation.id,
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
     },
   });
   ctx.events.publishToScope(
-    `workspace:${conversation.workspace_id}`,
+    `workspace:${workspaceId}`,
     'workspace_channels_changed',
     {
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
       channel_id: conversation.id,
     },
   );
@@ -787,7 +813,7 @@ export function evaluateChannelMemberExitEligibility(
   conversation: {
     id: string;
     kind: ConversationKind;
-    workspace_id: string;
+    workspace_id: string | null;
     visibility: ConversationVisibility;
     archived_at: number | null;
   },
@@ -795,8 +821,15 @@ export function evaluateChannelMemberExitEligibility(
   return evaluateChannelMemberExit({
     channel: () => conversation,
     isMember: () => deps.conversations.getUser(conversation.id, userId) !== null,
+    // A placement with no workspace has no workspace OWNER, so the owner-bound
+    // guard derives `false` rather than throwing: this is an AUTHORIZATION
+    // predicate, and `false` here only makes the rule fall through to the
+    // membership / last-human checks, both of which already deny a non-member.
+    // (Contrast the mutation paths, which assert the workspace arm outright —
+    // there a missing workspace has no correct fallback.)
     isTargetWorkspaceOwner: () =>
-      userWorkspaceRole(deps.ctx, conversation.workspace_id, userId) === 'owner',
+      conversation.workspace_id !== null
+      && userWorkspaceRole(deps.ctx, conversation.workspace_id, userId) === 'owner',
     humanMemberCount: () => deps.conversations.listUsers(conversation.id).length,
   });
 }
@@ -864,6 +897,8 @@ export async function leaveChannel(
   if (!conversation || conversation.kind !== 'channel') {
     return { ok: false, error: { code: 'channel_not_found' } };
   }
+  // Workspace-scoped by definition — same reasoning as addConversationMember.
+  const workspaceId = requireWorkspacePlacement(conversation);
   const eligibility = evaluateChannelMemberExitEligibility(
     { ctx: deps.ctx, conversations: deps.conversations },
     input.principal.userId,
@@ -883,7 +918,7 @@ export async function leaveChannel(
   let removed: boolean;
   try {
     removed = deps.membershipPersistence.uow.atomically(
-      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: input.principal.userId } },
+      { workspaceId, member: { kind: 'human', id: input.principal.userId } },
       (tx, anchor) => {
         const inLock = evaluateChannelMemberExit(
           inLockChannelExitFactSource(tx.membership, conversation.id, anchor),
@@ -918,20 +953,22 @@ export async function leaveChannel(
  */
 function publishSelfLeft(
   ctx: BackendContext,
-  conversation: { id: string; workspace_id: string },
+  conversation: { id: string; workspace_id: string | null },
 ): void {
+  // Workspace-scoped by definition — see publishMemberAdded.
+  const workspaceId = requireWorkspacePlacement(conversation);
   ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {
       conversation_id: conversation.id,
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
     },
   });
   ctx.events.publishToScope(
-    `workspace:${conversation.workspace_id}`,
+    `workspace:${workspaceId}`,
     'workspace_channels_changed',
     {
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
       channel_id: conversation.id,
     },
   );
@@ -968,6 +1005,10 @@ export function buildChannelDetailResponse(
     leave_blocked_reason: leave.reason,
     can_update_visibility:
       channel.kind === 'channel'
+      // Fail-closed on a placement with no workspace: there is no workspace
+      // role to govern with, so nobody may update visibility. An advisory
+      // capability carrier must never default to `true` (§12.1#5).
+      && channel.workspace_id !== null
       && canGovernWorkspace(ctx, principal, channel.workspace_id, 'admin'),
   };
 }
@@ -1052,6 +1093,8 @@ export async function removeConversationMember(
   if (conversation.closed_at !== null) {
     return { ok: false, error: { code: 'conversation_closed' } };
   }
+  // Workspace-scoped by definition — same reasoning as addConversationMember.
+  const workspaceId = requireWorkspacePlacement(conversation);
 
   // Authorization + anti-enumeration (spec §3.2, #957 — order is load-bearing).
   if (!canViewConversation(deps.ctx, input.principal, conversation.id)) {
@@ -1060,7 +1103,7 @@ export async function removeConversationMember(
   const canRemoveByWorkspaceRole = canGovernWorkspace(
     deps.ctx,
     input.principal,
-    conversation.workspace_id,
+    workspaceId,
     'admin',
   );
   const agent = deps.agents.get(input.agentId);
@@ -1076,7 +1119,7 @@ export async function removeConversationMember(
     !mayRemoveConversationAgent(
       deps.ctx,
       input.principal,
-      conversation.workspace_id,
+      workspaceId,
       agent.id,
     )
   ) {
@@ -1117,7 +1160,7 @@ export async function removeConversationMember(
   let message: MessageDto | null;
   try {
     message = deps.membershipPersistence.uow.atomically(
-      { workspaceId: conversation.workspace_id, member: { kind: 'agent', id: agent.id } },
+      { workspaceId: workspaceId, member: { kind: 'agent', id: agent.id } },
       tx => {
         const authority = readActorAuthority(tx.authority, input.principal, conversation.id);
         if (!authority.inConversation || !(authority.governs || ownsAgent)) {
@@ -1152,9 +1195,11 @@ export async function removeConversationMember(
 export function publishMemberRemoved(
   ctx: BackendContext,
   conversations: ConversationRepo,
-  conversation: { id: string; workspace_id: string },
+  conversation: { id: string; workspace_id: string | null },
   message: MessageDto,
 ): void {
+  // Workspace-scoped by definition — see publishMemberAdded.
+  const workspaceId = requireWorkspacePlacement(conversation);
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
   // The removed member no longer appears in listAgents, so the remaining
   // agents get the row and the departed one is naturally excluded.
@@ -1163,14 +1208,14 @@ export function publishMemberRemoved(
     kind: 'conversation_members_changed',
     payload: {
       conversation_id: conversation.id,
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
     },
   });
   ctx.events.publishToScope(
-    `workspace:${conversation.workspace_id}`,
+    `workspace:${workspaceId}`,
     'workspace_channels_changed',
     {
-      workspace_id: conversation.workspace_id,
+      workspace_id: workspaceId,
       channel_id: conversation.id,
     },
   );
@@ -1274,7 +1319,7 @@ export function evaluateChannelHumanMemberRemoval(
   conversation: {
     id: string;
     kind: ConversationKind;
-    workspace_id: string;
+    workspace_id: string | null;
     visibility: ConversationVisibility;
     archived_at: number | null;
     closed_at: number | null;
@@ -1296,7 +1341,17 @@ export function evaluateChannelHumanMemberRemoval(
   if (principal.kind === 'user' && principal.userId === targetUserId) {
     return { outcome: 'refused', code: 'self_target' };
   }
-  if (!canGovernWorkspace(deps.ctx, principal, conversation.workspace_id, 'admin')) {
+  // An AUTHORIZATION predicate, so a placement with no workspace refuses rather
+  // than asserts: every gate below asks a workspace-ROLE question, and "no
+  // workspace" means there is no role row to grant authority — never a reason to
+  // fall through to allowed (§12.1#5). The `kind === 'channel'` gate above
+  // already implies workspace placement today; this states the rule without
+  // depending on that.
+  const workspaceId = conversation.workspace_id;
+  if (workspaceId === null) {
+    return { outcome: 'refused', code: 'forbidden' };
+  }
+  if (!canGovernWorkspace(deps.ctx, principal, workspaceId, 'admin')) {
     return { outcome: 'refused', code: 'forbidden' };
   }
   // Rank guard: governance is not transitive upward. An `admin` who could evict
@@ -1308,8 +1363,8 @@ export function evaluateChannelHumanMemberRemoval(
   // blocks removing a plain member.
   if (
     workspaceRoleOutranks(
-      userWorkspaceRole(deps.ctx, conversation.workspace_id, targetUserId),
-      workspaceRole(deps.ctx, principal, conversation.workspace_id),
+      userWorkspaceRole(deps.ctx, workspaceId, targetUserId),
+      workspaceRole(deps.ctx, principal, workspaceId),
     )
   ) {
     return { outcome: 'refused', code: 'target_outranks_actor' };
@@ -1412,6 +1467,8 @@ export async function removeConversationHumanMember(
   }
   const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
   const member = conversationMemberAddedHumanSnapshot(target);
+  // Workspace-scoped by definition — same reasoning as addConversationMember.
+  const workspaceId = requireWorkspacePlacement(conversation);
   // The authority, the exit eligibility and the audit message are all decided under
   // the lock (#task:1987). The gate above ran before it, so another request could
   // have deleted the edge (a second removal audit is a state no serial order
@@ -1420,7 +1477,7 @@ export async function removeConversationHumanMember(
   let message: MessageDto | null;
   try {
     message = deps.membershipPersistence.uow.atomically(
-      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: input.userId } },
+      { workspaceId, member: { kind: 'human', id: input.userId } },
       (tx, anchor) => {
         const revalidated = revalidateHumanRemovalInsideLock(tx, {
           principal: input.principal,
@@ -1479,7 +1536,7 @@ export function buildConversationMemberRemovability(
   conversation: {
     id: string;
     kind: ConversationKind;
-    workspace_id: string;
+    workspace_id: string | null;
     visibility: ConversationVisibility;
     archived_at: number | null;
     closed_at: number | null;
@@ -1494,6 +1551,15 @@ export function buildConversationMemberRemovability(
           can_remove:
             conversation.kind === 'channel'
             && conversation.closed_at === null
+            // The arm below asks a workspace-ROLE question, so a placement with
+            // no workspace answers `false` here for the same reason
+            // {@link evaluateChannelHumanMemberRemoval} refuses it: there is no
+            // role row that could grant the authority. Written explicitly rather
+            // than leaned on `kind === 'channel'` — that only implies the
+            // workspace arm because `kind` is GENERATED from `roster_policy`, and
+            // a generated-column implication is too indirect to be the thing a
+            // governance answer rests on.
+            && isWorkspacePlaced(conversation)
             && mayRemoveConversationAgent(
               deps.ctx,
               principal,

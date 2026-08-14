@@ -4,10 +4,13 @@
 // returns named driver-free ports only — never a concrete repo — so
 // application/service code cannot reach raw DB through this surface.
 //
-// It composes NO effects: `unread_updated` publication and the cross-channel cc
-// fan-out are post-commit side effects with their own named adapters
-// (`adapters/unread-publish.ts`, `adapters/mention-cc.ts`). Keeping them out of
-// here is what makes "a transaction callback structurally cannot publish" true.
+// It composes NO effects: `unread_updated` publication is a post-commit side
+// effect with its own named adapter (`adapters/unread-publish.ts`). Keeping it
+// out of here is what makes "a transaction callback structurally cannot publish"
+// true. The mention CC used to be the second such adapter; in v71 its writes are
+// part of the send transaction (§5) and reach persistence through
+// `MessageTxScope` like every other in-transaction write, so nothing about it is
+// composed here separately.
 import type { Database as Db } from 'better-sqlite3';
 import { AgentRepo } from './agent-repo.js';
 import { AttachmentRepo } from './attachment-repo.js';
@@ -271,6 +274,12 @@ export function createSqliteConversationPersistence(
       conversations.getAgent(conversationId, agentId),
     listAgents: id => conversations.listAgents(id),
     listUserMemberIds: id => conversations.listUserMembers(id).map(u => u.id),
+    // Projection point: the inbox arc's only fact the CC write may see is the
+    // id (its `workspace_id` is NULL by construction and its roster is empty).
+    agentInbox: agentId => {
+      const inbox = conversations.getAgentInbox(agentId);
+      return inbox ? { id: inbox.id } : null;
+    },
   };
 
   const messageScope: MessageTxScope = {
@@ -298,6 +307,30 @@ export function createSqliteConversationPersistence(
         messages.listStreamBelowSeq(conversationId, threadRootId, beforeSeq),
     },
     conversations: messageConversations,
+    // Name only — see `MessageTxWorkspacesPort`. Explicit projection, not a
+    // structural pass-through of the row (R4).
+    workspaces: {
+      nameOf: workspaceId => workspaces.get(workspaceId)?.name ?? null,
+    },
+    notifications: {
+      insertMentionExternal: args => {
+        notifications.insert({
+          kind: 'mention_external',
+          userId: args.userId,
+          agentId: args.agentId,
+          // The notification's own coordinates ARE the source's (option A): the
+          // viewer is the author, and the author's read path is the source
+          // message they can see — never the recipient's inbox copy.
+          workspaceId: args.sourceWorkspaceId,
+          conversationId: args.sourceConversationId,
+          messageId: args.sourceMessageId,
+          sourceWorkspaceId: args.sourceWorkspaceId,
+          sourceConversationId: args.sourceConversationId,
+          sourceMessageId: args.sourceMessageId,
+          payload: args.payload,
+        });
+      },
+    },
     agents: {
       get: id => agents.get(id),
       getByName: name => agents.getByName(name),
@@ -372,7 +405,6 @@ export function createSqliteConversationPersistence(
     getMessageById: id => messages.getById(id),
     getAgent: id => agents.get(id),
     getUser: id => toPrincipalNameSnapshot(users.get(id)),
-    getWorkspace: id => workspaces.get(id),
     viewerUserIds: id => conversationViewerUserIds(conversations, id),
   };
 

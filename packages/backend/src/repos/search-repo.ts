@@ -10,6 +10,7 @@ import type {
 import { messageRowToDto } from './message-repo.js';
 import { loadMessageAuthors } from './message-author.js';
 import { likeNeedle } from './sql-like.js';
+import { workspacePlaced } from './conversation-placement-sql.js';
 import {
   streamScopePredicate,
   streamScopeParams,
@@ -395,6 +396,19 @@ function applyConversationScopeFilters(
   conversationAlias: string,
   workspaceAlias: string,
 ): void {
+  // Placement (§4.1/§6): search is a WORKSPACE-scoped read model — every
+  // `SearchResultDto` carries a `workspace` ref (id + name + kind), and `scope`
+  // itself is a workspace-kind filter, so a conversation with no workspace has
+  // no describable result shape here. Stated ONCE in the shared scope helper
+  // because all three statements that need it (conversation search, message
+  // search, and the message `total` COUNT over the same WHERE) come through
+  // here — and stated as a predicate rather than left to each query's
+  // `JOIN workspaces`, so the exclusion is a decision in the query text instead
+  // of a coordinate lookup quietly dropping rows. The human-visibility EXISTS is
+  // a SECOND, independent reason (a human is never a participant of a
+  // workspace-less placement, §4.2), but it is optional on `SearchOptions`, so
+  // it cannot be the thing this rule rests on.
+  where.push(workspacePlaced(conversationAlias));
   if (input.scope === 'regular') {
     where.push(`${workspaceAlias}.workspace_kind = 'regular'`);
   } else if (input.scope === 'dm') {

@@ -13,7 +13,22 @@ import {
 
 export const ConversationDtoSchema = z.object({
   id: z.string(),
-  workspace_id: z.string(),
+  // NULL exactly when the conversation is not workspace-placed
+  // (agent-scoped-session-v1 §4.1: `placement_kind='agent_inbox'` today,
+  // `direct_pair` from P3). A workspace coordinate is a PROPERTY OF THE
+  // PLACEMENT, not of every conversation, so it is derived per row rather than
+  // assumed — the doc's "每一行必须自带坐标" applied to the wire.
+  //
+  // Widened here rather than kept `z.string()` with a coercion at the mapper
+  // because the failure mode of the lie is invisible: responses are built from
+  // these types without a runtime parse, so a non-workspace row would flow out
+  // as `undefined`/`null` past a `string` type with no red light anywhere. The
+  // nullable type makes every consumer decide at typecheck instead.
+  //
+  // Reachability: a human-facing route cannot return a non-workspace row today
+  // (`participantsOf(agent_inbox)` = the owner agent only, so the permission
+  // check denies first) — the null arm is reached by agent/internal surfaces.
+  workspace_id: z.string().nullable(),
   kind: ConversationKindSchema,
   title: z.string(),
   status: ConversationStatusSchema,

@@ -1,5 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import { agentParticipates, WORKSPACE_PLACED } from './conversation-placement-sql.js';
+import { AGENT_INBOX_TITLE, requireWorkspacePlacement } from '@silverhand/shared';
 import type {
   ChannelConversationDto,
   ConversationAgentDto,
@@ -31,6 +33,27 @@ function newId(): string {
 export interface ConversationRef {
   id: string;
   workspace_id: string;
+}
+
+/**
+ * Identity + PLACEMENT: what a conversation is and WHERE it lives
+ * (agent-scoped-session-v1 §4.1), with no UI read model attached.
+ *
+ * A separate projection from `ConversationDto` because placement is deliberately
+ * not on the wire (see `stripInternalColumns`), and from `ConversationRef`
+ * because that one asserts a workspace coordinate a row may legitimately lack.
+ * This is what a consumer needs when the ANSWER DEPENDS ON THE ARM — the ACL's
+ * participant rule above all: `workspace_id === null` says only "not
+ * workspace-placed", never whose line it is.
+ */
+export interface ConversationIdentity {
+  id: string;
+  kind: ConversationRow['kind'];
+  visibility: ConversationVisibility;
+  archived_at: number | null;
+  placement_kind: ConversationPlacementKind;
+  workspace_id: string | null;
+  inbox_agent_id: string | null;
 }
 
 /**
@@ -73,21 +96,24 @@ export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.wo
 // and must never reach the wire. These mappers strip it from the row before it
 // becomes a DTO — the type drops it too, but stripping kills the runtime leak.
 //
-// `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1) are
-// stripped for a different reason: they are the new AUTHORITATIVE axes, but the
-// wire contract for this release still speaks only the derived `kind`. Exposing
-// them here would ship an unversioned DTO change from a migration-only ticket
+// `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1) and
+// `inbox_agent_id` (v71) are stripped for a different reason: they are the new
+// AUTHORITATIVE axes, but the wire contract for this release still speaks only
+// the derived `kind` (plus the now-nullable `workspace_id`). Exposing them here
+// would ship an unversioned DTO change from a migration-only ticket
 // (#task:2012); the placement-aware wire shape lands with the placements
 // themselves. A spread does NOT get excess-property-checked, so — exactly like
 // `pinned_at` — only the explicit strip prevents a silent runtime leak.
+// Consumers that legitimately need placement ask `getIdentity` for it.
 function stripInternalColumns(row: ConversationRow): Omit<
   ConversationRow,
-  'pinned_at' | 'placement_kind' | 'roster_policy'
+  'pinned_at' | 'placement_kind' | 'roster_policy' | 'inbox_agent_id'
 > {
   const {
     pinned_at: _pinnedAt,
     placement_kind: _placementKind,
     roster_policy: _rosterPolicy,
+    inbox_agent_id: _inboxAgentId,
     ...rest
   } = row;
   return rest;
@@ -133,6 +159,67 @@ export class ConversationRepo {
       .prepare<[string], ConversationRow>('SELECT * FROM conversations WHERE id = ?')
       .get(id);
     return row ? rowToDto(row) : null;
+  }
+
+  /** Identity + placement for one conversation — see {@link ConversationIdentity}.
+   *  One statement, so a placement-branching consumer (the ACL) pays a single
+   *  read rather than a DTO read plus a placement read. */
+  getIdentity(id: string): ConversationIdentity | null {
+    const row = this.db
+      .prepare<[string], ConversationRow>(
+        `SELECT id, kind, visibility, archived_at,
+                placement_kind, workspace_id, inbox_agent_id
+           FROM conversations WHERE id = ?`,
+      )
+      .get(id);
+    return row
+      ? {
+        id: row.id,
+        kind: row.kind,
+        visibility: row.visibility,
+        archived_at: row.archived_at,
+        placement_kind: row.placement_kind,
+        workspace_id: row.workspace_id,
+        inbox_agent_id: row.inbox_agent_id,
+      }
+      : null;
+  }
+
+  /**
+   * The agent's inbox placement, keyed on the OWNERSHIP column (v71, §4.2).
+   *
+   * Keyed on `inbox_agent_id`, never on the title: an inbox is an invariant of
+   * the Agent aggregate, so its identity is the owner edge — and
+   * `idx_conversations_inbox_agent` (partial UNIQUE) makes "at most one" a
+   * schema fact rather than an ORDER BY tie-break. The retired
+   * `getOrCreateMentionsConversation` looked its predecessor up by
+   * `title = 'Mentions'` inside the agent's home workspace, which is why two
+   * concurrent mentions could create two of them.
+   *
+   * Returns the identity projection, not a DTO: the only fact any caller needs
+   * is the conversation id, and a DTO would hand the mention CC path a
+   * `workspace_id` it must not use.
+   */
+  getAgentInbox(agentId: string): ConversationIdentity | null {
+    const row = this.db
+      .prepare<[string], ConversationRow>(
+        `SELECT id, kind, visibility, archived_at,
+                placement_kind, workspace_id, inbox_agent_id
+           FROM conversations
+          WHERE inbox_agent_id = ? AND placement_kind = 'agent_inbox'`,
+      )
+      .get(agentId);
+    return row
+      ? {
+        id: row.id,
+        kind: row.kind,
+        visibility: row.visibility,
+        archived_at: row.archived_at,
+        placement_kind: row.placement_kind,
+        workspace_id: row.workspace_id,
+        inbox_agent_id: row.inbox_agent_id,
+      }
+      : null;
   }
 
   getChannel(id: string): ChannelConversationDto | null {
@@ -290,13 +377,18 @@ export class ConversationRepo {
   /** Flat archived-channel list across all workspaces, with the parent
    *  workspace's name. Drives the global Archived chat-tool page. Sorted
    *  by `archived_at DESC, created_at ASC`. Filters: optional workspace
-   *  narrowing and `since` (inclusive lower bound on archived_at, epoch ms). */
+   *  narrowing and `since` (inclusive lower bound on archived_at, epoch ms).
+   *
+   *  WORKSPACE-scoped face: every row REPORTS its owning workspace's name, so a
+   *  placement without one has nothing to report. The exclusion is stated as
+   *  {@link WORKSPACE_PLACED} below rather than left to the `JOIN workspaces`. */
   listArchivedChannelsAggregate(opts: {
     workspaceId?: string;
     since?: number;
     forUserId?: string;
   } = {}): ArchivedAggregateRow[] {
     const where: string[] = [
+      WORKSPACE_PLACED,
       `c.kind IN ('channel', 'dm_channel')`,
       `c.archived_at IS NOT NULL`,
     ];
@@ -342,7 +434,10 @@ export class ConversationRepo {
       return {
         channel: assertChannelLike(conversation),
         workspace: {
-          id: conversation.workspace_id,
+          // Guaranteed by the `WORKSPACE_PLACED` predicate above; the assertion
+          // is what TIES that SQL domain filter to this non-null DTO field, so
+          // dropping the predicate reddens here instead of shipping a null id.
+          id: requireWorkspacePlacement(conversation),
           name: workspace_name,
           archived_at: workspace_archived_at,
         },
@@ -350,12 +445,21 @@ export class ConversationRepo {
     });
   }
 
+  /** Every workspace-placed DM channel, across all workspaces.
+   *
+   *  `WORKSPACE_PLACED` is load-bearing here, and in the OPPOSITE direction from
+   *  the other placement predicates in this file: `kind` is GENERATED from
+   *  `roster_policy`, so an agent inbox (necessarily `fixed`) reports
+   *  `kind='dm_channel'` too. Without the predicate this face would silently
+   *  GAIN one row per agent — an unfiltered `kind` scan is the one shape where a
+   *  new placement leaks IN rather than dropping out. */
   listDmChannels(): DmChannelDto[] {
     const rows = this.db
       .prepare<[], ConversationRow>(
-        `SELECT * FROM conversations
-         WHERE kind = 'dm_channel'
-         ORDER BY created_at ASC`,
+        `SELECT * FROM conversations c
+         WHERE ${WORKSPACE_PLACED}
+           AND c.kind = 'dm_channel'
+         ORDER BY c.created_at ASC`,
       )
       .all();
     return rows.map(rowToDmChannel);
@@ -364,6 +468,11 @@ export class ConversationRepo {
   listDmChannelForWorkspace(workspaceId: string): DmChannelDto | null {
     const row = this.db
       .prepare<[string], ConversationRow>(
+        // Placement: the caller's UNIT IS A WORKSPACE, and `c.workspace_id = ?`
+        // is itself the domain filter — a placement without a workspace has a
+        // NULL there, which never equals a bound id. The `JOIN workspaces` only
+        // resolves the owner agent for the title ordering; it excludes nothing
+        // the WHERE clause had not already excluded.
         `SELECT c.*
            FROM conversations c
            JOIN workspaces w ON w.id = c.workspace_id
@@ -439,6 +548,10 @@ export class ConversationRepo {
     workspaceId: string,
     opts: { forUserId?: string; archived?: boolean } = {},
   ): DmChannelDto[] {
+    // Placement: same as `listDmChannelForWorkspace` — the unit is a workspace
+    // and `c.workspace_id = ?` is the domain filter, so the `JOIN workspaces`
+    // (present only to resolve the owner agent for title ordering) removes
+    // nothing on its own.
     const args: Array<string> = [workspaceId];
     let userJoin = '';
     if (opts.forUserId !== undefined) {
@@ -540,8 +653,7 @@ export class ConversationRepo {
     visibility?: ConversationVisibility;
   }): ChannelConversationDto {
     const row = this.insert({
-      workspaceId: params.workspaceId,
-      placementKind: 'workspace',
+      placement: { kind: 'workspace', workspaceId: params.workspaceId },
       rosterPolicy: 'open',
       title: params.title,
       spawnedByAgentId: params.spawnedByAgentId ?? null,
@@ -556,13 +668,61 @@ export class ConversationRepo {
     agentId?: string | null;
   }): DmChannelDto {
     const row = this.insert({
-      workspaceId: params.workspaceId,
-      placementKind: 'workspace',
+      placement: { kind: 'workspace', workspaceId: params.workspaceId },
       rosterPolicy: 'fixed',
       title: params.title,
       spawnedByAgentId: null,
     });
     return rowToDmChannel(row);
+  }
+
+  /**
+   * The agent's inbox placement — the other half of bringing an Agent into
+   * existence (v71, §4.2). Written in the SAME transaction as the `agents` row
+   * (`reserveAgentAggregate`), so "an agent has exactly one inbox" is an
+   * invariant of the row rather than something a mention repairs later;
+   * `idx_conversations_inbox_agent` makes a second one a constraint failure.
+   *
+   * NOT the `pending → active` materialization graph, on purpose: the inbox needs
+   * nothing materialization produces (no daemon ack, no agent dir, no host, no
+   * workspace), while `AgentRepo.getByName` — the mention resolver — answers for
+   * `pending_materialization` and `failed` rows too. An inbox born with the
+   * status flip would mean a mention of a reserved-but-failed handle has no
+   * destination (a loud throw inside the sender's own message transaction), and a
+   * retry would try to insert a second inbox for a row that already has one.
+   *
+   * NO `conversation_agents` row, by construction: on this arc the participant IS
+   * `inbox_agent_id`, and a projected roster row would be a second authority for
+   * the same fact.
+   *
+   * `createdAt` is the OWNING AGENT's `created_at`, matching the v71 backfill
+   * statement: the timestamp expresses agent-aggregate birth, not when a
+   * dependent row happened to land, so an upgraded inbox and a freshly created
+   * one are indistinguishable. The id is an ordinary conversation id — see
+   * {@link insert} for why this arc may not mint a shape of its own.
+   *
+   * Returns the identity projection: an inbox has no workspace and no roster, so
+   * there is no channel DTO to hand back and no wire surface that wants one.
+   */
+  insertAgentInbox(agentId: string, createdAt: number): ConversationIdentity {
+    const row = this.insert({
+      placement: { kind: 'agent_inbox', agentId },
+      // The arc's CHECK requires `fixed`: an inbox roster is not open to
+      // placement at all, so "open" would not merely be wrong, it is refused.
+      rosterPolicy: 'fixed',
+      title: AGENT_INBOX_TITLE,
+      spawnedByAgentId: null,
+      createdAt,
+    });
+    return {
+      id: row.id,
+      kind: row.kind,
+      visibility: row.visibility,
+      archived_at: row.archived_at,
+      placement_kind: row.placement_kind,
+      workspace_id: row.workspace_id,
+      inbox_agent_id: row.inbox_agent_id,
+    };
   }
 
   setArchived(
@@ -755,6 +915,32 @@ export class ConversationRepo {
     return row ? { ...row } : null;
   }
 
+  /**
+   * PARTICIPATION — "is this agent one of the conversation's participants?" —
+   * which is NOT the same question as {@link getAgent}, "is there a roster row?".
+   *
+   * For the workspace arm the two coincide: participants ARE the
+   * `conversation_agents` rows. For `agent_inbox` there is deliberately no roster
+   * row (§4.2, Cindy `SEfG0TUfDkOaB9xn`): the placement itself names the single
+   * participant via `inbox_agent_id`, so a caller asking about MEMBERSHIP must
+   * ask this, while a caller that needs the runtime seat's columns
+   * (`pid` / `status` / `cli_session_id`) must keep using `getAgent` — those
+   * facts exist only for a roster row and an inbox has none.
+   *
+   * The predicate is the boolean form of `agentParticipates`, the same SQL the
+   * embedded read faces splice in, so there is ONE definition of participation
+   * rather than a TS copy that drifts from the query text.
+   */
+  isAgentParticipant(conversationId: string, agentId: string): boolean {
+    const { sql, params } = agentParticipates('c', agentId);
+    const row = this.db
+      .prepare<string[], { ok: number }>(
+        `SELECT 1 AS ok FROM conversations c WHERE c.id = ? AND ${sql}`,
+      )
+      .get(conversationId, ...params);
+    return row !== undefined;
+  }
+
   // ── Human (user) membership — `conversation_users` (v25) ─────────
   // Mirrors `addAgent` / `listAgents` / `getAgent` etc. for users.
   // Humans don't run as processes, so this table has no
@@ -840,33 +1026,50 @@ export class ConversationRepo {
       .map(r => ({ ...r }));
   }
 
+  /**
+   * The one INSERT. `placement` is a DISCRIMINATED UNION, not a
+   * `placementKind` + nullable columns triple, because the DB's arc CHECK is
+   * exactly that shape: each placement names the columns it owns and NULLs every
+   * other arc's. Passing them separately would make "workspace placement with an
+   * `inbox_agent_id`" a expressible-but-refused call — a runtime constraint
+   * failure standing in for a type error.
+   */
   private insert(params: {
-    workspaceId: string;
-    /** The two authoritative axes (v69). `kind` is NOT passed and NOT written:
-     *  the DB derives it from `roster_policy` as a generated column, so this
-     *  layer must not carry a mirrored derivation. */
-    placementKind: ConversationPlacementKind;
+    placement:
+      | { kind: 'workspace'; workspaceId: string }
+      | { kind: 'agent_inbox'; agentId: string };
+    /** The roster axis (v69). `kind` is NOT passed and NOT written: the DB
+     *  derives it from `roster_policy` as a generated column, so this layer must
+     *  not carry a mirrored derivation. */
     rosterPolicy: ConversationRosterPolicy;
     title: string;
     spawnedByAgentId: string | null;
     /** Defaults to the DB column default ('private') when
      *  omitted. Only an open roster may be 'public' (the DB CHECK enforces it). */
     visibility?: ConversationVisibility;
+    /** `created_at`/`updated_at`, when the caller owns a truer birth instant
+     *  than "now" — see {@link insertAgentInbox}. Defaults to the wall clock. */
+    createdAt?: number;
   }): ConversationRow {
+    // Every placement gets a fresh opaque id from the ONE generator: a
+    // conversation id is a domain value object (12 random bytes as 16 chars of
+    // base64url) and the canonical `#conv:<id>` grammar accepts exactly that, so
+    // no arc may mint a shape of its own.
     const id = newId();
-    const now = Date.now();
+    const now = params.createdAt ?? Date.now();
     this.db
       .prepare(
         `INSERT INTO conversations
-         (id, workspace_id, placement_kind, roster_policy, title, status,
-          spawned_by_agent_id, closed_at, close_summary,
+         (id, workspace_id, inbox_agent_id, placement_kind, roster_policy, title,
+          status, spawned_by_agent_id, closed_at, close_summary,
           created_at, updated_at, visibility)
-         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
       )
       .run(
         id,
-        params.workspaceId,
-        params.placementKind,
+        params.placement.kind === 'workspace' ? params.placement.workspaceId : null,
+        params.placement.kind === 'agent_inbox' ? params.placement.agentId : null,
+        params.placement.kind,
         params.rosterPolicy,
         params.title,
         params.spawnedByAgentId,

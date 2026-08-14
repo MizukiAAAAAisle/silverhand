@@ -23,6 +23,7 @@ import {
   internalPaths,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 
 export function registerTaskRoutes(
   app: Hono<AppEnv>,
@@ -65,8 +66,17 @@ export function registerTaskRoutes(
     // layer so the service doesn't silently widen reads across
     // workspaces. We don't accept --workspace <name> for list — only
     // claim/unclaim/status need the disambiguation.
-    let effectiveWorkspaceId = parsed.data.workspace_id;
-    if (effectiveWorkspaceId && effectiveWorkspaceId !== conversation.workspace_id) {
+    // A task Board belongs to a workspace and an `agent_inbox` has none (doc
+    // §4.2), so from an inbox session the board question has no ambient answer:
+    // name a workspace explicitly rather than read an empty board (v71).
+    const scope = resolveAgentQueryWorkspaceId(
+      c,
+      conversation,
+      parsed.data.workspace_id,
+    );
+    if (!scope.ok) return scope.response;
+    const effectiveWorkspaceId = scope.workspaceId;
+    if (effectiveWorkspaceId !== conversation.workspace_id) {
       const targetWs = workspaces.get(effectiveWorkspaceId);
       if (!targetWs) {
         return c.json(
@@ -87,8 +97,6 @@ export function registerTaskRoutes(
           403,
         );
       }
-    } else if (!effectiveWorkspaceId) {
-      effectiveWorkspaceId = conversation.workspace_id;
     }
     {
       const denied = requireAgentCapability(c, ctx, principal, 'read_tasks', effectiveWorkspaceId);
@@ -156,25 +164,31 @@ export function registerTaskRoutes(
     // same-conversation create requires WITHOUT relaxing the ~90-call-site
     // global post/view predicates. Unknown destination and non-member
     // destination collapse to ONE 403 shape: never probe existence.
+    // A task Board belongs to a WORKSPACE (doc §4.2: an `agent_inbox` has no
+    // board), so a workspace-less destination is not a place work can be filed.
+    // That joins the same single 403 as unknown/non-member destination — the
+    // caller must not be able to tell those apart.
     const destConv = conversations.get(destination);
+    const destWorkspaceId = destConv?.workspace_id ?? null;
     const authorized =
       !!destConv &&
-      canAgentAccessWorkspace(ctx, principal.agentId, destConv.workspace_id) &&
+      destWorkspaceId !== null &&
+      canAgentAccessWorkspace(ctx, principal.agentId, destWorkspaceId) &&
       conversations.getAgent(destination, principal.agentId) != null;
-    if (!destConv || !authorized) {
+    if (!destConv || destWorkspaceId === null || !authorized) {
       return c.json({ error: 'forbidden' }, 403);
     }
     // Capabilities are judged on the DESTINATION's workspace — a cross-workspace
     // create needs create_tasks (and write_tasks for --claim) in B, not in the
     // origin workspace.
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'create_tasks', destConv.workspace_id);
+      const denied = requireAgentCapability(c, ctx, principal, 'create_tasks', destWorkspaceId);
       if (denied) return denied;
     }
     // `--claim` self-assigns the created task, which is a task write — gate it
     // on write_tasks in addition to create_tasks (same capability claim needs).
     if (parsed.data.claim === true) {
-      const denied = requireAgentCapability(c, ctx, principal, 'write_tasks', destConv.workspace_id);
+      const denied = requireAgentCapability(c, ctx, principal, 'write_tasks', destWorkspaceId);
       if (denied) return denied;
     }
     const result = await ctx.taskService.createTasks({

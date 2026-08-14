@@ -1,6 +1,7 @@
-import type {
-  AttentionBadgeUpdatedPayload,
-  UnreadUpdatedMessagePayload,
+import {
+  requireWorkspacePlacement,
+  type AttentionBadgeUpdatedPayload,
+  type UnreadUpdatedMessagePayload,
 } from '@silverhand/shared';
 import type { AttentionBadgeRepo } from './repos/attention-badge-repo.js';
 import type { ConversationRepo } from './repos/conversation-repo.js';
@@ -140,7 +141,17 @@ export function publishUnreadUpdatedToConversationViewers(
 ): void {
   const conversation = conversations.get(conversationId);
   if (!conversation) return;
-  const workspaceId = conversation.workspace_id;
+  // This whole read model's unit is (HUMAN viewer, WORKSPACE) — see
+  // `buildUnreadUpdatedMessagePayload`. A workspace-less placement therefore has
+  // no payload to build, and by §4.2 no human participant either, so every
+  // caller that routes one here is announcing a human-facing unread change for a
+  // conversation no human can see.
+  //
+  // Deliberately NOT reordered into "list viewers first, return when empty":
+  // that would turn the routing bug into a silent no-op justified by a
+  // CONSEQUENCE of the same placement fact, which is exactly the incidental
+  // disappearance this feature exists to remove.
+  const workspaceId = requireWorkspacePlacement(conversation);
   // Per-viewer: unread is viewer-specific, so the payload is computed inside the
   // loop (never one payload reused across viewers). The frame rides the
   // per-viewer `viewer:<id>` scope, so per-viewer absolutes carry no

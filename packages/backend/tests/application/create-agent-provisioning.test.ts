@@ -94,7 +94,11 @@ describe('createAgent provisioning failure (application integration)', () => {
     const { db, deps, runtimeHost, fakeHostWs } = buildDeps();
     // Wrap the production provisioning scope: the SAME fault as the adapter
     // test — conversations.insertDmChannel throws after flipToActive + home.
+    // Only the DEPENDENT-GRAPH uow is faulted; `reserveAgentAggregate` stays
+    // real, because the L1 aggregate (row + inbox) must already have committed
+    // before this failure — that is what the assertions below read.
     deps.agentProvisioning = {
+      ...deps.agentProvisioning,
       uow: uowWithScopeWrap(deps.agentProvisioning.uow, () => tx =>
         overrideScope(tx, {
           conversations: overrideScope(tx.conversations, {

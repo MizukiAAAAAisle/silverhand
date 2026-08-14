@@ -10,7 +10,6 @@ import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createSqliteConversationPersistence } from '../../src/repos/conversation-persistence.js';
-import { createMentionCcAdapter } from '../../src/adapters/mention-cc.js';
 import { createUnreadPublishAdapter } from '../../src/adapters/unread-publish.js';
 import {
   ActorError,
@@ -22,14 +21,32 @@ import type { MessageTxScope } from '../../src/services/conversation-message/por
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
-import { ccMentionsFromUserMessage } from '../../src/application/mention-cc.js';
+import { writeMentionCcCopies } from '../../src/application/mention-cc.js';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 
+// v71 (#task:2014): the mention CC is no longer a post-commit port call but a
+// WRITE INSIDE the send transaction, so the seam this file mocks moved from the
+// adapter to the two module functions. The stub returns an empty report because
+// this suite is about the send's own contract — what the CC itself writes is
+// `tests/services/mention-cc.test.ts`, on the real thing.
 vi.mock('../../src/application/mention-cc.js', () => ({
-  ccMentionsFromUserMessage: vi.fn(async () => {}),
+  writeMentionCcCopies: vi.fn(
+    (
+      _tx: unknown,
+      input: { message: { id: string }; sourceConversation: { id: string } },
+    ) => ({
+      copies: [],
+      skipped: [],
+      source: {
+        conversationId: input.sourceConversation.id,
+        messageId: input.message.id,
+      },
+    }),
+  ),
+  dispatchMentionCcEffects: vi.fn(async () => {}),
 }));
 
 // #task:2000 (Cindy round-2 MUST FIX 1): the REAL parser, spy-wrapped. The send
@@ -100,7 +117,7 @@ class FakeConversationManager {
 }
 
 function bootstrap() {
-  vi.mocked(ccMentionsFromUserMessage).mockClear();
+  vi.mocked(writeMentionCcCopies).mockClear();
   vi.mocked(extractMessageReferences).mockClear();
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
@@ -131,12 +148,6 @@ function bootstrap() {
     uow: uowWithScopeWrap(persistence.message.uow, () => txWrap.current),
     threadFollow: persistence.threadFollow,
     delivery: persistence.delivery,
-    mentionCc: createMentionCcAdapter({
-      db,
-      runtimeHost: fake as unknown as AgentRuntimeHost,
-      events,
-      logger,
-    }),
     unreadPublish: createUnreadPublishAdapter({ db, events }),
     runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
@@ -225,7 +236,7 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(t.fake.starts.map(s => s.agentId).sort()).toEqual(
         [t.alice.id, t.bob.id].sort(),
       );
-      expect(vi.mocked(ccMentionsFromUserMessage)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(writeMentionCcCopies)).toHaveBeenCalledTimes(1);
       expect(conversationEvents[0]).toMatchObject({
         kind: 'message',
         payload: { message: { id: result.committed.message.id } },
@@ -719,7 +730,7 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(t.fake.resolvedRuns).toEqual([
         { conversationId: t.channel.id, agentId: t.alice.id, reason: 'replied' },
       ]);
-      expect(vi.mocked(ccMentionsFromUserMessage)).not.toHaveBeenCalled();
+      expect(vi.mocked(writeMentionCcCopies)).not.toHaveBeenCalled();
     } finally {
       t.cleanup();
     }
@@ -1690,10 +1701,12 @@ describe('ConversationMessageService.sendMessage', () => {
         }),
       ]);
 
-      // Consumer 3 (post-commit, across the port): the CC pass is handed the
-      // identical array — no second parse, no second authority.
-      await waitFor(() => vi.mocked(ccMentionsFromUserMessage).mock.calls.length === 1);
-      const ccArgs = vi.mocked(ccMentionsFromUserMessage).mock.calls[0]![0];
+      // Consumer 3 (IN-TX since v71 §5): the CC write is handed the identical
+      // array — no second parse, no second authority. No `waitFor` any more, and
+      // that is the point: the call happened synchronously inside the send
+      // transaction, so by the time `sendMessage` resolved it had already run.
+      expect(vi.mocked(writeMentionCcCopies).mock.calls).toHaveLength(1);
+      const ccArgs = vi.mocked(writeMentionCcCopies).mock.calls[0]![1];
       expect(ccArgs.references).toBe(derived);
     } finally {
       t.cleanup();
@@ -1911,7 +1924,7 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       expect(viewerEvents).toEqual([]);
       expect(t.fake.delivered).toEqual([]);
       expect(t.fake.starts).toEqual([]);
-      expect(vi.mocked(ccMentionsFromUserMessage).mock.calls).toEqual([]);
+      expect(vi.mocked(writeMentionCcCopies).mock.calls).toEqual([]);
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
       // and no half-written message row
       expect(t.messages.listForConversation(t.channel.id)).toEqual([]);

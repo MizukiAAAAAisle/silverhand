@@ -15,9 +15,12 @@
  *  - `MessageTxScope` carries NOTHING a callback does not actually call —
  *    surplus capability is how a future application ends up reading
  *    transactionally by accident (R3);
- *  - post-commit effects (`ConversationUnreadPublishPort`, `MentionCcPort`)
+ *  - post-commit EFFECTS (`ConversationUnreadPublishPort`, the runtime wake)
  *    are deliberately NOT reachable from the scope, so a tx callback cannot
- *    publish (R1/§6).
+ *    publish (R1/§6). The converse is not a rule: a WRITE whose loss the domain
+ *    cannot tolerate belongs in the transaction, which is why the mention CC
+ *    copy and its `mention_external` row moved onto the scope in v71 (§5) and
+ *    only their WS/runtime effects stayed outside.
  */
 import type {
   AgentDto,
@@ -31,7 +34,6 @@ import type {
   Reference,
   ThreadFollowerSource,
   ThreadSummaryInvariant,
-  WorkspaceDto,
 } from '@silverhand/shared';
 import type { AttachmentSnapshotSource } from '../attachment/snapshot-resolution.js';
 
@@ -60,6 +62,11 @@ export interface MessageInsertArgs {
   attachments?: AttachmentSnapshot[] | null;
   threadRootId?: string | null;
   freshnessExempt?: boolean;
+  /** Set ONLY by the in-transaction mention CC write (v71, §5): the source
+   *  message this row copies. The partial UNIQUE on
+   *  `(cc_source_message_id, conversation_id)` is what makes "one copy per
+   *  inbox" a schema fact. */
+  ccSourceMessageId?: string | null;
 }
 
 /** Compare-and-set insert arguments: `seenUpToSeq` is the actor's last
@@ -125,6 +132,69 @@ export interface MessageTxConversationsPort {
   /** Ids of the human members of a conversation — the mention-follow
    *  membership filter. Ids only: the callers never read another column. */
   listUserMemberIds(conversationId: string): string[];
+  /**
+   * The mentioned agent's INBOX placement (v71, §4.2) — the destination of the
+   * mention CC copy, which is written in the source message's own transaction.
+   *
+   * Id only. The inbox has no workspace and no roster rows, so a wider shape
+   * would hand the CC use case coordinates that do not exist on this arc. `null`
+   * means the Agent aggregate is missing its inbox invariant — the use case
+   * fails loud rather than creating one lazily (the retired title-keyed
+   * get-or-create is exactly what made two inboxes possible).
+   */
+  agentInbox(agentId: string): { id: string } | null;
+}
+
+/** The workspace facts the send transaction needs — the NAME only, for the
+ *  mention CC wrap and the `mention_external` payload's denormalized label.
+ *  Nothing on the send path is authorized BY a workspace read (capability and
+ *  membership gates run in the route/service before the transaction opens), so
+ *  a wider face here would only invite one. */
+export interface MessageTxWorkspacesPort {
+  nameOf(workspaceId: string): string | null;
+}
+
+/** The notification writes the send transaction performs. Named after the
+ *  domain act, so `kind = 'mention_external'` is decided by WHICH method is
+ *  called and cannot drift per call site.
+ *
+ *  `mention_external` is committed WITH the source message (§5): a human being
+ *  told "your mention reached that agent" is a consequence of the send, and a
+ *  post-commit insert loses it outright if the process dies in the gap.
+ *  Contrast `DeliveryWritePort.insertNotification`, which serves post-commit
+ *  kinds (`agent_start_failed`) whose trigger is not the send itself. */
+export interface MessageTxNotificationsPort {
+  insertMentionExternal(args: MentionExternalNotificationArgs): void;
+}
+
+/**
+ * The `mention_external` row's shape — settled product contract (shiki,
+ * 2026-08-14, "option A"):
+ *
+ *   - the VIEWER is the source message's author. The mention is theirs; the
+ *     inbox copy belongs to the agent, and an inbox has no human participant
+ *     (§4.2), so nobody else could receive this notification.
+ *   - the JUMP TARGET is the SOURCE message — `(conversationId, messageId)` name
+ *     the source, never the inbox copy. The author is a member there and can
+ *     read it; pointing at the inbox would send them to a conversation whose
+ *     ACL denies them by domain rule.
+ *
+ * Hence no `workspaceId` argument either: the source conversation's workspace is
+ * the only workspace involved, and the inbox has none.
+ */
+export interface MentionExternalNotificationArgs {
+  /** The author of the source message — the viewer of this notification. */
+  userId: string;
+  /** The agent that was mentioned (the inbox owner), for list rendering. */
+  agentId: string;
+  sourceWorkspaceId: string;
+  sourceConversationId: string;
+  sourceMessageId: string;
+  payload: {
+    source_workspace_name: string;
+    source_conversation_title: string;
+    mention_excerpt: string;
+  };
 }
 
 export interface ThreadFollowerUpsertArgs {
@@ -161,6 +231,8 @@ export interface AttachmentSnapshotSourcePort {
 export interface MessageTxScope {
   messages: MessageTxMessagesPort;
   conversations: MessageTxConversationsPort;
+  workspaces: MessageTxWorkspacesPort;
+  notifications: MessageTxNotificationsPort;
   agents: { get(agentId: string): AgentDto | null; getByName(name: string): AgentDto | null };
   users: { getByName(name: string): PrincipalNameSnapshot | null };
   inboxes: {
@@ -218,13 +290,17 @@ export interface ThreadFollowDirectWritePort {
 }
 
 /** Reads the post-commit delivery/notification path needs. All of it runs
- *  AFTER the send transaction committed, so none of it belongs on the scope. */
+ *  AFTER the send transaction committed, so none of it belongs on the scope.
+ *
+ *  No `getWorkspace`: the only post-commit consumer was the mention CC's
+ *  workspace-name lookup, which is now an in-transaction read on
+ *  `MessageTxWorkspacesPort` — the copy is named after the workspace as it was
+ *  when the message committed, not as it is whenever the effects happen to run. */
 export interface DeliveryReadPort {
   getConversation(conversationId: string): ConversationDto | null;
   getMessageById(messageId: string): MessageDto | null;
   getAgent(agentId: string): AgentDto | null;
   getUser(userId: string): PrincipalNameSnapshot | null;
-  getWorkspace(workspaceId: string): WorkspaceDto | null;
   /** Human viewers of a conversation (workspace-scoped resolution lives in
    *  the adapter). */
   viewerUserIds(conversationId: string): string[];
@@ -253,16 +329,12 @@ export interface DeliveryWritePort {
   ): void;
 }
 
-/** Cross-channel cc fan-out for `@mentions` of members of OTHER channels.
- *  A post-commit effect: not reachable from `MessageTxScope`. */
-export interface MentionCcPort {
-  ccMentionsFromUserMessage(args: {
-    message: MessageDto;
-    sourceConversation: ConversationDto;
-    sourceWorkspace: WorkspaceDto;
-    /** The send boundary's single derivation of what the message addresses
-     *  (#task:2000). Carried across the port so the CC pass never re-parses
-     *  the body it was handed. */
-    references: readonly Reference[];
-  }): Promise<void>;
-}
+/** Cross-channel cc fan-out for `@mentions` of members of OTHER channels — the
+ *  RETIRED port shape (v71, #task:2014). The CC copy is no longer a post-commit
+ *  effect that re-enters persistence through its own adapter: the copy, its
+ *  durable inbox delivery row and its `mention_external` notification are all
+ *  written inside the source message's transaction via `MessageTxScope` (§5).
+ *  What is left post-commit — the runtime wake, the WS frames, the skip log —
+ *  holds no persistence capability at all, so it needs no port; the delivery
+ *  coordinator drives it from the in-transaction report
+ *  (`application/mention-cc.ts`). */

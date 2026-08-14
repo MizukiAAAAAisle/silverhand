@@ -8,13 +8,21 @@ import { WorkspaceRepo } from './workspace-repo.js';
 import { ConversationRepo } from './conversation-repo.js';
 import { MessageRepo } from './message-repo.js';
 
-/** The minimal agent face: the conditional transition + authoritative re-read
- *  in ONE operation. `lost` = the UPDATE matched no `pending_materialization`
- *  row (the row is active / failed / vanished) — another transition won, so the
- *  caller fails closed and never compensates. */
+/** The minimal agent face: the L1 reserve, plus the conditional transition +
+ *  authoritative re-read in ONE operation. `lost` = the UPDATE matched no
+ *  `pending_materialization` row (the row is active / failed / vanished) —
+ *  another transition won, so the caller fails closed and never compensates. */
 function agentProvisioningAgentsPort(db: Db): AgentProvisioningTxScope['agents'] {
   const agents = new AgentRepo(db);
   return {
+    reserveForMaterialize({ input, defaultHostId, createdByUserId, idempotencyKey }) {
+      return agents.reserveForMaterialize(
+        input,
+        defaultHostId,
+        createdByUserId,
+        idempotencyKey,
+      );
+    },
     flipToActiveAndGet(id: string) {
       const changed = agents.flipToActive(id);
       if (changed === 0) return { status: 'lost' };
@@ -45,7 +53,9 @@ function workspaceProvisioningPort(
   };
 }
 
-/** The conversation face: DM insert + the two membership edges. */
+/** The conversation face: DM insert, the two membership edges, and the inbox
+ *  placement. The inbox gets NO membership edge on purpose — its participant is
+ *  the ownership column (§4.2). */
 function conversationProvisioningPort(
   db: Db,
 ): AgentProvisioningTxScope['conversations'] {
@@ -54,6 +64,10 @@ function conversationProvisioningPort(
     insertDmChannel(args) {
       const dm = conversations.insertDmChannel(args);
       return { id: dm.id };
+    },
+    insertAgentInbox(agentId, createdAt) {
+      const inbox = conversations.insertAgentInbox(agentId, createdAt);
+      return { id: inbox.id };
     },
     addAgent(conversationId, agentId): void {
       conversations.addAgent(conversationId, agentId);
@@ -99,6 +113,18 @@ export function createSqliteAgentProvisioningPersistence(
       atomically<T>(fn: (tx: AgentProvisioningTxScope) => T): T {
         return db.transaction(() => fn(scope))();
       },
+    },
+    /** The aggregate factory (v71): `agents` row + inbox placement, atomically.
+     *  Reuses the SAME tx-scoped faces as the dependent graph, so the pairing is
+     *  a transaction rather than two calls a caller must remember to make. The
+     *  inbox carries the owner's `created_at` — aggregate birth, which is the
+     *  same instant the v71 backfill writes for pre-existing agents. */
+    reserveAgentAggregate(args) {
+      return db.transaction(() => {
+        const row = scope.agents.reserveForMaterialize(args);
+        scope.conversations.insertAgentInbox(row.id, row.created_at);
+        return row;
+      })();
     },
   };
 }

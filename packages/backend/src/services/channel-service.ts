@@ -3,6 +3,7 @@ import {
   type ConversationVisibility,
   type DmChannelDto,
   type MessageDto,
+  requireWorkspacePlacement,
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
@@ -620,7 +621,7 @@ export class ChannelService {
     }
 
     this.publishWorkspaceChannelsChanged(
-      updated.workspace_id,
+      requireWorkspacePlacement(updated),
       updated.id,
     );
     // Archiving/unarchiving flips whether this channel's unread counts toward the
@@ -721,7 +722,7 @@ export class ChannelService {
       kind: 'message',
       payload: { message: announce },
     });
-    this.publishWorkspaceChannelsChanged(updated.workspace_id, updated.id);
+    this.publishWorkspaceChannelsChanged(requireWorkspacePlacement(updated), updated.id);
     return { channel: updated };
   }
 
@@ -776,7 +777,7 @@ export class ChannelService {
     if (!updated) {
       throw new ChannelError('not_found', 'channel not found');
     }
-    this.publishWorkspaceChannelsChanged(updated.workspace_id, updated.id);
+    this.publishWorkspaceChannelsChanged(requireWorkspacePlacement(updated), updated.id);
     this.logger.info(
       {
         conversationId: updated.id,
@@ -789,6 +790,18 @@ export class ChannelService {
     return { channel: updated };
   }
 
+  /** The discovery-union invalidation frame. Keyed on a WORKSPACE — both the
+   *  `workspace:<id>` scope it rides and the list it invalidates (the viewer's
+   *  per-workspace channel list) are workspace artifacts, so there is no frame
+   *  to emit for a placement without one.
+   *
+   *  The two CREATE callers pass the workspace they were asked to create in; the
+   *  three MUTATION callers derive it from the mutated row with
+   *  `requireWorkspacePlacement`. That assertion cannot fire today — each of
+   *  them refuses anything but `kind === 'channel'`, i.e. an open roster, which
+   *  only the workspace arm has — and it is written anyway because the
+   *  alternative (`?? ''` / `!`) would turn a future placement with an open
+   *  roster into a frame addressed to a scope nobody subscribes to. */
   private publishWorkspaceChannelsChanged(workspaceId: string, channelId: string): void {
     this.events.publishToScope(`workspace:${workspaceId}`, 'workspace_channels_changed', {
       workspace_id: workspaceId,

@@ -1,30 +1,79 @@
+/**
+ * Mention CC, v71 (#task:2014 / agent-scoped-session-v1 §4.2 + §5).
+ *
+ * The model this suite gates is the one the ticket introduced, and every case
+ * below exists because a DIFFERENT way of getting it wrong would go unnoticed:
+ *
+ *  1. The destination is the mentioned agent's INBOX PLACEMENT — workspace-less,
+ *     rosterless, one participant. The retired model copied into a `Mentions` DM
+ *     under the agent's home workspace and ADMITTED the human author to it
+ *     (`conversation_users` + `workspace_users`, #task:1989). So "no human
+ *     participant anywhere" is asserted directly, not implied: that admission is
+ *     the regression this file is here to catch.
+ *  2. The copy is written INSIDE THE SEND'S TRANSACTION. It used to be a
+ *     post-commit best-effort call, where a crash in the gap committed the
+ *     human's message and lost the copy silently. Both directions are gated:
+ *     a failure anywhere in the CC rolls the human's send back, and there is no
+ *     path that commits one without the other.
+ *  3. The wake is the ONLY best-effort part, and today it DEFERS: an inbox has no
+ *     workspace to derive a session cwd from until #task:2019. The fake runtime
+ *     host below therefore mirrors production's placement gate rather than
+ *     accepting every start — a permissive fake would let this suite claim a wake
+ *     that cannot happen, and would go green on the day #2019 regresses it.
+ *
+ * Driven through `ConversationMessageService.sendMessage` wherever the claim is
+ * about the send's transaction, because "same transaction" is not a property of
+ * `writeMentionCcCopies` in isolation — it is a property of who calls it and
+ * where. The write half is called directly only for the two states a user send
+ * cannot produce (a legacy authorless row, a workspace-less source).
+ */
 import { describe, expect, it, vi } from 'vitest';
-import { decodeTransportEpoch, decodeTransportSeq } from '@silverhand/shared';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
+import type { ConversationDto, MessageDto, Reference } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
-import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
-import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
-import { createMentionCcAdapter, createMentionCcComposition } from '../../src/adapters/mention-cc.js';
-import { ccMentionsFromUserMessage } from '../../src/application/mention-cc.js';
-import type { WorkspaceRosterUnitOfWork } from '../../src/application/membership-ports.js';
-import { overrideScope } from '../utils/tx-fault.js';
+import { createSqliteConversationPersistence } from '../../src/repos/conversation-persistence.js';
+import { createSqliteAgentProvisioningPersistence } from '../../src/repos/agent-provisioning-persistence.js';
+import { createUnreadPublishAdapter } from '../../src/adapters/unread-publish.js';
+import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
+import {
+  AgentInboxMissingError,
+  dispatchMentionCcEffects,
+  writeMentionCcCopies,
+} from '../../src/application/mention-cc.js';
+import type { MentionCcReport } from '../../src/application/mention-cc.js';
+import type { MessageTxScope } from '../../src/services/conversation-message/ports.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
+import { RuntimePlacementUnsupportedError } from '../../src/runtime/agent-runtime-host.js';
+import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
-import type { MessageDto } from '@silverhand/shared';
+import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 
-class FakeConversationManager {
+/**
+ * A runtime host that refuses to start a run in a conversation with no workspace
+ * placement — the same rule production applies in
+ * `outbound-event-fanout.runtimeStartOptions` (v71 §7.3), and the reason the
+ * inbox wake is deferred rather than performed. Mirrored here so the integration
+ * cases assert TODAY's end state; a fake that accepted the start would assert a
+ * capability that does not exist.
+ */
+class FakeRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
-  deliverError: Error | null = null;
+
+  constructor(private readonly workspaceOf: (conversationId: string) => string | null) {}
 
   async start(conversationId: string, agentId: string): Promise<void> {
     this.starts.push({ conversationId, agentId });
+    if (this.workspaceOf(conversationId) === null) {
+      throw new RuntimePlacementUnsupportedError(conversationId);
+    }
   }
 
   async deliverMessage(
@@ -32,902 +81,726 @@ class FakeConversationManager {
     agentId: string,
     messageId: string,
   ): Promise<void> {
-    if (this.deliverError) throw this.deliverError;
     this.delivered.push({ conversationId, agentId, messageId });
+  }
+
+  async deliverPending(): Promise<boolean> {
+    return true;
+  }
+  resolveRun(): void {}
+  resolveConversationRuns(): void {}
+  getAgentRunStates(): never[] {
+    return [];
+  }
+  async stop(): Promise<void> {}
+  async stopAll(): Promise<void> {}
+  reconcileOnBoot(): void {}
+  isRunning(): boolean {
+    return false;
+  }
+  closeActivityLog(): Promise<void> {
+    return Promise.resolve();
   }
 }
 
+/**
+ * `seedAllFixtureMemberships: false` is load-bearing, not hygiene: the fixture
+ * trigger snapshots every fixture user into `conversation_users` on EVERY
+ * conversation insert — including the inboxes created below. With it on, "the
+ * inbox has no human participant" would be untestable, and worse, the retired
+ * #1989 admission writes would be indistinguishable from the seed.
+ */
 function bootstrap() {
-  const { db, localHostId } = openTestDb();
-  // Drop the test fixture autoseed triggers — we want to observe the
-  // exact membership rows mention-cc writes, not the bulk fixture seed.
-  db.exec(
-    `DROP TRIGGER IF EXISTS test_seed_workspace_users;
-     DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
-  );
-
+  const { db, localHostId } = openTestDb({ seedAllFixtureMemberships: false });
   const tmp = makeTempSilverhandDir();
-  const hosts = new HostRepo(db);
-  hosts.ensureLocal();
+  new HostRepo(db).ensureLocal();
   const agents = new AgentRepo(db);
   const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
+  const inboxes = new ConversationInboxRepo(db);
   const messages = new MessageRepo(db);
   const notifications = new NotificationRepo(db);
   const events = new ScopeEventBus('test-epoch');
-  const fake = new FakeConversationManager();
-  const logger: BackendLogger = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  const fake = new FakeRuntimeHost(id => conversations.get(id)?.workspace_id ?? null);
+  const logger: BackendLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
-  // Source workspace + channel — created via the repo, autoseed-trigger
-  // is gone so no membership rows get written automatically.
-  const sourceWorkspace = workspaces.insert({
-    name: 'eng',
-    description: null,
-  });
-  const sourceChannel = conversations.insertChannel({
-    workspaceId: sourceWorkspace.id,
+  const workspace = workspaces.insert({ name: 'eng', description: null });
+  const channel = conversations.insertChannel({
+    workspaceId: workspace.id,
     title: 'general',
   });
+  // The author's own membership, written the way production writes it (a route /
+  // ChannelService insert) rather than by the dropped seed trigger.
+  conversations.addUser(channel.id, 'local');
 
-  // Recipient agent ("alice") with their agent_home + Onboarding DM.
-  // mention-cc looks up the agent's primary DM and uses its workspace
-  // as the home for the new Mentions DM.
-  const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
-  const aliceHome = workspaces.insertAgentHome({
-    agent: { id: alice.id, name: alice.name },
+  // `insider` receives the original message; `outsider` is the mention target and
+  // is deliberately not even a member of the source WORKSPACE — the CC has no
+  // membership precondition, and pretending it does would hide that.
+  const insider = agents.create({ name: 'cc-insider', runtime: 'claude' }, localHostId, 'local');
+  const outsider = agents.create({ name: 'cc-outsider', runtime: 'claude' }, localHostId, 'local');
+  workspaces.insertMembership(workspace.id, insider.id);
+  conversations.addAgent(channel.id, insider.id);
+
+  // The Agent aggregate's inbox invariant. `reserveAgentAggregate` performs
+  // exactly this insert in the same transaction as the `agents` row; the v71
+  // migration performed it for pre-existing agents. A test that skipped it would
+  // be testing a broken aggregate — which is its own case, `agent with no inbox`
+  // below.
+  const insiderInbox = conversations.insertAgentInbox(insider.id, insider.created_at);
+  const outsiderInbox = conversations.insertAgentInbox(outsider.id, outsider.created_at);
+
+  const persistence = createSqliteConversationPersistence(db);
+  const txWrap: { current: ((tx: MessageTxScope) => MessageTxScope) | null } = { current: null };
+  const service = new ConversationMessageService({
+    uow: uowWithScopeWrap(persistence.message.uow, () => txWrap.current),
+    threadFollow: persistence.threadFollow,
+    delivery: persistence.delivery,
+    unreadPublish: createUnreadPublishAdapter({ db, events }),
+    runtimeHost: fake as unknown as AgentRuntimeHost,
+    events,
+    logger,
   });
-  const aliceDm = conversations.insertDmChannel({
-    workspaceId: aliceHome.id,
-    title: 'Onboarding',
-    agentId: alice.id,
-  });
-  conversations.addAgent(aliceDm.id, alice.id);
 
   return {
     db,
-    tmp,
+    localHostId,
     agents,
     workspaces,
     conversations,
+    inboxes,
     messages,
     notifications,
     events,
     fake,
     logger,
-    sourceWorkspace,
-    sourceChannel,
-    alice,
-    aliceHome,
-    aliceDm,
+    persistence,
+    txWrap,
+    service,
+    workspace,
+    channel,
+    insider,
+    outsider,
+    insiderInbox,
+    outsiderInbox,
     cleanup: tmp.cleanup,
   };
 }
 
-async function runMentionCc(t: ReturnType<typeof bootstrap>, message: MessageDto) {
-  // Wired through the real adapter: the use case takes ports now, and the
-  // adapter is the only place that turns a `db` into them, so composing it
-  // here keeps this suite testing the production path end to end.
-  await createMentionCcAdapter({
-    db: t.db,
-    runtimeHost: t.fake as unknown as AgentRuntimeHost,
-    events: t.events,
-    logger: t.logger,
-  }).ccMentionsFromUserMessage({
-    message,
-    sourceConversation: t.sourceChannel,
-    sourceWorkspace: t.sourceWorkspace,
-    // The send boundary derives this once and hands it across the port
-    // (#task:2000); this harness stands in for that caller.
-    references: extractMessageReferences(message.content),
-  });
+type Fixture = ReturnType<typeof bootstrap>;
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
 }
 
-describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', () => {
-  it('writes message-author user_id into Mentions conversation_users + workspace_users', async () => {
-    const t = bootstrap();
-    try {
-      // Source message authored by 'teammate' (a fixture user that is
-      // NOT the registered viewer 'local'). The CC path must add the
-      // *author*, not the viewer, to the lazy Mentions DM.
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'hey <silverhand://agent/alice> take a look',
-      });
+/** The post-commit half is `void`-ed by the send, so its observable effects are
+ *  awaited on the log line that closes each copy's dispatch. */
+const logCalls = (spy: BackendLogger['info'] | BackendLogger['warn']): Array<Record<string, unknown>> =>
+  vi.mocked(spy).mock.calls.map(call => call[0] as Record<string, unknown>);
 
-      await runMentionCc(t, userMsg);
+const logEvents = (spy: BackendLogger['info'] | BackendLogger['warn']): string[] =>
+  logCalls(spy).map(fields => String(fields.event));
 
-      // The Mentions DM must now exist under alice's home workspace.
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      expect(mentionsDm).not.toBeNull();
-      expect(mentionsDm!.workspace_id).toBe(t.aliceHome.id);
-
-      // conversation_users for that DM must contain the *author*.
-      const dmMembers = t.db
-        .prepare<[string], { user_id: string }>(
-          `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
-        )
-        .all(mentionsDm!.id)
-        .map(r => r.user_id);
-      expect(dmMembers).toEqual(['teammate']);
-
-      // workspace_users for alice's home must also contain the author.
-      const homeMembers = t.db
-        .prepare<[string], { user_id: string }>(
-          `SELECT user_id FROM workspace_users WHERE workspace_id = ?`,
-        )
-        .all(t.aliceHome.id)
-        .map(r => r.user_id);
-      expect(homeMembers).toContain('teammate');
-      // …as a plain member. Mentioning an agent must not confer governance over
-      // the recipient's home workspace (the delegation passes no role and the
-      // method's default is `member`).
-      expect(t.workspaces.getUserRole(t.aliceHome.id, 'teammate')).toBe('member');
-    } finally {
-      t.cleanup();
-    }
+const send = (t: Fixture, content: string) =>
+  t.service.sendMessage({
+    conversationId: t.channel.id,
+    actor: { kind: 'user', userId: 'local' },
+    content,
   });
 
-  it('falls back to the source conversation sole human member when message has no from_user_id', async () => {
+/** `cc_source_message_id` is a persistence-level idempotency key, not a DTO
+ *  field: read it from the row. */
+const ccSourceOf = (t: Fixture, messageId: string): string | null =>
+  t.db
+    .prepare<[string], { cc_source_message_id: string | null }>(
+      `SELECT cc_source_message_id FROM messages WHERE id = ?`,
+    )
+    .get(messageId)?.cc_source_message_id ?? null;
+
+const humanMemberIdsOf = (t: Fixture, conversationId: string): string[] =>
+  t.db
+    .prepare<[string], { user_id: string }>(
+      `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
+    )
+    .all(conversationId)
+    .map(row => row.user_id);
+
+const workspaceMemberAgentIdsOf = (t: Fixture, workspaceId: string): string[] =>
+  t.db
+    .prepare<[string], { agent_id: string }>(
+      `SELECT agent_id FROM workspace_members WHERE workspace_id = ?`,
+    )
+    .all(workspaceId)
+    .map(row => row.agent_id);
+
+const canonical = (handle: string): string => `<silverhand://agent/${handle}>`;
+
+describe('mention CC v71 — the copy, in the send transaction', () => {
+  it('lands in the mentioned agent inbox with source provenance, a delivery row, and the author notification', async () => {
     const t = bootstrap();
     try {
-      t.conversations.addUser(t.sourceChannel.id, 'local');
-      // Legacy null-author message — pre-v25 messages may carry
-      // from_user_id = null. The fallback chain resolves to the sole
-      // human member in the source conversation ('local').
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: null,
-        content: 'hey <silverhand://agent/alice> legacy null author',
+      const inboxFrames: Array<{ kind: string; payload: unknown }> = [];
+      const viewerFrames: Array<{ kind: string; payload: unknown }> = [];
+      const workspaceFrames: Array<{ kind: string; payload: unknown }> = [];
+      const unsubInbox = t.events.subscribe(t.outsiderInbox.id, e => {
+        inboxFrames.push({ kind: e.kind, payload: e.payload });
+      });
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        viewerFrames.push({ kind: e.kind, payload: e.payload });
+      });
+      const unsubWorkspace = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
+        workspaceFrames.push({ kind: e.kind, payload: e.payload });
       });
 
-      await runMentionCc(t, userMsg);
+      const result = await send(t, `${canonical('cc-outsider')} can you look at the parser?`);
+      await waitFor(() => logEvents(t.logger.warn).includes('mention_cc.wake_deferred'));
+      unsubInbox();
+      unsubViewer();
+      unsubWorkspace();
 
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
+      // ── the copy ────────────────────────────────────────────────────────
+      const copies = t.messages.listForConversation(t.outsiderInbox.id);
+      expect(copies).toHaveLength(1);
+      const copy = copies[0]!;
+      expect(copy.from_kind).toBe('system');
+      expect(copy.metadata).toMatchObject({
+        subtype: 'mention_cc',
+        source_workspace_id: t.workspace.id,
+        source_workspace_name: 'eng',
+        source_conversation_id: t.channel.id,
+        source_conversation_title: 'general',
+        source_message_id: result.committed.message.id,
+        source_from_kind: 'user',
+        source_from_user_id: 'local',
+        source_message_content: result.committed.message.content,
       });
-      expect(mentionsDm).not.toBeNull();
-      const dmMembers = t.db
-        .prepare<[string], { user_id: string }>(
-          `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
-        )
-        .all(mentionsDm!.id)
-        .map(r => r.user_id);
-      expect(dmMembers).toEqual(['local']);
-    } finally {
-      t.cleanup();
-    }
-  });
+      // The idempotency key, which is what makes a second copy a constraint
+      // failure instead of a second notification.
+      expect(ccSourceOf(t, copy.id)).toBe(result.committed.message.id);
 
-  it('logs and skips membership writes when no user id is resolvable', async () => {
-    // Per Cindy's instruction: "如果最终仍拿不到 user id, 宁可
-    // log+skip user membership, 不要写空 membership". With a legacy
-    // null author and no source-conversation human member, the function
-    // must NOT insert any conversation_users / workspace_users rows for
-    // the lazily-created Mentions DM.
-    const t = bootstrap();
-    try {
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: null,
-        content: 'hey <silverhand://agent/alice> no resolvable human',
+      // ── the durable half of the delivery ────────────────────────────────
+      const pending = t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id);
+      expect(pending.map(item => item.message.id)).toEqual([copy.id]);
+
+      // ── the author's notification (option A: SOURCE coordinates) ────────
+      const notifications = t.notifications.list({ userId: 'local' });
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]).toMatchObject({
+        kind: 'mention_external',
+        user_id: 'local',
+        agent_id: t.outsider.id,
+        conversation_id: t.channel.id,
+        message_id: result.committed.message.id,
+        source_conversation_id: t.channel.id,
+        source_message_id: result.committed.message.id,
       });
-
-      await runMentionCc(t, userMsg);
-
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
+      expect(notifications[0]!.payload).toMatchObject({
+        source_workspace_name: 'eng',
+        source_conversation_title: 'general',
+        mention_excerpt: `${canonical('cc-outsider')} can you look at the parser?`,
       });
-      expect(mentionsDm).not.toBeNull();
-      // No conversation_users rows for the new Mentions DM.
-      const dmMembers = t.db
-        .prepare<[string], { user_id: string }>(
-          `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
-        )
-        .all(mentionsDm!.id);
-      expect(dmMembers).toHaveLength(0);
-      // No workspace_users rows added either.
-      const homeMembers = t.db
-        .prepare<[string], { user_id: string }>(
-          `SELECT user_id FROM workspace_users WHERE workspace_id = ?`,
-        )
-        .all(t.aliceHome.id);
-      expect(homeMembers).toHaveLength(0);
-      // The skip path must log a warning so this isn't silent.
-      expect(t.logger.warn).toHaveBeenCalled();
-    } finally {
-      t.cleanup();
-    }
-  });
+      // Never the inbox copy: the author cannot read the inbox, and a pointer
+      // there would be a click into a 403.
+      expect(notifications[0]!.conversation_id).not.toBe(t.outsiderInbox.id);
+      expect(notifications[0]!.message_id).not.toBe(copy.id);
 
-  it('logs and skips membership writes when a null-author source has multiple human members', async () => {
-    const t = bootstrap();
-    try {
-      t.conversations.addUser(t.sourceChannel.id, 'local');
-      t.conversations.addUser(t.sourceChannel.id, 'teammate');
-
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: null,
-        content: 'hey <silverhand://agent/alice> ambiguous human',
-      });
-
-      await runMentionCc(t, userMsg);
-
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      expect(mentionsDm).not.toBeNull();
-      const dmMembers = t.db
-        .prepare<[string], { user_id: string }>(
-          `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
-        )
-        .all(mentionsDm!.id);
-      expect(dmMembers).toHaveLength(0);
-      expect(t.logger.warn).toHaveBeenCalled();
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('does not write a duplicate user_id row when the same author is mentioned twice', async () => {
-    const t = bootstrap();
-    try {
-      // First mention seeds the Mentions DM + adds 'teammate'.
-      const m1 = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'first <silverhand://agent/alice>',
-      });
-      await runMentionCc(t, m1);
-      // Second mention — addUser must be idempotent.
-      const m2 = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'second <silverhand://agent/alice>',
-      });
-      await runMentionCc(t, m2);
-
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      const dmMembers = t.db
-        .prepare<[string], { user_id: string }>(
-          `SELECT user_id FROM conversation_users WHERE conversation_id = ?`,
-        )
-        .all(mentionsDm!.id)
-        .map(r => r.user_id);
-      expect(dmMembers).toEqual(['teammate']);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('repairs agent-home DM ACL scaffolding that is missing on a later mention', async () => {
-    // #task:1989 — the product contract: a mention is an agent-home DM
-    // admission / ACL repair, NOT a workspace invitation. There is no durable
-    // deny state, so an ABSENT workspace_users / conversation_users row means
-    // "never provisioned / needs repair", not "revoked". A later mention from
-    // a still-legal source conversation must therefore rebuild the scaffolding
-    // idempotently — the workspace row at the fixed plain `member` role and the
-    // two role-less conversation edges — without conferring governance over the
-    // recipient's home workspace.
-    const t = bootstrap();
-    try {
-      // First mention seeds the Mentions DM + adds 'teammate'.
-      const m1 = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'first <silverhand://agent/alice>',
-      });
-      await runMentionCc(t, m1);
-
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      expect(mentionsDm).not.toBeNull();
-
-      // Simulate the absence the repair must heal: both ACL rows are gone.
-      // (No product route removes them today — see #task:1989 — but a raw
-      // delete / legacy migration / broken seam can leave exactly this state,
-      // and membership-row absence must not be read as durable revocation.)
-      // The pure-DELETE repo methods stand in for that removal without
-      // emitting any audit/event side effects.
-      t.conversations.removeUser(mentionsDm!.id, 'teammate');
-      t.workspaces.removeUserMember(t.aliceHome.id, 'teammate');
-
-      // A new mention from the same still-legal source conversation rebuilds
-      // the scaffolding — this is the repair half of the contract.
-      const m2 = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'second <silverhand://agent/alice> after ACL removal',
-      });
-      await runMentionCc(t, m2);
-
-      const dmMembers = t.conversations
-        .listUsers(mentionsDm!.id)
-        .map(m => m.user_id);
-      expect(dmMembers).toEqual(['teammate']);
-
-      const homeMembers = t.workspaces
-        .listUserMembers(t.aliceHome.id)
-        .map(m => m.id);
-      expect(homeMembers).toContain('teammate');
-      // The repair never upgrades the author's governance: the fixed role is
-      // plain `member`, never owner/admin — mentioning an agent grants only
-      // DM admission, never governance over the recipient's home workspace.
-      expect(t.workspaces.getUserRole(t.aliceHome.id, 'teammate')).toBe('member');
-    } finally {
-      t.cleanup();
-    }
-  });
-});
-
-describe('ccMentionsFromUserMessage — realtime events and skip logging', () => {
-  it('publishes topology, message, unread, and notification events for a newly visible Mentions DM', async () => {
-    const t = bootstrap();
-    try {
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'please review this <silverhand://agent/alice>',
-      });
-
-      await runMentionCc(t, userMsg);
-
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      expect(mentionsDm).not.toBeNull();
-
-      const workspaceEvents = t.events.replay(
-        `workspace:${t.aliceHome.id}`,
-        decodeTransportSeq(0),
-        decodeTransportEpoch('test-epoch'),
-      );
-      expect(workspaceEvents).toEqual([
-        expect.objectContaining({
-          kind: 'workspace_channels_changed',
-          payload: {
-            workspace_id: t.aliceHome.id,
-            channel_id: mentionsDm!.id,
-          },
-        }),
-      ]);
-
-      const conversationEvents = t.events.replay(
-        `conversation:${mentionsDm!.id}`,
-        decodeTransportSeq(0),
-        decodeTransportEpoch('test-epoch'),
-      );
-      expect(conversationEvents).toHaveLength(1);
-      expect(conversationEvents[0]).toEqual(
-        expect.objectContaining({
-          kind: 'message',
-          payload: {
-            message: expect.objectContaining({
-              conversation_id: mentionsDm!.id,
-              from_kind: 'system',
-            }),
-          },
-        }),
-      );
-
-      const viewerEvents = t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch'));
-      // `unread_updated` and `attention_badge_updated` are ONE fact emitted as
-      // two frames (#task:1870) — the seam that publishes the first always
-      // publishes the second, so the badge can never be left behind by a client
-      // that holds it without refetching. For a `Mentions` DM (an `agent_home`
-      // workspace, which carries neither a channel tier nor the workspace
-      // suppressor) the badge simply equals the positional unread.
-      expect(viewerEvents.map(e => e.kind)).toEqual([
-        'unread_updated',
-        'attention_badge_updated',
-        'notification',
-      ]);
-      expect(viewerEvents[0]!.payload).toMatchObject({
-        conversation_id: mentionsDm!.id,
-        conversation_unread_count: expect.any(Number),
-        workspace_unread_count: expect.any(Number),
-      });
-      expect(viewerEvents[2]!.payload).toEqual(
-        expect.objectContaining({
-          kind: 'mention_external',
-          conversation_id: mentionsDm!.id,
-        }),
-      );
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('does not republish workspace_channels_changed when reusing the same Mentions DM membership', async () => {
-    const t = bootstrap();
-    try {
-      const first = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'first <silverhand://agent/alice>',
-      });
-      await runMentionCc(t, first);
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      expect(mentionsDm).not.toBeNull();
-
-      const second = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'second <silverhand://agent/alice>',
-      });
-      await runMentionCc(t, second);
-
-      expect(t.events.currentSeq(`workspace:${t.aliceHome.id}`)).toBe(1);
-      expect(t.events.currentSeq(`conversation:${mentionsDm!.id}`)).toBe(2);
-      expect(t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch')).map(e => e.kind))
-        .toEqual([
-          'unread_updated',
-          'attention_badge_updated',
-          'notification',
-          'unread_updated',
-          'attention_badge_updated',
-          'notification',
-        ]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('skips unread_updated when the viewer read cursor already covers the wrapped message seq', async () => {
-    const t = bootstrap();
-    try {
-      const first = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'first <silverhand://agent/alice>',
-      });
-      await runMentionCc(t, first);
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      expect(mentionsDm).not.toBeNull();
-
-      t.db
-        .prepare(
-          `INSERT INTO conversation_reads
-             (user_id, conversation_id, last_read_seq, read_at)
-           VALUES (?, ?, ?, ?)`,
-        )
-        .run('teammate', mentionsDm!.id, 99, Date.now());
-      const viewerSeqBeforeSecond = t.events.currentSeq('viewer:teammate');
-
-      const second = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'second <silverhand://agent/alice>',
-      });
-      await runMentionCc(t, second);
-
+      // ── the frames ──────────────────────────────────────────────────────
+      expect(inboxFrames.map(f => f.kind)).toEqual(['message']);
+      expect((inboxFrames[0]!.payload as { message: MessageDto }).message.id).toBe(copy.id);
+      // No per-viewer unread for a conversation no human is in, and no channel
+      // list fan-out for a placement that is in no workspace.
+      expect(inboxFrames.map(f => f.kind)).not.toContain('unread_updated');
+      expect(workspaceFrames.map(f => f.kind)).not.toContain('workspace_channels_changed');
       expect(
-        t.events
-          .replay('viewer:teammate', viewerSeqBeforeSecond, decodeTransportEpoch('test-epoch'))
-          .map(e => e.kind),
-      ).toEqual(['notification']);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('persists notification and publishes viewer events before runtime delivery can fail', async () => {
-    const t = bootstrap();
-    try {
-      t.fake.deliverError = new Error('transport_no_connection');
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'please review even if delivery fails <silverhand://agent/alice>',
-      });
-
-      await runMentionCc(t, userMsg);
-
-      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
-        title: 'Mentions',
-      });
-      expect(mentionsDm).not.toBeNull();
-      const wrappedEvents = t.events.replay(
-        `conversation:${mentionsDm!.id}`,
-        decodeTransportSeq(0),
-        decodeTransportEpoch('test-epoch'),
-      );
-      expect(wrappedEvents).toHaveLength(1);
-
-      const notifications = t.notifications.list({ userId: 'teammate' });
-      expect(notifications).toEqual([
-        expect.objectContaining({
+        viewerFrames.filter(f => f.kind === 'notification').map(f => f.payload),
+      ).toEqual([
+        {
           kind: 'mention_external',
-          conversation_id: mentionsDm!.id,
-          message_id: expect.any(String),
-        }),
+          conversation_id: t.channel.id,
+          message_id: result.committed.message.id,
+        },
       ]);
-      expect(t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch')).map(e => e.kind))
-        .toEqual(['unread_updated', 'attention_badge_updated', 'notification']);
-      expect(t.fake.delivered).toHaveLength(0);
-      expect(t.logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          handle: 'alice',
-          sourceConversationId: t.sourceChannel.id,
-          sourceMessageId: userMsg.id,
-          err: t.fake.deliverError,
-        }),
-        'mention-cc: delivery failed for one recipient; continuing',
-      );
     } finally {
       t.cleanup();
     }
   });
 
-  it('logs unknown mention handles at info level', async () => {
+  it('admits nobody: no human participant, no roster row, no workspace membership', async () => {
     const t = bootstrap();
     try {
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'hey <silverhand://agent/ghost>',
-      });
+      await send(t, `${canonical('cc-outsider')} heads up`);
 
-      await runMentionCc(t, userMsg);
-
-      expect(t.logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'mention_cc.skip',
-          reason: 'unknown_handle',
-          handle: 'ghost',
-        }),
-        expect.any(String),
-      );
-      expect(t.fake.delivered).toHaveLength(0);
+      // The whole retired #1989 admission block, asserted absent one row at a
+      // time. The inbox's single participant is derived from `inbox_agent_id`;
+      // nothing is projected into a roster table for it (§4.2).
+      expect(humanMemberIdsOf(t, t.outsiderInbox.id)).toEqual([]);
+      expect(t.conversations.listAgents(t.outsiderInbox.id)).toEqual([]);
+      expect(t.conversations.listUserMembers(t.outsiderInbox.id)).toEqual([]);
+      // …and the placement itself still has no workspace to be admitted INTO.
+      expect(t.conversations.get(t.outsiderInbox.id)?.workspace_id).toBeNull();
+      expect(workspaceMemberAgentIdsOf(t, t.workspace.id)).toEqual([t.insider.id]);
+      // Participation without a roster row is exactly what the inbox owner has.
+      expect(t.conversations.isAgentParticipant(t.outsiderInbox.id, t.outsider.id)).toBe(true);
+      expect(t.conversations.isAgentParticipant(t.outsiderInbox.id, t.insider.id)).toBe(false);
     } finally {
       t.cleanup();
     }
   });
 
-  it('logs source-member mentions at info level instead of duplicating into a DM', async () => {
+  it('tells the agent the truth: no reply route, and the original quoted', async () => {
     const t = bootstrap();
     try {
-      t.conversations.addAgent(t.sourceChannel.id, t.alice.id);
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'hey <silverhand://agent/alice>',
-      });
+      await send(t, 'ship it <silverhand://agent/cc-outsider>');
+      const copy = t.messages.listForConversation(t.outsiderInbox.id)[0]!;
 
-      await runMentionCc(t, userMsg);
-
-      expect(t.logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'mention_cc.skip',
-          reason: 'already_member',
-          handle: 'alice',
-          agentId: t.alice.id,
-        }),
-        expect.any(String),
-      );
-      expect(
-        t.conversations.findDmChannelForAgent(t.alice.id, { title: 'Mentions' }),
-      ).toBeNull();
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('logs missing agent DM channels at warn level', async () => {
-    const t = bootstrap();
-    try {
-      const bob = t.agents.create(
-        { name: 'bob', runtime: 'claude' },
-        t.alice.host_id,
-        'local',
-      );
-      const userMsg = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'hey <silverhand://agent/bob>',
-      });
-
-      await runMentionCc(t, userMsg);
-
-      expect(t.logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: 'mention_cc.skip',
-          reason: 'missing_agent_dm',
-          handle: 'bob',
-          agentId: bob.id,
-        }),
-        expect.any(String),
-      );
-      expect(t.fake.delivered).toHaveLength(0);
+      expect(copy.content).toContain(canonical('cc-outsider'));
+      // Free-text labels ride in code spans so a channel title cannot fabricate
+      // Markdown structure in a body the agent reads verbatim on stdin.
+      expect(copy.content).toContain('`eng`');
+      expect(copy.content).toContain('`general`');
+      // The quoted original is a blockquote, which is also why re-stating its
+      // references cannot re-deliver them.
+      expect(copy.content).toContain('> ship it <silverhand://agent/cc-outsider>');
+      // The retired wrap promised a reply route that never existed for an inbox.
+      expect(copy.content).not.toMatch(/reply here/i);
+      expect(copy.content).toContain('there is nothing to answer here');
     } finally {
       t.cleanup();
     }
   });
 });
 
-/**
- * The two statements this use case no longer prepares itself (#task:1982 W2).
- * Moving them onto existing repo methods is only safe if the methods carry the
- * SAME semantics, and neither property is visible from the mention-cc scenarios
- * above: the role default is invisible while nothing reads it, and the cursor
- * lookup is stream-qualified in a way a mainline-only test cannot distinguish.
- * These pin both so a later change to either method reddens HERE rather than
- * silently granting governance or reading an arbitrary thread's cursor.
- */
-describe('mention-cc — the equivalence its delegations rest on', () => {
-  it('addUserMember defaults to plain member and is idempotent over an existing row', () => {
+describe('mention CC v71 — what does NOT get copied', () => {
+  it('skips an agent that is already a member: it received the original', async () => {
     const t = bootstrap();
     try {
-      const first = t.workspaces.addUserMember(t.aliceHome.id, 'teammate');
-      // The bare INSERT this replaced omitted `role` and took the column's
-      // DEFAULT 'member'; the method's default argument must be the same.
-      expect(first.role).toBe('member');
+      const result = await send(t, `${canonical('cc-insider')} please review`);
+      await waitFor(() => logEvents(t.logger.info).includes('mention_cc.skip'));
 
-      // Idempotent in the INSERT OR IGNORE sense: an existing row is left
-      // ALONE, not overwritten. A method that upserted would silently demote a
-      // human who had since been promoted — mention-cc runs on every mention.
-      t.workspaces.setOwnerUserId(t.aliceHome.id, 'teammate');
-      const again = t.workspaces.addUserMember(t.aliceHome.id, 'teammate');
-      expect(again.role).toBe('owner');
-      expect(again.joined_at).toBe(first.joined_at);
-      expect(t.workspaces.getUserRole(t.aliceHome.id, 'teammate')).toBe('owner');
+      expect(t.messages.listForConversation(t.insiderInbox.id)).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      expect(logCalls(t.logger.info).find(f => f.event === 'mention_cc.skip')).toMatchObject({
+        reason: 'already_member',
+        handle: 'cc-insider',
+        agentId: t.insider.id,
+        sourceConversationId: t.channel.id,
+        sourceMessageId: result.committed.message.id,
+      });
+      // The member's own delivery is the normal fan-out, not a CC.
+      expect(t.fake.delivered).toEqual([
+        {
+          conversationId: t.channel.id,
+          agentId: t.insider.id,
+          messageId: result.committed.message.id,
+        },
+      ]);
     } finally {
       t.cleanup();
     }
   });
 
-  it('getLastReadSeq answers per stream — mainline and a thread root are distinct cursors', () => {
+  it('copies once for a handle written twice in one message', async () => {
     const t = bootstrap();
     try {
-      const reads = new ConversationReadRepo(t.db);
-      const root = t.messages.insertForConversation({
-        conversationId: t.sourceChannel.id,
-        fromKind: 'user',
-        fromUserId: 'teammate',
-        content: 'thread root',
+      await send(t, `${canonical('cc-outsider')} and again ${canonical('cc-outsider')}`);
+      await waitFor(() => t.fake.starts.length > 0);
+
+      // One copy, one notification, and — the part worth stating — NO skip: the
+      // shared parser already dedupes by `(kind, handle)`, so the second spelling
+      // never reaches the write half at all. The write half's own duplicate guard
+      // is about its argument type, not about user input; it is exercised in the
+      // write-half suite below.
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toHaveLength(1);
+      expect(t.notifications.list({ userId: 'local' })).toHaveLength(1);
+      expect(logEvents(t.logger.info)).not.toContain('mention_cc.skip');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('skips an unknown handle without failing the send', async () => {
+    const t = bootstrap();
+    try {
+      const result = await send(t, `${canonical('cc-nobody')} hello?`);
+      await waitFor(() => logEvents(t.logger.info).includes('mention_cc.skip'));
+
+      expect(result.committed.message.content).toContain('cc-nobody');
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      expect(logCalls(t.logger.info).find(f => f.event === 'mention_cc.skip')).toMatchObject({
+        reason: 'unknown_handle',
+        handle: 'cc-nobody',
+        agentId: null,
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('ignores the plain `@handle` alias and human references', async () => {
+    const t = bootstrap();
+    try {
+      // #task:2000: the alias renders a chip and addresses nobody, and a human
+      // reference addresses a person, who has no inbox to copy into.
+      await send(t, '@cc-outsider ping — <silverhand://human/local-test> fyi');
+
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' }).map(n => n.kind)).not.toContain(
+        'mention_external',
+      );
+      expect(logEvents(t.logger.info)).not.toContain('mention_cc.skip');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('does not CC an AGENT-authored mention: an agent cannot reach into a channel it was not put in', async () => {
+    const t = bootstrap();
+    try {
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.insider.id, conversationId: t.channel.id },
+        content: `${canonical('cc-outsider')} take this over`,
       });
 
-      // No cursor row yet → 0, on both streams. This is the `?? 0` the old
-      // inline SELECT applied, and it is what makes an unread mention publish.
-      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, null)).toBe(0);
-      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, root.id)).toBe(0);
-
-      reads.markRead({
-        viewerUserId: 'teammate',
-        conversationId: t.sourceChannel.id,
-        threadRootId: null,
-        seq: 7,
-      });
-      // `thread_root_id IS ?` — a mainline cursor must NOT answer for a thread,
-      // and vice versa. An unqualified lookup would return an arbitrary row.
-      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, null)).toBe(7);
-      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, root.id)).toBe(0);
-
-      reads.markRead({
-        viewerUserId: 'teammate',
-        conversationId: t.sourceChannel.id,
-        threadRootId: root.id,
-        seq: 3,
-      });
-      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, root.id)).toBe(3);
-      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, null)).toBe(7);
-
-      // Another viewer shares neither cursor.
-      expect(reads.getLastReadSeq('other', t.sourceChannel.id, null)).toBe(0);
+      // `POLICIES.agent.ccMentions` is false, so the write half never runs — no
+      // copy, no notification, and nothing skipped (a skip would mean the
+      // decision was made per-handle instead of per-policy).
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      expect(logEvents(t.logger.info)).not.toContain('mention_cc.skip');
     } finally {
       t.cleanup();
     }
   });
 });
 
-/**
- * What the generic roster-adapter rollback test CANNOT show (#task:1987): that
- * this use case's own orchestration keeps all three placement writes inside the
- * one transaction, and keeps every effect after it. Move one write out of the
- * callback and the scenarios above stay green — they only ever observe the happy
- * path. So the fault is injected into the PRODUCTION composition's roster scope
- * (every other port stays the real one) and the assertion is about what did NOT
- * happen.
- */
-describe('ccMentionsFromUserMessage — the placement is one unit, and effects follow it', () => {
-  type RosterFace = 'addConversationMember' | 'addWorkspaceHumanMembership';
-
-  /** Wrap the real roster UnitOfWork so the nth call of one face throws INSIDE
-   *  the transaction. Calls before it delegate for real, which is what makes the
-   *  rollback observable rather than vacuous. */
-  function rosterFailingAt(
-    roster: WorkspaceRosterUnitOfWork,
-    failOn: (face: RosterFace, nth: number) => boolean,
-  ): WorkspaceRosterUnitOfWork {
-    return {
-      atomicallyForWorkspace: (workspaceId, fn) =>
-        roster.atomicallyForWorkspace(workspaceId, tx => {
-          const seen: Record<RosterFace, number> = {
-            addConversationMember: 0,
-            addWorkspaceHumanMembership: 0,
-          };
-          const gate = (face: RosterFace): void => {
-            seen[face] += 1;
-            if (failOn(face, seen[face])) {
-              throw new Error(`injected ${face} #${seen[face]} failure`);
-            }
-          };
-          return fn(
-            overrideScope(tx, {
-              roster: overrideScope(tx.roster, {
-                addConversationMember: (conversationId, member) => {
-                  gate('addConversationMember');
-                  return tx.roster.addConversationMember(conversationId, member);
-                },
-                addWorkspaceHumanMembership: userId => {
-                  gate('addWorkspaceHumanMembership');
-                  tx.roster.addWorkspaceHumanMembership(userId);
-                },
-              }),
-            }),
-          );
-        }),
-    };
-  }
-
-  async function runWithRosterFault(
-    t: ReturnType<typeof bootstrap>,
-    message: MessageDto,
-    failOn: (face: RosterFace, nth: number) => boolean,
-  ): Promise<void> {
-    const composition = createMentionCcComposition({
-      db: t.db,
-      runtimeHost: t.fake as unknown as AgentRuntimeHost,
-      events: t.events,
-      logger: t.logger,
-    });
-    await ccMentionsFromUserMessage({
-      ...composition,
-      roster: rosterFailingAt(composition.roster, failOn),
-      message,
-      sourceConversation: t.sourceChannel,
-      sourceWorkspace: t.sourceWorkspace,
-      references: extractMessageReferences(message.content),
-    });
-  }
-
-  /** Everything the placement transaction and its follow-up effects would have
-   *  produced, read back through repos (no new native SQL) / the event bus.
-   *
-   *  The Mentions DM is located WITHOUT the agent-membership join
-   *  `findDmChannelForAgent` uses: after a rolled-back placement the row exists
-   *  with no member, so that finder cannot see it — and the assertions below are
-   *  about the rows inside it, which would silently pass against `null`. */
-  function observeAftermath(t: ReturnType<typeof bootstrap>) {
-    const mentionsDm =
-      t.conversations
-        .list()
-        .find(
-          c =>
-            c.kind === 'dm_channel'
-            && c.workspace_id === t.aliceHome.id
-            && c.title === 'Mentions',
-        ) ?? null;
-    const inDm = <T>(read: (conversationId: string) => T, fallback: T): T =>
-      mentionsDm ? read(mentionsDm.id) : fallback;
-    return {
-      mentionsDm,
-      agentMembers: inDm(id => t.conversations.listAgents(id).length, 0),
-      humanMembers: inDm(id => t.conversations.listUsers(id).length, 0),
-      homeHumanMembers: t.workspaces.listUserMembers(t.aliceHome.id).length,
-      wrappedMessages: inDm(id => t.messages.listForConversation(id).length, 0),
-      notifications: t.notifications.list({ userId: 'teammate' }).length,
-      topologySeq: Number(t.events.currentSeq(`workspace:${t.aliceHome.id}`)),
-      conversationSeq: inDm(id => Number(t.events.currentSeq(`conversation:${id}`)), 0),
-      viewerSeq: Number(t.events.currentSeq('viewer:teammate')),
-      delivered: t.fake.delivered.length,
-    };
-  }
-
-  for (const [label, failOn] of [
-    [
-      // The 2nd face: the agent's conversation edge is already written when the
-      // human's fails.
-      'the human conversation edge (2nd write)',
-      (face: RosterFace, nth: number) => face === 'addConversationMember' && nth === 2,
-    ],
-    [
-      // The 3rd face: BOTH conversation edges are written when the workspace row
-      // fails — the case that used to leave a Mentions DM its own author could
-      // not open.
-      'the workspace membership row (3rd write)',
-      (face: RosterFace) => face === 'addWorkspaceHumanMembership',
-    ],
-  ] as const) {
-    it(`rolls the whole placement back when ${label} fails, and fires no effect`, async () => {
-      const t = bootstrap();
-      try {
-        const userMsg = t.messages.insertForConversation({
-          conversationId: t.sourceChannel.id,
-          fromKind: 'user',
-          fromUserId: 'teammate',
-          content: 'hey <silverhand://agent/alice> take a look',
+describe('mention CC v71 — one transaction with the send (§5)', () => {
+  it('rolls the human send back when the CC write fails', async () => {
+    const t = bootstrap();
+    try {
+      const before = t.messages.listForConversation(t.channel.id).length;
+      // Injected through the tx scope, so this also proves the CC read the
+      // notification port THROUGH the scope rather than through a captured
+      // outside repo.
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          notifications: {
+            insertMentionExternal: () => {
+              throw new Error('notification insert exploded');
+            },
+          },
         });
 
-        await runWithRosterFault(t, userMsg, failOn);
+      await expect(send(t, `${canonical('cc-outsider')} hi`)).rejects.toThrow(
+        'notification insert exploded',
+      );
+      t.txWrap.current = null;
 
-        const after = observeAftermath(t);
-        // The lazy `Mentions` DM itself is created BEFORE the placement
-        // transaction, so it survives — a documented residual of this pass
-        // (#task:1987), sharpened by this test: because every lookup of it goes
-        // through the agent-membership join, the surviving row is UNREACHABLE and
-        // the next mention allocates a fresh DM instead of reusing it. Inert
-        // (empty, invisible) rather than wrong, and the price of fixing it is
-        // widening the membership roster scope with a conversation-creation face.
-        expect(after.mentionsDm).not.toBeNull();
-        expect(
-          t.conversations.findDmChannelForAgent(t.alice.id, { title: 'Mentions' }),
-        ).toBeNull();
-        expect({
-          agentMembers: after.agentMembers,
-          humanMembers: after.humanMembers,
-          homeHumanMembers: after.homeHumanMembers,
-        }).toEqual({ agentMembers: 0, humanMembers: 0, homeHumanMembers: 0 });
-        // …and no effect downstream of it may have happened: no wrapped message,
-        // no notification row, no topology / message / viewer frame, no runtime
-        // delivery. Each of these sits AFTER the callback in `deliverOne`, so a
-        // write moved out of the transaction would show up here as a landed row
-        // next to a rolled-back membership.
-        expect({
-          wrappedMessages: after.wrappedMessages,
-          notifications: after.notifications,
-          topologySeq: after.topologySeq,
-          conversationSeq: after.conversationSeq,
-          viewerSeq: after.viewerSeq,
-          delivered: after.delivered,
-        }).toEqual({
-          wrappedMessages: 0,
-          notifications: 0,
-          topologySeq: 0,
-          conversationSeq: 0,
-          viewerSeq: 0,
-          delivered: 0,
-        });
-        // The failure is swallowed per recipient (one bad mention must not fail
-        // the user's send) — but it is LOGGED, not silent.
-        expect(t.logger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({ handle: 'alice', err: expect.any(Error) }),
-          'mention-cc: delivery failed for one recipient; continuing',
-        );
-      } finally {
-        t.cleanup();
-      }
+      // The message the human wrote is gone WITH the copy. Under the pre-v71
+      // post-commit CC, the source message would be committed here and only the
+      // copy lost — silently.
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(before);
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      expect(t.fake.starts).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('fails loud on a broken Agent aggregate (an agent with no inbox) and commits nothing', async () => {
+    const t = bootstrap();
+    try {
+      // An agent WITHOUT the inbox its aggregate is supposed to carry. There is
+      // no lazy create here on purpose: a get-or-create is what allowed two
+      // `Mentions` DMs to exist in the retired model.
+      t.agents.create({ name: 'cc-broken', runtime: 'claude' }, t.localHostId, 'local');
+      const before = t.messages.listForConversation(t.channel.id).length;
+
+      await expect(send(t, `${canonical('cc-broken')} hello`)).rejects.toThrow(
+        AgentInboxMissingError,
+      );
+
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(before);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('copies to a RESERVED-but-failed agent: the handle is addressable, so the aggregate owes it a destination', async () => {
+    const t = bootstrap();
+    try {
+      // The other half of the aggregate-ownership rule (#task:2014 B1). The
+      // mention resolver reads `agents` with no `materialization_status` filter,
+      // so a handle is addressable from the reserve INSERT onward — including for
+      // a row whose materialization failed and is waiting for `?retry=true`. If
+      // the inbox were born in the L3a dependent tx instead, this send would
+      // throw `AgentInboxMissingError` INSIDE the human's message transaction:
+      // a human losing their own message because someone else's agent failed to
+      // provision hours earlier.
+      const reserved = createSqliteAgentProvisioningPersistence(
+        t.db,
+      ).reserveAgentAggregate({
+        input: { name: 'cc-reserved', runtime: 'claude' },
+        defaultHostId: t.localHostId,
+        createdByUserId: 'local',
+        idempotencyKey: 'k-cc-reserved',
+      });
+      t.agents.flipToFailed(reserved.id, 'host_attach_pending', 1);
+      expect(t.agents.getRow(reserved.id)?.materialization_status).toBe('failed');
+
+      const result = await send(t, `${canonical('cc-reserved')} hello`);
+
+      const inboxId = t.conversations.getAgentInbox(reserved.id)!.id;
+      const copies = t.messages.listForConversation(inboxId);
+      expect(copies).toHaveLength(1);
+      expect(ccSourceOf(t, copies[0]!.id)).toBe(result.committed.message.id);
+      expect(t.inboxes.listPending(inboxId, reserved.id)).toHaveLength(1);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a committed copy always carries its delivery row and notification', async () => {
+    const t = bootstrap();
+    try {
+      await send(t, `${canonical('cc-outsider')} one`);
+      await send(t, `${canonical('cc-outsider')} two`);
+
+      const copies = t.messages.listForConversation(t.outsiderInbox.id);
+      expect(copies).toHaveLength(2);
+      // The three facts are written together, so their counts cannot diverge —
+      // which is the property that makes "copy exists but nobody was told" and
+      // "told but nothing queued" both unreachable.
+      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toHaveLength(2);
+      expect(t.notifications.list({ userId: 'local' })).toHaveLength(2);
+      expect(new Set(copies.map(copy => ccSourceOf(t, copy.id))).size).toBe(2);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('mention CC v71 — the write half on states a user send cannot produce', () => {
+  /** The write half, run in a real transaction through the production scope.
+   *  `references` defaults to what the send boundary would derive. */
+  const runWrite = (
+    t: Fixture,
+    input: {
+      message: MessageDto;
+      sourceConversation: ConversationDto;
+      references?: readonly Reference[];
+    },
+  ): MentionCcReport =>
+    t.persistence.message.uow.atomically(tx =>
+      writeMentionCcCopies(tx, {
+        message: input.message,
+        sourceConversation: input.sourceConversation,
+        references: input.references ?? extractMessageReferences(input.message.content),
+      }),
+    );
+
+  const authoredMessage = (t: Fixture, content: string): MessageDto =>
+    t.messages.insertForConversation({
+      conversationId: t.channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content,
     });
-  }
+
+  it('skips a repeated reference rather than letting the partial UNIQUE abort the send', () => {
+    const t = bootstrap();
+    try {
+      const message = authoredMessage(t, `${canonical('cc-outsider')} twice`);
+      // The send boundary cannot produce this list — `extractMessageReferences`
+      // dedupes by `(kind, handle)` and handles are unique — so the guard being
+      // tested here defends the write half's DECLARED input (a reference list),
+      // not user input. Without it the second copy hits
+      // `UNIQUE(cc_source_message_id, conversation_id)` and the human's send dies
+      // on a constraint error; with it, one copy and a domain-shaped skip.
+      const twice: Reference[] = [
+        { kind: 'agent', handle: 'cc-outsider' },
+        { kind: 'agent', handle: 'cc-outsider' },
+      ];
+      const report = runWrite(t, {
+        message,
+        sourceConversation: t.conversations.get(t.channel.id)!,
+        references: twice,
+      });
+
+      expect(report.copies).toHaveLength(1);
+      expect(report.skipped).toEqual([
+        { handle: 'cc-outsider', reason: 'duplicate_reference', agentId: t.outsider.id },
+      ]);
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toHaveLength(1);
+      expect(t.notifications.list({ userId: 'local' })).toHaveLength(1);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('skips a row with no resolvable author: option A has no viewer without one', () => {
+    const t = bootstrap();
+    try {
+      const message = authoredMessage(t, `${canonical('cc-outsider')} legacy row`);
+      // Only legacy rows reach this state — a user send always carries its
+      // actor's id — and guessing a viewer would send someone else's mention
+      // notification to whoever happens to be the only human.
+      const report = runWrite(t, {
+        message: { ...message, from_user_id: null },
+        sourceConversation: t.conversations.get(t.channel.id)!,
+      });
+
+      expect(report.copies).toEqual([]);
+      expect(report.skipped).toEqual([
+        { handle: 'cc-outsider', reason: 'unresolved_author', agentId: t.outsider.id },
+      ]);
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a workspace-less source: a human is never a participant of one (§4.2)', () => {
+    const t = bootstrap();
+    try {
+      const message = authoredMessage(t, `${canonical('cc-outsider')} from an inbox`);
+      // The insider's own inbox as the SOURCE. The invariant is that no
+      // user-authored message can originate there; if that ever becomes false,
+      // this must be redesigned rather than defaulted to some workspace.
+      expect(() =>
+        runWrite(t, {
+          message,
+          sourceConversation: t.conversations.get(t.insiderInbox.id)!,
+        }),
+      ).toThrow(/has no workspace placement/);
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('mention CC v71 — the post-commit half is the only best-effort part', () => {
+  const report = (overrides: Partial<MentionCcReport['copies'][number]> = {}): MentionCcReport => ({
+    copies: [
+      {
+        agentId: 'agent-1',
+        agentHandle: 'cc-outsider',
+        inboxConversationId: 'inbox-1',
+        wrapped: { id: 'copy-1' } as MessageDto,
+        notifiedUserId: 'local',
+        ...overrides,
+      },
+    ],
+    skipped: [],
+    source: { conversationId: 'channel-1', messageId: 'source-1' },
+  });
+
+  const deps = (start: (c: string, a: string) => Promise<void>, deliver = async () => {}) => {
+    const logger: BackendLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const events = new ScopeEventBus('test-epoch');
+    const delivered: string[] = [];
+    return {
+      logger,
+      events,
+      delivered,
+      deps: {
+        runtimeStart: { start },
+        runtimeDeliver: {
+          deliverMessage: async (c: string, a: string, m: string) => {
+            delivered.push(m);
+            await deliver();
+          },
+        },
+        events,
+        logger,
+      },
+    };
+  };
+
+  it('defers the wake — not "delivery failed" — when the inbox has no session scope (#task:2019)', async () => {
+    const h = deps(async (conversationId: string) => {
+      throw new RuntimePlacementUnsupportedError(conversationId);
+    });
+    await dispatchMentionCcEffects(report(), h.deps);
+
+    // The bounded, known gap: the durable row is committed, so the next spawn
+    // with a scope drains it. Nothing may be logged as a delivery failure, and
+    // no live dispatch may be attempted against a runtime that never started.
+    expect(logCalls(h.logger.warn)).toHaveLength(1);
+    expect(logCalls(h.logger.warn)[0]).toMatchObject({
+      event: 'mention_cc.wake_deferred',
+      reason: 'runtime_placement_unsupported',
+      agentId: 'agent-1',
+      inboxConversationId: 'inbox-1',
+      wrappedMessageId: 'copy-1',
+      sourceConversationId: 'channel-1',
+      sourceMessageId: 'source-1',
+    });
+    expect(h.delivered).toEqual([]);
+  });
+
+  it('keeps the durable row when the wake fails for any other reason', async () => {
+    const h = deps(async () => {
+      throw new Error('spawn refused');
+    });
+    await dispatchMentionCcEffects(report(), h.deps);
+
+    expect(logEvents(h.logger.warn)).toEqual(['mention_cc.wake_failed']);
+    expect(h.delivered).toEqual([]);
+  });
+
+  it('keeps the durable row when the live dispatch fails after a successful start', async () => {
+    const h = deps(
+      async () => {},
+      async () => {
+        throw new Error('deliver refused');
+      },
+    );
+    await dispatchMentionCcEffects(report(), h.deps);
+
+    expect(h.delivered).toEqual(['copy-1']);
+    expect(logEvents(h.logger.warn)).toEqual(['mention_cc.dispatch_failed']);
+  });
+
+  it('publishes the inbox message frame and the author notification before waking', async () => {
+    const order: string[] = [];
+    const h = deps(async () => {
+      order.push('start');
+    });
+    const inboxFrames: string[] = [];
+    const viewerFrames: unknown[] = [];
+    h.events.subscribe('inbox-1', e => {
+      order.push('frame');
+      inboxFrames.push(e.kind);
+    });
+    h.events.subscribeScope('viewer:local', e => {
+      viewerFrames.push({ kind: e.kind, payload: e.payload });
+    });
+
+    await dispatchMentionCcEffects(report(), h.deps);
+
+    expect(inboxFrames).toEqual(['message']);
+    expect(viewerFrames).toEqual([
+      {
+        kind: 'notification',
+        payload: {
+          kind: 'mention_external',
+          conversation_id: 'channel-1',
+          message_id: 'source-1',
+        },
+      },
+    ]);
+    // The frames do not depend on the wake succeeding — a client that has the
+    // conversation open must see the copy even on the deferred path.
+    expect(order).toEqual(['frame', 'start']);
+    expect(logCalls(h.logger.warn)).toEqual([]);
+  });
 });

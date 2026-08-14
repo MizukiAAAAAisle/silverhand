@@ -15,13 +15,13 @@ import {
   addReaction,
   removeReaction,
 } from '../../application/react-message.js';
-import { requireAgentCapability } from '../capability.js';
 import { reactionResultResponse } from '../responses.js';
 import {
   AgentReactMessageInputSchema,
   internalPaths,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { requireAgentConversationCapability } from './capability-scope.js';
 
 export function registerReactRoutes(
   app: Hono<AppEnv>,
@@ -48,8 +48,8 @@ export function registerReactRoutes(
       return c.json({ error: 'forbidden' }, 403);
     }
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'send_messages',
-        conversations.get(principal.conversationId)?.workspace_id);
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'send_messages', conversations.getIdentity(principal.conversationId));
       if (denied) return denied;
     }
     const input = {

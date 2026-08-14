@@ -39,6 +39,8 @@ import {
   type AgentListedWorkspace,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { requireAgentConversationCapability } from './capability-scope.js';
+import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 
 /**
  * Build the cross-workspace `list_workspaces` payload for the calling
@@ -184,9 +186,17 @@ export function registerConversationRoutes(
     if (!canPostToConversation(ctx, principal, current.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    // A channel is BORN INTO a workspace, and this route's only source for that
+    // workspace is the calling conversation's own placement — so from an
+    // `agent_inbox` session the act has no destination (v71, #task:2014). This
+    // is the bounded-context declaration, made explicitly and answered as
+    // `workspace_scope_required`, rather than a workspace lookup that used to
+    // fail as "workspace not found" on a coordinate the row never had.
+    const scope = resolveAgentQueryWorkspaceId(c, current, null, null);
+    if (!scope.ok) return scope.response;
     {
       const denied = requireAgentCapability(c, ctx, principal, 'create_channels',
-        current.workspace_id);
+        scope.workspaceId);
       if (denied) return denied;
     }
     const memberAgentIds = conversations
@@ -195,7 +205,7 @@ export function registerConversationRoutes(
 
     try {
       const result = await ctx.channelService.createChannel({
-        workspaceId: current.workspace_id,
+        workspaceId: scope.workspaceId,
         title: parsed.data.title,
         memberAgentIds,
         actor: principal,
@@ -233,8 +243,8 @@ export function registerConversationRoutes(
       return c.json({ error: 'forbidden' }, 403);
     }
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'read_messages',
-        conversations.get(principal.conversationId)?.workspace_id);
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'read_messages', conversations.getIdentity(principal.conversationId));
       if (denied) return denied;
     }
     try {
@@ -267,8 +277,8 @@ export function registerConversationRoutes(
       return c.json({ error: 'forbidden' }, 403);
     }
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'read_messages',
-        conversations.get(principal.conversationId)?.workspace_id);
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'read_messages', conversations.getIdentity(principal.conversationId));
       if (denied) return denied;
     }
     try {
@@ -338,9 +348,16 @@ export function registerConversationRoutes(
     const sourceConversation = conversations.get(principal.conversationId);
     if (!sourceConversation) return c.json({ error: 'conversation not found' }, 404);
     // Default to source workspace; cross-workspace access is gated by
-    // `canAgentAccessWorkspace` (workspace_members ∪ owned agent_home).
-    const targetWorkspaceId =
-      parsedQuery.data.workspace_id ?? sourceConversation.workspace_id;
+    // `canAgentAccessWorkspace` (workspace_members ∪ owned agent_home). From a
+    // placement with no workspace the default is undefined, so `workspace_id`
+    // becomes REQUIRED instead of resolving to a silently empty list (v71).
+    const scope = resolveAgentQueryWorkspaceId(
+      c,
+      sourceConversation,
+      parsedQuery.data.workspace_id,
+    );
+    if (!scope.ok) return scope.response;
+    const targetWorkspaceId = scope.workspaceId;
     if (targetWorkspaceId !== sourceConversation.workspace_id) {
       if (!canAgentAccessWorkspace(ctx, principal.agentId, targetWorkspaceId)) {
         return c.json({ error: 'forbidden' }, 403);

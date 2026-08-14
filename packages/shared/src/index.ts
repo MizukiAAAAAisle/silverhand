@@ -13,6 +13,7 @@ export * from './driver/index.js';
 export * from './client-telemetry.js';
 export * from './config.js';
 export * from './connect-command.js';
+export * from './conversation-placement.js';
 export * from './desktop-server-api-epoch.js';
 export * from './handle.js';
 export * from './host-diagnostics.js';

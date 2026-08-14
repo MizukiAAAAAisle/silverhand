@@ -452,7 +452,16 @@ export interface WorkspaceAgentCapabilityRow {
 
 export interface ConversationRow {
   id: string;
-  workspace_id: string;
+  /** The workspace arm of the placement arc (v71+): NOT NULL exactly when
+   *  `placement_kind = 'workspace'`, NULL for every other placement. Read
+   *  surfaces must therefore not INNER JOIN `workspaces` to reach a
+   *  conversation — an `agent_inbox` row has no workspace at all. */
+  workspace_id: string | null;
+  /** The owner of an `agent_inbox` placement (v71+): NOT NULL exactly when
+   *  `placement_kind = 'agent_inbox'`, NULL otherwise. An OWNERSHIP edge
+   *  (`ON DELETE CASCADE`) — the inbox has no survivor, so it dies with the
+   *  agent rather than outliving it as a historical coordinate. */
+  inbox_agent_id: string | null;
   /** Authoritative placement axis (v69+). */
   placement_kind: ConversationPlacementKind;
   /** Authoritative roster axis (v69+); `kind` is derived from it. */
@@ -517,6 +526,15 @@ export interface MessageRow {
   author_id: string | null;
   author_name: string | null;
   author_display_name: string | null;
+  /** The source message this row is a mention CC copy OF (v71+, §5); NULL for
+   *  every ordinary message. Deliberately carries NO foreign key: the copy is an
+   *  independent fact inside the recipient's inbox, so deleting the source
+   *  conversation must not delete a notification someone already received.
+   *  `UNIQUE(cc_source_message_id, conversation_id)` (partial) is the
+   *  "exactly one copy per inbox" proof — the copy itself is written inside the
+   *  source message's own transaction, so it is a safety belt against a second
+   *  write path, not the correctness mechanism. */
+  cc_source_message_id: string | null;
   // ── DEAD MODEL RESIDUE (v60) ──────────────────────────────────────────
   // The columns below are from the retired "a message IS a task" model. As of
   // v60 a task is a first-class `tasks` aggregate (see TaskRow); these columns

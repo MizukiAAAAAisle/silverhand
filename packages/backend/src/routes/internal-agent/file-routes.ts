@@ -12,10 +12,10 @@ import {
   canPostToConversation,
   canViewConversation,
 } from '../../permissions.js';
-import { requireAgentCapability } from '../capability.js';
 import { updateAttachment, uploadAttachment } from '../attachment-upload.js';
 import { internalPaths } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { requireAgentConversationCapability } from './capability-scope.js';
 
 export function registerFileRoutes(
   app: Hono<AppEnv>,
@@ -40,8 +40,8 @@ export function registerFileRoutes(
       return c.json({ error: 'forbidden' }, 403);
     }
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'upload_attachments',
-        conversation.workspace_id);
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'upload_attachments', conversations.getIdentity(conversation.id));
       if (denied) return denied;
     }
     return uploadAttachment(
@@ -81,8 +81,8 @@ export function registerFileRoutes(
         return c.json({ error: 'forbidden' }, 403);
       }
       {
-        const denied = requireAgentCapability(c, ctx, principal, 'upload_attachments',
-          conversation.workspace_id);
+        const denied = requireAgentConversationCapability(c, ctx, principal,
+          'upload_attachments', conversations.getIdentity(conversation.id));
         if (denied) return denied;
       }
       return updateAttachment(
@@ -117,8 +117,8 @@ export function registerFileRoutes(
         return c.json({ error: 'forbidden' }, 403);
       }
       {
-        const denied = requireAgentCapability(c, ctx, principal, 'read_attachments',
-          conversations.get(principal.conversationId)?.workspace_id);
+        const denied = requireAgentConversationCapability(c, ctx, principal,
+          'read_attachments', conversations.getIdentity(principal.conversationId));
         if (denied) return denied;
       }
       // TODO(remote-blob): `locateForAgent` throws
@@ -162,8 +162,8 @@ export function registerFileRoutes(
         return c.json({ error: 'forbidden' }, 403);
       }
       {
-        const denied = requireAgentCapability(c, ctx, principal, 'read_attachments',
-          conversations.get(principal.conversationId)?.workspace_id);
+        const denied = requireAgentConversationCapability(c, ctx, principal,
+          'read_attachments', conversations.getIdentity(principal.conversationId));
         if (denied) return denied;
       }
       const located = await ctx.attachmentService.locateForAgent(

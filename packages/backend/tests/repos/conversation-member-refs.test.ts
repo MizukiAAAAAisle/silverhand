@@ -64,7 +64,11 @@ function legacyRefs(
     )
     .map(conversation => ({
       id: conversation.id,
-      workspace_id: conversation.workspace_id,
+      // The filter above established `workspace_id === workspaceId`, so naming the
+      // scope here is the same value the frozen algorithm projected — and it stays
+      // exact now that a conversation's `workspace_id` is nullable (a
+      // workspace-less placement can never satisfy that filter).
+      workspace_id: workspaceId,
     }));
 }
 

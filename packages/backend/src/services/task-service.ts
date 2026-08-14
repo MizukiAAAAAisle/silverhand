@@ -1,4 +1,5 @@
 import {
+  requireWorkspacePlacement,
   type ClaimErrorCode,
   type ClaimResultEntry,
   type CreateTasksResult,
@@ -260,7 +261,12 @@ export class TaskService {
       threadRootId = target.thread_root_id ?? target.id;
     }
 
-    const taskWorkspaceId = conversation.workspace_id;
+    // A Board is a WORKSPACE artifact: `tasks.workspace_id` is NOT NULL, so a
+    // conversation with no workspace has no board to create into (§4.2 — the
+    // agent inbox deliberately has none). Asserted here, at the one place the
+    // task's workspace is derived, rather than left to a NOT NULL violation
+    // deeper in the transaction.
+    const taskWorkspaceId = requireWorkspacePlacement(conversation);
 
     // Pre-txn source validation. `source_message_id` is a permanent 1:1
     // provenance identity: the source must exist, live in the SAME conversation

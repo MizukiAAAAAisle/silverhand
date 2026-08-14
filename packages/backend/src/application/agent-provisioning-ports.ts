@@ -1,6 +1,6 @@
 /**
  * Agent-provisioning ports (#task:1990) — the driver-free contract between the
- * create-agent L3a dependent-row transaction and persistence.
+ * create-agent transactions and persistence.
  *
  * Same discipline as `application/membership-ports.ts` / `services/channel/ports.ts`:
  * no driver types, no SQL, and the whole relative import closure of this module
@@ -8,12 +8,26 @@
  *
  * ## What this scope covers
  *
- * `create-agent.ts::insertProvisioningDependents` runs one DB transaction that
- * flips a `pending_materialization` agent to `active` and inserts its whole
- * dependent graph: the agent-home workspace, the onboarding DM channel + both
- * membership edges, the owner-human membership/pointer, and the onboarding
- * system message. All of those writes plus the authoritative re-read the
- * workspace insert needs are the faces below.
+ * TWO units of work, both atomic and independent (spec §5 note / §2.2):
+ *
+ * 1. the AGGREGATE reserve —
+ *    {@link AgentProvisioningPersistence.reserveAgentAggregate} writes the
+ *    `agents` row plus its inbox placement (v71 §4.2), the pair that makes an
+ *    Agent exist at all;
+ * 2. the DEPENDENT GRAPH —
+ *    `create-agent.ts::insertProvisioningDependents` flips a
+ *    `pending_materialization` agent to `active` and inserts everything that
+ *    exists only BECAUSE the daemon materialized a home on disk: the agent-home
+ *    workspace, the onboarding DM channel + both membership edges, the
+ *    owner-human membership/pointer, and the onboarding system message. All of
+ *    those writes plus the authoritative re-read the workspace insert needs are
+ *    the faces below.
+ *
+ * The split is the lifecycle: `pending_materialization | active | failed` are all
+ * legal states of an Agent, and only (2) is conditional on materialization
+ * succeeding. Putting the inbox in (2) would give a `failed` row no destination
+ * for a mention of its already-reserved handle, and would make a retry insert a
+ * second inbox for a row that already has one.
  *
  * ## Atomicity, not isolation — but the conditional transition IS the gate
  *
@@ -67,9 +81,26 @@
  * without opening new transactions.
  */
 
+import type { AgentRow, CreateAgentInput } from '@silverhand/shared';
+
 /** The agent face: the conditional transition and the authoritative re-read
  *  that follows it, as ONE operation. */
 export interface AgentProvisioningAgentsTxPort {
+  /**
+   * L1 reserve — INSERT the `agents` row in `pending_materialization`. Returns
+   * the reserved row because the row (never the request body) is the source of
+   * truth for the wire intent that follows.
+   *
+   * Reachable only through {@link AgentProvisioningPersistence.reserveAgentAggregate},
+   * which pairs it with the inbox insert; the port exposes it on the tx scope so
+   * that pairing is a transaction and not a convention.
+   */
+  reserveForMaterialize(args: {
+    input: CreateAgentInput;
+    defaultHostId: string;
+    createdByUserId: string;
+    idempotencyKey: string;
+  }): AgentRow;
   /**
    * Flip `pending_materialization` → `active` (clears failure stamps) AND
    * return the minimal `{id, name}` projection of the row.
@@ -107,7 +138,8 @@ export interface AgentProvisioningWorkspacesTxPort {
   setOwnerUserId(workspaceId: string, userId: string): void;
 }
 
-/** The conversation face: the onboarding DM channel and its two edges. */
+/** The conversation face: the onboarding DM channel, its two edges, and the
+ *  agent's inbox placement. */
 export interface AgentProvisioningConversationsTxPort {
   /** Insert the DM channel under the (already-inserted) agent-home workspace.
    *  Returns only its id — the edges below and the message insert key off it. */
@@ -116,6 +148,27 @@ export interface AgentProvisioningConversationsTxPort {
     title: string;
     agentId?: string | null;
   }): { id: string };
+  /**
+   * Insert the agent's INBOX placement (v71, §4.2) — part of the Agent
+   * aggregate, so it is written in the SAME transaction as the `agents` row
+   * ({@link AgentProvisioningPersistence.reserveAgentAggregate}), never lazily by
+   * whatever first needs it. The mention CC depends on this row existing and
+   * refuses to create one (`AgentInboxMissingError`): a get-or-create is exactly
+   * what let two `Mentions` DMs exist for one agent.
+   *
+   * NOT part of the dependent graph below: `pending_materialization` and
+   * `failed` rows own an inbox too (the mention resolver answers for them), and a
+   * retry that re-ran this insert would collide with the inbox its own first
+   * attempt already committed.
+   *
+   * Takes the owner and the owner's `created_at`: the inbox has no workspace, no
+   * roster edge, no caller-chosen title and no visibility — `inbox_agent_id` is
+   * its whole identity, and the DB's arc CHECK plus
+   * `idx_conversations_inbox_agent` make both facts schema-level. The timestamp
+   * is the agent's, so aggregate birth reads the same on an upgraded DB as on a
+   * fresh create. Returns `{ id }` like its siblings (R4).
+   */
+  insertAgentInbox(agentId: string, createdAt: number): { id: string };
   /** Owner-agent edge on the DM. */
   addAgent(conversationId: string, agentId: string): void;
   /** Owner-human edge on the DM. */
@@ -154,4 +207,23 @@ export interface AgentProvisioningUnitOfWork {
 
 export interface AgentProvisioningPersistence {
   uow: AgentProvisioningUnitOfWork;
+  /**
+   * The AGENT AGGREGATE FACTORY (v71): the `agents` row and its inbox, in one
+   * transaction. This is the only way an Agent comes into existence — the row
+   * alone is not an Agent, because the mention resolver can address the handle
+   * from the instant it is reserved and `requireAgentInbox` refuses to repair a
+   * missing destination.
+   *
+   * A named operation rather than an inline `atomically` at the call site: the
+   * atomicity is the aggregate's rule, so it belongs to the thing that owns the
+   * aggregate, and a second caller (a test fixture, a future import path) gets
+   * the invariant by calling this instead of re-deriving it. `AgentRepo`'s own
+   * `reserveForMaterialize` writes a bare row and is NOT that factory.
+   */
+  reserveAgentAggregate(args: {
+    input: CreateAgentInput;
+    defaultHostId: string;
+    createdByUserId: string;
+    idempotencyKey: string;
+  }): AgentRow;
 }

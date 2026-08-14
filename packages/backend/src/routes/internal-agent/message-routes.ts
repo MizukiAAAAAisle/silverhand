@@ -29,6 +29,8 @@ import {
   messageContentExceedsLimit,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { requireAgentConversationCapability } from './capability-scope.js';
+import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 
 export function registerMessageRoutes(
   app: Hono<AppEnv>,
@@ -101,8 +103,8 @@ export function registerMessageRoutes(
       return c.json({ error: 'forbidden' }, 403);
     }
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'send_messages',
-        conversations.get(principal.conversationId)?.workspace_id);
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'send_messages', conversations.getIdentity(principal.conversationId));
       if (denied) return denied;
     }
     if (parsed.data.stale_event_id !== undefined) {
@@ -161,8 +163,8 @@ export function registerMessageRoutes(
       return c.json({ error: 'forbidden' }, 403);
     }
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'send_messages',
-        conversations.get(principal.conversationId)?.workspace_id);
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'send_messages', conversations.getIdentity(principal.conversationId));
       if (denied) return denied;
     }
     c.set('cliStaleResolutionReason', parsed.data.resolution_reason);
@@ -202,8 +204,10 @@ export function registerMessageRoutes(
       return c.json({ error: target.message, code: target.code }, target.status);
     }
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'read_messages',
-        target.conversation.workspace_id);
+      // The TARGET conversation's placement governs: its workspace grant, or
+      // self-authority when the target is the caller's own inbox (v71).
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'read_messages', conversations.getIdentity(target.conversation.id));
       if (denied) return denied;
     }
     const result = timedRouteSpan(
@@ -268,16 +272,34 @@ export function registerMessageRoutes(
       }
     }
     {
-      // Resolve the workspace the search actually lands in:
-      // a conversation selector → that conversation's (global) workspace;
-      // else the explicit workspace_id arg; else the source conversation's
-      // (which is also what `current_workspace` means). The dto builder
-      // still bottom-guards per-conversation membership via JOIN.
-      const searchWorkspaceId = parsed.data.conversation_id
-        ? conversations.get(parsed.data.conversation_id)?.workspace_id ?? sourceConversation.workspace_id
-        : parsed.data.workspace_id ?? sourceConversation.workspace_id;
-      const denied = requireAgentCapability(c, ctx, principal, 'read_messages', searchWorkspaceId);
-      if (denied) return denied;
+      // Resolve WHAT the search is scoped to, and let that scope decide the
+      // grant:
+      //   - a conversation selector → THAT conversation governs (its workspace
+      //     grant, or self-authority in the caller's own inbox);
+      //   - otherwise the search is workspace-wide (explicit `workspace_id`,
+      //     else the source conversation's — which is also what
+      //     `current_workspace` means), and a workspace-less placement has no
+      //     ambient workspace to search, so the caller must name one (v71).
+      // The dto builder still bottom-guards per-conversation membership via
+      // JOIN.
+      const selected = parsed.data.conversation_id
+        ? conversations.getIdentity(parsed.data.conversation_id)
+        : null;
+      if (selected) {
+        const denied = requireAgentConversationCapability(c, ctx, principal,
+          'read_messages', selected);
+        if (denied) return denied;
+      } else {
+        const scope = resolveAgentQueryWorkspaceId(
+          c,
+          sourceConversation,
+          parsed.data.workspace_id,
+        );
+        if (!scope.ok) return scope.response;
+        const denied = requireAgentCapability(c, ctx, principal, 'read_messages',
+          scope.workspaceId);
+        if (denied) return denied;
+      }
     }
     const result = timedRouteSpan(
       ctx,

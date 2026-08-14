@@ -67,16 +67,22 @@ function bootstrap() {
   const agents = new AgentRepo(db);
   const hosts = new HostRepo(db);
   hosts.claimOrCreateLocal({ userId: 'local', installationId: 'uow-install' });
-  const row = agents.reserveForMaterialize(
-    { name: 'uow-agent', runtime: 'claude' },
-    localHostId,
-    'local',
-    freshKey(),
-  );
   const persistence = createSqliteAgentProvisioningPersistence(db);
+  // Through the AGGREGATE factory, which is the only way production reserves:
+  // the row plus its inbox. The dependent-row counts below join through
+  // `conversation_agents`, and the inbox deliberately has no such row (§4.2), so
+  // it never shows up as a dependent — which is itself the point.
+  const row = persistence.reserveAgentAggregate({
+    input: { name: 'uow-agent', runtime: 'claude' },
+    defaultHostId: localHostId,
+    createdByUserId: 'local',
+    idempotencyKey: freshKey(),
+  });
   return {
     db,
     agents,
+    localHostId,
+    persistence,
     agentId: row.id,
     agentName: row.name,
     uow: persistence.uow,
@@ -285,5 +291,118 @@ describe('AgentProvisioningUnitOfWork (SQLite adapter)', () => {
       )
       .get(created.home.id, 'local')!;
     expect(role.role).toBe('owner');
+  });
+});
+
+/**
+ * The AGGREGATE factory (#task:2014, v71 §4.2): `agents` row + inbox placement,
+ * atomically. Its three properties are each a way this could go wrong quietly —
+ * a row without an inbox (a mention of the handle would abort a human's send),
+ * an inbox whose id is not a conversation id (nothing can reference it), and a
+ * birth instant that disagrees with the migration's (two definitions of "when
+ * did this Agent start existing", visible as list order on upgrade day).
+ */
+describe('reserveAgentAggregate (SQLite adapter)', () => {
+  function inboxRow(t: ReturnType<typeof bootstrap>, agentId: string) {
+    return t.db
+      .prepare<
+        [string],
+        {
+          id: string;
+          workspace_id: string | null;
+          roster_policy: string;
+          title: string;
+          created_at: number;
+          updated_at: number;
+          latest_message_seq: number;
+        }
+      >(
+        `SELECT id, workspace_id, roster_policy, title, created_at, updated_at,
+                latest_message_seq
+           FROM conversations
+          WHERE placement_kind = 'agent_inbox' AND inbox_agent_id = ?`,
+      )
+      .get(agentId);
+  }
+
+  it('writes the row and its inbox together, with no roster row for the inbox', () => {
+    const t = bootstrap();
+    const inbox = inboxRow(t, t.agentId);
+    expect(inbox).toBeDefined();
+    expect(inbox!.workspace_id).toBeNull();
+    expect(inbox!.roster_policy).toBe('fixed');
+    expect(inbox!.latest_message_seq).toBe(0);
+    expect(
+      t.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM conversation_agents WHERE conversation_id = ?`,
+        )
+        .get(inbox!.id)!.c,
+    ).toBe(0);
+  });
+
+  it('mints an ORDINARY conversation id — the same domain `#conv:<id>` accepts', () => {
+    // B2: a derived `inbox-<agentId>` would be ~22 chars and would parse as no
+    // reference at all. One-per-agent is carried by the partial UNIQUE index, not
+    // by the id, so the id has nothing to encode.
+    const t = bootstrap();
+    const inbox = inboxRow(t, t.agentId)!;
+    expect(inbox.id).toMatch(/^[A-Za-z0-9_-]{16}$/);
+    expect(inbox.id).not.toContain(t.agentId);
+
+    const second = t.persistence.reserveAgentAggregate({
+      input: { name: 'uow-agent-2', runtime: 'claude' },
+      defaultHostId: t.localHostId,
+      createdByUserId: 'local',
+      idempotencyKey: freshKey(),
+    });
+    expect(inboxRow(t, second.id)!.id).not.toBe(inbox.id);
+  });
+
+  it('stamps aggregate BIRTH: both inbox timestamps are the agent row’s created_at', () => {
+    // M1: the same definition the v71 backfill uses
+    // (`created_at = updated_at = agents.created_at`). If the fresh path took its
+    // own `Date.now()` instead, an upgraded DB and a fresh create would disagree
+    // about the same field, and no test that looked at only one side would say so.
+    const t = bootstrap();
+    const agent = t.agents.getRow(t.agentId)!;
+    const inbox = inboxRow(t, t.agentId)!;
+    expect(inbox.created_at).toBe(agent.created_at);
+    expect(inbox.updated_at).toBe(agent.created_at);
+    expect(inbox.title).toBe('Inbox');
+  });
+
+  it('is atomic: a failing inbox insert leaves NO agents row behind', () => {
+    // The pair is the invariant, so a half-committed aggregate must be
+    // unreachable. Faulted at the DB, because the adapter composes two repo calls
+    // and a scope override would not prove the transaction wraps them.
+    const t = bootstrap();
+    t.db.exec(
+      `CREATE TRIGGER t2014_fail_inbox_insert
+         BEFORE INSERT ON conversations
+         WHEN NEW.placement_kind = 'agent_inbox'
+       BEGIN
+         SELECT RAISE(ABORT, 'forced inbox insert failure');
+       END`,
+    );
+    try {
+      expect(() =>
+        t.persistence.reserveAgentAggregate({
+          input: { name: 'uow-agent-atomic', runtime: 'claude' },
+          defaultHostId: t.localHostId,
+          createdByUserId: 'local',
+          idempotencyKey: freshKey(),
+        }),
+      ).toThrow(/forced inbox insert failure/);
+    } finally {
+      t.db.exec('DROP TRIGGER t2014_fail_inbox_insert');
+    }
+    expect(
+      t.db
+        .prepare<[], { c: number }>(
+          `SELECT COUNT(*) AS c FROM agents WHERE name = 'uow-agent-atomic'`,
+        )
+        .get()!.c,
+    ).toBe(0);
   });
 });

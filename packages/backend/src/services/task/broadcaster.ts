@@ -7,6 +7,7 @@
 // scope (via `TaskSystemEventPort`), and this file only publishes / delivers /
 // audits the already-durable row.
 import {
+  requireWorkspacePlacement,
   type ConversationDto,
   type MessageDto,
   type TaskAssigneeDto,
@@ -176,7 +177,12 @@ export class TaskBroadcaster {
 
   publishTaskChanged(args: TaskEventArgs): void {
     const conversationId = args.conversation.id;
-    const workspaceId = args.conversation.workspace_id;
+    // A task exists only on a workspace board (`tasks.workspace_id` NOT NULL),
+    // so a `task_changed` frame always has a workspace to name. The assertion
+    // guards the wire contract at the emit seam: the event's `workspace_id` is
+    // what routes it to the viewer's board, and a null there would be a frame no
+    // client can place.
+    const workspaceId = requireWorkspacePlacement(args.conversation);
     // A task-bearing conversation is always a channel-like top-level
     // conversation (#task:1303), so channel_id is its own id.
     const event: TaskChangedEvent = {

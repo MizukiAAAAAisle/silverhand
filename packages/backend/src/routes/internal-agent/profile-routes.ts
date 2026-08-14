@@ -32,6 +32,7 @@ import {
   type AgentProfileDto,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 
 /**
  * The ONE profile projection, shared by the self read/write and the peer read
@@ -310,9 +311,17 @@ export function registerProfileRoutes(
     }
     // Default to the source workspace; a cross-workspace target is gated by
     // the caller's own workspace horizon (`canAgentAccessWorkspace` =
-    // workspace_members ∪ owned agent_home), mirroring `list_channels`.
-    const targetWorkspaceId =
-      parsedQuery.data.workspace_id ?? sourceConversation.workspace_id;
+    // workspace_members ∪ owned agent_home), mirroring `list_channels`. "Who
+    // is this handle" is a WORKSPACE-scoped question here — the answer is a
+    // `workspace_members` edge — so from a workspace-less placement the caller
+    // must name the workspace instead of getting a bare `agent not found` (v71).
+    const scope = resolveAgentQueryWorkspaceId(
+      c,
+      sourceConversation,
+      parsedQuery.data.workspace_id,
+    );
+    if (!scope.ok) return scope.response;
+    const targetWorkspaceId = scope.workspaceId;
     if (targetWorkspaceId !== sourceConversation.workspace_id) {
       if (!canAgentAccessWorkspace(ctx, principal.agentId, targetWorkspaceId)) {
         return c.json({ error: 'forbidden' }, 403);

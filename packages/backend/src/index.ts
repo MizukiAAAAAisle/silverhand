@@ -546,11 +546,6 @@ export async function startBackend(
     uow: conversationPersistence.message.uow,
     threadFollow: conversationPersistence.threadFollow,
     delivery: conversationPersistence.delivery,
-    mentionCc: persistence.effects.mentionCc({
-      runtimeHost: ctx.runtimeHost,
-      events: ctx.events,
-      logger,
-    }),
     unreadPublish,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,

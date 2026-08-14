@@ -106,8 +106,11 @@ const CONCRETE_IMPORTERS = new Set([
   'packages/backend/src/repos/agent-teardown-persistence.ts',
   // the effect adapters wire concrete repos behind one driver-free effect port
   // (`unread-publish.ts` used to be listed here too; it composes plain repos
-  // only, so its row was an unexercised permission — #task:1983 W1)
-  'packages/backend/src/adapters/mention-cc.ts',
+  // only, so its row was an unexercised permission — #task:1983 W1. So did
+  // `mention-cc.ts`, deleted in v71 (#task:2014): the CC is no longer a
+  // post-commit effect with its own persistence, it is a write inside the send's
+  // transaction, so it takes a subset of the send's tx scope and there is
+  // nothing left for an adapter to compose)
   'packages/backend/src/adapters/runtime-fanout.ts',
 ]);
 
@@ -171,10 +174,12 @@ const USER_DOMAIN_APP_FILES = [
 ];
 
 /**
- * The cross-channel mention cc fan-out after #task:1982 W2. It declares its own
- * ports (one file, one consumer) and holds no `Database` handle: the two
- * statements it used to prepare are now `WorkspaceRepo.addUserMember` and
- * `ConversationReadRepo.getLastReadSeq`, delegated from the adapter.
+ * The mention cc use case. It declared its own ports after #task:1982 W2; in
+ * v71 (#task:2014) it stopped declaring any, because the copy is written INSIDE
+ * the send's transaction — its capability is a `Pick` of `MessageTxScope`, so
+ * the fence claim is simply that the decision-and-write half names no `repos/*`
+ * module and holds no handle. The adapter that used to compose its concretes is
+ * gone with the post-commit model.
  */
 const MENTION_CC_APP_FILES = [
   'packages/backend/src/application/mention-cc.ts',
@@ -519,7 +524,6 @@ describe('db-boundary: port/concrete boundary', () => {
       // wired in boot, importing no driver at all
       ["import { createSqliteProbePersistence } from './repos/probe-persistence.js';", './repos/probe-persistence.js'],
       ["import { createUnreadPublishAdapter } from './adapters/unread-publish.js';", './adapters/unread-publish.js'],
-      ["import { createMentionCcAdapter } from './adapters/mention-cc.js';", './adapters/mention-cc.js'],
       ["const m = await import('./adapters/runtime-fanout.js');", './adapters/runtime-fanout.js'],
     ] as const) {
       expect(
@@ -642,9 +646,10 @@ describe('db-boundary: port/concrete boundary', () => {
   it('the converged mention-cc use case names no repos/* module (R2)', () => {
     expect(
       repoDependencyViolations(MENTION_CC_APP_FILES, fsRead),
-      'the cc fan-out reaches persistence only through the ports it declares; its two ' +
-        'former inline statements now delegate to existing repo methods inside ' +
-        'adapters/mention-cc.ts, which is where the `Database` handle stops',
+      'the mention cc reaches persistence only through the send transaction scope it '
+        + 'takes as a parameter (v71: a `Pick<MessageTxScope, …>`); the concretes behind '
+        + 'that scope are wired in repos/conversation-persistence.ts, which is where the '
+        + '`Database` handle stops',
     ).toEqual([]);
 
     // positive self-test through the production helper, on a file of THIS fence
@@ -656,12 +661,12 @@ describe('db-boundary: port/concrete boundary', () => {
           : null,
       ),
     ).toEqual([`${fenced} imports ../repos/conversation-read-repo.js`]);
-    // The adapter that wires the concretes stays OUT of the fence, and
+    // The composition that wires the concretes stays OUT of the fence, and
     // `conversation-repo` / `message-repo` stay out of the composition
     // allowlist: they still have many unconverged callers, so allowing them
     // there would silence the fence for everyone else (#task:1982 R2).
     expect(MENTION_CC_APP_FILES).not.toContain(
-      'packages/backend/src/adapters/mention-cc.ts',
+      'packages/backend/src/repos/conversation-persistence.ts',
     );
     for (const repo of [
       'packages/backend/src/repos/conversation-repo.ts',

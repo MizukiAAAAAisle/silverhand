@@ -1383,6 +1383,12 @@ export class MessageRepo {
      *  `head <= seen` CAS relaxation: the exempt row's own delivery may
      *  push the recipient's observed PAST the head. */
     freshnessExempt?: boolean;
+    /** The message this row is the mention CC copy OF (v71, §5). Set ONLY by
+     *  the mention CC write, which runs inside the source message's own
+     *  transaction; the partial UNIQUE `(cc_source_message_id, conversation_id)`
+     *  turns a second copy per inbox into a constraint failure instead of a
+     *  duplicate notification. */
+    ccSourceMessageId?: string | null;
   }): MessageDto {
     return this.db.transaction(() => {
       const seq = this.reserveNextSeq(params.conversationId);
@@ -1681,6 +1687,7 @@ export class MessageRepo {
     metadata?: Record<string, unknown> | null;
     attachments?: AttachmentSnapshot[] | null;
     threadRootId?: string | null;
+    ccSourceMessageId?: string | null;
   }, seq: number): MessageDto {
     const id = newId();
     const now = Date.now();
@@ -1725,8 +1732,8 @@ export class MessageRepo {
         `INSERT INTO messages
          (id, conversation_id, from_kind, from_agent_id, from_user_id,
           content, metadata, seq, created_at, thread_root_id,
-          author_id, author_name, author_display_name)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          author_id, author_name, author_display_name, cc_source_message_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1742,6 +1749,7 @@ export class MessageRepo {
         authorId,
         authorName,
         authorDisplayName,
+        params.ccSourceMessageId ?? null,
       );
     const row = prepareObserved<[string], MessageRow>(
         this.db,

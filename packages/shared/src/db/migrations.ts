@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { BASELINE_SCHEMA_SQL, BASELINE_SCHEMA_VERSION } from './baseline-schema.js';
 
 /**
@@ -1374,6 +1375,221 @@ export const migrations: Migration[] = [
         ON conversations(status);
       CREATE INDEX idx_conversations_archived_at
         ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+    `,
+  },
+  {
+    version: 71,
+    name: 'agent_inbox_placement',
+    // agent-scoped-session-v1 §4.1 / §4.2 末 / §5 / §8 P0-b (#task:2014) — the
+    // `Mentions` inbox becomes a first-class placement instead of a DM that
+    // borrows an `agent_home` workspace, and the mention CC copy becomes part of
+    // the source message's own transaction.
+    //
+    // Version 71, not 70: 70 is reserved by the parallel P0-d runtime-slot lane
+    // (#task:2013). Whichever of the two lands second renumbers so the SHIPPED
+    // sequence stays dense — a gap would let a DB record 71 and then never apply
+    // 70 (the runner only replays versions above the ledger).
+    //
+    // Three things change, and only the first needs a rebuild:
+    //
+    // 1. `conversations`: `workspace_id` becomes NULLABLE, `inbox_agent_id`
+    //    appears, and v69's staging gate `CHECK (placement_kind = 'workspace')`
+    //    is replaced by the EXHAUSTIVE MUTUALLY EXCLUSIVE ARC — each placement
+    //    names exactly the columns it owns and NULLs every other arc's columns.
+    //    `direct_pair` stays fail-closed (its endpoint columns arrive in P3):
+    //    admitting the value without its columns would be a half-modelled arc,
+    //    which is the same lie v69's gate existed to prevent.
+    //    A rebuild is forced twice over: `workspace_id NOT NULL` cannot be
+    //    relaxed in place, and the retiring table-level CHECK cannot be dropped
+    //    in place either.
+    // 2. `messages.cc_source_message_id`: plain nullable ADD COLUMN plus a
+    //    PARTIAL UNIQUE index — the dedupe proof for "exactly one copy per
+    //    (source message, inbox)". It deliberately carries NO foreign key
+    //    (§4.2 末): the copy is an independent fact in the recipient's inbox, so
+    //    deleting the source conversation must not delete notifications other
+    //    principals already received.
+    // 3. One BRAND-NEW EMPTY inbox per existing agent. The legacy `Mentions`
+    //    DMs are NOT converted and NOT touched — every column, message,
+    //    attachment, task and roster row of theirs survives this migration
+    //    byte-for-byte (@Cindy 裁定 (b), 2026-08-14).
+    //
+    //    Converting them was the obvious move and it is wrong on the live data.
+    //    Measured before deciding: the three `Mentions` rows hold 137 messages,
+    //    7 attachments, 9 tasks and 3 human roster rows, and one of them (a
+    //    human ↔ agent private line, last active 2026-08-09, 32 human messages)
+    //    is a WORKING SURFACE, not the notification stream §4.2 models. An
+    //    `agent_inbox` has no human participant by construction, so converting
+    //    that row would cut its human out of his own conversation and
+    //    retroactively reclassify 9 tasks. The general rule this follows is the
+    //    one the doc already states: legacy stays legacy, a new concept takes
+    //    only new traffic. The legacy rows keep their formal home (an ordinary
+    //    `workspace` + `fixed` conversation) permanently — P3 gives the private
+    //    line a DirectPair for NEW traffic and still does not migrate these rows.
+    //
+    //    So there is no title heuristic, no `agent_home` derivation and no
+    //    oldest-per-agent tie-break here: the inbox is an INVARIANT OF THE
+    //    `agents` ROW, so its existence is derived from `agents`, and every agent
+    //    gets exactly one.
+    //
+    //    THE ROW, NOT THE ACTIVE GRAPH — which is why this SELECT has no
+    //    `materialization_status` filter. The lifecycle admits
+    //    `pending_materialization | active | failed`, and the inbox depends on
+    //    NONE of what materialization produces: no daemon ack, no agent dir, no
+    //    host, no workspace. What it does depend on is the thing the reserve
+    //    INSERT already established — a name in the global @handle namespace,
+    //    which `AgentRepo.getByName` resolves regardless of status. So a mention
+    //    of a reserved-but-failed handle must have a destination, and the row
+    //    that CASCADEs off `agents(id)` must be born with the row it dies with.
+    //    `reserveAgentAggregate` writes the pair in ONE transaction from now on
+    //    (never the `pending → active` flip: a `failed` row keeps its inbox, so
+    //    a retry's dependent-row tx must not try to insert a second one); this
+    //    backfill is that same statement for the agents that already exist.
+    //
+    //    `created_at`/`updated_at` = the agent's own `created_at`, the SAME rule
+    //    the aggregate factory applies: this timestamp expresses AGENT-AGGREGATE
+    //    BIRTH, not when a dependent row happened to land, so an upgraded and a
+    //    freshly created inbox are indistinguishable. A truthful old timestamp
+    //    also keeps an empty inbox at the bottom of `updated_at DESC` lists
+    //    instead of jumping every roster to the top on upgrade day.
+    //
+    //    The id is a NORMAL conversation id, minted by the production generator
+    //    in the precondition and staged in a temp table for `up` to join. It is
+    //    deliberately NOT derived from the agent id: `conversations.id` is a
+    //    domain value object — 12 random bytes as 16 chars of base64url — and the
+    //    canonical `#conv:<id>` grammar accepts exactly `[A-Za-z0-9_-]{16}`, so a
+    //    22-char `inbox-<agentId>` would be a conversations row that the system's
+    //    own conversation reference cannot express (invisible only while the inbox
+    //    has no discovery surface; #task:2019 gives it one). The `wsah_<agentId>`
+    //    precedent does not transfer: that convention exists because the daemon
+    //    must RECOGNIZE an agent-home id structurally with no kind column and no
+    //    path, whereas nothing recognizes an inbox from its id —
+    //    `placement_kind` + `inbox_agent_id` + the partial UNIQUE carry every
+    //    fact, including one-per-agent. Replayability to identical bytes was never
+    //    a requirement either: a migration is applied once per DB, inside one
+    //    transaction, and the ledger row is written with it.
+    //    NO `conversation_agents` row is written: on this arc the participant IS
+    //    `inbox_agent_id` (§4.2 表). A projected roster row would be a second
+    //    authority for the same fact and would re-create the cascade conflict
+    //    that table's triggers caused.
+    //
+    // `inbox_agent_id ... ON DELETE CASCADE` is an OWNERSHIP edge, not a
+    // historical coordinate: an inbox has exactly one owner and no survivor, so
+    // it is part of the Agent aggregate and dies with it. This does not add a
+    // cascade — it SHORTENS today's chain by one hop (`workspaces.owner_agent_id`
+    // → `conversations.workspace_id` → messages), which is how deleting an agent
+    // already removed its Mentions. Now that an inbox has no workspace, that
+    // cascade has to come from the owner edge itself.
+    foreignKeyEscape: true,
+    // Mint one conversation id per agent with the PRODUCTION generator and stage
+    // the pairs for `up` to join. SQL cannot call the generator, and the id
+    // domain must not grow a second one (see the note above), so the ids are
+    // made here — inside the migration's own transaction, on the same
+    // connection, before the rebuild — and consumed by the INSERT below. A
+    // rollback discards the temp table with everything else; `DROP … IF EXISTS`
+    // makes the next boot's retry start clean.
+    precondition: (db) => {
+      const handle = db as {
+        exec: (sql: string) => void;
+        prepare: (sql: string) => {
+          all: () => { id: string }[];
+          run: (...params: unknown[]) => void;
+        };
+      };
+      handle.exec(
+        `DROP TABLE IF EXISTS temp.agent_inbox_backfill;
+         CREATE TEMP TABLE agent_inbox_backfill (
+           agent_id        TEXT PRIMARY KEY,
+           conversation_id TEXT NOT NULL UNIQUE
+         );`,
+      );
+      const stage = handle.prepare(
+        `INSERT INTO temp.agent_inbox_backfill (agent_id, conversation_id)
+         VALUES (?, ?)`,
+      );
+      for (const agent of handle.prepare('SELECT id FROM agents').all()) {
+        stage.run(agent.id, randomBytes(12).toString('base64url'));
+      }
+    },
+    up: `
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        inbox_agent_id          TEXT REFERENCES agents(id) ON DELETE CASCADE,
+        placement_kind          TEXT NOT NULL
+          CHECK (placement_kind IN ('workspace', 'direct_pair', 'agent_inbox')),
+        roster_policy           TEXT NOT NULL
+          CHECK (roster_policy IN ('open', 'fixed')),
+        kind                    TEXT GENERATED ALWAYS AS
+          (CASE WHEN roster_policy = 'open' THEN 'channel' ELSE 'dm_channel' END) VIRTUAL,
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        visibility              TEXT NOT NULL DEFAULT 'private'
+          CHECK (
+            visibility IN ('private', 'public')
+            AND (visibility = 'private' OR roster_policy = 'open')
+          ),
+        CHECK (
+          CASE placement_kind
+            WHEN 'workspace'
+              THEN workspace_id IS NOT NULL AND inbox_agent_id IS NULL
+            WHEN 'agent_inbox'
+              THEN inbox_agent_id IS NOT NULL AND workspace_id IS NULL
+                   AND roster_policy = 'fixed'
+            ELSE 0
+          END
+        )
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+        title, status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq, visibility
+      )
+        SELECT
+          c.id, c.workspace_id, NULL, 'workspace', c.roster_policy,
+          c.title, c.status, c.spawned_by_agent_id, c.closed_at, c.close_summary,
+          c.pinned_at, c.created_at, c.updated_at, c.archived_at,
+          c.latest_message_seq, c.visibility
+        FROM conversations c;
+
+      INSERT INTO conversations_new (
+        id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+        title, status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq, visibility
+      )
+        SELECT
+          b.conversation_id, NULL, a.id, 'agent_inbox', 'fixed',
+          'Inbox', 'idle', NULL, NULL, NULL, NULL,
+          a.created_at, a.created_at, NULL, 0, 'private'
+        FROM agents a
+        JOIN temp.agent_inbox_backfill b ON b.agent_id = a.id;
+
+      DROP TABLE temp.agent_inbox_backfill;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+      CREATE UNIQUE INDEX idx_conversations_inbox_agent
+        ON conversations(inbox_agent_id) WHERE placement_kind = 'agent_inbox';
+
+      ALTER TABLE messages ADD COLUMN cc_source_message_id TEXT;
+      CREATE UNIQUE INDEX idx_messages_cc_dedupe
+        ON messages(cc_source_message_id, conversation_id)
+        WHERE cc_source_message_id IS NOT NULL;
     `,
   },
 ];

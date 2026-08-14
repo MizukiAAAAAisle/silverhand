@@ -1,4 +1,8 @@
-import type { ObserveSource, UnreadUpdatedBadgePayload } from '@silverhand/shared';
+import {
+  requireWorkspacePlacement,
+  type ObserveSource,
+  type UnreadUpdatedBadgePayload,
+} from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { Principal } from '../auth/principal.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -299,7 +303,15 @@ export async function observe(
     for (const conversationId of outcome.changedConversations) {
       const conversation = deps.conversations.get(conversationId);
       if (!conversation) continue;
-      const workspaceId = conversation.workspace_id;
+      // Both frames below are keyed on (viewer, WORKSPACE): `workspace_unread_count`
+      // and the tiered badge are workspace roll-ups, so this read model has no
+      // shape for a placement that carries no workspace coordinate. A viewer only
+      // reaches this loop through a cursor they were allowed to move, and a human
+      // is never a participant of a workspace-less placement (§4.2) — so a
+      // non-workspace conversation here is an upstream ACL/routing bug. Fail loud
+      // rather than skip: skipping would leave the client's absolute roll-up frozen
+      // at a stale value with no second chance to correct it.
+      const workspaceId = requireWorkspacePlacement(conversation);
       badgedWorkspaces.add(workspaceId);
       // Enriched message variant (#task:1283): the closure runs POST-COMMIT, so
       // the counts reflect the just-lowered read state — the same authoritative

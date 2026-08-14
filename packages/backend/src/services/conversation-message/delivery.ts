@@ -8,16 +8,24 @@
 //
 // Persistence discipline (#task:1981): no raw DB and no concrete repo. This
 // coordinator runs entirely outside the send transaction, so it takes the
-// callback-free read / write ports plus the two named effect ports
-// (`MentionCcPort`, `ConversationUnreadPublishPort`) — neither of which is
-// reachable from `MessageTxScope`, which is what makes "a transaction callback
-// structurally cannot publish" true.
+// callback-free read / write ports plus the named effect port
+// (`ConversationUnreadPublishPort`), which is NOT reachable from
+// `MessageTxScope` — that is what makes "a transaction callback structurally
+// cannot publish" true.
+//
+// The mention CC used to be a third persistence-holding effect port here
+// (`MentionCcPort`). In v71 its writes moved INTO the send transaction (§5), so
+// what is left on this side — the wake, the WS frames, the skip log — carries no
+// persistence capability at all and needs no port: this coordinator just drives
+// the in-transaction report through `dispatchMentionCcEffects`.
 import type {
   ConversationAgentDto,
   ConversationDto,
   MessageDto,
   Reference,
 } from '@silverhand/shared';
+import { dispatchMentionCcEffects } from '../../application/mention-cc.js';
+import type { MentionCcReport } from '../../application/mention-cc.js';
 import type { BackendLogger } from '../../context.js';
 import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
 import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
@@ -25,7 +33,6 @@ import type { ConversationUnreadPublishPort } from '../conversation/unread-publi
 import type {
   DeliveryReadPort,
   DeliveryWritePort,
-  MentionCcPort,
 } from './ports.js';
 import {
   excerpt,
@@ -37,7 +44,6 @@ import {
 export interface MessageDeliveryCoordinatorDeps {
   read: DeliveryReadPort;
   write: DeliveryWritePort;
-  mentionCc: MentionCcPort;
   unreadPublish: ConversationUnreadPublishPort;
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
@@ -47,7 +53,6 @@ export interface MessageDeliveryCoordinatorDeps {
 export class MessageDeliveryCoordinator {
   private readonly read: DeliveryReadPort;
   private readonly write: DeliveryWritePort;
-  private readonly mentionCc: MentionCcPort;
   private readonly unreadPublish: ConversationUnreadPublishPort;
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
@@ -56,7 +61,6 @@ export class MessageDeliveryCoordinator {
   constructor(deps: MessageDeliveryCoordinatorDeps) {
     this.read = deps.read;
     this.write = deps.write;
-    this.mentionCc = deps.mentionCc;
     this.unreadPublish = deps.unreadPublish;
     this.runtimeHost = deps.runtimeHost;
     this.events = deps.events;
@@ -293,24 +297,34 @@ export class MessageDeliveryCoordinator {
     );
   }
 
-  async ccMentionsBestEffort(
-    sourceConversation: ConversationDto,
-    message: MessageDto,
-    references: readonly Reference[],
-  ): Promise<void> {
-    const sourceWorkspace = this.read.getWorkspace(sourceConversation.workspace_id);
-    if (!sourceWorkspace) return;
+  /**
+   * Drive the post-commit half of the mention CC (v71, §5). The copies, their
+   * durable inbox rows and the author's `mention_external` notifications are
+   * ALREADY COMMITTED by the send transaction; what happens here is the wake,
+   * the WS frames and the skip log — none of which can be committed, and none of
+   * which can lose a mention if it fails.
+   *
+   * The `try/catch` therefore guards effects only. It does NOT mean "the CC is
+   * best-effort": the decision to copy was transactional, and a `throw` from the
+   * write half already rolled the human's send back rather than silently
+   * dropping the copy.
+   */
+  async dispatchMentionCcBestEffort(report: MentionCcReport): Promise<void> {
     try {
-      await this.mentionCc.ccMentionsFromUserMessage({
-        message,
-        sourceConversation,
-        sourceWorkspace,
-        references,
+      await dispatchMentionCcEffects(report, {
+        runtimeStart: this.runtimeHost,
+        runtimeDeliver: this.runtimeHost,
+        events: this.events,
+        logger: this.logger,
       });
     } catch (err) {
       this.logger.warn(
-        { conversationId: sourceConversation.id, messageId: message.id, err },
-        'conversation-message-service: mention cc failed',
+        {
+          conversationId: report.source.conversationId,
+          messageId: report.source.messageId,
+          err,
+        },
+        'conversation-message-service: mention cc effects failed (copies are committed)',
       );
     }
   }

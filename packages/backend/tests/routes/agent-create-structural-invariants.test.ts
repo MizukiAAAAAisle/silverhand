@@ -18,16 +18,19 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import { createSqliteAgentProvisioningPersistence } from '../../src/repos/agent-provisioning-persistence.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 /**
  * Seed a `materialization_status = 'failed'` row that matches the
- * shape a real L3b leaves behind: ONLY the `agents` row exists, NO
- * dependent rows (no `agent_home` workspace, no DM channel, no
- * `workspace_users` membership entry). The L3a transaction that
- * inserts those dependents rolls back atomically on failure, so a
- * "failed" row in production is structurally bare.
+ * shape a real L3b leaves behind: the AGGREGATE ONLY — the `agents`
+ * row plus its inbox placement (v71 §4.2) — and NO dependent rows
+ * (no `agent_home` workspace, no DM channel, no `workspace_users`
+ * membership entry). The L3a transaction that inserts those
+ * dependents rolls back atomically on failure, while the aggregate
+ * was committed earlier by `reserveAgentAggregate`, so that pair is
+ * what a "failed" row is in production.
  *
  * The cross-user ACL pins below depend on this shape: with no
  * dependent workspaces, `canViewAgent` short-circuits to creator-only,
@@ -36,7 +39,9 @@ import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js'
  * then flipping the status leaves an agent_home workspace + a
  * workspace_users row behind, which would let `canViewAgent` match
  * via the workspace branch and mask the contract this test is meant
- * to lock down.
+ * to lock down. The inbox does NOT reopen that branch: it is not a
+ * workspace and carries no human membership row (§4.2), so
+ * `canViewAgent` still short-circuits to creator-only.
  */
 function seedFailedAgent(
   t: TestApp,
@@ -53,12 +58,14 @@ function seedFailedAgent(
   }
   const hostId = owned[0]!.id;
   const agents = new AgentRepo(t.ctx.db);
-  const row = agents.reserveForMaterialize(
-    { name, runtime: 'claude' },
-    hostId,
+  const row = createSqliteAgentProvisioningPersistence(
+    t.ctx.db,
+  ).reserveAgentAggregate({
+    input: { name, runtime: 'claude' },
+    defaultHostId: hostId,
     createdByUserId,
     idempotencyKey,
-  );
+  });
   agents.flipToFailed(row.id, 'host_attach_pending', Date.now());
   return row.id;
 }
@@ -405,10 +412,16 @@ describe('D4.d structural invariants', () => {
 
       // Install the trigger BEFORE the POST. ABORT inside a tx
       // rolls the whole tx back.
+      //
+      // `placement_kind = 'workspace'` is load-bearing (v71): `kind` is a
+      // GENERATED column and an `agent_inbox` also reads as `dm_channel`, so a
+      // predicate on `kind` alone would abort the L1 AGGREGATE reserve instead —
+      // a different phase, a different failure (409 `agent_name_taken`), and the
+      // L3a arm this test exists for would never run.
       t.ctx.db.exec(
         `CREATE TRIGGER d4d_inv3_fail_dm_insert
            BEFORE INSERT ON conversations
-           WHEN NEW.kind = 'dm_channel'
+           WHEN NEW.kind = 'dm_channel' AND NEW.placement_kind = 'workspace'
          BEGIN
            SELECT RAISE(ABORT, 'd4d-inv3: forced dependent-row failure');
          END`,

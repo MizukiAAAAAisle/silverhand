@@ -68,6 +68,7 @@ import { AgentView } from '@/features/agents/AgentView';
 import { HumanView } from '@/features/me/HumanView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
+import { isWorkspacePlaced } from '@silverhand/shared';
 import type { ConversationVisibility } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
 import {
@@ -1429,7 +1430,16 @@ function RegisteredAppShell({
 
   const buildChannelDescriptor = useCallback(
     (s: ChannelListItem | null) =>
-      s
+      // Placement (agent-scoped-session-v1 §4.1): `workspace_id` is nullable on
+      // the wire because only the workspace arm of a placement carries one, and
+      // `ChannelView` is a WORKSPACE-scoped pane — it keys join, task refs,
+      // channel refs, search and the member list off that id. A human's channel
+      // lists cannot contain a workspace-less placement (an agent inbox has no
+      // human participant, §4.2), so this arm is unreachable today; it is
+      // written as the honest narrowing rather than a `!` so the day a new
+      // placement DOES reach a human list, the pane declines to mount instead of
+      // rendering with a fabricated coordinate.
+      s && isWorkspacePlaced(s)
         ? {
             id: s.id,
             title: s.title,

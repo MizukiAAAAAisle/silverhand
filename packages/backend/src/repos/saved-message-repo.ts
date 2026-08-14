@@ -1,7 +1,8 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { decodeMessageSeq } from '@silverhand/shared';
+import { decodeMessageSeq, requireWorkspacePlacement } from '@silverhand/shared';
 import type {
+  ConversationPlacementKind,
   MessageRow,
   SavedMessageRow,
   SavedMessageDto,
@@ -107,6 +108,14 @@ function extractAttachmentSnapshots(
   return out.length > 0 ? out : null;
 }
 
+/** The joined saved-message projection.
+ *
+ *  Placement (§4.1/§6): Saved is a HUMAN artifact of a workspace-placed
+ *  conversation, and the exclusion is enforced on the WRITE side, not by the
+ *  `JOIN workspaces` here: `save()` asserts the workspace arm before inserting,
+ *  so a message from a placement without a workspace is refused loudly instead
+ *  of producing a row this projection would then silently drop. (The route's ACL
+ *  refuses first: a human is never a participant of such a placement, §4.2.) */
 const SELECT_JOINED = `
   SELECT
     sm.id              AS id,
@@ -228,18 +237,35 @@ export class SavedMessageRepo {
         [string],
         {
           conversation_id: string;
-          workspace_id: string;
+          workspace_id: string | null;
+          placement_kind: ConversationPlacementKind;
         }
       >(
         `SELECT
            m.conversation_id AS conversation_id,
-           conv.workspace_id AS workspace_id
+           conv.workspace_id AS workspace_id,
+           conv.placement_kind AS placement_kind
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id
          WHERE m.id = ?`,
       )
       .get(messageId);
     if (!ctx) return null;
+    // Placement (§4.1): `saved_messages.workspace_id` is NOT NULL, but the
+    // constraint CANNOT be the guard here — `INSERT OR IGNORE` suppresses a
+    // NOT NULL violation exactly like it suppresses the duplicate it is there
+    // for, so a workspace-less placement would skip the row silently and this
+    // method would report "not saved" as `null`, indistinguishable from
+    // "message not found". Assert instead: Saved is a workspace-scoped human
+    // artifact, and a human is never a participant of a non-workspace
+    // placement (§4.2), so the route's ACL has already refused — reaching this
+    // line means the ACL was bypassed, which is a routing bug and not an
+    // outcome to encode in the return type.
+    const workspaceId = requireWorkspacePlacement({
+      id: ctx.conversation_id,
+      workspace_id: ctx.workspace_id,
+      placement_kind: ctx.placement_kind,
+    });
     const id = newId();
     const now = Date.now();
     this.db
@@ -253,7 +279,7 @@ export class SavedMessageRepo {
         userId,
         messageId,
         ctx.conversation_id,
-        ctx.workspace_id,
+        workspaceId,
         now,
       );
     return this.getByMessageIdForUser(messageId, userId);

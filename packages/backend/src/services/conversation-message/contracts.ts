@@ -18,12 +18,12 @@ import type {
   SendMessageTarget,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../../context.js';
+import type { MentionCcReport } from '../../application/mention-cc.js';
 import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
 import type { ConversationUnreadPublishPort } from '../conversation/unread-publish-port.js';
 import type {
   DeliveryReadPort,
   DeliveryWritePort,
-  MentionCcPort,
   MessageUnitOfWork,
   ThreadFollowDirectWritePort,
   ThreadFollowReadPort,
@@ -258,8 +258,11 @@ export interface ConversationMessageServiceOptions {
     read: DeliveryReadPort;
     write: DeliveryWritePort;
   };
-  /** Post-commit effects. Held OUTSIDE the transaction scope by construction. */
-  mentionCc: MentionCcPort;
+  /** Post-commit effects. Held OUTSIDE the transaction scope by construction.
+   *  The mention CC is deliberately absent: its writes are transactional now
+   *  (v71 §5), so it is not an injected effect port — the send calls the use case
+   *  with its own `MessageTxScope` and hands the resulting report to the delivery
+   *  coordinator after commit. */
   unreadPublish: ConversationUnreadPublishPort;
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
@@ -293,6 +296,11 @@ export interface SendMessageTxResult {
   targetConversation: ConversationDto;
   message: MessageDto;
   recipients: ConversationAgentDto[];
+  /** What the in-transaction mention CC wrote, for the post-commit half to
+   *  finish (wake / WS frames / skip log). Null when the actor's policy carries
+   *  no CC (`POLICIES.agent`), which is NOT the same as an empty report: an
+   *  agent send never evaluates the mentions at all. */
+  mentionCc: MentionCcReport | null;
   /** Non-null when this send is a thread reply: drives follower-gated
    *  delivery instead of the main-line channel-member fan-out. */
   threadDelivery: ThreadDeliveryPlan | null;

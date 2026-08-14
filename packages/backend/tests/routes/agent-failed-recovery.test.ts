@@ -54,7 +54,9 @@ import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import { createSqliteAgentProvisioningPersistence } from '../../src/repos/agent-provisioning-persistence.js';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -96,11 +98,27 @@ function readRow(t: TestApp, agentId: string): RowSnapshot | null {
   return row ?? null;
 }
 
+/** This agent's inbox placement id, read through the repository. Identity, not
+ *  a count: the partial UNIQUE already makes >1 impossible, so the two ways this
+ *  can go wrong are `null` (born too late — never, or only on the success path)
+ *  and a DIFFERENT id after a retry (born again, which the collision would
+ *  actually turn into a rolled-back retry). Comparing ids catches both, and the
+ *  second is the one a count cannot see. */
+function inboxIdOf(t: TestApp, agentId: string): string | null {
+  return new ConversationRepo(t.ctx.db).getAgentInbox(agentId)?.id ?? null;
+}
+
 /**
  * Seed a `failed` agent row that matches the production L3b shape:
- * only the `agents` row exists, no dependent agent_home / DM /
- * membership rows. See the matching helper in
- * `agent-create-structural-invariants.test.ts` for the long-form rationale.
+ * the AGGREGATE (agents row + its inbox placement, v71 §4.2) and nothing
+ * else — no dependent agent_home / DM / membership rows. See the matching
+ * helper in `agent-create-structural-invariants.test.ts` for the long-form
+ * rationale.
+ *
+ * Goes through `reserveAgentAggregate`, not the bare `reserveForMaterialize`,
+ * because the retry matrix below is exactly where the difference shows: a
+ * fixture without the inbox could not observe a second insert colliding on
+ * `idx_conversations_inbox_agent`.
  */
 function seedFailedAgent(
   t: TestApp,
@@ -118,24 +136,27 @@ function seedFailedAgent(
   }
   const hostId = owned[0]!.id;
   const agents = new AgentRepo(t.ctx.db);
-  const row = agents.reserveForMaterialize(
-    {
+  const row = createSqliteAgentProvisioningPersistence(
+    t.ctx.db,
+  ).reserveAgentAggregate({
+    input: {
       name: input.name,
       runtime: 'claude',
       model: input.model ?? undefined,
       description: input.description ?? undefined,
     },
-    hostId,
+    defaultHostId: hostId,
     createdByUserId,
     idempotencyKey,
-  );
+  });
   agents.flipToFailed(row.id, failedCode, Date.now());
   return row.id;
 }
 
 /**
  * Seed a `pending_materialization` agent row (post-reserve, pre-L3a).
- * Used to exercise the 409 in_progress dispatch arms.
+ * Used to exercise the 409 in_progress dispatch arms. Same aggregate factory:
+ * `pending_materialization` is a legal state of a WHOLE Agent, inbox included.
  */
 function seedPendingAgent(
   t: TestApp,
@@ -145,13 +166,14 @@ function seedPendingAgent(
 ): string {
   const hosts = new HostRepo(t.ctx.db);
   const hostId = hosts.listOwnedActiveLocalForUser(createdByUserId)[0]!.id;
-  const agents = new AgentRepo(t.ctx.db);
-  const row = agents.reserveForMaterialize(
-    { name, runtime: 'claude' },
-    hostId,
+  const row = createSqliteAgentProvisioningPersistence(
+    t.ctx.db,
+  ).reserveAgentAggregate({
+    input: { name, runtime: 'claude' },
+    defaultHostId: hostId,
     createdByUserId,
     idempotencyKey,
-  );
+  });
   return row.id;
 }
 
@@ -295,6 +317,67 @@ describe('D4.d D5: failed-row recovery surface', () => {
       expect(row?.materialization_status).toBe('active');
       expect(row?.materialization_failed_code).toBeNull();
       expect(row?.materialization_failed_at).toBeNull();
+    });
+
+    it('retry of a failed row keeps EXACTLY ONE inbox and never reports dependent_row_insert_failed (v71 §4.2)', async () => {
+      // The aggregate-ownership falsifier (#task:2014, @Cindy round-1 B1). The
+      // v71 backfill gives every row of `agents` an inbox with no
+      // `materialization_status` filter, so the create path has to agree about
+      // WHEN the inbox is born. If it were born in the L3a dependent tx instead
+      // of at reserve, this retry would insert a second one for the same owner,
+      // hit `idx_conversations_inbox_agent`, and roll the whole retry back —
+      // `dependent_row_insert_failed` forever, taking the home workspace, the DM
+      // and the status flip with it. Asserted from BOTH sides: the id before
+      // (the failed row already owns its inbox) and the SAME id after (the retry
+      // added nothing), plus the failure code that a collision would produce.
+      const t = buildTestApp();
+      tests.push(t);
+      const key = freshKey();
+      const name = `retry-inbox-${freshKey()}`;
+      const agentId = seedFailedAgent(t, t.viewerUserId, { name }, key);
+
+      const bornAtReserve = inboxIdOf(t, agentId);
+      expect(bornAtReserve).not.toBeNull();
+
+      const res = await http(t).post(
+        '/api/agents?retry=true',
+        { name, runtime: 'claude' },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(res.status, await res.clone().text()).toBe(201);
+      const row = readRow(t, agentId);
+      expect(row?.materialization_status).toBe('active');
+      expect(row?.materialization_failed_code).toBeNull();
+      expect(inboxIdOf(t, agentId)).toBe(bornAtReserve);
+    });
+
+    it('retry of a BOOT-RECONCILED pending → failed row behaves identically (one inbox, reaches active)', async () => {
+      // The other way into `failed`: the row was reserved, the process died
+      // before L3a/L3b, and the boot reconciler stamped it. It reaches `failed`
+      // through a different transition than the L3b compensation above, so it is
+      // a genuinely separate path into this retry — and its inbox came from the
+      // same reserve, which is what makes the two isomorphic.
+      const t = buildTestApp();
+      tests.push(t);
+      const key = freshKey();
+      const name = `retry-reconciled-${freshKey()}`;
+      const agentId = seedPendingAgent(t, t.viewerUserId, name, key);
+      const bornAtReserve = inboxIdOf(t, agentId);
+      expect(bornAtReserve).not.toBeNull();
+      new AgentRepo(t.ctx.db).flipToFailed(
+        agentId,
+        'materialize_timeout',
+        Date.now(),
+      );
+
+      const res = await http(t).post(
+        '/api/agents?retry=true',
+        { name, runtime: 'claude' },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(res.status, await res.clone().text()).toBe(201);
+      expect(readRow(t, agentId)?.materialization_status).toBe('active');
+      expect(inboxIdOf(t, agentId)).toBe(bornAtReserve);
     });
 
     it('failed + mismatching metadata → 400 idempotency_metadata_mismatch FIRST (retry verb does NOT mutate)', async () => {

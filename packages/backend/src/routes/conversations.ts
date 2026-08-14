@@ -16,6 +16,7 @@ import {
   ArchiveChannelInputSchema,
   ConversationLogDebugInputSchema,
   decodeMessageSeq,
+  isWorkspacePlaced,
   normalizeAttachmentRefs,
   ReactMessageInputSchema,
   SavedMessagesQueryInputSchema,
@@ -44,7 +45,7 @@ import type { ConversationEventRepo } from '../repos/conversation-event-repo.js'
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import {
   canEditAgent,
-  canGovernWorkspace,
+  canGovernConversationWorkspace,
   canPostToConversation,
   canReadConversation,
   canViewConversation,
@@ -389,6 +390,18 @@ export function createConversationReadApp(
     if (!canReadConversation(ctx, getUserPrincipal(c), conversation.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    // `ConversationRef` names a workspace in its contract (`workspace_id` +
+    // the projected `workspace_kind`), so this face can only describe the
+    // workspace arm. A user principal can never READ a workspace-less
+    // placement anyway (`canViewNonWorkspaceConversation`: an agent inbox has
+    // exactly one participant and it is never a human), so the branch is the
+    // same "cannot be named on this surface" answer as the deleted-workspace
+    // arm below — deliberately a 404, not an assertion: the ref endpoint is
+    // reached with arbitrary caller-supplied ids (`#conv:` chips, `?side`
+    // panes), so an unnameable id is bad input, not a routing bug.
+    if (!isWorkspacePlaced(conversation)) {
+      return c.json({ error: 'conversation not found' }, 404);
+    }
     const workspace = workspaces.get(conversation.workspace_id);
     if (!workspace) return c.json({ error: 'conversation not found' }, 404);
 
@@ -629,7 +642,7 @@ export function createConversationMessagingApp(
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const conversation = conversations.get(id);
     if (!conversation) return c.json({ error: 'channel not found' }, 404);
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), conversation.workspace_id, 'admin')) {
+    if (!canGovernConversationWorkspace(ctx, getUserPrincipal(c), conversation.id, 'admin')) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
@@ -652,17 +665,17 @@ export function createConversationMessagingApp(
 
   // Update a top-level channel's title OR visibility (EXACTLY ONE per request —
   // the schema rejects both/neither). Both mutations share the workspace `admin`
-  // gate (agents fail `canGovernWorkspace`, so `public` stays human-only) and
-  // the same error mapping; the service owns each write + its post-commit
-  // broadcast. Splitting the dispatch here (not a combined service call) keeps
-  // each mutation atomic — there is no half-committed title+visibility state.
+  // gate (agents fail it, so `public` stays human-only) and the same error
+  // mapping; the service owns each write + its post-commit broadcast. Splitting
+  // the dispatch here (not a combined service call) keeps each mutation atomic —
+  // there is no half-committed title+visibility state.
   app.patch(apiPaths.conversationChannel(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const conversation = conversations.get(id);
     if (!conversation) return c.json({ error: 'channel not found' }, 404);
     const principal = getUserPrincipal(c);
-    if (!canGovernWorkspace(ctx, principal, conversation.workspace_id, 'admin')) {
+    if (!canGovernConversationWorkspace(ctx, principal, conversation.id, 'admin')) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
