@@ -686,7 +686,7 @@ function WorkspaceFilter({
 
   // Grouped like the search workspace filter (#task:1387 shiki review):
   // regular Workspaces first, then DMs. Both kinds are selectable — the
-  // cascade matches on `task.workspace_id`, so a DM workspace filters exactly
+  // cascade matches on `task.board.workspace_id`, so a legacy DM workspace filters exactly
   // like a regular one.
   const sections = useMemo(
     () =>

@@ -35,8 +35,9 @@ export function resolveTaskJumpTarget(
   detail: TaskDetailDto,
 ): TaskJumpTarget | null {
   if (detail.nav.kind === 'unavailable') return null;
+  if (detail.board.kind !== 'workspace') return null;
   return {
-    workspaceId: detail.workspace_id,
+    workspaceId: detail.board.workspace_id,
     channelId: detail.nav.ref.channel_id,
     threadRootId: detail.nav.ref.thread_root_id,
     messageId: detail.nav.ref.message_id,

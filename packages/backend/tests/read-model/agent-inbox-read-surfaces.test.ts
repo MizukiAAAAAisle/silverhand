@@ -311,7 +311,7 @@ describe('agent inbox — its one participant CAN read it', () => {
 });
 
 describe('agent inbox — faces with no workspace answer refuse instead of guessing', () => {
-  it('has no default task board: the board read asserts rather than returning empty', () => {
+  it('has no default task board: the ambient derivation yields none and the repo refuses unresolved reads', () => {
     const t = bootstrap();
     // The production composition, so the board read sees the same narrow
     // conversation port the service does.
@@ -319,14 +319,26 @@ describe('agent inbox — faces with no workspace answer refuse instead of guess
       db: t.db,
       conversations: taskConversationAccessPort(t.db),
     });
-    // "No board" and "an empty board" are different answers, and only one is
-    // true — so this must throw, not return [].
+    // P0-f moved the ambient-board question OUT of the repo: the service
+    // derives the board-key set (placement-aware — a DM frame gets its pair
+    // board) and the ROUTE keeps the inbox's typed refusal. What the repo
+    // still owes: (a) the inbox derives NO board — "no board" and "an empty
+    // board" stay different answers…
+    expect(tasks.boardOfConversation(t.inbox.id)).toBeNull();
+    // …(b) an agent-arm read whose board set was never resolved is a harness
+    // bug and throws rather than guessing an ambient…
     expect(() =>
       tasks.list({ actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alpha.id, conversationId: t.inbox.id } }),
-    ).toThrow(/workspace/i);
-    // The same call from a workspace-placed conversation answers normally.
+    ).toThrow(/boardKeys/);
+    // …and (c) a workspace-placed conversation's derived board answers
+    // normally (empty board = empty list).
+    const board = tasks.boardOfConversation(t.general.id);
+    expect(board?.boardKey).toMatch(/^ws:/);
     expect(
-      tasks.list({ actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alpha.id, conversationId: t.general.id } }),
+      tasks.list({
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alpha.id, conversationId: t.general.id },
+        boardKeys: [board!.boardKey],
+      }),
     ).toEqual([]);
   });
 

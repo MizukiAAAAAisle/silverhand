@@ -55,6 +55,7 @@ function newTaskId(): string {
 const SELECT_RESOLVED_TASK = `
   SELECT
     t.id, t.conversation_id AS conversation_id, t.task_number, t.workspace_id,
+    t.board_key,
     t.status, t.closed_at, t.assignee_agent_id, t.assignee_user_id,
     t.title, t.content, t.thread_root_id, t.source_message_id,
     t.created_event_message_id, t.creator_kind, t.creator_agent_id,
@@ -82,31 +83,17 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     const args: (string | number)[] = [];
 
     if (filters.actor.kind === 'agent') {
-      if (filters.workspaceIds !== undefined) {
-        // Union arm (§7.2.2, agent-slot): the service already computed the
-        // visible-board set (membership ∧ read_tasks per board). An empty set
-        // reads as zero rows — never a fallback to some ambient board.
-        if (filters.workspaceIds.length === 0) return [];
-        const placeholders = filters.workspaceIds.map(() => '?').join(',');
-        clauses.push(`t.workspace_id IN (${placeholders})`);
-        args.push(...filters.workspaceIds);
-      } else {
-        // The agent path defaults to the actor's current workspace. The route
-        // layer validates any explicit `filters.workspaceId` (from the agent's
-        // `--workspace-id` flag) exists AND that the agent is a member. Once
-        // validated, honor the explicit value so the agent can read a sister
-        // workspace's board.
-        const conv = this.conversations.get(filters.actor.conversationId);
-        if (!conv) return [];
-        // The DEFAULT board is the actor conversation's own workspace, so a
-        // placement without one has no default to fall back to (§4.2: the agent
-        // inbox has no board). Asserted rather than returned as an empty list — an
-        // empty board and "this conversation has no board" are different answers,
-        // and only one of them is true here.
-        const effectiveWs = filters.workspaceId ?? requireWorkspacePlacement(conv);
-        clauses.push('t.workspace_id = ?');
-        args.push(effectiveWs);
+      // The agent arm reads BOARDS (P0-f): the service computes the board-key
+      // set — one validated key (explicit selector or frame-derived) or the
+      // agent-slot union. An empty set reads as zero rows — never a fallback
+      // to some ambient board.
+      if (filters.boardKeys === undefined) {
+        throw new Error('task list (agent arm): boardKeys must be resolved by the service');
       }
+      if (filters.boardKeys.length === 0) return [];
+      const placeholders = filters.boardKeys.map(() => '?').join(',');
+      clauses.push(`t.board_key IN (${placeholders})`);
+      args.push(...filters.boardKeys);
       // Per-task ACL (agent-scoped-session-v1 §4.4, #task:2018): the board
       // clause above is a COORDINATE, not an ACL — a WorkspaceBoard aggregates
       // conversations with different member sets, so the row set must also be
@@ -156,7 +143,9 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     // the globally comparable creation instant. `id DESC` is a deterministic
     // tiebreak in both arms, never a time axis.
     const orderBy =
-      filters.actor.kind === 'agent' && filters.workspaceIds !== undefined
+      filters.actor.kind === 'agent' &&
+      filters.boardKeys !== undefined &&
+      filters.boardKeys.length > 1
         ? 'ORDER BY t.created_at DESC, t.id DESC'
         : 'ORDER BY t.task_number DESC, t.id DESC';
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -185,25 +174,30 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     where: string,
     args: (string | number)[],
     actor: TaskActor,
-    authorizedWorkspaceId?: string,
+    authorizedBoardKey?: string,
   ): TaskSummaryDto | null {
-    const row = prepareObserved<typeof args, TaskJoinedRow>(
+    const queryArgs = [...args];
+    let gatedWhere = where;
+    if (actor.kind === 'agent') {
+      // BOARD COORDINATE check (P0-f) is a SQL predicate, not a projected
+      // display field. Keeping it here lets the shared DTO row stay minimal:
+      // board_key never crosses into TaskJoinedRow just to be compared once.
+      const gateKey =
+        authorizedBoardKey ?? this.boardOfConversation(actor.conversationId)?.boardKey;
+      if (gateKey === undefined) return null;
+      gatedWhere += ' AND t.board_key = ?';
+      queryArgs.push(gateKey);
+    }
+    const row = prepareObserved<typeof queryArgs, TaskJoinedRow>(
         this.db,
         queryName,
-        `${SELECT_TASK_JOINED} ${where}`,
+        `${SELECT_TASK_JOINED} ${gatedWhere}`,
       )
-      .get(...args);
+      .get(...queryArgs);
     if (!row) return null;
     if (actor.kind === 'agent') {
-      if (authorizedWorkspaceId !== undefined) {
-        if (row.workspace_id !== authorizedWorkspaceId) return null;
-      } else {
-        const conv = this.conversations.get(actor.conversationId);
-        if (!conv) return null;
-        if (row.workspace_id !== conv.workspace_id) return null;
-      }
       // Per-task ACL (agent-scoped-session-v1 §4.4, #task:2018): the workspace
-      // equality above is the BOARD COORDINATE check, not an ACL — the agent
+      // board predicate above is a COORDINATE check, not an ACL — the agent
       // must also participate in the task's own conversation (placement-aware;
       // public discovery grants no task read, mirroring the human arm below).
       if (!this.conversations.isAgentParticipant(row.conversation_id, actor.agentId)) {
@@ -218,25 +212,23 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
   /**
    * Read a task summary by its identity (`tasks.id`).
    *
-   * `authorizedWorkspaceId` is the workspace the CALLER has already resolved and
-   * authorized the actor against (membership verified upstream). When present,
-   * the agent gate is `task.workspace_id === authorizedWorkspaceId` (so a
-   * cross-workspace read the service authorized succeeds, and a leaked task id
-   * still can't escape the authorized scope). When omitted, the legacy gate
-   * applies: the task must live in the agent's CURRENT conversation's workspace.
-   * The user gate (conversation access) is unchanged.
+   * `authorizedBoardKey` is the board the caller has already resolved and
+   * authorized the actor against. When present, the coordinate gate is exact
+   * `tasks.board_key` equality (workspace or pair); per-task participation is
+   * still checked independently below, so Board never becomes ACL. The user
+   * gate (conversation access) is unchanged.
    */
   getById(
     taskId: string,
     actor: TaskActor,
-    authorizedWorkspaceId?: string,
+    authorizedBoardKey?: string,
   ): TaskSummaryDto | null {
     return this.readGatedSummary(
       'tasks.get_joined_by_id',
       'WHERE t.id = ?',
       [taskId],
       actor,
-      authorizedWorkspaceId,
+      authorizedBoardKey,
     );
   }
 
@@ -274,9 +266,9 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
   fetchTaskDetail(
     taskId: string,
     actor: TaskActor,
-    authorizedWorkspaceId?: string,
+    authorizedBoardKey?: string,
   ): TaskDetailDto | null {
-    const summary = this.getById(taskId, actor, authorizedWorkspaceId);
+    const summary = this.getById(taskId, actor, authorizedBoardKey);
     if (!summary) return null;
     const extra = prepareObserved<[string], {
         content: string;
@@ -365,7 +357,10 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
    *  member of that conversation; user = member row). */
   private viewerCanAccessConversation(actor: TaskActor, conversationId: string): boolean {
     if (actor.kind === 'agent') {
-      return this.conversations.getAgent(conversationId, actor.agentId) != null;
+      // Placement-aware participation (review B3): the roster-shaped getAgent
+      // has no row for a DirectPair endpoint, which would degrade every
+      // source/created-event nav on a pair task to 'unavailable'.
+      return this.conversations.isAgentParticipant(conversationId, actor.agentId);
     }
     return this.conversations.userCanAccessConversation(actor.userId, conversationId);
   }
@@ -376,15 +371,57 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
    *  a TOCTOU (#task:1980). The `uniq_tasks_workspace_number` unique index is
    *  the backstop; SQLite's single-writer transaction makes the MAX+1 read +
    *  INSERT atomic in this adapter. */
-  private allocateTaskNumber(workspaceId: string): number {
+  private allocateTaskNumber(boardKey: string): number {
     const row = prepareObserved<[string], { next: number }>(
         this.db,
         'tasks.allocate_task_number',
         `SELECT COALESCE(MAX(task_number), 0) + 1 AS next
-         FROM tasks WHERE workspace_id = ?`,
+         FROM tasks WHERE board_key = ?`,
       )
-      .get(workspaceId);
+      .get(boardKey);
     return row?.next ?? 1;
+  }
+
+  /** Every DirectPair board this agent is an endpoint of (P0-f §7.2.2):
+   *  participation IS the read authority on a pair board, so endpoint-ness is
+   *  the whole membership question. */
+  listAgentDirectPairBoardKeys(agentId: string): string[] {
+    return prepareObserved<[string, string], { board_key: string }>(
+        this.db,
+        'tasks.list_agent_pair_board_keys',
+        `SELECT 'pair:' || pair_key AS board_key
+           FROM conversations
+          WHERE placement_kind = 'direct_pair'
+            AND ((endpoint_a_kind = 'agent' AND endpoint_a_id = ?)
+              OR (endpoint_b_kind = 'agent' AND endpoint_b_id = ?))`,
+      )
+      .all(agentId, agentId)
+      .map(r => r.board_key);
+  }
+
+  /**
+   * The board a conversation's placement yields, or null when it has none
+   * (agent_inbox, unknown placement, missing row). READ-side twin of the v76
+   * derivation trigger's CASE — the trigger is the authority; a drift between
+   * the two is caught by it on every INSERT (and by the agreement falsifier
+   * in the migration suite).
+   */
+  boardOfConversation(
+    conversationId: string,
+  ): { boardKey: string; workspaceId: string | null } | null {
+    const row = prepareObserved<[string], { board_key: string | null; workspace_id: string | null }>(
+        this.db,
+        'tasks.board_of_conversation',
+        `SELECT CASE placement_kind
+                  WHEN 'workspace'   THEN 'ws:'   || workspace_id
+                  WHEN 'direct_pair' THEN 'pair:' || pair_key
+                END AS board_key,
+                workspace_id
+           FROM conversations WHERE id = ?`,
+      )
+      .get(conversationId);
+    if (!row || row.board_key === null) return null;
+    return { boardKey: row.board_key, workspaceId: row.workspace_id };
   }
 
   /**
@@ -399,7 +436,6 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
    * the row lands `in_progress` + assigned instead of unassigned `todo`.
    */
   createTaskRow(args: {
-    workspaceId: string;
     conversationId: string;
     threadRootId: string | null;
     title: string;
@@ -411,22 +447,33 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     claimByAgentId: string | null;
     createdAt: number;
   }): { id: string; taskNumber: number } {
+    // The BOARD is derived from the destination conversation's placement
+    // (P0-f §4.4) — never a caller coordinate. This read and the v76 INSERT
+    // trigger state the same rule; the trigger is the authority and would
+    // abort any drift here. A placement with no board (agent_inbox, unknown)
+    // derives null and fails loud before any number is allocated.
+    const board = this.boardOfConversation(args.conversationId);
+    if (!board) {
+      throw new Error(
+        `tasks.createTaskRow: conversation ${args.conversationId} has no task board`,
+      );
+    }
     const id = newTaskId();
-    const taskNumber = this.allocateTaskNumber(args.workspaceId);
+    const taskNumber = this.allocateTaskNumber(board.boardKey);
     const status: TaskStatus = args.claimByAgentId ? 'in_progress' : 'todo';
     try {
       prepareObserved(
           this.db,
           'tasks.insert_row',
           `INSERT INTO tasks (
-             id, workspace_id, task_number, conversation_id, thread_root_id,
+             id, workspace_id, board_key, task_number, conversation_id, thread_root_id,
              title, content, status, assignee_agent_id, assignee_user_id,
              creator_kind, creator_agent_id, creator_user_id,
              source_message_id, created_event_message_id,
              last_editor_kind, last_editor_id, last_edited_at,
              created_at, closed_at
            ) VALUES (
-             @id, @workspace_id, @task_number, @conversation_id, @thread_root_id,
+             @id, @workspace_id, @board_key, @task_number, @conversation_id, @thread_root_id,
              @title, @content, @status, @assignee_agent_id, NULL,
              @creator_kind, @creator_agent_id, @creator_user_id,
              @source_message_id, NULL,
@@ -436,7 +483,8 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
         )
         .run({
           id,
-          workspace_id: args.workspaceId,
+          workspace_id: board.workspaceId,
+          board_key: board.boardKey,
           task_number: taskNumber,
           conversation_id: args.conversationId,
           thread_root_id: args.threadRootId,
@@ -540,13 +588,13 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     return res.changes > 0;
   }
 
-  fetchTaskByNumber(workspaceId: string, taskNumber: number): ResolvedTaskRow | null {
+  fetchTaskByNumber(boardKey: string, taskNumber: number): ResolvedTaskRow | null {
     const row = prepareObserved<[string, number], ResolvedTaskRow>(
         this.db,
         'tasks.fetch_by_number',
-        `${SELECT_RESOLVED_TASK} WHERE t.workspace_id = ? AND t.task_number = ?`,
+        `${SELECT_RESOLVED_TASK} WHERE t.board_key = ? AND t.task_number = ?`,
       )
-      .get(workspaceId, taskNumber);
+      .get(boardKey, taskNumber);
     return row ?? null;
   }
 

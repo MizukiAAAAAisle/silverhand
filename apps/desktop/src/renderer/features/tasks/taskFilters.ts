@@ -38,7 +38,8 @@ export interface TaskFilters {
    *  cascade (shiki #task:1387). null = no workspace narrowing. The channel
    *  filter's option set is scoped to this workspace, and switching workspace
    *  drops a channel selection that no longer belongs to it (see
-   *  `applyWorkspaceCascade`). Matched directly by `task.workspace_id` — no
+   *  `applyWorkspaceCascade`). Matched by the workspace arm's
+   *  `task.board.workspace_id` — no
    *  surface predicate needed, workspace identity isn't thread-aware. */
   workspaceId: string | null;
   /** Conversation id to narrow to — a channel id (matches that channel and

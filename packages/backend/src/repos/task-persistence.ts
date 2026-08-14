@@ -14,6 +14,7 @@ import type {
   TaskSystemEventPort,
   TaskTxScope,
   TaskUnitOfWork,
+  TaskWriteAuthorityPort,
 } from '../services/task/ports.js';
 import { SqliteTaskRepo } from './task-repo.js';
 import { SqliteTaskBoardReadModel } from './task-board-read-model.js';
@@ -81,14 +82,17 @@ export function createSqliteTaskPersistence(
     },
   };
 
-  const scope: TaskTxScope = {
+  const baseScope: Omit<TaskTxScope, 'writeAuthority'> = {
     tasks: read,
     systemEvents,
     conversationAccess: conversations,
   };
   const uow: TaskUnitOfWork = {
-    atomically<T>(fn: (tx: TaskTxScope) => T): T {
-      return db.transaction(() => fn(scope))();
+    atomically<T>(
+      writeAuthority: TaskWriteAuthorityPort,
+      fn: (tx: TaskTxScope) => T,
+    ): T {
+      return db.transaction(() => fn({ ...baseScope, writeAuthority }))();
     },
   };
 

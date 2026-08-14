@@ -24,7 +24,10 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createSqliteTaskPersistence } from '../../src/repos/task-persistence.js';
 import { TaskService, type TaskServiceOptions } from '../../src/services/task-service.js';
-import type { TaskUnitOfWork } from '../../src/services/task/ports.js';
+import type {
+  TaskUnitOfWork,
+  TaskWriteAuthorityPort,
+} from '../../src/services/task/ports.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
@@ -41,18 +44,21 @@ function bootstrap() {
   const events = new ScopeEventBus('test-epoch');
   const logger: BackendLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const persistence = createSqliteTaskPersistence(db, { messages });
+  const writeAuthority: TaskWriteAuthorityPort = {
+    canPostToConversation: () => true,
+  };
 
   /** One-shot interposer: runs `swap` after any precheck reads, immediately
    *  before the next workflow transaction begins. */
   let pendingSwap: (() => void) | null = null;
   const trippedUow: TaskUnitOfWork = {
-    atomically(fn) {
+    atomically(authority, fn) {
       if (pendingSwap) {
         const swap = pendingSwap;
         pendingSwap = null;
         swap();
       }
-      return persistence.uow.atomically(fn);
+      return persistence.uow.atomically(authority, fn);
     },
   };
 
@@ -67,13 +73,14 @@ function bootstrap() {
     events,
     logger,
     canUseCapability: (() => true) as unknown as TaskServiceOptions['canUseCapability'],
+    canPostToConversation: writeAuthority.canPostToConversation,
   });
   const service = new TaskService(serviceOptions(trippedUow));
 
   const workspace = workspaces.insert({ name: 'eng', description: null });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   workspaces.insertMembership(workspace.id, alice.id);
-  const channel = conversations.insertChannel({ workspaceId: workspace.id, title: 'main' });
+  const channel = conversations.insertChannel({ name: 'main', workspaceId: workspace.id, title: 'main' });
   conversations.addAgent(channel.id, alice.id);
 
   const actor = {
@@ -90,9 +97,8 @@ function bootstrap() {
     let minted: { id: string; taskNumber: number } | null = null;
     pendingSwap = () => {
       db.prepare('DELETE FROM tasks WHERE id = ?').run(victimTaskId);
-      minted = persistence.uow.atomically(tx =>
+      minted = persistence.uow.atomically(writeAuthority, tx =>
         tx.tasks.createTaskRow({
-          workspaceId: workspace.id,
           conversationId: channel.id,
           threadRootId: null,
           title: 'replacement',

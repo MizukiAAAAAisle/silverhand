@@ -1,3 +1,4 @@
+import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
 import {
   useCallback,
   useEffect,
@@ -922,10 +923,10 @@ function TaskCard({
           </span>
           <span
             className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
-            title={task.conversation.title}
+            title={taskChannelLabel(task)}
           >
             <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
-            <span className="min-w-0 truncate">{task.conversation.title}</span>
+            <span className="min-w-0 truncate">{taskChannelLabel(task)}</span>
           </span>
           {/* Time pinned to the row's right edge (`ml-auto`), single line. */}
           <span className="ml-auto inline-flex shrink-0 items-center gap-0.5" title={absolute}>

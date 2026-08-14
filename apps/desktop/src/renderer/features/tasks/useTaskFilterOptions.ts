@@ -95,7 +95,7 @@ export function useTaskFilterOptions(): TaskFilterOptions {
   // filter, which lists DMs too). Each option carries `kind` + `dmAgentId` so
   // the dropdown can render the canonical WorkspaceIcon (serif "W" for regular,
   // the bound agent's avatar for a DM). The cascade matches on
-  // `task.workspace_id`, so a DM workspace filters exactly like a regular one.
+  // `task.board.workspace_id`, so a legacy DM workspace filters exactly like a regular one.
   const workspaceOptions = useMemo<WorkspaceOption[]>(
     () =>
       workspaces

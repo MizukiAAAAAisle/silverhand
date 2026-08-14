@@ -10,67 +10,15 @@
 //    ambient workspace — unchanged by an agent slot operating in the SAME
 //    conversation;
 //  - P1 custody applies to the task routes: a stale agent-slot bearer is 401.
-import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
-import { agentRuntimePrincipal } from '../../src/auth/runtime-principal.js';
+import {
+  agentSlotAuth,
+  canonicalTasksPath,
+  insertAgentScopedAgent,
+} from '../utils/agent-scope.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
-
-/** An agent row with `session_scope='agent'` — the product creation path for
- *  agent-scoped Agents is P2 (#task:2019), so the fixture inserts the row
- *  directly (cloning an API-created agent keeps every FK satisfied); the v70
- *  trigger auto-provisions its agent-scope runtime slot. */
-function insertAgentScopedAgent(t: TestApp, sourceAgentId: string, name: string): string {
-  const id = randomBytes(12).toString('base64url');
-  t.ctx.db
-    .prepare(
-      `INSERT INTO agents (id, name, runtime, model, host_id, description,
-                           created_at, updated_at, display_name, reasoning_effort,
-                           fast_mode, created_by_user_id, avatar_storage_key,
-                           avatar_content_type, materialization_status,
-                           materialization_failed_code, materialization_failed_at,
-                           idempotency_key, session_scope)
-       SELECT ?, ?, runtime, model, host_id, description,
-              created_at, updated_at, ?, reasoning_effort,
-              fast_mode, created_by_user_id, NULL,
-              NULL, 'active',
-              NULL, NULL,
-              NULL, 'agent'
-         FROM agents WHERE id = ?`,
-    )
-    .run(id, name, name, sourceAgentId);
-  return id;
-}
-
-/** A live agent-slot bearer: claim the (trigger-provisioned) agent-scope slot
- *  generation for the test daemon, then issue the principal token. */
-function agentSlotAuth(t: TestApp, agentId: string, daemonInstanceId = 'test-daemon'): {
-  authorization: string;
-} {
-  let slot = t.persistence.repos.runtimeSlots.getAgent(agentId);
-  if (!slot) throw new Error('agent-scope slot missing (v70 trigger)');
-  if (slot.claimed_by_daemon_instance_id === null) {
-    slot = t.persistence.repos.runtimeSlots.claimGeneration({
-      scope: { kind: 'agent', agentId },
-      daemonInstanceId,
-    });
-  }
-  if (!slot) throw new Error('agent-scope slot claim failed');
-  const token = t.ctx.agentTokens.issue(
-    agentRuntimePrincipal({
-      agentId,
-      generation: slot.generation,
-      daemonInstanceId: slot.claimed_by_daemon_instance_id ?? daemonInstanceId,
-    }),
-  );
-  return { authorization: `Bearer ${token}` };
-}
-
-/** Canonical (agent-rooted) route family — the P1 mount. */
-function canonicalTasksPath(agentId: string, conversationId: string, suffix = ''): string {
-  return `/internal/agents/${agentId}/conversations/${conversationId}/tasks${suffix}`;
-}
 
 interface Board {
   workspaceId: string;
@@ -153,8 +101,11 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     expect(detail.status).toBe(200);
     const detailBody = (await detail.json()) as any;
     expect(detailBody.task.id).toBe(task.id);
-    expect(detailBody.task.workspace_id).toBe(w2.workspaceId);
-    expect(detailBody.task.board).toEqual({ kind: 'workspace', workspace_id: w2.workspaceId });
+    expect(detailBody.task.channel_id).toBe(w2.channelId);
+    expect(detailBody.task.board).toMatchObject({
+      kind: 'workspace',
+      workspace_id: w2.workspaceId,
+    });
 
     const claim = (await (
       await h.post(frame('/claim'), { task_ids: [task.id] }, { headers: auth })
@@ -266,9 +217,9 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     expect(ids).not.toContain(t3.id);
     for (const row of union.tasks) {
       expect(row.board.kind).toBe('workspace');
-      expect(typeof row.workspace_id).toBe('string');
+      expect(typeof row.board.workspace_id).toBe('string');
       expect(typeof row.task_number).toBe('number');
-      expect(row.conversation.id).toBeTruthy();
+      expect(row.channel_id).toBeTruthy();
     }
     // Explicit workspace filter narrows to a subset of the union.
     const narrowed = (await (

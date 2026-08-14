@@ -41,13 +41,14 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
     id: 'task-42',
     task_number: 42,
-    workspace_id: 'ws-1',
-    workspace_name: 'silverhand',
     channel_id: 'chan-1',
-    channel_name: 'general',
-    board: { kind: 'workspace', workspace_id: 'ws-1' },
+    board: {
+      kind: 'workspace',
+      workspace_id: 'ws-1',
+      workspace_name: 'silverhand',
+      channel_name: 'general',
+    },
     thread_root_id: null,
-    conversation: { id: 'chan-1', title: 'general' },
     status: 'todo',
     title: 'wire registry',
     assignee: null,
@@ -61,7 +62,8 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
 function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = []): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const t of seededTasks) {
-    qc.setQueryData(taskByNumberKey(t.workspace_id, t.task_number), t);
+    if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
+    qc.setQueryData(taskByNumberKey(t.board.workspace_id, t.task_number), t);
   }
   return renderToStaticMarkup(
     React.createElement(

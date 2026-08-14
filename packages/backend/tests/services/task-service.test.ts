@@ -79,6 +79,7 @@ function bootstrap(
     events,
     logger,
     canUseCapability: capChecker as unknown as TaskServiceOptions['canUseCapability'],
+    canPostToConversation: () => true,
   });
 
   const workspace = workspaces.insert({
@@ -455,7 +456,7 @@ describe('TaskService.claimTask — agent actor', () => {
       // Task now assigned to alice.
       const fresh = refetch(t, id);
       expect(fresh?.assignee?.id).toBe(t.alice.id);
-      expect(fresh?.conversation.id).toBe(other.id);
+      expect(fresh?.channel_id).toBe(other.id);
     } finally {
       t.cleanup();
     }
@@ -1388,7 +1389,7 @@ describe('TaskService agent-actor validation', () => {
       expect('tasks' in result).toBe(true);
       const listed = t.service.list({ actor: { kind: 'user', userId: 'local' } });
       expect(listed.map(x => x.title)).toContain('filed cross-channel');
-      expect(listed.every(x => x.conversation.id === t.channel.id)).toBe(true);
+      expect(listed.every(x => x.channel_id === t.channel.id)).toBe(true);
     } finally {
       t.cleanup();
     }
@@ -2618,7 +2619,7 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
       const detail = t.service.getTaskDetail(
         id,
         { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
-        resolved.workspaceId,
+        resolved.boardKey,
       );
       expect(detail?.source_message_id).toBe(src.id); // provenance identity kept
       // A declared source that is gone → unavailable

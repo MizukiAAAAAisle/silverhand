@@ -30,10 +30,11 @@ import type { AgentCapabilityChecker } from './contracts.js';
 import type { AgentActor, TaskConversationAccessPort } from './ports.js';
 
 /** The minimal task coordinates the policy judges — satisfied by both
- *  `ResolvedTaskRow` and the joined summary row. */
+ *  `ResolvedTaskRow` and the joined summary row. `workspace_id` is null for
+ *  DirectPair-board tasks (P0-f). */
 export interface TaskAccessCoordinates {
   conversation_id: string;
-  workspace_id: string;
+  workspace_id: string | null;
 }
 
 export class TaskAccessPolicy {
@@ -49,6 +50,13 @@ export class TaskAccessPolicy {
    * `task_not_found`; callers on the by-number path apply the participation
    * axis through the same port (the repo read gate) and keep their typed
    * board-level capability errors.
+   *
+   * The capability axis is PLACEMENT-BRANCHED (P0-f): a workspace board keeps
+   * the workspace capability table; a DirectPair task has no workspace and no
+   * capability rows — participation IS the authority (the P0-b "no workspace
+   * ⇒ owner self-authority" precedent: an endpoint holds every capability on
+   * its own private line), so the participation check above is the whole
+   * decision there. Board identity is never consulted on either arm.
    */
   canAgentSeeTask(
     actor: AgentActor,
@@ -58,6 +66,7 @@ export class TaskAccessPolicy {
     if (!this.conversations.isAgentParticipant(task.conversation_id, actor.agentId)) {
       return false;
     }
+    if (task.workspace_id === null) return true;
     return this.canUseCapability(actor, task.workspace_id, capability);
   }
 }

@@ -22,9 +22,13 @@ export interface TaskJoinedRow {
   status: TaskStatus;
   title: string;
   closed_at: number | null;
-  workspace_id: string;
-  workspace_name: string;
-  channel_name: string;
+  /** NULL for DirectPair-board tasks (P0-f); the LEFT-JOINed name is null with it. */
+  workspace_id: string | null;
+  workspace_name: string | null;
+  conversation_pair_key: string | null;
+  /** Workspace-arm-only. SQL projects NULL for DirectPair so its sentinel
+   *  storage title never enters this read model. */
+  channel_name: string | null;
   thread_root_id: string | null;
   assignee_agent_id: string | null;
   assignee_user_id: string | null;
@@ -32,11 +36,40 @@ export interface TaskJoinedRow {
   creator_agent_id: string | null;
   creator_user_id: string | null;
   created_at: number;
-  conversation_title: string;
   assignee_agent_name: string | null;
   assignee_user_name: string | null;
   creator_agent_name: string | null;
   creator_user_name: string | null;
+}
+
+/** Row → the place union (P0-f §4.4, review B4). Values come from STORED
+ *  columns only — the pair arm carries EXACTLY the immutable `pair_key`
+ *  (v74 generated column, byte format lives in the migration; TS never
+ *  re-derives it) and deliberately NOT the stored sentinel title: a DM has no
+ *  display title, and projecting the placeholder would fake one (the
+ *  per-viewer label is #task:2021's formatter). The workspace arm carries the
+ *  board plus its display coordinates. A row matching neither arm is an
+ *  invariant breach (the v76 full-coordinate trigger + arc CHECKs make it
+ *  unrepresentable), so this fails loud rather than inventing a place. */
+function boardFrom(row: TaskJoinedRow): TaskSummaryDto['board'] {
+  if (
+    row.workspace_id !== null &&
+    row.workspace_name !== null &&
+    row.channel_name !== null
+  ) {
+    return {
+      kind: 'workspace',
+      workspace_id: row.workspace_id,
+      workspace_name: row.workspace_name,
+      channel_name: row.channel_name,
+    };
+  }
+  if (row.conversation_pair_key !== null) {
+    return { kind: 'direct_pair', pair_key: row.conversation_pair_key };
+  }
+  throw new Error(
+    `task ${row.id}: no board coordinate (workspace and pair_key both absent)`,
+  );
 }
 
 /** Row → `TaskSummaryDto`. Module-level and exported so the board read face
@@ -46,17 +79,9 @@ export function taskJoinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
   return {
     id: row.id,
     task_number: row.task_number,
-    workspace_id: row.workspace_id,
-    workspace_name: row.workspace_name,
     channel_id: row.conversation_id,
-    channel_name: row.channel_name,
-    // DERIVED board coordinate (agent-scoped-session-v1 §4.4): every stored
-    // task is workspace-placed today; P0-f (#task:2022) adds the
-    // DirectPairBoard arm HERE. Display/numbering namespace only — access
-    // policy never reads it (Board is not an ACL unit).
-    board: { kind: 'workspace', workspace_id: row.workspace_id },
+    board: boardFrom(row),
     thread_root_id: row.thread_root_id,
-    conversation: { id: row.conversation_id, title: row.conversation_title },
     status: row.status,
     title: row.title,
     assignee: assigneeFrom(row),

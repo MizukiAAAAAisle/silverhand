@@ -1,3 +1,4 @@
+import { taskWorkspaceId } from './taskPlace.js';
 import {
   useQuery,
   type QueryClient,
@@ -65,7 +66,7 @@ function sameTaskChangedFields(
 ): boolean {
   return (
     row.id === task.task_id
-    && row.workspace_id === task.workspace_id
+    && taskWorkspaceId(row) === task.workspace_id
     && row.channel_id === task.channel_id
     && row.thread_root_id === task.thread_root_id
     && row.status === task.status
@@ -122,7 +123,6 @@ export function applyTaskChangedToTaskByNumberCache(
   qc.setQueryData<TaskSummaryDto | null>(key, {
     ...prev,
     id: task.task_id,
-    workspace_id: task.workspace_id,
     channel_id: task.channel_id,
     // Keep the navigation anchor fresh from the realtime event so
     // an inline `#task:<n>` jump resolves to the right reply cluster

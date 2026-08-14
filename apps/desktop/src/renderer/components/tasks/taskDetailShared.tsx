@@ -1,3 +1,4 @@
+import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import dayjs from 'dayjs';
@@ -249,8 +250,8 @@ export function useTaskMetaRows({
       value: (
         <span className="flex min-w-0 items-center gap-1.5">
           <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
-          <span className="truncate" title={view.conversation.title}>
-            {view.conversation.title}
+          <span className="truncate" title={taskChannelLabel(view)}>
+            {taskChannelLabel(view)}
           </span>
         </span>
       ),

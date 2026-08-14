@@ -76,7 +76,7 @@ import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
 import { IdleReaperService } from '../../src/services/idle-reaper-service.js';
-import { canAgentUseCapability } from '../../src/permissions.js';
+import { canAgentUseCapability, canPostToConversation } from '../../src/permissions.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { UserService } from '../../src/services/user-service.js';
@@ -1143,6 +1143,8 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     logger: silentLogger,
     canUseCapability: (actor, workspaceId, capability) =>
       canAgentUseCapability(ctx, actor, capability, { workspaceId }),
+    canPostToConversation: (actor, conversationId) =>
+      canPostToConversation(ctx, actor, conversationId),
   });
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),

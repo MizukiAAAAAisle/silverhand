@@ -63,7 +63,7 @@ export interface TaskRepoReadPort {
   getById(
     taskId: string,
     actor: TaskActor,
-    authorizedWorkspaceId?: string,
+    authorizedBoardKey?: string,
   ): TaskSummaryDto | null;
   getByNumber(
     workspaceId: string,
@@ -73,10 +73,20 @@ export interface TaskRepoReadPort {
   fetchTaskDetail(
     taskId: string,
     actor: TaskActor,
-    authorizedWorkspaceId?: string,
+    authorizedBoardKey?: string,
   ): TaskDetailDto | null;
-  fetchTaskByNumber(workspaceId: string, taskNumber: number): ResolvedTaskRow | null;
+  fetchTaskByNumber(boardKey: string, taskNumber: number): ResolvedTaskRow | null;
   fetchTaskById(taskId: string): ResolvedTaskRow | null;
+  /** The board a conversation's placement yields ('ws:…' | 'pair:…'), or null
+   *  when it has none (agent_inbox / unknown / missing). Read-side twin of the
+   *  v76 derivation trigger — the trigger stays the write authority. */
+  boardOfConversation(
+    conversationId: string,
+  ): { boardKey: string; workspaceId: string | null } | null;
+  /** Every DirectPair board this agent is an endpoint of — the pair half of
+   *  the agent-slot union list (§7.2.2; participation IS the read authority
+   *  on a pair board). */
+  listAgentDirectPairBoardKeys(agentId: string): string[];
   fetchMessageRef(messageId: string): MessageRef | null;
   fetchTaskBySourceMessageId(sourceMessageId: string): {
     task_number: number;
@@ -101,7 +111,6 @@ export interface TaskRepoReadPort {
  *  returns `{id, taskNumber}`); no allocator primitive is exposed. */
 export interface TaskRepoWritePort {
   createTaskRow(args: {
-    workspaceId: string;
     conversationId: string;
     threadRootId: string | null;
     title: string;
@@ -155,6 +164,14 @@ export interface TaskConversationAccessPort {
   listUsers(conversationId: string): ConversationUserMemberDto[];
 }
 
+/** Canonical conversation WRITE decision injected by the authorization
+ * layer. This is deliberately a decision port, not another endpoint/tombstone
+ * fact reader: `canPostToConversation` remains the one rule that combines
+ * placement-aware participation with P0-e survivor-readonly semantics. */
+export interface TaskWriteAuthorityPort {
+  canPostToConversation(actor: TaskActor, conversationId: string): boolean;
+}
+
 /** Insert a task system-event message INSIDE the caller's transaction scope.
  *  The adapter binds to the current transaction (single-connection engines:
  *  same connection, savepoint nesting; a future pooled adapter inserts on the
@@ -175,13 +192,19 @@ export interface TaskTxScope {
   tasks: TaskRepoWritePort & TaskRepoReadPort;
   systemEvents: TaskSystemEventPort;
   conversationAccess: TaskConversationAccessPort;
+  /** Bound by the caller at transaction entry and invoked inside the same
+   * synchronous SQLite transaction as the task/event writes. */
+  writeAuthority: TaskWriteAuthorityPort;
 }
 
 /** Atomic write boundary. Guarantees atomicity only; isolation/locking
  *  obligations (if any) are expressed on the scope's methods. Deferred policy
  *  — this domain has no cross-process writer contention (#task:1980). */
 export interface TaskUnitOfWork {
-  atomically<T>(fn: (tx: TaskTxScope) => T): T;
+  atomically<T>(
+    writeAuthority: TaskWriteAuthorityPort,
+    fn: (tx: TaskTxScope) => T,
+  ): T;
 }
 
 /** Driver-free sentinel raised by the persistence adapter when a create

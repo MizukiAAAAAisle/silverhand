@@ -109,12 +109,12 @@ export interface ListTasksFilters {
   /** user actor: optional filter; agent actor: ignored (service derives
    *  physical workspace from actor.conversationId). */
   workspaceId?: string;
-  /** INTERNAL (never wire): the service-computed visible-board set for the
-   *  agent-slot union list (§7.2.2). When present the agent arm reads across
-   *  exactly these workspaces instead of one ambient/explicit board; rows are
+  /** INTERNAL (never wire): the service-computed board-key set for the agent
+   *  arm (§7.2.2 / P0-f). One key = a single validated board (explicit
+   *  selector or frame-derived); many keys = the agent-slot union. Rows are
    *  still narrowed per task by the participation predicate. Mutually
-   *  exclusive with `workspaceId`. */
-  workspaceIds?: readonly string[];
+   *  exclusive with `workspaceId` (which stays the HUMAN arm's narrowing). */
+  boardKeys?: readonly string[];
   conversationId?: string;
   /** OR-ed status filter. Empty array or undefined = no filter.
    *  Single-element array is the legacy single-value form. */
@@ -151,7 +151,10 @@ export interface ResolvedTaskRow {
   id: string;
   conversation_id: string;
   task_number: number;
-  workspace_id: string;
+  /** NULL for DirectPair-board tasks (P0-f). */
+  workspace_id: string | null;
+  /** The stored board coordinate ('ws:…' | 'pair:…'), proven at INSERT. */
+  board_key: string;
   status: TaskStatus;
   closed_at: number | null;
   assignee_agent_id: string | null;

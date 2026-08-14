@@ -21,7 +21,7 @@ import {
   type SilverhandCliLauncher,
 } from './context.js';
 import { AgentTokenStore } from './auth/agent-token-store.js';
-import { canAgentUseCapability } from './permissions.js';
+import { canAgentUseCapability, canPostToConversation } from './permissions.js';
 import { resolveAuthRuntimeConfig } from './auth/config.js';
 import {
   cleanupEmbeddedBootstrap,
@@ -564,6 +564,8 @@ export async function startBackend(
     logger,
     canUseCapability: (actor, workspaceId, capability) =>
       canAgentUseCapability(ctx, actor, capability, { workspaceId }),
+    canPostToConversation: (actor, conversationId) =>
+      canPostToConversation(ctx, actor, conversationId),
   });
   ctx.scheduleService = new ScheduleService({
     schedules: persistence.repos.schedules,
