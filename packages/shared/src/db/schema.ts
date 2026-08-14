@@ -117,6 +117,22 @@ export type ConversationRosterPolicy = z.infer<
 >;
 
 /**
+ * WHICH KIND OF PRINCIPAL a `direct_pair` endpoint names (migration v73,
+ * agent-scoped-session-v1 §4.2). It selects the table the sibling
+ * `endpoint_*_id` must be looked up in — a conditional reference no foreign key
+ * can express, which is why the DB validates it with a trigger subquery instead.
+ *
+ * Deliberately NOT the same enum as a message's `from_kind` or a thread
+ * follower's `principal_kind` even though the two members coincide today: this
+ * one is a COORDINATE SYSTEM for the endpoint columns, and widening it means
+ * teaching the birth trigger a new table.
+ */
+export const ConversationEndpointKindSchema = z.enum(['human', 'agent']);
+export type ConversationEndpointKind = z.infer<
+  typeof ConversationEndpointKindSchema
+>;
+
+/**
  * Channel visibility. `private` is the historical, membership-
  * gated semantic — only explicit `conversation_users` members can read or
  * interact. `public` widens READ (browse content) to any human workspace
@@ -468,6 +484,33 @@ export interface ConversationRow {
    *  (`ON DELETE CASCADE`) — the inbox has no survivor, so it dies with the
    *  agent rather than outliving it as a historical coordinate. */
   inbox_agent_id: string | null;
+  /** The two arms of a `direct_pair` placement (v73+): NOT NULL exactly when
+   *  `placement_kind = 'direct_pair'`, NULL for every other placement, and
+   *  stored in canonical order (`a < b` by `(kind, id)`, which also rules out a
+   *  self-pair). HISTORICAL PRINCIPAL COORDINATES — no foreign key: the DM must
+   *  outlive the deletion of the principal on the other side. Validated at birth
+   *  by trigger (the id must exist in the table its `_kind` names) and immutable
+   *  afterwards, so a lookup that MISSES means "deleted", never "wrong id". */
+  endpoint_a_kind: ConversationEndpointKind | null;
+  endpoint_a_id: string | null;
+  endpoint_b_kind: ConversationEndpointKind | null;
+  endpoint_b_id: string | null;
+  /** WHEN the endpoint's principal was hard-deleted (v73+), stamped by the
+   *  `BEFORE DELETE` trigger on `agents` / `users`. A DENORMALIZED TIMESTAMP,
+   *  never the authority for "gone": existence is derived by lookup, and every
+   *  read surface asks `deleted_at IS NOT NULL OR the lookup misses`, so a
+   *  delete path that failed to stamp cannot restore the survivor's write
+   *  access. Null for every non-`direct_pair` placement. */
+  endpoint_a_deleted_at: number | null;
+  endpoint_b_deleted_at: number | null;
+  /** The `direct_pair` identity as ONE scalar, DERIVED by the DB from the four
+   *  endpoint coordinates (GENERATED VIRTUAL, v74+): readable, never writable,
+   *  and NOT NULL exactly when `placement_kind = 'direct_pair'`. Its bytes are a
+   *  contract (P0-f's task-board key is `'pair:' || pair_key`) and are defined
+   *  ONLY in the v74 migration — derive nothing from a handle or a title, and do
+   *  not re-implement the format in TypeScript: look a pair up by its four
+   *  ordered coordinates instead. */
+  pair_key: string | null;
   /** Authoritative placement axis (v69+). */
   placement_kind: ConversationPlacementKind;
   /** Authoritative roster axis (v69+); `kind` is derived from it. */

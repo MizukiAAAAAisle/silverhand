@@ -240,7 +240,7 @@ function buildFixture(): Fixture {
   const wsHome = workspaces.insertAgentHome({ agent: dmAgent }).id;
 
   const channel = (workspaceId: string, title: string): string =>
-    conversations.insertChannel({ workspaceId, title }).id;
+    conversations.insertChannel({ name: title, workspaceId, title }).id;
 
   const chAll = channel(wsA, 'all-tier');
   const chMentions = channel(wsA, 'mentions-tier');
@@ -251,6 +251,7 @@ function buildFixture(): Fixture {
   const chCursorPastHead = channel(wsA, 'cursor-past-head');
   const chInMutedWs = channel(wsMuted, 'loud-channel-in-muted-ws');
   const dm = conversations.insertDmChannel({
+    name: 'dm-agent',
     workspaceId: wsHome,
     title: 'dm-agent',
     agentId: dmAgent.id,

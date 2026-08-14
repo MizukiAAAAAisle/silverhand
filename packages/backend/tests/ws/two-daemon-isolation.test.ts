@@ -155,6 +155,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     description: null,
   });
   const channelX = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: wsXRow.id,
     title: 'c6-x',
   });
@@ -170,6 +171,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     description: null,
   });
   const channelY = conversations.insertChannel({
+    name: 'ch-2',
     workspaceId: wsYRow.id,
     title: 'c6-y',
   });
@@ -368,6 +370,7 @@ function legitimateParsedEvent(
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',
+    runtime_scope: { kind: 'conversation', conversation_id: conversationId, agent_id: agentId },
     conversation_id: conversationId,
     agent_id: agentId,
     parsed: { kind: 'session_init', sessionId },
@@ -639,6 +642,11 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
         result: {
           runtimes: [
             {
+              runtime_scope: {
+                kind: 'conversation',
+                conversation_id: fix.hostX.channelId,
+                agent_id: fix.hostX.agentId,
+              },
               conversation_id: fix.hostX.channelId,
               agent_id: fix.hostX.agentId,
               runtime_generation: 1,

@@ -123,7 +123,10 @@ export interface AgentProvisioningAgentsTxPort {
 
 /** Outcome of the provisioning's conditional transition. */
 export type AgentProvisioningFlipOutcome =
-  | { status: 'transitioned'; row: { id: string; name: string } }
+  | {
+      status: 'transitioned';
+      row: { id: string; name: string; sessionScope: 'agent' | 'conversation' };
+    }
   | { status: 'lost' };
 
 /** The workspace face: the agent-home row and the owner-human stamping. */
@@ -142,10 +145,18 @@ export interface AgentProvisioningWorkspacesTxPort {
  *  agent's inbox placement. */
 export interface AgentProvisioningConversationsTxPort {
   /** Insert the DM channel under the (already-inserted) agent-home workspace.
-   *  Returns only its id — the edges below and the message insert key off it. */
+   *  Returns only its id — the edges below and the message insert key off it.
+   *
+   *  `name` is the channel's ADDRESS in the new home's namespace (#task:2016),
+   *  required for the same reason it is on the channel-domain port: a
+   *  workspace-placed conversation without an allocation is not a legal state,
+   *  and only the caller knows the address it means to publish. No conflict is
+   *  possible here — the namespace was created empty by `insertAgentHome`, two
+   *  statements earlier in this transaction. */
   insertDmChannel(args: {
     workspaceId: string;
     title: string;
+    name: string;
     agentId?: string | null;
   }): { id: string };
   /**

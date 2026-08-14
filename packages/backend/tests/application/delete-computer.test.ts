@@ -104,6 +104,7 @@ async function setup(t: TestApp): Promise<Fixture> {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(t.ctx.db);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'cascade channel',
   });
@@ -129,6 +130,7 @@ async function setup(t: TestApp): Promise<Fixture> {
   // home's DM channels).
   const home = workspaces.insertAgentHome({ agent });
   const dm = conversations.insertDmChannel({
+    name: 'ch-2',
     workspaceId: home.id,
     title: agent.name,
     agentId: agent.id,
@@ -372,6 +374,11 @@ describe('deleteComputer destruction boundaries', () => {
         agentId: f.agentId,
         hostId: f.hostId,
         runtimeGeneration: 1,
+        runtimeScope: {
+          kind: 'conversation',
+          conversationId: f.channelId,
+          agentId: f.agentId,
+        },
       },
     ]);
   });

@@ -9,6 +9,7 @@ import type {
   ResolvedStartOptions,
   ResolvedWorkspaceRef,
 } from './runtime-start-resolve.js';
+import { isResolvedAgentStartOptions } from './runtime-start-resolve.js';
 import { readMemoryNotesCatalog } from './memory-notes-catalog.js';
 
 export const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
@@ -50,17 +51,32 @@ export async function buildPromptContextFromRuntimeStartOptions(
     () => '',
   );
 
-  const currentMemoryDir = memoryDirFor(options.workspace);
-  const currentMemory = await readFileWithCap(
-    join(currentMemoryDir, 'MEMORY.md'),
-    MEMORY_INJECT_CAP_BYTES,
-  );
-  const memoryNotesCatalog = await readMemoryNotesCatalog(currentMemoryDir);
+  const agentScoped = isResolvedAgentStartOptions(options);
+  const workspaceLess = !agentScoped && options.workspace === null;
+  let currentMemoryDir: string | null;
+  if (agentScoped) {
+    currentMemoryDir = options.agent.home_dir;
+  } else if (options.workspace === null) {
+    currentMemoryDir = null;
+  } else {
+    currentMemoryDir = memoryDirFor(options.workspace);
+  }
+  const currentMemory = currentMemoryDir === null
+    ? { kind: 'missing' as const }
+    : await readFileWithCap(
+        join(currentMemoryDir, 'MEMORY.md'),
+        MEMORY_INJECT_CAP_BYTES,
+      );
+  const memoryNotesCatalog = currentMemoryDir === null
+    ? { entries: [], omittedCount: 0 }
+    : await readMemoryNotesCatalog(currentMemoryDir);
 
   return {
     agentId: options.agent.id,
     agentName: options.agent.name,
-    activeProfileDir: activeProfilePromptDir(options.workspace),
+    activeProfileDir: activeProfilePromptDir(
+      agentScoped || options.workspace === null ? undefined : options.workspace,
+    ),
     roleSystemPrompt,
     roleSystemPromptPath,
     currentMemory,
@@ -68,27 +84,42 @@ export async function buildPromptContextFromRuntimeStartOptions(
     workspaceMemoryIndex: buildWorkspaceMemoryIndexFromRuntimeStartOptions(
       options,
     ),
-    sessionContext: {
-      conversationId: options.session.conversation_id,
-      computerId: options.computer_id,
-      workspaceName: options.workspace.name,
-      // The daemon-resolved local root on THIS computer — the deterministic
-      // agent-centric bundle coordinate for regular workspaces, the agent L1
-      // home for DMs. Never a server-supplied path: since relocation-v1 §7
-      // there is no stored path column and no registry binding to read.
-      workspacePath: options.workspace.path,
-      channelKind: options.session.kind === 'dm_channel' ? 'dm' : 'regular',
-      sessionTitle: options.session.title,
-      members: options.session.members,
-    },
+    sessionContext: agentScoped
+      ? {
+          kind: 'agent',
+          computerId: options.computer_id,
+        }
+      : options.workspace === null
+        ? {
+            kind: 'conversation',
+            conversationId: options.session.conversation_id,
+            computerId: options.computer_id,
+            sessionTitle: options.session.title,
+            members: options.session.members,
+          }
+        : {
+          kind: 'conversation',
+          conversationId: options.session.conversation_id,
+          computerId: options.computer_id,
+          workspaceName: options.workspace.name,
+          // The daemon-resolved local root on THIS computer — the deterministic
+          // agent-centric bundle coordinate for regular workspaces, the agent L1
+          // home for DMs. Never a server-supplied path.
+          workspacePath: options.workspace.path,
+          channelKind: options.session.kind === 'dm_channel' ? 'dm' : 'regular',
+          sessionTitle: options.session.title,
+          members: options.session.members,
+        },
   };
 }
 
 export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
   options: ResolvedStartOptions,
 ): WorkspaceMemoryIndexEntry[] {
+  if (isResolvedAgentStartOptions(options)) return [];
   return options.workspace_memory_index.map(workspace => {
-    const isCurrent = workspace.id === options.workspace.id;
+    const isCurrent = options.workspace !== null
+      && workspace.id === options.workspace.id;
     const baseLabel =
       workspace.kind === 'agent_home' ? `${workspace.name} (DM)` : workspace.name;
     return {
@@ -106,7 +137,9 @@ export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
   });
 }
 
-function activeProfilePromptDir(workspace: ResolvedWorkspaceRef): string {
+function activeProfilePromptDir(
+  workspace: ResolvedWorkspaceRef | undefined,
+): string {
   // relocation-v1 §7 task 1 — the agent cwd IS its L2 root for BOTH kinds now
   // (regular = the workspace bundle root; agent_home = the L1 home), so the
   // prompt's profile dir is always `.` (MEMORY.md at `./MEMORY.md`, notes at

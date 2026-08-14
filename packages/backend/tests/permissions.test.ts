@@ -38,11 +38,13 @@ function seed(t: TestApp) {
   });
   workspaces.insertMembership(workspace.id, alice.id);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'Main',
   });
   conversations.addAgent(channel.id, alice.id);
   const sibling = conversations.insertChannel({
+    name: 'ch-2',
     workspaceId: workspace.id,
     title: 'Sibling',
   });
@@ -106,6 +108,7 @@ describe('permission helpers', () => {
         )
         .run(f.workspace.id, Date.now());
       const publicChannel = f.conversations.insertChannel({
+        name: 'ch-3',
         workspaceId: f.workspace.id,
         title: 'Public',
         visibility: 'public',
@@ -313,6 +316,7 @@ describe('permission helpers', () => {
       agent: f.alice,
     });
     const dm = f.conversations.insertDmChannel({
+      name: 'ch-4',
       workspaceId: home.id,
       title: 'Onboarding',
       agentId: f.alice.id,

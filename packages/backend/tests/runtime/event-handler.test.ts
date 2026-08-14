@@ -23,7 +23,7 @@ import {
   HOST_PROTOCOL_VERSION,
   KNOWN_CAPABILITIES_V1,
   type EventFrame,
-  type RuntimeStatusResult,
+  type RuntimeStatusResult as WireRuntimeStatusResult,
 } from '@silverhand/host';
 import type { AgentRunState } from '@silverhand/shared';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
@@ -39,9 +39,33 @@ import {
 } from '../../src/runtime/event-handler.js';
 import type { RuntimeStatusProjector } from '../../src/runtime/status-projector.js';
 
+type LegacyRuntimeStatusResult = {
+  runtimes: Array<
+    Omit<WireRuntimeStatusResult['runtimes'][number], 'runtime_scope'> & {
+      runtime_scope?: WireRuntimeStatusResult['runtimes'][number]['runtime_scope'];
+    }
+  >;
+};
+type RuntimeStatusResult = LegacyRuntimeStatusResult;
+
+function normalizeStatusSnapshot(
+  snapshot: RuntimeStatusResult,
+): WireRuntimeStatusResult {
+  return {
+    runtimes: snapshot.runtimes.map(runtime => ({
+      ...runtime,
+      runtime_scope: runtime.runtime_scope ?? {
+        kind: 'conversation',
+        conversation_id: runtime.conversation_id,
+        agent_id: runtime.agent_id,
+      },
+    })),
+  };
+}
+
 function makeFakeClient(): {
   client: RuntimeEventSource;
-  emit: (frame: EventFrame) => void;
+  emit: (frame: Record<string, unknown>) => void;
   triggerReconnect: () => void;
 } {
   const eventHandlers = new Set<(frame: EventFrame) => void>();
@@ -59,6 +83,21 @@ function makeFakeClient(): {
   return {
     client: fake,
     emit(frame) {
+      const scopedFrame =
+        'conversation_id' in frame
+        && typeof frame.conversation_id === 'string'
+        && 'agent_id' in frame
+        && typeof frame.agent_id === 'string'
+        && !('runtime_scope' in frame)
+          ? {
+              ...frame,
+              runtime_scope: {
+                kind: 'conversation',
+                conversation_id: frame.conversation_id,
+                agent_id: frame.agent_id,
+              },
+            }
+          : frame;
       const generationBoundEvents = new Set([
         'runtime_state',
         'runtime_exit',
@@ -67,11 +106,13 @@ function makeFakeClient(): {
         'runtime_init_retrying',
         'runtime_init_cooldown',
         'runtime_parsed_event',
+        'runtime_delivery_consumed',
+        'runtime_delivery_failed',
       ]);
-      const boundFrame = generationBoundEvents.has(frame.event)
-        && !('runtime_generation' in frame)
-        ? { ...frame, runtime_generation: 1 } as unknown as EventFrame
-        : frame;
+      const boundFrame = generationBoundEvents.has(String(scopedFrame.event))
+        && !('runtime_generation' in scopedFrame)
+        ? { ...scopedFrame, runtime_generation: 1 } as unknown as EventFrame
+        : scopedFrame as EventFrame;
       for (const h of eventHandlers) h(boundFrame);
     },
     triggerReconnect() {
@@ -88,7 +129,7 @@ function makeBridge(snapshot: RuntimeStatusResult): {
   const bridge = {
     runtimeStatus: async () => {
       count += 1;
-      return snapshot;
+      return normalizeStatusSnapshot(snapshot);
     },
   } as unknown as RuntimeStatusBridge;
   return { bridge, statusCalls: () => count };
@@ -121,11 +162,11 @@ function makeInboxAck(): {
   const delivered: number[][] = [];
   const undelivered: Array<{ ids: number[]; reason: string }> = [];
   const sink: InboxAckSink = {
-    markDelivered(ids) {
-      delivered.push([...ids]);
+    markDelivered(settlement) {
+      delivered.push([...settlement.deliveryIds]);
     },
-    markUndelivered(ids, reason) {
-      undelivered.push({ ids: [...ids], reason });
+    markUndelivered(settlement, reason) {
+      undelivered.push({ ids: [...settlement.deliveryIds], reason });
     },
   };
   return { sink, delivered, undelivered };
@@ -213,6 +254,7 @@ function makeHandler(deps: Omit<RuntimeEventHandlerDeps, 'statusProjector'>): Ru
   return new RuntimeEventHandler({
     ...deps,
     daemonInstanceId: deps.daemonInstanceId ?? (() => 'daemon-test'),
+    deliveryOwner: deps.deliveryOwner ?? (() => 'connection-test'),
     statusProjector: makeForwardingProjector(deps.events),
   });
 }
@@ -235,6 +277,11 @@ function readyFrame(daemonPid: number, startedAt: number): EventFrame {
 function runStateFrame(conversationId: string, agentId: string, state: AgentRunState, ts = 1700000000000): EventFrame {
   return {
     event: 'runtime_state',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversationId,
+      agent_id: agentId,
+    },
     conversation_id: conversationId,
     agent_id: agentId,
     state,
@@ -252,6 +299,11 @@ function exitFrame(
 ): EventFrame {
   return {
     event: 'runtime_exit',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversationId,
+      agent_id: agentId,
+    },
     conversation_id: conversationId,
     agent_id: agentId,
     code,
@@ -346,7 +398,7 @@ describe('RuntimeEventHandler — hydrate on reconnect', () => {
       ],
     };
     const bridge = {
-      runtimeStatus: async () => snapshot,
+      runtimeStatus: async () => normalizeStatusSnapshot(snapshot),
     } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
@@ -387,7 +439,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
       ],
     };
     const bridge = {
-      runtimeStatus: async () => snapshot,
+      runtimeStatus: async () => normalizeStatusSnapshot(snapshot),
     } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
@@ -421,7 +473,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
         statusCalls += 1;
         // First call (initial) — we want exactly 1; second call only
         // happens if we mistakenly hydrate on the duplicate ready.
-        return {
+        return normalizeStatusSnapshot({
           runtimes: [
             {
               conversation_id: 'c1',
@@ -433,7 +485,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
               started_at: 1700000000000,
             },
           ],
-        } as RuntimeStatusResult;
+        });
       },
     } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
@@ -1792,7 +1844,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
 
   function setup(opts: { withCallbacks?: boolean } = {}): {
     cache: RunStateCache;
-    emit: (frame: EventFrame) => void;
+    emit: (frame: Record<string, unknown>) => void;
     handler: RuntimeEventHandler;
     parsedCalls: Array<{ conv: string; agent: string; event: unknown }>;
     exitCalls: Array<{
@@ -1908,6 +1960,11 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       conv: 'c1',
       agent: 'a1',
       meta: {
+        scope: {
+          kind: 'conversation',
+          conversationId: 'c1',
+          agentId: 'a1',
+        },
         intentional: true,
         code: 0,
         initTimedOut: false,
@@ -2426,6 +2483,46 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
     expect(parsedCalls).toEqual([]);
   });
 
+  it('rejects an origin outside a ConversationSlot scope before delivery ack side effects', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher } = makePublisher();
+    const { sink, delivered } = makeInboxAck();
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_delivery_consumed',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
+      conversation_id: 'c2',
+      agent_id: 'a1',
+      delivery_ids: [41],
+      ts: 1700000001000,
+    });
+    expect(delivered).toEqual([]);
+
+    emit({
+      event: 'runtime_delivery_consumed',
+      runtime_scope: { kind: 'agent', agent_id: 'a1' },
+      conversation_id: 'c2',
+      agent_id: 'a1',
+      delivery_ids: [42],
+      ts: 1700000001001,
+    });
+    expect(delivered).toEqual([[42]]);
+  });
+
   it('runtime_parsed_event(session_init) → projector.sessionInit with cliSessionId', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();
@@ -2455,6 +2552,11 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       {
         kind: 'sessionInit',
         input: {
+          scope: {
+            kind: 'conversation',
+            conversationId: 'c1',
+            agentId: 'a1',
+          },
           conversationId: 'c1',
           agentId: 'a1',
           cliSessionId: 'sess-routed-9999',
@@ -2520,6 +2622,11 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       {
         kind: 'runtimeReady',
         input: {
+          scope: {
+            kind: 'conversation',
+            conversationId: 'c1',
+            agentId: 'a1',
+          },
           conversationId: 'c1',
           agentId: 'a1',
           custody: { generation: 1, daemonInstanceId: 'daemon-test' },
@@ -2700,6 +2807,11 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
     const retryCall = calls.find(c => c.kind === 'initRetrying');
     expect(retryCall).toBeDefined();
     expect(retryCall!.input).toEqual({
+      scope: {
+        kind: 'conversation',
+        conversationId: 'c1',
+        agentId: 'a1',
+      },
       conversationId: 'c1',
       agentId: 'a1',
       retryAttempt: 2,
@@ -2739,6 +2851,11 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       {
         kind: 'initCooldown',
         input: {
+          scope: {
+            kind: 'conversation',
+            conversationId: 'c1',
+            agentId: 'a1',
+          },
           conversationId: 'c1',
           agentId: 'a1',
           cooldownUntil: 1700000999000,
@@ -2760,7 +2877,7 @@ describe('hydrate retry — #task:1588 P1-3 (bounded same-generation recovery)',
       runtimeStatus: async () => {
         count += 1;
         if (count <= failures) throw new Error(`hydrate boom #${count}`);
-        return {
+        return normalizeStatusSnapshot({
           runtimes: [
             {
               conversation_id: 'c1',
@@ -2772,7 +2889,7 @@ describe('hydrate retry — #task:1588 P1-3 (bounded same-generation recovery)',
               started_at: 1700000000000,
             },
           ],
-        };
+        });
       },
     } as unknown as RuntimeStatusBridge;
     return { bridge, statusCalls: () => count };

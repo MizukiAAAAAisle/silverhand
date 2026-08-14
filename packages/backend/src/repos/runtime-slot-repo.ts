@@ -11,6 +11,69 @@ export type RuntimeSlotScope =
   | { kind: 'agent'; agentId: string }
   | { kind: 'conversation'; conversationId: string; agentId: string };
 
+/**
+ * ONE RUNTIME SEAT of an agent: one `agent_runtime_slots` row, as the CONTROL
+ * PLANE unit (runtime switch, stop-all, teardown capture, the delete-impact
+ * pre-flight, session management).
+ *
+ * IDENTITY IS THE SCOPE, and the scope is the ONLY carrier of the coordinate —
+ * there is deliberately no second `conversation_id` field beside it. A control
+ * plane that acts on a session must not be able to read a plausible coordinate
+ * out of a seat that does not have one: for an AgentSlot the honest answer is
+ * "this session is not placed in a conversation", and a nullable field next to a
+ * discriminated union is two representations of that one fact, free to disagree.
+ *
+ * CUSTODY TRAVELS WITH THE SEAT (`generation`, `claimedByDaemonInstanceId`). A
+ * stop or a session clear is only sound against the exact generation it was
+ * decided on — the successor of a crashed-and-respawned session is a different
+ * process behind the same identity — so a seat DTO that dropped these would force
+ * every caller to re-read the slot and race.
+ *
+ * WHAT IT DOES NOT CARRY: any conversation metadata (workspace, title, archived
+ * state). Every such field is a field a future edit could filter or join by, and
+ * the workspace coordinate is precisely the join that used to make DM and inbox
+ * seats vanish from these planes (@Cindy B3). The display face
+ * (`AgentRepo.listRuntimeConversations`) is where coordinates belong.
+ *
+ * NOT A PARTICIPATION FACE, in either direction: it neither answers "is this
+ * agent in that conversation" (`agentParticipates`, §4.2, the one authority) nor
+ * is it derived from it. An agent-scoped session has ONE seat serving N
+ * conversations, so a participation-driven seat list would report N seats and
+ * stop the same process N times.
+ */
+export interface AgentRuntimeSeat {
+  scope: RuntimeSlotScope;
+  status: ConversationAgentStatus;
+  pid: number | null;
+  generation: number;
+  claimedByDaemonInstanceId: string | null;
+  cliSessionId: string | null;
+}
+
+/** The slot row's identity as a discriminated value: `conversation_id IS NULL`
+ *  is what makes a row an AgentSlot, so that column is the discriminant and
+ *  nothing else needs to be consulted. */
+export function slotScopeOf(row: AgentRuntimeSlotRow): RuntimeSlotScope {
+  return row.conversation_id === null
+    ? { kind: 'agent', agentId: row.agent_id }
+    : {
+        kind: 'conversation',
+        conversationId: row.conversation_id,
+        agentId: row.agent_id,
+      };
+}
+
+function rowToSeat(row: AgentRuntimeSlotRow): AgentRuntimeSeat {
+  return {
+    scope: slotScopeOf(row),
+    status: row.observed_status,
+    pid: row.observed_pid,
+    generation: row.generation,
+    claimedByDaemonInstanceId: row.claimed_by_daemon_instance_id,
+    cliSessionId: row.cli_session_id,
+  };
+}
+
 export interface RuntimeProjectionPatch {
   status?: ConversationAgentStatus;
   pid?: number | null;
@@ -75,6 +138,30 @@ export class RuntimeSlotRepo {
 
   getAgent(agentId: string): AgentRuntimeSlotRow | null {
     return this.get({ kind: 'agent', agentId });
+  }
+
+  /**
+   * EVERY SEAT this agent holds — the row set of the slot table for one agent,
+   * unjoined and unfiltered, which is the whole point of the face (@Cindy B3).
+   *
+   * Unjoined is the load-bearing part: there is no conversation table here to
+   * resolve a coordinate through, so no edit can reintroduce the projection that
+   * used to delete DM and inbox seats from every control plane. Unfiltered
+   * likewise — "which statuses count as running" is a domain rule and belongs to
+   * the caller, where a test of the use case can see it.
+   *
+   * At most one row has `kind: 'agent'` (`uniq_agent_runtime_slots_agent_scope`),
+   * and an agent-scoped agent has exactly that one row and no others, so the
+   * aggregate slot cannot fan out into N seats no matter how many conversations
+   * the agent participates in.
+   */
+  listSeats(agentId: string): AgentRuntimeSeat[] {
+    return this.db
+      .prepare<[string], AgentRuntimeSlotRow>(
+        'SELECT * FROM agent_runtime_slots WHERE agent_id = ?',
+      )
+      .all(agentId)
+      .map(rowToSeat);
   }
 
   /**
@@ -251,14 +338,13 @@ export class RuntimeSlotRepo {
     })();
   }
 
-  listLiveConversationSlotsForHost(hostId: string): AgentRuntimeSlotRow[] {
+  listLiveSlotsForHost(hostId: string): AgentRuntimeSlotRow[] {
     return this.db
       .prepare<[string], AgentRuntimeSlotRow>(
         `SELECT s.*
            FROM agent_runtime_slots s
            JOIN agents a ON a.id = s.agent_id
           WHERE a.host_id = ?
-            AND s.conversation_id IS NOT NULL
             AND s.observed_status IN ('active', 'starting')`,
       )
       .all(hostId);

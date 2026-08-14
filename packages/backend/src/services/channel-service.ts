@@ -4,6 +4,7 @@ import {
   type DmChannelDto,
   type MessageDto,
   requireWorkspacePlacement,
+  slugifyConversationTitle,
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
@@ -58,6 +59,19 @@ export type ChannelActor =
 export interface CreateChannelInput {
   workspaceId: string;
   title: string;
+  /**
+   * The channel's ADDRESS in its workspace namespace (#task:2016). Omitted →
+   * derived from `title` by `slugifyConversationTitle`, the same deriver the v72
+   * backfill used, so an upgraded channel and a fresh one agree about the obvious
+   * name for a title.
+   *
+   * A conflict is a REFUSAL (`conversation_name_taken`, 409), never a silent
+   * suffix — including for the derived case, where two CJK-only titles both
+   * derive `channel`: the second request is told to choose an address rather than
+   * being handed one nobody asked for. Only the backfill may suffix; it had to
+   * cover every existing row and had no requester to refuse.
+   */
+  name?: string;
   memberAgentIds: string[];
   memberUserIds?: string[];
   /** Channel visibility. Omitted → 'private'. `public` requires a user actor
@@ -374,8 +388,20 @@ export class ChannelService {
           }
         }
 
+        // The ADDRESS, decided before the row is written and checked against the
+        // namespace under this transaction's write lock — so two concurrent
+        // creations of the same name cannot both pass. The namespace key inside
+        // `insertChannel` is the backstop if this check is ever wrong.
+        const name = input.name ?? slugifyConversationTitle(input.title);
+        if (tx.channels.isNameAllocated(name)) {
+          throw new ChannelError(
+            'conversation_name_taken',
+            `the name ${name} is already allocated in this workspace`,
+          );
+        }
         const channel = tx.channels.insertChannel({
           title: input.title,
+          name,
           spawnedByAgentId:
             input.actor.kind === 'agent' ? input.actor.agentId : null,
           visibility: input.visibility,
@@ -559,8 +585,21 @@ export class ChannelService {
             'agent_home owner not found',
           );
         }
+        // Same address rule as `createChannel`, derived only: this door takes no
+        // explicit name (an agent-home DM is reached through its owner, not by
+        // typing its address), so a conflict is answered by asking for a
+        // different TITLE. When P3 moves direct conversations onto their own
+        // placement they leave the namespace and this check goes with them.
+        const name = slugifyConversationTitle(input.title);
+        if (tx.channels.isNameAllocated(name)) {
+          throw new ChannelError(
+            'conversation_name_taken',
+            `the name ${name} is already allocated in this workspace`,
+          );
+        }
         const dm = tx.channels.insertDmChannel({
           title: input.title,
+          name,
           agentId: currentOwner.id,
         });
         tx.channels.addAgent(dm.id, currentOwner.id);
@@ -603,14 +642,21 @@ export class ChannelService {
     // Archiving a channel terminates its agent runtime: an agent still working
     // in an archived channel is doing meaningless work. Stop is best-effort and
     // async (the host may be offline), so "archived ⇒ no runtime" is an eventual
-    // state, not an instant invariant — which is exactly why the runtime-state
-    // *control-plane* callers (Stop-all, delete-agent purge) keep the COMPLETE
-    // conversation view (`listRuntimeConversations` without `excludeArchived`):
+    // state, not an instant invariant — which is exactly why the control-plane
+    // callers (Stop-all, delete-agent purge) read the unfiltered SEAT face
+    // (`RuntimeSlotRepo.listSeats`, no archive scope and no placement scope):
     // a straggler runtime left here must still be reachable to stop/purge. Only
     // the display roster excludes archived (see agent-repo). (#task:1398)
     if (input.archived) {
       this.runtimeHost.resolveConversationRuns(updated.id, 'conversation_closed');
       for (const ca of this.channels.listAgents(updated.id)) {
+        // A ConversationSlot is owned by this conversation edge; closing the
+        // conversation terminates that process. An AgentSlot is owned by the
+        // Agent aggregate and may still be serving other target conversations,
+        // so archiving one target must not kill the shared process.
+        if (this.agents.get(ca.agent_id)?.session_scope !== 'conversation') {
+          continue;
+        }
         void this.runtimeHost.stop(updated.id, ca.agent_id).catch(err =>
           this.logger.warn(
             { channelId: updated.id, agentId: ca.agent_id, err },
@@ -716,6 +762,145 @@ export class ChannelService {
         ca.agent_id,
         announce.id,
         'channel rename delivery failed',
+      );
+    }
+    this.events.publish(updated.id, {
+      kind: 'message',
+      payload: { message: announce },
+    });
+    this.publishWorkspaceChannelsChanged(requireWorkspacePlacement(updated), updated.id);
+    return { channel: updated };
+  }
+
+  /**
+   * RE-ADDRESS a channel: retire its current name and allocate a new one
+   * (#task:2016).
+   *
+   * A sibling of {@link renameChannel}, not a variant of it. A title is display
+   * text and may be rewritten as often as anyone likes; a name is the coordinate
+   * a `#<name>` reference resolves through, so changing it RETIRES an address
+   * permanently — the old name never resolves to this channel again and can never
+   * be given to another one. That asymmetry is why the two live in separate
+   * methods reached by separate request shapes (`PATCH` accepts exactly one of
+   * `title` / `visibility` / `name`), and why this one emits its own
+   * `conversation_name_changed` audit subtype instead of the display `rename`
+   * row. Changing the title does not touch the name and changing the name does
+   * not touch the title — the doc §8 falsifier for P0-c is exactly that.
+   *
+   * One transaction, keyed on this channel, containing: the authoritative read,
+   * the namespace conflict check, the retirement, the allocation, and the audit
+   * message. Retire-then-allocate rather than an UPDATE, because the namespace
+   * keeps retired rows forever (that is what lets a stale reference report its
+   * successor). Two concurrent re-addresses cannot both pass the conflict check:
+   * it is taken under the same write lock that performs the writes.
+   *
+   * Refusals:
+   *  - unknown / non-channel-like id → `not_found`;
+   *  - a target with no workspace namespace (an agent inbox, reachable because
+   *    `kind` is GENERATED) → `not_addressable`;
+   *  - a name allocated in this namespace, currently or in the past → 409
+   *    `conversation_name_taken`. Never auto-suffixed: a requester who typed
+   *    `#design` must not silently end up at `#design-2`.
+   *
+   * Requesting the name the channel already holds is a NO-OP (no retirement, no
+   * audit row, no events) — not a conflict and not a burn of the address.
+   */
+  async setChannelName(
+    input: { channelId: string; name: string },
+  ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
+    // Pre-lock refusals. `workspace_id` is immutable, so reading the placement
+    // before BEGIN cannot go stale — the same assumption the UnitOfWork's own
+    // key→workspace resolution rests on.
+    const target = this.channels.getChannelLike(input.channelId);
+    if (!target) {
+      throw new ChannelError('not_found', 'channel not found');
+    }
+    if (target.workspace_id === null) {
+      throw new ChannelError(
+        'not_addressable',
+        'this conversation has no workspace namespace to be addressed in',
+      );
+    }
+
+    const readdressed = this.uow.atomicallyForChannel(
+      input.channelId,
+      (
+        tx,
+      ): {
+        channel: ChannelConversationDto | DmChannelDto;
+        announce: MessageDto | null;
+      } => {
+        const existing = tx.channels.getChannelLikeForUpdate();
+        if (!existing) {
+          throw new ChannelError('not_found', 'channel not found');
+        }
+        const oldName = existing.name;
+        if (oldName === input.name) {
+          return { channel: existing, announce: null };
+        }
+        if (tx.channels.isNameAllocated(input.name)) {
+          throw new ChannelError(
+            'conversation_name_taken',
+            `the name ${input.name} is already allocated in this workspace`,
+          );
+        }
+        const now = Date.now();
+        tx.channels.retireCurrentName(now);
+        tx.channels.allocateName(input.name, now);
+        const updated = tx.channels.getChannelLikeForUpdate();
+        if (!updated) {
+          throw new ChannelError('not_found', 'channel not found');
+        }
+        // The audit row names BOTH addresses, and `old_name` is null only for a
+        // channel that held none — a half-state a fault left behind, which this
+        // write repairs rather than refuses.
+        //
+        // Both addresses are written as INLINE CODE, and that is load-bearing
+        // (@Cindy, #task:2016 review): the `#name` sigil is, today, still owned
+        // by the TITLE namespace on the read side — the renderer's `remarkRefs`
+        // turns a bare `#roadmap` in prose into `silverhand-channel:roadmap` and
+        // resolves it through a map keyed by channel TITLE. A semantic name is a
+        // different namespace, so a bare sigil here would silently navigate to
+        // whichever channel happens to be TITLED `roadmap` — this message is the
+        // first producer to write a semantic name into prose, so it would be the
+        // first to mis-target. `inlineCode` is the one position `remarkRefs`
+        // returns from without splitting, so the token stays literally visible to
+        // agents (plain-text read faces round-trip it byte for byte) while never
+        // entering the renderer's link branch. When the sigil is re-pointed at
+        // the name namespace, this can become a canonical reference; until then a
+        // producer of semantic names must not spell them like title references.
+        const announce = tx.messages.insert({
+          fromKind: 'system',
+          content: oldName === null
+            ? `This channel's address was set to \`#${input.name}\`. `
+              + 'Update any references in your MEMORY.md when you next edit it.'
+            : `This channel's address changed from \`#${oldName}\` to \`#${input.name}\`. `
+              + `\`#${oldName}\` will never point anywhere else, so old references `
+              + 'fail rather than reach the wrong channel — update any in your '
+              + 'MEMORY.md when you next edit it.',
+          metadata: {
+            subtype: systemSubtype('conversation_name_changed'),
+            old_name: oldName,
+            new_name: input.name,
+          },
+        });
+        return { channel: updated, announce };
+      },
+    );
+
+    const { channel: updated, announce } = readdressed;
+    if (!announce) return { channel: updated };
+
+    // Same post-commit effects as a title rename, for the same reason: every
+    // member agent must learn the new address (their MEMORY.md and their prompts
+    // carry the old one), and every open UI must refetch the channel lists that
+    // now report a different name.
+    for (const ca of this.channels.listAgents(updated.id)) {
+      await this.deliverBestEffort(
+        updated.id,
+        ca.agent_id,
+        announce.id,
+        'channel re-address delivery failed',
       );
     }
     this.events.publish(updated.id, {

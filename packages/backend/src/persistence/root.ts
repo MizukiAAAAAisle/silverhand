@@ -242,6 +242,7 @@ export function createBackendPersistence(db: Db): BackendPersistence {
       workspaces: repos.workspaces,
       conversations: repos.conversations,
       agents: repos.agents,
+      users: repos.users,
       capabilities: repos.agentCapabilities,
       attachments: repos.attachments,
     }),

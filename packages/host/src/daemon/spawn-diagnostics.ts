@@ -182,10 +182,15 @@ export interface SilverhandEnvPresenceSummary {
  */
 export function summarizeSilverhandEnvPresence(
   env: Readonly<Record<string, string | undefined>>,
+  options: { conversationIdRequired?: boolean } = {},
 ): SilverhandEnvPresenceSummary {
   const presentKeys: string[] = [];
   const missingKeys: string[] = [];
   for (const key of REQUIRED_SILVERHAND_ENV_KEYS) {
+    if (
+      key === SILVERHAND_CONVERSATION_ID_ENV
+      && options.conversationIdRequired === false
+    ) continue;
     const value = env[key];
     if (typeof value === 'string' && value.length > 0) {
       presentKeys.push(key);

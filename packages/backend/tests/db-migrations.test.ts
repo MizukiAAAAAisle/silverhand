@@ -48,6 +48,10 @@ function openDbAt(version: number): Database.Database {
   for (const migration of migrations) {
     if (migration.version > version) break;
     const apply = () => {
+      // Preconditions are part of applying a migration, not an optional extra:
+      // v71 stages its inbox ids in a temp table there, so a helper that skipped
+      // them could not open a DB at any version >= 71 at all.
+      if (migration.precondition) migration.precondition(db);
       db.exec(migration.up);
       insertMigration.run(migration.version, migration.name, Date.now());
     };
@@ -2675,6 +2679,600 @@ describe('v70 runtime slots scoped authority (#task:2013)', () => {
       expect(() =>
         db.prepare('DELETE FROM agent_runtime_events WHERE id = ?').run(migratedEventId),
       ).toThrow(/append-only/);
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+/**
+ * v75 runtime slots placement aware (#task:2020, P3) — the migration that makes a
+ * SEAT belong to PARTICIPATION instead of to the roster.
+ *
+ * v70 shipped the slot table while `conversation_agents` was still the only
+ * participation edge, so it tied the two together twice: a composite FK to the
+ * roster (a ConversationSlot could not EXIST without a roster row) and a single
+ * roster-INSERT creation trigger (a ConversationSlot could not be BORN any other
+ * way). §4.2 gives `direct_pair` and `agent_inbox` zero roster rows, so on the
+ * unified P2+P3 model those two arms could hold no seat at all — a session
+ * running in a DM was invisible to switch / stop / teardown / session
+ * management, and no honest fixture could even construct one.
+ *
+ * The assertions below are ordered as the three things that must all hold at
+ * once, because fixing any one alone reintroduces the others:
+ *   1. the REBUILD is lossless — same rows, same ids (`agent_runtime_events`
+ *      points at `slot_id` with no FK, so a renumbering would silently detach
+ *      every historical event), and the roster FK is gone from the survivor;
+ *   2. the BACKFILL gives the two rosterless arms the seats they could never
+ *      have had, exactly once, without re-stamping a birth event on the slots
+ *      that already had one;
+ *   3. the CREATION and RELEASE triggers are placement-gated in agreement: each
+ *      arm's own participation edge mints its seat, and a stray roster row on a
+ *      rosterless placement neither mints nor destroys one.
+ */
+describe('v75 runtime slots placement aware (#task:2020)', () => {
+  it('rebuilds without the roster FK, backfills the rosterless arms once, and gates every seat on its own participation edge', () => {
+    // Seeded at v69 and carried up through the REAL migrations rather than
+    // assembled at v74. A hand-built v74 fixture looks identical and is not: its
+    // slots were made by triggers, so their ids were a dense 1..n and none of
+    // them carried an event. Id preservation was then true by coincidence — an
+    // AUTOINCREMENT renumbering maps 1..n onto itself — and survived its own
+    // falsifier. Here v70 migrates the roster payload into the seat and stamps
+    // its provenance, v71 mints the inbox, and a deleted agent leaves both a hole
+    // in the id sequence and an event pointing at a slot that no longer exists.
+    const db = openDbAt(69);
+    try {
+      db.exec(`
+        INSERT INTO users (
+          id, name, display_name, created_at, updated_at
+        ) VALUES ('u_p', 'placement-owner', 'Placement Owner', 1, 1);
+        INSERT INTO hosts (
+          id, name, kind, created_at, user_id
+        ) VALUES ('h_p', 'placement-host', 'local', 1, 'u_p');
+        -- No session_scope column yet: v70 adds it, defaulting every existing
+        -- agent to 'conversation'. The agent-scoped arm is created after it.
+        INSERT INTO agents (
+          id, name, display_name, runtime, host_id, created_by_user_id,
+          materialization_status, created_at, updated_at
+        ) VALUES
+          ('a_conv', 'placement-conv', 'Conv', 'claude', 'h_p', 'u_p',
+           'active', 1, 1),
+          ('a_gone', 'placement-gone', 'Gone', 'claude', 'h_p', 'u_p',
+           'active', 2, 2);
+        INSERT INTO workspaces (
+          id, name, description, workspace_kind, owner_agent_id,
+          created_at, updated_at
+        ) VALUES ('w_p', 'Placement', NULL, 'regular', NULL, 1, 1);
+        INSERT INTO conversations (
+          id, workspace_id, placement_kind, roster_policy, title, status,
+          created_at, updated_at, visibility
+        ) VALUES (
+          'c_chan', 'w_p', 'workspace', 'open', 'chan', 'open', 1, 1, 'private'
+        );
+        -- At v69 the runtime payload still lives ON the roster row; v70 is what
+        -- moves it into a slot and records where it came from. TWO rows, because
+        -- the second one's seat is deleted below to leave a GAP.
+        INSERT INTO conversation_agents (
+          conversation_id, agent_id, joined_at, cli_session_id, pid, status
+        ) VALUES
+          ('c_chan', 'a_conv', 10, 'resume-chan', 4242, 'active'),
+          ('c_chan', 'a_gone', 11, NULL, NULL, 'idle');
+      `);
+
+      applyMigrationsThrough(db, 74);
+
+      db.exec(`
+        -- Custody is not a roster column, so v70 had nothing to migrate into it:
+        -- it is set here, and the rebuild has to carry it too.
+        UPDATE agent_runtime_slots
+           SET claimed_by_daemon_instance_id = 'daemon-1'
+         WHERE agent_id = 'a_conv' AND conversation_id = 'c_chan';
+        -- The hole: an agent aggregate dies and takes its seat and its v71 inbox
+        -- with it. AUTOINCREMENT never hands that id back, so the surviving ids
+        -- are no longer 1..n and a rebuild that dropped \`id\` would renumber
+        -- them visibly.
+        DELETE FROM agents WHERE id = 'a_gone';
+        -- The agent-scoped arm. Created after v71, so it has NO inbox — which is
+        -- why its coverage below is one aggregate seat and nothing else.
+        INSERT INTO agents (
+          id, name, display_name, runtime, host_id, created_by_user_id,
+          materialization_status, created_at, updated_at, session_scope
+        ) VALUES (
+          'a_scoped', 'placement-scoped', 'Scoped', 'claude', 'h_p', 'u_p',
+          'active', 3, 3, 'agent'
+        );
+        -- The DM, in v74's shape: endpoints are typed columns in v73's canonical
+        -- order, and v74 derives \`pair_key\` from them.
+        INSERT INTO conversations (
+          id, workspace_id, placement_kind, roster_policy, title, status,
+          created_at, updated_at, visibility,
+          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+        ) VALUES (
+          'c_pair', NULL, 'direct_pair', 'fixed', '', 'open', 4, 4, 'private',
+          'agent', 'a_conv', 'human', 'u_p'
+        );
+      `);
+
+      // v71's inbox for `a_conv`, by its production-minted id: nothing here
+      // hand-builds an inbox, so its absence from the seat table below is the
+      // real dogfood state and not a fixture choice.
+      const inboxRow = db
+        .prepare<[], { id: string }>(
+          `SELECT id FROM conversations WHERE inbox_agent_id = 'a_conv'`,
+        )
+        .get();
+      expect(inboxRow).toBeDefined();
+      const inboxId = inboxRow!.id;
+      // Seats as sorted keys, because the inbox id is minted at random and an
+      // `ORDER BY conversation_id` would otherwise make the expectation depend
+      // on which bytes it drew.
+      const seatKeys = () =>
+        db
+          .prepare<[], { agent_id: string; conversation_id: string | null }>(
+            'SELECT agent_id, conversation_id FROM agent_runtime_slots',
+          )
+          .all()
+          .map(r => `${r.agent_id}:${r.conversation_id ?? '(agent)'}`)
+          .sort();
+
+      // THE DEFECT, stated as the precondition: `a_conv` participates in three
+      // placements and holds a seat in exactly the one with a roster row.
+      expect(seatKeys()).toEqual(['a_conv:c_chan', 'a_scoped:(agent)']);
+      const slotIdsBefore = db
+        .prepare<[], { id: number; agent_id: string }>(
+          'SELECT id, agent_id FROM agent_runtime_slots ORDER BY id',
+        )
+        .all();
+      // The hole, asserted: without it the id-preservation check below cannot
+      // fail, because renumbering a dense sequence reproduces it exactly.
+      expect(slotIdsBefore.map(r => r.id)).toEqual([1, 3]);
+      // The two `slot_migrated` rows v70 wrote — one per pre-existing seat. These
+      // are the ONLY runtime history in this database, and the second one belongs
+      // to the seat deleted above, which is what makes the id-preservation check
+      // below falsifiable.
+      expect(
+        db
+          .prepare<[], { slot_id: number; count: number }>(
+            `SELECT slot_id, COUNT(*) AS count FROM agent_runtime_events
+              WHERE event_kind = 'slot_migrated'
+              GROUP BY slot_id ORDER BY slot_id`,
+          )
+          .all(),
+      ).toEqual([
+        { slot_id: 1, count: 1 },
+        { slot_id: 2, count: 1 },
+      ]);
+      // v70 tied a slot's existence to a roster row; that FK is what made a
+      // rosterless seat unrepresentable rather than merely uncreated. (The
+      // composite FK reports one row per column, hence the dedupe.)
+      expect(
+        [
+          ...new Set(
+            db
+              .prepare<[], { table: string }>(
+                'PRAGMA foreign_key_list(agent_runtime_slots)',
+              )
+              .all()
+              .map(r => r.table),
+          ),
+        ].sort(),
+      ).toEqual(['agents', 'conversation_agents', 'conversations']);
+
+      applyMigrationsThrough(db, 75);
+
+      // 1a. The survivor references only the two real owners of a seat's
+      //     identity. Nothing about membership can reach it any more.
+      expect(
+        db
+          .prepare<[], { table: string; on_delete: string }>(
+            'PRAGMA foreign_key_list(agent_runtime_slots)',
+          )
+          .all()
+          .map(r => ({ table: r.table, on_delete: r.on_delete }))
+          .sort((x, y) => x.table.localeCompare(y.table)),
+      ).toEqual([
+        { table: 'agents', on_delete: 'CASCADE' },
+        { table: 'conversations', on_delete: 'CASCADE' },
+      ]);
+      // 1b. Lossless, ids included: `agent_runtime_events.slot_id` is an FK-less
+      //     historical coordinate, so a renumbering would detach every event
+      //     ever written without a single constraint noticing.
+      expect(
+        db
+          .prepare<[], { id: number; agent_id: string }>(
+            `SELECT id, agent_id FROM agent_runtime_slots
+              WHERE agent_id IN ('a_conv', 'a_scoped')
+                AND (conversation_id = 'c_chan' OR conversation_id IS NULL)
+              ORDER BY id`,
+          )
+          .all(),
+      ).toEqual(slotIdsBefore);
+      expect(
+        db
+          .prepare(
+            `SELECT generation, claimed_by_daemon_instance_id, observed_status,
+                    observed_pid, cli_session_id
+               FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv' AND conversation_id = 'c_chan'`,
+          )
+          .get(),
+      ).toEqual({
+        generation: 0,
+        claimed_by_daemon_instance_id: 'daemon-1',
+        observed_status: 'active',
+        observed_pid: 4242,
+        cli_session_id: 'resume-chan',
+      });
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+
+      // 2. The backfill: the DM and the inbox now hold exactly one idle seat
+      //    each, and the agent-scoped agent gained none (its one AgentSlot
+      //    already serves every conversation it participates in).
+      expect(seatKeys()).toEqual(
+        [
+          'a_conv:c_chan',
+          `a_conv:${inboxId}`,
+          'a_conv:c_pair',
+          'a_scoped:(agent)',
+        ].sort(),
+      );
+      expect(
+        db
+          .prepare(
+            `SELECT generation, observed_status, observed_pid, cli_session_id
+               FROM agent_runtime_slots WHERE conversation_id = 'c_pair'`,
+          )
+          .get(),
+      ).toEqual({
+        generation: 0,
+        observed_status: 'idle',
+        observed_pid: null,
+        cli_session_id: null,
+      });
+      // The seats born here get NO event, and the two v70 wrote are untouched:
+      // this log records runtime GENERATIONS, and a seat at generation 0 that no
+      // daemon has claimed has none to report. "History from first claim" is the
+      // contract; the alternative — a synthetic birth row per seat — would be true
+      // for the length of the upgrade and false at the next roster join, since the
+      // four creation triggers insert a slot and nothing else.
+      expect(
+        db
+          .prepare<[], { slot_id: number; count: number }>(
+            `SELECT slot_id, COUNT(*) AS count FROM agent_runtime_events
+              GROUP BY slot_id ORDER BY slot_id`,
+          )
+          .all(),
+      ).toEqual([
+        { slot_id: 1, count: 1 },
+        { slot_id: 2, count: 1 },
+      ]);
+      // …and slot 2's event is now an orphan: history is append-only and
+      // `slot_id` carries no FK by design. This is the sharp end of 1b — had the
+      // rebuild renumbered the survivors into 1..n, `a_scoped`'s seat would have
+      // become id 2 and SILENTLY INHERITED a deleted agent's runtime history,
+      // with no constraint in the schema able to notice.
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_events e
+              WHERE NOT EXISTS (
+                SELECT 1 FROM agent_runtime_slots s WHERE s.id = e.slot_id
+              )`,
+          )
+          .get()!.count,
+      ).toBe(1);
+
+      // 3a. Each arm's own participation edge mints its seat, at birth. The pair
+      //     below has an agent on BOTH sides, so one INSERT must mint two seats:
+      //     the trigger's two-sided SELECT is the part a per-endpoint rewrite
+      //     would silently halve.
+      db.exec(`
+        INSERT INTO agents (
+          id, name, display_name, runtime, host_id, created_by_user_id,
+          materialization_status, created_at, updated_at, session_scope
+        ) VALUES (
+          'a_conv_z', 'placement-conv-z', 'Conv Z', 'claude', 'h_p', 'u_p',
+          'active', 4, 4, 'conversation'
+        );
+        INSERT INTO conversations (
+          id, workspace_id, placement_kind, roster_policy, title, status,
+          created_at, updated_at, visibility,
+          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+        ) VALUES (
+          'c_pair2', NULL, 'direct_pair', 'fixed', '', 'open', 4, 4, 'private',
+          'agent', 'a_conv', 'agent', 'a_conv_z'
+        );
+        INSERT INTO conversations (
+          id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+          title, status, created_at, updated_at, visibility
+        ) VALUES (
+          'c_inbox2', NULL, 'a_conv_z', 'agent_inbox', 'fixed',
+          'Mentions', 'open', 5, 5, 'private'
+        );
+      `);
+      expect(
+        db
+          .prepare<[], { conversation_id: string }>(
+            `SELECT conversation_id FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv' ORDER BY conversation_id`,
+          )
+          .all()
+          .map(r => r.conversation_id),
+      ).toEqual(['c_chan', inboxId, 'c_pair', 'c_pair2'].sort());
+      expect(
+        db
+          .prepare<[], { conversation_id: string }>(
+            `SELECT conversation_id FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv_z' ORDER BY conversation_id`,
+          )
+          .all()
+          .map(r => r.conversation_id),
+      ).toEqual(['c_inbox2', 'c_pair2']);
+      // …and an agent-scoped endpoint gets NONE: one aggregate slot serves every
+      // pair it is an endpoint of, so a per-pair seat would be a second seat for
+      // one process.
+      db.exec(`
+        INSERT INTO conversations (
+          id, workspace_id, placement_kind, roster_policy, title, status,
+          created_at, updated_at, visibility,
+          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+        ) VALUES (
+          'c_pair3', NULL, 'direct_pair', 'fixed', '', 'open', 6, 6, 'private',
+          'agent', 'a_scoped', 'human', 'u_p'
+        );
+      `);
+      expect(
+        db
+          .prepare<[], { conversation_id: string | null }>(
+            `SELECT conversation_id FROM agent_runtime_slots
+              WHERE agent_id = 'a_scoped'`,
+          )
+          .all(),
+      ).toEqual([{ conversation_id: null }]);
+      // The AgentSlot trigger survived the rebuild: dropping it while dropping
+      // the roster one would leave every future agent-scoped agent seatless.
+      db.exec(`
+        INSERT INTO agents (
+          id, name, display_name, runtime, host_id, created_by_user_id,
+          materialization_status, created_at, updated_at, session_scope
+        ) VALUES (
+          'a_scoped2', 'placement-scoped-2', 'Scoped 2', 'claude', 'h_p', 'u_p',
+          'active', 7, 7, 'agent'
+        );
+      `);
+      expect(
+        db
+          .prepare<[], { conversation_id: string | null; observed_status: string }>(
+            `SELECT conversation_id, observed_status FROM agent_runtime_slots
+              WHERE agent_id = 'a_scoped2'`,
+          )
+          .all(),
+      ).toEqual([{ conversation_id: null, observed_status: 'idle' }]);
+
+      // 3b. A stray roster row on a rosterless placement is INERT in BOTH
+      //     directions: it mints no second seat, and removing it does not take
+      //     the endpoint-owned seat away. An ungated release trigger here would
+      //     silently kill a live DM session's only control coordinate.
+      db.exec(`
+        INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+          VALUES ('c_pair', 'a_conv', 20);
+      `);
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv' AND conversation_id = 'c_pair'`,
+          )
+          .get()?.count,
+      ).toBe(1);
+      db.exec(
+        `DELETE FROM conversation_agents
+          WHERE conversation_id = 'c_pair' AND agent_id = 'a_conv'`,
+      );
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv' AND conversation_id = 'c_pair'`,
+          )
+          .get()?.count,
+      ).toBe(1);
+      // The workspace arm is the one the roster DOES own, so there the release
+      // still fires — the two gates have to agree on whose seat that is.
+      db.exec(
+        `DELETE FROM conversation_agents
+          WHERE conversation_id = 'c_chan' AND agent_id = 'a_conv'`,
+      );
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv' AND conversation_id = 'c_chan'`,
+          )
+          .get()?.count,
+      ).toBe(0);
+
+      // The guard triggers came through the rebuild intact — the rebuild
+      // recreates them by hand, so "still enforced" is not implied by anything.
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_runtime_slots (agent_id, conversation_id)
+          VALUES ('a_conv', NULL)
+        `),
+      ).toThrow(/scope must match/);
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_runtime_slots (agent_id, conversation_id)
+          VALUES ('a_conv', 'c_pair')
+        `),
+      ).toThrow(/UNIQUE/);
+      expect(() =>
+        db.exec(`
+          UPDATE agent_runtime_slots SET generation = generation + 2
+          WHERE agent_id = 'a_conv' AND conversation_id = 'c_pair'
+        `),
+      ).toThrow(/generation must advance by one/);
+      expect(() =>
+        db.exec(`
+          UPDATE agent_runtime_slots SET conversation_id = 'c_pair2'
+          WHERE agent_id = 'a_conv' AND conversation_id = 'c_pair'
+        `),
+      ).toThrow(/identity is immutable/);
+
+      // 4. PARTICIPATION IS THE INVARIANT, not just the creation path. The three
+      //    AFTER INSERT triggers above prove a seat is MINTED by a participation
+      //    edge; they say nothing about a row that arrives any other way, and the
+      //    composite FK that used to refuse one is gone. A forged seat is a forged
+      //    control coordinate — stop / switch / teardown would act on it — so the
+      //    rule is asserted against a direct writer, once per arm.
+      db.exec(`
+        INSERT INTO agents (
+          id, name, display_name, runtime, host_id, created_by_user_id,
+          materialization_status, created_at, updated_at, session_scope
+        ) VALUES (
+          'a_conv_y', 'placement-conv-y', 'Conv Y', 'claude', 'h_p', 'u_p',
+          'active', 8, 8, 'conversation'
+        );
+      `);
+      const forgeSeat = (agentId: string, conversationId: string) => () =>
+        db.exec(`
+          INSERT INTO agent_runtime_slots (agent_id, conversation_id)
+          VALUES ('${agentId}', '${conversationId}')
+        `);
+      // workspace arm: no roster row…
+      expect(forgeSeat('a_conv_y', 'c_chan')).toThrow(/requires participation/);
+      // …direct_pair arm: neither endpoint…
+      expect(forgeSeat('a_conv_y', 'c_pair2')).toThrow(/requires participation/);
+      // …agent_inbox arm: not the inbox's agent.
+      expect(forgeSeat('a_conv_y', 'c_inbox2')).toThrow(/requires participation/);
+      // The differential: the SAME insert, in the same place, succeeds the moment
+      // the participation edge exists — so the refusals above are about
+      // participation and not about this agent, this conversation, or a writer
+      // that cannot insert slots at all. (Through the roster edge, which is what
+      // production has; the trigger and the direct writer agree.)
+      db.exec(`
+        INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+          VALUES ('c_chan', 'a_conv_y', 30);
+      `);
+      expect(
+        db
+          .prepare<[], { conversation_id: string | null }>(
+            `SELECT conversation_id FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv_y'`,
+          )
+          .all(),
+      ).toEqual([{ conversation_id: 'c_chan' }]);
+
+      // 5. The EDGES a seat is derived from are frozen. An UPDATE is neither the
+      //    INSERT that mints a seat nor the DELETE that releases it, so a movable
+      //    edge would desynchronise the derivation without either trigger firing.
+      const namesBefore = db
+        .prepare<[], { count: number }>(
+          'SELECT COUNT(*) AS count FROM conversation_names',
+        )
+        .get()!.count;
+      const seatsBefore = seatKeys();
+      db.exec(`
+        INSERT INTO conversations (
+          id, workspace_id, placement_kind, roster_policy, title, status,
+          created_at, updated_at, visibility
+        ) VALUES (
+          'c_chan2', 'w_p', 'workspace', 'open', 'chan2', 'open', 9, 9, 'private'
+        );
+      `);
+      // Relocating a roster row would leave the seat on the old conversation and
+      // the new membership with none.
+      expect(() =>
+        db.exec(`
+          UPDATE conversation_agents SET conversation_id = 'c_chan2'
+          WHERE conversation_id = 'c_chan' AND agent_id = 'a_conv_y'
+        `),
+      ).toThrow(/roster edge is immutable/);
+      // One level up: a COORDINATED arm conversion that satisfies every CHECK the
+      // schema has. It would hand an inbox a mutable roster, make it eligible for
+      // a v72 name it never allocated, and move its seat's owning edge — all
+      // without an INSERT or a DELETE anywhere.
+      expect(() =>
+        db.exec(`
+          UPDATE conversations
+             SET placement_kind = 'workspace', workspace_id = 'w_p',
+                 inbox_agent_id = NULL, roster_policy = 'open'
+           WHERE id = 'c_inbox2'
+        `),
+      ).toThrow(/placement is immutable/);
+      // …and each column alone, because a freeze that only catches the four
+      // together is not a freeze.
+      expect(() =>
+        db.exec(`UPDATE conversations SET workspace_id = NULL WHERE id = 'c_chan'`),
+      ).toThrow(/placement is immutable/);
+      expect(() =>
+        db.exec(
+          `UPDATE conversations SET roster_policy = 'open' WHERE id = 'c_pair2'`,
+        ),
+      ).toThrow(/placement is immutable/);
+      expect(() =>
+        db.exec(
+          `UPDATE conversations SET inbox_agent_id = 'a_conv_y' WHERE id = 'c_inbox2'`,
+        ),
+      ).toThrow(/placement is immutable/);
+      // Zero drift in all three aggregates the conversion would have bypassed:
+      // the placement row itself, the name namespace, and the seat set.
+      expect(
+        db
+          .prepare(
+            `SELECT placement_kind, workspace_id, inbox_agent_id, roster_policy
+               FROM conversations WHERE id = 'c_inbox2'`,
+          )
+          .get(),
+      ).toEqual({
+        placement_kind: 'agent_inbox',
+        workspace_id: null,
+        inbox_agent_id: 'a_conv_z',
+        roster_policy: 'fixed',
+      });
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            'SELECT COUNT(*) AS count FROM conversation_names',
+          )
+          .get()!.count,
+      ).toBe(namesBefore);
+      expect(seatKeys()).toEqual(seatsBefore);
+      // The freeze is a COLUMN LIST, not a blanket ban on updating a placement:
+      // display and lifecycle columns still move, which is why `title` (the
+      // renameable half of v72's split) is asserted here rather than assumed.
+      db.exec(`UPDATE conversations SET title = 'renamed' WHERE id = 'c_chan'`);
+      expect(
+        db
+          .prepare<[], { title: string }>(
+            `SELECT title FROM conversations WHERE id = 'c_chan'`,
+          )
+          .get()!.title,
+      ).toBe('renamed');
+
+      // Deleting the CONVERSATION releases its seats through the slot's own FK —
+      // which is why the release trigger being inert on rosterless placements is
+      // correct rather than a hole.
+      db.exec(`DELETE FROM conversations WHERE id = 'c_pair'`);
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_slots
+              WHERE conversation_id = 'c_pair'`,
+          )
+          .get()?.count,
+      ).toBe(0);
+      // …and deleting the AGENT releases every seat it holds, on every arm.
+      db.exec(`DELETE FROM agents WHERE id = 'a_conv'`);
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_slots
+              WHERE agent_id = 'a_conv'`,
+          )
+          .get()?.count,
+      ).toBe(0);
       expect(db.pragma('foreign_key_check')).toEqual([]);
     } finally {
       db.close();

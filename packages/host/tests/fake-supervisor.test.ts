@@ -24,6 +24,16 @@ function assertStarted(
   }
 }
 
+function outputScope(conversationId: string, agentId: string) {
+  return {
+    runtime_scope: {
+      kind: 'conversation' as const,
+      conversation_id: conversationId,
+      agent_id: agentId,
+    },
+  };
+}
+
 interface Harness {
   supervisor: FakeSupervisor;
   events: EventFrame[];
@@ -130,6 +140,7 @@ describe('FakeSupervisor — deliver spawn-with-batch (happy path)', () => {
     const r = h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [101, 102, 103],
       kind: 'message',
@@ -166,6 +177,7 @@ describe('FakeSupervisor — deliver spawn-with-batch (failure path)', () => {
     h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1, 2],
       kind: 'message',
@@ -202,6 +214,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
     const r = h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
@@ -224,6 +237,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
     const r = h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
@@ -239,6 +253,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
     h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -249,6 +264,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
     const r = h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
@@ -271,6 +287,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
     const r = h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [10, 11, 12],
       kind: 'message',
@@ -303,6 +320,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
     const r = h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -331,6 +349,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
     const r = h.supervisor.deliver({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -415,7 +434,7 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
       runtime_generation: 1,
       conversation_id: 'c2',
       agent_id: 'a2',
-      options: testStartOptions(),
+      options: testStartOptions({ conversationId: 'c2', agentId: 'a2' }),
     });
     h.flush();
     h.supervisor.stop({
@@ -462,7 +481,7 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
   it('stopAll emits runtime_state on each draining transition (Cindy `9rxtrdT2NXfX2zEs`)', () => {
     const h = makeHarness();
     h.supervisor.start({ runtime_generation: 1, conversation_id: 'c1', agent_id: 'a1', options: testStartOptions() });
-    h.supervisor.start({ runtime_generation: 1, conversation_id: 'c2', agent_id: 'a2', options: testStartOptions() });
+    h.supervisor.start({ runtime_generation: 1, conversation_id: 'c2', agent_id: 'a2', options: testStartOptions({ conversationId: 'c2', agentId: 'a2' }) });
     h.flush();
     const eventsBefore = h.events.length;
     h.supervisor.stopAll({});
@@ -504,7 +523,7 @@ describe('FakeSupervisor — status', () => {
       runtime_generation: 1,
       conversation_id: 'c2',
       agent_id: 'a2',
-      options: testStartOptions(),
+      options: testStartOptions({ conversationId: 'c2', agentId: 'a2' }),
     });
     h.flush();
     const r = h.supervisor.status({});
@@ -528,7 +547,7 @@ describe('FakeSupervisor — status', () => {
       runtime_generation: 1,
       conversation_id: 'c2',
       agent_id: 'a2',
-      options: testStartOptions(),
+      options: testStartOptions({ conversationId: 'c2', agentId: 'a2' }),
     });
     h.flush();
     const r = h.supervisor.status({ conversation_id: 'c1' });
@@ -580,10 +599,7 @@ describe('FakeSupervisor — pauseOutput / resumeOutput', () => {
     h.flush();
     const eventsBefore = h.events.length;
 
-    const r1 = h.supervisor.pauseOutput({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-    });
+    const r1 = h.supervisor.pauseOutput(outputScope('c1', 'a1'));
     expect(r1).toEqual({ paused: true });
     expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
       'runtime_output_paused',
@@ -591,19 +607,13 @@ describe('FakeSupervisor — pauseOutput / resumeOutput', () => {
 
     // Idempotent: repeat pause returns paused=true but does NOT emit
     // a second event (avoids spamming the wire).
-    const r2 = h.supervisor.pauseOutput({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-    });
+    const r2 = h.supervisor.pauseOutput(outputScope('c1', 'a1'));
     expect(r2).toEqual({ paused: true });
     expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
       'runtime_output_paused',
     ]);
 
-    const r3 = h.supervisor.resumeOutput({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-    });
+    const r3 = h.supervisor.resumeOutput(outputScope('c1', 'a1'));
     expect(r3).toEqual({ resumed: true });
     expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
       'runtime_output_paused',
@@ -611,10 +621,7 @@ describe('FakeSupervisor — pauseOutput / resumeOutput', () => {
     ]);
 
     // Repeat resume also idempotent — no second resumed event.
-    const r4 = h.supervisor.resumeOutput({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-    });
+    const r4 = h.supervisor.resumeOutput(outputScope('c1', 'a1'));
     expect(r4).toEqual({ resumed: true });
     expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
       'runtime_output_paused',
@@ -626,10 +633,10 @@ describe('FakeSupervisor — pauseOutput / resumeOutput', () => {
     const h = makeHarness();
     const eventsBefore = h.events.length;
     expect(
-      h.supervisor.pauseOutput({ conversation_id: 'no-such', agent_id: 'no-such' }),
+      h.supervisor.pauseOutput(outputScope('no-such', 'no-such')),
     ).toEqual({ paused: false });
     expect(
-      h.supervisor.resumeOutput({ conversation_id: 'no-such', agent_id: 'no-such' }),
+      h.supervisor.resumeOutput(outputScope('no-such', 'no-such')),
     ).toEqual({ resumed: false });
     expect(h.events.length).toBe(eventsBefore);
   });
@@ -642,10 +649,10 @@ describe('FakeSupervisor — pauseOutput / resumeOutput', () => {
     h.flush();
     const eventsBefore = h.events.length;
     expect(
-      h.supervisor.pauseOutput({ conversation_id: 'c1', agent_id: 'a1' }),
+      h.supervisor.pauseOutput(outputScope('c1', 'a1')),
     ).toEqual({ paused: false });
     expect(
-      h.supervisor.resumeOutput({ conversation_id: 'c1', agent_id: 'a1' }),
+      h.supervisor.resumeOutput(outputScope('c1', 'a1')),
     ).toEqual({ resumed: false });
     expect(h.events.length).toBe(eventsBefore);
   });

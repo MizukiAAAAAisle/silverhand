@@ -64,7 +64,31 @@ import type {
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import type { BackendLogger } from '../context.js';
 import type { EventPublisher } from '../runtime/event-handler.js';
-import { conversationRuntimePrincipal } from '../auth/runtime-principal.js';
+import {
+  agentRuntimePrincipal,
+  conversationRuntimePrincipal,
+  type RuntimePrincipal,
+  type RuntimePrincipalScope,
+} from '../auth/runtime-principal.js';
+
+function principalForScope(input: {
+  scope: RuntimePrincipalScope;
+  generation: number;
+  daemonInstanceId: string;
+}): RuntimePrincipal {
+  return input.scope.kind === 'agent'
+    ? agentRuntimePrincipal({
+        agentId: input.scope.agentId,
+        generation: input.generation,
+        daemonInstanceId: input.daemonInstanceId,
+      })
+    : conversationRuntimePrincipal({
+        conversationId: input.scope.conversationId,
+        agentId: input.scope.agentId,
+        generation: input.generation,
+        daemonInstanceId: input.daemonInstanceId,
+      });
+}
 
 /**
  * Everything `OutboundRuntimeEventFanout` needs that is DB-backed. Spread into
@@ -134,6 +158,8 @@ export function createRuntimeFanoutDbDeps(deps: {
         inbox.ensureDelivery(conversationId, agentId, messageId),
       listPending: (conversationId, agentId) =>
         inbox.listPending(conversationId, agentId).map(toRuntimeInboxDelivery),
+      listPendingConversationIdsForAgent: agentId =>
+        inbox.listPendingConversationIdsForAgent(agentId),
       claimPending: (conversationId, agentId, inFlightOwner) =>
         inbox
           .claimPending(conversationId, agentId, inFlightOwner)
@@ -145,9 +171,8 @@ export function createRuntimeFanoutDbDeps(deps: {
         inbox.hasUndeliveredForPair(conversationId, agentId),
       countInFlightForPairOwner: (conversationId, agentId, inFlightOwner) =>
         inbox.countInFlightForPairOwner(conversationId, agentId, inFlightOwner),
-      markDelivered: inboxIds => {
-        inbox.markDelivered([...inboxIds]);
-      },
+      settleDelivered: input => inbox.settleDelivered(input),
+      settleUndelivered: input => inbox.settleUndelivered(input),
       rollbackInFlight: (inboxIds, inFlightOwner) => {
         inbox.rollbackInFlight(inboxIds, inFlightOwner);
       },
@@ -170,6 +195,8 @@ export function createRuntimeFanoutDbDeps(deps: {
     },
     conversations: {
       get: conversationId => conversations.get(conversationId),
+      isAgentParticipant: (conversationId, agentId) =>
+        conversations.isAgentParticipant(conversationId, agentId),
       getAgent: (conversationId, agentId) =>
         conversations.getAgent(conversationId, agentId),
       listAgents: conversationId => conversations.listAgents(conversationId),
@@ -196,45 +223,39 @@ export function createRuntimeFanoutDbDeps(deps: {
       },
     },
     runtimeCustody: {
-      currentConversation: (conversationId, agentId) => {
-        const row = runtimeSlots.getConversation(conversationId, agentId);
+      cliSessionId: scope => runtimeSlots.get(scope)?.cli_session_id ?? null,
+      current: scope => {
+        const row = runtimeSlots.get(scope);
         if (!row || !row.claimed_by_daemon_instance_id) return null;
-        return conversationRuntimePrincipal({
-          conversationId,
-          agentId,
+        return principalForScope({
+          scope,
           generation: row.generation,
           daemonInstanceId: row.claimed_by_daemon_instance_id,
         });
       },
-      claimConversation: ({ conversationId, agentId, daemonInstanceId }) => {
+      claim: ({ scope, daemonInstanceId }) => {
         const row = runtimeSlots.claimGeneration({
-          scope: { kind: 'conversation', conversationId, agentId },
+          scope,
           daemonInstanceId,
         });
         return row
-          ? conversationRuntimePrincipal({
-              conversationId,
-              agentId,
+          ? principalForScope({
+              scope,
               generation: row.generation,
               daemonInstanceId,
             })
           : null;
       },
-      finalizeConversation: input => {
+      finalize: input => {
         const row = runtimeSlots.finalizeGeneration({
-          scope: {
-            kind: 'conversation',
-            conversationId: input.conversationId,
-            agentId: input.agentId,
-          },
+          scope: input.scope,
           expectedGeneration: input.generation,
           expectedDaemonInstanceId: input.daemonInstanceId,
           status: input.status,
         });
         return row
-          ? conversationRuntimePrincipal({
-              conversationId: input.conversationId,
-              agentId: input.agentId,
+          ? principalForScope({
+              scope: input.scope,
               generation: row.generation,
               daemonInstanceId: input.daemonInstanceId,
             })
@@ -243,8 +264,15 @@ export function createRuntimeFanoutDbDeps(deps: {
     },
     hydrateReconcile: {
       listDbLiveRuntimesForHost: hostId =>
-        runtimeSlots.listLiveConversationSlotsForHost(hostId).map<DbLiveRuntime>(row => ({
-          conversationId: row.conversation_id!,
+        runtimeSlots.listLiveSlotsForHost(hostId).map<DbLiveRuntime>(row => ({
+          scope: row.conversation_id === null
+            ? { kind: 'agent', agentId: row.agent_id }
+            : {
+                kind: 'conversation',
+                conversationId: row.conversation_id,
+                agentId: row.agent_id,
+              },
+          focusConversationId: row.conversation_id,
           agentId: row.agent_id,
           generation: row.generation,
           daemonInstanceId: row.claimed_by_daemon_instance_id,
@@ -252,11 +280,7 @@ export function createRuntimeFanoutDbDeps(deps: {
           pid: row.observed_pid,
         })),
       markCrashed: runtime => {
-        const scope = {
-          kind: 'conversation' as const,
-          conversationId: runtime.conversationId,
-          agentId: runtime.agentId,
-        };
+        const scope = runtime.scope;
         const updated = runtime.daemonInstanceId
           ? runtimeSlots.finalizeGeneration({
               scope,
@@ -268,9 +292,7 @@ export function createRuntimeFanoutDbDeps(deps: {
               status: 'crashed',
               pid: null,
             });
-        return updated
-          ? conversations.getAgent(runtime.conversationId, runtime.agentId)
-          : null;
+        return updated !== null;
       },
     },
     session: {
@@ -282,14 +304,20 @@ export function createRuntimeFanoutDbDeps(deps: {
       atomically: fn =>
         deps.db.transaction(() =>
           fn({
-            clearCliSession: (conversationId, agentId) =>
-              runtimeSlots.clearCliSession({
-                kind: 'conversation',
-                conversationId,
-                agentId,
-              })
-                ? conversations.getAgent(conversationId, agentId)
-                : null,
+            clearCliSession: input => {
+              if (!conversations.isAgentParticipant(
+                input.targetConversationId,
+                input.agentId,
+              )) return null;
+              const slot = runtimeSlots.clearCliSession(input.scope);
+              return slot
+                ? {
+                    status: slot.observed_status,
+                    pid: slot.observed_pid,
+                    cli_session_id: slot.cli_session_id,
+                  }
+                : null;
+            },
             insertSystemMessage: input =>
               messages.insertForConversation({
                 conversationId: input.conversationId,

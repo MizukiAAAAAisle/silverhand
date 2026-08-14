@@ -109,6 +109,7 @@ function bootstrap(
     agent: owner,
   });
   const dm = conversations.insertDmChannel({
+    name: 'ch-1',
     workspaceId: home.id,
     title: `dm-${owner.name}`,
   });
@@ -435,6 +436,7 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
+      name: 'ch-2',
       workspaceId: ws.id,
       title: 'general',
     });
@@ -467,6 +469,7 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
+      name: 'ch-3',
       workspaceId: ws.id,
       title: 'release',
     });
@@ -581,6 +584,7 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
+      name: 'ch-4',
       workspaceId: ws.id,
       title: 'closed-room',
     });
@@ -613,6 +617,7 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
+      name: 'ch-5',
       workspaceId: ws.id,
       title: 'no-entry',
     });
@@ -1035,6 +1040,7 @@ describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
+      name: 'ch-6',
       workspaceId: ws.id,
       title: 'fire-here',
     });

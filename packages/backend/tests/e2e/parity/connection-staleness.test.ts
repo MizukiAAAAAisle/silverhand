@@ -99,6 +99,7 @@ function sessionInitEvent(
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',
+    runtime_scope: { kind: 'conversation', conversation_id: conversationId, agent_id: agentId },
     conversation_id: conversationId,
     agent_id: agentId,
     runtime_generation: runtimeGeneration,
@@ -138,6 +139,7 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     description: null,
   });
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: wsRow.id,
     title: 'd5a4-stale',
   });

@@ -508,6 +508,7 @@ describe('Channel attachment list (GET /api/channels/:id/attachments)', () => {
     const { workspaceId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
     const dm = conversations.insertDmChannel({
+      name: 'ch-1',
       workspaceId,
       title: 'dm',
     });

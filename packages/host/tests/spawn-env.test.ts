@@ -118,6 +118,34 @@ describe('daemon spawn env', () => {
     expect(env[SILVERHAND_AUTH_TOKEN_ENV]).toBe('tok_expected');
   });
 
+  it('AgentSlot deletes an inherited or driver-injected ambient conversation id', () => {
+    const driver = makeDriver(env => ({
+      ...env,
+      [SILVERHAND_CONVERSATION_ID_ENV]: 'ambient-from-daemon',
+    }));
+    const options = testStartOptions({
+      runtime: 'codex',
+      sessionScope: 'agent',
+      agentId: 'agent-global',
+    });
+
+    const env = buildDaemonSpawnEnv({
+      driver,
+      options,
+      conversationId: 'delivery-target-only',
+      agentId: 'agent-global',
+      binDir: '/tmp/silverhand-spawn/bin',
+      controlPlaneServerUrl: 'https://remote.example.test',
+      baseProcessEnv: {
+        ...BASE_ENV,
+        [SILVERHAND_CONVERSATION_ID_ENV]: 'ambient-from-parent',
+      },
+    });
+
+    expect(env).not.toHaveProperty(SILVERHAND_CONVERSATION_ID_ENV);
+    expect(env[SILVERHAND_AGENT_ID_ENV]).toBe('agent-global');
+  });
+
   it('fails loud when the daemon has no host-local control-plane URL', () => {
     const driver = makeDriver(env => ({ ...env }));
     const options = testStartOptions({ runtime: 'codex' });

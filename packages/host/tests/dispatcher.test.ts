@@ -155,12 +155,12 @@ describe('IntentDispatcher', () => {
       async status() {
         return {
           runtimes: [
-            { conversation_id: 'c1', agent_id: 'a-spawning', runtime_generation: 1, pid: 1, phase: 'spawning', run_state: null, started_at: 1 },
-            { conversation_id: 'c2', agent_id: 'a-startup', runtime_generation: 1, pid: 2, phase: 'startup_pending', run_state: null, started_at: 2 },
-            { conversation_id: 'c3', agent_id: 'a-ready', runtime_generation: 1, pid: 3, phase: 'ready', run_state: null, started_at: 3 },
-            { conversation_id: 'c4', agent_id: 'a-draining', runtime_generation: 1, pid: 4, phase: 'draining', run_state: null, started_at: 4 },
-            { conversation_id: 'c5', agent_id: 'a-idle', runtime_generation: 1, pid: 5, phase: 'idle', run_state: null, started_at: 5 },
-            { conversation_id: 'c6', agent_id: 'a-exited', runtime_generation: 1, pid: null, phase: 'exited', run_state: null, started_at: 6 },
+            { runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a-spawning' }, conversation_id: 'c1', agent_id: 'a-spawning', runtime_generation: 1, pid: 1, phase: 'spawning', run_state: null, started_at: 1 },
+            { runtime_scope: { kind: 'conversation', conversation_id: 'c2', agent_id: 'a-startup' }, conversation_id: 'c2', agent_id: 'a-startup', runtime_generation: 1, pid: 2, phase: 'startup_pending', run_state: null, started_at: 2 },
+            { runtime_scope: { kind: 'conversation', conversation_id: 'c3', agent_id: 'a-ready' }, conversation_id: 'c3', agent_id: 'a-ready', runtime_generation: 1, pid: 3, phase: 'ready', run_state: null, started_at: 3 },
+            { runtime_scope: { kind: 'conversation', conversation_id: 'c4', agent_id: 'a-draining' }, conversation_id: 'c4', agent_id: 'a-draining', runtime_generation: 1, pid: 4, phase: 'draining', run_state: null, started_at: 4 },
+            { runtime_scope: { kind: 'conversation', conversation_id: 'c5', agent_id: 'a-idle' }, conversation_id: 'c5', agent_id: 'a-idle', runtime_generation: 1, pid: 5, phase: 'idle', run_state: null, started_at: 5 },
+            { runtime_scope: { kind: 'conversation', conversation_id: 'c6', agent_id: 'a-exited' }, conversation_id: 'c6', agent_id: 'a-exited', runtime_generation: 1, pid: null, phase: 'exited', run_state: null, started_at: 6 },
           ],
         };
       },
@@ -366,6 +366,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const r = await d.dispatch('w', 'runtime_deliver', {
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [101, 102],
       kind: 'message',
@@ -396,6 +397,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
       {
         runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [101],
         kind: 'message',
@@ -484,8 +486,11 @@ describe('IntentDispatcher — runtime_* routing', () => {
       supervisor,
     });
     const pauseUnknown = await d.dispatch('p1', 'runtime_output_pause', {
-      conversation_id: 'no-such',
-      agent_id: 'no-such',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'no-such',
+        agent_id: 'no-such',
+      },
     }, { owner: 'test-owner' });
     expect('result' in pauseUnknown).toBe(true);
     if ('result' in pauseUnknown) {
@@ -498,16 +503,22 @@ describe('IntentDispatcher — runtime_* routing', () => {
     // and pauseOutput accepts any non-exited phase).
     supervisor.start({ runtime_generation: 1, conversation_id: 'c1', agent_id: 'a1', options: testStartOptions() });
     const pauseLive = await d.dispatch('p2', 'runtime_output_pause', {
-      conversation_id: 'c1',
-      agent_id: 'a1',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
     }, { owner: 'test-owner' });
     expect('result' in pauseLive).toBe(true);
     if ('result' in pauseLive) expect(pauseLive.result).toEqual({ paused: true });
     expect(events.filter(e => e.event === 'runtime_output_paused')).toHaveLength(1);
 
     const resumeLive = await d.dispatch('r2', 'runtime_output_resume', {
-      conversation_id: 'c1',
-      agent_id: 'a1',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
     }, { owner: 'test-owner' });
     expect('result' in resumeLive).toBe(true);
     if ('result' in resumeLive) expect(resumeLive.result).toEqual({ resumed: true });

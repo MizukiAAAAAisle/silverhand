@@ -61,7 +61,11 @@ function purgeCallCount(t: TestApp): number {
  */
 function runtimeStops(
   t: TestApp,
-): Array<{ conversationId: string; agentId: string; hostId?: string }> {
+): Array<{
+  conversationId: string | null;
+  agentId: string;
+  hostId?: string;
+}> {
   return t.fake.stops;
 }
 

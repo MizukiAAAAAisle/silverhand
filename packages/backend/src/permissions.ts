@@ -7,11 +7,16 @@
 // only field any of them reads is that port (W6's Gate 8 keeps every OTHER
 // production file out of it — it is this module's private source, not an
 // ambient repository).
-import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, WorkspaceRole } from '@silverhand/shared';
-import { conversationScope, conversationSideScope } from '@silverhand/shared';
+import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, ConversationActor, ConversationEndpointCoordinate, WorkspaceRole } from '@silverhand/shared';
+import {
+  conversationScope,
+  conversationSideScope,
+  directPairEndpointsOf as sharedDirectPairEndpointsOf,
+  resolveParticipation,
+} from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { AuthorizationConversationFacts } from './authorization-ports.js';
-import type { Principal, UserPrincipal } from './auth/principal.js';
+import type { AgentPrincipal, Principal, UserPrincipal } from './auth/principal.js';
 import { workspaceRoleMeetsFloor } from './auth/workspace-role.js';
 
 export type ParsedWsScope =
@@ -292,6 +297,31 @@ export function canAgentUseCapability(
   return reads.hasCapability(scope.workspaceId, principal.agentId, capability);
 }
 
+/**
+ * THE participation gate (agent-scoped-session-v1 §4.2): is this principal in
+ * this conversation? Its answer is decided by the conversation's PLACEMENT, and
+ * this is the ONE place that dispatch happens — there is no per-placement
+ * `canViewXConversation` sibling to drift from it.
+ *
+ * The rule itself is shared's `resolveParticipation`, which answers for every
+ * placement whose participants are written ON THE ROW (`direct_pair`'s two
+ * endpoints, `agent_inbox`'s single owner) and returns `null` for the workspace
+ * arm — the only one whose participants are a QUERY (workspace membership plus
+ * the roster tables). So the arms below are that query, and nothing else.
+ *
+ * The split is the guarantee, not a convenience: the non-workspace arms are
+ * evaluated inside a module that has no read port at all, so they CANNOT consult
+ * `conversation_users` / `conversation_agents`. A roster row on a DM or an inbox
+ * is inert by construction, while the workspace arm here stays free to read the
+ * roster — because that IS its authority. Pinned by
+ * `tests/db-boundary/participation-authority.test.ts`.
+ *
+ * `system` is admitted before the placement is consulted: it is the
+ * delivery/maintenance principal and passes every `canX` in this file. It is
+ * still not admitted to POST into a half-dead DM — see
+ * {@link canPostToConversation}, which asks about the conversation, not the
+ * caller.
+ */
 export function canViewConversation(
   ctx: BackendContext,
   principal: Principal,
@@ -300,23 +330,19 @@ export function canViewConversation(
   const reads = ctx.authorizationReads;
   const conversation = reads.conversation(conversationId);
   if (!conversation) return false;
-  // PLACEMENT decides who the participants are (agent-scoped-session-v1 §4.2).
-  // The workspace arm below derives them from workspace membership + the roster
-  // tables; a placement with no workspace has neither, so it gets its own rule
-  // instead of a workspace hop on a coordinate it does not have.
-  if (conversation.workspace_id === null) {
-    return canViewNonWorkspaceConversation(principal, conversation);
-  }
-  if (!canViewWorkspace(ctx, principal, conversation.workspace_id)) return false;
   if (principal.kind === 'system') return true;
+  const byPlacement = resolveParticipation(conversation, actorOf(principal));
+  if (byPlacement !== null) return byPlacement;
+  // The workspace arm. `workspace_id` is NOT NULL for this placement (v69's arc
+  // CHECK) and `resolveParticipation` returning `null` is what says so, so the
+  // null test below is a narrowing rather than a second placement rule.
+  const workspaceId = conversation.workspace_id;
+  if (workspaceId === null) return false;
+  if (!canViewWorkspace(ctx, principal, workspaceId)) return false;
   if (principal.kind === 'user') {
-    // v25: human conversation membership. Workspace check passed
-    // above (so we know the user is a workspace member); now also
-    // require explicit `conversation_users` membership for the
-    // specific channel/thread. Channels are seeded from
-    // `workspace_users` at creation; threads inherit from the parent
-    // conversation. v25 migration backfilled both for already-
-    // registered DBs.
+    // v25: human conversation membership. Workspace membership is necessary but
+    // not sufficient — a channel also needs an explicit `conversation_users` row
+    // (seeded at creation from `workspace_users`, backfilled by v25).
     return reads.isConversationUser(conversation.id, principal.userId);
   }
   if (principal.conversationId !== conversation.id) return false;
@@ -324,36 +350,50 @@ export function canViewConversation(
 }
 
 /**
- * The participant rule for a conversation with NO workspace (§4.2).
- *
- * `agent_inbox` has exactly ONE participant: the Agent named by
- * `inbox_agent_id`. There is no roster row to read — the placement IS the
- * membership — and no workspace to be a member of, so nothing about workspace
- * roles or `conversation_agents` applies here.
- *
- * A HUMAN is never a participant, not even the person who created the agent:
- * `agents.created_by_user_id` is MANAGEMENT authority (rename, capabilities,
- * delete) and not a message ACL, so the human can govern the agent without
- * reading its private line. Consequently the inbox is invisible on human read
- * surfaces by DOMAIN RULE, not because a JOIN dropped it.
- *
- * The agent principal must additionally be RUNNING IN the inbox, exactly as the
- * workspace arm requires `principal.conversationId === conversation.id`: a
- * session in channel A does not act inside its inbox by reference.
- *
- * Every other workspace-less placement (`direct_pair`, P3) is not admitted yet
- * — it fails closed here until its own rule lands, matching the DB CHECK that
- * still refuses to store one.
+ * `Principal` → the placement rule's actor. A TOTAL mapping over the two
+ * identity-bearing principals; `system` is handled by its caller because it is
+ * not a participant of anything (it is admitted despite that, not because of it),
+ * and giving it an actor arm would put "the delivery principal" inside the
+ * membership rule where every future placement would have to re-decide it.
  */
-function canViewNonWorkspaceConversation(
-  principal: Principal,
+function actorOf(principal: UserPrincipal | AgentPrincipal): ConversationActor {
+  return principal.kind === 'user'
+    ? { kind: 'human', userId: principal.userId }
+    : {
+        kind: 'agent',
+        agentId: principal.agentId,
+        runningInConversationId: principal.conversationId,
+      };
+}
+
+/**
+ * The two endpoints of a `direct_pair` row, non-null by the placement arc CHECK.
+ * A thin wrapper over shared's accessor so both call sites below read the
+ * columns through ONE narrowing, and so the impossible half-pair fails loud
+ * instead of degrading into "no endpoints" — which on the write gate would fail
+ * OPEN.
+ */
+function directPairEndpointsOf(
   conversation: AuthorizationConversationFacts,
+): readonly ConversationEndpointCoordinate[] {
+  return sharedDirectPairEndpointsOf(conversation) ?? [];
+}
+
+/**
+ * Is this endpoint's principal GONE? The lookup is the authority and the stamp
+ * is a shortcut, ORed in rather than trusted: `endpoint_*_deleted_at` is written
+ * by a `BEFORE DELETE` trigger today, but a delete path that ever failed to
+ * stamp must not thereby hand the survivor a live write gate. The lookup alone
+ * suffices for correctness — endpoint coordinates are validated at birth and
+ * immutable, so a miss can only mean "deleted" — and the stamp alone answers
+ * without a query in the common case.
+ */
+function isEndpointGone(
+  ctx: BackendContext,
+  endpoint: ConversationEndpointCoordinate,
 ): boolean {
-  if (principal.kind === 'system') return true;
-  if (principal.kind !== 'agent') return false;
-  if (conversation.placement_kind !== 'agent_inbox') return false;
-  if (conversation.inbox_agent_id !== principal.agentId) return false;
-  return principal.conversationId === conversation.id;
+  if (endpoint.deletedAt !== null) return true;
+  return !ctx.authorizationReads.endpointPrincipalExists(endpoint);
 }
 
 /**
@@ -447,20 +487,64 @@ export function canJoinPublicChannel(
   return isPublicChannelBranch(ctx, principal, conversation);
 }
 
+/**
+ * The WRITE gate. Membership (or endpoint participation) plus one narrowing that
+ * only `direct_pair` has: a DM whose OTHER endpoint's principal is gone is
+ * READ-ONLY for the survivor. There is no `readonly` column and no second state
+ * machine — the DM has not changed status, archived, or closed; it simply has
+ * nobody to deliver to, which is a fact about the endpoint, so the gate derives
+ * it from the endpoint every time it is asked.
+ *
+ * Both endpoints are tested, not just "the other one": a principal whose own
+ * record is gone cannot be the caller, so testing both costs nothing and keeps
+ * the rule stated as a property of the conversation rather than of the caller.
+ */
 export function canPostToConversation(
   ctx: BackendContext,
   principal: Principal,
   conversationId: string,
 ): boolean {
   if (!canViewConversation(ctx, principal, conversationId)) return false;
-  return true;
+  const conversation = ctx.authorizationReads.conversation(conversationId);
+  if (!conversation) return false;
+  return !directPairEndpointsOf(conversation).some(endpoint =>
+    isEndpointGone(ctx, endpoint),
+  );
 }
 
+/**
+ * May `principal` add a member to this conversation? A CONJUNCTION of two
+ * independent questions, and the first one is about the conversation alone:
+ *
+ *   1. Is its roster MUTABLE — `roster_policy = 'open'`? For a `fixed` roster the
+ *      participants are a property of the conversation itself (a `direct_pair`'s
+ *      two endpoints, an `agent_inbox`'s owner, a legacy agent-home DM channel's
+ *      pair), so "add a member" is not an operation that exists there for anyone.
+ *      No principal can be authorized for it, which is why this arm comes first
+ *      and ignores the caller entirely.
+ *   2. The PARTICIPATION FLOOR — is the caller in this conversation? That is what
+ *      keeps a private channel private: no role and no agent of yours gets you a
+ *      roster write on a channel you are not in (#task:1683).
+ *
+ * Both halves are needed because the name is a CAPABILITY, not a floor (@Cindy
+ * M1): a gate that answered the floor alone reported `true` for a DM whose domain
+ * has no member mutation at all, and the only thing stopping a write was an
+ * earlier `kind` guard in one use case. The next call site would not have
+ * inherited that guard — it would have inherited the `true`.
+ *
+ * The use case keeps its own refusal for the same fixed-roster case, one step
+ * earlier, and deliberately: it answers `conversation_member_add_unsupported`
+ * (this operation does not exist here) where this gate can only say `forbidden`
+ * (you may not). Same rule, two different truths to tell.
+ */
 export function canAddConversationMember(
   ctx: BackendContext,
   principal: Principal,
   conversationId: string,
 ): boolean {
+  const conversation = ctx.authorizationReads.conversation(conversationId);
+  if (!conversation) return false;
+  if (conversation.roster_policy !== 'open') return false;
   return canViewConversation(ctx, principal, conversationId);
 }
 

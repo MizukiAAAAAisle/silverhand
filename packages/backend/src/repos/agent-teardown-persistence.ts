@@ -3,6 +3,7 @@ import type { AgentDto } from '@silverhand/shared';
 import type {
   AgentTeardownCapture,
   AgentDeletionAttempt,
+  AgentRuntimeSessionFacts,
   AgentTeardownFacts,
   AgentTeardownKey,
   AgentTeardownPersistence,
@@ -46,6 +47,31 @@ interface TeardownRepos {
 }
 
 /**
+ * The agent's live children, as SEATS — one entry per `agent_runtime_slots` row
+ * and nothing else.
+ *
+ * ONE READ, no branch on `session_scope`: the slot table already answers both
+ * scopes, because an agent-scoped agent HAS exactly one row (NULL conversation)
+ * and a conversation-scoped one has one row per participation. Branching here is
+ * what produced the two defects this replaced — the conversation arm walked the
+ * ROSTER (so a DM session was captured by nobody and the post-commit stop walked
+ * past a live process), and the generation was re-read per row, which is a second
+ * read that can disagree with the status it is paired with.
+ */
+function runtimeSessionsForAgent(
+  repos: TeardownRepos,
+  agentId: string,
+): AgentRuntimeSessionFacts[] {
+  return repos.runtimeSlots.listSeats(agentId).map(seat => ({
+    runtimeScope: seat.scope,
+    conversationId:
+      seat.scope.kind === 'conversation' ? seat.scope.conversationId : null,
+    status: seat.status,
+    runtimeGeneration: seat.generation,
+  }));
+}
+
+/**
  * The SINGLE implementation of the per-agent teardown face, bound to `agentId`.
  * Both axes mint it from here — the computer cascade cannot capture or delete
  * differently from a single-agent delete because there is nothing else to call.
@@ -63,17 +89,7 @@ function agentTeardownFace(
     capture(): AgentTeardownCapture {
       // RAW statuses — the "which of these is still running" rule is the use
       // case's (see the port doc); filtering here would hide it from its tests.
-      const runtimeSessions = agents
-        .listRuntimeConversations(agentId)
-        .map(session => ({
-          conversationId: session.conversation_id,
-          status: session.status,
-          runtimeGeneration:
-            repos.runtimeSlots.getConversation(
-              session.conversation_id,
-              agentId,
-            )?.generation ?? 0,
-        }));
+      const runtimeSessions = runtimeSessionsForAgent(repos, agentId);
       // The agent's own home is the ONLY discovery path for its DM blobs: the
       // `attachments` rows hang off those channels and cascade away with the
       // home, so a post-commit sweep could not find them again.
@@ -150,15 +166,7 @@ export function createSqliteAgentTeardownPersistence(
       return deletionMarkerRead.isDeletionPending(agentId);
     },
     listRuntimeSessions(agentId: string) {
-      return repos.agents.listRuntimeConversations(agentId).map(session => ({
-        conversationId: session.conversation_id,
-        status: session.status,
-        runtimeGeneration:
-          repos.runtimeSlots.getConversation(
-            session.conversation_id,
-            agentId,
-          )?.generation ?? 0,
-      }));
+      return runtimeSessionsForAgent(repos, agentId);
     },
     readComputerFacts(hostId: string): ComputerTeardownFacts | null {
       const row = repos.hosts.get(hostId);

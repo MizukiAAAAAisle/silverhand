@@ -22,12 +22,16 @@ import type { AgentRepo } from './agent-repo.js';
 import type { AgentCapabilityRepo } from './agent-capability-repo.js';
 import type { AttachmentRepo } from './attachment-repo.js';
 import type { ConversationRepo } from './conversation-repo.js';
+import type { UserRepo } from './user-repo.js';
 import type { WorkspaceRepo } from './workspace-repo.js';
 
 export interface AuthorizationReadsDeps {
   readonly workspaces: WorkspaceRepo;
   readonly conversations: ConversationRepo;
   readonly agents: AgentRepo;
+  /** Only for `endpointPrincipalExists`'s human arm: a `direct_pair` endpoint's
+   *  kind decides which principal table answers for its id. */
+  readonly users: UserRepo;
   readonly capabilities: AgentCapabilityRepo;
   readonly attachments: AttachmentRepo;
 }
@@ -35,7 +39,8 @@ export interface AuthorizationReadsDeps {
 export function createSqliteAuthorizationReads(
   deps: AuthorizationReadsDeps,
 ): AuthorizationReadPort {
-  const { workspaces, conversations, agents, capabilities, attachments } = deps;
+  const { workspaces, conversations, agents, users, capabilities, attachments } =
+    deps;
   return {
     workspace: (workspaceId): AuthorizationWorkspaceFacts | null => {
       const row = workspaces.get(workspaceId);
@@ -61,12 +66,29 @@ export function createSqliteAuthorizationReads(
         id: row.id,
         workspace_id: row.workspace_id,
         placement_kind: row.placement_kind,
+        roster_policy: row.roster_policy,
         inbox_agent_id: row.inbox_agent_id,
         kind: row.kind,
         visibility: row.visibility,
         archived_at: row.archived_at,
+        endpoint_a_kind: row.endpoint_a_kind,
+        endpoint_a_id: row.endpoint_a_id,
+        endpoint_b_kind: row.endpoint_b_kind,
+        endpoint_b_id: row.endpoint_b_id,
+        endpoint_a_deleted_at: row.endpoint_a_deleted_at,
+        endpoint_b_deleted_at: row.endpoint_b_deleted_at,
       };
     },
+    // Liveness by LOOKUP, kind-directed: the endpoint's `_kind` says which
+    // namespace its id belongs to, so asking the wrong table would report a live
+    // principal as gone (and, on the other side, a `human` endpoint could be
+    // satisfied by an agent that happens to share the id). Collapsed to a boolean
+    // like the membership reads above — an ACL must not be able to reach a
+    // deleted-or-not principal's other columns through this port.
+    endpointPrincipalExists: endpoint =>
+      endpoint.kind === 'agent'
+        ? agents.get(endpoint.id) !== null
+        : users.get(endpoint.id) !== null,
     isConversationAgent: (conversationId, agentId) =>
       conversations.getAgent(conversationId, agentId) !== null,
     isConversationUser: (conversationId, userId) =>

@@ -49,6 +49,7 @@ export const SYSTEM_SUBTYPES = [
   'conversation_member_added',
   'conversation_member_removed',
   'rename',
+  'conversation_name_changed',
   'task_create',
   'task_claim',
   'task_unclaim',
@@ -651,5 +652,63 @@ export function readRenameMetadata(
 ): RenameMetadata | null {
   if (!metadata) return null;
   const parsed = RenameMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}
+
+// ── conversation_name_changed metadata (#task:2016) ──────────────────
+
+/**
+ * Metadata shape for `conversation_name_changed` system messages — emitted when
+ * a channel's stable semantic NAME is reallocated (`PATCH /api/channels/:id`
+ * with `name`).
+ *
+ * A SEPARATE SUBTYPE from `rename`, deliberately, even though the field pair is
+ * identical. `rename` with `scope: 'conversation'` announces a DISPLAY change:
+ * nothing an existing reference points at moves. This event announces an ADDRESS
+ * change, and its consequence is the opposite — the old name is retired
+ * permanently, so every reference to it FAILS CLOSED from here on and can never
+ * be revived (the allocation stays in the namespace forever, so the address does
+ * not even become re-takeable). Folding the two into one subtype would leave the
+ * reader unable to tell which of those two very different things happened, and
+ * the renderer unable to word it — so the split is the point, not the metadata.
+ *
+ * There is no `scope` field: a name belongs to a workspace namespace and is
+ * allocated to exactly one conversation, so this event has exactly one scope and
+ * a discriminator with one value would be noise. Workspace rename keeps
+ * `rename`/`scope:'workspace'`.
+ *
+ * No actor field, for the same reason `RenameMetadataSchema` has none: the route
+ * is user-principal only (single-user v1). Add one when the auth model grows one.
+ */
+export const ConversationNameChangedMetadataSchema = z.object({
+  subtype: z.literal('conversation_name_changed'),
+  /**
+   * The retired address. Never resolves again — see the schema docstring.
+   *
+   * NULLABLE because a channel that held no address is a reachable state, not a
+   * defensive one: totality is a property of the write paths rather than a DB
+   * constraint, so a fault between "retire" and "allocate" leaves a live channel
+   * with none, and the next re-address REPAIRS it instead of refusing. `null`
+   * means "this is the channel's first address", which is a different audit fact
+   * from "it moved", and the two must not be collapsed.
+   */
+  old_name: z.string().nullable(),
+  /** The newly allocated current address. */
+  new_name: z.string(),
+});
+export type ConversationNameChangedMetadata = z.infer<
+  typeof ConversationNameChangedMetadataSchema
+>;
+
+/** Defensive parse for conversation_name_changed metadata. Returns `null` on a
+ *  malformed row; the renderer falls back to generic italic narration over
+ *  `message.content` (the compact audit row lands with the ticket that switches
+ *  `#<name>` resolution over to these allocations — wording a contract that is
+ *  not yet in force is worse than plain narration). */
+export function readConversationNameChangedMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): ConversationNameChangedMetadata | null {
+  if (!metadata) return null;
+  const parsed = ConversationNameChangedMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
 }

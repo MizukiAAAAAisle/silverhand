@@ -124,7 +124,8 @@ function fixture(cleanups: Array<() => void>): Fixture {
     agentId: agent.id,
     conversations,
     workspaces,
-    channel: title => conversations.insertChannel({ workspaceId: workspace.id, title }).id,
+    channel: title =>
+      conversations.insertChannel({ name: title, workspaceId: workspace.id, title }).id,
     messageCount: conversationId => messages.listForConversation(conversationId).length,
   };
 }
@@ -353,6 +354,7 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
     const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
     t.workspaces.insertMembership(foreignWs.id, t.agentId);
     const foreign = t.conversations.insertChannel({
+      name: 'ch-2',
       workspaceId: foreignWs.id,
       title: 'theirs',
     }).id;
@@ -396,6 +398,7 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
     const t = fixture(cleanups);
     const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
     const foreign = t.conversations.insertChannel({
+      name: 'ch-3',
       workspaceId: foreignWs.id,
       title: 'theirs',
     }).id;
@@ -504,6 +507,7 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
     const mine = t.channel('mine');
     const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
     const foreign = t.conversations.insertChannel({
+      name: 'ch-4',
       workspaceId: foreignWs.id,
       title: 'theirs',
     }).id;

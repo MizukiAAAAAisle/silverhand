@@ -36,6 +36,14 @@ interface Fixture {
   row(): { status: string; pid: number | null; cli_session_id: string | null };
 }
 
+function fixtureScope(fix: Fixture) {
+  return {
+    kind: 'conversation' as const,
+    conversationId: fix.channelId,
+    agentId: fix.agentId,
+  };
+}
+
 function makeFixture(
   opts: { initialCliSessionId?: string | null; initialStatus?: 'starting' | 'active' | 'idle' | 'crashed' } = {},
 ): Fixture {
@@ -56,6 +64,7 @@ function makeFixture(
     viewerUserId,
   );
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: ws.id,
     title: 'ws-proj',
     spawnedByAgentId: null,
@@ -111,6 +120,7 @@ describe('DbRuntimeStatusProjector — sessionInit', () => {
     const fix = makeFixture({ initialStatus: 'starting' });
     try {
       fix.projector.sessionInit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -144,12 +154,14 @@ describe('DbRuntimeStatusProjector — sessionInit', () => {
     const fix = makeFixture({ initialStatus: 'starting' });
     try {
       fix.projector.sessionInit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
         cliSessionId: 'sess-cafe-1234',
       });
       fix.projector.sessionInit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -168,6 +180,7 @@ describe('DbRuntimeStatusProjector — runtimeReady', () => {
     const fix = makeFixture({ initialStatus: 'starting', initialCliSessionId: 'sess-existing' });
     try {
       fix.projector.runtimeReady({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -208,6 +221,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     const fix = makeFixture({ initialStatus: 'active' });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -233,6 +247,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     const fix = makeFixture({ initialStatus: 'active' });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -257,6 +272,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     const fix = makeFixture({ initialStatus: 'active' });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -278,6 +294,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     const fix = makeFixture({ initialStatus: 'starting' });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -298,6 +315,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     const fix = makeFixture({ initialStatus: 'active' });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -320,6 +338,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -342,6 +361,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -372,6 +392,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     const fix = makeFixture({ initialStatus: 'active' });
     try {
       fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -392,6 +413,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
     const fix = makeFixture({ initialStatus: 'active' });
     try {
       const finalized = fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -405,12 +427,14 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       expect(fix.events).toHaveLength(1);
 
       fix.projector.sessionInit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
         cliSessionId: 'late-session',
       });
       const duplicate = fix.projector.runtimeExit({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -438,6 +462,7 @@ describe('DbRuntimeStatusProjector — initRetrying', () => {
     const fix = makeFixture({ initialStatus: 'starting' });
     try {
       fix.projector.initRetrying({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -463,6 +488,7 @@ describe('DbRuntimeStatusProjector — initRetrying', () => {
     const fix = makeFixture({ initialStatus: 'starting' });
     try {
       fix.projector.initRetrying({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,
@@ -483,6 +509,7 @@ describe('DbRuntimeStatusProjector — initCooldown', () => {
     const fix = makeFixture({ initialStatus: 'starting' });
     try {
       fix.projector.initCooldown({
+        scope: fixtureScope(fix),
         conversationId: fix.channelId,
         agentId: fix.agentId,
         custody: fix.custody,

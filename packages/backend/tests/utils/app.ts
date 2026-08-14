@@ -116,12 +116,13 @@ import { sweepStoredBlobs } from '../../src/application/delete-agent.js';
 export class FakeConversationManager implements AgentRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   stops: Array<{
-    conversationId: string;
+    conversationId: string | null;
     agentId: string;
     /** Routing the caller supplied instead of letting the dispatcher re-read
      *  `agents`/`hosts` — load-bearing for post-delete teardown (#task:1616). */
     hostId?: string;
     runtimeGeneration?: number;
+    runtimeScope?: StopOptions['runtimeScope'];
   }> = [];
   clearedSessions: Array<{
     conversationId: string;
@@ -195,7 +196,7 @@ export class FakeConversationManager implements AgentRuntimeHost {
     this.starts.push({ conversationId, agentId });
   }
   async stop(
-    conversationId: string,
+    conversationId: string | null,
     agentId: string,
     opts?: StopOptions,
   ): Promise<void> {
@@ -205,6 +206,9 @@ export class FakeConversationManager implements AgentRuntimeHost {
       ...(opts?.hostId !== undefined ? { hostId: opts.hostId } : {}),
       ...(opts?.runtimeGeneration !== undefined
         ? { runtimeGeneration: opts.runtimeGeneration }
+        : {}),
+      ...(opts?.runtimeScope !== undefined
+        ? { runtimeScope: opts.runtimeScope }
         : {}),
     });
     if (this.stopError) throw this.stopError;

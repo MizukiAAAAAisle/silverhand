@@ -94,7 +94,10 @@ export class OutboundRuntimeCommandDispatcher {
     kind: K,
     params: ExtractAgentParams<K>,
   ): Promise<ExtractAgentResult<K>> {
-    const hostId = this.hostIdForAgent(params.agent_id);
+    const agentId = 'agent_id' in params
+      ? params.agent_id
+      : params.runtime_scope.agent_id;
+    const hostId = this.hostIdForAgent(agentId);
     return this.opts.transport.sendCommand(hostId, kind, params) as Promise<
       ExtractAgentResult<K>
     >;

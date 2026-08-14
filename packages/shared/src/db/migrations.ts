@@ -1,4 +1,8 @@
 import { randomBytes } from 'node:crypto';
+import {
+  disambiguateConversationName,
+  slugifyConversationTitle,
+} from '../conversation-name.js';
 import { BASELINE_SCHEMA_SQL, BASELINE_SCHEMA_VERSION } from './baseline-schema.js';
 
 /**
@@ -1813,6 +1817,941 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX idx_messages_cc_dedupe
         ON messages(cc_source_message_id, conversation_id)
         WHERE cc_source_message_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 72,
+    name: 'conversation_names',
+    // agent-scoped-session-v1 §8 P0-c (#task:2016) — a workspace conversation
+    // gains a STABLE ADDRESS, distinct from its display title. `title` keeps the
+    // display half and may be renamed freely; the name is the coordinate a
+    // `#<name>` reference resolves through, and renaming the title must not
+    // change what an address resolves to (the doc's falsifier).
+    //
+    // The name is NOT a column on `conversations`. It is an ALLOCATION in a
+    // workspace namespace, and the table below is the whole namespace — current
+    // names and retired ones in ONE relation, so `PRIMARY KEY (workspace_id,
+    // name)` alone proves the load-bearing property: a name that has ever been
+    // allocated can never be allocated again, to any conversation, ever. A
+    // column plus a separate reservation table would spread that uniqueness
+    // across two relations, leaving a trigger to maintain what a key would
+    // otherwise decide — two authorities for one fact.
+    //
+    // `conversation_id` carries NO foreign key, for the same reason
+    // `messages.cc_source_message_id` (v71) carries none: it is a HISTORICAL
+    // COORDINATE. A retired row must survive its conversation's deletion, or the
+    // deletion would hand the name back. Dropping the FK is what removes birth
+    // validation, so the trigger below performs it explicitly — and more
+    // narrowly than an FK could, since it also pins the placement and the
+    // workspace.
+    //
+    // Three triggers, created BEFORE the backfill so the backfill itself passes
+    // through them. Without them the key proves far less than it looks:
+    // `PRIMARY KEY` only blocks a conflicting INSERT, while `UPDATE name`,
+    // `UPDATE workspace_id`, a plain `DELETE`, or resetting `retired_at` back to
+    // NULL all release an allocated name.
+    //
+    //   - `_birth` — the INSERT-time validation the missing FK would not have
+    //     given anyway: the target must exist, be workspace-placed, and belong
+    //     to THIS workspace. Cross-workspace allocation is not merely dirty
+    //     data; combined with a resolver that joined on id alone it would be a
+    //     cross-workspace addressing hole.
+    //   - `_immutable` — the only legal UPDATE is retirement. Coordinates and
+    //     `assigned_at` are frozen, and `retired_at` may go NULL → timestamp
+    //     once: no resurrection, and no rewriting when a name died.
+    //   - `_permanent` — an ordinary DELETE fails loud. The one legitimate
+    //     removal is the namespace disappearing with its workspace, and the
+    //     `WHEN EXISTS (workspaces …)` guard admits exactly that: when SQLite
+    //     runs this trigger for an `ON DELETE CASCADE`, the parent row is
+    //     already gone, so the cascade passes and every direct DELETE aborts.
+    //
+    // Totality — "every live workspace conversation has exactly one current
+    // name" — is deliberately NOT claimed as a DB fact. `conversations` and its
+    // name are mutually prerequisite and SQLite has no deferred constraints, so
+    // the partial UNIQUE proves single-valuedness (AT MOST one current name per
+    // conversation) and the create / backfill / rename units of work provide the
+    // rest.
+    precondition: (db) => {
+      const handle = db as {
+        exec: (sql: string) => void;
+        prepare: (sql: string) => {
+          all: () => {
+            id: string;
+            workspace_id: string;
+            title: string;
+            created_at: number;
+          }[];
+          run: (...params: unknown[]) => void;
+        };
+      };
+      handle.exec(
+        `DROP TABLE IF EXISTS temp.conversation_name_backfill;
+         CREATE TEMP TABLE conversation_name_backfill (
+           conversation_id TEXT PRIMARY KEY,
+           workspace_id    TEXT NOT NULL,
+           name            TEXT NOT NULL,
+           assigned_at     INTEGER NOT NULL,
+           UNIQUE (workspace_id, name)
+         );`,
+      );
+      const stage = handle.prepare(
+        `INSERT INTO temp.conversation_name_backfill
+           (conversation_id, workspace_id, name, assigned_at)
+         VALUES (?, ?, ?, ?)`,
+      );
+      // SQL cannot derive a slug, so the names are minted here — inside the
+      // migration's own transaction, on the same connection, before `up` — with
+      // the SAME deriver channel creation uses (`slugifyConversationTitle`). A
+      // second copy of the algorithm would make an upgraded database and a
+      // freshly created channel disagree about the obvious name for a title.
+      //
+      // Collisions are inevitable (every CJK-only title derives `channel`) and
+      // are resolved by ordinal, in `(created_at, id)` order so the result
+      // depends only on the data, not on the scan order. Only the BACKFILL may
+      // suffix: it must cover every row and has no requester to refuse.
+      const taken = new Map<string, Set<string>>();
+      const rows = handle
+        .prepare(
+          `SELECT id, workspace_id, title, created_at
+             FROM conversations
+            WHERE placement_kind = 'workspace'
+            ORDER BY workspace_id, created_at, id`,
+        )
+        .all();
+      for (const row of rows) {
+        let namespace = taken.get(row.workspace_id);
+        if (!namespace) {
+          namespace = new Set<string>();
+          taken.set(row.workspace_id, namespace);
+        }
+        const stem = slugifyConversationTitle(row.title);
+        let name = stem;
+        for (let ordinal = 2; namespace.has(name); ordinal += 1) {
+          name = disambiguateConversationName(stem, ordinal);
+        }
+        namespace.add(name);
+        // `assigned_at` = the conversation's own `created_at`, the rule v71's
+        // inbox backfill established: the timestamp expresses when the addressed
+        // thing came into being, so an upgraded name and a freshly allocated one
+        // are indistinguishable.
+        stage.run(row.id, row.workspace_id, name, row.created_at);
+      }
+    },
+    up: `
+      -- The CHECK below is the NAME GRAMMAR as a database fact (@Cindy,
+      -- #task:2016 review): the SQLite GLOB transcription of shared's
+      -- CONVERSATION_NAME_PATTERN = '[a-z](?:[a-z0-9_-]*[a-z0-9])?' plus
+      -- ENTITY_NAME_MAX_LENGTH. First character a lowercase letter, last
+      -- character alphanumeric ('*' matches the empty string, so a one-letter
+      -- name passes both predicates), and no character outside the class
+      -- anywhere (the '-' sits last inside the negated set, where GLOB reads it
+      -- literally). The transcription is not trusted by eye: a test asserts it
+      -- decides exactly what ConversationNameSchema decides, over a corpus that
+      -- includes GLOB's own metacharacters.
+      --
+      -- Why the domain is closed HERE and not only in the writer: a name is an
+      -- address and an allocation can never be released, so a value the chat
+      -- tokenizer cannot spell is a permanent, un-referenceable hole in the
+      -- namespace — the one class of bad write no later fix can undo.
+      -- ConversationNameRepo.allocate asserts the same domain to produce a
+      -- legible error; this is what makes the claim true of every connection,
+      -- including one that never goes through that repo.
+      --
+      -- The 64 is a FROZEN COPY of ENTITY_NAME_MAX_LENGTH as of v72, not a
+      -- reference to it: migration text is history and must not change meaning
+      -- when a constant is edited. Widening the stored domain later therefore
+      -- needs its own migration, which is the right amount of friction.
+      --
+      -- Comments live OUTSIDE the statements in this migration on purpose:
+      -- SQLite keeps a statement's text verbatim from CREATE onward in the schema
+      -- catalog, so a rationale written inside the parentheses would be replayed
+      -- into the normalized schema oracle.
+      CREATE TABLE conversation_names (
+        workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name            TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        assigned_at     INTEGER NOT NULL,
+        retired_at      INTEGER,
+        PRIMARY KEY (workspace_id, name),
+        CHECK (
+          length(name) BETWEEN 1 AND 64
+          AND name GLOB '[a-z]*'
+          AND name GLOB '*[a-z0-9]'
+          AND NOT name GLOB '*[^a-z0-9_-]*'
+        )
+      );
+
+      CREATE UNIQUE INDEX idx_conversation_names_current
+        ON conversation_names(conversation_id) WHERE retired_at IS NULL;
+
+      CREATE TRIGGER trg_conversation_names_birth
+      BEFORE INSERT ON conversation_names
+      WHEN NOT EXISTS (
+        SELECT 1 FROM conversations c
+         WHERE c.id = NEW.conversation_id
+           AND c.placement_kind = 'workspace'
+           AND c.workspace_id = NEW.workspace_id
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: target must be a workspace-placed conversation of the same workspace'
+        );
+      END;
+
+      -- An allocation is BORN CURRENT (@Cindy, #task:2016 review). The legal
+      -- lifecycle has two states in one direction — current, then retired once,
+      -- forever — and trg_conversation_names_immutable already owns the
+      -- transition. Birth was the missing half: a row inserted with retired_at
+      -- already set slips past BOTH the partial unique index (which indexes
+      -- current rows only) and the immutability trigger (which sees no UPDATE),
+      -- and what it leaves behind is unrepairable by construction — it
+      -- permanently occupies a name nobody ever held, fabricates a retirement
+      -- that never happened, and, unconstrained by that index, may be one of
+      -- arbitrarily many such rows for a single conversation. Kept as its own
+      -- trigger rather than folded into the birth predicate above so the refusal
+      -- names which rule was broken.
+      CREATE TRIGGER trg_conversation_names_born_current
+      BEFORE INSERT ON conversation_names
+      WHEN NEW.retired_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: an allocation is born current; retire it in a later write'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversation_names_immutable
+      BEFORE UPDATE ON conversation_names
+      WHEN NOT (
+        NEW.workspace_id = OLD.workspace_id
+        AND NEW.name = OLD.name
+        AND NEW.conversation_id = OLD.conversation_id
+        AND NEW.assigned_at = OLD.assigned_at
+        AND OLD.retired_at IS NULL
+        AND NEW.retired_at IS NOT NULL
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: an allocation is immutable; only retirement may be written'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversation_names_permanent
+      BEFORE DELETE ON conversation_names
+      WHEN EXISTS (
+        SELECT 1 FROM workspaces w WHERE w.id = OLD.workspace_id
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversation_names: an allocation is permanent; retire it instead of deleting it'
+        );
+      END;
+
+      INSERT INTO conversation_names
+        (workspace_id, name, conversation_id, assigned_at, retired_at)
+        SELECT b.workspace_id, b.name, b.conversation_id, b.assigned_at, NULL
+          FROM temp.conversation_name_backfill b;
+
+      DROP TABLE temp.conversation_name_backfill;
+    `,
+  },
+  {
+    version: 73,
+    name: 'direct_pair_endpoint_identity',
+    // agent-scoped-session-v1 §4.2 / §8 P0-e (#task:2017) — the DirectPair
+    // placement gains its two ENDPOINTS, and with them the one property the whole
+    // placement rests on: a DM must survive the deletion of the principal on the
+    // other side.
+    //
+    // An endpoint is a HISTORICAL PRINCIPAL COORDINATE, not a foreign key. With
+    // an FK, deleting an agent would either ABORT (RESTRICT) or take the
+    // conversation and its history with it (CASCADE), and both answers are wrong:
+    // the survivor's DM is their record of a conversation that really happened.
+    // Dropping the FK is also what removes birth validation, so
+    // `trg_conversations_endpoints_birth` performs it explicitly — and more
+    // precisely than an FK could, since which table an id must exist in depends
+    // on the sibling `_kind` column (a conditional reference no FK can express).
+    //
+    // Existence is therefore derived by LOOKUP, and `endpoint_*_deleted_at`
+    // records only WHEN a principal disappeared. That split is deliberate: birth
+    // validation plus endpoint immutability mean a lookup miss ALREADY implies
+    // "this principal existed and was deleted", so every read surface phrases the
+    // question as `tombstone IS NOT NULL OR the lookup misses`. A delete path
+    // that forgot to stamp the tombstone therefore cannot hand write access back
+    // to the survivor — the same shape as v72's `conversation_gone` guard, where
+    // forgetting to retire a name still cannot resolve a dangling id. The column
+    // is a denormalized timestamp; correctness never rests on it.
+    //
+    // The stamp is written by BEFORE DELETE triggers on `agents` and `users`
+    // rather than by the teardown use case, because that is the only form that
+    // covers EVERY delete path, present and future — including FK cascades, which
+    // do fire the deleted table's own BEFORE DELETE trigger (probed, and pinned
+    // by a falsifier in the migration test). It also means the human side needs
+    // no repo face and no product delete entry point: `users` has no deletion
+    // path today (`user-repo.ts`: handles are never recycled), and this model
+    // does not require inventing one for the endpoint identity to be complete.
+    // These triggers TRANSFER a fact; they never RAISE — the alternative the
+    // design doc already rejected (projected member rows guarded by refusing
+    // triggers) turned `DELETE FROM agents` into an abort instead of a tombstone.
+    // The `WHERE … IS NULL` filter keeps the transition monotonic, so the stamp is
+    // legal under the monotonicity trigger and re-running it is a no-op. No
+    // endpoint index accompanies it: this is the only endpoint-keyed statement in
+    // P0-e and it runs on a rare hard delete, so the endpoint read faces (and the
+    // indexes they need) stay with P3.
+    //
+    // A TABLE REBUILD is required rather than `ALTER TABLE ADD COLUMN`: the arc
+    // CHECK's `ELSE 0` currently makes a `direct_pair` row UNCONSTRUCTIBLE, and
+    // SQLite cannot alter a CHECK. Template = the v69 / v71 rebuilds; every
+    // surviving column, constraint, and index is reproduced explicitly and the
+    // falsifiers assert the full normalized schema rather than a sample, because a
+    // rebuild's failure mode is silently losing one of them. `foreignKeyEscape`
+    // disables `foreign_keys` around the migration and runs `foreign_key_check`
+    // afterwards, so `DROP TABLE conversations` cannot cascade-delete children.
+    //
+    // There is NO data migration: no `direct_pair` row can exist below this
+    // version, so every existing row keeps every column byte-for-byte.
+    //
+    // What is deliberately NOT here (P3): `pair_key` and its unique index,
+    // get-or-create, the wire DTO, delivery and board surfaces. The CANONICAL
+    // ORDER check IS here, though, on the same principle that made v69 declare
+    // `CHECK (placement_kind = 'workspace')`: a declared domain that nothing
+    // enforces is a lie. It also rules out a self-pair for free, and it lets P3
+    // derive `pair_key` as a pure function of two already-ordered endpoints
+    // instead of normalizing rows it inherited.
+    foreignKeyEscape: true,
+    up: `
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        inbox_agent_id          TEXT REFERENCES agents(id) ON DELETE CASCADE,
+        endpoint_a_kind         TEXT,
+        endpoint_a_id           TEXT,
+        endpoint_b_kind         TEXT,
+        endpoint_b_id           TEXT,
+        endpoint_a_deleted_at   INTEGER,
+        endpoint_b_deleted_at   INTEGER,
+        placement_kind          TEXT NOT NULL
+          CHECK (placement_kind IN ('workspace', 'direct_pair', 'agent_inbox')),
+        roster_policy           TEXT NOT NULL
+          CHECK (roster_policy IN ('open', 'fixed')),
+        kind                    TEXT GENERATED ALWAYS AS
+          (CASE WHEN roster_policy = 'open' THEN 'channel' ELSE 'dm_channel' END) VIRTUAL,
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        visibility              TEXT NOT NULL DEFAULT 'private'
+          CHECK (
+            visibility IN ('private', 'public')
+            AND (visibility = 'private' OR roster_policy = 'open')
+          ),
+        CHECK (
+          (endpoint_a_kind IS NULL OR endpoint_a_kind IN ('human', 'agent'))
+          AND (endpoint_b_kind IS NULL OR endpoint_b_kind IN ('human', 'agent'))
+        ),
+        CHECK (
+          placement_kind <> 'direct_pair'
+          OR (endpoint_a_kind, endpoint_a_id) < (endpoint_b_kind, endpoint_b_id)
+        ),
+        CHECK (
+          CASE placement_kind
+            WHEN 'workspace'
+              THEN workspace_id IS NOT NULL AND inbox_agent_id IS NULL
+                   AND endpoint_a_kind IS NULL AND endpoint_a_id IS NULL
+                   AND endpoint_b_kind IS NULL AND endpoint_b_id IS NULL
+                   AND endpoint_a_deleted_at IS NULL
+                   AND endpoint_b_deleted_at IS NULL
+            WHEN 'agent_inbox'
+              THEN inbox_agent_id IS NOT NULL AND workspace_id IS NULL
+                   AND roster_policy = 'fixed'
+                   AND endpoint_a_kind IS NULL AND endpoint_a_id IS NULL
+                   AND endpoint_b_kind IS NULL AND endpoint_b_id IS NULL
+                   AND endpoint_a_deleted_at IS NULL
+                   AND endpoint_b_deleted_at IS NULL
+            WHEN 'direct_pair'
+              THEN workspace_id IS NULL AND inbox_agent_id IS NULL
+                   AND roster_policy = 'fixed'
+                   AND endpoint_a_kind IS NOT NULL AND endpoint_a_id IS NOT NULL
+                   AND endpoint_b_kind IS NOT NULL AND endpoint_b_id IS NOT NULL
+            ELSE 0
+          END
+        )
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+        title, status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq, visibility
+      )
+        SELECT
+          c.id, c.workspace_id, c.inbox_agent_id, c.placement_kind, c.roster_policy,
+          c.title, c.status, c.spawned_by_agent_id, c.closed_at, c.close_summary,
+          c.pinned_at, c.created_at, c.updated_at, c.archived_at,
+          c.latest_message_seq, c.visibility
+        FROM conversations c;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+      CREATE UNIQUE INDEX idx_conversations_inbox_agent
+        ON conversations(inbox_agent_id) WHERE placement_kind = 'agent_inbox';
+
+      CREATE TRIGGER trg_conversations_endpoints_birth
+      BEFORE INSERT ON conversations
+      WHEN NEW.placement_kind = 'direct_pair'
+       AND NOT (
+         (CASE NEW.endpoint_a_kind
+            WHEN 'human' THEN EXISTS (SELECT 1 FROM users u WHERE u.id = NEW.endpoint_a_id)
+            WHEN 'agent' THEN EXISTS (SELECT 1 FROM agents g WHERE g.id = NEW.endpoint_a_id)
+            ELSE 0
+          END)
+         AND
+         (CASE NEW.endpoint_b_kind
+            WHEN 'human' THEN EXISTS (SELECT 1 FROM users u WHERE u.id = NEW.endpoint_b_id)
+            WHEN 'agent' THEN EXISTS (SELECT 1 FROM agents g WHERE g.id = NEW.endpoint_b_id)
+            ELSE 0
+          END)
+       )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: each direct_pair endpoint must name an existing principal of its own kind'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversations_endpoints_born_alive
+      BEFORE INSERT ON conversations
+      WHEN NEW.endpoint_a_deleted_at IS NOT NULL
+        OR NEW.endpoint_b_deleted_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: an endpoint is born alive; its deletion is stamped by a later write'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversations_endpoints_immutable
+      BEFORE UPDATE OF
+        endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+      ON conversations
+      WHEN NOT (
+        NEW.endpoint_a_kind IS OLD.endpoint_a_kind
+        AND NEW.endpoint_a_id IS OLD.endpoint_a_id
+        AND NEW.endpoint_b_kind IS OLD.endpoint_b_kind
+        AND NEW.endpoint_b_id IS OLD.endpoint_b_id
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: endpoint coordinates are immutable'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversations_endpoint_tombstone_monotonic
+      BEFORE UPDATE OF endpoint_a_deleted_at, endpoint_b_deleted_at
+      ON conversations
+      WHEN NOT (
+        (NEW.endpoint_a_deleted_at IS OLD.endpoint_a_deleted_at
+         OR (OLD.endpoint_a_deleted_at IS NULL
+             AND NEW.endpoint_a_deleted_at IS NOT NULL))
+        AND
+        (NEW.endpoint_b_deleted_at IS OLD.endpoint_b_deleted_at
+         OR (OLD.endpoint_b_deleted_at IS NULL
+             AND NEW.endpoint_b_deleted_at IS NOT NULL))
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: an endpoint deletion is stamped once and never unstamped'
+        );
+      END;
+
+      CREATE TRIGGER trg_agents_stamp_endpoint_deleted
+      BEFORE DELETE ON agents
+      BEGIN
+        UPDATE conversations
+           SET endpoint_a_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_a_kind = 'agent'
+           AND endpoint_a_id = OLD.id
+           AND endpoint_a_deleted_at IS NULL;
+        UPDATE conversations
+           SET endpoint_b_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_b_kind = 'agent'
+           AND endpoint_b_id = OLD.id
+           AND endpoint_b_deleted_at IS NULL;
+      END;
+
+      CREATE TRIGGER trg_users_stamp_endpoint_deleted
+      BEFORE DELETE ON users
+      BEGIN
+        UPDATE conversations
+           SET endpoint_a_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_a_kind = 'human'
+           AND endpoint_a_id = OLD.id
+           AND endpoint_a_deleted_at IS NULL;
+        UPDATE conversations
+           SET endpoint_b_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_b_kind = 'human'
+           AND endpoint_b_id = OLD.id
+           AND endpoint_b_deleted_at IS NULL;
+      END;
+    `,
+  },
+  {
+    version: 74,
+    name: 'direct_pair_pair_key',
+    // agent-scoped-session-v1 §4.1 / §4.2 / §8 P3 (#task:2020) — the DirectPair
+    // placement gains the two things that make it an AGGREGATE rather than a pair
+    // of columns: a single scalar identity, and a DB-carried uniqueness that
+    // survives two concurrent get-or-creates.
+    //
+    // `pair_key` IS A CONTRACT, not just a dedup device. P0-f keys the task-board
+    // numbering space on `board_key = 'pair:' || pair_key` (§4.4), so this string
+    // is read by a surface outside this table and its BYTES ARE LOCKED HERE. It is
+    // derived from the endpoint COORDINATES only — never from a handle, a title or
+    // anything else a human can rename — so renaming an agent or a user cannot
+    // renumber their board.
+    //
+    // FORMAT: `<kind-initial><len>:<id>` per endpoint, `a` side then `b` side, e.g.
+    // `a3:AG1h5:local`. It is PROVABLY INJECTIVE on the current (and any future)
+    // endpoint domain, which is the whole reason for the shape:
+    //   - the kind is one character out of a CLOSED enum whose two members differ
+    //     in their first letter (`human` / `agent`, pinned by the v73 CHECK), so
+    //     the leading byte decodes the kind with no delimiter;
+    //   - each id is a NETSTRING. Decoding reads decimal digits up to the FIRST
+    //     `:` — a length field never contains `:`, so that colon is unambiguously
+    //     the delimiter — then takes exactly that many characters. An id may
+    //     therefore itself contain `:` or leading digits without creating a second
+    //     parse (`a4:a:5x` + `a5:b7:zz` round-trips), which is why this needs no
+    //     id-charset CHECK to stay injective and cannot be broken by a later
+    //     widening of the id alphabet.
+    // Injectivity is not merely argued: `idx_conversations_pair_key` makes the DB
+    // reject any two `direct_pair` rows that collide, so an edit to the expression
+    // that lost injectivity would fail loudly instead of silently giving two DMs
+    // one shared task board.
+    //
+    // GENERATED, not a column plus a trigger. §4.2 requires `UPDATE pair_key` to
+    // ABORT; a generated column is UNWRITABLE BY CONSTRUCTION ("cannot UPDATE
+    // generated column"), which discharges that rule with no load-bearing trigger
+    // to forget, and it cannot drift from the endpoints it is derived from. It also
+    // matches how `kind` is already derived on this table. VIRTUAL (not STORED)
+    // because `ALTER TABLE ADD COLUMN` accepts only VIRTUAL — which is precisely
+    // what lets P3 skip a table rebuild, so every existing row keeps every byte and
+    // the v73 constraints and triggers survive untouched. The `CASE` guard makes
+    // `pair_key IS NULL` ⟺ `placement_kind <> 'direct_pair'` a statement about
+    // this expression alone, rather than one that has to borrow the arc CHECK.
+    //
+    // UNIQUENESS SITS ON BOTH KEYS, deliberately:
+    //   - `idx_conversations_direct_pair_endpoints` is the IDENTITY constraint and
+    //     the get-or-create lookup path. Looking a pair up by its four ordered
+    //     coordinates means the byte format is never re-implemented in TypeScript:
+    //     the DB stays the single authority for it.
+    //   - `idx_conversations_pair_key` enforces injectivity (above) and is the
+    //     lookup path for callers that hold only the scalar — P0-f's board key.
+    // Both are PARTIAL on `placement_kind = 'direct_pair'`: workspace and inbox
+    // rows have NULL endpoints, and while SQLite would treat those NULLs as
+    // distinct, a partial index states the intent and keeps the entries out.
+    //
+    // There is NO data migration and no backfill: v73 left the placement
+    // unconstructible until it landed, so no `direct_pair` row can exist yet.
+    up: `
+      ALTER TABLE conversations ADD COLUMN pair_key TEXT
+        GENERATED ALWAYS AS (
+          CASE
+            WHEN placement_kind <> 'direct_pair' THEN NULL
+            ELSE substr(endpoint_a_kind, 1, 1)
+              || length(endpoint_a_id) || ':' || endpoint_a_id
+              || substr(endpoint_b_kind, 1, 1)
+              || length(endpoint_b_id) || ':' || endpoint_b_id
+          END
+        ) VIRTUAL;
+
+      CREATE UNIQUE INDEX idx_conversations_direct_pair_endpoints
+        ON conversations(
+          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+        )
+        WHERE placement_kind = 'direct_pair';
+
+      CREATE UNIQUE INDEX idx_conversations_pair_key
+        ON conversations(pair_key)
+        WHERE placement_kind = 'direct_pair';
+    `,
+  },
+  {
+    version: 75,
+    name: 'runtime_slots_placement_aware',
+    // agent-scoped-session-v1 §4.2 / §8 P3 (#task:2020, @Cindy B3) — A RUNTIME
+    // SEAT BELONGS TO PARTICIPATION, AND PARTICIPATION IS PLACEMENT-DERIVED.
+    //
+    // v70 landed the slot table while `conversation_agents` was still the only
+    // participation edge in the schema, so it wrote that assumption into the
+    // structure twice:
+    //
+    //   1. `FOREIGN KEY (conversation_id, agent_id) REFERENCES
+    //      conversation_agents(...)` — a ConversationSlot could not EXIST without
+    //      a roster row. §4.2 gives `direct_pair` and `agent_inbox` zero roster
+    //      rows forever, so on those placements the slot was UNREPRESENTABLE, and
+    //      the only way to make one was to insert the roster row the placement
+    //      rule says must never exist (which is exactly the contradiction that
+    //      failed review).
+    //   2. `conversation_agents_create_runtime_slot` — the only creation path for
+    //      a ConversationSlot was a roster INSERT, so even with the FK relaxed no
+    //      DM or inbox slot would ever be born.
+    //
+    // Consequence while both stood: a DM session was invisible to every control
+    // plane that reads slots (switch / stop / teardown / management), because the
+    // row it would read cannot be created. This migration moves the seat's parent
+    // to the pair it is actually a seat OF — `(agents, conversations)` — and gives
+    // each placement its own creation edge, so "one seat per participation" holds
+    // on all three arms instead of one.
+    //
+    // The roster keeps its arm and ONLY its arm: the workspace trigger now also
+    // requires `placement_kind = 'workspace'`, so a stray roster row on a DM or an
+    // inbox stays INERT here too — the same rule `agentParticipates` applies in
+    // SQL and `resolveParticipation` applies in code.
+    //
+    // A DELETE trigger replaces what the composite FK used to do. Dropping the FK
+    // would otherwise leave a seat behind when an agent LEAVES a channel, and a
+    // leftover seat is not inert: stop / teardown would target a session in a
+    // conversation the agent no longer belongs to. It deletes by the slot's own
+    // coordinate, so an agent-scoped agent's single AgentSlot (NULL conversation)
+    // is untouched by leaving any channel.
+    //
+    // `foreignKeyEscape` because this is a table REBUILD (SQLite cannot drop a
+    // table-level FK in place) and the runner's `foreign_key_check` afterwards is
+    // the acceptance evidence that the copy preserved every reference. Slot `id`s
+    // are copied VERBATIM: `agent_runtime_events.slot_id` is a historical
+    // coordinate with no FK, so renumbering would silently re-parent the
+    // append-only history instead of failing.
+    //
+    // ## What replaces the FK as the INVARIANT (@Cindy B10)
+    //
+    // The composite FK did two jobs, and only one of them was wrong. Requiring a
+    // ROSTER row was wrong; requiring PARTICIPATION was right, and it was the
+    // FK — not the creation triggers — that made it a fact. Three AFTER INSERT
+    // triggers say "a participation edge mints a seat"; they say nothing about a
+    // seat that arrives by any other route, and with the FK gone two plain FKs
+    // plus the partial UNIQUEs would happily accept
+    // `(conversation-scoped agent, a conversation it does not participate in)`.
+    // Such a row is not inert: it is a forged control coordinate that stop /
+    // switch / teardown would act on. So the invariant is restated directly as
+    // `agent_runtime_slots_participation_insert`, over the SAME placement
+    // authority the three creation triggers use — and unknown placements fail
+    // closed, because a future arm has no matching branch.
+    //
+    // ## Why the participation EDGES are frozen (@Cindy B11)
+    //
+    // A seat is derived from an edge, so an edge that can move invalidates the
+    // derivation without touching either table's triggers: SQLite lets you
+    // `UPDATE conversation_agents SET conversation_id = ...`, which is neither an
+    // INSERT nor a DELETE, so the old seat stays where it was and the new
+    // membership gets none. One level up, an `UPDATE conversations SET
+    // placement_kind / workspace_id / inbox_agent_id / roster_policy` could
+    // migrate a live row between arms while satisfying every CHECK, bypassing
+    // v72's name allocation and both halves of this migration's seat lifecycle.
+    // Nothing in production writes those columns after birth (placement is
+    // decided by the constructor), so they are frozen here rather than given
+    // transition rules — a real conversion would have to reallocate a name and
+    // re-derive seats, which is a migration's job, not an UPDATE's.
+    foreignKeyEscape: true,
+    up: `
+      CREATE TABLE agent_runtime_slots_new (
+        id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id                      TEXT NOT NULL
+          REFERENCES agents(id) ON DELETE CASCADE,
+        conversation_id               TEXT
+          REFERENCES conversations(id) ON DELETE CASCADE,
+        generation                    INTEGER NOT NULL DEFAULT 0
+          CHECK (generation >= 0),
+        claimed_by_daemon_instance_id TEXT,
+        observed_status               TEXT NOT NULL DEFAULT 'idle'
+          CHECK (observed_status IN ('idle', 'starting', 'active', 'crashed')),
+        observed_pid                  INTEGER,
+        cli_session_id                TEXT
+      );
+
+      INSERT INTO agent_runtime_slots_new (
+        id, agent_id, conversation_id, generation,
+        claimed_by_daemon_instance_id,
+        observed_status, observed_pid, cli_session_id
+      )
+        SELECT id, agent_id, conversation_id, generation,
+               claimed_by_daemon_instance_id,
+               observed_status, observed_pid, cli_session_id
+          FROM agent_runtime_slots;
+
+      DROP TRIGGER conversation_agents_create_runtime_slot;
+      DROP TRIGGER agents_create_agent_runtime_slot;
+      DROP TABLE agent_runtime_slots;
+      ALTER TABLE agent_runtime_slots_new RENAME TO agent_runtime_slots;
+
+      CREATE UNIQUE INDEX uniq_agent_runtime_slots_agent_scope
+        ON agent_runtime_slots(agent_id)
+        WHERE conversation_id IS NULL;
+
+      CREATE UNIQUE INDEX uniq_agent_runtime_slots_conversation_scope
+        ON agent_runtime_slots(agent_id, conversation_id)
+        WHERE conversation_id IS NOT NULL;
+
+      CREATE INDEX idx_agent_runtime_slots_conversation
+        ON agent_runtime_slots(conversation_id, agent_id);
+
+      CREATE TRIGGER agent_runtime_slots_scope_consistency_insert
+        BEFORE INSERT ON agent_runtime_slots
+        WHEN COALESCE(
+          (SELECT session_scope FROM agents WHERE id = NEW.agent_id), ''
+        ) != CASE
+          WHEN NEW.conversation_id IS NULL THEN 'agent'
+          ELSE 'conversation'
+        END
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot scope must match agents.session_scope');
+        END;
+
+      CREATE TRIGGER agent_runtime_slots_scope_consistency_update
+        BEFORE UPDATE OF agent_id, conversation_id ON agent_runtime_slots
+        WHEN COALESCE(
+          (SELECT session_scope FROM agents WHERE id = NEW.agent_id), ''
+        ) != CASE
+          WHEN NEW.conversation_id IS NULL THEN 'agent'
+          ELSE 'conversation'
+        END
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot scope must match agents.session_scope');
+        END;
+
+      CREATE TRIGGER agent_runtime_slots_identity_immutable
+        BEFORE UPDATE OF agent_id, conversation_id ON agent_runtime_slots
+        WHEN NEW.agent_id != OLD.agent_id
+          OR NEW.conversation_id IS NOT OLD.conversation_id
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot identity is immutable');
+        END;
+
+      CREATE TRIGGER agent_runtime_slots_generation_monotonic
+        BEFORE UPDATE OF generation ON agent_runtime_slots
+        WHEN NEW.generation != OLD.generation + 1
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot generation must advance by one');
+        END;
+
+      -- The invariant the composite FK used to carry, restated over placement
+      -- instead of over the roster: a ConversationSlot exists only where its
+      -- agent PARTICIPATES. Every arm resolves its participants the way §4.2
+      -- says it does, so this is the same authority the creation triggers below
+      -- fire on — asserted here for EVERY writer, not just for them. A slot with
+      -- no conversation is an AgentSlot: its participation is agent-level, and
+      -- the scope trigger above already pins it to session_scope = 'agent'.
+      -- An unknown placement matches no branch and is REFUSED: a future arm must
+      -- name its participants here before it can hold a seat.
+      CREATE TRIGGER agent_runtime_slots_participation_insert
+        BEFORE INSERT ON agent_runtime_slots
+        WHEN NEW.conversation_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1
+             FROM conversations c
+            WHERE c.id = NEW.conversation_id
+              AND ((c.placement_kind = 'workspace'
+                    AND EXISTS (
+                      SELECT 1 FROM conversation_agents ca
+                       WHERE ca.conversation_id = c.id
+                         AND ca.agent_id = NEW.agent_id))
+                OR (c.placement_kind = 'direct_pair'
+                    AND ((c.endpoint_a_kind = 'agent'
+                          AND c.endpoint_a_id = NEW.agent_id)
+                      OR (c.endpoint_b_kind = 'agent'
+                          AND c.endpoint_b_id = NEW.agent_id)))
+                OR (c.placement_kind = 'agent_inbox'
+                    AND c.inbox_agent_id = NEW.agent_id))
+         )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'runtime slot requires participation in its conversation'
+          );
+        END;
+
+      -- A seat is DERIVED from an edge, so the edge may not move: an UPDATE is
+      -- neither the INSERT that mints a seat nor the DELETE that releases it, so
+      -- relocating a roster row would leave the seat on the old conversation and
+      -- the new membership with none. Membership changes by leaving and joining.
+      CREATE TRIGGER conversation_agents_edge_immutable
+        BEFORE UPDATE OF conversation_id, agent_id ON conversation_agents
+        WHEN NEW.conversation_id != OLD.conversation_id
+          OR NEW.agent_id != OLD.agent_id
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'a roster edge is immutable; leave and join instead of moving it'
+          );
+        END;
+
+      -- Placement is decided at birth by the constructor and read by every
+      -- derivation downstream of it (participant set, name allocation, seat
+      -- lifecycle). A coordinated UPDATE across these four columns satisfies the
+      -- arm CHECKs while bypassing all three, so the columns are frozen: an arm
+      -- conversion is a migration, not an UPDATE.
+      CREATE TRIGGER conversations_placement_immutable
+        BEFORE UPDATE OF
+          placement_kind, workspace_id, inbox_agent_id, roster_policy
+        ON conversations
+        WHEN NOT (
+          NEW.placement_kind IS OLD.placement_kind
+          AND NEW.workspace_id IS OLD.workspace_id
+          AND NEW.inbox_agent_id IS OLD.inbox_agent_id
+          AND NEW.roster_policy IS OLD.roster_policy
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversations: placement is immutable from birth'
+          );
+        END;
+
+      -- Workspace arm: the roster row IS the participation edge, and only there.
+      CREATE TRIGGER conversation_agents_create_runtime_slot
+        AFTER INSERT ON conversation_agents
+        WHEN (SELECT session_scope FROM agents WHERE id = NEW.agent_id)
+             = 'conversation'
+         AND (SELECT placement_kind FROM conversations WHERE id = NEW.conversation_id)
+             = 'workspace'
+        BEGIN
+          INSERT INTO agent_runtime_slots (
+            agent_id, conversation_id, generation,
+            observed_status, observed_pid, cli_session_id
+          ) VALUES (
+            NEW.agent_id, NEW.conversation_id, 0,
+            'idle', NULL, NULL
+          );
+        END;
+
+      -- Unchanged from v70, recreated verbatim: the AgentSlot is still born with
+      -- the Agent row and still has no conversation. It is dropped and remade
+      -- rather than left in place so that "which triggers may insert a slot" can
+      -- be read off ONE migration instead of two.
+      CREATE TRIGGER agents_create_agent_runtime_slot
+        AFTER INSERT ON agents
+        WHEN NEW.session_scope = 'agent'
+        BEGIN
+          INSERT INTO agent_runtime_slots (
+            agent_id, conversation_id, generation,
+            observed_status, observed_pid, cli_session_id
+          ) VALUES (
+            NEW.id, NULL, 0,
+            'idle', NULL, NULL
+          );
+        END;
+
+      -- Losing the roster edge releases the seat it created. This is the
+      -- composite FK's ON DELETE CASCADE, re-expressed where the roster is only
+      -- one of three participation edges. Placement-gated like its creation
+      -- counterpart: on a DM or an inbox the seat is owned by the endpoint /
+      -- inbox edge, so a stray roster row's removal must not take it away.
+      -- Deleting the CONVERSATION needs no help from this trigger — the slot's
+      -- own conversation_id FK cascades — which is why a NULL placement lookup
+      -- (row already gone) leaving this inert is correct rather than a hole.
+      CREATE TRIGGER conversation_agents_delete_runtime_slot
+        AFTER DELETE ON conversation_agents
+        WHEN (SELECT placement_kind FROM conversations WHERE id = OLD.conversation_id)
+             = 'workspace'
+        BEGIN
+          DELETE FROM agent_runtime_slots
+            WHERE conversation_id = OLD.conversation_id
+              AND agent_id = OLD.agent_id;
+        END;
+
+      -- DirectPair arm: the two endpoints ARE the participants (§4.2), and they
+      -- are immutable columns of the row being inserted, so the conversation's
+      -- birth is the participation edge. One statement covers both sides; an
+      -- endpoint that is not an agent, or an agent-scoped agent (whose one
+      -- AgentSlot already serves every conversation), selects zero rows.
+      CREATE TRIGGER conversations_create_direct_pair_runtime_slots
+        AFTER INSERT ON conversations
+        WHEN NEW.placement_kind = 'direct_pair'
+        BEGIN
+          INSERT INTO agent_runtime_slots (
+            agent_id, conversation_id, generation,
+            observed_status, observed_pid, cli_session_id
+          )
+            SELECT a.id, NEW.id, 0, 'idle', NULL, NULL
+              FROM agents a
+             WHERE a.session_scope = 'conversation'
+               AND ((NEW.endpoint_a_kind = 'agent' AND a.id = NEW.endpoint_a_id)
+                 OR (NEW.endpoint_b_kind = 'agent' AND a.id = NEW.endpoint_b_id));
+        END;
+
+      -- AgentInbox arm: exactly one participant, named by the row itself.
+      CREATE TRIGGER conversations_create_agent_inbox_runtime_slot
+        AFTER INSERT ON conversations
+        WHEN NEW.placement_kind = 'agent_inbox'
+        BEGIN
+          INSERT INTO agent_runtime_slots (
+            agent_id, conversation_id, generation,
+            observed_status, observed_pid, cli_session_id
+          )
+            SELECT a.id, NEW.id, 0, 'idle', NULL, NULL
+              FROM agents a
+             WHERE a.id = NEW.inbox_agent_id
+               AND a.session_scope = 'conversation';
+        END;
+
+      -- Backfill the two arms that could never have a seat before this
+      -- migration. Guarded by NOT EXISTS rather than trusted to be empty: v71
+      -- creates an inbox with every agent, so these rows are REAL on any dogfood
+      -- database, and a re-run must not duplicate what it already made.
+      INSERT INTO agent_runtime_slots (
+        agent_id, conversation_id, generation,
+        observed_status, observed_pid, cli_session_id
+      )
+        SELECT a.id, c.id, 0, 'idle', NULL, NULL
+          FROM conversations c
+          JOIN agents a
+            ON a.session_scope = 'conversation'
+           AND ((c.placement_kind = 'direct_pair'
+                 AND ((c.endpoint_a_kind = 'agent' AND a.id = c.endpoint_a_id)
+                   OR (c.endpoint_b_kind = 'agent' AND a.id = c.endpoint_b_id)))
+             OR (c.placement_kind = 'agent_inbox' AND a.id = c.inbox_agent_id))
+         WHERE NOT EXISTS (
+           SELECT 1 FROM agent_runtime_slots s
+            WHERE s.agent_id = a.id AND s.conversation_id = c.id
+         );
+
+      -- NO event is written for the seats born above (@Cindy B12). The earlier
+      -- draft stamped every unstamped slot with slot_migrated under the banner
+      -- "every slot has a birth event", and that contract cannot hold: the four
+      -- creation triggers insert a slot and nothing else, so it would be true for
+      -- the instant of the upgrade and false for the next roster join. Of the two
+      -- ways out, writing a synthetic birth row per seat is the wrong one — every
+      -- kind this log records (generation_claimed, projection_updated,
+      -- generation_finalized) is a RUNTIME GENERATION, and a seat at generation 0
+      -- that no daemon has claimed has no generation to report. So the log's
+      -- domain stays "history from first claim", and slot_migrated keeps the
+      -- narrower meaning v70 gave it: PROVENANCE for projection state that arrived
+      -- without a claim (v70 moved live pid / status / cli_session_id off the
+      -- roster row, so there was something to account for). The seats this
+      -- migration mints carry no such state — generation 0, idle, NULL, NULL,
+      -- identical to a trigger-born seat — so there is nothing to record, and
+      -- inventing a row would make the log a worse account of the lifecycle
+      -- rather than a complete one.
     `,
   },
 ];

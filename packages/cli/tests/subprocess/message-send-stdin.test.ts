@@ -83,6 +83,99 @@ beforeAll(async () => {
   serverUrl = `http://127.0.0.1:${addr.port}`;
 });
 
+describe('runtime route target vs command-local conversation selector', { timeout: 30_000 }, () => {
+  it('keeps ConversationSlot route A while task and search requests select B', async () => {
+    captured.length = 0;
+    nextSendResponse = { status: 200, body: { tasks: [] } };
+    const list = await runMessage({
+      noun: 'task',
+      verb: 'list',
+      argv: ['--conversation-id', 'conv-B'],
+    });
+    expect(list.code, list.stderr).toBe(0);
+    expect(captured[0]!.path).toBe(
+      '/internal/agents/agent-1/conversations/conv-1/tasks?conversation_id=conv-B',
+    );
+
+    captured.length = 0;
+    nextSendResponse = {
+      status: 200,
+      body: { tasks: [{ id: 'task-id', task_number: 12, title: 'file in B' }] },
+    };
+    const create = await runMessage({
+      noun: 'task',
+      verb: 'create',
+      argv: ['--title', 'file in B', '--conversation-id', 'conv-B'],
+    });
+    expect(create.code, create.stderr).toBe(0);
+    expect(captured[0]!.path).toBe(
+      '/internal/agents/agent-1/conversations/conv-1/tasks/create',
+    );
+    expect(JSON.parse(captured[0]!.bodyBytes.toString('utf8'))).toMatchObject({
+      conversation_id: 'conv-B',
+    });
+
+    captured.length = 0;
+    nextSendResponse = {
+      status: 200,
+      body: {
+        query: 'needle',
+        scope: 'conversation',
+        workspace_id: null,
+        conversation_id: 'conv-B',
+        include_system: true,
+        limit: 50,
+        hits: [],
+      },
+    };
+    const search = await runMessage({
+      noun: 'message',
+      verb: 'search',
+      argv: ['needle', '--conversation-id', 'conv-B'],
+    });
+    expect(search.code, search.stderr).toBe(0);
+    expect(captured[0]!.path).toBe(
+      '/internal/agents/agent-1/conversations/conv-1/search-messages',
+    );
+    expect(JSON.parse(captured[0]!.bodyBytes.toString('utf8'))).toMatchObject({
+      conversation_id: 'conv-B',
+    });
+  });
+
+  it('uses AgentSlot route target only as transport focus; list stays unfiltered until a command selector is supplied', async () => {
+    captured.length = 0;
+    nextSendResponse = { status: 200, body: { tasks: [] } };
+    const allBoards = await runMessage({
+      noun: 'task',
+      verb: 'list',
+      argv: ['--route-conversation-id', 'agent-inbox'],
+      env: { SILVERHAND_CONVERSATION_ID: '' },
+    });
+    expect(allBoards.code, allBoards.stderr).toBe(0);
+    expect(captured[0]!.path).toBe(
+      '/internal/agents/agent-1/conversations/agent-inbox/tasks',
+    );
+
+    captured.length = 0;
+    nextSendResponse = { status: 200, body: { tasks: [] } };
+    const narrowed = await runMessage({
+      noun: 'task',
+      verb: 'list',
+      argv: [
+        '--route-conversation-id',
+        'agent-inbox',
+        '--conversation-id',
+        'conv-B',
+      ],
+      env: { SILVERHAND_CONVERSATION_ID: '' },
+    });
+    expect(narrowed.code, narrowed.stderr).toBe(0);
+    expect(captured[0]!.path).toBe(
+      '/internal/agents/agent-1/conversations/agent-inbox/tasks?conversation_id=conv-B',
+    );
+  });
+});
+
 afterAll(async () => {
   await new Promise<void>(r => server.close(() => r()));
 });
@@ -423,6 +516,24 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     expect(reqBody.content).toBe('hi');
     expect(reqBody.target).toEqual({ kind: 'thread', message_id: 'm-1' });
     expect(reqBody.attachment_ids).toEqual(['att-1', 'att-2']);
+  });
+
+  it('uses the explicit conversation as the AgentSlot route when no ambient target exists', async () => {
+    captured.length = 0;
+    const r = await runSend({
+      argv: ['--route-conversation-id', 'conv-explicit'],
+      stdin: 'cross-target message',
+      env: { SILVERHAND_CONVERSATION_ID: '' },
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.path).toBe(
+      '/internal/agents/agent-1/conversations/conv-explicit/send-message',
+    );
+    const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+      content: string;
+    };
+    expect(reqBody.content).toBe('cross-target message');
   });
 
   it('maps --target channel to the current channel main-line target', async () => {

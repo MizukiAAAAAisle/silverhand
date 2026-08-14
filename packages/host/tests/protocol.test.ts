@@ -31,6 +31,12 @@ import {
 } from '../src/protocol.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
 
+const CONVERSATION_RUNTIME_SCOPE = {
+  kind: 'conversation' as const,
+  conversation_id: 'c1',
+  agent_id: 'a1',
+};
+
 // The closed effort enum an OLD daemon's wire schema accepted before the open
 // token landed — the REAL pre-Ultra set (`none/low/medium/high/xhigh/max`),
 // copied VERBATIM, NOT a narrower approximation. It is a frozen literal on
@@ -551,6 +557,7 @@ describe('protocol — runtime_* events', () => {
         ts: 1,
       },
       {
+        runtime_generation: 1,
         event: 'runtime_delivery_consumed',
         conversation_id: 'c1',
         agent_id: 'a1',
@@ -558,6 +565,7 @@ describe('protocol — runtime_* events', () => {
         ts: 1,
       },
       {
+        runtime_generation: 1,
         event: 'runtime_delivery_failed',
         conversation_id: 'c1',
         agent_id: 'a1',
@@ -585,14 +593,19 @@ describe('protocol — runtime_* events', () => {
       },
     ];
     for (const s of samples) {
-      const r = EventFrameSchema.safeParse(s);
+      const r = EventFrameSchema.safeParse({
+        ...s,
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+      });
       expect(r.success, `event ${s.event} should parse`).toBe(true);
     }
   });
 
   it('rejects runtime_delivery_failed with unknown reason', () => {
     const r = EventFrameSchema.safeParse({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
@@ -606,11 +619,29 @@ describe('protocol — runtime_* events', () => {
 describe('protocol — runtime_stop shape (hard-only since #task:1558)', () => {
   it('accepts the hard-stop params shape', () => {
     const ok = RuntimeStopParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       runtime_generation: 1, mode: 'hard',
     });
     expect(ok.success).toBe(true);
+  });
+
+  it('rejects runtime commands and events that omit semantic scope', () => {
+    expect(RuntimeStopParamsSchema.safeParse({
+      runtime_generation: 1,
+      mode: 'hard',
+    }).success).toBe(false);
+    expect(EventFrameSchema.safeParse({
+      event: 'runtime_output',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      stream: 'stdout',
+      chunk: 'legacy tuple only',
+      ts: 1,
+    }).success).toBe(false);
   });
 
   it('rejects destructive stop/clear commands and status rows without generation', () => {
@@ -697,6 +728,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
       const r = EventFrameSchema.safeParse({
         runtime_generation: 1,
         event: 'runtime_init_timeout',
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
         conversation_id: 'c1',
         agent_id: 'a1',
         timeout_reason: reason,
@@ -715,6 +747,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const r = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       timeout_reason: 'random_tier',
@@ -736,6 +769,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const fields = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       timeout_reason: 'pre_protocol_cap',
@@ -754,6 +788,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const tooNarrow = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       timeout_reason: 'pre_protocol_cap',
@@ -768,6 +803,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const legacyName = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       timeout_reason: 'pre_protocol',
@@ -789,6 +825,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const withCooldown = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       timeout_reason: 'silence',
@@ -805,6 +842,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const withoutCooldown = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       timeout_reason: 'silence',
@@ -822,6 +860,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const zero = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       timeout_reason: 'silence',
@@ -840,6 +879,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const r = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_retrying',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       retry_attempt: 2,
@@ -854,6 +894,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     const r = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_init_cooldown',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       cooldown_until: 1_700_000_000_000,
@@ -870,6 +911,7 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     // fields it doesn't model.
     const r = EventFrameSchema.safeParse({
       event: 'runtime_delivery_failed',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
@@ -908,6 +950,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
       const r = EventFrameSchema.safeParse({
         runtime_generation: 1,
         event: 'runtime_parsed_event',
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
         conversation_id: 'c1',
         agent_id: 'a1',
         parsed,
@@ -924,6 +967,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const r = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'text', text: 'hi' },
@@ -937,6 +981,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const r = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'absurd_new_kind', text: 'nope' },
@@ -955,6 +1000,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const missing = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'tool_call', name: 'Bash' },
@@ -965,6 +1011,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const explicitUndef = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'tool_call', name: 'Bash', input: undefined },
@@ -978,6 +1025,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const nullInput = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'tool_call', name: 'Bash', input: null },
@@ -989,6 +1037,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const emptyObj = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'tool_call', name: 'Bash', input: {} },
@@ -1004,6 +1053,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const r = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: {
@@ -1026,6 +1076,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const rawSmuggle = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: {
@@ -1041,6 +1092,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const unknownStatus = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'api_response', status: 'rate_limited', message: 'x' },
@@ -1051,6 +1103,7 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
     const emptyMessage = EventFrameSchema.safeParse({
       runtime_generation: 1,
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'api_response', status: 'waiting', message: '' },
@@ -1064,6 +1117,7 @@ describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZG
   it('accepts the minimal metadata-only shape', () => {
     const r = EventFrameSchema.safeParse({
       event: 'runtime_parsed_event_dropped',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed_kind: 'tool_call',
@@ -1091,6 +1145,7 @@ describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZG
     for (const extra of forbidden) {
       const r = EventFrameSchema.safeParse({
         event: 'runtime_parsed_event_dropped',
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
         conversation_id: 'c1',
         agent_id: 'a1',
         parsed_kind: 'unknown',
@@ -1106,6 +1161,7 @@ describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZG
   it('rejects unknown parsed_kind', () => {
     const r = EventFrameSchema.safeParse({
       event: 'runtime_parsed_event_dropped',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed_kind: 'made_up',
@@ -1119,6 +1175,7 @@ describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZG
   it('rejects unknown reason (single-arm enum: only frame_too_large in 3b)', () => {
     const r = EventFrameSchema.safeParse({
       event: 'runtime_parsed_event_dropped',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed_kind: 'text',
@@ -1132,6 +1189,7 @@ describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZG
   it('rejects negative encoded_bytes', () => {
     const r = EventFrameSchema.safeParse({
       event: 'runtime_parsed_event_dropped',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed_kind: 'text',
@@ -1255,6 +1313,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     const r = RuntimeDeliverParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1, 2, 3],
       delivered_up_to_seq: 3,
@@ -1270,6 +1329,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     const empty = RuntimeDeliverParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [],
       kind: 'message',
@@ -1283,6 +1343,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     const base = {
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -1334,6 +1395,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     const missing = RuntimeDeliverParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -1344,6 +1406,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     const empty = RuntimeDeliverParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -1356,6 +1419,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     const ok = RuntimeDeliverParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -1460,6 +1524,7 @@ describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 
   it('accepts the minimal shape', () => {
     const r = EventFrameSchema.safeParse({
       event: 'runtime_compaction_stale',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       elapsed_ms: 300_000,
@@ -1475,6 +1540,7 @@ describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 
     // from a one-line PR sneaking in a side-effect field.
     const r = EventFrameSchema.safeParse({
       event: 'runtime_compaction_stale',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       elapsed_ms: 300_000,
@@ -1487,6 +1553,7 @@ describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 
   it('rejects negative elapsed_ms (must be ≥0)', () => {
     const r = EventFrameSchema.safeParse({
       event: 'runtime_compaction_stale',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       elapsed_ms: -1,
@@ -1498,6 +1565,7 @@ describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 
   it('rejects missing conversation_id / agent_id', () => {
     const noConv = EventFrameSchema.safeParse({
       event: 'runtime_compaction_stale',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       agent_id: 'a1',
       elapsed_ms: 0,
       ts: 1,
@@ -1506,6 +1574,7 @@ describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 
 
     const noAgent = EventFrameSchema.safeParse({
       event: 'runtime_compaction_stale',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       elapsed_ms: 0,
       ts: 1,
@@ -1534,6 +1603,7 @@ describe('protocol v13 runtime custody generation', () => {
   it('rejects projection and parsed events that omit runtime_generation', () => {
     expect(EventFrameSchema.safeParse({
       event: 'runtime_state',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       state: {
@@ -1549,6 +1619,7 @@ describe('protocol v13 runtime custody generation', () => {
     }).success).toBe(false);
     expect(EventFrameSchema.safeParse({
       event: 'runtime_parsed_event',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'session_init', sessionId: 's1' },

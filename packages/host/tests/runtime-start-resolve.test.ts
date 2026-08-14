@@ -81,13 +81,13 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
       }),
     );
     expect(resolved.agent.home_dir).toBe(l1('a1'));
-    expect(resolved.workspace.path).toBe(bundle('a1', 'ws1'));
+    expect(resolved.workspace!.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index[0]!.path).toBe(bundle('a1', 'ws1'));
     // The active workspace is NOT availability-probed here (that is the
     // supervisor's post-resolve assert); only the index entry is.
     expect(probed).toEqual([bundle('a1', 'ws1')]);
     // Semantic fields are preserved.
-    expect(resolved.workspace.id).toBe('ws1');
+    expect(resolved.workspace!.id).toBe('ws1');
     expect(resolved.agent.id).toBe('a1');
   });
 
@@ -113,7 +113,7 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
       options,
       depsWith(async dir => dir === bundle('a1', 'ws1')),
     );
-    expect(resolved.workspace.path).toBe(bundle('a1', 'ws1'));
+    expect(resolved.workspace!.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index).toEqual([
       { id: 'ws1', name: 'primary', kind: 'regular', path: bundle('a1', 'ws1') },
       { id: 'ws_never_spawned', name: 'peer', kind: 'regular', path: null },
@@ -170,13 +170,13 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
       workspaceKind: 'agent_home',
     });
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
-    expect(resolved.workspace.path).toBe(l1('a9'));
+    expect(resolved.workspace!.path).toBe(l1('a9'));
     expect(resolved.workspace_memory_index[0]!.path).toBe(
       l1('a9'),
     );
     expect(resolved.agent.home_dir).toBe(l1('a9'));
     // The valid ref is THIS agent's own home workspace id.
-    expect(resolved.workspace.id).toBe(agentHomeWorkspaceId('a9'));
+    expect(resolved.workspace!.id).toBe(agentHomeWorkspaceId('a9'));
   });
 
   it('joins agent.home_dir and agent_home workspace paths onto the caller-supplied agents root', async () => {
@@ -192,7 +192,7 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
     });
     const expected = l1('a9', agentHomeRootDir);
     expect(resolved.agent.home_dir).toBe(expected);
-    expect(resolved.workspace.path).toBe(expected);
+    expect(resolved.workspace!.path).toBe(expected);
     expect(resolved.workspace_memory_index[0]!.path).toBe(expected);
   });
 
@@ -285,7 +285,7 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
       ],
     };
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
-    expect(resolved.workspace.path).toBe(bundle('a1', 'ws1'));
+    expect(resolved.workspace!.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index).toEqual([
       { id: 'ws1', name: 'primary', kind: 'regular', path: bundle('a1', 'ws1') },
       { id: '../escape', name: 'peer', kind: 'regular', path: null },
@@ -299,6 +299,24 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
     await expect(
       resolveRuntimeStartPaths(activeUnsafe, depsWith()),
     ).rejects.toBeInstanceOf(RuntimeStartResolveError);
+  });
+});
+
+describe('resolveRuntimeStartPaths — agent scope', () => {
+  it('uses the stable agent home as cwd and carries no workspace projection', async () => {
+    const resolved = await resolveRuntimeStartPaths(
+      testStartOptions({ agentId: 'a-agent', sessionScope: 'agent' }),
+      depsWith(),
+    );
+
+    expect(resolved.runtime_scope).toEqual({
+      kind: 'agent',
+      agent_id: 'a-agent',
+    });
+    expect(resolved.agent.home_dir).toBe(l1('a-agent'));
+    expect(resolved.cwd).toBe(l1('a-agent'));
+    expect('workspace' in resolved).toBe(false);
+    expect('workspace_memory_index' in resolved).toBe(false);
   });
 });
 

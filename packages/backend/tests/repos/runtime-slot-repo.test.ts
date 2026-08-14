@@ -16,6 +16,7 @@ function bootstrap() {
   });
   const conversation = conversations.insertChannel({
     workspaceId: workspace.id,
+    name: 'runtime-slot-authority',
     title: 'runtime-slot-authority',
   });
   const agent = agents.create(

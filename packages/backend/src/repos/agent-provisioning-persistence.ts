@@ -28,7 +28,14 @@ function agentProvisioningAgentsPort(db: Db): AgentProvisioningTxScope['agents']
       if (changed === 0) return { status: 'lost' };
       const dto = agents.get(id);
       return dto
-        ? { status: 'transitioned', row: { id: dto.id, name: dto.name } }
+        ? {
+            status: 'transitioned',
+            row: {
+              id: dto.id,
+              name: dto.name,
+              sessionScope: dto.session_scope,
+            },
+          }
         : { status: 'lost' };
     },
   };

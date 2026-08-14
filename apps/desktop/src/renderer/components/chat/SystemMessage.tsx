@@ -144,6 +144,14 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   // metadata fall through to generic italic narration).
   onboarding: OnboardingRow,
   rename: RenameRow,
+  // #task:2016: a channel's stable semantic NAME changed — an ADDRESS change,
+  // not a display rename (see `ConversationNameChangedMetadataSchema`).
+  // Deliberately generic narration for now: the compact audit row lands with the
+  // ticket that switches `#<name>` resolution over to these allocations, because
+  // a chip reading "old → new address" would claim a contract that is not yet in
+  // force. The metadata is already structured, so that row is a renderer-only
+  // change when it comes.
+  conversation_name_changed: GenericNarrationFallback,
   conversation_member_added: ConversationMemberChangeRow,
   conversation_member_removed: ConversationMemberChangeRow,
   mention_cc: MentionCcCard,

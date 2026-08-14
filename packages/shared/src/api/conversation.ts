@@ -2,6 +2,7 @@
 // Bounded context: conversation. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import { HandleSchema } from '../handle.js';
+import { ConversationNameSchema } from './name.js';
 import {
   ConversationAgentStatusSchema,
   ConversationEventKindSchema,
@@ -46,13 +47,52 @@ export const ConversationDtoSchema = z.object({
 });
 export type ConversationDto = z.infer<typeof ConversationDtoSchema>;
 
+/**
+ * The channel-like conversation's STABLE SEMANTIC NAME (#task:2016) — the
+ * allocated address, `null` when the row holds no current allocation.
+ *
+ * Not on `ConversationDtoSchema`. A name is an allocation in a WORKSPACE
+ * namespace (`conversation_names`), so only workspace-placed conversations have
+ * one at all, and reading it costs a join — a cost the base DTO's producers must
+ * not pay: they include the aggregate read paths whose query plans are pinned to
+ * production constants (#1967). Widening the base type would quietly conscript
+ * every one of them.
+ *
+ * NULLABLE, and the null arm is reachable — deliberately not "always a string
+ * because the backfill is total". `kind` is GENERATED from `roster_policy`, so an
+ * `agent_inbox` row reports `kind='dm_channel'` and can reach a channel-like
+ * mapper (`getChannelLike(id)` by id, for instance); an inbox is addressed by
+ * its owning principal and never enters a workspace namespace. A consumer that
+ * needs an address therefore has to handle its absence at typecheck instead of
+ * discovering an `undefined` at render time.
+ *
+ * `title` is the DISPLAY name and is now nothing else: renaming the title leaves
+ * this field untouched, which is the whole point of the field existing.
+ *
+ * The NON-NULL arm is {@link ConversationNameSchema}, not `z.string()` (@Cindy,
+ * #task:2016 review): "present" and "well-formed" are not the same claim, and
+ * this DTO is what a consumer trusts when it turns the value back into an
+ * address — a `#<name>` sigil, a CLI selector, a line in a MEMORY.md. A value
+ * outside the grammar is not spellable in any of those, so admitting it here
+ * would publish a name that the surface reading this field cannot render as a
+ * reference. The storage domain is closed by the v72 `CHECK` plus
+ * `ConversationNameRepo.allocate`; stating the same domain on the wire type is
+ * what makes that closure legible to every consumer instead of a fact one has to
+ * go read the DDL to learn.
+ */
+const conversationNameField = {
+  name: ConversationNameSchema.nullable(),
+} as const;
+
 export const ChannelConversationDtoSchema = ConversationDtoSchema.extend({
   kind: z.literal('channel'),
+  ...conversationNameField,
 });
 export type ChannelConversationDto = z.infer<typeof ChannelConversationDtoSchema>;
 
 export const DmChannelDtoSchema = ConversationDtoSchema.extend({
   kind: z.literal('dm_channel'),
+  ...conversationNameField,
 });
 export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
 
@@ -65,6 +105,19 @@ export const ChannelTitleSchema = z.string().trim().min(1).max(128);
 
 export const CreateConversationChannelInputSchema = z.object({
   title: ChannelTitleSchema,
+  /**
+   * The channel's stable semantic NAME (#task:2016). Omitted = derived from
+   * `title` by the shared deriver, so an ordinary caller never has to think about
+   * addresses; spelled explicitly when the requester wants a specific address.
+   *
+   * A conflict in the workspace namespace is a 409 `conversation_name_taken` —
+   * creation NEVER auto-suffixes. The address you asked for must be the address
+   * you got, and silently handing back `design-2` would make the requester's own
+   * follow-up reference point at someone else's channel. (The v72 backfill does
+   * suffix: it must cover every pre-existing row and has no requester to tell.
+   * The asymmetry is intentional.)
+   */
+  name: ConversationNameSchema.optional(),
   member_agent_ids: z.array(z.string()).default([]),
   member_user_ids: z.array(z.string()).optional(),
   // Channel visibility. Omitted = server default 'private'. `public` is a
@@ -395,23 +448,33 @@ export const ArchiveChannelInputSchema = z.object({
 export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
 
 /** Body for `PATCH /api/channels/:id` — mutate a top-level channel's title OR
- *  visibility. EXACTLY ONE field per request (v1): the settings modal submits
- *  each mutation independently (rename vs private/public toggle are separate
- *  actions), so the handler dispatches to a single service call and there is no
- *  half-committed title+visibility state. `title` reuses `ChannelTitleSchema`
- *  (trimmed, 1–128) so rename and create validate titles identically; setting
- *  both (or neither) is a 400. Archive / pin have their own dedicated routes. */
+ *  visibility OR name. EXACTLY ONE field per request (v1): the settings modal
+ *  submits each mutation independently (rename vs private/public toggle vs
+ *  re-address are separate actions), so the handler dispatches to a single
+ *  service call and there is no half-committed multi-field state. `title` reuses
+ *  `ChannelTitleSchema` (trimmed, 1–128) so rename and create validate titles
+ *  identically, and `name` reuses `ConversationNameSchema` for the same reason;
+ *  setting several (or none) is a 400. Archive / pin have their own dedicated
+ *  routes.
+ *
+ *  `title` and `name` are two different mutations, not two spellings of one
+ *  (#task:2016): a title change is display-only and MUST NOT move the address,
+ *  and a name change retires the old address — every reference to it fails closed
+ *  from then on — so it carries its own audit event. That asymmetry is why they
+ *  are separate fields of a one-of rather than a single "rename". */
 export const UpdateChannelInputSchema = z
   .object({
     title: ChannelTitleSchema.optional(),
     visibility: ConversationVisibilitySchema.optional(),
+    name: ConversationNameSchema.optional(),
   })
   .refine(
     input =>
       (input.title !== undefined ? 1 : 0)
         + (input.visibility !== undefined ? 1 : 0)
+        + (input.name !== undefined ? 1 : 0)
       === 1,
-    { message: 'exactly one of `title` or `visibility` must be provided' },
+    { message: 'exactly one of `title`, `visibility` or `name` must be provided' },
   );
 export type UpdateChannelInput = z.infer<typeof UpdateChannelInputSchema>;
 

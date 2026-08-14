@@ -162,6 +162,7 @@ describe('Internal route auth', () => {
     const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
     const unauthorized = t.persistence.repos.conversations.insertChannel({
       workspaceId: channelId,
+      name: 'known-but-unauthorized',
       title: 'known but unauthorized',
     });
     const request = (targetConversationId: string) => http(t!).post(

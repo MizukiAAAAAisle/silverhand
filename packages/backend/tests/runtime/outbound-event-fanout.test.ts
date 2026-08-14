@@ -9,6 +9,7 @@ import {
   type OutboundServerCommandKind,
   type OutboundServerCommandParams,
   type OutboundServerCommandResult,
+  type RuntimeDeliverParams,
   type RuntimeStatusResult,
 } from '@silverhand/host';
 import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
@@ -22,7 +23,10 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
-import { conversationRuntimePrincipal } from '../../src/auth/runtime-principal.js';
+import {
+  conversationRuntimePrincipal,
+  runtimePrincipalForScope,
+} from '../../src/auth/runtime-principal.js';
 import { RuntimePrincipalVerifier } from '../../src/auth/runtime-principal-verifier.js';
 import { RuntimeEventHandler, type EventPublisher } from '../../src/runtime/event-handler.js';
 import {
@@ -75,6 +79,11 @@ describe('OutboundRuntimeEventFanout', () => {
       const event: EventFrame = {
         runtime_generation: 1,
         event: 'runtime_parsed_event',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: unix.channelId,
+          agent_id: unix.agentId,
+        },
         conversation_id: unix.channelId,
         agent_id: unix.agentId,
         parsed: { kind: 'session_init', sessionId: 'sess-1' },
@@ -87,6 +96,7 @@ describe('OutboundRuntimeEventFanout', () => {
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_parsed_event',
+        runtime_scope: { kind: 'conversation', conversation_id: outbound.channelId, agent_id: outbound.agentId },
         conversation_id: outbound.channelId,
         agent_id: outbound.agentId,
         parsed: { kind: 'session_init', sessionId: 'sess-1' },
@@ -103,6 +113,118 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('builds one AgentSlot spawn authority for deliveries from different conversations', async () => {
+    const fix = makeFixture({ sessionScope: 'agent' });
+    try {
+      const slots = new RuntimeSlotRepo(fix.db);
+      const slot = slots.getAgent(fix.agentId)!;
+      expect(slots.compareAndSetProjection({
+        scope: { kind: 'agent', agentId: fix.agentId },
+        expectedGeneration: slot.generation,
+        expectedDaemonInstanceId: slot.claimed_by_daemon_instance_id!,
+        patch: { cliSessionId: 'vendor-session-global' },
+      })).not.toBeNull();
+      const second = fix.conversations.insertChannel({
+        workspaceId: fix.workspaceId,
+        name: 'second-target',
+        title: 'second target',
+      });
+      fix.conversations.addAgent(second.id, fix.agentId);
+
+      enqueueMessage(fix, 'first target');
+      const secondMessage = fix.messages.insertForConversation({
+        conversationId: second.id,
+        fromKind: 'user',
+        content: 'second target',
+      });
+      fix.inbox.ensureDelivery(second.id, fix.agentId, secondMessage.id);
+
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      await expect(
+        fix.fanout.deliverPending(second.id, fix.agentId),
+      ).resolves.toBe(true);
+
+      const deliveries = fix.transport.deliverCalls().map(call => ({
+        ...call,
+        params: call.params as unknown as RuntimeDeliverParams,
+      }));
+      expect(deliveries).toHaveLength(2);
+      expect(deliveries.map(call => call.params.conversation_id)).toEqual([
+        fix.channelId,
+        second.id,
+      ]);
+      for (const call of deliveries) {
+        expect(call.params.runtime_generation).toBe(1);
+        expect(call.params.spawn_options).toMatchObject({
+          runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+          agent: { id: fix.agentId },
+          driver: { cli_session_id: 'vendor-session-global' },
+        });
+        expect(call.params.spawn_options).not.toHaveProperty('workspace');
+        expect(call.params.spawn_options).not.toHaveProperty('session');
+        expect(call.params.spawn_options).not.toHaveProperty(
+          'workspace_memory_index',
+        );
+      }
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('keeps AgentSlot and ConversationSlot principals disjoint inside one conversation', async () => {
+    const fix = makeFixture({ sessionScope: 'agent' });
+    try {
+      const conversationAgent = new AgentRepo(fix.db).create(
+        {
+          name: 'conversation-slot-peer',
+          runtime: 'claude',
+          host_id: fix.hostId,
+          session_scope: 'conversation',
+        },
+        fix.hostId,
+        fix.viewerUserId,
+      );
+      fix.conversations.addAgent(fix.channelId, conversationAgent.id);
+      const first = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'agent slot turn',
+      });
+      fix.inbox.ensureDelivery(fix.channelId, fix.agentId, first.id);
+      const second = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'conversation slot turn',
+      });
+      fix.inbox.ensureDelivery(
+        fix.channelId,
+        conversationAgent.id,
+        second.id,
+      );
+
+      await fix.fanout.deliverPending(fix.channelId, fix.agentId);
+      await fix.fanout.deliverPending(fix.channelId, conversationAgent.id);
+
+      expect(
+        fix.transport.deliverCalls().map(call =>
+          (call.params as unknown as RuntimeDeliverParams).spawn_options
+            .runtime_scope,
+        ),
+      ).toEqual([
+        { kind: 'agent', agent_id: fix.agentId },
+        {
+          kind: 'conversation',
+          conversation_id: fix.channelId,
+          agent_id: conversationAgent.id,
+        },
+      ]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('marks delivery consumed rows delivered from outbound events', () => {
     const fix = makeFixture();
     try {
@@ -112,13 +234,16 @@ describe('OutboundRuntimeEventFanout', () => {
         content: 'deliver me',
       });
       const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
 
       fix.fanout.onEvent(fix.hostId, {
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_delivery_consumed',
+        runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
+        runtime_generation: 1,
         delivery_ids: [delivery.inboxId],
         ts: 1700000000000,
       }, 'conn-1');
@@ -138,13 +263,16 @@ describe('OutboundRuntimeEventFanout', () => {
         content: 'retry me',
       });
       const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
 
       fix.fanout.onEvent(fix.hostId, {
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_delivery_failed',
+        runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
+        runtime_generation: 1,
         delivery_ids: [delivery.inboxId],
         reason: 'write_failed',
         ts: 1700000000000,
@@ -153,6 +281,188 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toMatchObject([
         { inboxId: delivery.inboxId },
       ]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('settles AgentSlot acks only for the exact origin, agent, and dispatch owner', () => {
+    const fix = makeFixture({ sessionScope: 'agent' });
+    try {
+      const channelB = fix.conversations.insertChannel({
+        workspaceId: fix.workspaceId,
+        name: 'origin-b',
+        title: 'origin-b',
+      });
+      fix.conversations.addAgent(channelB.id, fix.agentId);
+      const otherAgent = new AgentRepo(fix.db).create(
+        { name: 'other-agent', runtime: 'claude' },
+        fix.hostId,
+        fix.viewerUserId,
+      );
+      fix.conversations.addAgent(channelB.id, otherAgent.id);
+      const enqueue = (conversationId: string, agentId: string, content: string) => {
+        const message = fix.messages.insertForConversation({
+          conversationId,
+          fromKind: 'user',
+          content,
+        });
+        return fix.inbox.ensureDelivery(conversationId, agentId, message.id).inboxId;
+      };
+      const aId = enqueue(fix.channelId, fix.agentId, 'A');
+      const bId = enqueue(channelB.id, fix.agentId, 'B');
+      const otherAgentId = enqueue(channelB.id, otherAgent.id, 'other');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
+      fix.inbox.claimPending(channelB.id, fix.agentId, 'conn-1');
+      fix.inbox.claimPending(channelB.id, otherAgent.id, 'conn-1');
+      const row = (id: number) => fix.db.prepare(
+        `SELECT id, conversation_id, agent_id, delivered_at, failed_at,
+                in_flight_owner, in_flight_at
+           FROM conversation_inboxes WHERE id = ?`,
+      ).get(id);
+      const before = new Map([
+        [aId, row(aId)],
+        [bId, row(bId)],
+        [otherAgentId, row(otherAgentId)],
+      ]);
+      const emit = (
+        kind: 'runtime_delivery_consumed' | 'runtime_delivery_failed',
+        deliveryIds: number[],
+      ) => {
+        const common = {
+          direction: 'daemon_to_server' as const,
+          type: 'event' as const,
+          runtime_scope: { kind: 'agent' as const, agent_id: fix.agentId },
+          conversation_id: channelB.id,
+          agent_id: fix.agentId,
+          runtime_generation: 1,
+          delivery_ids: deliveryIds,
+          ts: 1700000000000,
+        };
+        fix.fanout.onEvent(
+          fix.hostId,
+          kind === 'runtime_delivery_failed'
+            ? { ...common, kind, reason: 'write_failed' }
+            : { ...common, kind },
+          'conn-1',
+        );
+      };
+
+      emit('runtime_delivery_consumed', [aId]);
+      emit('runtime_delivery_consumed', [bId, aId]);
+      emit('runtime_delivery_consumed', [bId, otherAgentId]);
+      expect(row(aId)).toEqual(before.get(aId));
+      expect(row(bId)).toEqual(before.get(bId));
+      expect(row(otherAgentId)).toEqual(before.get(otherAgentId));
+
+      emit('runtime_delivery_consumed', [bId]);
+      expect(row(bId)).toMatchObject({
+        delivered_at: expect.any(Number),
+        failed_at: null,
+        in_flight_owner: null,
+        in_flight_at: null,
+      });
+      expect(row(aId)).toEqual(before.get(aId));
+      expect(row(otherAgentId)).toEqual(before.get(otherAgentId));
+
+      const retryId = enqueue(channelB.id, fix.agentId, 'B retry');
+      fix.inbox.claimPending(channelB.id, fix.agentId, 'conn-1');
+      emit('runtime_delivery_failed', [retryId, aId]);
+      expect(row(retryId)).toMatchObject({ in_flight_owner: 'conn-1' });
+      emit('runtime_delivery_failed', [retryId]);
+      expect(row(retryId)).toMatchObject({
+        delivered_at: null,
+        failed_at: null,
+        in_flight_owner: null,
+        in_flight_at: null,
+      });
+      expect(row(aId)).toEqual(before.get(aId));
+      expect(row(otherAgentId)).toEqual(before.get(otherAgentId));
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('drops stale-generation consumed and failed before inbox settlement', () => {
+    const fix = makeFixture({ sessionScope: 'agent' });
+    try {
+      const enqueue = (content: string) => {
+        const message = fix.messages.insertForConversation({
+          conversationId: fix.channelId,
+          fromKind: 'user',
+          content,
+        });
+        return fix.inbox.ensureDelivery(
+          fix.channelId,
+          fix.agentId,
+          message.id,
+        ).inboxId;
+      };
+      const consumedId = enqueue('consume');
+      const failedId = enqueue('fail');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
+      const row = (id: number) => fix.db.prepare(
+        `SELECT id, conversation_id, agent_id, delivered_at, failed_at,
+                in_flight_owner, in_flight_at
+           FROM conversation_inboxes WHERE id = ?`,
+      ).get(id);
+      const beforeConsumed = row(consumedId);
+      const beforeFailed = row(failedId);
+
+      const daemonInstanceId = makeDaemonInstanceKey(123, 1700000000000);
+      const successor = new RuntimeSlotRepo(fix.db).claimGeneration({
+        scope: { kind: 'agent', agentId: fix.agentId },
+        daemonInstanceId,
+      });
+      expect(successor?.generation).toBe(2);
+      fix.agentTokens.issue(runtimePrincipalForScope({
+        scope: { kind: 'agent', agentId: fix.agentId },
+        generation: 2,
+        daemonInstanceId,
+      }));
+
+      const emit = (
+        kind: 'runtime_delivery_consumed' | 'runtime_delivery_failed',
+        generation: number,
+        deliveryIds: number[],
+      ) => {
+        const common = {
+          direction: 'daemon_to_server' as const,
+          type: 'event' as const,
+          runtime_scope: { kind: 'agent' as const, agent_id: fix.agentId },
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          runtime_generation: generation,
+          delivery_ids: deliveryIds,
+          ts: 1700000000000,
+        };
+        fix.fanout.onEvent(
+          fix.hostId,
+          kind === 'runtime_delivery_failed'
+            ? { ...common, kind, reason: 'write_failed' }
+            : { ...common, kind },
+          'conn-1',
+        );
+      };
+
+      emit('runtime_delivery_consumed', 1, [consumedId]);
+      emit('runtime_delivery_failed', 1, [failedId]);
+      expect(row(consumedId)).toEqual(beforeConsumed);
+      expect(row(failedId)).toEqual(beforeFailed);
+
+      emit('runtime_delivery_consumed', 2, [consumedId]);
+      emit('runtime_delivery_failed', 2, [failedId]);
+      expect(row(consumedId)).toMatchObject({
+        delivered_at: expect.any(Number),
+        in_flight_owner: null,
+        in_flight_at: null,
+      });
+      expect(row(failedId)).toMatchObject({
+        delivered_at: null,
+        failed_at: null,
+        in_flight_owner: null,
+        in_flight_at: null,
+      });
     } finally {
       fix.cleanup();
     }
@@ -578,6 +888,7 @@ describe('OutboundRuntimeEventFanout', () => {
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_state',
+        runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
         state: {
@@ -593,6 +904,7 @@ describe('OutboundRuntimeEventFanout', () => {
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_parsed_event',
+        runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
         parsed: { kind: 'text', text: 'must stay invisible' },
@@ -827,6 +1139,94 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.transport.calls.some(call => call.kind === 'runtime_deliver'),
       );
       expect(fix.transport.deliverCalls()).toHaveLength(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('reattach replays every pending origin of one live AgentSlot, not only its status focus', async () => {
+    const fix = makeFixture({ runtime: 'codex', sessionScope: 'agent' });
+    try {
+      const workspace = new WorkspaceRepo(fix.db).insert({
+        name: 'second-agent-slot-workspace',
+        description: null,
+      });
+      const second = fix.conversations.insertChannel({
+        workspaceId: workspace.id,
+        name: 'second-agent-slot-target',
+        title: 'second-agent-slot-target',
+      });
+      fix.conversations.addAgent(second.id, fix.agentId);
+
+      const firstDelivery = enqueueMessage(fix, 'first origin');
+      const secondMessage = fix.messages.insertForConversation({
+        conversationId: second.id,
+        fromKind: 'user',
+        content: 'second origin',
+      });
+      const secondDelivery = fix.inbox.ensureDelivery(
+        second.id,
+        fix.agentId,
+        secondMessage.id,
+      );
+      const revoked = fix.conversations.insertChannel({
+        workspaceId: workspace.id,
+        name: 'revoked-agent-slot-target',
+        title: 'revoked-agent-slot-target',
+      });
+      fix.conversations.addAgent(revoked.id, fix.agentId);
+      const revokedMessage = fix.messages.insertForConversation({
+        conversationId: revoked.id,
+        fromKind: 'user',
+        content: 'must stay unread after participant removal',
+      });
+      fix.inbox.ensureDelivery(
+        revoked.id,
+        fix.agentId,
+        revokedMessage.id,
+      );
+      fix.conversations.removeAgent(revoked.id, fix.agentId);
+      fix.transport.snapshot = {
+        runtimes: [
+          runtimeDto(
+            second.id,
+            fix.agentId,
+            'ready',
+            {
+              ...RUN_STATE,
+              conversationId: second.id,
+              agentId: fix.agentId,
+              status: 'idle',
+            },
+            { kind: 'agent', agent_id: fix.agentId },
+          ),
+        ],
+      };
+
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() => fix.transport.deliverCalls().length === 2);
+
+      const deliveries = fix.transport.deliverCalls().map(call => ({
+        ...call,
+        params: call.params as unknown as RuntimeDeliverParams,
+      }));
+      expect(deliveries.map(call => ({
+        conversationId: call.params.conversation_id,
+        deliveryIds: call.params.delivery_ids,
+        scope: call.params.spawn_options.runtime_scope,
+      }))).toEqual([
+        {
+          conversationId: fix.channelId,
+          deliveryIds: [firstDelivery.inboxId],
+          scope: { kind: 'agent', agent_id: fix.agentId },
+        },
+        {
+          conversationId: second.id,
+          deliveryIds: [secondDelivery.inboxId],
+          scope: { kind: 'agent', agent_id: fix.agentId },
+        },
+      ]);
+      expect(fix.inbox.listPending(revoked.id, fix.agentId)).toHaveLength(1);
     } finally {
       fix.cleanup();
     }
@@ -1076,8 +1476,10 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_delivery_consumed',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
+          runtime_generation: 1,
           delivery_ids: [first.inboxId, second.inboxId],
           ts: 1700000002000,
         },
@@ -1167,6 +1569,7 @@ describe('OutboundRuntimeEventFanout', () => {
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_parsed_event',
+        runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
         parsed: {
@@ -1355,6 +1758,7 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_exit',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           code: 1,
@@ -1368,6 +1772,116 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(fix.transport.deliverCalls()[1]!.params).toMatchObject({
         delivery_ids: [delivery.inboxId],
       });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('AgentSlot ready re-drives a different origin refused during startup without a third message', async () => {
+    const fix = makeFixture({ runtime: 'codex', sessionScope: 'agent' });
+    try {
+      const channelB = fix.conversations.insertChannel({
+        workspaceId: fix.workspaceId,
+        name: 'origin-b',
+        title: 'origin-b',
+      });
+      fix.conversations.addAgent(channelB.id, fix.agentId);
+      const enqueue = (conversationId: string, content: string) => {
+        const message = fix.messages.insertForConversation({
+          conversationId,
+          fromKind: 'user',
+          content,
+        });
+        return fix.inbox.ensureDelivery(conversationId, fix.agentId, message.id);
+      };
+      const a = enqueue(fix.channelId, 'A starts aggregate');
+      const b = enqueue(channelB.id, 'B arrives during startup');
+      await fix.fanout.deliverPending(fix.channelId, fix.agentId);
+      fix.transport.refuseNextDeliver('startup_pending');
+      await fix.fanout.deliverPending(channelB.id, fix.agentId);
+      expect(fix.transport.deliverCalls()).toHaveLength(2);
+      expect(fix.inbox.listPending(channelB.id, fix.agentId)).toMatchObject([
+        { inboxId: b.inboxId },
+      ]);
+
+      fix.fanout.onEvent(fix.hostId, {
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_delivery_consumed',
+        runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        runtime_generation: 1,
+        delivery_ids: [a.inboxId],
+        ts: 1700000000000,
+      }, 'conn-1');
+      fix.fanout.onEvent(fix.hostId, {
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_ready_for_drain',
+        runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        runtime_generation: 1,
+        ts: 1700000001000,
+      }, 'conn-1');
+
+      await waitFor(() => fix.transport.deliverCalls().length === 3);
+      expect(fix.transport.deliverCalls()[2]!.params).toMatchObject({
+        conversation_id: channelB.id,
+        runtime_generation: 1,
+        delivery_ids: [b.inboxId],
+        spawn_options: { runtime_scope: { kind: 'agent', agent_id: fix.agentId } },
+      });
+      expect(fix.transport.calls.filter(call => call.kind === 'runtime_start')).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('AgentSlot one-shot exit respawns from the earliest pending origin, not stale focus', async () => {
+    const fix = makeFixture({ runtime: 'cursor', sessionScope: 'agent' });
+    try {
+      const channelB = fix.conversations.insertChannel({
+        workspaceId: fix.workspaceId,
+        name: 'origin-b',
+        title: 'origin-b',
+      });
+      fix.conversations.addAgent(channelB.id, fix.agentId);
+      const message = fix.messages.insertForConversation({
+        conversationId: channelB.id,
+        fromKind: 'user',
+        content: 'only B is pending',
+      });
+      const b = fix.inbox.ensureDelivery(channelB.id, fix.agentId, message.id);
+      fix.transport.refuseNextDeliver('startup_pending');
+      await fix.fanout.deliverPending(channelB.id, fix.agentId);
+      expect(fix.inbox.listPending(channelB.id, fix.agentId)).toMatchObject([
+        { inboxId: b.inboxId },
+      ]);
+
+      fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: 1,
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_exit',
+        runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        code: 0,
+        intentional: false,
+        ts: 1700000010000,
+      }, 'conn-1');
+
+      await waitFor(() => fix.transport.deliverCalls().length === 2);
+      expect(fix.transport.deliverCalls()[1]!.params).toMatchObject({
+        conversation_id: channelB.id,
+        delivery_ids: [b.inboxId],
+        spawn_options: { runtime_scope: { kind: 'agent', agent_id: fix.agentId } },
+      });
+      expect(fix.transport.deliverCalls().filter(call =>
+        call.params['conversation_id'] === fix.channelId
+      )).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -1396,8 +1910,10 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_delivery_failed',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
+          runtime_generation: 1,
           delivery_ids: [delivery.inboxId],
           reason: 'child_exit',
           ts: 1700000001000,
@@ -1435,6 +1951,7 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_parsed_event',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           parsed: {
@@ -1454,8 +1971,10 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_delivery_failed',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
+          runtime_generation: 1,
           delivery_ids: [delivery.inboxId],
           reason: 'child_exit',
           ts: 1700000001001,
@@ -1468,6 +1987,7 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_exit',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           code: 1,
@@ -1514,6 +2034,7 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_exit',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           code: 1,
@@ -1596,6 +2117,7 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_parsed_event',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           parsed: {
@@ -1642,6 +2164,7 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_exit',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
           code: 1,
@@ -1656,26 +2179,26 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(fix.transport.deliverCalls()).toHaveLength(1);
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
 
-      // Rollback is daemon-driven: the daemon's onChildExit emits
-      // `runtime_delivery_failed{child_exit}` for the queued entry, which the
-      // backend applies by returning the row to durable pending.
+      // An ack that arrives after runtime_exit is stale custody. The daemon's
+      // real onChildExit path emits queued delivery failures before the exit;
+      // this reversed-order injection must not settle after finalization.
       fix.fanout.onEvent(
         fix.hostId,
         {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_delivery_failed',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
           conversation_id: fix.channelId,
           agent_id: fix.agentId,
+          runtime_generation: 1,
           delivery_ids: [delivery.inboxId],
           reason: 'child_exit',
           ts: 1700000011000,
         },
         'conn-1',
       );
-      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toMatchObject([
-        { inboxId: delivery.inboxId },
-      ]);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -2223,8 +2746,11 @@ describe('OutboundRuntimeEventFanout', () => {
       const stops = fix.transport.calls.filter(c => c.kind === 'runtime_stop');
       expect(stops).toHaveLength(1);
       expect(stops[0]!.params).toEqual({
-        conversation_id: fix.channelId,
-        agent_id: fix.agentId,
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+        },
         runtime_generation: 1, mode: 'hard',
       });
       expect('soft_directive' in stops[0]!.params).toBe(false);
@@ -2252,14 +2778,22 @@ describe('OutboundRuntimeEventFanout', () => {
       await fix.fanout.stop(fix.channelId, fix.agentId, {
         hostId: capturedHostId,
         runtimeGeneration: 1,
+        runtimeScope: {
+          kind: 'conversation',
+          conversationId: fix.channelId,
+          agentId: fix.agentId,
+        },
       });
 
       const stops = fix.transport.calls.filter(c => c.kind === 'runtime_stop');
       expect(stops).toHaveLength(1);
       expect(stops[0]!.hostId).toBe(capturedHostId);
       expect(stops[0]!.params).toEqual({
-        conversation_id: fix.channelId,
-        agent_id: fix.agentId,
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+        },
         runtime_generation: 1, mode: 'hard',
       });
     } finally {
@@ -2309,8 +2843,11 @@ describe('OutboundRuntimeEventFanout', () => {
 
       const stop = fix.transport.stopCalls()[0]!;
       expect(stop.params).toEqual({
-        conversation_id: fix.channelId,
-        agent_id: fix.agentId,
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+        },
         runtime_generation: 1, mode: 'hard',
       });
       expect(stop.opts?.expectedConnectionId).toBe('conn-1');
@@ -2472,6 +3009,7 @@ describe('OutboundRuntimeEventFanout', () => {
           direction: 'daemon_to_server',
           type: 'event',
           kind: 'runtime_state',
+          runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: secondAgent.id },
           conversation_id: fix.channelId,
           agent_id: secondAgent.id,
           state: {
@@ -2496,7 +3034,11 @@ describe('OutboundRuntimeEventFanout', () => {
       });
       expect(fix.transport.stopCalls()).toHaveLength(1);
       expect(fix.transport.stopCalls()[0]!.params).toMatchObject({
-        agent_id: fix.agentId,
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+        },
       });
     } finally {
       fix.cleanup();
@@ -2587,6 +3129,41 @@ describe('OutboundRuntimeEventFanout', () => {
   //      `finally` cleanup runs, the lock releases and a third call
   //      can succeed.
   describe('clearSession (D4.c C7)', () => {
+    it('clears the AgentSlot session authority rather than a target roster projection', async () => {
+      const fix = makeFixture({ sessionScope: 'agent' });
+      try {
+        const slots = new RuntimeSlotRepo(fix.db);
+        const slot = slots.getAgent(fix.agentId);
+        if (!slot?.claimed_by_daemon_instance_id) {
+          throw new Error('fixture AgentSlot has no active custody');
+        }
+        expect(slots.compareAndSetProjection({
+          scope: { kind: 'agent', agentId: fix.agentId },
+          expectedGeneration: slot.generation,
+          expectedDaemonInstanceId: slot.claimed_by_daemon_instance_id,
+          patch: { cliSessionId: 'agent-session-1' },
+        })).not.toBeNull();
+        fix.transport.setNextClearResult({ cleared: false });
+
+        await expect(fix.fanout.clearSession(
+          fix.channelId,
+          fix.agentId,
+          null,
+        )).resolves.toEqual({
+          prevCliSessionId: 'agent-session-1',
+          wasRunning: false,
+        });
+
+        expect(fix.transport.clearSessionCalls()[0]?.params).toEqual({
+          runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+          runtime_generation: slot.generation,
+        });
+        expect(slots.getAgent(fix.agentId)?.cli_session_id).toBeNull();
+      } finally {
+        fix.cleanup();
+      }
+    });
+
     it('clears cli_session_id + inserts audit + publishes SSE when runtime_exit lands within bound', async () => {
       const fix = makeFixture({ clearSessionExitTimeoutMs: 200 });
       try {
@@ -2634,8 +3211,11 @@ describe('OutboundRuntimeEventFanout', () => {
         const clearCalls = fix.transport.clearSessionCalls();
         expect(clearCalls).toHaveLength(1);
         expect(clearCalls[0]!.params).toEqual({
-          conversation_id: fix.channelId,
-          agent_id: fix.agentId,
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: fix.channelId,
+            agent_id: fix.agentId,
+          },
           runtime_generation: 1,
         });
 
@@ -2892,6 +3472,7 @@ function emitRuntimeExit(fix: Fixture): void {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_exit',
+      runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
       conversation_id: fix.channelId,
       agent_id: fix.agentId,
       code: 0,
@@ -3008,6 +3589,7 @@ function makeFixture(
     /** Most event fixtures model an already-running generation. Tests that
      * prove first-claim failure semantics opt out explicitly. */
     preclaimRuntime?: boolean;
+    sessionScope?: 'agent' | 'conversation';
   } = {},
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
@@ -3018,22 +3600,35 @@ function makeFixture(
   });
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'fanout',
   });
   const agent = new AgentRepo(db).create(
-    { name: 'agent', runtime: opts.runtime ?? 'claude', host_id: localHostId },
+    {
+      name: 'agent',
+      runtime: opts.runtime ?? 'claude',
+      host_id: localHostId,
+      session_scope: opts.sessionScope ?? 'conversation',
+    },
     localHostId,
     viewerUserId,
   );
   conversations.addAgent(channel.id, agent.id);
   const runtimeSlots = new RuntimeSlotRepo(db);
-  runtimeSlots.updateCurrentConversationProjection(channel.id, agent.id, {
+  const runtimeScope = opts.sessionScope === 'agent'
+    ? { kind: 'agent' as const, agentId: agent.id }
+    : {
+        kind: 'conversation' as const,
+        conversationId: channel.id,
+        agentId: agent.id,
+      };
+  runtimeSlots.updateCurrentProjection(runtimeScope, {
     status: 'starting',
   });
   if (opts.preclaimRuntime !== false) {
     runtimeSlots.claimGeneration({
-      scope: { kind: 'conversation', conversationId: channel.id, agentId: agent.id },
+      scope: runtimeScope,
       daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
     });
   }
@@ -3058,11 +3653,10 @@ function makeFixture(
           ensure: async () => ({ ok: true }),
         } as unknown as AgentL2SeedEnsurer);
   const agentTokens = new AgentTokenStore();
-  const preclaimed = runtimeSlots.getConversation(channel.id, agent.id);
+  const preclaimed = runtimeSlots.get(runtimeScope);
   if (preclaimed?.claimed_by_daemon_instance_id) {
-    agentTokens.issue(conversationRuntimePrincipal({
-      conversationId: channel.id,
-      agentId: agent.id,
+    agentTokens.issue(runtimePrincipalForScope({
+      scope: runtimeScope,
       generation: preclaimed.generation,
       daemonInstanceId: preclaimed.claimed_by_daemon_instance_id,
     }));
@@ -3371,18 +3965,25 @@ class FakeTransport implements HostWsServerController {
     }
     if (kind === 'runtime_stop') {
       const stop = params as OutboundServerCommandParams<'runtime_stop'>;
+      const stopScope = stop.runtime_scope;
       const matched = this.snapshot.runtimes.some(
         runtime =>
-          runtime.conversation_id === stop.conversation_id
-          && runtime.agent_id === stop.agent_id
+          runtime.runtime_scope.kind === stopScope.kind
+          && (runtime.runtime_scope.kind !== 'conversation'
+            || stopScope.kind !== 'conversation'
+            || runtime.runtime_scope.conversation_id === stopScope.conversation_id)
+          && runtime.agent_id === stopScope.agent_id
           && runtime.runtime_generation === stop.runtime_generation,
       );
       if (matched) {
         this.snapshot = {
           runtimes: this.snapshot.runtimes.filter(
             runtime =>
-              runtime.conversation_id !== stop.conversation_id
-              || runtime.agent_id !== stop.agent_id
+              runtime.runtime_scope.kind !== stopScope.kind
+              || (runtime.runtime_scope.kind === 'conversation'
+                && stopScope.kind === 'conversation'
+                && runtime.runtime_scope.conversation_id !== stopScope.conversation_id)
+              || runtime.agent_id !== stopScope.agent_id
               || runtime.runtime_generation !== stop.runtime_generation,
           ),
         };
@@ -3526,8 +4127,14 @@ function runtimeDto(
   agentId: string,
   phase: 'idle' | 'spawning' | 'startup_pending' | 'ready' | 'draining' | 'exited',
   runState: AgentRunState,
+  runtimeScope: RuntimeStatusResult['runtimes'][number]['runtime_scope'] = {
+    kind: 'conversation',
+    conversation_id: conversationId,
+    agent_id: agentId,
+  },
 ): RuntimeStatusResult['runtimes'][number] {
   return {
+    runtime_scope: runtimeScope,
     conversation_id: conversationId,
     agent_id: agentId,
     runtime_generation: 1,
@@ -3563,6 +4170,11 @@ function readyForDrainEvent(fix: Fixture): OutboundDaemonToServerEventFrame {
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_ready_for_drain',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: fix.channelId,
+      agent_id: fix.agentId,
+    },
     conversation_id: fix.channelId,
     agent_id: fix.agentId,
     ts: 1700000001000,
@@ -3586,9 +4198,10 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
-        state: RUN_STATE,
+        state: { ...RUN_STATE, conversationId: 'c1' },
         ts: 1700000000000,
       };
     case 'runtime_output':
@@ -3596,6 +4209,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         stream: 'stdout',
@@ -3608,6 +4222,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         code: 0,
@@ -3620,15 +4235,18 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         ts: 1700000000000,
       };
     case 'runtime_delivery_consumed':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1],
@@ -3636,9 +4254,11 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
       };
     case 'runtime_delivery_failed':
       return {
+        runtime_generation: 1,
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         delivery_ids: [1],
@@ -3651,6 +4271,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         timeout_reason: 'silence',
@@ -3667,6 +4288,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         retry_attempt: 1,
@@ -3680,6 +4302,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         cooldown_until: 1700000100000,
@@ -3691,6 +4314,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         elapsed_ms: 1000,
@@ -3701,6 +4325,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         dropped_count: 1,
@@ -3713,6 +4338,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
       };
@@ -3722,6 +4348,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         parsed: { kind: 'session_init', sessionId: 'sess-1' },
@@ -3732,6 +4359,7 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         direction: 'daemon_to_server',
         type: 'event',
         kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
         parsed_kind: 'tool_call',
@@ -3912,6 +4540,7 @@ describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_state',
+      runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
       conversation_id: fix.channelId,
       agent_id: fix.agentId,
       state: {
@@ -3935,6 +4564,7 @@ describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_exit',
+      runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
       conversation_id: fix.channelId,
       agent_id: fix.agentId,
       code: 0,

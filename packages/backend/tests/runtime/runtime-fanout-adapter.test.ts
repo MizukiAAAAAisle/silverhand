@@ -67,6 +67,7 @@ function makeFixture() {
     description: null,
   });
   const channel = conversations.insertChannel({
+    name: 'ch-1',
     workspaceId: workspace.id,
     title: 'fanout-adapter',
   });
@@ -182,14 +183,20 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     expect(live).toHaveLength(1);
     expect(Object.keys(live[0]!).sort()).toEqual([
       'agentId',
-      'conversationId',
       'daemonInstanceId',
+      'focusConversationId',
       'generation',
       'pid',
+      'scope',
       'status',
     ]);
     expect(live[0]).toEqual({
-      conversationId: f.channelId,
+      scope: {
+        kind: 'conversation',
+        conversationId: f.channelId,
+        agentId: f.agentId,
+      },
+      focusConversationId: f.channelId,
       agentId: f.agentId,
       generation: 0,
       daemonInstanceId: null,
@@ -200,22 +207,26 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     // `markCrashed`'s constant is in its name — the caller cannot ask for a
     // different status, and the pair leaves the live set afterwards.
     const updated = f.persistence.hydrateReconcile.markCrashed(live[0]!);
-    expect(updated?.status).toBe('crashed');
-    expect(updated?.pid).toBeNull();
+    expect(updated).toBe(true);
     expect(
       f.persistence.hydrateReconcile.listDbLiveRuntimesForHost(f.localHostId),
     ).toEqual([]);
     // a membership row that is gone is `null`, which the caller skips
     expect(
       f.persistence.hydrateReconcile.markCrashed({
-        conversationId: f.channelId,
+        scope: {
+          kind: 'conversation',
+          conversationId: f.channelId,
+          agentId: 'no-such-agent',
+        },
+        focusConversationId: f.channelId,
         agentId: 'no-such-agent',
         generation: 0,
         daemonInstanceId: null,
         status: 'active',
         pid: null,
       }),
-    ).toBeNull();
+    ).toBe(false);
   });
 
   it('user reads answer with a handle, never a users row (R4)', () => {
@@ -235,7 +246,15 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
 
     // (a) happy path — both writes land
     const result = f.persistence.session.atomically(scope => {
-      const updated = scope.clearCliSession(f.channelId, f.agentId);
+      const updated = scope.clearCliSession({
+        scope: {
+          kind: 'conversation',
+          conversationId: f.channelId,
+          agentId: f.agentId,
+        },
+        targetConversationId: f.channelId,
+        agentId: f.agentId,
+      });
       const audit = scope.insertSystemMessage({
         conversationId: f.channelId,
         fromUserId: f.viewerUserId,
@@ -255,7 +274,15 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     const midpoint = messageCount();
     expect(() =>
       f.persistence.session.atomically(scope => {
-        scope.clearCliSession(f.channelId, f.agentId);
+        scope.clearCliSession({
+          scope: {
+            kind: 'conversation',
+            conversationId: f.channelId,
+            agentId: f.agentId,
+          },
+          targetConversationId: f.channelId,
+          agentId: f.agentId,
+        });
         scope.insertSystemMessage({
           conversationId: f.channelId,
           fromUserId: f.viewerUserId,

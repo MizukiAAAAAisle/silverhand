@@ -44,8 +44,9 @@ import type { AgentRunState } from '@silverhand/shared';
 import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { EventPublisher } from './event-handler.js';
 import {
-  conversationRuntimePrincipal,
+  runtimePrincipalForScope,
   type RuntimePrincipal,
+  type RuntimePrincipalScope,
 } from '../auth/runtime-principal.js';
 
 export interface RuntimeProjectionCustody {
@@ -59,6 +60,7 @@ export type InitTimeoutReason =
   | 'post_protocol';
 
 export interface SessionInitProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   cliSessionId: string;
@@ -66,12 +68,14 @@ export interface SessionInitProjection {
 }
 
 export interface RuntimeReadyProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   custody: RuntimeProjectionCustody;
 }
 
 export interface RuntimeExitProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   intentional: boolean;
@@ -84,6 +88,7 @@ export interface RuntimeExitProjection {
 }
 
 export interface InitRetryingProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   retryAttempt: number;
@@ -93,6 +98,7 @@ export interface InitRetryingProjection {
 }
 
 export interface InitCooldownProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   cooldownUntil: number;
@@ -129,13 +135,14 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * dedup of the non-idempotent steps (B3).
    */
   sessionInit({
+    scope,
     conversationId,
     agentId,
     cliSessionId,
     custody,
   }: SessionInitProjection): void {
     const updated = this.runtimeSlots.compareAndSetProjection({
-      scope: { kind: 'conversation', conversationId, agentId },
+      scope,
       expectedGeneration: custody.generation,
       expectedDaemonInstanceId: custody.daemonInstanceId,
       patch: { status: 'active', cliSessionId },
@@ -160,9 +167,9 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * This deliberately preserves `cli_session_id`; `sessionInit()` will
    * fill/refresh it once the driver emits a real session id.
    */
-  runtimeReady({ conversationId, agentId, custody }: RuntimeReadyProjection): void {
+  runtimeReady({ scope, conversationId, agentId, custody }: RuntimeReadyProjection): void {
     const updated = this.runtimeSlots.compareAndSetProjection({
-      scope: { kind: 'conversation', conversationId, agentId },
+      scope,
       expectedGeneration: custody.generation,
       expectedDaemonInstanceId: custody.daemonInstanceId,
       patch: { status: 'active' },
@@ -198,6 +205,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * start fail against the same invalid lower-level session.
    */
   runtimeExit({
+    scope,
     conversationId,
     agentId,
     intentional,
@@ -215,7 +223,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
           ? 'idle'
           : 'crashed';
     const finalized = this.runtimeSlots.finalizeGeneration({
-      scope: { kind: 'conversation', conversationId, agentId },
+      scope,
       expectedGeneration: custody.generation,
       expectedDaemonInstanceId: custody.daemonInstanceId,
       status,
@@ -233,9 +241,8 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
         ...(clearCliSessionId ? { cli_session_id: null } : {}),
       },
     });
-    return conversationRuntimePrincipal({
-      conversationId,
-      agentId,
+    return runtimePrincipalForScope({
+      scope,
       generation: custody.generation,
       daemonInstanceId: custody.daemonInstanceId,
     });
@@ -251,6 +258,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * regressing to the pre-retry view.
    */
   initRetrying({
+    scope,
     conversationId,
     agentId,
     retryAttempt,
@@ -259,7 +267,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     custody,
   }: InitRetryingProjection): void {
     const updated = this.runtimeSlots.compareAndSetProjection({
-      scope: { kind: 'conversation', conversationId, agentId },
+      scope,
       expectedGeneration: custody.generation,
       expectedDaemonInstanceId: custody.daemonInstanceId,
       patch: { status: 'starting', pid: null },
@@ -287,6 +295,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * restart until cooldown lapses.
    */
   initCooldown({
+    scope,
     conversationId,
     agentId,
     cooldownUntil,
@@ -294,7 +303,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     custody,
   }: InitCooldownProjection): void {
     const updated = this.runtimeSlots.compareAndSetProjection({
-      scope: { kind: 'conversation', conversationId, agentId },
+      scope,
       expectedGeneration: custody.generation,
       expectedDaemonInstanceId: custody.daemonInstanceId,
       patch: { status: 'crashed', pid: null },

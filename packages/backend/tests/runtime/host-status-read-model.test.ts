@@ -372,6 +372,11 @@ describe('activeAgentIdsFromCacheEntries', () => {
   const entry = (
     overrides: Partial<CachedRuntimeEntry> & Pick<CachedRuntimeEntry, 'agentId'>,
   ): CachedRuntimeEntry => ({
+    runtimeScope: {
+      kind: 'conversation',
+      conversation_id: overrides.conversationId ?? 'conv-1',
+      agent_id: overrides.agentId,
+    },
     conversationId: 'conv-1',
     runtimeGeneration: 1,
     phase: 'ready',

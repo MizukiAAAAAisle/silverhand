@@ -7,6 +7,7 @@ import {
 } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type {
+  AgentSessionScope,
   CreateAgentInput,
   RuntimeAvailabilityState,
   RuntimeKind,
@@ -95,6 +96,32 @@ const EMPTY_RUNTIME_GATE: RuntimeGate = {
   selectedAbsent: false,
 };
 
+export interface CreateAgentSubmitDraft {
+  name: string;
+  runtime: RuntimeKind;
+  model: string;
+  hostId: string | null;
+  sessionScope: AgentSessionScope;
+}
+
+/** Canonical product submit shape. Conversation scope remains the wire
+ * default for old clients; only a positive Agent-scoped choice widens the
+ * payload. This function is the path the real form submits through, so tests
+ * can exercise both branches without a second form-only mirror. */
+export function createAgentInputFromDraft(
+  draft: CreateAgentSubmitDraft,
+): CreateAgentInput {
+  const input: CreateAgentInput = {
+    name: draft.name.trim(),
+    runtime: draft.runtime,
+  };
+  const trimmedModel = draft.model.trim();
+  if (trimmedModel) input.model = trimmedModel;
+  if (draft.hostId) input.host_id = draft.hostId;
+  if (draft.sessionScope === 'agent') input.session_scope = 'agent';
+  return input;
+}
+
 export function CreateAgentDialog({
   open,
   onOpenChange,
@@ -102,6 +129,8 @@ export function CreateAgentDialog({
 }: CreateAgentDialogProps): JSX.Element {
   const [name, setName] = useState('');
   const [runtime, setRuntime] = useState<RuntimeKind>('claude');
+  const [sessionScope, setSessionScope] =
+    useState<AgentSessionScope>('conversation');
   // Model tracks the selected runtime's catalog default (qoder → `Ultimate`,
   // others → blank = the runtime's own CLI default). Switching runtime resets
   // it to that runtime's default so the field always reflects what will be
@@ -175,6 +204,7 @@ export function CreateAgentDialog({
   useEffect(() => {
     if (!open) {
       setSelectedHostId(null);
+      setSessionScope('conversation');
       setRuntimeGate(EMPTY_RUNTIME_GATE);
       return;
     }
@@ -239,14 +269,18 @@ export function CreateAgentDialog({
       return;
     }
     try {
-      const input: CreateAgentInput = { name: name.trim(), runtime };
-      const trimmedModel = model.trim();
-      if (trimmedModel) input.model = trimmedModel;
-      if (effectiveHostId) input.host_id = effectiveHostId;
+      const input = createAgentInputFromDraft({
+        name,
+        runtime,
+        model,
+        hostId: effectiveHostId,
+        sessionScope,
+      });
       const res = await createAgent.mutateAsync(input);
       onCreated?.(res.agent.id);
       setName('');
       setRuntime('claude');
+      setSessionScope('conversation');
       setModel(runtimeDefaultModel('claude') ?? '');
       setSelectedHostId(null);
       setRuntimeGate(EMPTY_RUNTIME_GATE);
@@ -301,6 +335,33 @@ export function CreateAgentDialog({
             onSelect={selectRuntime}
             onGateChange={setRuntimeGate}
           />
+
+          <div className="flex flex-col gap-1.5">
+            <Label className="font-semibold">Session scope</Label>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Session scope">
+              <button
+                type="button"
+                className={chipClass(sessionScope === 'conversation')}
+                aria-pressed={sessionScope === 'conversation'}
+                onClick={() => setSessionScope('conversation')}
+              >
+                Conversation
+              </button>
+              <button
+                type="button"
+                className={chipClass(sessionScope === 'agent')}
+                aria-pressed={sessionScope === 'agent'}
+                onClick={() => setSessionScope('agent')}
+              >
+                Agent
+              </button>
+            </div>
+            <p className="text-xs text-text-muted">
+              {sessionScope === 'agent'
+                ? 'One persistent session follows this agent across conversations.'
+                : 'A separate session is kept for each conversation.'}
+            </p>
+          </div>
 
           <div className="flex flex-col gap-1.5">
             {/* No `htmlFor` → the caption is a plain visual label, not a

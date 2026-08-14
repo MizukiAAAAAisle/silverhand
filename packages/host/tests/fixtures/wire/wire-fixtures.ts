@@ -25,6 +25,7 @@
 import type { z } from 'zod';
 import {
   EventFrameSchema,
+  HOST_PROTOCOL_VERSION,
   intentSchemas,
   LooseResponseFrameSchema,
   RequestFrameSchema,
@@ -92,7 +93,88 @@ const RUNTIME_START_OPTIONS = testStartOptions({
 //    Lets us keep the registry source readable while ensuring every
 //    fixture is real JSON the schemas can parse. We DO NOT use this
 //    for round-trip canonicalisation — the test consumes `frame` as-is.
-const enc = (o: unknown): string => JSON.stringify(o);
+const enc = (o: unknown): string => JSON.stringify(normalizeRuntimeScopeFixture(o));
+
+function normalizeRuntimeScopeFixture(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  const frame = value as Record<string, unknown>;
+  if (
+    typeof frame.event === 'string'
+    && frame.event.startsWith('runtime_')
+    && typeof frame.conversation_id === 'string'
+    && typeof frame.agent_id === 'string'
+    && frame.runtime_scope === undefined
+  ) {
+    return {
+      ...frame,
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: frame.conversation_id,
+        agent_id: frame.agent_id,
+      },
+    };
+  }
+  if (
+    (frame.intent === 'runtime_stop' || frame.intent === 'runtime_clear_session')
+    && frame.params !== null
+    && typeof frame.params === 'object'
+    && !Array.isArray(frame.params)
+  ) {
+    const params = frame.params as Record<string, unknown>;
+    if (
+      typeof params.conversation_id === 'string'
+      && typeof params.agent_id === 'string'
+      && params.runtime_scope === undefined
+    ) {
+      const { conversation_id, agent_id, ...rest } = params;
+      return {
+        ...frame,
+        params: {
+          ...rest,
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id,
+            agent_id,
+          },
+        },
+      };
+    }
+  }
+  if (
+    frame.result !== null
+    && typeof frame.result === 'object'
+    && !Array.isArray(frame.result)
+  ) {
+    const result = frame.result as Record<string, unknown>;
+    if (Array.isArray(result.runtimes)) {
+      return {
+        ...frame,
+        result: {
+          ...result,
+          runtimes: result.runtimes.map(runtime => {
+            if (runtime === null || typeof runtime !== 'object' || Array.isArray(runtime)) {
+              return runtime;
+            }
+            const row = runtime as Record<string, unknown>;
+            return row.runtime_scope !== undefined
+              ? row
+              : {
+                  ...row,
+                  runtime_scope: {
+                    kind: 'conversation',
+                    conversation_id: row.conversation_id,
+                    agent_id: row.agent_id,
+                  },
+                };
+          }),
+        },
+      };
+    }
+  }
+  return frame;
+}
 
 // ── Request fixtures ───────────────────────────────────────────────
 //    One per intent, plus discriminated-union arms where the request
@@ -199,6 +281,7 @@ const REQUESTS: WireFixture[] = [
       params: {
         runtime_generation: 1,
         conversation_id: C,
+        target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: DELIVERY_IDS,
         kind: 'message',
@@ -218,6 +301,7 @@ const REQUESTS: WireFixture[] = [
       params: {
         runtime_generation: 1,
         conversation_id: C,
+        target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: [201],
         kind: 'schedule_fire',
@@ -237,6 +321,7 @@ const REQUESTS: WireFixture[] = [
       params: {
         runtime_generation: 1,
         conversation_id: C,
+        target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: [200, 201],
         delivered_up_to_seq: 201,
@@ -316,21 +401,33 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/runtime_output_pause',
-    description: 'Pause droppable runtime_output stream for a (conv, agent).',
+    description: 'Pause droppable runtime_output stream for a semantic runtime scope.',
     frame: enc({
       id: 'req-pause',
       intent: 'runtime_output_pause',
-      params: { conversation_id: C, agent_id: A },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: C,
+          agent_id: A,
+        },
+      },
     }),
     kind: { kind: 'request', intent: 'runtime_output_pause' },
   },
   {
     name: 'request/runtime_output_resume',
-    description: 'Resume droppable runtime_output stream for a (conv, agent).',
+    description: 'Resume droppable runtime_output stream for a semantic runtime scope.',
     frame: enc({
       id: 'req-resume',
       intent: 'runtime_output_resume',
-      params: { conversation_id: C, agent_id: A },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: C,
+          agent_id: A,
+        },
+      },
     }),
     kind: { kind: 'request', intent: 'runtime_output_resume' },
   },
@@ -596,7 +693,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 14,
+        protocol_version: HOST_PROTOCOL_VERSION,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -2192,7 +2289,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 14,
+      protocol_version: HOST_PROTOCOL_VERSION,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',
@@ -2302,8 +2399,9 @@ const EVENTS: WireFixture[] = [
   {
     name: 'event/runtime_delivery_consumed',
     description:
-      '#task:1417 Stage 2 — unified delivery ack: daemon wrote a runtime_deliver batch to stdin (init-proven for requires_first_message). Backend markDelivered. Sole mover of delivered_at.',
+      '#task:1417 Stage 2 — unified delivery ack: daemon wrote a runtime_deliver batch to stdin (init-proven for requires_first_message). Backend settles the exact generation/origin/lease. Sole mover of delivered_at.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_consumed',
       conversation_id: C,
       agent_id: A,
@@ -2317,6 +2415,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery rollback: child exited before the runtime_deliver batch drained. Backend rolls rows back to pending.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
@@ -2331,6 +2430,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery rollback: init watchdog fired before the driver proved the turn landed (mirrors the legacy startup_delivery init_watchdog arm; kept so consumers see every reason variant).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
@@ -2345,6 +2445,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery rollback: stdin write failed mid-batch.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
@@ -2359,6 +2460,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery fatal: driver refused the encoded payload after claiming ready (programming error).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,

@@ -264,11 +264,15 @@ export async function addConversationMember(
   // handle here.
   //
   // Stage 1 — the FLOOR, target-independent: the caller must be a member of
-  // THIS conversation (`canAddConversationMember` = `canViewConversation`).
-  // This is what keeps a private channel private: no role and no agent of
-  // yours gets you a roster write on a channel you are not in, so
+  // THIS conversation, and the conversation's roster must be mutable at all
+  // (`canAddConversationMember` = `roster_policy = 'open'` ∧ participation).
+  // The membership half is what keeps a private channel private: no role and
+  // no agent of yours gets you a roster write on a channel you are not in, so
   // own-agent-add can never be used to gain or spread channel access
-  // (#task:1683). Agent/system: the agent route's
+  // (#task:1683). The roster half is already implied here by the
+  // `kind === 'channel'` refusal above — kept as a conjunct in the GATE because
+  // the gate is exported and the next call site will not inherit this use
+  // case's guard (@Cindy M1). Agent/system: the agent route's
   // `manage_conversation_members` capability gate already ran before the
   // request entered this use case; the floor is the same membership check.
   if (!canAddConversationMember(deps.ctx, input.principal, conversation.id)) {
@@ -1134,17 +1138,19 @@ export async function removeConversationMember(
     return { ok: true, members: deps.membership.listMembers(conversation.id) };
   }
 
-  // Pre-commit best-effort: stop the runtime BEFORE the DB write (spec §2.1).
-  // The success path awaits until stop settles; a failure is caught and we
-  // continue to the removal.
-  await deps.ctx.runtimeHost
-    .stop(conversation.id, agent.id)
-    .catch(err =>
-      deps.ctx.logger.warn(
-        { conversationId: conversation.id, agentId: agent.id, err },
-        'conversation member remove: stop failed',
-      ),
-    );
+  // ConversationSlot is owned by this membership edge, so removal stops it.
+  // AgentSlot belongs to the Agent aggregate and merely loses this target;
+  // stopping it would kill unrelated work in every other conversation.
+  if (agent.session_scope === 'conversation') {
+    await deps.ctx.runtimeHost
+      .stop(conversation.id, agent.id)
+      .catch(err =>
+        deps.ctx.logger.warn(
+          { conversationId: conversation.id, agentId: agent.id, err },
+          'conversation member remove: stop failed',
+        ),
+      );
+  }
 
   // The IMMUTABLE half of the removal authority: `canEditAgent` is the agent's
   // creator (or the agent itself), which no roster write can change. The

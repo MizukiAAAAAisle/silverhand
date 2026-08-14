@@ -57,7 +57,11 @@
  *    socket buckets — one slow consumer cannot starve another. State
  *    is keyed by `(socket, conv, agent)`.
  */
-import { encodeFrame, type EventFrame } from '../protocol.js';
+import {
+  encodeFrame,
+  type EventFrame,
+  type RuntimeScope,
+} from '../protocol.js';
 import type { Socket } from 'node:net';
 
 /** Hard ceiling on un-flushed runtime_output bytes per (conv, agent). */
@@ -67,6 +71,7 @@ export const OUTPUT_BUFFER_HIGH_BYTES = 4 * 1024 * 1024; // 4 MiB
 export const OUTPUT_BUFFER_LOW_BYTES = 2 * 1024 * 1024; // 2 MiB
 
 interface DropWindow {
+  runtime_scope: RuntimeScope;
   since_ts: number;
   dropped_count: number;
   bytes_dropped: number;
@@ -169,6 +174,7 @@ export class OutputBackpressure {
     if (wouldExceed && socket.writableNeedDrain) {
       if (!state.dropping_window) {
         state.dropping_window = {
+          runtime_scope: event.runtime_scope,
           since_ts: this.now(),
           dropped_count: 0,
           bytes_dropped: 0,
@@ -308,6 +314,7 @@ export class OutputBackpressure {
     if (!state.dropping_window) return;
     const summary: EventFrame = {
       event: 'runtime_output_dropped',
+      runtime_scope: state.dropping_window.runtime_scope,
       conversation_id: conv,
       agent_id: agent,
       dropped_count: state.dropping_window.dropped_count,

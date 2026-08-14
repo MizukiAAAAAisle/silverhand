@@ -13,6 +13,7 @@ import {
   type UpdateAgentInput,
   type WorkspaceKind,
 } from '@silverhand/shared';
+import { agentParticipates } from './conversation-placement-sql.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -32,6 +33,7 @@ export function agentRowToDto(row: AgentRow): AgentDto {
       fast === null || fast === undefined ? null : Boolean(fast),
     host_id: row.host_id,
     description: row.description,
+    session_scope: row.session_scope,
     created_by_user_id: row.created_by_user_id,
     // Mirror UserDto: present when the row has an avatar blob set;
     // cache-busted via `updated_at` so the renderer's HTTP cache
@@ -130,8 +132,8 @@ export class AgentRepo {
       .prepare(
         `INSERT INTO agents
          (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
-          host_id, description, created_by_user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          host_id, description, session_scope, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -143,6 +145,7 @@ export class AgentRepo {
         input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
         input.host_id ?? defaultHostId,
         input.description ?? null,
+        input.session_scope ?? 'conversation',
         createdByUserId,
         now,
         now,
@@ -244,10 +247,10 @@ export class AgentRepo {
       .prepare(
         `INSERT INTO agents
          (id, name, display_name, runtime, model, reasoning_effort, fast_mode,
-          host_id, description, created_by_user_id,
+          host_id, description, session_scope, created_by_user_id,
           materialization_status, idempotency_key,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  'pending_materialization', ?,
                  ?, ?)`,
       )
@@ -261,6 +264,7 @@ export class AgentRepo {
         input.fast_mode === undefined ? null : input.fast_mode ? 1 : 0,
         input.host_id ?? defaultHostId,
         input.description ?? null,
+        input.session_scope ?? 'conversation',
         createdByUserId,
         idempotencyKey,
         now,
@@ -647,11 +651,34 @@ export class AgentRepo {
   }
 
   /**
-   * Every (conversation, agent) pair this agent participates in, joined to
-   * workspace/channel/thread metadata. Single SQL — drives both the agent
-   * profile "where it runs" table and the delete use-case impact calculation.
-   * Includes closed conversations so the UI can show full history; the
-   * caller filters by `closed_at` if needed.
+   * Every runtime seat this agent holds, joined to its conversation's display
+   * coordinates — the agent profile's "where it runs" table
+   * (`GET /api/agents/:id/runtime-state`). Includes closed conversations so the
+   * UI can show full history; the caller filters by `closed_at` if needed.
+   *
+   * THE DISPLAY FACE, and the only one of the two faces that is allowed to have a
+   * coordinate at all. The control-plane unit is a SEAT and lives on
+   * `RuntimeSlotRepo.listSeats` — see its docblock for why no join may reach it.
+   *
+   * The two arms differ, deliberately:
+   *
+   *   - A CONVERSATION-SCOPED agent has one slot per conversation it participates
+   *     in, so the row set IS the slot set — workspace channels, DMs and its inbox
+   *     alike. This is why the FROM is the slot table and not `conversation_agents`:
+   *     a DM has no roster row (§4.2), so a roster-driven query showed the user a
+   *     DM session it could not name, or nothing at all.
+   *   - An AGENT-SCOPED agent has exactly ONE slot serving every conversation.
+   *     Here the fan-out is the honest answer to "where does it run", so this face
+   *     joins the one slot to the conversations the agent PARTICIPATES in
+   *     (`agentParticipates`, §4.2, the one authority — not a second roster read).
+   *     Every such row therefore reports the SAME slot's status, which is true:
+   *     there is one process. The control plane must never see this shape, and
+   *     structurally cannot — it reads the slot table directly.
+   *
+   * Hence LEFT JOIN on `workspaces`, and hence the nullable workspace fields on
+   * the wire: the coordinate belongs to ONE placement arm (§4.1), so an INNER JOIN
+   * would not "filter" a DM seat, it would delete the row — the §1 failure mode
+   * this feature exists to remove, on a payload the Stop control reads.
    */
   listRuntimeConversations(
     agentId: string,
@@ -659,9 +686,9 @@ export class AgentRepo {
   ): AgentRuntimeConversation[] {
     type Row = {
       conversation_id: string;
-      workspace_id: string;
-      workspace_name: string;
-      workspace_kind: WorkspaceKind;
+      workspace_id: string | null;
+      workspace_name: string | null;
+      workspace_kind: WorkspaceKind | null;
       conversation_kind: ConversationKind;
       channel_id: string;
       channel_title: string;
@@ -677,24 +704,15 @@ export class AgentRepo {
     const archivedFilter = opts?.excludeArchived
       ? 'AND c.archived_at IS NULL'
       : '';
-    // PLACEMENT (§4.1): this query is driven by `conversation_agents`, so what it
-    // lists is ROSTER SEATS — and an `agent_inbox` deliberately has no roster row
-    // (the placement itself names its one participant), so the inbox is absent
-    // because of the driving table, NOT because `JOIN workspaces` dropped it.
-    // That join is load-bearing PROJECTION here (`w.name`, `w.workspace_kind` are
-    // returned), which is also why an inbox has no place in this shape: there is
-    // no workspace row to name. Nothing is lost — no runtime runs in an inbox, and
-    // the purge path does not need it listed because the inbox row cascades with
-    // the agent.
-    //
-    // P3 `direct_pair` is where this must change: it WILL have roster rows and no
-    // workspace, so its seats would vanish through this join. Splitting the
-    // projection (nullable workspace fields, or a second arm) is that ticket's
-    // work, not a filter to add here today.
+    const participates = agentParticipates('c', agentId);
+    // The participation params are spliced into the JOIN, so they precede the
+    // WHERE's own `agent_id` — same ordering discipline as the other faces that
+    // embed this fragment.
+    const params: string[] = [...participates.params, agentId];
     const rows = this.db
-      .prepare<[string], Row>(
+      .prepare<string[], Row>(
         `SELECT
-           ca.conversation_id AS conversation_id,
+           c.id               AS conversation_id,
            c.workspace_id     AS workspace_id,
            w.name             AS workspace_name,
            w.workspace_kind   AS workspace_kind,
@@ -704,23 +722,15 @@ export class AgentRepo {
            s.observed_status  AS status,
            s.observed_pid     AS pid,
            c.closed_at        AS closed_at
-         FROM conversation_agents ca
-         JOIN agents a ON a.id = ca.agent_id
-         JOIN agent_runtime_slots s
-           ON s.agent_id = ca.agent_id
-          AND (
-            (a.session_scope = 'conversation'
-             AND s.conversation_id = ca.conversation_id)
-            OR
-            (a.session_scope = 'agent'
-             AND s.conversation_id IS NULL)
-          )
-         JOIN conversations c ON c.id = ca.conversation_id
-         JOIN workspaces w ON w.id = c.workspace_id
-         WHERE ca.agent_id = ? ${archivedFilter}
+         FROM agent_runtime_slots s
+         JOIN conversations c
+           ON (s.conversation_id IS NOT NULL AND c.id = s.conversation_id)
+           OR (s.conversation_id IS NULL AND ${participates.sql})
+         LEFT JOIN workspaces w ON w.id = c.workspace_id
+         WHERE s.agent_id = ? ${archivedFilter}
          ORDER BY c.closed_at IS NULL DESC, c.updated_at DESC`,
       )
-      .all(agentId);
+      .all(...params);
     return rows;
   }
 }

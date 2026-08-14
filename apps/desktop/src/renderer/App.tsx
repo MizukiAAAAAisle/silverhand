@@ -2134,6 +2134,14 @@ function RegisteredAppShell({
                   agentId={selectedAgentId}
                   onDeleted={() => nav.toMembers()}
                   onOpenConversation={s => {
+                    // A seat whose conversation carries NO workspace coordinate —
+                    // a `direct_pair` placement (#task:2020) — has no destination
+                    // in this navigation model, which is workspace-keyed. Falling
+                    // back to the selected workspace (what `resolveNavWorkspaceId`
+                    // does for `undefined`) would open a channel id that does not
+                    // belong to it, so the row stays visible and inert until the
+                    // direct-pair read surfaces land (#task:2022).
+                    if (s.workspace_id === null) return;
                     // Jump back to chat view, focusing the agent's channel.
                     const workspaceId = resolveNavWorkspaceId(s.workspace_id, s.channel_id);
                     if (!workspaceId) return;

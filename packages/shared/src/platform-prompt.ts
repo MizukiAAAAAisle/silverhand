@@ -104,13 +104,20 @@ export interface MemoryNotesCatalog {
   omittedCount: number;
 }
 
-export interface SessionContextInput {
+interface ConversationSessionContextCommon {
+  kind: 'conversation';
   /** Current channel/thread conversation id. */
   conversationId: string;
   /** The daemon-authenticated computer id this agent runs on. Sourced from
    *  the daemon's control-plane binding (`host_id`), never derived from the
    *  workspace or trusted from the wire. */
   computerId: string;
+  sessionTitle: string;
+  members: MemberDto[];
+}
+
+export interface WorkspaceConversationSessionContextInput
+  extends ConversationSessionContextCommon {
   /** Workspace display name. Server-controlled text — rendered JSON-quoted
    *  (see `quotePromptValue`) so it cannot break the Context bullet list. */
   workspaceName: string;
@@ -121,14 +128,36 @@ export interface SessionContextInput {
    *  Never a foreign computer's path and never the server-side home path. */
   workspacePath: string;
   channelKind: WorkspaceUiKind;
-  sessionTitle: string;
   /** Agent + human participants of this conversation. Includes self;
    *  the renderer marks the row whose `agent_id` equals the spawning
    *  agent's id (`PlatformPromptInput.agentId` — the single identity
    *  authority) with `self: true`. The list is rendered verbatim under
    *  "Channel members:" — see PR-B. */
-  members: MemberDto[];
 }
+
+/** ConversationSlot for a workspace-less placement. It keeps a dedicated,
+ * stable conversation cwd but has no workspace L2 or workspace path to inject. */
+export interface WorkspaceLessConversationSessionContextInput
+  extends ConversationSessionContextCommon {
+  workspaceName?: never;
+  workspacePath?: never;
+  channelKind?: never;
+}
+
+export type ConversationSessionContextInput =
+  | WorkspaceConversationSessionContextInput
+  | WorkspaceLessConversationSessionContextInput;
+
+export interface AgentSessionContextInput {
+  kind: 'agent';
+  /** Authenticated computer only. Agent scope intentionally has no ambient
+   * conversation or workspace coordinate. */
+  computerId: string;
+}
+
+export type SessionContextInput =
+  | ConversationSessionContextInput
+  | AgentSessionContextInput;
 
 export interface DriverPromptContext {
   agentId: string;
@@ -180,20 +209,113 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const profileDir = normalizeProfileDir(input.activeProfileDir);
   const memoryPath = profilePath(profileDir, 'MEMORY.md');
   const notesDir = profilePath(profileDir, 'notes');
+  const agentScoped = input.sessionContext.kind === 'agent';
+  const workspaceLess =
+    input.sessionContext.kind === 'conversation'
+    && !('workspaceName' in input.sessionContext);
   const memoryBlock = renderInjectedFile({
-    title: 'Active Workspace Memory',
+    title: agentScoped
+      ? 'Active Agent Memory'
+      : workspaceLess
+        ? 'Active Conversation Memory'
+        : 'Active Workspace Memory',
     relPath: memoryPath,
-    description:
-      'This is the current workspace\'s MEMORY.md, auto-loaded for you. Treat it as your recovery index. Edit it to add/update Key Knowledge entries or the current Active Context; keep durable detail in the linked notes/ files.',
+    description: agentScoped
+      ? 'This is your agent-global MEMORY.md, auto-loaded for you in every AgentSlot session. Treat it as your recovery index. It must not contain workspace-private context; keep durable global detail in the linked notes/ files.'
+      : workspaceLess
+        ? 'This workspace-less ConversationSlot has no workspace L2 memory. The missing projection below is intentional.'
+      : 'This is the current workspace\'s MEMORY.md, auto-loaded for you. Treat it as your recovery index. Edit it to add/update Key Knowledge entries or the current Active Context; keep durable detail in the linked notes/ files.',
     content: input.currentMemory,
-    missingHint:
-      'No MEMORY.md exists yet. Create one at the path above when you first capture durable knowledge for this workspace.',
+    missingHint: agentScoped
+      ? 'No agent-global MEMORY.md exists yet. Create one at the path above only for durable knowledge safe across every workspace.'
+      : workspaceLess
+        ? 'No workspace L2 exists for this placement; do not create one or infer a workspace path.'
+      : 'No MEMORY.md exists yet. Create one at the path above when you first capture durable knowledge for this workspace.',
   });
   const memoryNotesCatalogBlock = renderMemoryNotesCatalog(
     input.memoryNotesCatalog,
     profileDir,
   );
-  const memoryIndexBlock = renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
+  const memoryIndexBlock = agentScoped || workspaceLess
+    ? ''
+    : renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
+  const turnOrientation = agentScoped
+    ? '1. Orient from **Initial role**, **Active Agent Memory**, and the message\n   header. They are re-injected; do not reopen them just to recover baseline.'
+    : workspaceLess
+      ? '1. Orient from **Initial role**, the explicit conversation header, and the message\n   header. They are re-injected; do not infer an ambient workspace.'
+      : '1. Orient from **Initial role**, **Active Workspace Memory**, and the message\n   header. They are re-injected; do not reopen them just to recover baseline.';
+  const memoryManual = agentScoped
+    ? `## Agent-Global Memory
+
+Your current working directory (\`cwd\`) is the stable agent home and persists
+across every AgentSlot target, respawn, and context reset. It contains your L1
+role plus agent-global recovery memory; it is never a workspace root.
+
+- **L1 — identity (global).** ${inlineCode(input.roleSystemPromptPath)}
+  is the only identity source and is injected as **Initial role**. Use this
+  daemon-resolved path; never reconstruct it.
+- **Agent-global memory.** \`${memoryPath}\` plus \`${notesDir}/\` may contain
+  only knowledge safe to load in every workspace. MEMORY.md is injected and
+  note metadata appears in **Memory Notes Catalog**.
+- **Workspace L2 is unavailable in AgentSlot context.** Do not search for,
+  infer, index, or open workspace MEMORY.md files or workspace paths from this
+  prompt. A delivery names its absolute conversation target independently.
+
+### MEMORY.md — recovery index
+
+MEMORY.md is a concise agent-global recovery index. Never put workspace-private
+state, task handoffs, channel history, or a workspace path here. The catalog
+makes durable global notes discoverable. Target under 10KB / 80–120 lines
+(injection truncates beyond 16KB).
+
+### Action targeting
+
+AgentSlot has no ambient conversation. Every \`silverhand\` action must pass
+\`--route-conversation-id <id>\` using the explicit target in the delivered
+action header. Command-local \`--conversation-id\` remains a separate
+range/destination filter and must be passed only when that command needs it.
+Every filesystem action must use the explicit absolute workdir. Omission
+must fail loud instead of falling back to the conversation that spawned the
+runtime.`
+    : workspaceLess
+      ? `## Conversation Context
+
+This workspace-less ConversationSlot has a stable, daemon-resolved conversation
+cwd. It has no workspace L2 memory, workspace catalog, or workspace path in the
+prompt. Every external action still targets this one conversation explicitly.`
+      : `## Workspace & Memory
+
+Your current working directory (\`cwd\`) is persistent across sessions. It may
+contain shared project files, worktrees, artifacts, and task files; it is not
+exclusively yours. Choose the intended project/worktree before git or package
+manager commands. Private agent memory belongs only in L1/L2, not arbitrary cwd
+files.
+
+Organize durable agent knowledge by scope:
+
+- **L1 — identity (global).** ${inlineCode(input.roleSystemPromptPath)}
+  is the only identity source and is injected as **Initial role**. Use this
+  daemon-resolved path; never reconstruct it. Global role/style changes go here.
+- **L2 — workspace memory (agent-owned).** \`${memoryPath}\` plus
+  \`${notesDir}/\` hold this workspace's durable knowledge. MEMORY.md is injected;
+  note metadata appears in **Memory Notes Catalog**.
+- **Other workspaces** appear in **Workspace Memory Index** as paths. Open only
+  what a concrete cross-workspace task needs; don't expose internal paths.
+
+### MEMORY.md — recovery index
+
+MEMORY.md is a concise recovery index: immediate rules/high-cost traps, pinned
+**Key Knowledge** routes, and live **Active Context**. The catalog makes durable
+notes discoverable.
+Target under 10KB / 80–120 lines (injection truncates beyond 16KB).
+
+Active Context is workspace-wide and shared by every channel session in this
+workspace. Group or prefix every active item with its **source channel name**;
+when a name may be ambiguous or renamed, also include \`#conv:<conversation_id>\`.
+On wake, compare those labels with **This Context → Channel**. Only same-channel
+items are current by default. Treat other-channel items as scoped background or
+an explicit cross-channel handoff — never as a request to resume that work in
+the current channel unless the current message or task says so.`;
 
   return `# Who you are in silverhand
 
@@ -241,8 +363,7 @@ These invariants always hold. Everything else in this manual serves them.
 
 Each time you are woken:
 
-1. Orient from **Initial role**, **Active Workspace Memory**, and the message
-   header. They are re-injected; do not reopen them just to recover baseline.
+${turnOrientation}
 2. Acknowledge briefly when useful, then gather the required context.
 3. Claim new substantive work or continue its existing task.
 4. Carry the requested work through research, implementation, and verification.
@@ -256,39 +377,7 @@ Your **profile** is your global (L1) configuration, shared across workspaces and
 separate from L2 workspace memory. Use \`silverhand profile --help\` for profile
 and custom MCP operations.
 
-## Workspace & Memory
-
-Your current working directory (\`cwd\`) is persistent across sessions. It may
-contain shared project files, worktrees, artifacts, and task files; it is not
-exclusively yours. Choose the intended project/worktree before git or package
-manager commands. Private agent memory belongs only in L1/L2, not arbitrary cwd
-files.
-
-Organize durable agent knowledge by scope:
-
-- **L1 — identity (global).** ${inlineCode(input.roleSystemPromptPath)}
-  is the only identity source and is injected as **Initial role**. Use this
-  daemon-resolved path; never reconstruct it. Global role/style changes go here.
-- **L2 — workspace memory (agent-owned).** \`${memoryPath}\` plus
-  \`${notesDir}/\` hold this workspace's durable knowledge. MEMORY.md is injected;
-  note metadata appears in **Memory Notes Catalog**.
-- **Other workspaces** appear in **Workspace Memory Index** as paths. Open only
-  what a concrete cross-workspace task needs; don't expose internal paths.
-
-### MEMORY.md — recovery index
-
-MEMORY.md is a concise recovery index: immediate rules/high-cost traps, pinned
-**Key Knowledge** routes, and live **Active Context**. The catalog makes durable
-notes discoverable.
-Target under 10KB / 80–120 lines (injection truncates beyond 16KB).
-
-Active Context is workspace-wide and shared by every channel session in this
-workspace. Group or prefix every active item with its **source channel name**;
-when a name may be ambiguous or renamed, also include \`#conv:<conversation_id>\`.
-On wake, compare those labels with **This Context → Channel**. Only same-channel
-items are current by default. Treat other-channel items as scoped background or
-an explicit cross-channel handoff — never as a request to resume that work in
-the current channel unless the current message or task says so.
+${memoryManual}
 
 ### Durable Memory
 
@@ -724,6 +813,22 @@ function renderSessionContext(sc: SessionContextInput, agentId: string): string 
   lines.push('');
   lines.push(`- Agent ID: ${inlineCode(agentId)}`);
   lines.push(`- Computer: ${inlineCode(sc.computerId)}`);
+  if (sc.kind === 'agent') {
+    lines.push(
+      '- Runtime scope: agent — one persistent session serves every explicitly addressed conversation; there is no ambient workspace or channel.',
+    );
+    return lines.join('\n');
+  }
+  if (!hasWorkspaceSessionContext(sc)) {
+    lines.push(
+      '- Runtime scope: workspace-less conversation — this session is isolated to the explicit conversation below and has no ambient workspace or workspace L2.',
+    );
+    lines.push(
+      `- Channel: ${quotePromptValue(sc.sessionTitle)} (${inlineCode(sc.conversationId)})`,
+    );
+    renderSessionMembers(lines, sc, agentId);
+    return lines.join('\n');
+  }
   const workspaceValue = `${quotePromptValue(sc.workspaceName)} (${inlineCode(sc.workspacePath)})`;
   if (sc.channelKind === 'dm') {
     lines.push(
@@ -737,6 +842,21 @@ function renderSessionContext(sc: SessionContextInput, agentId: string): string 
   lines.push(
     `- Channel: ${quotePromptValue(sc.sessionTitle)} (${inlineCode(sc.conversationId)})`,
   );
+  renderSessionMembers(lines, sc, agentId);
+  return lines.join('\n');
+}
+
+function hasWorkspaceSessionContext(
+  sc: ConversationSessionContextInput,
+): sc is WorkspaceConversationSessionContextInput {
+  return sc.workspaceName !== undefined && sc.workspacePath !== undefined;
+}
+
+function renderSessionMembers(
+  lines: string[],
+  sc: ConversationSessionContextInput,
+  agentId: string,
+): void {
   if (sc.members.length === 0) {
     // Defensive: every spawn happens because the agent IS a member,
     // so this list should always contain at least self. If we somehow
@@ -751,7 +871,6 @@ function renderSessionContext(sc: SessionContextInput, agentId: string): string 
       `- Address rule: use \`<silverhand://<kind>/<name>>\` from the \`kind\` and \`name\` fields above; \`display_name\` is for recognition and bare \`@<name>\` is display only.`,
     );
   }
-  return lines.join('\n');
 }
 
 /**
