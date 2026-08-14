@@ -131,7 +131,9 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     }
     // `conversation_id` is IN the projection (#task:2021 P4-3) and carries the
     // row's OWN stream, because the stdin header renders it as an absolute
-    // target and an agent-scoped runtime drains more than one conversation.
+    // target. Today's claim is per stream, so this equals the claimed
+    // conversation; the column exists so the coordinate travels WITH the row
+    // rather than being re-supplied by whoever assembled the batch.
     expect(pending[0]!.message.conversation_id).toBe(f.channelId);
 
     const claimed = f.persistence.inbox.claimPending(

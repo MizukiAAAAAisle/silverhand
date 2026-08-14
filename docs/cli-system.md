@@ -579,10 +579,15 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
   (#task:2021 P4-3), rendered by the one codec
   (`packages/shared/src/delivery-target.ts`): `#conv:<conversation_id>` on the
   main line, with a `/thread:<root_message_id>` suffix inside that message's
-  reply cluster. It is derived from the ROW, so one batch may legitimately carry
-  two different targets — an agent-scoped runtime is woken for N conversations.
-  Being absolute it is viewer-independent; it replaced the relative token
-  `channel`, which only named whichever conversation the reader assumed.
+  reply cluster. It is derived from the ROW: the coordinate travels with the
+  message, and no caller — ambient or per-batch — has authority over it. Today
+  the claim is per stream (`claimPending(conversationId, agentId)`), so a batch
+  has exactly one origin; the row-wise derivation is what keeps that from being
+  load-bearing, since agent-scoped drain is what makes a multi-origin batch
+  reachable and a per-batch parameter would then mislabel every row of it
+  without erroring. Being absolute the token is viewer-independent; it replaced
+  the relative token `channel`, which only named whichever conversation the
+  reader assumed.
 - **The header's grammar is not yet the `--target` flag's grammar.** P4-3
   changed only what is EMITTED and TAUGHT. The write flag still takes
   `channel|thread:<root_message_id>` and the read flag

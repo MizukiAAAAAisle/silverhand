@@ -50,10 +50,12 @@ export function sendMessageToolName(): string {
 export interface MessageLite {
   id: string;
   /** The stream this message belongs to, as the header's absolute `target`
-   *  (#task:2021 P4-3). Carried by the MESSAGE rather than passed in per batch:
-   *  the target is a fact about the row, and an agent-scoped runtime is woken for
-   *  N conversations, so a per-call conversation parameter would mislabel every
-   *  row of any batch that ever spans two of them. */
+   *  (#task:2021 P4-3). Carried by the MESSAGE rather than passed in per batch,
+   *  because the target is a fact about the row: no caller — ambient or
+   *  per-batch — gets authority over a row's coordinate. Today's claim is per
+   *  stream (`claimPending(conversationId, agentId)`), so a batch has one
+   *  origin; agent-scoped drain is what makes two reachable, and then a
+   *  per-call parameter would mislabel every row of the batch without erroring. */
   conversation_id: string;
   thread_root_id: string | null;
   from_kind: FromKind;

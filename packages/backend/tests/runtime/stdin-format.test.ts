@@ -334,19 +334,29 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
 /**
  * #task:2021 P4-3 — the header's `target` is an ABSOLUTE address.
  *
- * The three properties that make it one: it is derived per ROW (so a batch is
- * not allowed to label its messages by whatever conversation assembled it), it
- * parses back to the stream it names (so "copy the token you received" is a
- * contract rather than advice), and the relative token `channel` is gone
- * everywhere — a header that still emitted it would be naming whichever stream
- * the reader assumed, which is the whole failure this slice removes.
+ * The three properties that make it one: it is derived per ROW (the formatter
+ * has no authority over a row's coordinate, per-call or ambient), it parses back
+ * through the codec to the stream it names (so the emitted token is a coordinate
+ * and not just a label), and the relative token `channel` is gone everywhere — a
+ * header that still emitted it would be naming whichever stream the reader
+ * assumed, which is the whole failure this slice removes.
+ *
+ * What the token is NOT, yet: a destination you can paste into `--target`.
+ * Canonical acceptance across the CLI is P4-4; until then an agent reads the
+ * token's parts.
  */
 describe('the header target is absolute', () => {
   it('addresses each row by its own stream, even in one batch', () => {
-    // The reachable case under agent-scoped sessions: one runtime, N
-    // conversations. A conversation parameter passed once per batch would render
-    // both of these rows with the same address, and the second agent would reply
-    // into the first stream.
+    // Row-wise invariant, proved adversarially: production claims per stream
+    // today (`claimPending(conversationId, agentId)` filters on
+    // `conversation_id`), so a single batch carrying two origins is NOT a
+    // currently reachable path — it is the shape that must stay impossible to
+    // get wrong. Handing the formatter two origins at once is the only way to
+    // show it never reintroduces a per-call or ambient coordinate: a
+    // conversation parameter passed once per batch would render both rows with
+    // the same address, and the second agent would reply into the first stream.
+    // Agent-scoped drain is what makes that reachable, and this test is the
+    // fence that will already be standing.
     const { presentations } = formatInboxBatchPresentation(
       [
         {
@@ -391,7 +401,7 @@ describe('the header target is absolute', () => {
     );
   });
 
-  it('round-trips: the token an agent copies back names the same stream', () => {
+  it('round-trips through the codec: the emitted token names that stream', () => {
     for (const threadRootId of [null, ROOT]) {
       const header = formatStdinMessageHeader(
         {

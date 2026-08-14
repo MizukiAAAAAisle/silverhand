@@ -255,7 +255,7 @@ import {
 // spawns is TAUGHT, while the backend decides which form is EMITTED. A mixed
 // pair is silently wrong in both directions — an old daemon teaches
 // `target=channel|thread:<id>` to agents that receive `#conv:<id>`, and a new
-// daemon teaches "copy the absolute token back" to agents whose backend still
+// daemon teaches "read the absolute token's parts" to agents whose backend still
 // emits the ambient one. An agent-scoped runtime is woken for N conversations,
 // so what breaks is not a parse but the DESTINATION: the agent replies into
 // whichever conversation it assumed, i.e. it answers the right message in the
