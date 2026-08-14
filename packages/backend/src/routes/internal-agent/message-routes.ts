@@ -135,6 +135,14 @@ export function registerMessageRoutes(
         ...(result.streamHeadBeforeSend !== undefined
           ? { stream_head_before: result.streamHeadBeforeSend }
           : {}),
+        // Omitted when empty (#task:2021 P4-5-b): the field is the ANSWER
+        // "these references addressed nobody", so an empty array on every
+        // ordinary send would be noise on the one surface an agent reads after
+        // each of its own messages. The service's field is total; the wire's is
+        // present only when it says something.
+        ...(result.unresolvedReferences.length > 0
+          ? { unresolved_references: result.unresolvedReferences }
+          : {}),
       });
     } catch (err) {
       const mapped = conversationMessageServiceErrorResponse(c, err);

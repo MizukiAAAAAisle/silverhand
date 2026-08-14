@@ -198,6 +198,7 @@
   "MessageReactionChangedEventSchema",
   "MessageReactionDetailDtoSchema",
   "MessageRefSchema",
+  "MessageReferenceSchema",
   "MessageSendTargetSchema",
   "MessageSenderRefSchema",
   "MessageUnreadByConversationDtoSchema",

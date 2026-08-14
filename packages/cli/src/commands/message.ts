@@ -4,6 +4,7 @@
 import type {
   AgentSendStaleResolutionReason,
   MessageSendTarget,
+  Reference,
   SendMessageTarget,
 } from '@silverhand/shared';
 import {
@@ -105,7 +106,14 @@ Pre-flight failures (exit 1):
   stdin is empty and no attachment → empty_stdin
   stdin is not UTF-8             → invalid_utf8 (re-encode upstream)
 
-stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null> }`,
+stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null> }
+
+\`unresolved_references\` is added to that object ONLY when some reference in
+the body addressed nobody — the handle names no participant of the conversation
+the message landed in. The send still succeeded and everyone it did address
+received it; fix the spelling (or add the member) and send again if that
+reference mattered. No reason is given per token, and its absence means
+nothing was reported, not that every reference landed.`,
   flags: ['target', 'reply-to', 'attachment-id', 'stale-resolution'] as const,
   booleanFlags: ['anyway'],
   removedFlags: {
@@ -777,7 +785,12 @@ function parseSendStaleResolution(
 async function sendViaDaemon(
   socketPath: string,
   input: AgentMessageSendParams,
-): Promise<{ message_id: string; message_seq?: number; thread_root_id?: string | null }> {
+): Promise<{
+  message_id: string;
+  message_seq?: number;
+  thread_root_id?: string | null;
+  unresolved_references?: readonly Reference[];
+}> {
   const host = new HostClient({ socketPath });
   try {
     await host.connect();
@@ -791,6 +804,12 @@ async function sendViaDaemon(
       ...(result.message_seq !== undefined ? { message_seq: result.message_seq } : {}),
       ...(result.thread_root_id !== undefined
         ? { thread_root_id: result.thread_root_id }
+        : {}),
+      // Reported only when the daemon reported it: the send SUCCEEDED, and on
+      // stdout the field's absence means "nothing to say about your
+      // references", never "all of them landed" (#task:2021 P4-5-b).
+      ...(result.unresolved_references !== undefined
+        ? { unresolved_references: result.unresolved_references }
         : {}),
     };
   } catch (err) {

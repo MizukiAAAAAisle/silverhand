@@ -30,7 +30,7 @@ export interface ThreadFollowerUpsert {
  * {@link ThreadFollowerRepo.listFollowerAgentIdsParticipating} for what it means).
  *
  * Exported because its ACCESS PATH is the argument for keeping the CORRELATED
- * reading of participation at all (@Cindy B9, #task:2021 P4-5): the candidate set
+ * reading of participation at all (#task:2021 P4-5): the candidate set
  * is bounded by `thread_followers` for one root, so the predicate filters rows
  * already in hand and `agents` is probed by primary key. `tests/read-model/
  * participation-enumeration.test.ts` EXPLAINs this exact text — the same rule as

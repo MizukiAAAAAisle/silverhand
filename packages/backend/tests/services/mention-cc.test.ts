@@ -57,15 +57,12 @@ import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 /**
  * A runtime host that records what it was asked to do and refuses nothing.
  *
- * It used to throw `RuntimePlacementUnsupportedError` for a workspace-less
- * conversation, on the stated grounds that "production applies the same rule".
- * Production never did: the only `throw` sites in the repo were in this file,
- * while `buildRuntimeStartOptions` emits `workspace: null` with an agent-scoped
- * `runtime_scope` (#task:2019). A fake that refuses what production performs does
- * not assert today's end state — it MANUFACTURES a defect, and every deferral the
- * integration cases below observed was its own (#task:2021 P4-5 round 2, @Cindy
- * B11). Round 2's B12 finished it: the error class and the branch that caught it
- * are DELETED, so refusing nothing is now the only shape a fake can have.
+ * Refusing nothing is the only shape it may have: production wakes an agent in a
+ * workspace-less conversation exactly like any other — `buildRuntimeStartOptions`
+ * emits `workspace: null` with an agent-scoped `runtime_scope` (#task:2019) — so a
+ * fake that rejected such a placement would not assert today's end state but
+ * manufacture a defect, and every deferral the integration cases below observe
+ * would be its own.
  */
 class FakeRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -748,7 +745,14 @@ describe('mention CC v71 — a DM source declines the CC without failing the sen
       // an `agent_start_failed` either — the DM endpoint's wake is an ORDINARY
       // one, because a workspace-less placement has a session scope (#task:2019).
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
-      expect(logEvents(t.logger.warn)).toEqual([]);
+      // The ONE warn this send produces is the author's own report (#task:2021
+      // P4-5-b): the CC declined and `cc-outsider` is not an endpoint of this DM,
+      // so the reference reached nobody — which is exactly what the human is told,
+      // while the message itself stands.
+      expect(logEvents(t.logger.warn)).toEqual(['send.references_unresolved']);
+      expect(result.unresolvedReferences).toEqual([
+        { kind: 'agent', handle: 'cc-outsider' },
+      ]);
       // The decision is REPORTED, not silent: an operator asking "why did my
       // mention not arrive" has the reason and the handle.
       expect(
@@ -813,11 +817,11 @@ describe('mention CC v71 — the post-commit half is the only best-effort part',
     });
     await dispatchMentionCcEffects(report(), h.deps);
 
-    // ONE arm on purpose (@Cindy B12). v71 also had a typed
+    // ONE arm on purpose. v71 also had a typed
     // `runtime_placement_unsupported` deferral here, and its only `throw` site in
     // the whole repo was a fake in THIS file — a failure shape no production host
     // can produce, asserted by manufacturing it. #task:2019 made the refusal
-    // impossible and P4-5 round 2 deleted the class, the branch and that case
+    // impossible and P4-5 deleted the class, the branch and that case
     // rather than keeping them as defensive contract, because a caller reading
     // them would take the shape for supported host semantics. What survives is the
     // claim that actually holds for every refusal: the copy and its durable inbox

@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
+  AgentSendMessageOutputSchema,
   buildSystemPromptFor,
   composeRuntimeDeliveryPresentation,
   CONVERSATION_ADDRESS_PREFIX,
@@ -1644,11 +1645,24 @@ export class Supervisor implements SupervisorContract {
       }
     }
     handle.pendingStaleEvents.delete(params.conversation_id);
+    // Sender-only feedback, FORWARDED and never derived (#task:2021 P4-5-b):
+    // the daemon holds no participation authority, so it validates the shape
+    // against the backend's own output contract and hands the answer through
+    // unchanged. A field we cannot read is DROPPED, not repaired: the CLI must
+    // never learn "every reference landed" from a response the daemon failed to
+    // parse, and the send itself succeeded either way.
+    const unresolvedReferences =
+      AgentSendMessageOutputSchema.shape.unresolved_references.safeParse(
+        json['unresolved_references'],
+      );
     return {
       ok: true,
       message_id: messageId,
       ...(typeof messageSeq === 'number' ? { message_seq: messageSeq } : {}),
       thread_root_id: resolvedRoot,
+      ...(unresolvedReferences.success && unresolvedReferences.data
+        ? { unresolved_references: unresolvedReferences.data }
+        : {}),
     };
   }
 

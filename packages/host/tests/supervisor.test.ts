@@ -5413,6 +5413,63 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
+  it('forwards the sender-only unresolved references verbatim, and drops a field it cannot read (#task:2021 P4-5-b)', async () => {
+    const { supervisor } = makeSupervisor();
+    // Three backend answers, in order: a well-formed report, no report at all,
+    // and a report the daemon must refuse to interpret.
+    const responses: Array<Record<string, unknown>> = [
+      { unresolved_references: [{ kind: 'agent', handle: 'nosuchagent' }] },
+      {},
+      // Malformed on purpose (a `reason` the contract forbids, plus a bad kind):
+      // a version skew must not reach the agent as a half-understood answer.
+      { unresolved_references: [{ kind: 'robot', handle: 'x', reason: 'unknown' }] },
+    ];
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const extra = responses[call] ?? {};
+        call += 1;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${call}`,
+            message_seq: 50 + call,
+            thread_root_id: null,
+            ...extra,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      const send = (content: string) =>
+        supervisor.agentMessageSend({ conversation_id: 'c1', agent_id: 'a1', content });
+
+      // FORWARDED, never derived: the daemon holds no participation authority, so
+      // the token it emits is byte-identical to the one the backend answered with.
+      expect(await send('<silverhand://agent/nosuchagent> hi')).toMatchObject({
+        ok: true,
+        unresolved_references: [{ kind: 'agent', handle: 'nosuchagent' }],
+      });
+      // Absent stays absent — the daemon never fabricates the empty case.
+      expect(await send('nothing addressed')).not.toHaveProperty(
+        'unresolved_references',
+      );
+      // Unreadable is DROPPED, and the send still succeeds: an unparsable
+      // diagnostic must not fail a message that the backend committed.
+      const skewed = await send('<silverhand://agent/x> hi');
+      expect(skewed).toMatchObject({ ok: true, message_id: 'm3' });
+      expect(skewed).not.toHaveProperty('unresolved_references');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('defaults a bare send to the channel main line across mixed and observe-only wakes', async () => {
     const { supervisor, events } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];

@@ -133,8 +133,8 @@ export interface ConversationIdentity {
   /** Whether the participant set can be CHANGED at all, which is a different
    *  question from who is in it — and the one `kind` cannot answer, being a
    *  generated projection of this column plus history. Carried on identity
-   *  because the ACL asks it (`canAddConversationMember`, @Cindy M1 on
-   *  #task:2020) before it asks anything about the caller. */
+   *  because the ACL asks it (`canAddConversationMember`, #task:2020) before it
+   *  asks anything about the caller. */
   roster_policy: ConversationRosterPolicy;
   workspace_id: string | null;
   inbox_agent_id: string | null;
@@ -190,7 +190,7 @@ export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.wo
 /**
  * The send path's RECIPIENT enumeration: the LIVE agent participants of one
  * conversation, in a stable order. Exported because its ACCESS PATH is a contract
- * (@Cindy B9, #task:2021 P4-5) — `tests/read-model/participation-enumeration.test.ts`
+ * (#task:2021 P4-5) — `tests/read-model/participation-enumeration.test.ts`
  * EXPLAINs this exact text, following #1967's rule that a plan test must run the
  * production statement rather than a simplified copy of it.
  *
@@ -1254,7 +1254,7 @@ export class ConversationRepo {
    * signature would have to take a tagged principal and branch inside the SQL.
    *
    * Its first caller is the send's write gate, which asks participation of every
-   * actor kind INSIDE the transaction (#task:2021 P4-4, @Cindy B7) — before that
+   * actor kind INSIDE the transaction (#task:2021 P4-4) — before that
    * the human answer was only ever computed at the request layer, so a person
    * removed from a channel could still win the race to write into it.
    */
@@ -1279,13 +1279,13 @@ export class ConversationRepo {
    * placement's own set-shaped text ({@link PARTICIPANT_AGENT_IDS_SQL}) rather
    * than a second query with an arm per placement.
    *
-   * TWO CONJUNCTS, and the second is not decoration (@Cindy P4-5 boundary 2):
+   * TWO CONJUNCTS, and the second is not decoration (#task:2021 P4-5):
    * participation deliberately ignores `endpoint_*_deleted_at` so a survivor
    * keeps reading its own DM, while a DELIVERY target must also be a LIVE
    * principal — `JOIN agents a` is that conjunct, and it is what keeps a deleted
    * endpoint out of the fan-out without weakening participation for the reader.
    *
-   * The join is also the ACCESS PATH (@Cindy B9): the placement produces the
+   * The join is also the ACCESS PATH: the placement produces the
    * candidate ids and `agents` is probed by primary key, so cost tracks the
    * conversation's own size. The predicate reading of the same rule would have to
    * offer `agents` as the candidate set — a full scan of every agent in the

@@ -161,8 +161,8 @@ export interface MessageTxConversationsPort {
   isAgentParticipant(conversationId: string, agentId: string): boolean;
   /**
    * PARTICIPATION for the HUMAN actor kind — the SAME conjunct of the SAME gate,
-   * and it is on this scope because leaving it at the route was itself the defect
-   * (@Cindy B7): `canPostToConversation` answers before the transaction opens, so
+   * and it is on this scope because leaving it at the route was itself the
+   * defect: `canPostToConversation` answers before the transaction opens, so
    * a person removed from the channel — or from the workspace — in the gap still
    * wrote, and a direct service caller was never gated at all.
    *
@@ -294,7 +294,7 @@ export interface MessageTxScope {
   workspaces: MessageTxWorkspacesPort;
   notifications: MessageTxNotificationsPort;
   agents: { get(agentId: string): AgentDto | null; getByName(name: string): AgentDto | null };
-  /** `get` is the LIVENESS reading (#task:2021 P4-5 round 2, @Cindy B10): the
+  /** `get` is the LIVENESS reading (#task:2021 P4-5): the
    *  human twin of `agents.get`, so `follower ⊆ LIVE participant` can be one
    *  conjunction per principal kind instead of a participation check that a
    *  tombstoned principal passes on purpose. */
@@ -314,8 +314,8 @@ export interface MessageTxScope {
   attachments: AttachmentSnapshotSourcePort;
 }
 
-/** Atomic write boundary for the message domain, and — since #task:2021 P4-4
- *  (@Cindy B6) — a COMMIT-TIME AUTHORITY boundary.
+/** Atomic write boundary for the message domain, and — since #task:2021 P4-4 —
+ *  a COMMIT-TIME AUTHORITY boundary.
  *
  *  ATOMICITY is the easy half. The load-bearing half is that the write gate
  *  (`assertPostAuthority`: lifecycle ∧ participation ∧ not-survivor-read-only)
@@ -368,7 +368,7 @@ export interface ThreadFollowReadPort {
 /** The callback-free follower write surface: the VOLUNTARY UNFOLLOW, and
  *  nothing else.
  *
- *  There is no `upsert` here (#task:2021 P4-5 round 2, @Cindy B10). Creating a
+ *  There is no `upsert` here (#task:2021 P4-5). Creating a
  *  follower row requires the `follower ⊆ live participant` gate and — for an
  *  agent — the history backfill in the same transaction, so every insertion path
  *  goes through the aggregate's in-transaction funnels. A direct-write upsert was

@@ -13,7 +13,7 @@
 //
 // Every follower-row INSERT is in a transaction and goes through `followAgent` /
 // `followUser` — including the voluntary manual follows, for both principal
-// kinds (#task:2021 P4-5 round 2, @Cindy B10). Those two are the only places the
+// kinds (#task:2021 P4-5). Those two are the only places the
 // `follower ⊆ live participant` gate is stated, so a writer that bypassed them
 // would be a second, ungated definition of who may follow.
 
@@ -145,7 +145,7 @@ export class ThreadFollowManager {
   }
 
   /** Voluntary manual follow by a HUMAN — the twin of {@link followThread}, and
-   *  since #task:2021 P4-5 round 2 (@Cindy B10) the same shape: one transaction,
+   *  since #task:2021 P4-5 the same shape: one transaction,
    *  the root resolved inside it, and the row written through {@link followUser}.
    *
    *  It used to call the direct-write port, which made this a SECOND WRITER of
@@ -220,8 +220,8 @@ export class ThreadFollowManager {
    * for the current reply, executed best-effort after commit.
    *
    * EVERY gate below is `follower ⊆ live participant`, asked of the one placement
-   * authority (§4.2) for BOTH principal kinds (#task:2021 P4-5, @Cindy boundary
-   * 3). They used to be roster questions — `conversation_agents` for an agent,
+   * authority (§4.2) for BOTH principal kinds (#task:2021 P4-5). They used to be
+   * roster questions — `conversation_agents` for an agent,
    * `conversation_users` for a human — which are the participants of the WORKSPACE
    * arm only: on a `direct_pair` / `agent_inbox` thread nothing was ever eligible,
    * not even the endpoint principal replying in its own DM, so no follower row was
@@ -349,7 +349,7 @@ export class ThreadFollowManager {
    *  a NEW follower row was created (false = already following, not a
    *  participant, or not live → no backfill).
    *
-   *  LIVENESS is its own conjunct (#task:2021 P4-5 round 2, @Cindy B10).
+   *  LIVENESS is its own conjunct (#task:2021 P4-5).
    *  Participation deliberately survives an endpoint tombstone so the SURVIVOR of a
    *  deleted DM keeps reading — which means `isAgentParticipant` alone still says
    *  yes for the agent that no longer exists, and this is the wrong place to learn

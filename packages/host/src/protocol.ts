@@ -66,6 +66,7 @@ import {
   HostKindSchema,
   McpProbeResultSchema,
   MemberDtoSchema,
+  MessageReferenceSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
   ReasoningEffortTokenSchema,
@@ -591,6 +592,20 @@ export const AgentMessageSendResultSchema = z.union([
        *  the backend send response so a caller (CLI) can report which
        *  stream the message landed in. */
       thread_root_id: z.string().min(1).nullable().optional(),
+      /** References in the sent body that addressed NOBODY (#task:2021
+       *  P4-5-b), forwarded verbatim from the backend send response so the CLI
+       *  can tell its agent which of its own tokens landed nowhere. Absent when
+       *  every reference was addressed.
+       *
+       *  Forwarded, never derived: the daemon has no participation authority and
+       *  must not acquire one — a second opinion here would be a second
+       *  definition of "addressed", reported to the one reader who cannot check
+       *  it. Reason-free for the same purpose it is reason-free at the backend
+       *  boundary: `unknown handle` and `not a participant` are one outcome. */
+      unresolved_references: z
+        .array(MessageReferenceSchema)
+        .nonempty()
+        .optional(),
     })
     .strict(),
   AgentBackendHttpErrorSchema,

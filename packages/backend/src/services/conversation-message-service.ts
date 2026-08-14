@@ -15,6 +15,7 @@ import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { assertActorConversationMatch } from '../auth/principal.js';
 import { writeMentionCcCopies } from '../application/mention-cc.js';
+import { collectUnresolvedReferences } from '../application/reference-addressing.js';
 import { resolveSnapshotsFromSources } from './attachment/snapshot-resolution.js';
 import type { MessageTxScope, MessageUnitOfWork } from './conversation-message/ports.js';
 import {
@@ -203,6 +204,39 @@ export class ConversationMessageService {
                 references,
               })
             : null;
+        // Mention CC, IN THIS TRANSACTION (v71 §5, #task:2014). It was a
+        // post-commit `void ccMentionsBestEffort(...)`: a crash in the gap
+        // committed the human's message and lost the copy permanently, with
+        // nothing said to anyone. The copy, its durable inbox delivery row and
+        // the author's `mention_external` notification are all facts the domain
+        // cannot afford to lose, so they commit or roll back WITH the message
+        // that caused them. What it returns is the report the post-commit half
+        // needs (wake / WS frames / skip log) — no effect ran here.
+        //
+        // `sourceConversation`, not the target: the CC answers "who did this
+        // message address that cannot see the channel it was written in", and a
+        // user send never has a foreign target (`allowTarget: false`), so the
+        // two are the same conversation on this path anyway.
+        const mentionCc = policy.ccMentions
+          ? writeMentionCcCopies(tx, {
+              message,
+              sourceConversation,
+              references,
+            })
+          : null;
+        // What the author addressed and this send could not reach (#task:2021
+        // P4-5-b). Computed AFTER the two mechanisms that can reach a referenced
+        // principal have run — the follower rows above and the CC copies just
+        // written — because it reports on their outcome; it decides nothing and
+        // writes nothing itself. Judged against the TARGET conversation, which is
+        // where the message landed and therefore what "addressed" can mean.
+        const unresolvedReferences = collectUnresolvedReferences(tx, {
+          references,
+          targetConversationId: targetConversation.id,
+          ccReachedAgentIds: new Set(
+            (mentionCc?.copies ?? []).map(copy => copy.agentId),
+          ),
+        });
         // S1 (#task:1276) P1+P2: a thread reply changes the root's authoritative
         // reply badge (P1) and its threads-list entry (P2). Both are computed IN
         // THIS TRANSACTION (after the insert, so they INCLUDE this reply — never a
@@ -235,26 +269,7 @@ export class ConversationMessageService {
           sourceConversation,
           targetConversation,
           message,
-          // Mention CC, IN THIS TRANSACTION (v71 §5, #task:2014). It was a
-          // post-commit `void ccMentionsBestEffort(...)`: a crash in the gap
-          // committed the human's message and lost the copy permanently, with
-          // nothing said to anyone. The copy, its durable inbox delivery row and
-          // the author's `mention_external` notification are all facts the domain
-          // cannot afford to lose, so they commit or roll back WITH the message
-          // that caused them. What is returned is the report the post-commit half
-          // needs (wake / WS frames / skip log) — no effect ran here.
-          //
-          // `sourceConversation`, not the target: the CC answers "who did this
-          // message address that cannot see the channel it was written in", and a
-          // user send never has a foreign target (`allowTarget: false`), so the
-          // two are the same conversation on this path anyway.
-          mentionCc: policy.ccMentions
-            ? writeMentionCcCopies(tx, {
-                message,
-                sourceConversation,
-                references,
-              })
-            : null,
+          mentionCc,
           // Main-line recipients only; thread replies deliver via
           // `threadDelivery` (follower-gated), not the conversation-wide fan-out.
           //
@@ -277,6 +292,7 @@ export class ConversationMessageService {
                   .map(agentId => ({ agentId }))
               : [],
           threadDelivery,
+          unresolvedReferences,
           skippedFreshnessReason,
           streamHeadBeforeSend,
           projections,
@@ -378,6 +394,32 @@ export class ConversationMessageService {
       'conversation-message-service: message inserted',
     );
 
+    // The author addressed someone this send could not reach. Logged at WARN and
+    // per send (not per reference), because it is an ANOMALY someone may have to
+    // explain after the fact — "I told the agent and nothing happened" — and the
+    // default level on a running install is `warn`, so an `info` line would not
+    // be on disk when that question is asked. Only the author's own tokens are
+    // recorded: no reason, and nothing about who does exist (see
+    // `application/reference-addressing.ts`).
+    if (txResult.unresolvedReferences.length > 0) {
+      this.logger.warn(
+        {
+          event: 'send.references_unresolved',
+          sourceConversationId: txResult.sourceConversation.id,
+          targetConversationId: txResult.targetConversation.id,
+          messageId: txResult.message.id,
+          actorKind: input.actor.kind,
+          actorId:
+            input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
+          unresolved: txResult.unresolvedReferences.map(ref => ({
+            kind: ref.kind,
+            handle: ref.handle,
+          })),
+        },
+        'conversation-message-service: references addressed nobody in the target',
+      );
+    }
+
     // The committed-message payload: persisted message + in-transaction
     // absolute projections. Built ONCE here and reused verbatim for both the
     // WS publish (below) and the caller-facing result — the human send route
@@ -403,6 +445,10 @@ export class ConversationMessageService {
     const result: SendMessageResult = {
       committed,
       targetConversationId: txResult.targetConversation.id,
+      // A SIBLING of `committed`, never a field inside it: `committed` is
+      // published to the whole conversation, and who the author failed to
+      // address is theirs alone (#task:2021 P4-5-b).
+      unresolvedReferences: txResult.unresolvedReferences,
       ...(txResult.streamHeadBeforeSend !== null
         ? { streamHeadBeforeSend: txResult.streamHeadBeforeSend }
         : {}),
@@ -441,8 +487,7 @@ export class ConversationMessageService {
     // thread where a separate Cindy@thread session exists, the thread
     // session is the actual recipient and must receive the message in
     // its inbox. Excluding by agent id would deliver to nobody and the
-    // started session would wake without a message to process — exactly
-    // the bug @Cindy caught on `f28ed08` review.
+    // started session would wake without a message to process.
     const deliveryExcludeAgentId =
       policy.distributeExcludeSender
       && input.actor.kind === 'agent'
@@ -830,7 +875,7 @@ export class ConversationMessageService {
    * is the pre-existing order, so a legitimate member's closed-channel send keeps
    * reporting the reason it always did.
    *
-   * EVERY ACTOR KIND, through the same authority (@Cindy B7). The human arm used
+   * EVERY ACTOR KIND, through the same authority. The human arm used
    * to stop at the route, and that was not a smaller version of this gate but a
    * different one: `canPostToConversation` answers before the transaction opens,
    * so a person removed from the channel — or from the workspace — in the gap
@@ -839,8 +884,8 @@ export class ConversationMessageService {
    * v25) is not a reason to leave it there; it is a reason for the SCOPE to expose
    * the placement authority's human face, which it now does.
    *
-   * AND UNCONDITIONALLY, which is why this takes no `SendMessagePolicy` (@Cindy
-   * B8). Participation was briefly a policy field that both arms set to `true`;
+   * AND UNCONDITIONALLY, which is why this takes no `SendMessagePolicy`.
+   * Participation was briefly a policy field that both arms set to `true`;
    * a flag with no legal current value only offers a future reader somewhere to
    * turn a security invariant off. A new actor kind must widen
    * {@link SendMessageActor} and state its arm HERE, in the gate.

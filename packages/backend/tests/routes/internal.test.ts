@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  AgentSendMessageOutputSchema,
   X_SILVERHAND_PRINCIPAL_HEADER,
   internalPaths,
   legacyInternalPaths,
@@ -280,8 +281,36 @@ describe('POST /internal/.../send-message', () => {
     );
   });
 
-  it('returns a stale_event_id when same-conversation agent send is stale', async () => {
+  it('tells the SENDER which of its references addressed nobody, and says nothing when they all landed (#task:2021 P4-5-b)', async () => {
     t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
+    const send = (content: string) => http(t!).post(
+      internalPaths.agentSendConversationMessage(conversationId, agentIds.alice!),
+      { content },
+      { headers: authHeaders(t!.authToken) },
+    );
+
+    const landed = await send('<silverhand://agent/bob> ping');
+    expect(landed.status).toBe(200);
+    const landedBody = AgentSendMessageOutputSchema.parse(await landed.json());
+    // ABSENT, not `[]`: an empty array on every ordinary send would be noise on
+    // the one surface an agent reads after each of its own messages. The service
+    // field is total; the wire's is present only when it says something.
+    expect('unresolved_references' in landedBody).toBe(false);
+
+    const missed = await send('<silverhand://agent/nosuchagent> ping');
+    expect(missed.status).toBe(200);
+    const missedBody = AgentSendMessageOutputSchema.parse(await missed.json());
+    // Parsed through the shared output schema on purpose: the shape the daemon and
+    // the CLI will read is the shape asserted here, and it carries no reason.
+    expect(missedBody.unresolved_references).toEqual([
+      { kind: 'agent', handle: 'nosuchagent' },
+    ]);
+    // The send still succeeded — the message is in the channel and bob got it.
+    expect(t.fake.delivered.map(d => d.messageId)).toContain(missedBody.message_id);
+  });
+
+  it('returns a stale_event_id when same-conversation agent send is stale', async () => {    t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const observed = await (
       await http(t).post(

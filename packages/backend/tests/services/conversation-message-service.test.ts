@@ -22,6 +22,7 @@ import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { writeMentionCcCopies } from '../../src/application/mention-cc.js';
+import type { MessageDto } from '@silverhand/shared';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
@@ -144,7 +145,7 @@ function bootstrap() {
   // tx scope. `txWrap.current` is read per transaction, so a test arms its
   // fault / authority swap AFTER its setup writes committed normally.
   const txWrap: { current: ((tx: MessageTxScope) => MessageTxScope) | null } = { current: null };
-  // The GAP instrument (@Cindy B7): a rival's write that COMMITS between the
+  // The GAP instrument: a rival's write that COMMITS between the
   // request layer's authorization answer and BEGIN. `txWrap` cannot express it —
   // a write from inside the callback rolls back with the transaction under test.
   const txSeam: { current: (() => void) | null } = { current: null };
@@ -2438,7 +2439,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
 });
 
 /**
- * THE HUMAN ARM of the same gate (#task:2021 P4-4, @Cindy B7).
+ * THE HUMAN ARM of the same gate (#task:2021 P4-4).
  *
  * A human's participation is a fact the WRITE TRANSACTION asks, unconditionally
  * and through the same placement authority as an agent's. It is not a per-actor
@@ -2639,38 +2640,39 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
  *     explicit rather than implied, because "reference ⇒ recipient" is exactly the
  *     shortcut this boundary invites.
  *
- * The falsifier's coordinates are the load-bearing part (@Cindy P4-5 boundary 4):
+ * The falsifier's coordinates are the load-bearing part (#task:2021 P4-5):
  * the claim is that the FOREIGN principal gets nothing WHILE the conversation's
  * own recipients still receive. Asserting "nothing was delivered" instead would
  * be satisfied by a total fan-out shutdown — the failure this slice exists to
  * repair — and would report it as a pass.
  */
+/** A second channel in the same workspace whose only agent participant is a
+ *  newly created `carol`. Same workspace on purpose: the falsifier is about the
+ *  CONVERSATION boundary, and a foreign workspace would let a coarser gate pass
+ *  it. */
+function withForeignChannel(t: ReturnType<typeof bootstrap>) {
+  const carol = t.agents.create(
+    { name: 'carol', runtime: 'claude' },
+    t.localHostId,
+    'local',
+  );
+  t.workspaces.insertMembership(t.workspace.id, carol.id);
+  const other = t.conversations.insertChannel({
+    name: 'ch-2',
+    workspaceId: t.workspace.id,
+    title: 'elsewhere',
+  });
+  t.conversations.addAgent(other.id, carol.id);
+  // The precondition the whole case rests on: carol participates THERE and not
+  // HERE. Asserted rather than assumed — if a future fixture change added her to
+  // the source channel, every expectation below would still pass and mean
+  // nothing.
+  expect(t.conversations.isAgentParticipant(other.id, carol.id)).toBe(true);
+  expect(t.conversations.isAgentParticipant(t.channel.id, carol.id)).toBe(false);
+  return { carol, other };
+}
+
 describe('ConversationMessageService.sendMessage — the recipient boundary (P4-5)', () => {
-  /** A second channel in the same workspace whose only agent participant is a
-   *  newly created `carol`. Same workspace on purpose: the falsifier is about the
-   *  CONVERSATION boundary, and a foreign workspace would let a coarser gate pass
-   *  it. */
-  function withForeignChannel(t: ReturnType<typeof bootstrap>) {
-    const carol = t.agents.create(
-      { name: 'carol', runtime: 'claude' },
-      t.localHostId,
-      'local',
-    );
-    t.workspaces.insertMembership(t.workspace.id, carol.id);
-    const other = t.conversations.insertChannel({
-      name: 'ch-2',
-      workspaceId: t.workspace.id,
-      title: 'elsewhere',
-    });
-    t.conversations.addAgent(other.id, carol.id);
-    // The precondition the whole case rests on: carol participates THERE and not
-    // HERE. Asserted rather than assumed — if a future fixture change added her to
-    // the source channel, every expectation below would still pass and mean
-    // nothing.
-    expect(t.conversations.isAgentParticipant(other.id, carol.id)).toBe(true);
-    expect(t.conversations.isAgentParticipant(t.channel.id, carol.id)).toBe(false);
-    return { carol, other };
-  }
 
   it('does not admit a referenced agent from ANOTHER conversation, while this conversation’s own recipients still receive', async () => {
     const t = bootstrap();
@@ -2755,7 +2757,7 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
       // bob becomes a follower the ordinary way (he authored the root), THEN loses
       // his seat. The follower row outlives the removal — nothing deletes it — so
       // the delivery read is the only thing standing between an ex-participant and
-      // the rest of the thread (@Cindy P4-5 boundary 3).
+      // the rest of the thread (#task:2021 P4-5).
       const root = t.messages.insertForConversation({
         conversationId: t.channel.id,
         fromKind: 'agent',
@@ -2841,7 +2843,229 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
 });
 
 /**
- * THE TWO FOLLOWER FUNNELS (#task:2021 P4-5 round 2, @Cindy B10).
+ * THE SENDER-ONLY UNRESOLVED REPORT (#task:2021 P4-5-b).
+ *
+ * Every consumer of the addressing contract fails CLOSED, which is correct
+ * delivery behaviour and silent reporting behaviour: the cases above prove the
+ * referenced outsider gets nothing, and nothing anywhere told the AUTHOR that.
+ * This suite is about the answer the author gets back, and it has exactly three
+ * claims — each with its own failure mode:
+ *
+ *  1. THE ANSWER IS TRUE — it is derived from the participation authority the
+ *     fan-out itself uses (plus what the CC actually copied), so it cannot say
+ *     "delivered" where no row was written, nor "unresolved" for a principal that
+ *     was reached out of band.
+ *  2. THE ANSWER CARRIES NO REASON — `unknown handle` and `not a participant
+ *     here` are ONE outcome. Splitting them turns the send response into an
+ *     existence oracle for every name in the deployment.
+ *  3. THE ANSWER IS THE SENDER'S ALONE — it never enters the stored row, the
+ *     published frame, or any recipient's queue. It is a fact about this attempt,
+ *     and publishing it would both leak the probe of (2) and rewrite what
+ *     everyone else sees of the message.
+ */
+describe('references that addressed nobody — the sender-only report (P4-5-b)', () => {
+  const eventOf = (t: ReturnType<typeof bootstrap>) =>
+    vi
+      .mocked(t.logger.warn)
+      .mock.calls.map(call => call[0] as { event?: string })
+      .filter(obj => obj?.event === 'send.references_unresolved');
+
+  it('reports the author’s own token for a reference that participates only ELSEWHERE', async () => {
+    const t = bootstrap();
+    try {
+      const { carol } = withForeignChannel(t);
+
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/carol> please look',
+      });
+
+      // The author's token, verbatim and alone. `toEqual` on the whole array is
+      // the assertion: an extra entry would mean a landed reference was reported
+      // as failed, which is the same lie in the other direction.
+      expect(sent.unresolvedReferences).toEqual([{ kind: 'agent', handle: 'carol' }]);
+      // The send SUCCEEDED and delivered to everyone it did address — an
+      // unresolved reference is feedback, never a refusal.
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === sent.committed.message.id,
+        ),
+      );
+      expect(t.fake.delivered.some(d => d.agentId === carol.id)).toBe(false);
+
+      // One WARN per send (not per reference), carrying only the author's tokens.
+      expect(eventOf(t)).toEqual([
+        expect.objectContaining({
+          event: 'send.references_unresolved',
+          sourceConversationId: t.channel.id,
+          targetConversationId: t.channel.id,
+          messageId: sent.committed.message.id,
+          actorKind: 'agent',
+          actorId: t.alice.id,
+          unresolved: [{ kind: 'agent', handle: 'carol' }],
+        }),
+      ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('merges “unknown handle” with “not a participant here” into ONE reason-free outcome', async () => {
+    const t = bootstrap();
+    try {
+      withForeignChannel(t);
+
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content:
+          '<silverhand://agent/nosuchagent> <silverhand://human/local-test> '
+          + '<silverhand://agent/carol>',
+      });
+
+      // `nosuchagent` names nobody in the deployment; `carol` names a real agent
+      // that participates elsewhere. INDISTINGUISHABLE here, and in the author's
+      // own order — the middle token addressed a participant and is absent.
+      expect(sent.unresolvedReferences).toEqual([
+        { kind: 'agent', handle: 'nosuchagent' },
+        { kind: 'agent', handle: 'carol' },
+      ]);
+      // Reason-free by SHAPE, not by inspection: `kind` + `handle` and nothing
+      // else. A `reason` / `exists` / `conversation_id` field added later fails
+      // here rather than after it has shipped as an oracle.
+      for (const ref of sent.unresolvedReferences) {
+        expect(Object.keys(ref).sort()).toEqual(['handle', 'kind']);
+      }
+      expect(eventOf(t)[0]).toMatchObject({
+        unresolved: [
+          { kind: 'agent', handle: 'nosuchagent' },
+          { kind: 'agent', handle: 'carol' },
+        ],
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('answers with an EMPTY list when every reference landed, and logs nothing', async () => {
+    const t = bootstrap();
+    try {
+      const outsider = t.users.create({
+        id: 'outsider',
+        name: 'outsider-test',
+        displayName: 'Outsider',
+      });
+      // Created AFTER the channel, so the fixture's membership trigger never saw
+      // them: a real person who is not here. The HUMAN namespace answers through
+      // its own predicate, and this test pins both arms of the same send.
+      expect(t.conversations.isUserParticipant(t.channel.id, outsider.id)).toBe(false);
+      expect(t.conversations.isUserParticipant(t.channel.id, 'local')).toBe(true);
+
+      const landed = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/bob> <silverhand://human/local-test> hi',
+      });
+      // The total-not-optional half of the contract: "nothing unresolved" is an
+      // ANSWER, and it is this one.
+      expect(landed.unresolvedReferences).toEqual([]);
+      expect(eventOf(t)).toEqual([]);
+
+      const missed = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://human/outsider-test> hi',
+      });
+      expect(missed.unresolvedReferences).toEqual([
+        { kind: 'human', handle: 'outsider-test' },
+      ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('treats an agent the mention CC actually copied to as ADDRESSED', async () => {
+    const t = bootstrap();
+    try {
+      const { carol, other } = withForeignChannel(t);
+      // The CC exists to reach a referenced agent BECAUSE it is not a participant
+      // here, so participation alone would report the one mechanism built for this
+      // case as a failure to reach her. Only `agentId` is read by the derivation;
+      // the rest of the copy is the mocked CC's own contract, exercised for real
+      // in `tests/services/mention-cc.test.ts`.
+      vi.mocked(writeMentionCcCopies).mockReturnValueOnce({
+        copies: [
+          {
+            agentId: carol.id,
+            agentHandle: 'carol',
+            inboxConversationId: other.id,
+            notifiedUserId: 'local',
+            wrapped: { id: 'cc-wrapped' } as unknown as MessageDto,
+          },
+        ],
+        skipped: [],
+        source: { conversationId: t.channel.id, messageId: 'unused' },
+      });
+
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        // A user actor: `POLICIES.user.ccMentions` is the only arm that CCs.
+        actor: { kind: 'user', userId: 'local' },
+        content: '<silverhand://agent/carol> please look',
+      });
+
+      expect(sent.unresolvedReferences).toEqual([]);
+      expect(eventOf(t)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('never leaves the sender’s own response — not the stored row, the published frame, or a recipient’s queue', async () => {
+    const t = bootstrap();
+    try {
+      withForeignChannel(t);
+      const published: Array<{ kind: string; payload: unknown }> = [];
+      const unsub = t.events.subscribeScope(`conversation:${t.channel.id}`, e => {
+        published.push({ kind: e.kind, payload: e.payload });
+      });
+      const content = '<silverhand://agent/carol> please look';
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content,
+      });
+      await waitFor(() =>
+        t.fake.delivered.some(d => d.messageId === sent.committed.message.id),
+      );
+      unsub();
+
+      // The committed payload is what the human route echoes VERBATIM and what
+      // the WS frame carries to everyone (#task:1749) — so the field must not be
+      // reachable through it, and the two must stay identical.
+      expect(sent.committed).not.toHaveProperty('unresolvedReferences');
+      expect(sent.committed).not.toHaveProperty('unresolved_references');
+      const frame = published.find(e => e.kind === 'message');
+      expect(frame?.payload).toEqual(sent.committed);
+
+      // The stored row: content byte-identical to what the author piped, and no
+      // projection of the report anywhere on the message.
+      const stored = t.messages.getById(sent.committed.message.id);
+      expect(stored?.content).toBe(content);
+      expect(JSON.stringify(stored)).not.toContain('unresolved');
+      // …and nothing was queued for anyone about it.
+      expect(
+        JSON.stringify(t.conversationInboxes.listPending(t.channel.id, t.bob.id)),
+      ).not.toContain('unresolved');
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE TWO FOLLOWER FUNNELS (#task:2021 P4-5).
  *
  * `followAgent` / `followUser` are the only writers of a `thread_followers` row,
  * and each holds `follower ⊆ LIVE participant` as a conjunction of two
@@ -2874,7 +3098,7 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
  * stated — one layer removing its own guard must not be able to make the other
  * one's absence invisible.
  */
-describe('the follower funnels — follower ⊆ live participant (P4-5 round 2)', () => {
+describe('the follower funnels — follower ⊆ live participant (P4-5)', () => {
   /** A DM between the fixture human and `bob`, with a root message in it. */
   function withDirectPair(t: ReturnType<typeof bootstrap>) {
     const dm = t.conversations.getOrCreateDirectPair(
@@ -3018,7 +3242,7 @@ describe('the follower funnels — follower ⊆ live participant (P4-5 round 2)'
       );
       t.workspaces.insertMembership(t.workspace.id, carol.id);
       t.conversations.addAgent(t.channel.id, carol.id);
-      // A LIVE FOLLOWER, and the reason this case has one (@Cindy B13): without
+      // A LIVE FOLLOWER, and the reason this case has one: without
       // carol the only follower is alice, who is the SENDER and therefore excluded
       // from her own plan — so "delivers to the live followers" would have been
       // asserted by an EMPTY delivery list, which any broken plan also produces.

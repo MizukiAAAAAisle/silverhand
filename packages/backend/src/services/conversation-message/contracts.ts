@@ -14,6 +14,7 @@ import type {
   MessageDto,
   MessageEventPayload,
   MessageProjections,
+  Reference,
   SendMessageTarget,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../../context.js';
@@ -71,6 +72,23 @@ export interface SendMessageResult {
    *  and this return — there is no second, projection-less payload shape. */
   committed: MessageEventPayload;
   targetConversationId: string;
+  /**
+   * The references in this message that addressed NOBODY (#task:2021 P4-5-b) —
+   * the author's own tokens, in their own order, with no reason attached (see
+   * `application/reference-addressing.ts` for why a reason would be an existence
+   * oracle).
+   *
+   * SENDER-ONLY, by position: it is a sibling of `committed`, never a field
+   * inside it. `committed` is the payload the post-commit WS frame carries to
+   * everyone in the conversation and the human route echoes verbatim (#task:1749),
+   * so anything placed in it is published; this belongs to the caller that wrote
+   * the message and to nobody else.
+   *
+   * Total, not optional: "which of your references landed" is answered for every
+   * send, and an empty array is that answer. An absent field would make "nothing
+   * unresolved" indistinguishable from "not computed".
+   */
+  unresolvedReferences: readonly Reference[];
   /** Stream head at the moment BEFORE this message was inserted. Set for an
    *  agent send whose insert SKIPPED the freshness CAS — an explicit
    *  `freshnessBypass`, or a loose first touch that carried no
@@ -107,7 +125,7 @@ export interface ResolveStaleMessageInput {
  * `requireSenderParticipation`, and by the end of #task:2021 P4-4 both arms
  * filled it with `true`: a boolean with no legal current value is not a seam,
  * it is a security invariant demoted to a switch someone can later set to
- * `false` (@Cindy B8). `assertPostAuthority` therefore takes no policy at all,
+ * `false`. `assertPostAuthority` therefore takes no policy at all,
  * and a future actor kind has to widen the discriminated union and state its
  * arm there, which is where a reviewer looks for it.
  */
@@ -181,7 +199,7 @@ export type ActorErrorCode =
    */
   | 'agent_not_participant_of_conversation'
   /**
-   * The human arm of the same refusal (#task:2021 P4-4, @Cindy B7). A SEPARATE
+   * The human arm of the same refusal (#task:2021 P4-4). A SEPARATE
    * code rather than a shared "not a participant": the two actor kinds reach the
    * wire through different clients, and an operator reading `agent_…` for a
    * person's refused send would look for the wrong subject. Both resolve through
@@ -306,7 +324,7 @@ export interface ConversationMessageServiceOptions {
 
 /**
  * A DELIVERY RECIPIENT of a message: the minimal principal identity, and
- * deliberately nothing more (#task:2021 P4-5, @Cindy boundary 1).
+ * deliberately nothing more (#task:2021 P4-5).
  *
  * It replaced `ConversationAgentDto` on every recipient-shaped signature of the
  * send path. That DTO is a MEMBERSHIP FACT — `joined_at` plus the runtime seat's
@@ -366,6 +384,11 @@ export interface SendMessageTxResult {
   /** Non-null when this send is a thread reply: drives follower-gated
    *  delivery instead of the main-line channel-member fan-out. */
   threadDelivery: ThreadDeliveryPlan | null;
+  /** The references that addressed nobody, computed in this transaction from the
+   *  same participation authority the fan-out above is built from, plus what the
+   *  CC actually copied. Reported to the SENDER after commit; see
+   *  {@link SendMessageResult.unresolvedReferences}. */
+  unresolvedReferences: Reference[];
   skippedFreshnessReason: string | null;
   /** S1 (#task:1276) authoritative projection deltas computed IN this
    *  transaction, attached to the post-commit `message` event. Null when the

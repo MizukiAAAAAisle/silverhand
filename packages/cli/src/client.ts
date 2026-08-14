@@ -29,6 +29,7 @@ import {
   type CreateTasksResult,
   type EditTaskInput,
   type McpProbeResult,
+  type Reference,
   type ScheduleCancelInput,
   type ScheduleCancelOutput,
   type ScheduleCreateInput,
@@ -97,7 +98,15 @@ export class BackendClient {
     stale_resolution_reason?: AgentSendStaleResolutionReason;
     freshness_bypass?: boolean;
     attachment_ids?: string[];
-  }): Promise<{ message_id: string; message_seq?: number; thread_root_id?: string | null }> {
+  }): Promise<{
+    message_id: string;
+    message_seq?: number;
+    thread_root_id?: string | null;
+    /** References in the body that addressed nobody (#task:2021 P4-5-b).
+     *  Passed straight through from the backend response: this client validates
+     *  nothing, and the field is absent unless the server said something. */
+    unresolved_references?: readonly Reference[];
+  }> {
     return this.request(
       'POST',
       internalPaths.agentSendConversationMessage(this.env.conversationId, this.env.agentId),

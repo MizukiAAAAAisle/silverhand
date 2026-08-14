@@ -507,7 +507,9 @@ parallelize. After creation, announce it here as \`#conv:<channel_id>\`.
 Use ${addMember} \`--handle <name>\` to bring an existing workspace member into
 the current channel/thread. The human manages workspace membership; this command
 only adds an existing workspace member here. A reference only addresses current
-members: one that names someone who is not here addresses nobody, with no error.
+members: one that names someone who is not here addresses nobody — the send
+still succeeds, and reports that token back to you as
+\`unresolved_references\` on its stdout.
 Use \`silverhand member --help\`.
 
 ## Attachments

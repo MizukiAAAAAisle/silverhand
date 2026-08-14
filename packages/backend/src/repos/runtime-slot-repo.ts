@@ -33,7 +33,7 @@ export type RuntimeSlotScope =
  * WHAT IT DOES NOT CARRY: any conversation metadata (workspace, title, archived
  * state). Every such field is a field a future edit could filter or join by, and
  * the workspace coordinate is precisely the join that used to make DM and inbox
- * seats vanish from these planes (@Cindy B3). The display face
+ * seats vanish from these planes. The display face
  * (`AgentRepo.listRuntimeConversations`) is where coordinates belong.
  *
  * NOT A PARTICIPATION FACE, in either direction: it neither answers "is this
@@ -163,7 +163,7 @@ export class RuntimeSlotRepo {
 
   /**
    * EVERY SEAT this agent holds — the row set of the slot table for one agent,
-   * unjoined and unfiltered, which is the whole point of the face (@Cindy B3).
+   * unjoined and unfiltered, which is the whole point of the face.
    *
    * Unjoined is the load-bearing part: there is no conversation table here to
    * resolve a coordinate through, so no edit can reintroduce the projection that

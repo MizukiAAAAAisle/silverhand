@@ -15,13 +15,13 @@
  *      someone's DM, and it would have to add a dependency here to do it.
  *   2. `packages/backend/src/repos/conversation-placement-sql.ts` — the SQL face —
  *      must keep its roster `EXISTS` INSIDE the workspace arm, for EVERY principal
- *      kind (@Cindy B7 added the human one: the send's write gate now asks human
- *      participation inside the transaction, so the human rule has a SQL face too).
+ *      kind — including the human one, since the send's write gate now asks human
+ *      participation inside the transaction, so the human rule has a SQL face too.
  *      The same rule with two faces is only one rule while both faces agree; an
  *      ungated `EXISTS` would make a stray roster row authoritative in delivery and
  *      in P2's runtime target gate while the code face correctly ignored it. Its
  *      IMPORT SURFACE is pinned for the same reason as the rule module's, and closes
- *      the escape the fragment pin cannot see (@Cindy B2.1): a roster edge built by
+ *      the escape the fragment pin cannot see: a roster edge built by
  *      an IMPORTED helper and ORed in leaves this file's own text with exactly the
  *      allowed literal roster mentions, so counting mentions here would stay green
  *      while a second authority ran. The module's load-bearing shape is "SQL text,
@@ -30,7 +30,7 @@
  *
  *   3. `packages/backend/src/services/conversation-message/contracts.ts` and the
  *      send gate in `conversation-message-service.ts` — participation must not be
- *      expressible as a POLICY at all (@Cindy B8). `requireSenderParticipation`
+ *      expressible as a POLICY at all. `requireSenderParticipation`
  *      existed for exactly as long as one arm legitimately said `false`; once both
  *      arms said `true` the field was a security invariant left behind as a
  *      switch. A values test cannot pin its absence — `true` and "no field" behave
@@ -173,7 +173,7 @@ function importsOf(src: string): Array<{ specifier: string; typeOnly: boolean }>
  * Every roster-table mention in `src`, as `{table, at}`. Deliberately NOT a
  * judgement about which arm it sits in: the first version of this gate read the
  * nearest PRECEDING `placement_kind = '…'` and called a mention gated when that
- * happened to be `workspace`, which @Cindy's B2 shows is no structural claim at
+ * happened to be `workspace`, which is no structural claim at
  * all —
  *
  *     (c.placement_kind = 'workspace' AND EXISTS (…roster…))
@@ -246,7 +246,7 @@ const PINNED_AGENT_ROSTER_FRAGMENT = `(\${conversationAlias}.placement_kind = 'w
             ))`;
 
 /**
- * The SET-shaped roster read (#task:2021 P4-5 round 2, @Cindy B9). The agent rule
+ * The SET-shaped roster read (#task:2021 P4-5). The agent rule
  * now has TWO readings — a predicate over one agent and a set of candidate ids
  * produced by the placement — because enumerating with the predicate meant offering
  * every agent in the installation as a candidate (a full `SCAN a` per message).
@@ -452,7 +452,7 @@ describe('db-boundary: participation authority', () => {
   });
 
   /**
-   * The SET reading's shape (@Cindy B9). Its arms cannot be pinned by the fragment
+   * The SET reading's shape. Its arms cannot be pinned by the fragment
    * count — only its roster read can — so the two properties that make it ONE
    * authority rather than a hand-rolled second query are asserted here:
    *
@@ -488,7 +488,7 @@ describe('db-boundary: participation authority', () => {
     expect([...sql.matchAll(/c_p\.id = @conv/g)]).toHaveLength(arms.length);
     // … and the binding is named, so there is exactly one value to supply.
     expect(sql.split('?')).toHaveLength(1);
-    // LIVENESS IS NOT HERE (P4-5 boundary 2): the set is candidates. A `JOIN agents`
+    // LIVENESS IS NOT HERE (#task:2021 P4-5): the set is candidates. A `JOIN agents`
     // inside this text would redefine participation for every future reader of it;
     // the delivery statement adds it (`LIVE_PARTICIPANT_AGENT_IDS_SQL`).
     expect(sql).not.toContain('agents a');
@@ -496,7 +496,7 @@ describe('db-boundary: participation authority', () => {
   });
 
   it('the SQL face has no dependencies, so no roster edge can arrive from outside it', () => {
-    // @Cindy B2.1. The mention count above is a claim about THIS FILE'S TEXT, and
+    // The mention count above is a claim about THIS FILE'S TEXT, and
     // an imported `extraRosterEdge(alias)` ORed into the predicate satisfies it
     // while running a second authority: the table name lives in the other module.
     // What forecloses that is the module's actual shape — SQL text with no
@@ -544,7 +544,7 @@ describe('db-boundary: participation authority', () => {
       OR (\${conversationAlias}.placement_kind = 'direct_pair' AND \${conversationAlias}.endpoint_a_id = ?)\`;`;
     expect(rosterReadsOutside(gated, PINNED_ROSTER_FRAGMENTS)).toEqual([]);
 
-    // @Cindy's B2 bypass, verbatim in shape: the second arm's roster read is wide
+    // The `OR` bypass, verbatim in shape: the second arm's roster read is wide
     // open (the `OR` short-circuits the predicate away) while its nearest preceding
     // `placement_kind` is still `workspace`. The retired proximity check passed
     // this; the fragment check must not.
@@ -575,7 +575,7 @@ describe('db-boundary: participation authority', () => {
     const reindented = gated.replace(/\n\s+/g, '\n  ');
     expect(rosterReadsOutside(reindented, PINNED_ROSTER_FRAGMENTS)).toEqual([]);
 
-    // THE SET READING'S PIN (@Cindy B9), and the bypass it exists to report. The
+    // THE SET READING'S PIN, and the bypass it exists to report. The
     // pinned text passes …
     const membersGated = `const sql = \`${PINNED_AGENT_ROSTER_MEMBERS_FRAGMENT}\`;`;
     expect(rosterReadsOutside(membersGated, PINNED_ROSTER_FRAGMENTS)).toEqual([]);
@@ -600,7 +600,7 @@ describe('db-boundary: participation authority', () => {
       ),
     ).toHaveLength(1);
 
-    // THE HUMAN PAIR IS THE PIN (@Cindy B7). The whole fragment passes …
+    // THE HUMAN PAIR IS THE PIN. The whole fragment passes …
     const humanGated = `const sql = \`${PINNED_HUMAN_ROSTER_FRAGMENT}\`;`;
     expect(rosterReadsOutside(humanGated, PINNED_ROSTER_FRAGMENTS)).toEqual([]);
     // … and the "simplification" that keeps only the channel seat does NOT: it
@@ -644,7 +644,7 @@ describe('db-boundary: participation authority', () => {
       { specifier: './dyn.js', typeOnly: false },
     ]);
 
-    // @Cindy B2.1, stated as the two halves it actually has. An EXTERNAL roster
+    // The import escape, stated as the two halves it actually has. An EXTERNAL roster
     // edge, ORed into the predicate: the fragment check is BLIND to it (this file's
     // text still holds exactly one literal roster mention, inside the pin) …
     const external = [
@@ -693,7 +693,7 @@ describe('db-boundary: participation authority', () => {
   });
 
   /**
-   * @Cindy B8. Both assertions are about CODE (`codeOf` blanks comments), because
+   * Both assertions are about CODE (`codeOf` blanks comments), because
    * the reason this gate exists is that the history has to stay writable: the
    * docblocks that explain why participation is unconditional necessarily name the
    * field that used to make it conditional. A prose fence would be "fixed" by

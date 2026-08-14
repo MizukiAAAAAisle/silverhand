@@ -328,7 +328,7 @@ export function createSqliteConversationPersistence(
     // agent send into a DM fail (#task:2021 P4-4).
     isAgentParticipant: (conversationId, agentId) =>
       conversations.isAgentParticipant(conversationId, agentId),
-    // The SAME authority for the other principal kind (@Cindy B7). Its human arms
+    // The SAME authority for the other principal kind. Its human arms
     // are the v25 pair (seat AND workspace membership), the `human` endpoint, and
     // no inbox arm at all — all three inside one SQL predicate, so this face
     // cannot restate half of the rule.
@@ -464,8 +464,8 @@ export function createSqliteConversationPersistence(
 
   const messageUow: MessageUnitOfWork = {
     /**
-     * BEGIN IMMEDIATE, not the default deferred BEGIN (#task:2021 P4-4, @Cindy
-     * B6). The send's write gate — lifecycle ∧ participation ∧
+     * BEGIN IMMEDIATE, not the default deferred BEGIN (#task:2021 P4-4). The
+     * send's write gate — lifecycle ∧ participation ∧
      * not-survivor-read-only — READS facts owned by other aggregates and then
      * writes on their strength. Under a deferred BEGIN those reads run with no
      * lock held, so a rival connection could revoke the seat / archive the

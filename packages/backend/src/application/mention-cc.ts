@@ -21,7 +21,7 @@
 //     `cc_source_message_id` (partial UNIQUE per inbox) makes a duplicate a
 //     constraint failure rather than a second notification.
 //
-//  3. THE INBOX HAS NO HUMAN PARTICIPANT (§4.2, @Cindy 裁定 1). That deletes the
+//  3. THE INBOX HAS NO HUMAN PARTICIPANT (§4.2). That deletes the
 //     entire `#task:1989` admission block this module used to perform — the
 //     author's conversation edge, the agent's edge, the author's home-workspace
 //     row — along with the `workspace_channels_changed` fan-out and the viewer
@@ -39,8 +39,8 @@
 // A WAKE FAILURE IS NEVER A LOST MENTION, and there is exactly ONE arm saying so.
 // v71 gave this module a second, typed arm for "the host refused the placement
 // because the inbox has no session cwd"; #task:2019 landed the agent-scoped
-// RuntimeScope, which made that refusal impossible, and #task:2021 P4-5 round 2
-// (@Cindy B12) deleted it rather than keeping it as defensive contract — a failure
+// RuntimeScope, which made that refusal impossible, and #task:2021 P4-5 deleted
+// it rather than keeping it as defensive contract — a failure
 // shape only a test fake can construct reads to the next caller as a supported
 // host semantics to mirror. Any throw from `start` now lands in the generic arm
 // below: the copy and its durable inbox delivery row are already committed, so the

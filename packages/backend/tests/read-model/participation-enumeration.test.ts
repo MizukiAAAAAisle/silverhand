@@ -1,6 +1,6 @@
 /**
  * Recipient enumeration: the SET-shaped reading of participation
- * (agent-scoped-session-v1 §4.2, #task:2021 P4-5, @Cindy B9).
+ * (agent-scoped-session-v1 §4.2, #task:2021 P4-5).
  *
  * `conversation-placement-sql.ts` now carries the participation rule TWICE — as a
  * predicate over one agent (`agentParticipates` / `…Correlated`) and as a set of
