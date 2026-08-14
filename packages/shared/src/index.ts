@@ -15,6 +15,7 @@ export * from './config.js';
 export * from './connect-command.js';
 export * from './conversation-name.js';
 export * from './conversation-placement.js';
+export * from './delivery-target.js';
 export * from './desktop-server-api-epoch.js';
 export * from './handle.js';
 export * from './host-diagnostics.js';
