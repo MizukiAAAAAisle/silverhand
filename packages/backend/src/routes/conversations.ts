@@ -1342,8 +1342,7 @@ export function createConversationRuntimeApp(
     // formal semantics.**
     try {
       const result = await ctx.runtimeHost.clearSession(
-        conversationId,
-        agentId,
+        { kind: 'conversation', conversationId, agentId },
         principal.userId,
       );
       return c.json({

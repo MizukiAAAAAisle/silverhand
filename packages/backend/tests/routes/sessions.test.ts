@@ -730,6 +730,7 @@ describe('canonical channel/thread routes', () => {
     t.fake.clearSessionResult = {
       prevCliSessionId: 'cli-prev-route',
       wasRunning: true,
+      focusConversationId: channelId,
     };
     const clear = await http(t, { 'X-Silverhand-User-Id': 'local' }).post(
       `/api/channels/${channelId}/agents/${agentIds.alice}/clear-session`,
@@ -741,8 +742,11 @@ describe('canonical channel/thread routes', () => {
       was_running: true,
     });
     expect(t.fake.clearedSessions).toContainEqual({
-      conversationId: channelId,
-      agentId: agentIds.alice,
+      scope: {
+        kind: 'conversation',
+        conversationId: channelId,
+        agentId: agentIds.alice,
+      },
       actorUserId: 'local',
     });
   });

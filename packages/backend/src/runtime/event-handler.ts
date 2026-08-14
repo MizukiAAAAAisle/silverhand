@@ -176,6 +176,8 @@ export type RuntimeExitHandler = (
   agentId: string,
   meta: {
     scope: RuntimePrincipalScope;
+    custody?: RuntimeProjectionCustody;
+    projectionFinalized?: boolean;
     intentional: boolean;
     code: number | null;
     initTimedOut: boolean;
@@ -1336,6 +1338,7 @@ export class RuntimeEventHandler {
     // owns the cache update above + the gating-flag snapshot below
     // because those depend on EventHandler-local state.
     const custody = this.projectionCustody(frame);
+    let projectionFinalized = false;
     if (custody) {
       const finalized = this.statusProjector.runtimeExit({
         scope: principalScopeFromWire(frame.runtime_scope),
@@ -1349,7 +1352,10 @@ export class RuntimeEventHandler {
         runState: entry?.runState ?? null,
         custody,
       });
-      if (finalized) this.onRuntimeCustodyFinalized?.(finalized);
+      if (finalized) {
+        projectionFinalized = true;
+        this.onRuntimeCustodyFinalized?.(finalized);
+      }
     }
     // Forward to the coordinator AFTER cache+SSE updates, so the
     // coordinator's auto-respawn doesn't race a stale projection. The
@@ -1359,6 +1365,8 @@ export class RuntimeEventHandler {
       try {
         this.onRuntimeExitCb(frame.conversation_id, frame.agent_id, {
           scope: principalScopeFromWire(frame.runtime_scope),
+          ...(custody ? { custody } : {}),
+          projectionFinalized,
           intentional: frame.intentional,
           code: frame.code,
           initTimedOut,

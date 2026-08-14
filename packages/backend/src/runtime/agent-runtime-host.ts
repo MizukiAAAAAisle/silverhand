@@ -74,11 +74,17 @@ export interface StopOptions {
   runtimeScope?: RuntimePrincipalScope;
 }
 
-/** Pre-clear snapshot returned by `clearSession()`. Callers use this
- *  to decide whether to publish an audit message and what to log. */
+/** Pre-clear snapshot returned by `clearSession()`. Callers use this to decide
+ * whether to resume a cleared runtime. The persistence implementation records
+ * the scope-appropriate audit atomically: conversation message for
+ * ConversationSlot, agent-level control fact for AgentSlot. */
 export interface ClearSessionResult {
   prevCliSessionId: string | null;
   wasRunning: boolean;
+  /** Presentation focus observed before the clear. Never part of slot identity.
+   * Runtime transitions may use it only to choose where a previously-live
+   * AgentSlot resumes after the new runtime is committed. */
+  focusConversationId: string | null;
 }
 
 export interface ReapIdleRuntimesOptions {
@@ -98,7 +104,9 @@ export interface ReapIdleRuntimesResult {
 /**
  * D4.c C7 — bounded wait the standalone fanout uses while
  * `clearSession` blocks on the post-`runtime_clear_session`
- * `runtime_exit` event landing in projection.
+ * `runtime_exit` event landing in projection before it clears durable session
+ * state. ConversationSlot then publishes its existing conversation audit;
+ * AgentSlot has no conversation audit surface.
  *
  * 10s mirrors `runtime_deliver`'s round-trip ceiling and is the
  * largest "user-explicit" interactive action we want to make a
@@ -126,12 +134,16 @@ export const CLEAR_SESSION_EXIT_TIMEOUT_MS = 10_000;
  */
 export class ClearSessionExitTimeoutError extends Error {
   readonly code = 'clear_session_timeout' as const;
-  readonly conversationId: string;
+  readonly conversationId: string | null;
   readonly agentId: string;
 
-  constructor(conversationId: string, agentId: string) {
+  constructor(scope: RuntimePrincipalScope) {
+    const conversationId = scope.kind === 'conversation'
+      ? scope.conversationId
+      : null;
+    const agentId = scope.agentId;
     super(
-      `clear-session for ${conversationId}/${agentId} timed out waiting for ` +
+      `clear-session for ${scope.kind === 'agent' ? `agent/${agentId}` : `${conversationId}/${agentId}`} timed out waiting for ` +
         'runtime_exit projection landed',
     );
     this.name = 'ClearSessionExitTimeoutError';
@@ -184,12 +196,16 @@ export class RuntimePlacementUnsupportedError extends Error {
  */
 export class ClearSessionInProgressError extends Error {
   readonly code = 'clear_session_in_progress' as const;
-  readonly conversationId: string;
+  readonly conversationId: string | null;
   readonly agentId: string;
 
-  constructor(conversationId: string, agentId: string) {
+  constructor(scope: RuntimePrincipalScope) {
+    const conversationId = scope.kind === 'conversation'
+      ? scope.conversationId
+      : null;
+    const agentId = scope.agentId;
     super(
-      `clear-session is already in progress for ${conversationId}/${agentId}`,
+      `clear-session is already in progress for ${scope.kind === 'agent' ? `agent/${agentId}` : `${conversationId}/${agentId}`}`,
     );
     this.name = 'ClearSessionInProgressError';
     this.conversationId = conversationId;
@@ -229,8 +245,7 @@ export interface AgentRuntimeHost {
    * publishes the resulting state.
    */
   clearSession(
-    conversationId: string,
-    agentId: string,
+    scope: RuntimePrincipalScope,
     actorUserId?: string | null,
   ): Promise<ClearSessionResult>;
 

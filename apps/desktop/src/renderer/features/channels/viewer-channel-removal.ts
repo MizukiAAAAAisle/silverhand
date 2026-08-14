@@ -113,7 +113,19 @@ export type ConversationScopedListData = { items: ConversationAttributed[] };
  *  (so a NON-selected workspace's held channels are enumerable) and which channel
  *  (so the cleanup can filter). Required fields on purpose — see
  *  {@link attributedRowFamily}. */
-export type ChannelAttributedRow = { workspace_id: string; channel_id: string };
+export type ChannelAttributedRow =
+  | { workspace_id: string; channel_id: string }
+  /** P0-f (#task:2022): task rows moved their workspace attribution into the
+   *  board union — the proof accepts the arm-attributed shape, and
+   *  {@link heldChannelIdsInWorkspace}-style enumerators derive the workspace
+   *  by narrowing `board.kind === 'workspace'` (a DirectPair row belongs to no
+   *  workspace and is never held by one). */
+  | {
+      channel_id: string;
+      board:
+        | { kind: 'workspace'; workspace_id: string }
+        | { kind: 'direct_pair'; pair_key: string };
+    };
 
 /** How a viewer-local cache carries a channel — each settles differently.
  *  Exhaustive: a new member must also gain a dispatch branch in

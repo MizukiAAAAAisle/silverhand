@@ -6,9 +6,11 @@ import {
 } from '@silverhand/shared';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
+import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { switchAgentRuntime } from '../../src/application/switch-agent-runtime.js';
 import {
   HostWsCommandResponseError,
@@ -1302,7 +1304,10 @@ describe('PUT /api/agents/:id/runtime', () => {
     expect(body.restarted_conversations).toBe(1);
     expect(body.restart_failures).toBe(0);
     expect(t.fake.clearedSessions).toEqual([
-      { conversationId, agentId, actorUserId: t.viewerUserId },
+      {
+        scope: { kind: 'conversation', conversationId, agentId },
+        actorUserId: t.viewerUserId,
+      },
     ]);
     expect(t.fake.starts).toEqual([{ conversationId, agentId }]);
     expect(changed).toEqual([agentId]);
@@ -1312,6 +1317,162 @@ describe('PUT /api/agents/:id/runtime', () => {
       runtime_transition_started_at: null,
     });
   });
+
+  it('clears and restarts one AgentSlot by semantic scope with monotonic generation', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', {
+        name: 'agent-slot-switcher',
+        runtime: 'claude',
+        session_scope: 'agent',
+      })
+    ).json() as any;
+    const agentId: string = created.agent.id;
+    const workspace = new WorkspaceRepo(t.ctx.db).insert({
+      name: 'agent-slot-switch-target',
+      description: null,
+    });
+    const conversations = new ConversationRepo(t.ctx.db);
+    const channel = conversations.insertChannel({
+      workspaceId: workspace.id,
+      title: 'switch-target',
+      name: 'switch-target',
+    });
+    conversations.addAgent(channel.id, agentId);
+
+    const slots = new RuntimeSlotRepo(t.ctx.db);
+    const scope = { kind: 'agent' as const, agentId };
+    const generationOne = slots.claimGeneration({
+      scope,
+      daemonInstanceId: 'daemon-before-switch',
+      status: 'active',
+      pid: 101,
+    });
+    expect(generationOne?.generation).toBe(1);
+    expect(slots.compareAndSetProjection({
+      scope,
+      expectedGeneration: 1,
+      expectedDaemonInstanceId: 'daemon-before-switch',
+      patch: { cliSessionId: 'claude-agent-session' },
+    })).not.toBeNull();
+
+    t.fake.clearedSessions = [];
+    t.fake.starts = [];
+    t.fake.clearSession = async (receivedScope, actorUserId = null) => {
+      t!.fake.clearedSessions.push({ scope: receivedScope, actorUserId });
+      expect(receivedScope).toEqual(scope);
+      expect(slots.finalizeGeneration({
+        scope,
+        expectedGeneration: 1,
+        expectedDaemonInstanceId: 'daemon-before-switch',
+        status: 'idle',
+        clearCliSessionId: true,
+      })).not.toBeNull();
+      return {
+        prevCliSessionId: 'claude-agent-session',
+        wasRunning: true,
+        focusConversationId: channel.id,
+      };
+    };
+    t.fake.start = async (conversationId, receivedAgentId) => {
+      t!.fake.starts.push({ conversationId, agentId: receivedAgentId });
+      expect(slots.claimGeneration({
+        scope,
+        daemonInstanceId: 'daemon-after-switch',
+        status: 'starting',
+      })?.generation).toBe(2);
+    };
+
+    const response = await http(t).put(`/api/agents/${agentId}/runtime`, codexConfig);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      cleared_sessions: 1,
+      restarted_conversations: 1,
+      restart_failures: 0,
+    });
+    expect(t.fake.clearedSessions).toEqual([
+      { scope, actorUserId: t.viewerUserId },
+    ]);
+    expect(t.fake.starts).toEqual([{ conversationId: channel.id, agentId }]);
+    expect(slots.getAgent(agentId)).toMatchObject({
+      generation: 2,
+      observed_status: 'starting',
+      cli_session_id: null,
+      claimed_by_daemon_instance_id: 'daemon-after-switch',
+    });
+    expect(new AgentRepo(t.ctx.db).get(agentId)).toMatchObject({
+      runtime: 'codex',
+      session_scope: 'agent',
+    });
+  });
+
+  it.each([
+    ['missing', null],
+    ['no-longer-participating', 'stale'],
+  ] as const)(
+    'keeps an AgentSlot dormant instead of guessing a binding when focus is %s',
+    async (_case, focusKind) => {
+      t = buildTestApp();
+      const created = await (
+        await http(t).post('/api/agents', {
+          name: `dormant-switch-${focusKind ?? 'none'}`,
+          runtime: 'claude',
+          session_scope: 'agent',
+        })
+      ).json() as any;
+      const agentId: string = created.agent.id;
+      const workspace = new WorkspaceRepo(t.ctx.db).insert({
+        name: `dormant-switch-ws-${focusKind ?? 'none'}`,
+        description: null,
+      });
+      const conversations = new ConversationRepo(t.ctx.db);
+      const first = conversations.insertChannel({
+        workspaceId: workspace.id,
+        title: 'first visible binding',
+        name: `first-${focusKind ?? 'none'}`,
+      });
+      const second = conversations.insertChannel({
+        workspaceId: workspace.id,
+        title: 'second visible binding',
+        name: `second-${focusKind ?? 'none'}`,
+      });
+      conversations.addAgent(first.id, agentId);
+      conversations.addAgent(second.id, agentId);
+      const stale = conversations.insertChannel({
+        workspaceId: workspace.id,
+        title: 'stale focus',
+        name: `stale-${focusKind ?? 'none'}`,
+      });
+
+      expect(new RuntimeSlotRepo(t.ctx.db).updateCurrentProjection(
+        { kind: 'agent', agentId },
+        { status: 'active', pid: 321 },
+      )).not.toBeNull();
+      t.fake.clearSessionResult = {
+        prevCliSessionId: 'old-agent-session',
+        wasRunning: true,
+        focusConversationId: focusKind === 'stale' ? stale.id : null,
+      };
+      t.fake.starts = [];
+
+      const response = await http(t).put(`/api/agents/${agentId}/runtime`, codexConfig);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        cleared_sessions: 1,
+        restarted_conversations: 0,
+        restart_failures: 0,
+      });
+      expect(t.fake.starts).toEqual([]);
+      expect(conversations.isAgentParticipant(first.id, agentId)).toBe(true);
+      expect(conversations.isAgentParticipant(second.id, agentId)).toBe(true);
+      expect(conversations.isAgentParticipant(stale.id, agentId)).toBe(false);
+
+      t.cleanup();
+      t = null;
+    },
+  );
 
   it('requires explicit tuning choices and rejects invalid target-runtime values', async () => {
     t = buildTestApp();
@@ -1415,8 +1576,9 @@ describe('PUT /api/agents/:id/runtime', () => {
       {
         ctx: t.ctx,
         agents,
-        runtimeSlots: new RuntimeSlotRepo(t.ctx.db),
+        conversations: new ConversationRepo(t.ctx.db),
         conversationInboxes: inboxes,
+        runtimeSlots: new RuntimeSlotRepo(t.ctx.db),
       },
       {
         agentId,
@@ -1533,6 +1695,60 @@ describe('PUT /api/agents/:id/runtime', () => {
       restarted_conversations: 0,
       restart_failures: 1,
     });
+  });
+});
+
+describe('POST /api/agents/:id/clear-session', () => {
+  let t: TestApp | null = null;
+  afterEach(() => { t?.cleanup(); t = null; });
+
+  it('clears an AgentSlot without inventing a conversation coordinate', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', {
+        name: 'agent-slot-clear',
+        runtime: 'claude',
+        session_scope: 'agent',
+      })
+    ).json() as any;
+    t.fake.clearSessionResult = {
+      prevCliSessionId: 'agent-slot-session',
+      wasRunning: true,
+      focusConversationId: 'presentation-only',
+    };
+
+    const response = await http(t).post(
+      `/api/agents/${created.agent.id}/clear-session`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      prev_cli_session_id: 'agent-slot-session',
+      was_running: true,
+    });
+    expect(t.fake.clearedSessions).toEqual([{
+      scope: { kind: 'agent', agentId: created.agent.id },
+      actorUserId: t.viewerUserId,
+    }]);
+  });
+
+  it('rejects ConversationSlot use so the two control addresses cannot alias', async () => {
+    t = buildTestApp();
+    const created = await (
+      await http(t).post('/api/agents', {
+        name: 'conversation-slot-clear',
+        runtime: 'claude',
+      })
+    ).json() as any;
+
+    const response = await http(t).post(
+      `/api/agents/${created.agent.id}/clear-session`,
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'runtime_scope_mismatch' });
+    expect(t.fake.clearedSessions).toEqual([]);
   });
 });
 

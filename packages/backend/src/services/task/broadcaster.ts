@@ -83,7 +83,10 @@ export class TaskBroadcaster {
     sourceConv: ConversationDto;
     ownerConv: ConversationDto;
     taskNumber: number;
-    taskWorkspaceId: string;
+    /** The task's board coordinate ('ws:…' | 'pair:…'), placement-derived
+     *  post-commit — total over pair boards where a workspace id would not
+     *  exist. */
+    taskBoardKey: string;
     status?: TaskStatus;
   }): void {
     if (args.sourceConv.id === args.ownerConv.id) return;
@@ -100,7 +103,7 @@ export class TaskBroadcaster {
         source_workspace_id: args.sourceConv.workspace_id,
         owner_conversation_id: args.ownerConv.id,
         owner_workspace_id: args.ownerConv.workspace_id,
-        task_workspace_id: args.taskWorkspaceId,
+        task_board_key: args.taskBoardKey,
         task_number: args.taskNumber,
         cross_workspace: crossWorkspace,
         ...(args.status ? { status: args.status } : {}),
@@ -177,12 +180,12 @@ export class TaskBroadcaster {
 
   publishTaskChanged(args: TaskEventArgs): void {
     const conversationId = args.conversation.id;
-    // A task exists only on a workspace board (`tasks.workspace_id` NOT NULL),
-    // so a `task_changed` frame always has a workspace to name. The assertion
-    // guards the wire contract at the emit seam: the event's `workspace_id` is
-    // what routes it to the viewer's board, and a null there would be a frame no
-    // client can place.
-    const workspaceId = requireWorkspacePlacement(args.conversation);
+    // P0-f: a task board is workspace-placed OR a DirectPair. The event's
+    // routing keys are the conversation scopes below; `workspace_id` is a
+    // workspace-board-only fact and is null for pair boards (wire schema
+    // nullable since #task:2022) — clients place pair frames by
+    // conversation/channel id.
+    const workspaceId = args.conversation.workspace_id;
     // A task-bearing conversation is always a channel-like top-level
     // conversation (#task:1303), so channel_id is its own id.
     const event: TaskChangedEvent = {

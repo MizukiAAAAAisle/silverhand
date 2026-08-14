@@ -17,12 +17,14 @@ function summary(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
     id: 'task-1',
     task_number: 7,
-    workspace_id: 'ws1',
-    workspace_name: 'ws',
     channel_id: 'anchor-chan',
-    channel_name: 'chan',
+    board: {
+      kind: 'workspace',
+      workspace_id: 'ws1',
+      workspace_name: 'ws',
+      channel_name: 'chan',
+    },
     thread_root_id: null,
-    conversation: { id: 'anchor-chan', title: 'chan' },
     status: 'todo',
     title: 'a task',
     assignee: null,

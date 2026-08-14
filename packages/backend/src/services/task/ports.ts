@@ -35,10 +35,24 @@ import type { TaskBoardColumnRequest, TaskBoardPopulationFilters } from './board
 /** The task actor faces. Structurally IDENTICAL to the request principals
  *  (`auth/principal.ts`) but defined HERE so this port module's relative
  *  import closure stays driver-free — `principal.ts` transitively types raw
- *  repos, and no port surface may reach a driver through any hop. */
+ *  repos, and no port surface may reach a driver through any hop.
+ *
+ *  `runtimeScope` is the task domain's REQUIRED projection of the P1
+ *  RuntimePrincipal kind (#task:2018 / #task:2015): 'agent' unlocks the
+ *  cross-board global-id lane and the union list (§4.5/§7.2.2);
+ *  'conversation' is the frozen conversation-frame contract. There is NO
+ *  default and NO optional form — an agent actor without a declared scope
+ *  cannot be constructed, so "the caller never said which principal kind"
+ *  is a compile error at the construction site (or a fail-loud boundary
+ *  rejection), never a silent reinterpretation inside the domain. */
 export type TaskActor =
   | { kind: 'user'; userId: string }
-  | { kind: 'agent'; agentId: string; conversationId: string };
+  | {
+      kind: 'agent';
+      agentId: string;
+      conversationId: string;
+      runtimeScope: 'conversation' | 'agent';
+    };
 export type UserActor = Extract<TaskActor, { kind: 'user' }>;
 export type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
 
@@ -49,7 +63,7 @@ export interface TaskRepoReadPort {
   getById(
     taskId: string,
     actor: TaskActor,
-    authorizedWorkspaceId?: string,
+    authorizedBoardKey?: string,
   ): TaskSummaryDto | null;
   getByNumber(
     workspaceId: string,
@@ -59,10 +73,20 @@ export interface TaskRepoReadPort {
   fetchTaskDetail(
     taskId: string,
     actor: TaskActor,
-    authorizedWorkspaceId?: string,
+    authorizedBoardKey?: string,
   ): TaskDetailDto | null;
-  fetchTaskByNumber(workspaceId: string, taskNumber: number): ResolvedTaskRow | null;
+  fetchTaskByNumber(boardKey: string, taskNumber: number): ResolvedTaskRow | null;
   fetchTaskById(taskId: string): ResolvedTaskRow | null;
+  /** The board a conversation's placement yields ('ws:…' | 'pair:…'), or null
+   *  when it has none (agent_inbox / unknown / missing). Read-side twin of the
+   *  v76 derivation trigger — the trigger stays the write authority. */
+  boardOfConversation(
+    conversationId: string,
+  ): { boardKey: string; workspaceId: string | null } | null;
+  /** Every DirectPair board this agent is an endpoint of — the pair half of
+   *  the agent-slot union list (§7.2.2; participation IS the read authority
+   *  on a pair board). */
+  listAgentDirectPairBoardKeys(agentId: string): string[];
   fetchMessageRef(messageId: string): MessageRef | null;
   fetchTaskBySourceMessageId(sourceMessageId: string): {
     task_number: number;
@@ -87,7 +111,6 @@ export interface TaskRepoReadPort {
  *  returns `{id, taskNumber}`); no allocator primitive is exposed. */
 export interface TaskRepoWritePort {
   createTaskRow(args: {
-    workspaceId: string;
     conversationId: string;
     threadRootId: string | null;
     title: string;
@@ -127,13 +150,26 @@ export interface TaskBoardReadModelPort {
 /** Named narrow conversation face the task domain needs — deliberately NOT the
  *  whole ConversationRepo. `userCanAccessConversation` is the human membership
  *  check; agent membership uses `getAgent`; the broadcaster's post-commit
- *  fanout uses `listAgents`/`listUsers`. */
+ *  fanout uses `listAgents`/`listUsers`. `isAgentParticipant` is the
+ *  placement-aware participation authority (§4.2: roster edge OR own inbox
+ *  placement) — the per-task ACL (§4.4: ACL derives from the task's own
+ *  conversation, never its board) reads THIS, not the roster-shaped
+ *  `getAgent`. */
 export interface TaskConversationAccessPort {
   get(conversationId: string): ConversationDto | null;
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
+  isAgentParticipant(conversationId: string, agentId: string): boolean;
   userCanAccessConversation(userId: string, conversationId: string): boolean;
   listAgents(conversationId: string): ConversationAgentDto[];
   listUsers(conversationId: string): ConversationUserMemberDto[];
+}
+
+/** Canonical conversation WRITE decision injected by the authorization
+ * layer. This is deliberately a decision port, not another endpoint/tombstone
+ * fact reader: `canPostToConversation` remains the one rule that combines
+ * placement-aware participation with P0-e survivor-readonly semantics. */
+export interface TaskWriteAuthorityPort {
+  canPostToConversation(actor: TaskActor, conversationId: string): boolean;
 }
 
 /** Insert a task system-event message INSIDE the caller's transaction scope.
@@ -156,13 +192,19 @@ export interface TaskTxScope {
   tasks: TaskRepoWritePort & TaskRepoReadPort;
   systemEvents: TaskSystemEventPort;
   conversationAccess: TaskConversationAccessPort;
+  /** Bound by the caller at transaction entry and invoked inside the same
+   * synchronous SQLite transaction as the task/event writes. */
+  writeAuthority: TaskWriteAuthorityPort;
 }
 
 /** Atomic write boundary. Guarantees atomicity only; isolation/locking
  *  obligations (if any) are expressed on the scope's methods. Deferred policy
  *  — this domain has no cross-process writer contention (#task:1980). */
 export interface TaskUnitOfWork {
-  atomically<T>(fn: (tx: TaskTxScope) => T): T;
+  atomically<T>(
+    writeAuthority: TaskWriteAuthorityPort,
+    fn: (tx: TaskTxScope) => T,
+  ): T;
 }
 
 /** Driver-free sentinel raised by the persistence adapter when a create

@@ -223,6 +223,16 @@ export function createRuntimeFanoutDbDeps(deps: {
       },
     },
     runtimeCustody: {
+      snapshot: scope => {
+        const row = runtimeSlots.get(scope);
+        return row
+          ? {
+              generation: row.generation,
+              daemonInstanceId: row.claimed_by_daemon_instance_id,
+              cliSessionId: row.cli_session_id,
+            }
+          : null;
+      },
       cliSessionId: scope => runtimeSlots.get(scope)?.cli_session_id ?? null,
       current: scope => {
         const row = runtimeSlots.get(scope);
@@ -296,28 +306,44 @@ export function createRuntimeFanoutDbDeps(deps: {
       },
     },
     session: {
-      // Plain deferred transaction: both statements are writes, so the write
-      // lock is taken at the first one and the pair cannot interleave with
-      // another writer. Atomicity only — see the R5 note on
-      // `RuntimeSessionUnitOfWork`. The callback is synchronous by contract;
-      // better-sqlite3 would not honor an `await` inside it.
-      atomically: fn =>
-        deps.db.transaction(() =>
+      // SQLite BEGIN IMMEDIATE owns the writer reservation before the first
+      // participation read. This is isolation, not just atomicity: no rival
+      // writer can invalidate authorization/custody between that read, the
+      // generation CAS, and its audit write. See the R5 port contract.
+      atomically: fn => {
+        // Root-only: better-sqlite3 silently degrades nested `.immediate()` to
+        // a SAVEPOINT, which takes no writer reservation. Entering the
+        // authorization callback in that state would invalidate R5.
+        if (deps.db.inTransaction) {
+          throw new Error(
+            'runtime session UnitOfWork: immediate transactions are root-only; already inside a transaction',
+          );
+        }
+        return deps.db.transaction(() =>
           fn({
             clearCliSession: input => {
-              if (!conversations.isAgentParticipant(
-                input.targetConversationId,
-                input.agentId,
-              )) return null;
-              const slot = runtimeSlots.clearCliSession(input.scope);
+              if (
+                input.scope.kind === 'conversation'
+                && !conversations.isAgentParticipant(
+                  input.scope.conversationId,
+                  input.scope.agentId,
+                )
+              ) return null;
+              const slot = runtimeSlots.clearCliSession(input);
               return slot
                 ? {
-                    status: slot.observed_status,
-                    pid: slot.observed_pid,
-                    cli_session_id: slot.cli_session_id,
+                    scope: input.scope,
+                    generation: input.expectedGeneration,
+                    projection: {
+                      status: slot.observed_status,
+                      pid: slot.observed_pid,
+                      cli_session_id: slot.cli_session_id,
+                    },
                   }
                 : null;
             },
+            insertAgentControlEvent: input =>
+              runtimeSlots.insertControlEvent(input),
             insertSystemMessage: input =>
               messages.insertForConversation({
                 conversationId: input.conversationId,
@@ -327,7 +353,8 @@ export function createRuntimeFanoutDbDeps(deps: {
                 metadata: input.metadata,
               }),
           }),
-        )(),
+        ).immediate();
+      },
     },
   };
 

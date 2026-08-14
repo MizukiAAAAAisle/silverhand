@@ -1,3 +1,4 @@
+import { taskWorkspaceId } from './taskPlace.js';
 import {
   useMutation,
   useQuery,
@@ -113,7 +114,7 @@ export function tasksHeldChannelIds(
   const ids = new Set<string>();
   const hold = (rows: readonly TaskSummaryDto[]) => {
     for (const t of rows) {
-      if (t.workspace_id === workspaceId) ids.add(t.channel_id);
+      if (taskWorkspaceId(t) === workspaceId) ids.add(t.channel_id);
     }
   };
   for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
@@ -131,7 +132,7 @@ export function tasksHeldChannelIds(
   for (const root of [['task-detail'], ['task-by-number']] as const) {
     for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
       const data = qc.getQueryData<TaskSummaryDto | TaskDetailDto | null>(q.queryKey);
-      if (data && data.workspace_id === workspaceId) ids.add(data.channel_id);
+      if (data && taskWorkspaceId(data) === workspaceId) ids.add(data.channel_id);
     }
   }
   return [...ids];

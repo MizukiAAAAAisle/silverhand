@@ -12,7 +12,7 @@ import type {
 import { isWorkspacePlaced } from '@silverhand/shared';
 import type { AgentRepo } from '../../repos/agent-repo.js';
 import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
-import type { TaskConversationAccessPort } from './ports.js';
+import type { TaskConversationAccessPort, TaskRepoReadPort } from './ports.js';
 import {
   failClaim,
   type AgentActor,
@@ -23,24 +23,32 @@ export interface TaskAccessControlDeps {
   agents: AgentRepo;
   conversations: TaskConversationAccessPort;
   workspaces: WorkspaceRepo;
+  /** Placement→board derivation (P0-f), read through the task read port so
+   *  the pair arm never re-implements the pair_key byte format. */
+  taskBoards: Pick<TaskRepoReadPort, 'boardOfConversation'>;
 }
 
 export class TaskAccessControl {
   private readonly agents: AgentRepo;
   private readonly conversations: TaskConversationAccessPort;
   private readonly workspaces: WorkspaceRepo;
+  private readonly taskBoards: Pick<TaskRepoReadPort, 'boardOfConversation'>;
 
   constructor(deps: TaskAccessControlDeps) {
     this.agents = deps.agents;
     this.conversations = deps.conversations;
     this.workspaces = deps.workspaces;
+    this.taskBoards = deps.taskBoards;
   }
 
   validateAgentActorForClaim(actor: AgentActor): ClaimResultEntry | undefined {
     if (!this.agents.get(actor.agentId)) {
       return failClaim({ code: 'agent_not_found', reason: 'agent not found' });
     }
-    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
+    // Placement-aware participation (the canonical port, NOT the roster-shaped
+    // getAgent): identical for workspace placements, and the agent's own inbox
+    // frame — which deliberately has no roster row — is a legal frame.
+    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
       return failClaim({
         code: 'not_conversation_member',
         reason: 'agent is not a member of this conversation',
@@ -55,7 +63,7 @@ export class TaskAccessControl {
     if (!this.agents.get(actor.agentId)) {
       return { success: false, code: 'agent_not_found', reason: 'agent not found' };
     }
-    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
+    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
       return {
         success: false,
         code: 'not_conversation_member',
@@ -86,7 +94,7 @@ export class TaskAccessControl {
    *  Callers pass a `fail` builder so the same logic can produce either
    *  `ClaimResultEntry` (claim) or `TaskMutationResult` (unclaim /
    *  status) shapes without leaking shape knowledge here. */
-  resolveAgentTaskWorkspace<F>(
+  resolveAgentTaskBoard<F>(
     actor: AgentActor,
     sourceConv: ConversationDto,
     selector: WorkspaceSelector | undefined,
@@ -95,7 +103,10 @@ export class TaskAccessControl {
       reason: string;
       candidates?: string[];
     }) => F,
-  ): { workspace: WorkspaceDto } | { failure: F } {
+  ):
+    | { kind: 'workspace'; boardKey: string; workspace: WorkspaceDto }
+    | { kind: 'direct_pair'; boardKey: string }
+    | { failure: F } {
     // Schema enforces XOR but defend against an out-of-band call.
     if (selector?.workspaceId && selector?.workspaceName) {
       return {
@@ -140,13 +151,22 @@ export class TaskAccessControl {
       }
       ws = matches[0]!;
     } else {
-      // No selector ⇒ the default board is the SOURCE conversation's own
-      // workspace. A placement without one has no default (§4.2: the agent
-      // inbox has no board), which is a typed failure rather than an assertion
-      // here because this resolver's whole job is turning "no workspace could be
-      // resolved" into an actionable answer for the agent — the same code the
-      // deleted-workspace case below returns, with its own reason.
+      // No selector ⇒ the board is the SOURCE conversation's own,
+      // placement-derived (P0-f): a workspace frame reads its WorkspaceBoard,
+      // a DM frame reads its own DirectPairBoard — the frame participation
+      // was already validated by the caller, and a pair board has no
+      // capability table (participation is the authority, §4.4). A placement
+      // with no board (§4.2: the agent inbox) is a typed failure rather than
+      // an assertion, because this resolver's whole job is turning "no board
+      // could be resolved" into an actionable answer for the agent.
       if (!isWorkspacePlaced(sourceConv)) {
+        // Workspace-less frame: a DirectPair derives its own board (the wire
+        // DTO strips pair_key, so the derivation goes through the task read
+        // port); the inbox derives none and stays the typed failure.
+        const board = this.taskBoards.boardOfConversation(sourceConv.id);
+        if (board) {
+          return { kind: 'direct_pair', boardKey: board.boardKey };
+        }
         return {
           failure: fail({
             code: 'unknown_workspace',
@@ -178,6 +198,6 @@ export class TaskAccessControl {
         }),
       };
     }
-    return { workspace: ws };
+    return { kind: 'workspace', boardKey: `ws:${ws.id}`, workspace: ws };
   }
 }

@@ -83,6 +83,15 @@ function principalScopeFromWire(scope: RuntimeScope): RuntimePrincipalScope {
         agentId: scope.agent_id,
       };
 }
+
+function wireScopeOwnsEventTarget(
+  scope: RuntimeScope,
+  conversationId: string,
+  agentId: string,
+): boolean {
+  return scope.agent_id === agentId
+    && (scope.kind === 'agent' || scope.conversation_id === conversationId);
+}
 import { RuntimeDeliveryCoordinator, type RuntimeDelivery } from './delivery-coordinator.js';
 import {
   RuntimeEventHandler,
@@ -107,7 +116,10 @@ import {
 import { type AgentL2SeedEnsurer } from './agent-l2-seed-ensurer.js';
 import { planRuntimeStartFilesystemEnsure } from './runtime-filesystem-plan.js';
 import type { RuntimeEventPerimeterPort } from './event-perimeter.js';
-import { ClearSessionWaiterRegistry } from './clear-session-registry.js';
+import {
+  ClearSessionWaiterRegistry,
+  type ClearSessionOperation,
+} from './clear-session-registry.js';
 
 export interface OutboundRuntimeEventFanoutOptions {
   /**
@@ -461,6 +473,33 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     }
     state.dispatchConnectionId = connectionId;
     try {
+      // A clear operation waits for the exact runtime it dispatched against,
+      // even if a successor generation has already become the DB's current
+      // authority by the time the old exit frame arrives. Observe only the
+      // exact custody token here, before RuntimeEventHandler's current-custody
+      // gate; every cache/DB/SSE/coordinator side effect still remains behind
+      // that gate. This hook can therefore release old N's waiter without ever
+      // projecting N over current N+1.
+      if (
+        event.kind === 'runtime_exit'
+        && wireScopeOwnsEventTarget(
+          event.runtime_scope,
+          event.conversation_id,
+          event.agent_id,
+        )
+      ) {
+        const daemonInstanceId = this.opts.transport()
+          ?.getAttachment(hostId)?.daemonInstanceId ?? null;
+        if (daemonInstanceId) {
+          this.clearSessions.notifyExit(
+            principalScopeFromWire(event.runtime_scope),
+            {
+              generation: event.runtime_generation,
+              daemonInstanceId,
+            },
+          );
+        }
+      }
       state.handler.dispatch(outboundEventToEventFrame(event));
     } finally {
       state.dispatchConnectionId = null;
@@ -497,8 +536,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       state.dispatchConnectionId = null;
       for (const entry of state.cache.list()) {
         state.coordinator.clearRuntime(
-          entry.conversationId,
-          entry.agentId,
+          principalScopeFromWire(entry.runtimeScope),
           'stopped',
         );
       }
@@ -835,16 +873,16 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   /**
    * D4.c C7 — clearSession over the outbound daemon transport.
    *
-   * Uses a bounded wait for the
-   * `runtime_exit` event to land in projection BEFORE we touch the
-   * DB, so the audit row + `cli_session_id=null` write sees a
+   * Uses a bounded wait for the exact dispatched generation's
+   * `runtime_exit` event to arrive BEFORE we touch the DB, so the
+   * ConversationSlot audit row + `cli_session_id=null` write sees a
    * coherent post-exit state and the renderer's `agent_status` SSE
    * follows the death event in the right order.
    *
    * Sequence (Cindy `szDHSdeKwtEUlxZb` P1 + `nPqEVJjCLjuNDH-6` final):
    *
-   *   1. Validate the (conv, agent) triplet against the DB.
-   *   2. Concurrent same-(cid,aid) → fail-fast
+   *   1. Validate the semantic runtime scope against the DB.
+   *   2. Concurrent same-scope → fail-fast
    *      {@link ClearSessionInProgressError}; clear-session is a
    *      user-explicit one-shot, share-waiter would be over-engineered.
    *   3. Snapshot pre-state (`prevCliSessionId`, `wasRunning` from
@@ -877,22 +915,16 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    *      - `cleared === false` → daemon authoritatively reports it
    *        had no handle; skip wait. Covers `cleared:false` /
    *        already-exited / orphan-row clears.
-   *   7. `coordinator.clearRuntime` mirrors the embedded path's
-   *      delivery-state cleanup (cancel delivery watchdog, drop
-   *      pending/busy markers).
-   *   8. DB transaction (Cindy `szDHSdeKwtEUlxZb` P3): the
-   *      runtime-slot `cli_session_id=null` write AND the
-   *      audit-message insert MUST land in the same SQLite tx so a
-   *      crash between them can't leave a row with a dangling audit
-   *      pointer (or vice versa).
-   *   9. Outside the tx (best-effort, mirrors embedded):
-   *      - Publish `agent_status` SSE.
-   *      - Publish `message` SSE for the audit row.
-   *      - Per-peer `deliverMessage` so each OTHER agent in the
-   *        conversation sees the cleared-session signal (their own
-   *        chat history / inbox-if-offline). Per-delivery failures
-   *        are warn-level only — clearSession-as-a-whole stays
-   *        successful.
+   *   7. DB transaction: clear the captured generation's
+   *      `cli_session_id`; a
+   *      ConversationSlot also inserts its existing audit message in the same
+   *      transaction. AgentSlot inserts an actor/reason control fact owned by
+   *      the Agent/Runtime aggregate, with no conversation coordinate.
+   *   8. Only after that generation CAS succeeds,
+   *      `coordinator.clearRuntime` cancels its watchdog projection. This
+   *      prevents an old clear from erasing successor-generation state.
+   *   9. Outside the tx, only ConversationSlot publishes the existing status
+   *      and audit-message SSE and best-effort peer delivery.
    *
    *  10. `finally` (Cindy `nPqEVJjCLjuNDH-6` constraint #2): delete
    *      the waiter from the resolver table regardless of which
@@ -900,41 +932,68 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    *      throw / DB tx throw).
    */
   async clearSession(
-    conversationId: string,
-    agentId: string,
+    runtimeScope: RuntimePrincipalScope,
     actorUserId: string | null = null,
   ): Promise<ClearSessionResult> {
-    // 1. Validate.
-    const conversation = this.conversations.get(conversationId);
-    if (!conversation) {
-      throw new Error(`conversation ${conversationId} not found`);
-    }
+    // 1. Validate the semantic slot itself. ConversationSlot retains the
+    // placement-aware participant precondition; AgentSlot is agent-owned and
+    // intentionally has no conversation coordinate to validate or audit.
+    const agentId = runtimeScope.agentId;
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
-    if (!this.conversations.isAgentParticipant(conversationId, agentId)) {
-      throw new Error(
-        `agent ${agentId} is not a member of conversation ${conversationId}`,
-      );
+    if (runtimeScope.kind === 'conversation') {
+      const conversationId = runtimeScope.conversationId;
+      const conversation = this.conversations.get(conversationId);
+      if (!conversation) {
+        throw new Error(`conversation ${conversationId} not found`);
+      }
+      if (agent.session_scope !== 'conversation') {
+        throw new Error(`agent ${agentId} does not own a conversation runtime slot`);
+      }
+      if (!this.conversations.isAgentParticipant(conversationId, agentId)) {
+        throw new Error(
+          `agent ${agentId} is not a member of conversation ${conversationId}`,
+        );
+      }
+    } else if (agent.session_scope !== 'agent') {
+      throw new Error(`agent ${agentId} does not own an agent runtime slot`);
+    }
+    if (runtimeScope.kind === 'agent' && actorUserId === null) {
+      throw new Error('AgentSlot clear requires an actor for control audit');
     }
 
-    // 2. Concurrent guard.
-    const runtimeScope = this.runtimeScopeForTarget(conversationId, agentId);
     if (this.clearSessions.inProgress(runtimeScope)) {
-      throw new ClearSessionInProgressError(conversationId, agentId);
+      throw new ClearSessionInProgressError(runtimeScope);
     }
 
     const hostId = this.hostIdForAgent(agentId);
     const state = this.stateForHost(hostId);
 
     // 3. Snapshot pre-state.
-    const prevCliSessionId = this.runtimeCustody.cliSessionId(runtimeScope);
-    const cacheEntryBefore = state.cache.get(conversationId, agentId);
+    const controlSnapshot = this.runtimeCustody.snapshot(runtimeScope);
+    if (!controlSnapshot) {
+      throw new Error(`runtime slot not found for agent ${agentId}`);
+    }
+    const operation: ClearSessionOperation = {
+      scope: runtimeScope,
+      generation: controlSnapshot.generation,
+      daemonInstanceId: controlSnapshot.daemonInstanceId,
+    };
+    const prevCliSessionId = controlSnapshot.cliSessionId;
+    const cacheEntryBefore = state.cache.getScope(wireRuntimeScope(runtimeScope));
+    const focusConversationId = cacheEntryBefore?.conversationId ?? null;
     const wasRunning =
       cacheEntryBefore !== undefined && cacheEntryBefore.phase !== 'exited';
-    const currentCustody = this.runtimeCustody.current(runtimeScope);
+    const currentCustody = controlSnapshot.daemonInstanceId
+      ? runtimePrincipalForScope({
+          scope: runtimeScope,
+          generation: controlSnapshot.generation,
+          daemonInstanceId: controlSnapshot.daemonInstanceId,
+        })
+      : null;
 
     // 4. Register waiter BEFORE dispatch.
-    this.clearSessions.begin(runtimeScope);
+    this.clearSessions.begin(operation);
 
     try {
       // 5. Dispatch over WS. Connection must exist; outbound
@@ -982,28 +1041,43 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       //        for this pair; skip wait. This is the legitimate
       //        fast path for already-exited / orphan-row clears.
       if (result.cleared) {
-        await this.clearSessions.awaitExit(runtimeScope, conversationId, agentId);
+        await this.clearSessions.awaitExit(operation);
+      } else if (currentCustody) {
+        // The daemon proved it has no handle for the dispatched generation.
+        // End that exact stale DB custody before clearing resumable state; a
+        // successor generation makes this finalizer (and the CAS below) fail.
+        const finalized = this.runtimeCustody.finalize({
+          scope: runtimeScope,
+          generation: currentCustody.custody.generation,
+          daemonInstanceId: currentCustody.custody.daemonInstanceId,
+          status: 'idle',
+        });
+        if (finalized) this.opts.agentTokens.revokeFor(finalized);
       }
 
-      // 7. Coordinator-side cleanup.
-      state.coordinator.clearRuntime(conversationId, agentId, 'stopped');
-
-      // 8. DB tx — audit insert + cli_session_id clear in one shot.
+      // 7/8. DB tx — clear the exact generation captured before dispatch.
+      // ConversationSlot preserves the existing atomic message audit.
+      // AgentSlot writes a separate agent-level actor/reason fact in the same
+      // transaction, never a conversation message. Runtime events remain state
+      // history and do not impersonate this user-action audit.
+      const conversationId = runtimeScope.kind === 'conversation'
+        ? runtimeScope.conversationId
+        : null;
       const shouldAudit = wasRunning || prevCliSessionId !== null;
-      const { updated, auditMessage } = this.session.atomically(scope => {
-        const updated = scope.clearCliSession({
+      const { receipt, auditMessage } = this.session.atomically(scope => {
+        const receipt = scope.clearCliSession({
           scope: runtimeScope,
-          targetConversationId: conversationId,
-          agentId,
+          expectedGeneration: operation.generation,
         });
-        if (!updated) {
+        if (!receipt) {
           throw new Error(
-            `agent ${agentId} is not a member of conversation ${conversationId}`,
+            `runtime slot generation changed while clearing agent ${agentId}`,
           );
         }
         const auditMessage = shouldAudit
+          && conversationId !== null
           ? this.insertSessionClearedAuditMessage(scope, {
-              conversationId,
+              conversationId: conversationId!,
               agentId,
               agentName: agent.name,
               actorUserId,
@@ -1011,20 +1085,39 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
               wasRunning,
             })
           : null;
-        return { updated, auditMessage };
+        if (shouldAudit && runtimeScope.kind === 'agent') {
+          scope.insertAgentControlEvent({
+            agentId,
+            generation: operation.generation,
+            actorUserId: actorUserId!,
+            reason: 'session_cleared',
+            wasRunning,
+            previousCliSessionIdPrefix: prevCliSessionId?.slice(0, 8) ?? null,
+            occurredAt: Date.now(),
+          });
+        }
+        return { receipt, auditMessage };
       });
 
+      // Daemon identity has completed its job at the exact waiter. Durable and
+      // coordinator settlement are generation-bound: v77 makes a daemon claim
+      // immutable inside a generation, persistence mints this receipt only
+      // after the CAS, and the coordinator accepts no dispatch token directly.
+      state.coordinator.settleClear(receipt);
+
       // 9. SSE + per-peer best-effort delivery (outside tx).
-      this.opts.events.publishSide(conversationId, {
-        kind: 'agent_status',
-        payload: {
-          agent_id: agentId,
-          status: updated.status,
-          pid: updated.pid,
-          cli_session_id: null,
-        },
-      });
-      if (auditMessage) {
+      if (conversationId !== null) {
+        this.opts.events.publishSide(conversationId, {
+          kind: 'agent_status',
+          payload: {
+            agent_id: agentId,
+            status: receipt.projection.status,
+            pid: receipt.projection.pid,
+            cli_session_id: null,
+          },
+        });
+      }
+      if (auditMessage && conversationId !== null) {
         this.opts.events.publish(conversationId, {
           kind: 'message',
           payload: { message: auditMessage },
@@ -1058,10 +1151,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         }
       }
 
-      return { prevCliSessionId, wasRunning };
+      return { prevCliSessionId, wasRunning, focusConversationId };
     } finally {
       // 10. Finally cleanup — Cindy `nPqEVJjCLjuNDH-6` #2.
-      this.clearSessions.end(runtimeScope);
+      this.clearSessions.end(operation);
     }
   }
 
@@ -1880,13 +1973,13 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       onParsedEvent: (cid, aid, event) =>
         coordinator.onParsedEvent(cid, aid, event),
       onRuntimeExit: (cid, aid, meta) => {
-        // D4.c C7 — notify any in-flight `clearSession` waiter
-        // BEFORE handing off to the coordinator. The coordinator's
-        // own respawn-gate logic doesn't care whether a clear-session
-        // is awaiting; the waiter does. Order: waiter first so a
-        // synchronous resolve cannot race the next microtask.
-        this.clearSessions.notifyExit(meta.scope);
-        coordinator.onRuntimeExit(cid, aid, meta);
+        // Waiter observation happens at the fanout ingress before the current-
+        // custody gate, so a late exit can settle only its own old operation.
+        // Coordinator state is stricter: mutate it only after the DB accepted
+        // this exit as the current generation.
+        if (meta.projectionFinalized) {
+          coordinator.onRuntimeExit(cid, aid, meta);
+        }
       },
       onInitTimeout: (cid, aid) =>
         coordinator.clearDeliveryWatchdog(cid, aid, 'timeout'),

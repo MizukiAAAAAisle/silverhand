@@ -2754,6 +2754,287 @@ export const migrations: Migration[] = [
       -- rather than a complete one.
     `,
   },
+  {
+    version: 76,
+    name: 'task_board_key',
+    // agent-scoped-session-v1 §4.4 / §8 P0-f (#task:2022) — the task numbering
+    // namespace becomes a first-class BOARD coordinate:
+    //
+    //   Board = WorkspaceBoard('ws:'||workspace_id)
+    //         | DirectPairBoard('pair:'||pair_key)
+    //
+    // derived from the owning conversation's placement, never supplied as an
+    // independent caller coordinate. `agent_inbox` has NO board: creating a
+    // task there is refused by the DB, not silently filed somewhere.
+    //
+    // Table REBUILD, not ALTER: `tasks.workspace_id` was NOT NULL and SQLite
+    // has no path to relax a column's nullability in place. The rebuild
+    // follows the v69/v71 idiom (new table, row copy, DROP + RENAME, indexes
+    // and triggers recreated afterwards) and its acceptance is the same
+    // three-part, no-sampling check: full schema fingerprint, per-row data
+    // equality by id, and an empty foreign_key_check.
+    //
+    // BOARD IDENTITY IS PROVEN, NOT TRUSTED (@Cindy, #task:2022 review):
+    //  - the two arc CHECKs tie the key's prefix to the workspace column's
+    //    null-ness in BOTH directions; together they also make any foreign
+    //    prefix unsatisfiable (neither biconditional can hold);
+    //  - the INSERT trigger requires NEW.board_key to EQUAL the value derived
+    //    from the conversation's CURRENT placement — a well-formed but forged
+    //    key (a `pair:` key on a workspace task, or another workspace's legal
+    //    `ws:` key) is rejected, which NOT NULL + prefix shape + immutability
+    //    alone cannot do. The trigger enumerates only the two registered Board
+    //    arms, so `agent_inbox` and any future unregistered placement fail loud;
+    //  - birth coordinates (conversation_id, workspace_id, board_key) are
+    //    immutable: the derivation is checked at INSERT, so every coordinate
+    //    it read must stay what it was (conversations.placement is already
+    //    immutable from birth — v74's trigger).
+    //
+    // `board_key` backfill is the pure function 'ws:'||workspace_id, so the
+    // legacy rows keep their numbers verbatim: (board_key, task_number)
+    // resolves row-for-row identically to the old (workspace_id, task_number)
+    // business key, and uniq_tasks_workspace_number is REPLACED by
+    // uniq_tasks_board_number rather than kept alongside (two unique axes
+    // over one namespace would be a second authority).
+    foreignKeyEscape: true,
+    // PROVE THE INNER-JOIN BACKFILL IS TOTAL before any DDL (review B1/B5).
+    // v75 never constrained `tasks.workspace_id = conversations.workspace_id`,
+    // and an FK-off half-state may also carry an owner conversation id that no
+    // longer exists. The backfill below intentionally INNER JOINs the placement
+    // authority; without this LEFT-JOIN precondition either shape would be
+    // dangerous: a divergence freezes the wrong board, while an orphan simply
+    // vanishes when the old table is dropped. Refuse both before the rebuild.
+    precondition: (db) => {
+      const handle = db as {
+        prepare: (sql: string) => {
+          all: () => { id: string; issue: 'missing_owner' | 'workspace_mismatch' }[];
+          get: () => { n: number };
+        };
+      };
+      const invalid = handle
+        .prepare(
+          `SELECT t.id,
+                  CASE WHEN c.id IS NULL
+                       THEN 'missing_owner'
+                       ELSE 'workspace_mismatch'
+                   END AS issue
+             FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id
+            WHERE c.id IS NULL OR t.workspace_id IS NOT c.workspace_id
+            LIMIT 5`,
+        )
+        .all();
+      if (invalid.length > 0) {
+        const count = handle
+          .prepare(
+            `SELECT COUNT(*) AS n
+               FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id
+              WHERE c.id IS NULL OR t.workspace_id IS NOT c.workspace_id`,
+          )
+          .get().n;
+        throw new Error(
+          `v76 task_board_key: ${count} task row(s) cannot derive a board from their ` +
+            `owner conversation (samples: ${invalid.map(row => `${row.id}:${row.issue}`).join(', ')}). ` +
+            'Resolve missing owners or workspace divergence before upgrading; refusing ' +
+            'to drop an orphan or freeze a wrong board.',
+        );
+      }
+    },
+    up: `
+      CREATE TABLE tasks_new (
+        id                       TEXT PRIMARY KEY,
+        workspace_id             TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        task_number              INTEGER NOT NULL,
+        conversation_id          TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        thread_root_id           TEXT,
+        title                    TEXT NOT NULL,
+        content                  TEXT NOT NULL DEFAULT '',
+        status                   TEXT NOT NULL,
+        assignee_agent_id        TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        assignee_user_id         TEXT REFERENCES users(id) ON DELETE SET NULL,
+        creator_kind             TEXT NOT NULL,
+        creator_agent_id         TEXT,
+        creator_user_id          TEXT,
+        source_message_id        TEXT,
+        created_event_message_id TEXT,
+        last_editor_kind         TEXT,
+        last_editor_id           TEXT,
+        last_edited_at           INTEGER,
+        created_at               INTEGER NOT NULL,
+        closed_at                INTEGER,
+        board_key                TEXT NOT NULL,
+        CHECK (status IN ('todo', 'in_progress', 'in_review', 'done', 'closed')),
+        CHECK (task_number > 0),
+        -- At most one assignee (agent XOR user, or neither = unassigned).
+        CHECK (assignee_agent_id IS NULL OR assignee_user_id IS NULL),
+        -- Creator kind pairs EXACTLY with its id column (immutable provenance).
+        -- 'system' = both ids null: a task whose creating agent/user was since
+        -- deleted (from_agent_id/from_user_id are ON DELETE SET NULL — a
+        -- supported product path), degraded exactly as the old store did.
+        CHECK (
+          (creator_kind = 'agent' AND creator_agent_id IS NOT NULL AND creator_user_id IS NULL)
+          OR (creator_kind = 'user' AND creator_user_id IS NOT NULL AND creator_agent_id IS NULL)
+          OR (creator_kind = 'system' AND creator_agent_id IS NULL AND creator_user_id IS NULL)
+        ),
+        -- Last-editor is all-null (never edited) or a COMPLETE triple, so the
+        -- "edited by X · <time>" byline can always be fully rendered.
+        CHECK (
+          (last_editor_kind IS NULL AND last_editor_id IS NULL AND last_edited_at IS NULL)
+          OR (last_editor_kind IN ('agent', 'user') AND last_editor_id IS NOT NULL AND last_edited_at IS NOT NULL)
+        ),
+        -- closed_at is set IFF the task is in the terminal 'closed' status
+        -- (mirrors the service: 'done' does NOT set closed_at).
+        CHECK ((status = 'closed') = (closed_at IS NOT NULL)),
+        -- Board arc (P0-f): the key's namespace prefix and the workspace
+        -- column's null-ness imply each other in BOTH directions. Any prefix
+        -- outside {ws:, pair:} leaves the two biconditionals contradictory,
+        -- so an unknown board family is unsatisfiable by construction.
+        CHECK ((board_key LIKE 'ws:%') = (workspace_id IS NOT NULL)),
+        CHECK ((board_key LIKE 'pair:%') = (workspace_id IS NULL))
+      );
+
+      INSERT INTO tasks_new (
+        id, workspace_id, task_number, conversation_id, thread_root_id,
+        title, content, status, assignee_agent_id, assignee_user_id,
+        creator_kind, creator_agent_id, creator_user_id,
+        source_message_id, created_event_message_id,
+        last_editor_kind, last_editor_id, last_edited_at,
+        created_at, closed_at, board_key
+      )
+      SELECT
+        t.id, t.workspace_id, t.task_number, t.conversation_id, t.thread_root_id,
+        t.title, t.content, t.status, t.assignee_agent_id, t.assignee_user_id,
+        t.creator_kind, t.creator_agent_id, t.creator_user_id,
+        t.source_message_id, t.created_event_message_id,
+        t.last_editor_kind, t.last_editor_id, t.last_edited_at,
+        t.created_at, t.closed_at,
+        -- Derived from the CONVERSATION (the board authority), not from the
+        -- task's own column; the precondition above proved the two agree on
+        -- every legacy row, so this is the same value — stated from the
+        -- source that defines it.
+        'ws:' || c.workspace_id
+      FROM tasks t JOIN conversations c ON c.id = t.conversation_id;
+
+      DROP TABLE tasks;
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX idx_tasks_conversation ON tasks(conversation_id);
+      CREATE INDEX idx_tasks_status_number
+        ON tasks(status, task_number DESC, id DESC);
+      CREATE INDEX idx_tasks_workspace_status_number
+        ON tasks(workspace_id, status, task_number DESC, id DESC);
+      CREATE UNIQUE INDEX uniq_tasks_source_message
+        ON tasks(source_message_id) WHERE source_message_id IS NOT NULL;
+      CREATE UNIQUE INDEX uniq_tasks_board_number
+        ON tasks(board_key, task_number);
+
+      -- The board is DERIVED, never asserted — and the proof covers the FULL
+      -- coordinate (review B1): board_key must equal what the conversation's
+      -- placement yields RIGHT NOW, and the task's own workspace_id must be
+      -- exactly the conversation's (workspace arm) or NULL (pair arm). A
+      -- correct board_key with a foreign workspace_id would otherwise split
+      -- the unique-numbering axis from every workspace-filtered read. No arm
+      -- matches for agent_inbox / unknown placements / a missing conversation,
+      -- which is the DB-level "the inbox has no board" rule.
+      CREATE TRIGGER trg_tasks_board_key_derivation_insert
+        BEFORE INSERT ON tasks
+        WHEN NOT EXISTS (
+          SELECT 1 FROM conversations c
+           WHERE c.id = NEW.conversation_id
+             AND (
+               (c.placement_kind = 'workspace'
+                 AND NEW.board_key = 'ws:' || c.workspace_id
+                 AND NEW.workspace_id IS c.workspace_id)
+               OR
+               (c.placement_kind = 'direct_pair'
+                 AND NEW.board_key = 'pair:' || c.pair_key
+                 AND NEW.workspace_id IS NULL)
+             )
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'tasks.board_key must equal the board derived from the conversation placement'
+          );
+        END;
+
+      -- Birth coordinates are immutable: the derivation above is proven at
+      -- INSERT, so everything it read must stay put. (conversations.placement
+      -- is immutable since v74; this pins the task's side of the same fact.)
+      CREATE TRIGGER trg_tasks_board_coordinates_immutable
+        BEFORE UPDATE OF conversation_id, workspace_id, board_key ON tasks
+        WHEN NOT (
+          NEW.conversation_id IS OLD.conversation_id
+          AND NEW.workspace_id IS OLD.workspace_id
+          AND NEW.board_key IS OLD.board_key
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'tasks: board coordinates are immutable from birth');
+        END;
+    `,
+  },
+  {
+    version: 77,
+    name: 'agent_runtime_control_audit',
+    // #task:2025 c2 — a user clearing an AgentSlot is a control-plane fact,
+    // not a runtime projection and not a conversation message. The historical
+    // coordinates intentionally carry NO FK: deleting the Agent or actor must
+    // neither erase nor block this append-only audit. There is deliberately no
+    // conversation/focus column; the Agent aggregate owns the action and the
+    // focus visible at dispatch time has no authority over it.
+    up: `
+      CREATE TABLE agent_runtime_control_events (
+        id                             INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id                       TEXT NOT NULL,
+        generation                     INTEGER NOT NULL CHECK (generation >= 0),
+        actor_user_id                  TEXT NOT NULL,
+        reason                         TEXT NOT NULL
+          CHECK (reason IN ('session_cleared')),
+        was_running                    INTEGER NOT NULL
+          CHECK (was_running IN (0, 1)),
+        previous_cli_session_id_prefix TEXT,
+        occurred_at                    INTEGER NOT NULL
+      );
+
+      CREATE INDEX idx_agent_runtime_control_events_agent
+        ON agent_runtime_control_events(agent_id, id);
+
+      -- A daemon claim is immutable inside one generation. Rebinding a live
+      -- generation to another daemon would make a generation-only terminal
+      -- settlement ambiguous: only a generation increment may introduce a
+      -- different non-null daemon, and finalization may only clear the claim.
+      CREATE TRIGGER agent_runtime_slots_daemon_claim_generation_bound
+        BEFORE UPDATE OF claimed_by_daemon_instance_id ON agent_runtime_slots
+        WHEN NOT (
+          NEW.claimed_by_daemon_instance_id IS OLD.claimed_by_daemon_instance_id
+          OR (
+            NEW.generation = OLD.generation + 1
+            AND NEW.claimed_by_daemon_instance_id IS NOT NULL
+          )
+          OR (
+            NEW.generation = OLD.generation
+            AND OLD.claimed_by_daemon_instance_id IS NOT NULL
+            AND NEW.claimed_by_daemon_instance_id IS NULL
+          )
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'runtime slot daemon claim cannot rebind within a generation'
+          );
+        END;
+
+      CREATE TRIGGER agent_runtime_control_events_append_only_update
+        BEFORE UPDATE ON agent_runtime_control_events
+        BEGIN
+          SELECT RAISE(ABORT, 'agent_runtime_control_events is append-only');
+        END;
+
+      CREATE TRIGGER agent_runtime_control_events_append_only_delete
+        BEFORE DELETE ON agent_runtime_control_events
+        BEGIN
+          SELECT RAISE(ABORT, 'agent_runtime_control_events is append-only');
+        END;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

@@ -6,7 +6,10 @@ import {
 import type { BackendContext } from '../context.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
+import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
+import type { RuntimePrincipalScope } from '../auth/runtime-principal.js';
+import type { ClearSessionResult } from '../runtime/agent-runtime-host.js';
 import { dispatchHostRuntimeCatalog } from '../runtime/host-runtime-catalog-dispatch.js';
 import type {
   DataPlaneFailureCode,
@@ -22,7 +25,6 @@ export type SwitchAgentRuntimeErrorCode =
   | 'agent_deletion_in_progress'
   | 'runtime_transition_lost'
   | 'runtime_session_clear_failed'
-  | 'runtime_session_clear_scope_unsupported'
   | DataPlaneFailureCode;
 
 export class SwitchAgentRuntimeError extends Error {
@@ -40,8 +42,9 @@ export class SwitchAgentRuntimeError extends Error {
 export interface SwitchAgentRuntimeDeps {
   ctx: BackendContext;
   agents: AgentRepo;
-  runtimeSlots: RuntimeSlotRepo;
+  conversations: Pick<ConversationRepo, 'isAgentParticipant'>;
   conversationInboxes: ConversationInboxRepo;
+  runtimeSlots: RuntimeSlotRepo;
 }
 
 /**
@@ -138,6 +141,8 @@ export async function switchAgentRuntime(
   }
 
   const liveBefore = new Set<string>();
+  let agentSlotWasLive = false;
+  let agentResumeFocus: string | null = null;
   try {
     // The preflight row can become stale while the host catalog round-trip is
     // in flight. Re-read under our durable lock so a transition that another
@@ -168,7 +173,7 @@ export async function switchAgentRuntime(
     // status it is paired with (the roster read this replaced returned NULL for
     // every rosterless placement, which made a resumable DM session invisible).
     const seats = deps.runtimeSlots.listSeats(input.agentId);
-    const clearTargets: string[] = [];
+    const toClear: RuntimePrincipalScope[] = [];
     for (const seat of seats) {
       const live = seat.status === 'active' || seat.status === 'starting';
       // Nothing running and nothing resumable — the old runtime holds no
@@ -176,44 +181,24 @@ export async function switchAgentRuntime(
       // clear through it.
       if (!live && seat.cliSessionId === null) continue;
       if (seat.scope.kind === 'agent') {
-        // An AgentSlot is ONE session serving N conversations, so there is no
-        // conversation to clear it through: `clearSession` resolves custody by
-        // scope but still needs a target conversation for its participation
-        // check and its audit message. Choosing one would post a
-        // session-cleared notice into an arbitrary channel and key the exit
-        // waiter on a coordinate the session does not have. Refusing loudly
-        // keeps the durable lock's promise — the runtime never changes under a
-        // live session. Closing it is #task:2025 (the P2 runtime-scope lane): a
-        // scope-keyed participation check, a scope-keyed coordinator key, and an
-        // explicit decision about where an AgentSlot's clear is audited, since
-        // an agent-scoped agent has neither an `agent_home` nor an inbox DM
-        // (§9.2). A DORMANT AgentSlot is unaffected: it
-        // is filtered out above, so an agent-scoped agent with no live session
-        // and no resumable CLI session still switches.
-        throw new SwitchAgentRuntimeError(
-          'runtime_session_clear_scope_unsupported',
-          409,
-          `agent ${input.agentId} holds an agent-scoped session; clearing it is not supported yet, so the runtime was not changed`,
-        );
+        // One aggregate session serves every origin. Clear it once by its
+        // semantic scope; conversation focus is captured only as a possible
+        // restart presentation target after the transition commits.
+        agentSlotWasLive = live;
+        toClear.push(seat.scope);
+      } else {
+        if (live) liveBefore.add(seat.scope.conversationId);
+        toClear.push(seat.scope);
       }
-      if (live) liveBefore.add(seat.scope.conversationId);
-      clearTargets.push(seat.scope.conversationId);
     }
-
     // A claim made before the lock is no longer valid custody. Returning it to
     // pending lets the post-transition restart deliver under the target runtime.
     const reclaimedConversationIds =
       deps.conversationInboxes.rollbackInFlightForAgent(input.agentId);
 
-    const cleared = await Promise.allSettled(
-      clearTargets.map(conversationId =>
-        deps.ctx.runtimeHost.clearSession(
-          conversationId,
-          input.agentId,
-          input.actorUserId,
-        ),
-      ),
-    );
+    const cleared = await Promise.allSettled(toClear.map(scope =>
+      deps.ctx.runtimeHost.clearSession(scope, input.actorUserId),
+    ));
     const firstFailure = cleared.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     );
@@ -224,6 +209,22 @@ export async function switchAgentRuntime(
         'failed to clear every old-runtime session; runtime was not changed',
         { cause: firstFailure.reason },
       );
+    }
+    if (lockedRow.session_scope === 'agent') {
+      const successful = cleared.find(
+        (result): result is PromiseFulfilledResult<ClearSessionResult> =>
+          result.status === 'fulfilled',
+      );
+      const focus = successful?.value.focusConversationId ?? null;
+      // A focus captured before clear is only a presentation coordinate, not
+      // durable ownership. It may have been deleted or the agent may have lost
+      // participation while the clear was in flight. Reuse that exact focus
+      // only while the placement-aware participant authority still accepts it;
+      // never substitute another visible binding.
+      agentResumeFocus = focus !== null
+        && deps.conversations.isAgentParticipant(focus, input.agentId)
+        ? focus
+        : null;
     }
 
     const updated = deps.ctx.agentService.completeRuntimeTransition(
@@ -243,23 +244,41 @@ export async function switchAgentRuntime(
         actorUserId: input.actorUserId,
         fromRuntime: lockedRow.runtime,
         toRuntime: input.config.runtime,
-        clearedSessions: clearTargets.length,
+        clearedSessions: toClear.length,
       },
       'agent runtime transition committed',
     );
 
-    const resumeIds = new Set([
-      ...liveBefore,
-      ...reclaimedConversationIds,
-      // Deliberately nudge only messages created while this transition held
-      // the spawn gate. Older never-live pending rows remain demand-driven and
-      // will be claimed with the pair's next inbox trigger; a config change
-      // must not turn historical backlog into an unbounded restart herd.
-      ...deps.conversationInboxes.listPendingConversationIdsForAgentSince(
-        input.agentId,
-        transitionStartedAt,
-      ),
-    ]);
+    const newlyPending = deps.conversationInboxes.listPendingConversationIdsForAgentSince(
+      input.agentId,
+      transitionStartedAt,
+    );
+    let resumeIds: Set<string>;
+    if (lockedRow.session_scope === 'agent') {
+      // One AgentSlot gets one restart target. Origin is presentation only:
+      // prefer the oldest durable pending origin, otherwise reuse the focus
+      // observed before clear. Starting once is enough; AgentSlot ready replay
+      // drains every remaining origin in global inbox order.
+      const shouldResume = agentSlotWasLive
+        || reclaimedConversationIds.length > 0
+        || newlyPending.length > 0;
+      const oldestPending = shouldResume
+        ? deps.conversationInboxes.listPendingConversationIdsForAgent(input.agentId)[0]
+        : undefined;
+      const target = oldestPending
+        ?? (shouldResume ? agentResumeFocus : null);
+      resumeIds = new Set(target ? [target] : []);
+    } else {
+      resumeIds = new Set([
+        ...liveBefore,
+        ...reclaimedConversationIds,
+        // Deliberately nudge only messages created while this transition held
+        // the spawn gate. Older never-live pending rows remain demand-driven and
+        // will be claimed with the pair's next inbox trigger; a config change
+        // must not turn historical backlog into an unbounded restart herd.
+        ...newlyPending,
+      ]);
+    }
     const restarted = await Promise.allSettled(
       [...resumeIds].map(conversationId =>
         deps.ctx.runtimeHost.start(conversationId, input.agentId),
@@ -274,7 +293,7 @@ export async function switchAgentRuntime(
     }
     return {
       agent: updated,
-      cleared_sessions: clearTargets.length,
+      cleared_sessions: toClear.length,
       restarted_conversations: restarted.length - restartFailures.length,
       restart_failures: restartFailures.length,
     };
@@ -289,11 +308,14 @@ export async function switchAgentRuntime(
       // Restore previously-live pairs under the unchanged old runtime after a
       // partial clear failure. Best effort: the original failure remains the
       // response and another retry can finish the transition.
-      await Promise.allSettled(
-        [...liveBefore].map(conversationId =>
-          deps.ctx.runtimeHost.start(conversationId, input.agentId),
-        ),
-      );
+      const restoreTargets = existing.session_scope === 'agent'
+        ? agentSlotWasLive && agentResumeFocus
+          ? [agentResumeFocus]
+          : []
+        : [...liveBefore];
+      await Promise.allSettled(restoreTargets.map(conversationId =>
+        deps.ctx.runtimeHost.start(conversationId, input.agentId),
+      ));
     }
     throw err;
   }

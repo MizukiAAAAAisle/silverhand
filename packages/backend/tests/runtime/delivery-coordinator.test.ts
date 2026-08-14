@@ -50,6 +50,8 @@ import {
   type RuntimeDelivery,
 } from '../../src/runtime/delivery-coordinator.js';
 import type { RuntimePhase } from '../../src/runtime/run-state-cache.js';
+import type { ClearSessionOperation } from '../../src/runtime/clear-session-registry.js';
+import type { RuntimeSessionClearReceipt } from '../../src/runtime/persistence-ports.js';
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -700,5 +702,47 @@ describe('delivery stuck watchdog', () => {
     vi.advanceTimersByTime(2_000);
 
     expect(published).toHaveLength(0);
+  });
+
+  it('AgentSlot clear cancels every origin watchdog without touching another agent', async () => {
+    vi.useFakeTimers();
+    const { bridge } = makeBridge([admitted(), admitted(), admitted()]);
+    const published: AgentRunState[] = [];
+    const cache = makeCacheView([
+      { conv: 'c-a', agent: 'a1', phase: 'ready', runState: runState({ conversationId: 'c-a', agentId: 'a1' }) },
+      { conv: 'c-b', agent: 'a1', phase: 'ready', runState: runState({ conversationId: 'c-b', agentId: 'a1' }) },
+      { conv: 'c-x', agent: 'a2', phase: 'ready', runState: runState({ conversationId: 'c-x', agentId: 'a2' }) },
+    ]);
+    const c = makeCoordinator(bridge, cache, {
+      deliveryWatchdogMs: 1_000,
+      now: () => 5_000,
+      callbacks: { publishActivity: state => published.push(state) },
+    });
+
+    await c.submitLiveDelivery('c-a', 'a1', req({ inboxId: 1, driver: DRIVER_DIRECT }));
+    await c.submitLiveDelivery('c-b', 'a1', req({ inboxId: 2, driver: DRIVER_DIRECT }));
+    await c.submitLiveDelivery('c-x', 'a2', req({ inboxId: 3, driver: DRIVER_DIRECT }));
+
+    const receipt: RuntimeSessionClearReceipt = {
+      scope: { kind: 'agent', agentId: 'a1' },
+      generation: 7,
+      projection: { status: 'idle', pid: null, cli_session_id: null },
+    };
+    c.settleClear(receipt);
+    if (false) {
+      const dispatchOperation: ClearSessionOperation = {
+        scope: receipt.scope,
+        generation: receipt.generation,
+        daemonInstanceId: 'daemon-a',
+      };
+      // The coordinator consumes persistence proof, never the earlier daemon
+      // dispatch/waiter token. This is a compile-time negative contract.
+      // @ts-expect-error ClearSessionOperation is not a persistence receipt.
+      c.settleClear(dispatchOperation);
+    }
+    vi.advanceTimersByTime(1_000);
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ conversationId: 'c-x', agentId: 'a2' });
   });
 });

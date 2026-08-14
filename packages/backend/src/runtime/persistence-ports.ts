@@ -32,6 +32,7 @@
  */
 import type {
   AgentDto,
+  AgentRuntimeControlEventRow,
   ConversationAgentDto,
   ConversationDto,
   FromKind,
@@ -206,6 +207,13 @@ export interface RuntimeHostReadPort {
 }
 
 export interface RuntimeCustodyPort {
+  /** One read of the durable control coordinates used to bind a clear
+   * operation. Unlike `current`, this also returns an unclaimed generation. */
+  snapshot(scope: RuntimePrincipalScope): {
+    generation: number;
+    daemonInstanceId: string | null;
+    cliSessionId: string | null;
+  } | null;
   cliSessionId(scope: RuntimePrincipalScope): string | null;
   current(scope: RuntimePrincipalScope): RuntimePrincipal | null;
   claim(input: {
@@ -254,9 +262,11 @@ export interface RuntimeMemberRosterPort {
 }
 
 /**
- * The two writes `clearSession` must land together: forget the CLI session and
- * record the audit message that tells every participant it happened. Exactly
- * these two — nothing else in the clear-session flow is durable.
+ * Durable clear-session writes. ConversationSlot pairs the CLI-session clear
+ * with its conversation audit message; AgentSlot has no conversation audit
+ * surface and clears only the semantic slot. The append-only runtime event
+ * stream remains runtime state history; it does not identify the actor or
+ * claim to audit the user clear action.
  */
 export interface RuntimeSessionTxScope {
   /** `cli_session_id=null` on the semantic runtime slot. Membership is a
@@ -264,9 +274,19 @@ export interface RuntimeSessionTxScope {
    * projection authority and AgentSlot has no roster row to return. */
   clearCliSession(input: {
     scope: RuntimePrincipalScope;
-    targetConversationId: string;
+    expectedGeneration: number;
+  }): RuntimeSessionClearReceipt | null;
+  /** AgentSlot-only actor/reason audit. It is paired atomically with the
+   * exact-generation clear and intentionally has no conversation coordinate. */
+  insertAgentControlEvent(input: {
     agentId: string;
-  }): Pick<ConversationAgentDto, 'status' | 'pid' | 'cli_session_id'> | null;
+    generation: number;
+    actorUserId: string;
+    reason: 'session_cleared';
+    wasRunning: boolean;
+    previousCliSessionIdPrefix: string | null;
+    occurredAt: number;
+  }): AgentRuntimeControlEventRow;
   /** `from_kind='system'`, decided by the method rather than per call site. */
   insertSystemMessage(input: {
     conversationId: string;
@@ -277,22 +297,35 @@ export interface RuntimeSessionTxScope {
 }
 
 /**
+ * Persistence-minted proof that one semantic slot generation accepted the
+ * clear CAS. Daemon identity is deliberately absent: the daemon is the waiter
+ * authority, while the database proves settlement by generation after v77's
+ * claim-lifecycle trigger makes rebinding inside a generation impossible.
+ * Coordinator cleanup accepts this receipt, never the earlier dispatch token.
+ */
+export interface RuntimeSessionClearReceipt {
+  scope: RuntimePrincipalScope;
+  generation: number;
+  projection: Pick<ConversationAgentDto, 'status' | 'pid' | 'cli_session_id'>;
+}
+
+/**
  * ## Isolation obligation (R5)
  *
- * This UoW claims ATOMICITY ONLY — no isolation level, because the flow has no
- * read-then-write invariant to protect: the pre-state it decides on
- * (`cli_session_id`, cache liveness) is read BEFORE the callback and only
- * chooses the audit text. The placement-aware participation precondition is
- * re-read by `clearCliSession` inside this same transaction; a racing removal
- * yields `null` and the caller aborts the audit + slot write together.
+ * The callback contains a real authorization-read → slot-CAS → audit-write
+ * invariant. No concurrent writer may change participation or slot custody
+ * between those steps.
  *
- * SQLite: a plain deferred `db.transaction(...)()` — the write lock is taken at
- * the first statement, and both statements are writes, so the pair cannot
- * interleave with another writer. The callback runs synchronously; it must not
- * be given an `await`.
+ * The shipped adapter is SQLite-specific and **root-only**. It refuses when the
+ * connection is already inside a transaction, because better-sqlite3 degrades
+ * nested `.immediate()` to a SAVEPOINT with no writer reservation. At the root
+ * it begins with `BEGIN IMMEDIATE`, so it owns the reservation before the first
+ * authorization read; a competing writer fails before the callback starts.
+ * The callback is synchronous and must not be given an `await`.
  *
- * A pooled / PG adapter owes only that the callback run on ONE connection
- * inside one transaction. It does NOT owe SERIALIZABLE.
+ * A future pooled/PG adapter must supply an equivalent mechanism (for example
+ * SERIALIZABLE, or explicit row/advisory locks covering both participation and
+ * runtime-slot identities). A plain READ COMMITTED transaction is insufficient.
  */
 export interface RuntimeSessionUnitOfWork {
   atomically<T>(fn: (scope: RuntimeSessionTxScope) => T): T;

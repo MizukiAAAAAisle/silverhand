@@ -92,20 +92,49 @@ export const TaskCreatorDtoSchema = z.object({
 });
 export type TaskCreatorDto = z.infer<typeof TaskCreatorDtoSchema>;
 
+/** The task's PLACE — board identity AND every placement-specific display
+ *  coordinate, in ONE discriminated union (P0-f, review B4: no parallel
+ *  nullable fields outside the union).
+ *
+ *  - workspace arm: the numbering namespace ('ws:'||workspace_id) plus the
+ *    workspace/channel display coordinates that exist only there.
+ *  - direct_pair arm: ONLY the immutable `pair_key` (the v74 generated
+ *    column's value read verbatim — its byte format is defined in the
+ *    migration and never re-implemented in TS). NO title and NO display
+ *    name: a DM stores no display title, and the per-viewer `dm:@other`
+ *    label belongs to the DeliveryTarget formatter (#task:2021), never
+ *    smuggled in here.
+ *
+ *  Display/namespace ONLY — access control never reads it (ACL derives per
+ *  task from the task's own conversation, §4.4: Board is not an ACL unit). */
+export const TaskBoardRefSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('workspace'),
+    workspace_id: z.string(),
+    workspace_name: z.string(),
+    /** The conversation's display title (a channel has one; a DM does not). */
+    channel_name: z.string(),
+  }),
+  z.object({ kind: z.literal('direct_pair'), pair_key: z.string() }),
+]);
+export type TaskBoardRef = z.infer<typeof TaskBoardRefSchema>;
+
 export const TaskSummaryDtoSchema = z.object({
   /** The task identity (`tasks.id`) — canonical key for REST paths, events,
    *  and mutations. */
   id: z.string(),
   task_number: z.number(),
-  workspace_id: z.string(),
-  workspace_name: z.string(),
+  /** Placement-NEUTRAL conversation identity (the task's home conversation
+   *  id). Every display coordinate lives in `board` (review B4). */
   channel_id: z.string(),
-  channel_name: z.string(),
+  /** The task's place: board identity + placement-specific display
+   *  coordinates (see TaskBoardRefSchema). Narrow on `board.kind` —
+   *  workspace fields are structurally ABSENT on the pair arm. */
+  board: TaskBoardRefSchema,
   /** Reply-cluster root message id when the task's conversational footprint
    *  (its lifecycle system events) sits inside a thread cluster. NULL =
    *  main-line task. */
   thread_root_id: z.string().nullable(),
-  conversation: TaskConversationRefSchema,
   status: TaskStatusSchema,
   title: z.string(),
   assignee: TaskAssigneeDtoSchema.nullable(),
@@ -486,6 +515,10 @@ export const CreateTasksOpErrorSchema = z.enum([
    *  it writes no task/event and never probes whether the destination exists.
    *  The human-readable reason lives only in the CLI mapper. */
   'cross_conversation_claim',
+  /** The destination conversation is READ-ONLY: a direct-pair endpoint is
+   *  gone (P0-e survivor-readonly). Nothing may write a task row or its
+   *  system event into the pair — proven inside the write transaction. */
+  'conversation_readonly',
 ]);
 export type CreateTasksOpError = z.infer<typeof CreateTasksOpErrorSchema>;
 
@@ -579,17 +612,34 @@ export type HumanCreateTaskResult = z.infer<typeof HumanCreateTaskResultSchema>;
 // POST /internal/agent/:aid/tasks/claim — claim_tasks MCP tool
 export const ClaimTasksInputSchema = z
   .object({
-    task_numbers: z.array(z.number()).min(1),
+    /** Local-number batch: resolved on ONE explicit board (the workspace
+     *  selector below, or the caller's ambient workspace). */
+    task_numbers: z.array(z.number()).min(1).optional(),
+    /** Global-identity batch (`tasks.id`, agent-scoped-session-v1 §4.5).
+     *  EXACTLY ONE of `task_numbers` / `task_ids` per call — a mixed batch
+     *  would need a board coordinate for the numbers while the ids forbid
+     *  one, so the two selector families never share a call. */
+    task_ids: z.array(z.string().min(1)).min(1).optional(),
     /** Optional workspace selector for cross-workspace task ops. When
      *  omitted, the target task is resolved in the actor's current
      *  conversation's workspace (the legacy default). When provided,
      *  the actor must already be a member of the resolved workspace.
-     *  `workspace_id` and `workspace_name` are mutually exclusive. */
+     *  `workspace_id` and `workspace_name` are mutually exclusive.
+     *  Only legal with `task_numbers`: a global id already determines its
+     *  board, so a second coordinate could only be redundant or
+     *  contradictory. */
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_numbers !== undefined) !== (v.task_ids !== undefined), {
+    message: 'provide exactly one of task_numbers or task_ids',
+  })
+  .refine(v => !(v.task_ids && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_numbers; a task id already determines its board',
   });
 export type ClaimTasksInput = z.infer<typeof ClaimTasksInputSchema>;
 
@@ -614,6 +664,7 @@ export const ClaimErrorCodeSchema = z.enum([
   'ambiguous_workspace',
   'workspace_membership_required',
   'capability_denied',
+  'conversation_readonly',
 ]);
 export type ClaimErrorCode = z.infer<typeof ClaimErrorCodeSchema>;
 
@@ -645,20 +696,33 @@ export type ClaimTasksResult = z.infer<typeof ClaimTasksResultSchema>;
 // POST /internal/agent/:aid/tasks/unclaim
 export const UnclaimTaskInputSchema = z
   .object({
-    task_number: z.number().int().positive(),
+    task_number: z.number().int().positive().optional(),
+    /** Global-identity selector (`tasks.id`) — exactly one of `task_number` /
+     *  `task_id`. No workspace selector may accompany it (the id already
+     *  determines its board). */
+    task_id: z.string().min(1).optional(),
     /** Optional workspace selector — see ClaimTasksInputSchema. */
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+    message: 'provide exactly one of task_number or task_id',
+  })
+  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_number; a task id already determines its board',
   });
 export type UnclaimTaskInput = z.infer<typeof UnclaimTaskInputSchema>;
 
 // POST /internal/agent/:aid/tasks/update-status
 export const UpdateTaskStatusInputSchema = z
   .object({
-    task_number: z.number().int().positive(),
+    task_number: z.number().int().positive().optional(),
+    /** Global-identity selector — see UnclaimTaskInputSchema. */
+    task_id: z.string().min(1).optional(),
     status: TaskStatusSchema,
     /** Optional workspace selector — see ClaimTasksInputSchema. */
     workspace_id: z.string().optional(),
@@ -666,6 +730,13 @@ export const UpdateTaskStatusInputSchema = z
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+    message: 'provide exactly one of task_number or task_id',
+  })
+  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_number; a task id already determines its board',
   });
 export type UpdateTaskStatusInput = z.infer<typeof UpdateTaskStatusInputSchema>;
 
@@ -685,6 +756,10 @@ export const TaskMutationErrorCodeSchema = z.enum([
   'ambiguous_workspace',
   'workspace_membership_required',
   'capability_denied',
+  /** The task's conversation is READ-ONLY: a direct-pair endpoint is gone
+   *  (P0-e survivor-readonly); mutations would write a system event into the
+   *  pair. Proven inside the write transaction. */
+  'conversation_readonly',
 ]);
 export type TaskMutationErrorCode = z.infer<typeof TaskMutationErrorCodeSchema>;
 
@@ -734,7 +809,9 @@ export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
 // POST /internal/agent/:aid/tasks/edit — agent CLI `task edit`
 export const EditTaskInputSchema = z
   .object({
-    task_number: z.number().int().positive(),
+    task_number: z.number().int().positive().optional(),
+    /** Global-identity selector — see UnclaimTaskInputSchema. */
+    task_id: z.string().min(1).optional(),
     title: TaskTitleSchema.optional(),
     body: TaskBodySchema.optional(),
     /** Optional workspace selector — see ClaimTasksInputSchema. */
@@ -746,6 +823,13 @@ export const EditTaskInputSchema = z
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+    message: 'provide exactly one of task_number or task_id',
+  })
+  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_number; a task id already determines its board',
   });
 export type EditTaskInput = z.infer<typeof EditTaskInputSchema>;
 
@@ -769,6 +853,7 @@ export const TaskEditErrorCodeSchema = z.enum([
   'ambiguous_workspace',
   'workspace_membership_required',
   'capability_denied',
+  'conversation_readonly',
 ]);
 export type TaskEditErrorCode = z.infer<typeof TaskEditErrorCodeSchema>;
 
@@ -806,7 +891,9 @@ export type TaskEditResult = z.infer<typeof TaskEditResultSchema>;
 // so a private channel's task never fans out beyond its members).
 export const TaskChangedEventSchema = z.object({
   kind: z.enum(['create', 'claim', 'unclaim', 'status', 'edit']),
-  workspace_id: z.string(),
+  /** Null for DirectPair-board tasks (P0-f): the event's routing keys are the
+   *  conversation scopes below; workspace is a workspace-board-only fact. */
+  workspace_id: z.string().nullable(),
   channel_id: z.string(),
   /** Reply-cluster root message id when the task's lifecycle events are
    *  placed inside a thread cluster. NULL = main-line. */

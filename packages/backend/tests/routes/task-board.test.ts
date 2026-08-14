@@ -78,14 +78,15 @@ function insertTask(t: TestApp, s: SeedTask): string {
   t.ctx.db
     .prepare(
       `INSERT INTO tasks (
-         id, workspace_id, task_number, conversation_id, title, content, status,
+         id, workspace_id, board_key, task_number, conversation_id, title, content, status,
          assignee_agent_id, assignee_user_id,
          creator_kind, creator_agent_id, creator_user_id,
          created_at, closed_at
-       ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, 'ws:' || ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
+      s.place.workspaceId,
       s.place.workspaceId,
       s.number,
       s.place.conversationId,
@@ -245,9 +246,9 @@ describe('GET /api/tasks/board/column', () => {
     // and a `tk-000N` literal shift when any earlier case seeds one more row.
     const item = page.items.find(i => i.id === id);
     expect(item, `column items: ${JSON.stringify(page.ids)}`).toBeDefined();
-    expect(item!.workspace_id).toBe(place.workspaceId);
+    // B4 (P0-f): placement coordinates live in the board union arm.
+    expect(item!.board).toMatchObject({ kind: 'workspace', workspace_id: place.workspaceId });
     expect(item!.channel_id).toBe(place.conversationId);
-    expect(item!.conversation.id).toBe(place.conversationId);
     expect(item!.status).toBe('todo');
     expect(item!.assignee).toBeNull();
   });

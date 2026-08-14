@@ -60,6 +60,7 @@ import type {
 } from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { conversationRuntimePrincipal } from '../../src/auth/runtime-principal.js';
+import type { RuntimePrincipalScope } from '../../src/auth/runtime-principal.js';
 import {
   DEFAULT_AUTH_SESSION_TTL_MS,
   type AuthRuntimeConfig,
@@ -76,7 +77,7 @@ import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
 import { IdleReaperService } from '../../src/services/idle-reaper-service.js';
-import { canAgentUseCapability } from '../../src/permissions.js';
+import { canAgentUseCapability, canPostToConversation } from '../../src/permissions.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { UserService } from '../../src/services/user-service.js';
@@ -125,8 +126,7 @@ export class FakeConversationManager implements AgentRuntimeHost {
     runtimeScope?: StopOptions['runtimeScope'];
   }> = [];
   clearedSessions: Array<{
-    conversationId: string;
-    agentId: string;
+    scope: RuntimePrincipalScope;
     actorUserId: string | null;
   }> = [];
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
@@ -166,7 +166,11 @@ export class FakeConversationManager implements AgentRuntimeHost {
    * outbound transport.
    */
   clearError: Error | null = null;
-  clearSessionResult = { prevCliSessionId: 'prev-session-1', wasRunning: false };
+  clearSessionResult = {
+    prevCliSessionId: 'prev-session-1',
+    wasRunning: false,
+    focusConversationId: null as string | null,
+  };
 
   reconcileOnBoot(): void {
     this.reconciled++;
@@ -219,12 +223,15 @@ export class FakeConversationManager implements AgentRuntimeHost {
     return true;
   }
   async clearSession(
-    conversationId: string,
-    agentId: string,
+    scope: RuntimePrincipalScope,
     actorUserId: string | null = null,
-  ): Promise<{ prevCliSessionId: string | null; wasRunning: boolean }> {
+  ): Promise<{
+    prevCliSessionId: string | null;
+    wasRunning: boolean;
+    focusConversationId: string | null;
+  }> {
     if (this.clearError) throw this.clearError;
-    this.clearedSessions.push({ conversationId, agentId, actorUserId });
+    this.clearedSessions.push({ scope, actorUserId });
     return this.clearSessionResult;
   }
   async stopAll(): Promise<void> {
@@ -1143,6 +1150,8 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     logger: silentLogger,
     canUseCapability: (actor, workspaceId, capability) =>
       canAgentUseCapability(ctx, actor, capability, { workspaceId }),
+    canPostToConversation: (actor, conversationId) =>
+      canPostToConversation(ctx, actor, conversationId),
   });
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),

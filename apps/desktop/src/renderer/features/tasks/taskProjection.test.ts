@@ -53,12 +53,14 @@ function row(over: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
     id: 'task-a',
     task_number: 100,
-    workspace_id: WS,
-    workspace_name: 'ws',
     channel_id: 'chan-1',
-    channel_name: 'chan',
+    board: {
+      kind: 'workspace',
+      workspace_id: WS,
+      workspace_name: 'ws',
+      channel_name: 'chan',
+    },
     thread_root_id: null,
-    conversation: { id: 'chan-1', title: 'chan' },
     status: 'todo',
     title: 'a task',
     assignee: null,
@@ -248,12 +250,12 @@ describe('moveTaskStatusInBoardColumns', () => {
     const to = qc.getQueryData<BoardColumnPages>(boardColumnKey('in_progress', FILTER));
     expect(from?.pages[0]?.items.map(t => t.id)).toEqual(['task-b']);
     // Ordered placement, and the row carried over WHOLE — the fields the event
-    // does not have (`workspace_name`, `creator`, `created_at`) come from the row
+    // does not have (`board.workspace_name`, `creator`, `created_at`) come from the row
     // itself, so the moved card renders identically.
     expect(to?.pages[0]?.items.map(t => t.id)).toEqual(['task-c', 'task-a']);
     expect(to?.pages[0]?.items[1]).toMatchObject({
       status: 'in_progress',
-      workspace_name: 'ws',
+      board: { kind: 'workspace', workspace_name: 'ws' },
       creator: { name: 'Shiki' },
     });
   });

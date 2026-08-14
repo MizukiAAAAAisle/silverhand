@@ -31,8 +31,12 @@ function makeSpyProjection(): {
       calls.push(`stop:${a.join(',')}`);
     },
     clearSession: async (...a) => {
-      calls.push(`clearSession:${a.join(',')}`);
-      return { prevCliSessionId: null, wasRunning: false };
+      calls.push(`clearSession:${JSON.stringify(a[0])},${a[1] ?? ''}`);
+      return {
+        prevCliSessionId: null,
+        wasRunning: false,
+        focusConversationId: null,
+      };
     },
     deliverMessage: async (...a) => {
       calls.push(`deliverMessage:${a.join(',')}`);
@@ -156,7 +160,11 @@ describe('OutboundAgentRuntimeHost', () => {
       HostRuntimeDisabledError,
     );
     await expect(
-      host.clearSession('conv-1', 'agent-1'),
+      host.clearSession({
+        kind: 'conversation',
+        conversationId: 'conv-1',
+        agentId: 'agent-1',
+      }),
     ).rejects.toBeInstanceOf(HostRuntimeDisabledError);
     await expect(
       host.deliverMessage('conv-1', 'agent-1', 'msg-1'),

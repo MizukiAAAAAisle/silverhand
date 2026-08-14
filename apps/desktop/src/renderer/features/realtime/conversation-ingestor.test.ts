@@ -1907,12 +1907,14 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
     const taskSummary = (): TaskSummaryDto => ({
       id: 't1',
       task_number: 7,
-      workspace_id: 'w1',
-      workspace_name: 'WS',
       channel_id: 'c1',
-      channel_name: 'general',
+      board: {
+        kind: 'workspace',
+        workspace_id: 'w1',
+        workspace_name: 'WS',
+        channel_name: 'general',
+      },
       thread_root_id: null,
-      conversation: { id: 'c1', title: 'general' },
       status: 'todo',
       title: 'old',
       assignee: null,

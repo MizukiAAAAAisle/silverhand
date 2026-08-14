@@ -1,3 +1,4 @@
+import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
 import { useState } from 'react';
 import { useTaskByNumber } from '@/features/tasks/useTaskByNumber';
 import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
@@ -352,9 +353,9 @@ function TaskPopoverBody({
         <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
         <span
           className="min-w-0 truncate text-text-secondary"
-          title={task.conversation.title}
+          title={taskChannelLabel(task)}
         >
-          in {task.conversation.title}
+          in {taskChannelLabel(task)}
         </span>
         <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
         <span className="shrink-0" title={absolute}>{relative}</span>

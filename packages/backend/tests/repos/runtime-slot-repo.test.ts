@@ -279,12 +279,62 @@ describe('RuntimeSlotRepo scoped custody authority', () => {
         status: 'idle',
       });
 
-      expect(t.runtimeSlots.clearCliSession(scope)).toMatchObject({
+      expect(t.runtimeSlots.clearCliSession({
+        scope,
+        expectedGeneration: claimed.generation,
+      })).toMatchObject({
         generation: claimed.generation,
         claimed_by_daemon_instance_id: null,
         observed_status: 'idle',
         observed_pid: null,
         cli_session_id: null,
+      });
+    } finally {
+      t.db.close();
+    }
+  });
+
+  it('refuses to clear a successor generation through an older clear operation', () => {
+    const t = bootstrap();
+    try {
+      const scope = {
+        kind: 'conversation' as const,
+        conversationId: t.conversationId,
+        agentId: t.agentId,
+      };
+      const first = t.runtimeSlots.claimGeneration({
+        scope,
+        daemonInstanceId: 'daemon-clear-n',
+      })!;
+      t.runtimeSlots.finalizeGeneration({
+        scope,
+        expectedGeneration: first.generation,
+        expectedDaemonInstanceId: 'daemon-clear-n',
+        status: 'idle',
+      });
+      const successor = t.runtimeSlots.claimGeneration({
+        scope,
+        daemonInstanceId: 'daemon-clear-n-plus-one',
+        status: 'active',
+        pid: 222,
+      })!;
+      t.runtimeSlots.compareAndSetProjection({
+        scope,
+        expectedGeneration: successor.generation,
+        expectedDaemonInstanceId: 'daemon-clear-n-plus-one',
+        patch: { cliSessionId: 'successor-session' },
+      });
+
+      expect(t.runtimeSlots.clearCliSession({
+        scope,
+        expectedGeneration: first.generation,
+      })).toBeNull();
+      expect(t.runtimeSlots.get(scope)).toMatchObject({
+        generation: successor.generation,
+        claimed_by_daemon_instance_id: 'daemon-clear-n-plus-one',
+        observed_status: 'active',
+        observed_pid: 222,
+        cli_session_id: 'successor-session',
       });
     } finally {
       t.db.close();

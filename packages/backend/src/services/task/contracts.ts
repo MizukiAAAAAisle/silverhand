@@ -23,7 +23,13 @@ export type { AgentActor, TaskActor, UserActor } from './ports.js';
 // per-workspace `task_number` (the agent/CLI resolver) or its `tasks.id` (the
 // human REST path key). The old "select a task by a message id" form is fully
 // retired — a message id may only name a source/nav ref, never a task.
-export type AgentTaskRef = { taskNumber: number };
+//
+// P0-g (#task:2018, agent-scoped-session-v1 §4.5): the agent lane's ref is a
+// discriminated union — the board-scoped local number (needs a board
+// coordinate: explicit workspace selector or the caller's ambient workspace)
+// OR the global `tasks.id` (needs none; ACL gates before existence is
+// disclosed, so unknown and unauthorized ids are indistinguishable).
+export type AgentTaskRef = { taskNumber: number } | { taskId: string };
 export type UserTaskRef = { taskId: string };
 
 export interface CreateTasksInput {
@@ -103,6 +109,12 @@ export interface ListTasksFilters {
   /** user actor: optional filter; agent actor: ignored (service derives
    *  physical workspace from actor.conversationId). */
   workspaceId?: string;
+  /** INTERNAL (never wire): the service-computed board-key set for the agent
+   *  arm (§7.2.2 / P0-f). One key = a single validated board (explicit
+   *  selector or frame-derived); many keys = the agent-slot union. Rows are
+   *  still narrowed per task by the participation predicate. Mutually
+   *  exclusive with `workspaceId` (which stays the HUMAN arm's narrowing). */
+  boardKeys?: readonly string[];
   conversationId?: string;
   /** OR-ed status filter. Empty array or undefined = no filter.
    *  Single-element array is the legacy single-value form. */
@@ -139,7 +151,10 @@ export interface ResolvedTaskRow {
   id: string;
   conversation_id: string;
   task_number: number;
-  workspace_id: string;
+  /** NULL for DirectPair-board tasks (P0-f). */
+  workspace_id: string | null;
+  /** The stored board coordinate ('ws:…' | 'pair:…'), proven at INSERT. */
+  board_key: string;
   status: TaskStatus;
   closed_at: number | null;
   assignee_agent_id: string | null;

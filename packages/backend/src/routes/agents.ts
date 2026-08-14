@@ -48,6 +48,10 @@ import {
   type WorkspaceRepo,
 } from '../repos/workspace-repo.js';
 import {
+  ClearSessionExitTimeoutError,
+  ClearSessionInProgressError,
+} from '../runtime/agent-runtime-host.js';
+import {
   agentServiceErrorBody,
   agentServiceErrorStatus,
   placementErrorResponse,
@@ -564,7 +568,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     }
     try {
       const result = await switchAgentRuntime(
-        { ctx, agents, runtimeSlots, conversationInboxes },
+        { ctx, agents, conversations, conversationInboxes, runtimeSlots },
         {
           agentId: id,
           actorUserId: resolveViewerUserId(c),
@@ -579,6 +583,48 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
           if (mapped) return mapped;
         }
         return c.json({ error: err.message, code: err.code }, err.status);
+      }
+      const mapped = placementErrorResponse(c, err);
+      if (mapped) return mapped;
+      throw err;
+    }
+  });
+
+  // AgentSlot session control. Its authority is the Agent aggregate, not the
+  // conversation currently used as presentation focus, so this route carries
+  // no conversation coordinate and writes no conversation audit message.
+  app.post(apiPaths.agentClearSession(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    const agent = agents.get(id);
+    if (!agent || !canViewAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canEditAgent(ctx, getUserPrincipal(c), id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    if (agent.session_scope !== 'agent') {
+      return c.json({
+        error: 'conversation-scoped sessions must be cleared from a conversation',
+        code: 'runtime_scope_mismatch',
+      }, 409);
+    }
+    try {
+      const result = await ctx.runtimeHost.clearSession(
+        { kind: 'agent', agentId: id },
+        resolveViewerUserId(c),
+      );
+      return c.json({
+        ok: true,
+        prev_cli_session_id: result.prevCliSessionId,
+        was_running: result.wasRunning,
+      });
+    } catch (err) {
+      if (err instanceof ClearSessionExitTimeoutError) {
+        return c.json({ error: err.message, code: err.code }, 503);
+      }
+      if (err instanceof ClearSessionInProgressError) {
+        return c.json({ error: err.message, code: err.code }, 409);
       }
       const mapped = placementErrorResponse(c, err);
       if (mapped) return mapped;

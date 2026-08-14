@@ -3,6 +3,7 @@ import type {
   AgentRunTerminalReason,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
+import type { RuntimePrincipalScope } from '../auth/runtime-principal.js';
 import type {
   AgentRuntimeHost,
   ClearSessionResult,
@@ -50,8 +51,7 @@ export interface OutboundAgentRuntimeProjection {
    * the route translates to 503 / 409.
    */
   clearSession(
-    conversationId: string,
-    agentId: string,
+    scope: RuntimePrincipalScope,
     actorUserId: string | null,
   ): Promise<ClearSessionResult>;
   deliverMessage(
@@ -156,15 +156,14 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
   }
 
   async clearSession(
-    conversationId: string,
-    agentId: string,
+    scope: RuntimePrincipalScope,
     actorUserId?: string | null,
   ): Promise<ClearSessionResult> {
     const projection = this.projection?.();
     if (projection) {
-      return projection.clearSession(conversationId, agentId, actorUserId ?? null);
+      return projection.clearSession(scope, actorUserId ?? null);
     }
-    throw this.unavailable('clearSession', { conversationId, agentId });
+    throw this.unavailable('clearSession', { scope });
   }
 
   async stopAll(): Promise<void> {
@@ -246,7 +245,12 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
 
   private unavailable(
     method: string,
-    meta: { conversationId?: string | null; agentId?: string; messageId?: string },
+    meta: {
+      conversationId?: string | null;
+      agentId?: string;
+      messageId?: string;
+      scope?: RuntimePrincipalScope;
+    },
   ): Error {
     this.logger.warn(
       { runtime: 'control-plane', method, ...meta },

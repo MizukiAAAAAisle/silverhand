@@ -696,6 +696,19 @@ epoch」。residual（写在 P2 / P5）：**agent-scoped agent 没有 home 行**
 为键的 owner-facing 读面必须改为以 **agent 本身**为键，否则 agent-scoped agent 在管理视图里整行消失
 （与 §4.1 的 INNER JOIN 失效同一类症状）。
 
+### 9.3 AgentSlot clear 行为审计 = **c2**（@shiki 2026-08-14 21:50，已裁定）
+
+AgentSlot clear **不造 conversation system message**：当前 focus 只是展示状态，不是 action owner；为审计恢复
+`agent_home` / AgentInbox 或把 focus 冒充归属，都会重新引入已删除的 conversation 权威。与此同时，它也不采用
+c1 的“完全不记录用户行为”，因为 ConversationSlot 的同一动作已经保留 actor 审计，只有 AgentSlot 无人可查会
+形成没有模型理由的审计强度不对称。
+
+终态是独立的 **agent-level control audit fact**：至少记录 `agent_id`、exact runtime `generation`、
+`actor_user_id`、`reason='session_cleared'` 与发生时间；不含任何 conversation / workspace / focus 坐标，且与
+AgentSlot 的 exact-generation `cli_session_id=NULL` 在同一 DB 事务提交。`agent_runtime_events` 继续只表达 runtime
+状态历史，**不兼任**“谁执行了 clear”的行为审计。ConversationSlot 维持既有 `session_cleared` system message，
+两种 scope 的载体不同、行为事实强度一致。
+
 ---
 
 ## 10. 被否方案与其失效形态

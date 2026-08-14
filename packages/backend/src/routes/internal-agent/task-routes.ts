@@ -22,14 +22,37 @@ import {
   UpdateTaskStatusInputSchema,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
-import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 import { internalAgentRoutePaths } from './paths.js';
+import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 
 export function registerTaskRoutes(
   app: Hono<AppEnv>,
   deps: InternalRouteDeps,
 ): void {
   const { ctx, agents, conversations, workspaces } = deps;
+
+  /** Task-domain actor: the verified principal plus the P1 runtime-scope
+   *  projection (#task:2018 B1). The mapping is TOTAL over the verified
+   *  RuntimePrincipal union — a missing principal after the auth middleware
+   *  is an invariant breach and fails loud (500), never a silent
+   *  reinterpretation as conversation scope. */
+  const taskActorFrom = (
+    c: Parameters<typeof getAgentPrincipal>[0],
+  ): { kind: 'agent'; agentId: string; conversationId: string; runtimeScope: 'conversation' | 'agent' } => {
+    const principal = getAgentPrincipal(c);
+    const runtime = c.get('runtimePrincipal');
+    if (!runtime) {
+      throw new Error(
+        'runtimePrincipal missing after internal auth middleware — task routes cannot derive a scope',
+      );
+    }
+    return {
+      kind: 'agent',
+      agentId: principal.agentId,
+      conversationId: principal.conversationId,
+      runtimeScope: runtime.kind === 'agent_slot' ? 'agent' : 'conversation',
+    };
+  };
 
   app.get(internalAgentRoutePaths.tasks, c => {
     const cid = c.req.param('cid');
@@ -60,6 +83,51 @@ export function registerTaskRoutes(
     if (!canViewConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    const actor = taskActorFrom(c);
+
+    // Agent-slot default list = the UNION of every board the actor can read
+    // (§7.2.2, #task:2018): no ambient board is resolved and no single-board
+    // capability gate applies — the service filters per board (membership ∧
+    // read_tasks) and the repo narrows per task. An explicit workspace_id
+    // keeps the validated single-board lane below (narrowing only, with its
+    // typed board errors).
+    if (actor.runtimeScope === 'agent' && parsed.data.workspace_id === undefined) {
+      return c.json({
+        tasks: ctx.taskService.list({
+          actor,
+          conversationId: parsed.data.conversation_id,
+          status: parsed.data.status,
+          taskNumbers: parsed.data.task_number,
+          assigneeAgentId: parsed.data.assignee_id,
+          limit: parsed.data.limit,
+        }),
+      });
+    }
+
+    // Conversation frame on a NON-workspace placement (P0-f): a DirectPair
+    // frame reads its OWN board — the service derives it by placement, no
+    // workspace resolution and no workspace capability table applies
+    // (participation is the pair's authority; the frame gate above already
+    // proved it). An explicit workspace selector keeps the validated
+    // workspace lane below; the inbox still has no board and falls through to
+    // the typed refusal in resolveAgentQueryWorkspaceId.
+    if (
+      parsed.data.workspace_id === undefined &&
+      conversation.workspace_id === null &&
+      ctx.taskService.boardOfConversation(cid) !== null
+    ) {
+      return c.json({
+        tasks: ctx.taskService.list({
+          actor,
+          conversationId: parsed.data.conversation_id,
+          status: parsed.data.status,
+          taskNumbers: parsed.data.task_number,
+          assigneeAgentId: parsed.data.assignee_id,
+          limit: parsed.data.limit,
+        }),
+      });
+    }
+
     // Agent-side --workspace-id: default is the actor's current conversation's
     // workspace; if the agent passes a different
     // workspace_id we must validate existence + membership at the route
@@ -104,7 +172,7 @@ export function registerTaskRoutes(
     }
     return c.json({
       tasks: ctx.taskService.list({
-        actor: principal,
+        actor,
         workspaceId: effectiveWorkspaceId,
         conversationId: parsed.data.conversation_id,
         status: parsed.data.status,
@@ -164,36 +232,45 @@ export function registerTaskRoutes(
     // same-conversation create requires WITHOUT relaxing the ~90-call-site
     // global post/view predicates. Unknown destination and non-member
     // destination collapse to ONE 403 shape: never probe existence.
-    // A task Board belongs to a WORKSPACE (doc §4.2: an `agent_inbox` has no
-    // board), so a workspace-less destination is not a place work can be filed.
-    // That joins the same single 403 as unknown/non-member destination — the
-    // caller must not be able to tell those apart.
+    // The destination must HAVE a board (P0-f §4.4): a workspace conversation
+    // files onto its WorkspaceBoard, a DirectPair onto its own board, and the
+    // agent inbox has none — boardless joins the same single 403 as
+    // unknown/non-member destination (the caller must not tell those apart).
+    // Authorization per placement:
+    //  - workspace: workspace access ∧ destination roster membership, then the
+    //    destination workspace's create_tasks (and write_tasks for --claim);
+    //  - direct_pair: PARTICIPATION (endpoint-ness, the placement-aware port)
+    //    is the whole authority — a pair has no workspace, no roster and no
+    //    capability rows (P0-b owner-self precedent).
     const destConv = conversations.get(destination);
-    const destWorkspaceId = destConv?.workspace_id ?? null;
+    const destBoard = destConv ? ctx.taskService.boardOfConversation(destination) : null;
+    const destWorkspaceId = destBoard?.workspaceId ?? null;
     const authorized =
       !!destConv &&
-      destWorkspaceId !== null &&
-      canAgentAccessWorkspace(ctx, principal.agentId, destWorkspaceId) &&
-      conversations.getAgent(destination, principal.agentId) != null;
-    if (!destConv || destWorkspaceId === null || !authorized) {
+      !!destBoard &&
+      (destWorkspaceId !== null
+        ? canAgentAccessWorkspace(ctx, principal.agentId, destWorkspaceId) &&
+          conversations.getAgent(destination, principal.agentId) != null
+        : conversations.isAgentParticipant(destination, principal.agentId));
+    if (!destConv || !destBoard || !authorized) {
       return c.json({ error: 'forbidden' }, 403);
     }
     // Capabilities are judged on the DESTINATION's workspace — a cross-workspace
     // create needs create_tasks (and write_tasks for --claim) in B, not in the
-    // origin workspace.
-    {
+    // origin workspace. A pair board has no capability table (above).
+    if (destWorkspaceId !== null) {
       const denied = requireAgentCapability(c, ctx, principal, 'create_tasks', destWorkspaceId);
       if (denied) return denied;
     }
     // `--claim` self-assigns the created task, which is a task write — gate it
     // on write_tasks in addition to create_tasks (same capability claim needs).
-    if (parsed.data.claim === true) {
+    if (parsed.data.claim === true && destWorkspaceId !== null) {
       const denied = requireAgentCapability(c, ctx, principal, 'write_tasks', destWorkspaceId);
       if (denied) return denied;
     }
     const result = await ctx.taskService.createTasks({
       conversationId: destination,
-      actor: principal,
+      actor: taskActorFrom(c),
       // Map the wire (snake_case) task items to the service contract shape
       // (camelCase `sourceMessageId`).
       tasks: parsed.data.tasks.map(item => ({
@@ -232,6 +309,7 @@ export function registerTaskRoutes(
     if (!canPostToConversation(ctx, actor, actor.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    const taskActor = taskActorFrom(c);
     // Wire optional --workspace-id / --workspace selector.
     // Schema XOR enforces exclusivity; the service does membership +
     // existence checks per result entry.
@@ -239,11 +317,17 @@ export function registerTaskRoutes(
       ...(parsed.data.workspace_id ? { workspaceId: parsed.data.workspace_id } : {}),
       ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
     };
+    // P0-g (#task:2018): the schema guarantees EXACTLY ONE of task_numbers /
+    // task_ids, so the batch is homogeneous — numbers resolve on one explicit
+    // board, ids resolve globally (and are folded per the caller's principal
+    // scope inside the service).
+    const refs =
+      parsed.data.task_ids !== undefined
+        ? parsed.data.task_ids.map(taskId => ({ taskId }))
+        : (parsed.data.task_numbers ?? []).map(taskNumber => ({ taskNumber }));
     const results = [];
-    for (const taskNumber of parsed.data.task_numbers) {
-      results.push(
-        await ctx.taskService.claimTask({ actor, by: { taskNumber }, workspaceSelector }),
-      );
+    for (const by of refs) {
+      results.push(await ctx.taskService.claimTask({ actor: taskActor, by, workspaceSelector }));
     }
     return c.json({ results });
   });
@@ -268,8 +352,11 @@ export function registerTaskRoutes(
       ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
     };
     const result = await ctx.taskService.unclaimTask({
-      actor: principal,
-      by: { taskNumber: parsed.data.task_number },
+      actor: taskActorFrom(c),
+      by:
+        parsed.data.task_id !== undefined
+          ? { taskId: parsed.data.task_id }
+          : { taskNumber: parsed.data.task_number! },
       workspaceSelector,
     });
     return c.json(result);
@@ -295,8 +382,11 @@ export function registerTaskRoutes(
       ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
     };
     const result = await ctx.taskService.updateStatus({
-      actor: principal,
-      by: { taskNumber: parsed.data.task_number },
+      actor: taskActorFrom(c),
+      by:
+        parsed.data.task_id !== undefined
+          ? { taskId: parsed.data.task_id }
+          : { taskNumber: parsed.data.task_number! },
       status: parsed.data.status,
       workspaceSelector,
     });
@@ -326,8 +416,11 @@ export function registerTaskRoutes(
       ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
     };
     const result = await ctx.taskService.editTask({
-      actor: principal,
-      by: { taskNumber: parsed.data.task_number },
+      actor: taskActorFrom(c),
+      by:
+        parsed.data.task_id !== undefined
+          ? { taskId: parsed.data.task_id }
+          : { taskNumber: parsed.data.task_number! },
       // An omitted flag means "leave unchanged" → null; the service COALESCEs
       // nulls against the stored value. An explicit empty body ("") clears.
       title: parsed.data.title ?? null,
@@ -346,6 +439,41 @@ export function registerTaskRoutes(
       return c.json({ error: 'conversation id and agent id required' }, 400);
     }
     const taskNumberRaw = c.req.query('task_number');
+    const taskIdRaw = c.req.query('task_id');
+    // P0-g (#task:2018): exactly ONE of task_number / task_id. The id arm
+    // takes no workspace selector — a global id already determines its board.
+    if (taskIdRaw !== undefined && taskNumberRaw !== undefined) {
+      return c.json(
+        { error: 'provide exactly one of task_number or task_id', code: 'invalid_input' },
+        400,
+      );
+    }
+    if (taskIdRaw !== undefined) {
+      if (taskIdRaw === '') {
+        return c.json({ error: 'task_id must be non-empty', code: 'invalid_input' }, 400);
+      }
+      if (c.req.query('workspace_id') || c.req.query('workspace_name')) {
+        return c.json(
+          {
+            error: 'workspace selectors only apply to task_number; a task id already determines its board',
+            code: 'invalid_input',
+          },
+          400,
+        );
+      }
+      const principal = getAgentPrincipal(c);
+      if (!canViewConversation(ctx, principal, principal.conversationId)) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      // NO route-level workspace resolution or capability gate here: for a
+      // by-id read both axes are folded into the service's indistinguishable
+      // gate (participation ∧ read_tasks ∧ ambient board), and every failure
+      // is the SAME 404 a by-number miss produces — a typed 403 would be an
+      // id-probing oracle (agent-scoped-session-v1 §4.5).
+      const detail = ctx.taskService.getTaskDetailByGlobalId(taskIdRaw, taskActorFrom(c));
+      if (!detail) return c.json({ error: 'task not found', code: 'not_found' }, 404);
+      return c.json({ task: detail });
+    }
     const taskNumber = taskNumberRaw ? Number(taskNumberRaw) : NaN;
     if (!Number.isInteger(taskNumber) || taskNumber <= 0) {
       return c.json({ error: 'task_number required', code: 'invalid_input' }, 400);
@@ -364,8 +492,9 @@ export function registerTaskRoutes(
       ...(c.req.query('workspace_id') ? { workspaceId: c.req.query('workspace_id')! } : {}),
       ...(c.req.query('workspace_name') ? { workspaceName: c.req.query('workspace_name')! } : {}),
     };
-    const resolved = ctx.taskService.resolveAgentDetailWorkspace(principal, selector);
-    if (!('workspaceId' in resolved)) {
+    const actor = taskActorFrom(c);
+    const resolved = ctx.taskService.resolveAgentDetailWorkspace(actor, selector);
+    if (!('boardKey' in resolved)) {
       const status =
         resolved.code === 'workspace_membership_required'
           ? 403
@@ -374,14 +503,16 @@ export function registerTaskRoutes(
             : 404;
       return c.json({ error: resolved.reason, code: resolved.code }, status);
     }
-    {
+    // Capability is a WORKSPACE-board fact; a pair board's read authority is
+    // participation, already validated by the frame gate above (P0-f §4.4).
+    if (resolved.workspaceId !== null) {
       const denied = requireAgentCapability(c, ctx, principal, 'read_tasks', resolved.workspaceId);
       if (denied) return denied;
     }
     const detail = ctx.taskService.getTaskDetailByNumber(
       taskNumber,
-      principal,
-      resolved.workspaceId,
+      actor,
+      resolved.boardKey,
     );
     if (!detail) return c.json({ error: 'task not found', code: 'not_found' }, 404);
     return c.json({ task: detail });

@@ -3146,12 +3146,12 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.transport.setNextClearResult({ cleared: false });
 
         await expect(fix.fanout.clearSession(
-          fix.channelId,
-          fix.agentId,
-          null,
+          { kind: 'agent', agentId: fix.agentId },
+          fix.viewerUserId,
         )).resolves.toEqual({
           prevCliSessionId: 'agent-session-1',
           wasRunning: false,
+          focusConversationId: null,
         });
 
         expect(fix.transport.clearSessionCalls()[0]?.params).toEqual({
@@ -3159,6 +3159,288 @@ describe('OutboundRuntimeEventFanout', () => {
           runtime_generation: slot.generation,
         });
         expect(slots.getAgent(fix.agentId)?.cli_session_id).toBeNull();
+        expect(slots.listControlEvents(fix.agentId)).toEqual([
+          expect.objectContaining({
+            agent_id: fix.agentId,
+            generation: slot.generation,
+            actor_user_id: fix.viewerUserId,
+            reason: 'session_cleared',
+            was_running: 0,
+            previous_cli_session_id_prefix: 'agent-se',
+          }),
+        ]);
+        expect(fix.events.filter(event => event.kind === 'message')).toEqual([]);
+        expect(fix.events.filter(event => event.kind === 'agent_status')).toEqual([]);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('clears one live AgentSlot by aggregate custody without creating a conversation audit', async () => {
+      const fix = makeFixture({
+        sessionScope: 'agent',
+        clearSessionExitTimeoutMs: 200,
+      });
+      try {
+        const scope = { kind: 'agent' as const, agentId: fix.agentId };
+        const slots = new RuntimeSlotRepo(fix.db);
+        const slot = slots.getAgent(fix.agentId);
+        if (!slot?.claimed_by_daemon_instance_id) {
+          throw new Error('fixture AgentSlot has no active custody');
+        }
+        expect(slots.compareAndSetProjection({
+          scope,
+          expectedGeneration: slot.generation,
+          expectedDaemonInstanceId: slot.claimed_by_daemon_instance_id,
+          patch: { cliSessionId: 'agent-session-live' },
+        })).not.toBeNull();
+
+        fix.transport.snapshot = {
+          runtimes: [
+            runtimeDto(
+              fix.channelId,
+              fix.agentId,
+              'ready',
+              {
+                ...RUN_STATE,
+                conversationId: fix.channelId,
+                agentId: fix.agentId,
+                status: 'thinking',
+              },
+              { kind: 'agent', agent_id: fix.agentId },
+            ),
+          ],
+        };
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        await waitFor(
+          () => fix.fanout.getAgentRunStates(fix.channelId).length === 1,
+        );
+        fix.events.length = 0;
+
+        const clear = fix.fanout.clearSession(scope, fix.viewerUserId);
+        await new Promise(resolve => setImmediate(resolve));
+        emitRuntimeExit(fix, scope);
+
+        await expect(clear).resolves.toEqual({
+          prevCliSessionId: 'agent-session-live',
+          wasRunning: true,
+          focusConversationId: fix.channelId,
+        });
+        expect(fix.transport.clearSessionCalls()).toHaveLength(1);
+        expect(fix.transport.clearSessionCalls()[0]?.params).toEqual({
+          runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+          runtime_generation: slot.generation,
+        });
+        expect(slots.getAgent(fix.agentId)).toMatchObject({
+          cli_session_id: null,
+          observed_status: 'idle',
+          observed_pid: null,
+        });
+        expect(slots.listControlEvents(fix.agentId)).toEqual([
+          expect.objectContaining({
+            agent_id: fix.agentId,
+            generation: slot.generation,
+            actor_user_id: fix.viewerUserId,
+            reason: 'session_cleared',
+            was_running: 1,
+            previous_cli_session_id_prefix: 'agent-se',
+          }),
+        ]);
+        expect(fix.events.filter(event => event.kind === 'message')).toEqual([]);
+        expect(
+          fix.events.some(event => event.kind === 'agent_status'),
+        ).toBe(true);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('lets late N exit release only clear N while the DB CAS and coordinator preserve successor N+1', async () => {
+      const fix = makeFixture({
+        sessionScope: 'agent',
+        clearSessionExitTimeoutMs: 200,
+      });
+      try {
+        const scope = { kind: 'agent' as const, agentId: fix.agentId };
+        const slots = new RuntimeSlotRepo(fix.db);
+        const generationOne = slots.getAgent(fix.agentId)!;
+        expect(generationOne.claimed_by_daemon_instance_id).not.toBeNull();
+        expect(slots.compareAndSetProjection({
+          scope,
+          expectedGeneration: generationOne.generation,
+          expectedDaemonInstanceId: generationOne.claimed_by_daemon_instance_id!,
+          patch: {
+            status: 'active',
+            pid: 111,
+            cliSessionId: 'session-n',
+          },
+        })).not.toBeNull();
+
+        fix.transport.snapshot = {
+          runtimes: [{
+            ...runtimeDto(
+              fix.channelId,
+              fix.agentId,
+              'ready',
+              {
+                ...RUN_STATE,
+                conversationId: fix.channelId,
+                agentId: fix.agentId,
+                status: 'thinking',
+              },
+              { kind: 'agent', agent_id: fix.agentId },
+            ),
+            runtime_generation: generationOne.generation,
+          }],
+        };
+        fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+        await waitFor(
+          () => fix.fanout.getAgentRunStates(fix.channelId).length === 1,
+        );
+
+        const clearN = fix.fanout.clearSession(scope, fix.viewerUserId);
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(slots.finalizeGeneration({
+          scope,
+          expectedGeneration: generationOne.generation,
+          expectedDaemonInstanceId: generationOne.claimed_by_daemon_instance_id!,
+          status: 'idle',
+        })).not.toBeNull();
+        const generationTwo = slots.claimGeneration({
+          scope,
+          daemonInstanceId: generationOne.claimed_by_daemon_instance_id!,
+          status: 'active',
+          pid: 222,
+        })!;
+        expect(generationTwo.generation).toBe(generationOne.generation + 1);
+        expect(slots.compareAndSetProjection({
+          scope,
+          expectedGeneration: generationTwo.generation,
+          expectedDaemonInstanceId: generationTwo.claimed_by_daemon_instance_id!,
+          patch: { cliSessionId: 'session-n-plus-one' },
+        })).not.toBeNull();
+        fix.agentTokens.issue(runtimePrincipalForScope({
+          scope,
+          generation: generationTwo.generation,
+          daemonInstanceId: generationTwo.claimed_by_daemon_instance_id!,
+        }));
+
+        // Old N is no longer current, so EventHandler drops every projection
+        // side effect. Fanout ingress still recognizes it as the exact clear-N
+        // completion and releases only that waiter; the subsequent DB CAS is
+        // what prevents the old operation from touching current N+1.
+        emitRuntimeExit(fix, scope, generationOne.generation);
+        await expect(clearN).rejects.toThrow(
+          /runtime slot generation changed while clearing/,
+        );
+
+        expect(slots.getAgent(fix.agentId)).toMatchObject({
+          generation: generationTwo.generation,
+          claimed_by_daemon_instance_id: generationTwo.claimed_by_daemon_instance_id,
+          observed_status: 'active',
+          observed_pid: 222,
+          cli_session_id: 'session-n-plus-one',
+        });
+        expect(slots.listControlEvents(fix.agentId)).toEqual([]);
+        // The stale exit and failed old-clear settlement leave the live
+        // coordinator/cache projection intact as well.
+        expect(fix.fanout.getAgentRunStates(fix.channelId)).toHaveLength(1);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('does not let successor N+1 exit satisfy the parked clear-N waiter', async () => {
+      const fix = makeFixture({
+        sessionScope: 'agent',
+        clearSessionExitTimeoutMs: 30,
+      });
+      try {
+        const scope = { kind: 'agent' as const, agentId: fix.agentId };
+        const slots = new RuntimeSlotRepo(fix.db);
+        const generationOne = slots.getAgent(fix.agentId)!;
+        expect(slots.compareAndSetProjection({
+          scope,
+          expectedGeneration: generationOne.generation,
+          expectedDaemonInstanceId: generationOne.claimed_by_daemon_instance_id!,
+          patch: { cliSessionId: 'session-n' },
+        })).not.toBeNull();
+
+        const clearN = fix.fanout.clearSession(scope, fix.viewerUserId);
+        await new Promise(resolve => setImmediate(resolve));
+        expect(slots.finalizeGeneration({
+          scope,
+          expectedGeneration: generationOne.generation,
+          expectedDaemonInstanceId: generationOne.claimed_by_daemon_instance_id!,
+          status: 'idle',
+        })).not.toBeNull();
+        const generationTwo = slots.claimGeneration({
+          scope,
+          daemonInstanceId: generationOne.claimed_by_daemon_instance_id!,
+          status: 'active',
+          pid: 222,
+        })!;
+        expect(slots.compareAndSetProjection({
+          scope,
+          expectedGeneration: generationTwo.generation,
+          expectedDaemonInstanceId: generationTwo.claimed_by_daemon_instance_id!,
+          patch: { cliSessionId: 'session-n-plus-one' },
+        })).not.toBeNull();
+        fix.agentTokens.issue(runtimePrincipalForScope({
+          scope,
+          generation: generationTwo.generation,
+          daemonInstanceId: generationTwo.claimed_by_daemon_instance_id!,
+        }));
+
+        emitRuntimeExit(fix, scope, generationTwo.generation);
+        await expect(clearN).rejects.toBeInstanceOf(
+          ClearSessionExitTimeoutError,
+        );
+        // N+1's own exit is legitimate runtime history, but it did not grant
+        // clear N authority to erase N+1's resumable session.
+        expect(slots.getAgent(fix.agentId)).toMatchObject({
+          generation: generationTwo.generation,
+          observed_status: 'idle',
+          observed_pid: null,
+          cli_session_id: 'session-n-plus-one',
+        });
+        expect(slots.listControlEvents(fix.agentId)).toEqual([]);
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('rolls back the AgentSlot session clear when its control audit insert fails', async () => {
+      const fix = makeFixture({ sessionScope: 'agent' });
+      try {
+        const scope = { kind: 'agent' as const, agentId: fix.agentId };
+        const slots = new RuntimeSlotRepo(fix.db);
+        const slot = slots.getAgent(fix.agentId)!;
+        expect(slots.compareAndSetProjection({
+          scope,
+          expectedGeneration: slot.generation,
+          expectedDaemonInstanceId: slot.claimed_by_daemon_instance_id!,
+          patch: { cliSessionId: 'atomic-agent-session' },
+        })).not.toBeNull();
+        fix.transport.setNextClearResult({ cleared: false });
+        fix.db.exec(`
+          CREATE TRIGGER test_fail_agent_control_audit
+          BEFORE INSERT ON agent_runtime_control_events
+          BEGIN
+            SELECT RAISE(ABORT, 'injected agent control audit failure');
+          END;
+        `);
+
+        await expect(fix.fanout.clearSession(
+          scope,
+          fix.viewerUserId,
+        )).rejects.toThrow(/injected agent control audit failure/);
+
+        expect(slots.getAgent(fix.agentId)?.cli_session_id).toBe(
+          'atomic-agent-session',
+        );
+        expect(slots.listControlEvents(fix.agentId)).toEqual([]);
       } finally {
         fix.cleanup();
       }
@@ -3193,8 +3475,11 @@ describe('OutboundRuntimeEventFanout', () => {
         //    waiter. After dispatch microtasks settle, emit the exit
         //    event so the waiter resolves.
         const promise = fix.fanout.clearSession(
-          fix.channelId,
-          fix.agentId,
+          {
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          },
           null,
         );
         await new Promise(resolve => setImmediate(resolve));
@@ -3204,6 +3489,7 @@ describe('OutboundRuntimeEventFanout', () => {
         expect(result).toEqual({
           prevCliSessionId: 'sess-abcdef-12345',
           wasRunning: true,
+          focusConversationId: fix.channelId,
         });
 
         // 5. Wire shape — `runtime_clear_session` was dispatched
@@ -3221,6 +3507,9 @@ describe('OutboundRuntimeEventFanout', () => {
 
         // 6. DB tx landed.
         expect(fix.row().cli_session_id).toBeNull();
+        expect(
+          new RuntimeSlotRepo(fix.db).listControlEvents(fix.agentId),
+        ).toEqual([]);
 
         // 7. Audit message published as a `message` SSE.
         const messageEvents = fix.events.filter(
@@ -3278,7 +3567,11 @@ describe('OutboundRuntimeEventFanout', () => {
 
         // No emitRuntimeExit — the waiter must time out.
         await expect(
-          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+          fix.fanout.clearSession({
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          }, null),
         ).rejects.toBeInstanceOf(ClearSessionExitTimeoutError);
 
         // DB UNCHANGED: prev cli_session_id intact, no audit.
@@ -3296,7 +3589,11 @@ describe('OutboundRuntimeEventFanout', () => {
         // is fine — we only assert it does NOT reject as
         // `ClearSessionInProgressError`).
         await expect(
-          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+          fix.fanout.clearSession({
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          }, null),
         ).rejects.not.toBeInstanceOf(ClearSessionInProgressError);
       } finally {
         fix.cleanup();
@@ -3323,13 +3620,17 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.events.length = 0;
 
         const result = await fix.fanout.clearSession(
-          fix.channelId,
-          fix.agentId,
+          {
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          },
           null,
         );
         expect(result).toEqual({
           prevCliSessionId: 'sess-orphan',
           wasRunning: false,
+          focusConversationId: null,
         });
 
         // DB still cleared, audit still fires (prevCliSessionId was
@@ -3381,7 +3682,11 @@ describe('OutboundRuntimeEventFanout', () => {
         // `clearSession` must throw, NOT fast-path via the
         // (formerly cache-derived) `wasRunning` check.
         await expect(
-          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+          fix.fanout.clearSession({
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          }, null),
         ).rejects.toBeInstanceOf(ClearSessionExitTimeoutError);
 
         // DB UNCHANGED: cli_session_id intact, no audit row, no SSE.
@@ -3417,14 +3722,21 @@ describe('OutboundRuntimeEventFanout', () => {
 
         // First call parks on the waiter (no runtime_exit emitted).
         const first = fix.fanout.clearSession(
-          fix.channelId,
-          fix.agentId,
+          {
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          },
           null,
         );
 
         // Concurrent same-pair call must fast-fail typed.
         await expect(
-          fix.fanout.clearSession(fix.channelId, fix.agentId, null),
+          fix.fanout.clearSession({
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          }, null),
         ).rejects.toBeInstanceOf(ClearSessionInProgressError);
 
         // Drain the first call's timeout so its `finally` runs.
@@ -3436,8 +3748,11 @@ describe('OutboundRuntimeEventFanout', () => {
         // running a third call on the same pair that lands the
         // happy path: emit runtime_exit so it resolves.
         const third = fix.fanout.clearSession(
-          fix.channelId,
-          fix.agentId,
+          {
+            kind: 'conversation',
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+          },
           null,
         );
         await new Promise(resolve => setImmediate(resolve));
@@ -3449,6 +3764,7 @@ describe('OutboundRuntimeEventFanout', () => {
           // ClearSessionInProgress.
           prevCliSessionId: null,
           wasRunning: expect.any(Boolean),
+          focusConversationId: expect.anything(),
         });
       } finally {
         fix.cleanup();
@@ -3457,24 +3773,41 @@ describe('OutboundRuntimeEventFanout', () => {
   });
 });
 
-function emitRuntimeExit(fix: Fixture): void {
-  const slot = new RuntimeSlotRepo(fix.db).getConversation(
-    fix.channelId,
-    fix.agentId,
-  );
+function emitRuntimeExit(
+  fix: Fixture,
+  scope:
+    | { kind: 'agent'; agentId: string }
+    | { kind: 'conversation'; conversationId: string; agentId: string } = {
+      kind: 'conversation',
+      conversationId: fix.channelId,
+      agentId: fix.agentId,
+  },
+  runtimeGeneration?: number,
+): void {
+  const slot = new RuntimeSlotRepo(fix.db).get(scope);
   if (!slot?.claimed_by_daemon_instance_id) {
     throw new Error('emitRuntimeExit requires active runtime custody');
   }
+  const conversationId = scope.kind === 'conversation'
+    ? scope.conversationId
+    : fix.channelId;
+  const runtimeScope = scope.kind === 'conversation'
+    ? {
+        kind: 'conversation' as const,
+        conversation_id: scope.conversationId,
+        agent_id: scope.agentId,
+      }
+    : { kind: 'agent' as const, agent_id: scope.agentId };
   fix.fanout.onEvent(
     fix.hostId,
     {
-      runtime_generation: slot.generation,
+      runtime_generation: runtimeGeneration ?? slot.generation,
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_exit',
-      runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
-      conversation_id: fix.channelId,
-      agent_id: fix.agentId,
+      runtime_scope: runtimeScope,
+      conversation_id: conversationId,
+      agent_id: scope.agentId,
       code: 0,
       intentional: true,
       ts: 1700000010000,

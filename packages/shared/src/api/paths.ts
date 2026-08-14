@@ -199,6 +199,10 @@ export const apiPaths = {
     `/api/channels/${id}/agents/${agentId}/stop`,
   channelAgentClearSession: (id: string, agentId: string) =>
     `/api/channels/${id}/agents/${agentId}/clear-session`,
+  /** AgentSlot session control. Unlike the channel route, this address has no
+   * presentation target because the runtime is owned by the Agent aggregate. */
+  agentClearSession: (agentId: string) =>
+    `/api/agents/${agentId}/clear-session`,
   channelAgentRunStates: (id: string) => `/api/channels/${id}/agent-run-states`,
   channelClose: (id: string) => `/api/channels/${id}/close`,
   channelStop: (id: string) => `/api/channels/${id}/stop`,

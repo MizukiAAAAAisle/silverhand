@@ -102,7 +102,12 @@ import type {
   AgentRunTerminalReason,
   ParsedEvent,
 } from '@silverhand/shared';
+import type { RuntimeSessionClearReceipt } from './persistence-ports.js';
 import type { RuntimePhase } from './run-state-cache.js';
+import type {
+  RuntimeCustody,
+  RuntimePrincipalScope,
+} from '../auth/runtime-principal.js';
 
 /**
  * Capability snapshot a driver exposes to the coordinator. We do NOT
@@ -268,6 +273,11 @@ export type LiveDeliveryDecision =
  * auto-respawn (Cindy `BYHZJI9ALSVmmlFr` pin a).
  */
 export interface RuntimeExitMeta {
+  /** Exact event custody derived from generation + attached daemon. Missing
+   * only for legacy/invalid frames, which must never settle a clear waiter. */
+  custody?: RuntimeCustody;
+  /** True only when the DB accepted this exit as the current generation. */
+  projectionFinalized?: boolean;
   intentional: boolean;
   code: number | null;
   /** True iff the exit was preceded by `runtime_init_cooldown` (i.e.
@@ -368,6 +378,8 @@ export interface RuntimeDeliveryCoordinatorDeps {
 }
 
 interface PerAgentState {
+  conversationId: string;
+  agentId: string;
   /**
    * #task:1417 Stage 3 — the coordinator no longer holds a busy tracker
    * or pending queue. Mid-turn deferral moved into the daemon
@@ -647,12 +659,40 @@ export class RuntimeDeliveryCoordinator {
    * mid-turn queue and fails its entries on exit / discards them on
    * disconnect via owner-scoped cleanup). */
   clearRuntime(
-    conversationId: string,
-    agentId: string,
+    scope: RuntimePrincipalScope,
     reason: AgentRunTerminalReason = 'stopped',
   ): void {
-    this.clearDeliveryWatchdog(conversationId, agentId, reason);
-    this.state.delete(key(conversationId, agentId));
+    if (scope.kind === 'conversation') {
+      this.clearDeliveryWatchdog(scope.conversationId, scope.agentId, reason);
+      this.state.delete(key(scope.conversationId, scope.agentId));
+      return;
+    }
+    // AgentSlot owns one runtime across many origin conversations. The
+    // watchdog projection remains per origin so A/B freshness cannot collide,
+    // but lifecycle teardown must clear every origin owned by the aggregate.
+    for (const [stateKey, state] of [...this.state.entries()]) {
+      if (state.agentId !== scope.agentId) continue;
+      this.clearDeliveryWatchdog(state.conversationId, state.agentId, reason);
+      this.state.delete(stateKey);
+    }
+  }
+
+  /**
+   * Settle a user clear only from the receipt minted by the persistence
+   * generation CAS. The earlier daemon-bound dispatch operation is not accepted
+   * here: daemon identity gates the waiter, while this cleanup is authorized by
+   * the durable generation result after v77 forbids daemon rebinding inside a
+   * generation. An old N clear that loses its CAS cannot obtain this receipt.
+   */
+  settleClear(receipt: RuntimeSessionClearReceipt): void {
+    this.logger.info(
+      {
+        runtimeScope: receipt.scope,
+        settledGeneration: receipt.generation,
+      },
+      'clear-session: settling coordinator state from persistence receipt',
+    );
+    this.clearRuntime(receipt.scope, 'stopped');
   }
 
   // ── test inspection ──────────────────────────────────────────────
@@ -664,7 +704,7 @@ export class RuntimeDeliveryCoordinator {
     const k = key(conversationId, agentId);
     let st = this.state.get(k);
     if (!st) {
-      st = { deliveryWatchdog: null };
+      st = { conversationId, agentId, deliveryWatchdog: null };
       this.state.set(k, st);
     }
     return st;

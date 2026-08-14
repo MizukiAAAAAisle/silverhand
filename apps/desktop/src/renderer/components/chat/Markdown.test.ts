@@ -795,7 +795,8 @@ describe('SystemMessage task event rows (PR-2)', () => {
     // TaskEventChip onto TaskRef — title rendering is now driven by
     // TaskRef's own `useTaskByNumber` query, so tests must seed it.
     for (const t of seededTasks) {
-      qc.setQueryData(taskByNumberKey(t.workspace_id, t.task_number), t);
+      if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
+      qc.setQueryData(taskByNumberKey(t.board.workspace_id, t.task_number), t);
     }
     return renderToStaticMarkup(
       React.createElement(
@@ -822,12 +823,14 @@ describe('SystemMessage task event rows (PR-2)', () => {
     return {
       id: 'task-42',
       task_number: 42,
-      workspace_id: 'ws-1',
-      workspace_name: 'silverhand',
       channel_id: 'chan-1',
-      channel_name: 'general',
+      board: {
+        kind: 'workspace',
+        workspace_id: 'ws-1',
+        workspace_name: 'silverhand',
+        channel_name: 'general',
+      },
       thread_root_id: null,
-      conversation: { id: 'chan-1', title: 'general' },
       status: 'todo',
       title: 'wire registry',
       assignee: null,
@@ -1692,12 +1695,14 @@ describe('Markdown bare task refs (#task:1430)', () => {
     return {
       id: 'task-bare',
       task_number: 42,
-      workspace_id: 'w-eng',
-      workspace_name: 'silverhand',
       channel_id: 'chan-1',
-      channel_name: 'general',
+      board: {
+        kind: 'workspace',
+        workspace_id: 'w-eng',
+        workspace_name: 'silverhand',
+        channel_name: 'general',
+      },
       thread_root_id: null,
-      conversation: { id: 'chan-1', title: 'general' },
       status: 'todo',
       title: 'wire registry',
       assignee: null,
@@ -1716,7 +1721,8 @@ describe('Markdown bare task refs (#task:1430)', () => {
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     for (const t of seeded) {
-      qc.setQueryData(taskByNumberKey(t.workspace_id, t.task_number), t);
+      if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
+      qc.setQueryData(taskByNumberKey(t.board.workspace_id, t.task_number), t);
     }
     return renderToStaticMarkup(
       React.createElement(

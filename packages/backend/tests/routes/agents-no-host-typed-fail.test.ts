@@ -503,7 +503,9 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
     it('runtime_exit projection times out → 503 clear_session_timeout (route-local typed)', async () => {
       t = buildTestApp();
       const { channelId, agentId } = await createChannelWithAgent(t);
-      t.fake.clearError = new ClearSessionExitTimeoutError(channelId, agentId);
+      t.fake.clearError = new ClearSessionExitTimeoutError({
+        kind: 'conversation', conversationId: channelId, agentId,
+      });
       const res = await http(t).post(
         `/api/channels/${channelId}/agents/${agentId}/clear-session`,
       );
@@ -518,7 +520,9 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
     it('concurrent same-(cid, aid) → 409 clear_session_in_progress (route-local typed)', async () => {
       t = buildTestApp();
       const { channelId, agentId } = await createChannelWithAgent(t);
-      t.fake.clearError = new ClearSessionInProgressError(channelId, agentId);
+      t.fake.clearError = new ClearSessionInProgressError({
+        kind: 'conversation', conversationId: channelId, agentId,
+      });
       const res = await http(t).post(
         `/api/channels/${channelId}/agents/${agentId}/clear-session`,
       );
@@ -536,8 +540,9 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       );
       expect(res.status).toBe(200);
       expect(t.fake.clearedSessions).toHaveLength(1);
-      expect(t.fake.clearedSessions[0]!.conversationId).toBe(channelId);
-      expect(t.fake.clearedSessions[0]!.agentId).toBe(agentId);
+      expect(t.fake.clearedSessions[0]!.scope).toEqual({
+        kind: 'conversation', conversationId: channelId, agentId,
+      });
     });
   });
 

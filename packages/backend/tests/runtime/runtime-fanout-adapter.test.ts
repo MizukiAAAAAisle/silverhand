@@ -13,9 +13,9 @@
  *    `hosts.installation_id`, the snake_case reconcile columns. Add a column to
  *    one of those tables and these tests still pass; write a projection that
  *    spreads the row and they fail.
- *  - **Atomicity of the clear-session pair.** `RuntimeSessionUnitOfWork` claims
- *    atomicity only (no isolation level — see its R5 note), so what has to hold
- *    is that a throw anywhere in the callback leaves NEITHER the
+ *  - **Isolation + atomicity of the clear-session pair.** The SQLite adapter
+ *    takes `BEGIN IMMEDIATE` before the first authorization read. A throw
+ *    anywhere in the callback leaves NEITHER the
  *    `cli_session_id` clear nor the audit message behind. The test carries its
  *    own falsifier: the same two writes performed outside `atomically` DO leave
  *    a half state, which is what proves the assertion is load-bearing rather
@@ -246,14 +246,16 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
 
     // (a) happy path — both writes land
     const result = f.persistence.session.atomically(scope => {
-      const updated = scope.clearCliSession({
+      const receipt = scope.clearCliSession({
         scope: {
           kind: 'conversation',
           conversationId: f.channelId,
           agentId: f.agentId,
         },
-        targetConversationId: f.channelId,
-        agentId: f.agentId,
+        expectedGeneration: f.runtimeSlots.getConversation(
+          f.channelId,
+          f.agentId,
+        )!.generation,
       });
       const audit = scope.insertSystemMessage({
         conversationId: f.channelId,
@@ -261,9 +263,17 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
         content: 'session cleared',
         metadata: { subtype: 'test' },
       });
-      return { updated, audit };
+      return { receipt, audit };
     });
-    expect(result.updated?.cli_session_id).toBeNull();
+    expect(result.receipt).toMatchObject({
+      scope: {
+        kind: 'conversation',
+        conversationId: f.channelId,
+        agentId: f.agentId,
+      },
+      generation: 0,
+      projection: { cli_session_id: null },
+    });
     expect(result.audit.from_kind).toBe('system');
     expect(messageCount()).toBe(before + 1);
 
@@ -280,8 +290,10 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
             conversationId: f.channelId,
             agentId: f.agentId,
           },
-          targetConversationId: f.channelId,
-          agentId: f.agentId,
+          expectedGeneration: f.runtimeSlots.getConversation(
+            f.channelId,
+            f.agentId,
+          )!.generation,
         });
         scope.insertSystemMessage({
           conversationId: f.channelId,

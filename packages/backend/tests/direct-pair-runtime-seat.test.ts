@@ -396,7 +396,14 @@ describe('DirectPair runtime seat: the control planes reach it', () => {
       restart_failures: 0,
     });
     expect(t.fake.clearedSessions).toEqual([
-      { conversationId: f.pairId, agentId: f.agentId, actorUserId: t.viewerUserId },
+      {
+        scope: {
+          kind: 'conversation',
+          conversationId: f.pairId,
+          agentId: f.agentId,
+        },
+        actorUserId: t.viewerUserId,
+      },
     ]);
     // Live-before means resume-after: the session comes back in the SAME DM.
     expect(t.fake.starts).toEqual([
@@ -405,13 +412,18 @@ describe('DirectPair runtime seat: the control planes reach it', () => {
     expect(f.conversations.listAgents(f.pairId)).toEqual([]);
   });
 
-  it('refuses the switch while an AgentSlot session is live, instead of switching under it', async () => {
+  it('clears one live AgentSlot and restarts it without inventing per-conversation ownership', async () => {
     t = buildTestApp();
     const f = await paired(t, 'seat-switch-aggregate', 'agent');
     f.runtimeSlots.updateCurrentProjection(
       { kind: 'agent', agentId: f.agentId },
       { status: 'active', pid: 777, cliSessionId: 'claude-aggregate-session' },
     );
+    t.fake.clearSessionResult = {
+      prevCliSessionId: 'claude-aggregate-session',
+      wasRunning: true,
+      focusConversationId: f.pairId,
+    };
 
     const res = await http(t).put(`/api/agents/${f.agentId}/runtime`, {
       runtime: 'codex',
@@ -419,24 +431,32 @@ describe('DirectPair runtime seat: the control planes reach it', () => {
       reasoning_effort: 'high',
       fast_mode: true,
     });
-    // An AgentSlot has no conversation to clear it THROUGH (`clearSession`
-    // resolves custody by scope but still needs a target conversation for its
-    // participation check and its audit message), so the honest answer is a
-    // typed refusal, not a silent skip that would leave the old runtime's
-    // process serving a switched agent. The scope-aware clear is #task:2025's
-    // (the P2 runtime-scope lane), and THIS TEST is its falsifier: when that
-    // lands, the refusal becomes a successful clear and this assertion must be
-    // turned around rather than deleted.
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
-      code: 'runtime_session_clear_scope_unsupported',
+      cleared_sessions: 1,
+      restarted_conversations: 1,
+      restart_failures: 0,
     });
-    expect(t.fake.clearedSessions).toEqual([]);
-    // The lock was released and nothing was committed.
+    expect(t.fake.clearedSessions).toEqual([{
+      scope: { kind: 'agent', agentId: f.agentId },
+      actorUserId: t.viewerUserId,
+    }]);
+    expect(t.fake.starts).toEqual([{
+      conversationId: f.pairId,
+      agentId: f.agentId,
+    }]);
+    // The runtime changed, while the slot remains one aggregate seat and the
+    // DirectPair remains rosterless.
     expect(f.agents.getRow(f.agentId)).toMatchObject({
-      runtime: 'claude',
+      runtime: 'codex',
       runtime_transition_target: null,
     });
+    expect(f.runtimeSlots.listSeats(f.agentId)).toHaveLength(1);
+    expect(f.runtimeSlots.listSeats(f.agentId)[0]?.scope).toEqual({
+      kind: 'agent',
+      agentId: f.agentId,
+    });
+    expect(f.conversations.listAgents(f.pairId)).toEqual([]);
   });
 
   it('bulk stop stops the DM session, once', async () => {
@@ -461,10 +481,14 @@ describe('DirectPair runtime seat: the control planes reach it', () => {
     const f = await paired(t, 'seat-management');
     runInPair(f, 'claude-session-in-a-dm');
 
-    const cleared = f.runtimeSlots.clearCliSession({
-      kind: 'conversation',
+    const scope = {
+      kind: 'conversation' as const,
       conversationId: f.pairId,
       agentId: f.agentId,
+    };
+    const cleared = f.runtimeSlots.clearCliSession({
+      scope,
+      expectedGeneration: f.runtimeSlots.get(scope)!.generation,
     });
     // The management face is not a runtime projection: the resumable session is
     // gone, while status / pid / generation / custody are untouched. Before v75

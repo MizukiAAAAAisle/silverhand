@@ -299,7 +299,7 @@ function AgentManagementActions({
   const { data: conversationAgents = [] } = useChannelAgents(conversationId);
   const start = useStartAgent(conversationId);
   const stop = useStopAgent(conversationId);
-  const clearSession = useClearAgentSession(conversationId);
+  const clearSession = useClearAgentSession(conversationId, agent.session_scope);
   const removeFromChannel = useRemoveAgentFromChannel(conversationId);
   const { data: viewer } = useViewerUser();
   // Resolve the viewer's role in THIS conversation's workspace so the

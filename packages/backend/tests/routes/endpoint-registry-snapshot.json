@@ -107,6 +107,7 @@
   "GET /api/agents/:id",
   "PATCH /api/agents/:id",
   "PUT /api/agents/:id/runtime",
+  "POST /api/agents/:id/clear-session",
   "POST /api/agents/:id/avatar",
   "DELETE /api/agents/:id/avatar",
   "GET /api/agents/:id/avatar",

@@ -385,6 +385,13 @@ export class RunStateCache {
       ?? this.entries.get(scopeKey({ kind: 'agent', agent_id: agentId }));
   }
 
+  /** Exact semantic-slot lookup for lifecycle/control operations. Unlike
+   * {@link get}, this never treats a conversation target as an AgentSlot
+   * fallback coordinate. */
+  getScope(runtimeScope: RuntimeScope): CachedRuntimeEntry | undefined {
+    return this.entries.get(scopeKey(runtimeScope));
+  }
+
   list(): CachedRuntimeEntry[] {
     return Array.from(this.entries.values());
   }

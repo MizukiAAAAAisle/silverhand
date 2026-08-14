@@ -308,21 +308,115 @@ function parseTaskNumberOperands(
   });
 }
 
+/**
+ * Resolve the ONE-task selector for detail | edit | status | unclaim: either
+ * the positional `<task_number>` (a board-local number — may pair with the
+ * workspace selector naming that board) or the explicit `--id <task_id>` (the
+ * task's GLOBAL identity, the `id` field on `task list` / `task detail`
+ * output).
+ *
+ * The two are different coordinate SYSTEMS, not two spellings: a number only
+ * means something on a board, an id already determines its board. So `--id`
+ * pairs with NOTHING — combining it with a positional number or with
+ * `--workspace-id` / `--workspace` is rejected pre-flight (the second
+ * coordinate could only be redundant or contradictory), and the type of a
+ * bare positional token is never guessed from its shape.
+ *
+ * Server-side semantics for `--id` (P0-g): unknown, inaccessible, and
+ * out-of-scope ids all report the SAME `task_not_found` — the id selector is
+ * not an existence oracle. A conversation-scoped session can only
+ * dereference ids for `detail` on its own workspace's board; by-id mutations
+ * are the agent-scoped lane. When a by-id call reports `task_not_found`
+ * against a task you can otherwise see, re-address it by number +
+ * workspace selector.
+ */
+function resolveSingleTaskSelector(
+  args: ParsedArgs,
+  verb: string,
+): { taskNumber: number } | { taskId: string } {
+  const rawId = args.flags['id'];
+  if (rawId === undefined) {
+    const [n] = parseTaskNumberOperands(args, verb, 'exactly-one');
+    return { taskNumber: n! };
+  }
+  if (Array.isArray(rawId)) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'unexpected_arguments',
+      message:
+        `silverhand task ${verb} operates on ONE task, so --id cannot repeat. ` +
+        'Batch by-id operations exist only on `silverhand task claim`.',
+      retriable: false,
+      details: { command: `task ${verb}`, flag: 'id' },
+    });
+  }
+  if (typeof rawId !== 'string' || rawId === '') {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'missing_flag_value',
+      message:
+        `--id requires the task's global id value — e.g. ` +
+        `\`silverhand task ${verb} --id vls9VUa02jTqVVXV\`. ` +
+        'Task ids come from the `id` field on `task list` / `task detail` rows.',
+      retriable: false,
+      details: { command: `task ${verb}`, flag: 'id' },
+    });
+  }
+  if (args.positional.length > 0) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'mutually_exclusive',
+      message:
+        `--id and the positional <task_number> are mutually exclusive: they are ` +
+        'two coordinate systems for the same operand. Pass exactly one.',
+      retriable: false,
+      details: { command: `task ${verb}`, flags: ['id', 'task_number'] },
+    });
+  }
+  if (flagString(args, 'workspace-id') || flagString(args, 'workspace')) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'mutually_exclusive',
+      message:
+        '--id excludes --workspace-id/--workspace: a task id already determines ' +
+        'its board, so a second coordinate could only be redundant or contradictory. ' +
+        'Workspace selectors pair with the positional <task_number> form.',
+      retriable: false,
+      details: { command: `task ${verb}`, flags: ['id', 'workspace-id', 'workspace'] },
+    });
+  }
+  return { taskId: rawId };
+}
+
 const listCommand: Command = {
   verb: 'list',
-  summary: 'View the workspace task board.',
+  summary: 'View the task board(s) you can read.',
   help: `silverhand task list [--task-number N [--task-number N ...]]
                        [--status STATUS [--status STATUS ...]]
                        [--assignee <agent_id>] [--mine]
                        [--workspace-id <id>] [--conversation-id <id>]
                        [--limit N]
 
-Returns aggregated tasks across the current workspace, with server-side
-filtering. Pass --workspace-id <id> to read a sister workspace's board
-(you must be a member); the default is the actor's current workspace.
+Returns tasks with server-side filtering. The DEFAULT population depends
+on your session's runtime scope:
 
-Without filters this returns the entire board, which can be large — pass
---task-number / --status / --mine / --limit to narrow.
+  conversation-scoped   Your current workspace's board (the legacy
+                        default). Pass --workspace-id <id> to read a
+                        sister workspace's board instead (you must be a
+                        member).
+  agent-scoped          The UNION of every Board you can read (workspace
+                        membership + read_tasks per board), newest first
+                        across boards. There is no ambient workspace.
+
+--workspace-id / --conversation-id only NARROW the population — they
+never widen it past what you can read. Because a union can span boards,
+interpret each row by its own coordinates: the global \`id\` is the
+task's canonical identity, \`board\` + \`task_number\` locate it on its
+numbering namespace, and \`conversation\` is where it lives — do NOT
+assume rows belong to the current workspace.
+
+Without filters this can be large — pass --task-number / --status /
+--mine / --limit to narrow.
 
 Flags:
   --task-number N      Repeatable. Filter to specific task numbers.
@@ -343,8 +437,8 @@ Flags:
   --assignee <id>      Filter by assignee agent id.
   --mine               Shortcut for --assignee=<your agent id>.
                        Resolves locally to this agent.
-  --workspace-id <id>  Optional filter to a specific workspace.
-  --conversation-id <id>  Optional filter to a specific conversation.
+  --workspace-id <id>  Narrow to one workspace's board.
+  --conversation-id <id>  Narrow to a specific conversation.
   --limit N            Cap rows returned (max 500). Useful with status
                        filters to peek the board.
 
@@ -694,6 +788,7 @@ const claimCommand: Command = {
   summary: 'Claim existing tasks by task number.',
   help: `silverhand task claim <task_number> [<task_number> ...]
                          [--workspace-id <id> | --workspace <name>]
+       silverhand task claim --id <task_id> [--id <task_id> ...]
 
 Atomic claim of tasks that ALREADY exist. If a task is already claimed by
 someone else, the result entry has success=false with a reason. Always
@@ -703,6 +798,15 @@ Claiming a "todo" task auto-advances it to "in_progress".
 
   silverhand task claim 42          # one task
   silverhand task claim 42 43 44    # batch; per-task success in the result
+  silverhand task claim --id vls9VUa02jTqVVXV   # by global identity
+
+One command, ONE selector family: positional numbers resolve on a single
+explicit board (workspace selector below), \`--id\` entries resolve by
+global identity and take NO workspace selector (each id already
+determines its board). Mixing numbers and --id in one call is rejected —
+split into two calls. NOTE: by-id mutations are the agent-scoped lane; a
+conversation-scoped session gets \`task_not_found\` for ANY --id claim and
+should claim by number + workspace selector instead.
 
 To create a task from a message and start it in one call, use
 \`silverhand task create --title "..." --source-message-id <id> --claim\`.
@@ -718,10 +822,53 @@ You must be a member of the resolved workspace; otherwise the claim
 fails with \`workspace_membership_required\`.
 
 stdout: ClaimTasksResult JSON.`,
-  flags: ['workspace-id', 'workspace'] as const,
+  flags: ['workspace-id', 'workspace', 'id'] as const,
   removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
   allowPositional: true,
   async run({ client, args }) {
+    const ids = flagStringArray(args, 'id');
+    if (ids !== undefined) {
+      // A value-less `--id` in a repeat run parses to boolean `true` inside
+      // the array (a lone one throws in flagStringArray); empty strings are
+      // equally impossible as real ids. Both are the missing-value mistake.
+      if (ids.some(id => typeof id !== 'string' || id === '')) {
+        throw new CliError({
+          code: 'validation_error',
+          subkind: 'missing_flag_value',
+          message:
+            '--id requires the task\'s global id value — e.g. ' +
+            '`silverhand task claim --id vls9VUa02jTqVVXV`. Task ids come from ' +
+            'the `id` field on `task list` rows.',
+          retriable: false,
+          details: { command: 'task claim', flag: 'id' },
+        });
+      }
+      if (args.positional.length > 0) {
+        throw new CliError({
+          code: 'validation_error',
+          subkind: 'mutually_exclusive',
+          message:
+            'a claim batch carries ONE selector family: positional task numbers ' +
+            'OR repeated --id entries, never both (numbers need a board ' +
+            'coordinate, ids forbid one). Split into two calls.',
+          retriable: false,
+          details: { command: 'task claim', flags: ['id', 'task_number'] },
+        });
+      }
+      if (flagString(args, 'workspace-id') || flagString(args, 'workspace')) {
+        throw new CliError({
+          code: 'validation_error',
+          subkind: 'mutually_exclusive',
+          message:
+            '--id excludes --workspace-id/--workspace: a task id already ' +
+            'determines its board. Workspace selectors pair with positional ' +
+            'task numbers.',
+          retriable: false,
+          details: { command: 'task claim', flags: ['id', 'workspace-id', 'workspace'] },
+        });
+      }
+      return client.claimTasks({ task_ids: ids });
+    }
     const taskNumbers = parseTaskNumberOperands(args, 'claim', 'one-or-more');
     const selector = resolveWorkspaceSelector(args);
     return client.claimTasks({
@@ -736,22 +883,31 @@ const unclaimCommand: Command = {
   summary: 'Release your claim on a task.',
   help: `silverhand task unclaim <task_number>
                            [--workspace-id <id> | --workspace <name>]
+       silverhand task unclaim --id <task_id>
 
 Use only when you can no longer work on the task. To signal completion,
 use \`silverhand task status <task_number> --status in_review\` (or
 done if explicitly approved) instead.
 
+Selector forms — see \`silverhand task detail --help\`. NOTE: by-id
+mutations are the agent-scoped lane; a conversation-scoped session gets
+\`task_not_found\` for ANY --id mutation and should use the task number +
+workspace selector instead.
+
 Workspace selector — see \`silverhand task claim --help\`. You must be
 the task's assignee.
 
 stdout: TaskMutationResult JSON.`,
-  flags: ['workspace-id', 'workspace'] as const,
+  flags: ['workspace-id', 'workspace', 'id'] as const,
   removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
   allowPositional: true,
   async run({ client, args }) {
-    const [n] = parseTaskNumberOperands(args, 'unclaim', 'exactly-one');
-    const selector = resolveWorkspaceSelector(args);
-    return client.unclaimTask({ task_number: n!, ...selector });
+    const selector = resolveSingleTaskSelector(args, 'unclaim');
+    if ('taskId' in selector) {
+      return client.unclaimTask({ task_id: selector.taskId });
+    }
+    const workspace = resolveWorkspaceSelector(args);
+    return client.unclaimTask({ task_number: selector.taskNumber, ...workspace });
   },
 };
 
@@ -760,6 +916,7 @@ const statusCommand: Command = {
   summary: 'Move a task through its status workflow.',
   help: `silverhand task status <task_number> --status todo|in_progress|in_review|done|closed
                           [--workspace-id <id> | --workspace <name>]
+       silverhand task status --id <task_id> --status <status>
 
 Allowed transitions (you must be the assignee, or the creator of an
 unassigned task you created yourself):
@@ -778,15 +935,20 @@ unassigned task you created yourself):
 are NOT valid here — passing one fails with enum_invalid pointing back
 to \`task list\`.
 
+Selector forms — see \`silverhand task detail --help\`. NOTE: by-id
+mutations are the agent-scoped lane; a conversation-scoped session gets
+\`task_not_found\` for ANY --id mutation and should use the task number +
+workspace selector instead.
+
 Workspace selector — see \`silverhand task claim --help\`. Cross-workspace
 status updates require you to be a member of the resolved workspace.
 
 stdout: TaskMutationResult JSON.`,
-  flags: ['status', 'workspace-id', 'workspace'] as const,
+  flags: ['status', 'workspace-id', 'workspace', 'id'] as const,
   removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
   allowPositional: true,
   async run({ client, args }) {
-    const [n] = parseTaskNumberOperands(args, 'status', 'exactly-one');
+    const selector = resolveSingleTaskSelector(args, 'status');
     const status = flagString(args, 'status') as TaskStatus | undefined;
     if (!status) {
       throw new CliError({
@@ -831,8 +993,11 @@ stdout: TaskMutationResult JSON.`,
         },
       });
     }
-    const selector = resolveWorkspaceSelector(args);
-    return client.updateTaskStatus({ task_number: n!, status, ...selector });
+    if ('taskId' in selector) {
+      return client.updateTaskStatus({ task_id: selector.taskId, status });
+    }
+    const workspace = resolveWorkspaceSelector(args);
+    return client.updateTaskStatus({ task_number: selector.taskNumber, status, ...workspace });
   },
 };
 
@@ -842,6 +1007,7 @@ const editCommand: Command = {
   help: `silverhand task edit <task_number>
                         [--title <title>] [--body | --clear-body]
                         [--workspace-id <id> | --workspace <name>]
+       silverhand task edit --id <task_id> [--title <title>] [--body | --clear-body]
 
 Edit the current definition (title and/or content) of an existing task.
 Provide at least one of --title / --body / --clear-body. --body is a value-less
@@ -858,6 +1024,11 @@ description). To clear the content, pass --clear-body (mutually exclusive with
 
   silverhand task edit 42 --clear-body   # clears the body
 
+Selector forms — see \`silverhand task detail --help\`. NOTE: by-id
+mutations are the agent-scoped lane; a conversation-scoped session gets
+\`task_not_found\` for ANY --id mutation and should use the task number +
+workspace selector instead.
+
 Last-write-wins: the edit is applied directly and the most recent
 successful write wins — there is no concurrency check. It never changes
 status or assignee. The result carries the full updated task detail.
@@ -870,12 +1041,13 @@ stdout: TaskEditResult JSON.`,
     'body',
     'workspace-id',
     'workspace',
+    'id',
   ] as const,
   booleanFlags: ['clear-body'] as const,
   removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
   allowPositional: true,
   async run({ client, args }) {
-    const [taskNumber] = parseTaskNumberOperands(args, 'edit', 'exactly-one');
+    const selector = resolveSingleTaskSelector(args, 'edit');
     const title = flagString(args, 'title');
     const clearBody = flagBool(args, 'clear-body') === true;
     const hasBodyFlag = args.flags['body'] !== undefined;
@@ -907,12 +1079,19 @@ stdout: TaskEditResult JSON.`,
     // refuses an empty pipe). Either yields the wire body (or undefined = leave
     // unchanged when --body is absent).
     const body = clearBody ? '' : await resolveBodySwitch(args, 'edit');
-    const selector = resolveWorkspaceSelector(args);
+    if ('taskId' in selector) {
+      return client.editTask({
+        task_id: selector.taskId,
+        ...(title !== undefined ? { title } : {}),
+        ...(body !== undefined ? { body } : {}),
+      });
+    }
+    const workspace = resolveWorkspaceSelector(args);
     return client.editTask({
-      task_number: taskNumber!,
+      task_number: selector.taskNumber,
       ...(title !== undefined ? { title } : {}),
       ...(body !== undefined ? { body } : {}),
-      ...selector,
+      ...workspace,
     });
   },
 };
@@ -922,25 +1101,38 @@ const detailCommand: Command = {
   summary: "Read one task's full detail (content + provenance).",
   help: `silverhand task detail <task_number>
                          [--workspace-id <id> | --workspace <name>]
+       silverhand task detail --id <task_id>
 
 Read a single task's full definition: title, complete content,
 last-editor attribution, the provenance \`source_message_id\`,
 and a viewer-resolved \`nav\` target for "view in conversation".
 
-<task_number> is the task's per-workspace number (the \`task_number\` field
-on each row from \`task list\`, and what \`#task:N\` refers to).
+Two selector forms (exactly one):
+  <task_number>   The task's per-workspace number (the \`task_number\` field
+                  on each row from \`task list\`, what \`#task:N\` refers to).
+                  Pairs with the workspace selector; defaults to the actor's
+                  current workspace.
+  --id <task_id>  The task's GLOBAL identity (the \`id\` field on task rows).
+                  Takes no workspace selector — the id already determines its
+                  board. A conversation-scoped session dereferences ids on its
+                  current workspace's board only; an id that is unknown,
+                  inaccessible, or out of scope reports the SAME not_found
+                  (the id is never an existence oracle).
 
 Workspace selector — see \`silverhand task claim --help\`. Defaults to the
 actor's current workspace.
 
 stdout: { "task": TaskDetailDto }`,
-  flags: ['workspace-id', 'workspace'] as const,
+  flags: ['workspace-id', 'workspace', 'id'] as const,
   removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
   allowPositional: true,
   async run({ client, args }) {
-    const [taskNumber] = parseTaskNumberOperands(args, 'detail', 'exactly-one');
-    const selector = resolveWorkspaceSelector(args);
-    return client.getTaskDetail({ task_number: taskNumber!, ...selector });
+    const selector = resolveSingleTaskSelector(args, 'detail');
+    if ('taskId' in selector) {
+      return client.getTaskDetail({ task_id: selector.taskId });
+    }
+    const workspace = resolveWorkspaceSelector(args);
+    return client.getTaskDetail({ task_number: selector.taskNumber, ...workspace });
   },
 };
 

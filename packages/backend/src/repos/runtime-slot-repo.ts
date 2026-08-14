@@ -1,5 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import type {
+  AgentRuntimeControlEventRow,
   AgentRuntimeEventKind,
   AgentRuntimeEventRow,
   AgentRuntimeSlotRow,
@@ -207,10 +208,14 @@ export class RuntimeSlotRepo {
    * changes status, pid, generation, or daemon custody. The generation CAS
    * prevents a clear racing a fresh claim from mutating the successor.
    */
-  clearCliSession(scope: RuntimeSlotScope): AgentRuntimeSlotRow | null {
+  clearCliSession(input: {
+    scope: RuntimeSlotScope;
+    expectedGeneration: number;
+  }): AgentRuntimeSlotRow | null {
     return this.db.transaction(() => {
-      const current = this.get(scope);
+      const current = this.get(input.scope);
       if (!current) return null;
+      if (current.generation !== input.expectedGeneration) return null;
       if (current.cli_session_id === null) return current;
       const result = this.db
         .prepare(
@@ -218,9 +223,9 @@ export class RuntimeSlotRepo {
               SET cli_session_id = NULL
             WHERE id = ? AND generation = ?`,
         )
-        .run(current.id, current.generation);
+        .run(current.id, input.expectedGeneration);
       if (result.changes !== 1) return null;
-      const updated = this.get(scope);
+      const updated = this.get(input.scope);
       if (!updated) return null;
       this.insertEvent(updated, 'projection_updated');
       return updated;
@@ -358,6 +363,55 @@ export class RuntimeSlotRepo {
           ORDER BY id ASC`,
       )
       .all(slotId);
+  }
+
+  /**
+   * Record a user control fact for the Agent/Runtime aggregate. Unlike
+   * `agent_runtime_events`, this answers who requested the control action and
+   * why; unlike the ConversationSlot system message, it has no conversation
+   * coordinate. The caller owns the transaction pairing it with the exact
+   * generation's session clear.
+   */
+  insertControlEvent(input: {
+    agentId: string;
+    generation: number;
+    actorUserId: string;
+    reason: 'session_cleared';
+    wasRunning: boolean;
+    previousCliSessionIdPrefix: string | null;
+    occurredAt: number;
+  }): AgentRuntimeControlEventRow {
+    return this.db.prepare<[
+      string,
+      number,
+      string,
+      'session_cleared',
+      number,
+      string | null,
+      number,
+    ], AgentRuntimeControlEventRow>(
+      `INSERT INTO agent_runtime_control_events (
+         agent_id, generation, actor_user_id, reason, was_running,
+         previous_cli_session_id_prefix, occurred_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       RETURNING *`,
+    ).get(
+      input.agentId,
+      input.generation,
+      input.actorUserId,
+      input.reason,
+      input.wasRunning ? 1 : 0,
+      input.previousCliSessionIdPrefix,
+      input.occurredAt,
+    )!;
+  }
+
+  listControlEvents(agentId: string): AgentRuntimeControlEventRow[] {
+    return this.db.prepare<[string], AgentRuntimeControlEventRow>(
+      `SELECT * FROM agent_runtime_control_events
+        WHERE agent_id = ?
+        ORDER BY id`,
+    ).all(agentId);
   }
 
   private updateSlotById(

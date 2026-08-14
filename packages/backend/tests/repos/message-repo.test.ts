@@ -349,21 +349,21 @@ describe('MessageRepo', () => {
     // source_message_id — not flat task_* columns on the message.
     db.prepare(
       `INSERT INTO tasks (
-         id, workspace_id, task_number, conversation_id, thread_root_id,
+         id, workspace_id, board_key, task_number, conversation_id, thread_root_id,
          title, content, status, assignee_agent_id, assignee_user_id,
          creator_kind, creator_agent_id, creator_user_id,
          source_message_id, created_event_message_id,
          last_editor_kind, last_editor_id, last_edited_at,
          created_at, closed_at
        ) VALUES (
-         'task_1', ?, 1, ?, NULL,
+         'task_1', ?, 'ws:' || ?, 1, ?, NULL,
          'please handle this', '', 'in_progress', ?, NULL,
          'agent', ?, NULL,
          ?, NULL,
          NULL, NULL, NULL,
          1, NULL
        )`,
-    ).run(workspace.id, channel.id, agentId, agentId, msg.id);
+    ).run(workspace.id, workspace.id, channel.id, agentId, agentId, msg.id);
 
     const listed = repo.listForConversation(channel.id);
     expect(listed[0]?.linked_task).toMatchObject({

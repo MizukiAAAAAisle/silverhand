@@ -16,7 +16,9 @@ import {
 } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
+import { clearAgentSessionPath } from './runtime-control';
 import type {
+  AgentDto,
   AgentRunStatesDto,
   AttachmentDto,
   AttachmentRefInput,
@@ -1286,12 +1288,16 @@ export function useStopAgent(
 
 export function useClearAgentSession(
   channelId: string | null,
+  sessionScope: AgentDto['session_scope'],
 ) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (agentId: string) => {
-      if (!channelId) throw new Error('no channel selected');
-      const path = apiPaths.channelAgentClearSession(channelId, agentId);
+      const path = clearAgentSessionPath({
+        agentId,
+        sessionScope,
+        conversationId: channelId,
+      });
       return api<ClearSessionResponse>(path, { method: 'POST' });
     },
     onSuccess: (res, agentId) => {

@@ -269,7 +269,8 @@ export class BackendClient {
   }
 
   unclaimTask(input: {
-    task_number: number;
+    task_number?: number;
+    task_id?: string;
     workspace_id?: string;
     workspace_name?: string;
   }): Promise<TaskMutationResult> {
@@ -281,7 +282,8 @@ export class BackendClient {
   }
 
   updateTaskStatus(input: {
-    task_number: number;
+    task_number?: number;
+    task_id?: string;
     status: TaskStatus;
     workspace_id?: string;
     workspace_name?: string;
@@ -305,7 +307,8 @@ export class BackendClient {
   }
 
   getTaskDetail(input: {
-    task_number: number;
+    task_number?: number;
+    task_id?: string;
     workspace_id?: string;
     workspace_name?: string;
   }): Promise<{ task: TaskDetailDto }> {
@@ -315,6 +318,7 @@ export class BackendClient {
       undefined,
       {
         task_number: input.task_number,
+        task_id: input.task_id,
         workspace_id: input.workspace_id,
         workspace_name: input.workspace_name,
       },

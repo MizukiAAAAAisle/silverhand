@@ -23,7 +23,11 @@ function makeRuntimeHost(
     start: async () => {},
     stop: async () => {},
     deliverPending: async () => true,
-    clearSession: async () => ({ prevCliSessionId: null, wasRunning: false }),
+    clearSession: async () => ({
+      prevCliSessionId: null,
+      wasRunning: false,
+      focusConversationId: null,
+    }),
     stopAll: async () => {},
     reapIdleRuntimes: reap,
     setConversationLogDebug: async () => {},

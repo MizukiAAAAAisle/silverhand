@@ -1965,6 +1965,11 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
           conversationId: 'c1',
           agentId: 'a1',
         },
+        custody: {
+          generation: 1,
+          daemonInstanceId: 'daemon-test',
+        },
+        projectionFinalized: false,
         intentional: true,
         code: 0,
         initTimedOut: false,

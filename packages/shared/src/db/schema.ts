@@ -578,6 +578,24 @@ export interface AgentRuntimeEventRow {
   occurred_at: number;
 }
 
+export type AgentRuntimeControlReason = 'session_cleared';
+
+/**
+ * Append-only user control audit for the Agent/Runtime aggregate. Historical
+ * agent and actor coordinates deliberately have no FK, and the shape has no
+ * conversation coordinate: an AgentSlot focus is presentation, not ownership.
+ */
+export interface AgentRuntimeControlEventRow {
+  id: number;
+  agent_id: string;
+  generation: number;
+  actor_user_id: string;
+  reason: AgentRuntimeControlReason;
+  was_running: 0 | 1;
+  previous_cli_session_id_prefix: string | null;
+  occurred_at: number;
+}
+
 /** Human membership row for `conversation_users` (v25). */
 export interface ConversationUserMemberRow {
   conversation_id: string;
