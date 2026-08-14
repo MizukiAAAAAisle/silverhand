@@ -59,6 +59,12 @@ export interface ConversationIdentity {
   placement_kind: ConversationPlacementKind;
   workspace_id: string | null;
   inbox_agent_id: string | null;
+  endpoint_a_kind: ConversationRow['endpoint_a_kind'];
+  endpoint_a_id: string | null;
+  endpoint_b_kind: ConversationRow['endpoint_b_kind'];
+  endpoint_b_id: string | null;
+  endpoint_a_deleted_at: number | null;
+  endpoint_b_deleted_at: number | null;
 }
 
 /**
@@ -101,27 +107,66 @@ export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.wo
 // and must never reach the wire. These mappers strip it from the row before it
 // becomes a DTO — the type drops it too, but stripping kills the runtime leak.
 //
-// `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1) and
-// `inbox_agent_id` (v71) are stripped for a different reason: they are the new
-// AUTHORITATIVE axes, but the wire contract for this release still speaks only
-// the derived `kind` (plus the now-nullable `workspace_id`). Exposing them here
-// would ship an unversioned DTO change from a migration-only ticket
-// (#task:2012); the placement-aware wire shape lands with the placements
-// themselves. A spread does NOT get excess-property-checked, so — exactly like
-// `pinned_at` — only the explicit strip prevents a silent runtime leak.
+// `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1),
+// `inbox_agent_id` (v71) and the six `endpoint_*` columns (v73) are stripped for
+// a different reason: they are the new AUTHORITATIVE axes, but the wire contract
+// for this release still speaks only the derived `kind` (plus the now-nullable
+// `workspace_id`). Exposing them here would ship an unversioned DTO change from a
+// migration-only ticket (#task:2012 / #task:2017); the placement-aware wire shape
+// lands with the placements themselves — for `direct_pair`, with P3, which is
+// also where deciding how a tombstoned endpoint RENDERS belongs. A spread does
+// NOT get excess-property-checked, so — exactly like `pinned_at` — only the
+// explicit strip prevents a silent runtime leak.
 // Consumers that legitimately need placement ask `getIdentity` for it.
 function stripInternalColumns(row: ConversationRow): Omit<
   ConversationRow,
-  'pinned_at' | 'placement_kind' | 'roster_policy' | 'inbox_agent_id'
+  | 'pinned_at'
+  | 'placement_kind'
+  | 'roster_policy'
+  | 'inbox_agent_id'
+  | 'endpoint_a_kind'
+  | 'endpoint_a_id'
+  | 'endpoint_b_kind'
+  | 'endpoint_b_id'
+  | 'endpoint_a_deleted_at'
+  | 'endpoint_b_deleted_at'
 > {
   const {
     pinned_at: _pinnedAt,
     placement_kind: _placementKind,
     roster_policy: _rosterPolicy,
     inbox_agent_id: _inboxAgentId,
+    endpoint_a_kind: _endpointAKind,
+    endpoint_a_id: _endpointAId,
+    endpoint_b_kind: _endpointBKind,
+    endpoint_b_id: _endpointBId,
+    endpoint_a_deleted_at: _endpointADeletedAt,
+    endpoint_b_deleted_at: _endpointBDeletedAt,
     ...rest
   } = row;
   return rest;
+}
+
+/** Row → {@link ConversationIdentity}: the ONE projection, so a second identity
+ *  read cannot quietly omit a placement column (a missing `endpoint_*` would
+ *  read as "no endpoints", which on the write gate fails OPEN). Every field is
+ *  a column of `conversations`; queries feeding this must select all of them. */
+function rowToIdentity(row: ConversationRow): ConversationIdentity {
+  return {
+    id: row.id,
+    kind: row.kind,
+    visibility: row.visibility,
+    archived_at: row.archived_at,
+    placement_kind: row.placement_kind,
+    workspace_id: row.workspace_id,
+    inbox_agent_id: row.inbox_agent_id,
+    endpoint_a_kind: row.endpoint_a_kind,
+    endpoint_a_id: row.endpoint_a_id,
+    endpoint_b_kind: row.endpoint_b_kind,
+    endpoint_b_id: row.endpoint_b_id,
+    endpoint_a_deleted_at: row.endpoint_a_deleted_at,
+    endpoint_b_deleted_at: row.endpoint_b_deleted_at,
+  };
 }
 
 function rowToDto(row: ConversationRow): ConversationDto {
@@ -218,21 +263,14 @@ export class ConversationRepo {
     const row = this.db
       .prepare<[string], ConversationRow>(
         `SELECT id, kind, visibility, archived_at,
-                placement_kind, workspace_id, inbox_agent_id
+                placement_kind, workspace_id, inbox_agent_id,
+                endpoint_a_kind, endpoint_a_id,
+                endpoint_b_kind, endpoint_b_id,
+                endpoint_a_deleted_at, endpoint_b_deleted_at
            FROM conversations WHERE id = ?`,
       )
       .get(id);
-    return row
-      ? {
-        id: row.id,
-        kind: row.kind,
-        visibility: row.visibility,
-        archived_at: row.archived_at,
-        placement_kind: row.placement_kind,
-        workspace_id: row.workspace_id,
-        inbox_agent_id: row.inbox_agent_id,
-      }
-      : null;
+    return row ? rowToIdentity(row) : null;
   }
 
   /**
@@ -254,22 +292,15 @@ export class ConversationRepo {
     const row = this.db
       .prepare<[string], ConversationRow>(
         `SELECT id, kind, visibility, archived_at,
-                placement_kind, workspace_id, inbox_agent_id
+                placement_kind, workspace_id, inbox_agent_id,
+                endpoint_a_kind, endpoint_a_id,
+                endpoint_b_kind, endpoint_b_id,
+                endpoint_a_deleted_at, endpoint_b_deleted_at
            FROM conversations
           WHERE inbox_agent_id = ? AND placement_kind = 'agent_inbox'`,
       )
       .get(agentId);
-    return row
-      ? {
-        id: row.id,
-        kind: row.kind,
-        visibility: row.visibility,
-        archived_at: row.archived_at,
-        placement_kind: row.placement_kind,
-        workspace_id: row.workspace_id,
-        inbox_agent_id: row.inbox_agent_id,
-      }
-      : null;
+    return row ? rowToIdentity(row) : null;
   }
 
   getChannel(id: string): ChannelConversationDto | null {
@@ -805,15 +836,7 @@ export class ConversationRepo {
       spawnedByAgentId: null,
       createdAt,
     });
-    return {
-      id: row.id,
-      kind: row.kind,
-      visibility: row.visibility,
-      archived_at: row.archived_at,
-      placement_kind: row.placement_kind,
-      workspace_id: row.workspace_id,
-      inbox_agent_id: row.inbox_agent_id,
-    };
+    return rowToIdentity(row);
   }
 
   setArchived(

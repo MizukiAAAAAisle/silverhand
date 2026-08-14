@@ -322,6 +322,82 @@ describe('AgentTeardownUnitOfWork (SQLite adapter) — FK cascade contract', () 
     expect(row.author_name).toBe('teardown-subject');
   });
 
+  /**
+   * v73 (#task:2017) — the SAME production delete on an agent that is a
+   * `direct_pair` endpoint. Two claims, and both are about what the schema does
+   * NOT do:
+   *
+   *  - the DM is not reached by any cascade. It has no workspace, is not in the
+   *    agent's home, and its `endpoint_*_id` columns carry NO foreign key — so
+   *    the transcript outlives its participant instead of being collected with
+   *    it. `foreign_key_check` stays empty afterwards, which is the assertion
+   *    that the coordinate is genuinely reference-free rather than a dangling
+   *    FK the pragma would report.
+   *  - the delete stamps the endpoint on its way out, in the same transaction,
+   *    on the correct side only, with no code enumerating anything. The ACL
+   *    consequence (survivor reads, cannot post) is pinned in
+   *    `tests/direct-pair-endpoint-acl.test.ts`; here the claim is narrower and
+   *    is the one a future adapter must reproduce: the delete SUCCEEDS (a
+   *    RESTRICT-shaped endpoint would abort it) and the row is stamped.
+   */
+  it('an agent that is a direct_pair endpoint: the DM survives the delete, stamped and never cascaded', () => {
+    const t = bootstrap();
+    const messages = new MessageRepo(t.db);
+    // Same-kind endpoints are ordered by id, so the canonical-order CHECK — not
+    // the test — decides which side the subject lands on.
+    const [lo, hi] =
+      t.subjectId < t.bystanderId
+        ? [t.subjectId, t.bystanderId]
+        : [t.bystanderId, t.subjectId];
+    t.db
+      .prepare(
+        `INSERT INTO conversations
+           (id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+            endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
+            title, status, created_at, updated_at)
+         VALUES ('dp-1', NULL, NULL, 'direct_pair', 'fixed',
+                 'agent', ?, 'agent', ?, 'DM', 'idle', ?, ?)`,
+      )
+      .run(lo, hi, 1, 1);
+    const dmMessage = messages.insertForConversation({
+      conversationId: 'dp-1',
+      fromKind: 'agent',
+      fromAgentId: t.subjectId,
+      content: 'said in the DM before the delete',
+    });
+
+    deleteThroughScope(t, t.subjectId);
+
+    const dm = t.db
+      .prepare<
+        [],
+        {
+          c: number;
+          endpoint_a_deleted_at: number | null;
+          endpoint_b_deleted_at: number | null;
+        }
+      >(
+        `SELECT COUNT(*) AS c, endpoint_a_deleted_at, endpoint_b_deleted_at
+           FROM conversations WHERE id = 'dp-1'`,
+      )
+      .get()!;
+    expect(dm.c).toBe(1);
+    const [subjectSide, bystanderSide] =
+      t.subjectId === lo
+        ? [dm.endpoint_a_deleted_at, dm.endpoint_b_deleted_at]
+        : [dm.endpoint_b_deleted_at, dm.endpoint_a_deleted_at];
+    expect(subjectSide).toBeGreaterThan(0);
+    expect(bystanderSide).toBeNull();
+    expect(
+      t.db
+        .prepare<[string], { c: number }>(
+          `SELECT COUNT(*) AS c FROM messages WHERE id = ?`,
+        )
+        .get(dmMessage.id)!.c,
+    ).toBe(1);
+    expect(t.db.pragma('foreign_key_check')).toEqual([]);
+  });
+
   it('the in-scope capture sees the DM blob refs and the live runtime session the post-commit phase needs', () => {
     const t = bootstrap();
     const { facts, capture } = deleteThroughScope(t, t.subjectId);

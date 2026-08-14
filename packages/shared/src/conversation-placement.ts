@@ -24,7 +24,10 @@
 // Deliberately NOT a coercion (`?? someWorkspaceId`) and NOT a filter: a
 // silently-substituted or silently-dropped row is the exact failure mode this
 // feature exists to remove (§1 "INNER JOIN 整行消失").
-import type { ConversationPlacementKind } from './db/schema.js';
+import type {
+  ConversationEndpointKind,
+  ConversationPlacementKind,
+} from './db/schema.js';
 
 /** The title every agent inbox carries. One constant so the backend insert and
  *  any display surface agree; the v71 backfill repeats the literal because SQL
@@ -80,4 +83,63 @@ export function isWorkspacePlaced<T extends ConversationPlacementRef>(
   conversation: T,
 ): conversation is T & { workspace_id: string } {
   return conversation.workspace_id !== null;
+}
+
+/** One endpoint of a `direct_pair` placement as a COORDINATE: which kind of
+ *  principal, and its id. Says nothing about whether that principal still
+ *  exists — that is a lookup, and keeping it out of this type is what stops
+ *  "gone" from being stored twice (see {@link directPairEndpointsOf}). */
+export interface ConversationEndpointCoordinate {
+  kind: ConversationEndpointKind;
+  id: string;
+  /** WHEN the principal was hard-deleted, when that is known. NEVER read as the
+   *  existence question: a stamp may be missing (some future delete path) while
+   *  the principal is genuinely gone, so callers must OR this with a failed
+   *  lookup. It is here only so a caller that already knows the endpoint is gone
+   *  can say WHEN. */
+  deletedAt: number | null;
+}
+
+/** The columns {@link directPairEndpointsOf} reads. Structural, so a DB row and
+ *  any projection of it (the ACL facts, a future DTO) satisfy it unchanged. */
+export interface ConversationEndpointRef {
+  placement_kind: ConversationPlacementKind;
+  endpoint_a_kind: ConversationEndpointKind | null;
+  endpoint_a_id: string | null;
+  endpoint_b_kind: ConversationEndpointKind | null;
+  endpoint_b_id: string | null;
+  endpoint_a_deleted_at: number | null;
+  endpoint_b_deleted_at: number | null;
+}
+
+/**
+ * The two endpoints of a `direct_pair` conversation, in the canonical order the
+ * DB stores them, or `null` for every other placement — the ONE place the six
+ * endpoint columns are turned into a pair, so no caller re-derives "is the b
+ * column the one I mean".
+ *
+ * Throws rather than returning a half pair when a `direct_pair` row is missing a
+ * coordinate. The DB's arc CHECK makes that unrepresentable, so reaching it
+ * means the row did not come from this schema, and an ACL that silently treated
+ * a half pair as "no endpoints" would fail OPEN on the survivor's write gate.
+ */
+export function directPairEndpointsOf(
+  conversation: ConversationEndpointRef,
+): readonly [ConversationEndpointCoordinate, ConversationEndpointCoordinate] | null {
+  if (conversation.placement_kind !== 'direct_pair') return null;
+  const {
+    endpoint_a_kind: aKind,
+    endpoint_a_id: aId,
+    endpoint_b_kind: bKind,
+    endpoint_b_id: bId,
+  } = conversation;
+  if (aKind === null || aId === null || bKind === null || bId === null) {
+    throw new Error(
+      'direct_pair conversation is missing an endpoint coordinate: the placement arc CHECK cannot produce this row',
+    );
+  }
+  return [
+    { kind: aKind, id: aId, deletedAt: conversation.endpoint_a_deleted_at },
+    { kind: bKind, id: bId, deletedAt: conversation.endpoint_b_deleted_at },
+  ];
 }

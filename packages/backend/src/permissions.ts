@@ -7,8 +7,12 @@
 // only field any of them reads is that port (W6's Gate 8 keeps every OTHER
 // production file out of it — it is this module's private source, not an
 // ambient repository).
-import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, WorkspaceRole } from '@silverhand/shared';
-import { conversationScope, conversationSideScope } from '@silverhand/shared';
+import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, ConversationEndpointCoordinate, WorkspaceRole } from '@silverhand/shared';
+import {
+  conversationScope,
+  conversationSideScope,
+  directPairEndpointsOf as sharedDirectPairEndpointsOf,
+} from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { AuthorizationConversationFacts } from './authorization-ports.js';
 import type { Principal, UserPrincipal } from './auth/principal.js';
@@ -341,19 +345,61 @@ export function canViewConversation(
  * workspace arm requires `principal.conversationId === conversation.id`: a
  * session in channel A does not act inside its inbox by reference.
  *
- * Every other workspace-less placement (`direct_pair`, P3) is not admitted yet
- * — it fails closed here until its own rule lands, matching the DB CHECK that
- * still refuses to store one.
+ * `direct_pair` (v73) has exactly TWO participants, and they ARE its endpoints:
+ * an `agent` endpoint admits that agent under the same running-in rule, a
+ * `human` endpoint admits that user. Deletion of the OTHER side changes nothing
+ * here — reading one's own history is the whole reason the endpoint is a
+ * historical coordinate rather than a foreign key. What it does change is the
+ * WRITE gate; see {@link canPostToConversation}.
  */
 function canViewNonWorkspaceConversation(
   principal: Principal,
   conversation: AuthorizationConversationFacts,
 ): boolean {
   if (principal.kind === 'system') return true;
+  if (conversation.placement_kind === 'direct_pair') {
+    return directPairEndpointsOf(conversation).some(endpoint =>
+      endpoint.kind === 'agent'
+        ? principal.kind === 'agent' &&
+          principal.agentId === endpoint.id &&
+          principal.conversationId === conversation.id
+        : principal.kind === 'user' && principal.userId === endpoint.id,
+    );
+  }
   if (principal.kind !== 'agent') return false;
   if (conversation.placement_kind !== 'agent_inbox') return false;
   if (conversation.inbox_agent_id !== principal.agentId) return false;
   return principal.conversationId === conversation.id;
+}
+
+/**
+ * The two endpoints of a `direct_pair` row, non-null by the placement arc CHECK.
+ * A thin wrapper over shared's accessor so both call sites below read the
+ * columns through ONE narrowing, and so the impossible half-pair fails loud
+ * instead of degrading into "no endpoints" — which on the write gate would fail
+ * OPEN.
+ */
+function directPairEndpointsOf(
+  conversation: AuthorizationConversationFacts,
+): readonly ConversationEndpointCoordinate[] {
+  return sharedDirectPairEndpointsOf(conversation) ?? [];
+}
+
+/**
+ * Is this endpoint's principal GONE? The lookup is the authority and the stamp
+ * is a shortcut, ORed in rather than trusted: `endpoint_*_deleted_at` is written
+ * by a `BEFORE DELETE` trigger today, but a delete path that ever failed to
+ * stamp must not thereby hand the survivor a live write gate. The lookup alone
+ * suffices for correctness — endpoint coordinates are validated at birth and
+ * immutable, so a miss can only mean "deleted" — and the stamp alone answers
+ * without a query in the common case.
+ */
+function isEndpointGone(
+  ctx: BackendContext,
+  endpoint: ConversationEndpointCoordinate,
+): boolean {
+  if (endpoint.deletedAt !== null) return true;
+  return !ctx.authorizationReads.endpointPrincipalExists(endpoint);
 }
 
 /**
@@ -447,13 +493,29 @@ export function canJoinPublicChannel(
   return isPublicChannelBranch(ctx, principal, conversation);
 }
 
+/**
+ * The WRITE gate. Membership (or endpoint participation) plus one narrowing that
+ * only `direct_pair` has: a DM whose OTHER endpoint's principal is gone is
+ * READ-ONLY for the survivor. There is no `readonly` column and no second state
+ * machine — the DM has not changed status, archived, or closed; it simply has
+ * nobody to deliver to, which is a fact about the endpoint, so the gate derives
+ * it from the endpoint every time it is asked.
+ *
+ * Both endpoints are tested, not just "the other one": a principal whose own
+ * record is gone cannot be the caller, so testing both costs nothing and keeps
+ * the rule stated as a property of the conversation rather than of the caller.
+ */
 export function canPostToConversation(
   ctx: BackendContext,
   principal: Principal,
   conversationId: string,
 ): boolean {
   if (!canViewConversation(ctx, principal, conversationId)) return false;
-  return true;
+  const conversation = ctx.authorizationReads.conversation(conversationId);
+  if (!conversation) return false;
+  return !directPairEndpointsOf(conversation).some(endpoint =>
+    isEndpointGone(ctx, endpoint),
+  );
 }
 
 export function canAddConversationMember(

@@ -39,6 +39,7 @@ import type {
   AgentCapability,
   AgentDto,
   ConversationDto,
+  ConversationEndpointKind,
   ConversationRow,
   WorkspaceDto,
   WorkspaceRole,
@@ -61,12 +62,27 @@ export type AuthorizationWorkspaceFacts = Pick<
  * participant and names it directly. An ACL that saw only `workspace_id: null`
  * could tell "not workspace-placed" but not WHOSE line it is, and would have to
  * fail closed on the agent's own inbox.
+ *
+ * The `endpoint_*` columns (v73) are the `direct_pair` arm of the same rule: its
+ * two participants ARE its endpoints. The tombstones come along because the
+ * survivor's gate depends on whether the OTHER endpoint still exists — but only
+ * as one half of that question; see {@link AuthorizationReadPort.endpointPrincipalExists}.
  */
 export type AuthorizationConversationFacts = Pick<
   ConversationDto,
   'id' | 'workspace_id' | 'kind' | 'visibility' | 'archived_at'
 > &
-  Pick<ConversationRow, 'placement_kind' | 'inbox_agent_id'>;
+  Pick<
+    ConversationRow,
+    | 'placement_kind'
+    | 'inbox_agent_id'
+    | 'endpoint_a_kind'
+    | 'endpoint_a_id'
+    | 'endpoint_b_kind'
+    | 'endpoint_b_id'
+    | 'endpoint_a_deleted_at'
+    | 'endpoint_b_deleted_at'
+  >;
 
 /** Only what agent ownership and the `materialization_status` widener read. */
 export type AuthorizationAgentFacts = Pick<
@@ -86,6 +102,17 @@ export interface AuthorizationReadPort {
    */
   agentWorkspaceIds(agentId: string): readonly string[];
   conversation(conversationId: string): AuthorizationConversationFacts | null;
+  /**
+   * Does the principal a `direct_pair` endpoint names still exist? THE
+   * authority for endpoint liveness — the `endpoint_*_deleted_at` stamp is a
+   * denormalized timestamp, so the ACL asks this and ORs the stamp in, never the
+   * other way round. Endpoint coordinates are validated at birth and immutable,
+   * so a miss can only mean the principal was deleted.
+   */
+  endpointPrincipalExists(endpoint: {
+    kind: ConversationEndpointKind;
+    id: string;
+  }): boolean;
   isConversationAgent(conversationId: string, agentId: string): boolean;
   isConversationUser(conversationId: string, userId: string): boolean;
   agent(agentId: string): AuthorizationAgentFacts | null;

@@ -1835,6 +1835,264 @@ export const migrations: Migration[] = [
       DROP TABLE temp.conversation_name_backfill;
     `,
   },
+  {
+    version: 73,
+    name: 'direct_pair_endpoint_identity',
+    // agent-scoped-session-v1 §4.2 / §8 P0-e (#task:2017) — the DirectPair
+    // placement gains its two ENDPOINTS, and with them the one property the whole
+    // placement rests on: a DM must survive the deletion of the principal on the
+    // other side.
+    //
+    // An endpoint is a HISTORICAL PRINCIPAL COORDINATE, not a foreign key. With
+    // an FK, deleting an agent would either ABORT (RESTRICT) or take the
+    // conversation and its history with it (CASCADE), and both answers are wrong:
+    // the survivor's DM is their record of a conversation that really happened.
+    // Dropping the FK is also what removes birth validation, so
+    // `trg_conversations_endpoints_birth` performs it explicitly — and more
+    // precisely than an FK could, since which table an id must exist in depends
+    // on the sibling `_kind` column (a conditional reference no FK can express).
+    //
+    // Existence is therefore derived by LOOKUP, and `endpoint_*_deleted_at`
+    // records only WHEN a principal disappeared. That split is deliberate: birth
+    // validation plus endpoint immutability mean a lookup miss ALREADY implies
+    // "this principal existed and was deleted", so every read surface phrases the
+    // question as `tombstone IS NOT NULL OR the lookup misses`. A delete path
+    // that forgot to stamp the tombstone therefore cannot hand write access back
+    // to the survivor — the same shape as v72's `conversation_gone` guard, where
+    // forgetting to retire a name still cannot resolve a dangling id. The column
+    // is a denormalized timestamp; correctness never rests on it.
+    //
+    // The stamp is written by BEFORE DELETE triggers on `agents` and `users`
+    // rather than by the teardown use case, because that is the only form that
+    // covers EVERY delete path, present and future — including FK cascades, which
+    // do fire the deleted table's own BEFORE DELETE trigger (probed, and pinned
+    // by a falsifier in the migration test). It also means the human side needs
+    // no repo face and no product delete entry point: `users` has no deletion
+    // path today (`user-repo.ts`: handles are never recycled), and this model
+    // does not require inventing one for the endpoint identity to be complete.
+    // These triggers TRANSFER a fact; they never RAISE — the alternative the
+    // design doc already rejected (projected member rows guarded by refusing
+    // triggers) turned `DELETE FROM agents` into an abort instead of a tombstone.
+    // The `WHERE … IS NULL` filter keeps the transition monotonic, so the stamp is
+    // legal under the monotonicity trigger and re-running it is a no-op. No
+    // endpoint index accompanies it: this is the only endpoint-keyed statement in
+    // P0-e and it runs on a rare hard delete, so the endpoint read faces (and the
+    // indexes they need) stay with P3.
+    //
+    // A TABLE REBUILD is required rather than `ALTER TABLE ADD COLUMN`: the arc
+    // CHECK's `ELSE 0` currently makes a `direct_pair` row UNCONSTRUCTIBLE, and
+    // SQLite cannot alter a CHECK. Template = the v69 / v71 rebuilds; every
+    // surviving column, constraint, and index is reproduced explicitly and the
+    // falsifiers assert the full normalized schema rather than a sample, because a
+    // rebuild's failure mode is silently losing one of them. `foreignKeyEscape`
+    // disables `foreign_keys` around the migration and runs `foreign_key_check`
+    // afterwards, so `DROP TABLE conversations` cannot cascade-delete children.
+    //
+    // There is NO data migration: no `direct_pair` row can exist below this
+    // version, so every existing row keeps every column byte-for-byte.
+    //
+    // What is deliberately NOT here (P3): `pair_key` and its unique index,
+    // get-or-create, the wire DTO, delivery and board surfaces. The CANONICAL
+    // ORDER check IS here, though, on the same principle that made v69 declare
+    // `CHECK (placement_kind = 'workspace')`: a declared domain that nothing
+    // enforces is a lie. It also rules out a self-pair for free, and it lets P3
+    // derive `pair_key` as a pure function of two already-ordered endpoints
+    // instead of normalizing rows it inherited.
+    foreignKeyEscape: true,
+    up: `
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        inbox_agent_id          TEXT REFERENCES agents(id) ON DELETE CASCADE,
+        endpoint_a_kind         TEXT,
+        endpoint_a_id           TEXT,
+        endpoint_b_kind         TEXT,
+        endpoint_b_id           TEXT,
+        endpoint_a_deleted_at   INTEGER,
+        endpoint_b_deleted_at   INTEGER,
+        placement_kind          TEXT NOT NULL
+          CHECK (placement_kind IN ('workspace', 'direct_pair', 'agent_inbox')),
+        roster_policy           TEXT NOT NULL
+          CHECK (roster_policy IN ('open', 'fixed')),
+        kind                    TEXT GENERATED ALWAYS AS
+          (CASE WHEN roster_policy = 'open' THEN 'channel' ELSE 'dm_channel' END) VIRTUAL,
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        visibility              TEXT NOT NULL DEFAULT 'private'
+          CHECK (
+            visibility IN ('private', 'public')
+            AND (visibility = 'private' OR roster_policy = 'open')
+          ),
+        CHECK (
+          (endpoint_a_kind IS NULL OR endpoint_a_kind IN ('human', 'agent'))
+          AND (endpoint_b_kind IS NULL OR endpoint_b_kind IN ('human', 'agent'))
+        ),
+        CHECK (
+          placement_kind <> 'direct_pair'
+          OR (endpoint_a_kind, endpoint_a_id) < (endpoint_b_kind, endpoint_b_id)
+        ),
+        CHECK (
+          CASE placement_kind
+            WHEN 'workspace'
+              THEN workspace_id IS NOT NULL AND inbox_agent_id IS NULL
+                   AND endpoint_a_kind IS NULL AND endpoint_a_id IS NULL
+                   AND endpoint_b_kind IS NULL AND endpoint_b_id IS NULL
+                   AND endpoint_a_deleted_at IS NULL
+                   AND endpoint_b_deleted_at IS NULL
+            WHEN 'agent_inbox'
+              THEN inbox_agent_id IS NOT NULL AND workspace_id IS NULL
+                   AND roster_policy = 'fixed'
+                   AND endpoint_a_kind IS NULL AND endpoint_a_id IS NULL
+                   AND endpoint_b_kind IS NULL AND endpoint_b_id IS NULL
+                   AND endpoint_a_deleted_at IS NULL
+                   AND endpoint_b_deleted_at IS NULL
+            WHEN 'direct_pair'
+              THEN workspace_id IS NULL AND inbox_agent_id IS NULL
+                   AND roster_policy = 'fixed'
+                   AND endpoint_a_kind IS NOT NULL AND endpoint_a_id IS NOT NULL
+                   AND endpoint_b_kind IS NOT NULL AND endpoint_b_id IS NOT NULL
+            ELSE 0
+          END
+        )
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+        title, status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq, visibility
+      )
+        SELECT
+          c.id, c.workspace_id, c.inbox_agent_id, c.placement_kind, c.roster_policy,
+          c.title, c.status, c.spawned_by_agent_id, c.closed_at, c.close_summary,
+          c.pinned_at, c.created_at, c.updated_at, c.archived_at,
+          c.latest_message_seq, c.visibility
+        FROM conversations c;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+      CREATE UNIQUE INDEX idx_conversations_inbox_agent
+        ON conversations(inbox_agent_id) WHERE placement_kind = 'agent_inbox';
+
+      CREATE TRIGGER trg_conversations_endpoints_birth
+      BEFORE INSERT ON conversations
+      WHEN NEW.placement_kind = 'direct_pair'
+       AND NOT (
+         (CASE NEW.endpoint_a_kind
+            WHEN 'human' THEN EXISTS (SELECT 1 FROM users u WHERE u.id = NEW.endpoint_a_id)
+            WHEN 'agent' THEN EXISTS (SELECT 1 FROM agents g WHERE g.id = NEW.endpoint_a_id)
+            ELSE 0
+          END)
+         AND
+         (CASE NEW.endpoint_b_kind
+            WHEN 'human' THEN EXISTS (SELECT 1 FROM users u WHERE u.id = NEW.endpoint_b_id)
+            WHEN 'agent' THEN EXISTS (SELECT 1 FROM agents g WHERE g.id = NEW.endpoint_b_id)
+            ELSE 0
+          END)
+       )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: each direct_pair endpoint must name an existing principal of its own kind'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversations_endpoints_born_alive
+      BEFORE INSERT ON conversations
+      WHEN NEW.endpoint_a_deleted_at IS NOT NULL
+        OR NEW.endpoint_b_deleted_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: an endpoint is born alive; its deletion is stamped by a later write'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversations_endpoints_immutable
+      BEFORE UPDATE OF
+        endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+      ON conversations
+      WHEN NOT (
+        NEW.endpoint_a_kind IS OLD.endpoint_a_kind
+        AND NEW.endpoint_a_id IS OLD.endpoint_a_id
+        AND NEW.endpoint_b_kind IS OLD.endpoint_b_kind
+        AND NEW.endpoint_b_id IS OLD.endpoint_b_id
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: endpoint coordinates are immutable'
+        );
+      END;
+
+      CREATE TRIGGER trg_conversations_endpoint_tombstone_monotonic
+      BEFORE UPDATE OF endpoint_a_deleted_at, endpoint_b_deleted_at
+      ON conversations
+      WHEN NOT (
+        (NEW.endpoint_a_deleted_at IS OLD.endpoint_a_deleted_at
+         OR (OLD.endpoint_a_deleted_at IS NULL
+             AND NEW.endpoint_a_deleted_at IS NOT NULL))
+        AND
+        (NEW.endpoint_b_deleted_at IS OLD.endpoint_b_deleted_at
+         OR (OLD.endpoint_b_deleted_at IS NULL
+             AND NEW.endpoint_b_deleted_at IS NOT NULL))
+      )
+      BEGIN
+        SELECT RAISE(
+          ABORT,
+          'conversations: an endpoint deletion is stamped once and never unstamped'
+        );
+      END;
+
+      CREATE TRIGGER trg_agents_stamp_endpoint_deleted
+      BEFORE DELETE ON agents
+      BEGIN
+        UPDATE conversations
+           SET endpoint_a_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_a_kind = 'agent'
+           AND endpoint_a_id = OLD.id
+           AND endpoint_a_deleted_at IS NULL;
+        UPDATE conversations
+           SET endpoint_b_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_b_kind = 'agent'
+           AND endpoint_b_id = OLD.id
+           AND endpoint_b_deleted_at IS NULL;
+      END;
+
+      CREATE TRIGGER trg_users_stamp_endpoint_deleted
+      BEFORE DELETE ON users
+      BEGIN
+        UPDATE conversations
+           SET endpoint_a_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_a_kind = 'human'
+           AND endpoint_a_id = OLD.id
+           AND endpoint_a_deleted_at IS NULL;
+        UPDATE conversations
+           SET endpoint_b_deleted_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+         WHERE placement_kind = 'direct_pair'
+           AND endpoint_b_kind = 'human'
+           AND endpoint_b_id = OLD.id
+           AND endpoint_b_deleted_at IS NULL;
+      END;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =
