@@ -6,6 +6,12 @@ import {
 } from '../../src/routes/responses.js';
 import { TargetError } from '../../src/services/conversation-message-service.js';
 import {
+  ActorError as SendActorError,
+  ConversationError as SendConversationError,
+  type ActorErrorCode as SendActorErrorCode,
+  type ConversationErrorCode as SendConversationErrorCode,
+} from '../../src/services/conversation-message-service.js';
+import {
   ActorError,
   type ActorErrorCode,
   MemberError,
@@ -175,6 +181,76 @@ describe('channelServiceErrorResponse — ActorError wire rendering', () => {
       expect(
         await channelBody(new ActorError(code as ActorErrorCode, 'forged')),
       ).toEqual({ status: expected.status, body: expected.body });
+    });
+  }
+});
+
+/** Drive the send mapper and return status + wire code together: the renderer
+ *  and the CLI both branch on the code, so a status that survives while the code
+ *  drifts is still a break. */
+async function sendMapping(err: unknown): Promise<{ status: number; code: unknown }> {
+  const app = new Hono();
+  app.get('/', c =>
+    conversationMessageServiceErrorResponse(c, err) ?? c.text('unmapped', 500),
+  );
+  const res = await app.request('/');
+  if (res.status === 500) return { status: 500, code: null };
+  return { status: res.status, code: ((await res.json()) as { code?: unknown }).code };
+}
+
+/**
+ * The send path's conversation-level refusals, EXHAUSTIVE OVER
+ * `ConversationErrorCode` BY TYPE: a new member of that union fails to compile
+ * until its status is declared here. Written as a type-keyed table for the same
+ * reason as `ACTOR_WIRE` above — `conversation_endpoint_gone` (#task:2021 P4-4)
+ * is exactly the kind of code that reaches the wire with no arm to redden.
+ *
+ * The 403/409 split is the contract, not a detail: a lifecycle 409 invites a
+ * retry, and the `direct_pair` narrowing is a state that NEVER becomes postable
+ * again. 403 is also what `canPostToConversation` already answers to the same
+ * fact at the request layer, so the in-transaction re-check reporting a
+ * different status would make one refusal look like two.
+ */
+const SEND_CONVERSATION_WIRE: Record<SendConversationErrorCode, number> = {
+  conversation_not_found: 404,
+  conversation_closed: 409,
+  conversation_archived: 409,
+  conversation_endpoint_gone: 403,
+};
+
+describe('conversationMessageServiceErrorResponse — ConversationError mapping', () => {
+  for (const [code, status] of Object.entries(SEND_CONVERSATION_WIRE)) {
+    it(`maps ${code} to ${status}`, async () => {
+      expect(
+        await sendMapping(
+          new SendConversationError(code as SendConversationErrorCode, 'refused'),
+        ),
+      ).toEqual({ status, code });
+    });
+  }
+});
+
+/**
+ * Same discipline for the send path's actor refusals: "the thing you named does
+ * not exist" (404) vs "it exists and you may not post here" (403).
+ */
+const SEND_ACTOR_WIRE: Record<SendActorErrorCode, number> = {
+  agent_not_found: 404,
+  agent_not_participant_of_conversation: 403,
+  // The human arm of the SAME gate (#task:2021 P4-4, @Cindy B7). Same 403 as its
+  // agent counterpart and as the route's own pre-transaction refusal, and a
+  // separate code only so an operator reading a person's refused send is not
+  // handed an `agent_…` one. No 404 twin: an id naming nobody simply holds no
+  // seat, endpoint or membership, so it is refused as a non-participant.
+  user_not_participant_of_conversation: 403,
+};
+
+describe('conversationMessageServiceErrorResponse — ActorError mapping', () => {
+  for (const [code, status] of Object.entries(SEND_ACTOR_WIRE)) {
+    it(`maps ${code} to ${status}`, async () => {
+      expect(
+        await sendMapping(new SendActorError(code as SendActorErrorCode, 'refused')),
+      ).toEqual({ status, code });
     });
   }
 });

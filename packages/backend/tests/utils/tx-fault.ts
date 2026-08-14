@@ -44,17 +44,30 @@ interface ChannelAxesUnitOfWorkLike<S, W> {
  * A UnitOfWork that hands the callback a wrapped scope. `wrap` is read on every
  * transaction, so a test can arm the fault AFTER its setup writes committed
  * through the real scope.
+ *
+ * `seam` is a DIFFERENT instrument, and the two are not interchangeable: it runs
+ * BEFORE the entry point delegates — in the gap between the caller's pre-lock
+ * reads (a route's authorization answer, say) and BEGIN — so whatever it writes is
+ * COMMITTED by the time the transaction starts. Wrapping the scope cannot express
+ * that: a write issued from inside the callback belongs to the transaction under
+ * test and rolls back with it. This is the only honest way to state "a rival
+ * committed in the gap", which is what a route-pass → fact-revoked → zero-write
+ * falsifier needs (#task:2021 P4-4, @Cindy B7). Same shape as
+ * {@link twoAxisUowWithScopeWrap}'s slot of the same name.
  */
 export function uowWithScopeWrap<S extends object>(
   uow: UnitOfWorkLike<S>,
   wrap: () => ((tx: S) => S) | null,
+  seam?: () => (() => void) | null,
 ): UnitOfWorkLike<S> {
   return {
-    atomically: fn =>
-      uow.atomically(tx => {
+    atomically: fn => {
+      seam?.()?.();
+      return uow.atomically(tx => {
         const wrapper = wrap();
         return fn(wrapper ? wrapper(tx) : tx);
-      }),
+      });
+    },
   };
 }
 

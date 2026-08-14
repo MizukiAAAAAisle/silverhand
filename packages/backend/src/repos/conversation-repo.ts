@@ -1,6 +1,10 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { agentParticipates, WORKSPACE_PLACED } from './conversation-placement-sql.js';
+import {
+  agentParticipates,
+  userParticipates,
+  WORKSPACE_PLACED,
+} from './conversation-placement-sql.js';
 import {
   CURRENT_NAME,
   CURRENT_NAME_UNALIASED,
@@ -1208,6 +1212,29 @@ export class ConversationRepo {
    */
   isAgentParticipant(conversationId: string, agentId: string): boolean {
     const { sql, params } = agentParticipates('c', agentId);
+    const row = this.db
+      .prepare<string[], { ok: number }>(
+        `SELECT 1 AS ok FROM conversations c WHERE c.id = ? AND ${sql}`,
+      )
+      .get(conversationId, ...params);
+    return row !== undefined;
+  }
+
+  /**
+   * PARTICIPATION for a HUMAN — the same question as
+   * {@link isAgentParticipant}, asked of the other principal kind, and answered
+   * by the same authority (`userParticipates`, the SQL face of §4.2). One
+   * predicate per kind rather than one polymorphic one: the arms differ (a human
+   * channel seat is two facts, an inbox has no human arm at all), and a shared
+   * signature would have to take a tagged principal and branch inside the SQL.
+   *
+   * Its first caller is the send's write gate, which asks participation of every
+   * actor kind INSIDE the transaction (#task:2021 P4-4, @Cindy B7) — before that
+   * the human answer was only ever computed at the request layer, so a person
+   * removed from a channel could still win the race to write into it.
+   */
+  isUserParticipant(conversationId: string, userId: string): boolean {
+    const { sql, params } = userParticipates('c', userId);
     const row = this.db
       .prepare<string[], { ok: number }>(
         `SELECT 1 AS ok FROM conversations c WHERE c.id = ? AND ${sql}`,

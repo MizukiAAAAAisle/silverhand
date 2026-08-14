@@ -8,8 +8,10 @@
  *    only because the channel UnitOfWork takes the write lock at BEGIN
  *    (`BEGIN IMMEDIATE`). "There is usually only one writer" is not a
  *    mechanism, so the mechanism gets a second connection pointed at it. The
- *    message UnitOfWork's deliberately-deferred policy is pinned in the same
- *    place, so flipping either one reddens.
+ *    message UnitOfWork carries the SAME obligation since #task:2021 P4-4
+ *    (@Cindy B6) — its write gate reads lifecycle / participation / endpoint facts
+ *    and then writes on their strength — so its mechanism is pinned the same way,
+ *    with the rival pointed at the roster row the gate actually reads.
  *  - `PrincipalNameSnapshot` is a RUNTIME projection, not a type-level
  *    narrowing: `UserRow` is a structural supertype, so a bare return would
  *    type-check while still shipping `email` / `avatar_storage_key` /
@@ -180,23 +182,80 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
     expect(new MessageRepo(db).listForConversation(b.id)).toHaveLength(0);
   });
 
-  it('message UoW: the current SQLite policy stays deferred — a read prelude does not fight for the write lock', () => {
+  /**
+   * B6, the mechanism half. The message UnitOfWork's obligation is that facts the
+   * write gate READ before writing still hold at COMMIT, and the mechanism named
+   * for that is the write lock taken at BEGIN. So a rival is pointed at exactly
+   * the fact the gate reads — a `conversation_agents` roster row — and must LOSE.
+   *
+   * `revoke` targeting a row that may not exist is deliberate: `run()` reaching
+   * the engine at all is what gets refused, so the assertion does not depend on
+   * the rival's statement matching anything.
+   */
+  it('message UoW: a rival cannot revoke participation while the gate reads it', () => {
+    const { writer, contender, channelId } = fileBackedChannel();
+    const persistence = createSqliteConversationPersistence(writer);
+    const revoke = contender.prepare(
+      `DELETE FROM conversation_agents WHERE conversation_id = ?`,
+    );
+
+    let rivalError: unknown;
+    const head = persistence.message.uow.atomically(tx => {
+      const observed = tx.messages.streamHeadLatestSeq(channelId, null);
+      try {
+        revoke.run(channelId);
+      } catch (err) {
+        rivalError = err;
+      }
+      return observed;
+    });
+
+    // THE load-bearing assertion, and the one that was FALSE before this change:
+    // under a deferred BEGIN the callback's first statement is a read, no write
+    // lock is held, and this revocation would commit between the gate's answer
+    // and the insert — the stale-authorization defect one layer below the gate.
+    expect(rivalError).toMatchObject({ code: 'SQLITE_BUSY' });
+    expect(head).toBe(0);
+  });
+
+  it('message UoW: the write lock is taken at BEGIN — contention surfaces before the callback runs a step', () => {
     const { writer, contender, channelId } = fileBackedChannel();
     const persistence = createSqliteConversationPersistence(writer);
 
     contender.exec('BEGIN IMMEDIATE');
+    let callbackRan = false;
     try {
-      // Pins the POLICY (deferred lock window), not a race-freedom claim: this
-      // domain's one mechanised race is the stream head via the freshness CAS;
-      // its other pre-write reads carry no declared cross-connection isolation
-      // obligation. See the `MessageUnitOfWork` port doc.
-      const head = persistence.message.uow.atomically(tx =>
-        tx.messages.streamHeadLatestSeq(channelId, null),
-      );
-      expect(head).toBe(0);
+      let thrown: unknown;
+      try {
+        persistence.message.uow.atomically(tx => {
+          callbackRan = true;
+          return tx.messages.streamHeadLatestSeq(channelId, null);
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      // Fails CLOSED: the send never observes a fact it cannot hold, so the
+      // caller's refusal is "try again", not a message written on a stale read.
+      expect(thrown).toMatchObject({ code: 'SQLITE_BUSY' });
     } finally {
       contender.exec('ROLLBACK');
     }
+    expect(callbackRan).toBe(false);
+  });
+
+  it('message UoW: the immediate policy is root-only and refuses loudly when nested', () => {
+    // Nested, `.immediate()` degrades to a SAVEPOINT and takes no write lock at
+    // all — the failure mode that would leave the obligation resting on nothing
+    // while every test above still passed.
+    const { db } = openTestDb();
+    cleanups.push(() => db.close());
+    const persistence = createSqliteConversationPersistence(db);
+
+    db.transaction(() => {
+      expect(() => persistence.message.uow.atomically(() => undefined)).toThrow(
+        /root-only/,
+      );
+    })();
   });
 });
 

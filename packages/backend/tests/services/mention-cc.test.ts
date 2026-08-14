@@ -130,8 +130,14 @@ function bootstrap() {
     workspaceId: workspace.id,
     title: 'general',
   });
-  // The author's own membership, written the way production writes it (a route /
-  // ChannelService insert) rather than by the dropped seed trigger.
+  // The author's own participation, written the way production writes it (a route
+  // / ChannelService insert) rather than by the dropped seed trigger. BOTH facts,
+  // because human channel participation is the v25 PAIR — the `conversation_users`
+  // seat AND `workspace_users` membership — and since #task:2021 P4-4 the send's
+  // write gate asks for it INSIDE the transaction. With the seat alone this
+  // fixture's author was less privileged than any real one, and every send here
+  // would be refused.
+  workspaces.addUserMember(workspace.id, 'local');
   conversations.addUser(channel.id, 'local');
 
   // `insider` receives the original message; `outsider` is the mention target and

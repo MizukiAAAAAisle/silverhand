@@ -24,6 +24,7 @@ import type {
   MessageDto,
   Reference,
 } from '@silverhand/shared';
+import { isWorkspacePlaced } from '@silverhand/shared';
 import { dispatchMentionCcEffects } from '../../application/mention-cc.js';
 import type { MentionCcReport } from '../../application/mention-cc.js';
 import type { BackendLogger } from '../../context.js';
@@ -69,8 +70,27 @@ export class MessageDeliveryCoordinator {
 
   /** Publish `unread_updated` to every human member of this conversation.
    *  The adapter behind this port co-emits the tiered attention badge
-   *  (#task:1870) — that pairing stays enforced inside `viewer-scope.ts`. */
+   *  (#task:1870) — that pairing stays enforced inside `viewer-scope.ts`.
+   *
+   *  WORKSPACE PLACEMENTS ONLY, and the split is HERE rather than in the
+   *  publisher (#task:2021 P4-4). That read model's unit is (human viewer,
+   *  WORKSPACE): a workspace-less placement has no coordinate in it, so
+   *  `publishUnreadUpdatedToConversationViewers` throws on one — deliberately,
+   *  because for a channel a missing workspace means a corrupt row, and it will
+   *  not turn a routing bug into a silent no-op. Once a `direct_pair` send is
+   *  reachable that stops being a bug and becomes a placement the read model
+   *  does not cover yet: the send commits and then this post-commit call throws,
+   *  i.e. the caller is told its message failed while the row is durable.
+   *
+   *  So the CALLER side answers it, as an honest branch on the placement instead
+   *  of a widened publisher. What is skipped is real and named: a `direct_pair`
+   *  with a human endpoint has a human who ought to see unread, and giving them
+   *  one needs an unread coordinate that is not workspace-keyed — the DM read
+   *  surface, a separate slice. The skip is pinned by test rather than logged:
+   *  it happens on every DM message, so a log line would be pure volume. */
   publishUnreadUpdated(conversationId: string): void {
+    const conversation = this.read.getConversation(conversationId);
+    if (!conversation || !isWorkspacePlaced(conversation)) return;
     this.unreadPublish.publishUnreadUpdatedToConversationViewers(conversationId);
   }
 

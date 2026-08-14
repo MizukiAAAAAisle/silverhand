@@ -336,7 +336,17 @@ export function conversationMessageServiceErrorResponse(
   err: unknown,
 ): Response | null {
   if (err instanceof ConversationError) {
-    const status = err.code === 'conversation_not_found' ? 404 : 409;
+    // 404 for "no such conversation"; 403 for the `direct_pair` narrowing, whose
+    // fact is an AUTHORIZATION one and is what `canPostToConversation` already
+    // answers 403 to at the request layer (#task:2021 P4-4) — the in-transaction
+    // re-check must not report the same refusal as a lifecycle 409, or a client
+    // would retry a state that never changes; 409 for the lifecycle codes.
+    const status =
+      err.code === 'conversation_not_found'
+        ? 404
+        : err.code === 'conversation_endpoint_gone'
+          ? 403
+          : 409;
     return c.json({ error: err.message, code: err.code }, status);
   }
   if (err instanceof MessageActorError) {

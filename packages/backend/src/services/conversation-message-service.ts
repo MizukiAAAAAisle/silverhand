@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
+import { directPairIsReadOnlyForSurvivor } from '@silverhand/shared';
 import type {
   AttachmentRefInput,
   AttachmentSnapshot,
@@ -31,7 +32,6 @@ import {
   type ResolveStaleMessageInput,
   type SendMessageActor,
   type SendMessageInput,
-  type SendMessagePolicy,
   type SendMessageResult,
   type SendMessageTxResult,
 } from './conversation-message/contracts.js';
@@ -158,19 +158,7 @@ export class ConversationMessageService {
             'conversation not found',
           );
         }
-        if (sourceConversation.closed_at !== null) {
-          throw new ConversationError(
-            'conversation_closed',
-            'conversation is closed',
-          );
-        }
-        if (sourceConversation.archived_at !== null) {
-          throw new ConversationError(
-            'conversation_archived',
-            'conversation is archived',
-          );
-        }
-        this.validateActor(tx, input.actor, policy, sourceConversation.id);
+        this.assertPostAuthority(tx, sourceConversation, input.actor);
 
         const targetConversation = target.kind === 'legacy'
           ? this.resolveLegacyTarget(sourceConversation, target.target)
@@ -799,23 +787,101 @@ export class ConversationMessageService {
     );
   }
 
-  private validateActor(
+  /**
+   * MAY THIS SEND HAPPEN? The write gate, as ONE conjunction evaluated INSIDE the
+   * write transaction (#task:2021 P4-4 finding (b)):
+   *
+   *     lifecycle ∧ participation ∧ not-survivor-read-only
+   *
+   * All three are in here because all three can change between the request's
+   * resolution and this commit — the conversation can be archived, the actor
+   * removed, the DM's other endpoint deleted — and the request-layer answers
+   * (`resolveDeliveryTarget`, `canPostToConversation`) are SHAPING reads, never
+   * capability tokens. Splitting them across layers is what let a stale
+   * "authorized" survive: two of the three used to be checked here and the third
+   * only at the route.
+   *
+   * PARTICIPATION IS PLACEMENT-BASED, not roster-based. The predicate this
+   * replaced was `tx.conversations.getAgent(...)` — a `conversation_agents` row —
+   * and `direct_pair` / `agent_inbox` have no roster rows by construction (§4.2),
+   * so an agent posting into a new-model DM was refused unconditionally. That was
+   * not a policy: it was the roster question being asked about placements whose
+   * participants live on the row.
+   *
+   * ORDER IS PART OF THE CONTRACT. Existence (the caller's `get`) → lifecycle →
+   * participation → the DM narrowing. The narrowing goes LAST so only a
+   * participant can distinguish "this DM is read-only because your peer is gone"
+   * from a plain refusal; and lifecycle stays ahead of participation because that
+   * is the pre-existing order, so a legitimate member's closed-channel send keeps
+   * reporting the reason it always did.
+   *
+   * EVERY ACTOR KIND, through the same authority (@Cindy B7). The human arm used
+   * to stop at the route, and that was not a smaller version of this gate but a
+   * different one: `canPostToConversation` answers before the transaction opens,
+   * so a person removed from the channel — or from the workspace — in the gap
+   * still wrote, and a direct service caller was never gated at all. The human
+   * rule's extra hop (`conversation_users` seat AND `workspace_users` membership,
+   * v25) is not a reason to leave it there; it is a reason for the SCOPE to expose
+   * the placement authority's human face, which it now does.
+   *
+   * AND UNCONDITIONALLY, which is why this takes no `SendMessagePolicy` (@Cindy
+   * B8). Participation was briefly a policy field that both arms set to `true`;
+   * a flag with no legal current value only offers a future reader somewhere to
+   * turn a security invariant off. A new actor kind must widen
+   * {@link SendMessageActor} and state its arm HERE, in the gate.
+   */
+  private assertPostAuthority(
     tx: MessageTxScope,
+    conversation: ConversationDto,
     actor: SendMessageActor,
-    policy: SendMessagePolicy,
-    sourceConversationId: string,
   ): void {
-    if (actor.kind !== 'agent') return;
-    if (!tx.agents.get(actor.agentId)) {
-      throw new ActorError('agent_not_found', 'agent not found');
+    if (conversation.closed_at !== null) {
+      throw new ConversationError('conversation_closed', 'conversation is closed');
     }
+    if (conversation.archived_at !== null) {
+      throw new ConversationError(
+        'conversation_archived',
+        'conversation is archived',
+      );
+    }
+    if (actor.kind === 'agent') {
+      if (!tx.agents.get(actor.agentId)) {
+        throw new ActorError('agent_not_found', 'agent not found');
+      }
+      if (!tx.conversations.isAgentParticipant(conversation.id, actor.agentId)) {
+        throw new ActorError(
+          'agent_not_participant_of_conversation',
+          'agent is not a participant of this conversation',
+        );
+      }
+    }
+    if (actor.kind === 'user') {
+      // No existence check to mirror `agents.get`: the actor id here is an
+      // authenticated principal, and participation is FALSE for an id that names
+      // nobody — a missing user cannot hold a seat, be an endpoint, or be a
+      // workspace member — so a separate lookup would add a second refusal for a
+      // case this one already covers.
+      if (!tx.conversations.isUserParticipant(conversation.id, actor.userId)) {
+        throw new ActorError(
+          'user_not_participant_of_conversation',
+          'user is not a participant of this conversation',
+        );
+      }
+    }
+    // A property of the CONVERSATION, so it is asked for every actor kind: a
+    // human's send into a DM whose agent was deleted is refused by the same fact
+    // as the agent's. The rule itself lives in shared, shared with
+    // `canPostToConversation`; only the two facts it reads come from this scope.
+    const endpoints = tx.conversations.endpointFacts(conversation.id);
     if (
-      policy.requireSenderMembership
-      && !tx.conversations.getAgent(sourceConversationId, actor.agentId)
+      endpoints !== null
+      && directPairIsReadOnlyForSurvivor(endpoints, endpoint =>
+        tx.conversations.endpointPrincipalExists(endpoint),
+      )
     ) {
-      throw new ActorError(
-        'agent_not_member_of_conversation',
-        'agent is not a member of this conversation',
+      throw new ConversationError(
+        'conversation_endpoint_gone',
+        'the other endpoint of this direct conversation no longer exists',
       );
     }
   }

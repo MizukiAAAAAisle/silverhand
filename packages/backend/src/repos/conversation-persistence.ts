@@ -17,6 +17,7 @@ import { AttachmentRepo } from './attachment-repo.js';
 import { ConversationInboxRepo } from './conversation-inbox-repo.js';
 import { ConversationNameRepo } from './conversation-name-repo.js';
 import { ConversationRepo } from './conversation-repo.js';
+import { createEndpointPrincipalPresence } from './endpoint-principal-presence.js';
 import { MessageRepo } from './message-repo.js';
 import { NotificationRepo } from './notification-repo.js';
 import { ThreadFollowerRepo } from './thread-follower-repo.js';
@@ -104,6 +105,10 @@ export function createSqliteConversationPersistence(
   // `db`, so both writes land in whatever transaction the caller opened, and
   // `conversation_names` still has exactly one writing module.
   const names = new ConversationNameRepo(db);
+  // The endpoint-liveness dispatch the write gate's `direct_pair` narrowing needs
+  // — the SAME composition the request-layer ACL uses
+  // (`authorization-reads.ts`), so both faces of one rule answer identically.
+  const endpointPresence = createEndpointPrincipalPresence({ agents, users });
 
   // --- channel domain -----------------------------------------------------
 
@@ -313,8 +318,40 @@ export function createSqliteConversationPersistence(
 
   const messageConversations: MessageTxConversationsPort = {
     get: id => conversations.get(id),
+    // The PLACEMENT authority's boolean face (§4.2). Not `getAgent`: a DM and an
+    // inbox have no roster row, so the roster predicate this replaced made every
+    // agent send into a DM fail (#task:2021 P4-4).
+    isAgentParticipant: (conversationId, agentId) =>
+      conversations.isAgentParticipant(conversationId, agentId),
+    // The SAME authority for the other principal kind (@Cindy B7). Its human arms
+    // are the v25 pair (seat AND workspace membership), the `human` endpoint, and
+    // no inbox arm at all — all three inside one SQL predicate, so this face
+    // cannot restate half of the rule.
+    isUserParticipant: (conversationId, userId) =>
+      conversations.isUserParticipant(conversationId, userId),
+    // The roster-seat question, now used ONLY by thread-follower eligibility —
+    // see the port doc for why that one stays roster-shaped until P4-5.
     getAgent: (conversationId, agentId) =>
       conversations.getAgent(conversationId, agentId),
+    // Projection point: the write gate's `direct_pair` narrowing reads the
+    // placement arc's columns and nothing else. Listed field by field rather
+    // than returned bare — `ConversationIdentity` is a structural supertype of
+    // `ConversationEndpointRef`, so a pass-through would type-check while handing
+    // the application the whole identity row at runtime (R4).
+    endpointFacts: id => {
+      const row = conversations.getIdentity(id);
+      if (!row) return null;
+      return {
+        placement_kind: row.placement_kind,
+        endpoint_a_kind: row.endpoint_a_kind,
+        endpoint_a_id: row.endpoint_a_id,
+        endpoint_b_kind: row.endpoint_b_kind,
+        endpoint_b_id: row.endpoint_b_id,
+        endpoint_a_deleted_at: row.endpoint_a_deleted_at,
+        endpoint_b_deleted_at: row.endpoint_b_deleted_at,
+      };
+    },
+    endpointPrincipalExists: endpointPresence,
     listAgents: id => conversations.listAgents(id),
     listUserMemberIds: id => conversations.listUserMembers(id).map(u => u.id),
     // Projection point: the inbox arc's only fact the CC write may see is the
@@ -403,28 +440,47 @@ export function createSqliteConversationPersistence(
     },
   };
 
+  /** Root-only, same reason as {@link assertChannelTxRoot}: nested,
+   *  `.immediate()` degrades to a savepoint SILENTLY and takes no write lock, so
+   *  the write gate's commit-time authority would rest on nothing while every
+   *  test still passed. */
+  const assertMessageTxRoot = (): void => {
+    if (db.inTransaction) {
+      throw new Error(
+        'message UnitOfWork: immediate transactions are root-only; already inside a transaction',
+      );
+    }
+  };
+
   const messageUow: MessageUnitOfWork = {
     /**
-     * Deferred BEGIN — a LOCK-WINDOW POLICY of this SQLite composition, not a
-     * claim that the callbacks are race-free. Escalating to IMMEDIATE would put
-     * the write lock around the (potentially large) thread-window reads for
-     * every send, and it is not what makes the one race that matters safe:
-     * the per-stream sequence head is resolved EXPLICITLY by
-     * `insertForConversationIfFresh`'s CAS, which fails closed with
-     * `MessageFreshnessGuardError` instead of relying on lock ordering.
+     * BEGIN IMMEDIATE, not the default deferred BEGIN (#task:2021 P4-4, @Cindy
+     * B6). The send's write gate — lifecycle ∧ participation ∧
+     * not-survivor-read-only — READS facts owned by other aggregates and then
+     * writes on their strength. Under a deferred BEGIN those reads run with no
+     * lock held, so a rival connection could revoke the seat / archive the
+     * conversation / delete the peer AFTER the gate said yes and the insert would
+     * still land: exactly the stale-authorization defect the gate exists to
+     * remove, one layer down. Source position is not a concurrency mechanism, so
+     * this composition names one — the file-wide write lock, taken at BEGIN and
+     * held to COMMIT.
      *
-     * What this composition does NOT promise: the callbacks also gate writes on
-     * other reads — conversation archived/closed state, actor membership,
-     * attachment ownership, thread membership/follower rows. No method on
-     * `MessageTxScope` declares a cross-connection isolation obligation for
-     * those, so their stability here is a property of the single-connection
-     * SQLite topology (a stale decision surfaces as a failed snapshot upgrade),
-     * NOT something derivable from the CAS. A pooled/PG adapter must decide
-     * per read whether it needs transaction isolation, a locking read, or a
-     * conditional write — see the `MessageUnitOfWork` port doc.
+     * Cost, stated honestly: the lock window now spans the callback's reads,
+     * including the thread-window ones. It is a longer window on the SAME lock
+     * every send already had to take to insert its row — this engine has one
+     * writer either way — so it changes lock DURATION, not the set of sends that
+     * contend. What it buys is that "the gate answers at commit time" is provable
+     * (`conversation-persistence.test.ts` points a second connection at it)
+     * rather than a comment.
+     *
+     * The freshness CAS stays exactly as it was and is still the ONLY mechanism
+     * for the per-stream head: `insertForConversationIfFresh` runs its own nested
+     * savepoint so a CAS miss rolls back the burned seq without aborting this
+     * transaction.
      */
     atomically<T>(fn: (tx: MessageTxScope) => T): T {
-      return db.transaction(() => fn(messageScope))();
+      assertMessageTxRoot();
+      return db.transaction(() => fn(messageScope)).immediate();
     },
   };
 

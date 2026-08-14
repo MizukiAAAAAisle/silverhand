@@ -144,8 +144,16 @@ function bootstrap() {
   // tx scope. `txWrap.current` is read per transaction, so a test arms its
   // fault / authority swap AFTER its setup writes committed normally.
   const txWrap: { current: ((tx: MessageTxScope) => MessageTxScope) | null } = { current: null };
+  // The GAP instrument (@Cindy B7): a rival's write that COMMITS between the
+  // request layer's authorization answer and BEGIN. `txWrap` cannot express it —
+  // a write from inside the callback rolls back with the transaction under test.
+  const txSeam: { current: (() => void) | null } = { current: null };
   const service = new ConversationMessageService({
-    uow: uowWithScopeWrap(persistence.message.uow, () => txWrap.current),
+    uow: uowWithScopeWrap(
+      persistence.message.uow,
+      () => txWrap.current,
+      () => txSeam.current,
+    ),
     threadFollow: persistence.threadFollow,
     delivery: persistence.delivery,
     unreadPublish: createUnreadPublishAdapter({ db, events }),
@@ -188,6 +196,7 @@ function bootstrap() {
     service,
     persistence,
     txWrap,
+    txSeam,
     workspace,
     channel,
     alice,
@@ -2189,6 +2198,418 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
       expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
       expect(t.messages.latestSeqForConversation(t.channel.id)).toBe(0);
       expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE SEND WRITE GATE (#task:2021 P4-4, finding (b)).
+ *
+ * `canPostToConversation` answers the same question at the request layer, and
+ * `direct-pair-endpoint-acl.test.ts` pins it there. This block is about the
+ * OTHER copy — the one inside the send transaction — and the two claims that
+ * only it can make:
+ *
+ *  1. PARTICIPATION IS THE PLACEMENT, INSIDE THE TRANSACTION TOO. The gate used
+ *     to ask "is there a `conversation_agents` row", which `direct_pair` and
+ *     `agent_inbox` never have by construction (§4.2). That refused EVERY agent
+ *     send into a DM — the same fact as `dm:@handle` not working at all — while
+ *     the ACL above it said yes. Both faces now resolve through one placement
+ *     authority, so the falsifiers are symmetric: an endpoint may post with NO
+ *     roster row, and a roster row on a DM makes NOBODY a participant.
+ *  2. THE ANSWER IS THE TRANSACTION'S, AT COMMIT TIME. Every conjunct
+ *     (lifecycle, participation, survivor) can change between the request
+ *     layer's resolution and the insert, so the request-layer answer is a
+ *     SNAPSHOT, never a capability token. The scope overrides below are how that
+ *     is stated without a production-only hook: swapping what the SCOPE answers
+ *     changes the refusal, which is only possible if the gate read through it
+ *     (R1) rather than through a captured outside port.
+ *
+ * The `direct_pair` rows come from `ConversationRepo.getOrCreateDirectPair()`,
+ * the aggregate's only constructor: a fixture that assembled the placement's
+ * columns itself would be a second construction authority, and these tests would
+ * then be asserting against a row production can never produce.
+ */
+function openAliceBobDm(t: ReturnType<typeof bootstrap>): string {
+  return t.conversations.getOrCreateDirectPair(
+    { kind: 'agent', id: t.alice.id },
+    { kind: 'agent', id: t.bob.id },
+    1_700_000_000_000,
+  ).conversation.id;
+}
+
+describe('ConversationMessageService.sendMessage — the write gate', () => {
+  it('lets an agent endpoint post into its DM, which has no roster row at all', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      const viewerEvents: Array<{ kind: string }> = [];
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        viewerEvents.push({ kind: e.kind });
+      });
+
+      const result = await t.service.sendMessage({
+        conversationId: dm,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+        content: 'hi',
+      });
+      unsubViewer();
+
+      expect(result.targetConversationId).toBe(dm);
+      const stored = t.messages.listForConversation(dm);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toMatchObject({
+        from_kind: 'agent',
+        from_agent_id: t.alice.id,
+      });
+      // THE falsifier: the send cannot have been admitted by a roster row,
+      // because the placement has none — if this list ever becomes non-empty the
+      // test stops proving anything.
+      expect(t.conversations.listAgents(dm)).toEqual([]);
+      // KNOWN GAP, pinned deliberately (P4-5, the recipient boundary): main-line
+      // recipients are still the roster, so a DM delivers to nobody. The write
+      // gate is fixed; who receives is a separate slice with its own review, and
+      // this expectation is the reminder that it is still open.
+      expect(t.fake.delivered).toEqual([]);
+      // The unread read model is keyed by (human viewer, WORKSPACE), so this
+      // placement has no frame to emit — and emitting one anyway means the
+      // publisher THREW post-commit, which reported a durable message as a failed
+      // send. The skip is the contract until the DM read surface exists.
+      expect(viewerEvents.filter(e => e.kind === 'unread_updated')).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('treats a stray roster row on a DM as inert, not as participation', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      const stranger = t.agents.create(
+        { name: 'stranger', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      // The row a future "fix" would fall through to. On a placement whose
+      // participants ARE its endpoints it must mean nothing.
+      t.conversations.addAgent(dm, stranger.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: stranger.id, conversationId: dm },
+          content: 'let me in',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'agent_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+      expect(t.messages.latestSeqForConversation(dm)).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses the survivor of a half-dead DM with conversation_endpoint_gone', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      t.agents.delete(t.bob.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          content: 'anyone there',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ConversationError',
+        code: 'conversation_endpoint_gone',
+      });
+      // Read-only, not closed: history survives and the lifecycle columns are
+      // untouched, so the refusal is derived from the endpoints every time.
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+      expect(t.conversations.get(dm)).toMatchObject({
+        closed_at: null,
+        archived_at: null,
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('takes participation from the transaction scope, not from a request-layer answer', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      // Armed AFTER setup: the placement really does say "participant", so a
+      // refusal can only come from the scope the callback was handed.
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          conversations: overrideScope(tx.conversations, {
+            isAgentParticipant: () => false,
+          }),
+        });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          content: 'removed in the gap',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'agent_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('takes endpoint liveness from the transaction scope, and only on direct_pair', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      // Both principals are alive and neither endpoint is stamped; the ONLY
+      // source of "gone" is the scope's lookup.
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          conversations: overrideScope(tx.conversations, {
+            endpointPrincipalExists: () => false,
+          }),
+        });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          content: 'peer died in the gap',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ConversationError',
+        code: 'conversation_endpoint_gone',
+      });
+
+      // The same injection on a WORKSPACE placement is vacuous: a channel has no
+      // endpoints, so the narrowing is false there by construction. Without this
+      // arm, a gate that asked the lookup unconditionally would pass the test
+      // above while quietly closing every channel.
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'channels are unaffected',
+      });
+      expect(sent.targetConversationId).toBe(t.channel.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('still judges a workspace channel by its roster', async () => {
+    const t = bootstrap();
+    try {
+      // The other half of "participation is the placement": on the workspace arm
+      // the roster IS the authority, so losing the seat refuses the send even
+      // though the agent is still a workspace member.
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'agent_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE HUMAN ARM of the same gate (#task:2021 P4-4, @Cindy B7).
+ *
+ * A human's participation is a fact the WRITE TRANSACTION asks, unconditionally
+ * and through the same placement authority as an agent's. It is not a per-actor
+ * policy: the request layer's `canPostToConversation` answers before the
+ * transaction opens, so treating its YES as sufficient spends a snapshot as a
+ * capability token. Two consequences, and each gets a falsifier below — a person
+ * whose seat (or whose WORKSPACE membership) is revoked in the gap, and a direct
+ * service caller for whom no route ever ran.
+ *
+ * The refusals are asserted as ZERO WRITES, not as an error alone: an error thrown
+ * after the insert would satisfy a `rejects` assertion while leaving the message in
+ * the stream, which is the whole failure being ruled out.
+ */
+describe('ConversationMessageService.sendMessage — the write gate, human arm', () => {
+  it('refuses a human whose seat was revoked in the gap after the route said yes', async () => {
+    const t = bootstrap();
+    try {
+      // The route's answer, taken from the authority the route actually uses. It
+      // says YES here — which is exactly what makes the sequence a falsifier
+      // rather than a restatement of the refusal.
+      expect(t.conversations.isUserParticipant(t.channel.id, 'local')).toBe(true);
+
+      // …and the rival commits in the GAP: after that answer, before BEGIN.
+      t.txSeam.current = () => {
+        t.conversations.removeUser(t.channel.id, 'local');
+      };
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'removed while I was typing',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+      expect(t.messages.latestSeqForConversation(t.channel.id)).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a human removed from the WORKSPACE though the channel seat survives', async () => {
+    const t = bootstrap();
+    try {
+      // v25's pair, and the reason the human predicate has two conjuncts: the
+      // channel row outlives a workspace removal, so a seat-only rule would keep
+      // admitting this person. Nothing about the conversation changed.
+      t.workspaces.removeUserMember(t.workspace.id, 'local');
+      expect(t.conversations.isUserParticipant(t.channel.id, 'local')).toBe(false);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'ex-member',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('lets a human endpoint post into its DM, which has no roster row at all', async () => {
+    const t = bootstrap();
+    try {
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: t.alice.id },
+        { kind: 'human', id: 'local' },
+        1_700_000_000_000,
+      ).conversation.id;
+
+      const result = await t.service.sendMessage({
+        conversationId: dm,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'hi alice',
+      });
+
+      expect(result.targetConversationId).toBe(dm);
+      expect(t.messages.listForConversation(dm)).toHaveLength(1);
+      // THE falsifier for the endpoint arm: admission cannot have come from a
+      // workspace hop, because this placement HAS no workspace.
+      expect(t.conversations.get(dm)?.workspace_id).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('treats a stray conversation_users row on a DM as inert, not as participation', async () => {
+    const t = bootstrap();
+    try {
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: t.alice.id },
+        { kind: 'agent', id: t.bob.id },
+        1_700_000_000_000,
+      ).conversation.id;
+      // The row a future "fix" would fall through to — here it is not even
+      // planted by the test: the fixture's compatibility trigger seeds every
+      // fixture user into every new conversation, DMs included. So the assertion
+      // is that the row EXISTS and still means nothing.
+      t.conversations.addUser(dm, 'teammate');
+      expect(t.conversations.listUsers(dm).map(u => u.user_id)).toContain('teammate');
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'user', userId: 'teammate' },
+          content: 'let me in',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('takes human participation from the transaction scope, not from a request-layer answer', async () => {
+    const t = bootstrap();
+    try {
+      // The seat and the workspace membership are both real, so a refusal can only
+      // come from the scope the callback was handed (R1).
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          conversations: overrideScope(tx.conversations, {
+            isUserParticipant: () => false,
+          }),
+        });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'removed in the gap',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('never admits a human to an agent_inbox, whoever created the agent', async () => {
+    const t = bootstrap();
+    try {
+      // `created_by_user_id` is MANAGEMENT authority, not a message ACL (§4.2), so
+      // the human predicate has NO inbox arm at all — the creator included. The
+      // inbox is inserted explicitly because `AgentRepo.create` does not carry the
+      // aggregate's inbox invariant (see its docblock).
+      const inbox = t.conversations.insertAgentInbox(t.alice.id, 1_700_000_000_000);
+      expect(t.conversations.getAgentInbox(t.alice.id)?.id).toBe(inbox.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: inbox.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'writing into your inbox',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(inbox.id)).toHaveLength(0);
     } finally {
       t.cleanup();
     }

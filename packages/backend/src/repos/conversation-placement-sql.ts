@@ -102,13 +102,11 @@ function workspaceAgentRosterEdge(conversationAlias: string): string {
  * caller here is a set-shaped face (delivery fan-out, activity, runtime control
  * planes, target gates).
  *
- * A HUMAN is never a participant of an inbox, and no live face enumerates a
- * person's `direct_pair` rows yet (the human DM read surfaces land with
- * #task:2022), so there is deliberately no user-side counterpart here: human
- * faces stay `conversation_users`-gated for the workspace arm, and the human ACL
- * reaches `direct_pair` through the code face (`resolveParticipation`), which
- * needs no SQL. The predicate this file would hold is a one-liner; writing it
- * before a caller exists would make it an unverified contract.
+ * The human counterpart is {@link userParticipates} — the same rule for the
+ * other principal kind. It exists now because a caller does (@Cindy B7): the
+ * send's write gate asks participation of EVERY actor kind inside the
+ * transaction, so "the human arm has no SQL face" stopped being true the moment
+ * that gate stopped ending at the route.
  */
 export function agentParticipates(
   conversationAlias: string,
@@ -124,5 +122,68 @@ export function agentParticipates(
            OR (${conversationAlias}.placement_kind = 'agent_inbox'
                AND ${conversationAlias}.inbox_agent_id = ?))`,
     params: [agentId, agentId, agentId, agentId],
+  };
+}
+
+/**
+ * THE human roster read of the placement layer, and the only one — the same
+ * shape and the same reason as {@link workspaceAgentRosterEdge}: the workspace
+ * predicate is ANDed INSIDE the fragment so no caller can separate the gating
+ * from the read, and Gate 9 pins it by TEXT so a second `conversation_users` /
+ * `workspace_users` read anywhere in this file is countable rather than a matter
+ * of reading nearby prose.
+ *
+ * TWO conjuncts, because human participation in a channel is two facts (v25):
+ * the explicit `conversation_users` seat AND workspace membership. `permissions
+ * .ts` applies exactly this pair (`canViewWorkspace` then `isConversationUser`),
+ * and a SQL face that kept only the seat would admit a person who had been
+ * removed from the workspace but whose channel row outlived the removal.
+ *
+ * Binds TWO parameters (the user id, twice) — see {@link PlacementSqlFragment}
+ * for why the caller never counts them itself.
+ */
+function workspaceHumanRosterEdge(conversationAlias: string): string {
+  return `(${conversationAlias}.placement_kind = 'workspace'
+            AND EXISTS (
+              SELECT 1 FROM conversation_users cu_p
+               WHERE cu_p.conversation_id = ${conversationAlias}.id
+                 AND cu_p.user_id = ?
+            )
+            AND EXISTS (
+              SELECT 1 FROM workspace_users wu_p
+               WHERE wu_p.workspace_id = ${conversationAlias}.workspace_id
+                 AND wu_p.user_id = ?
+            ))`;
+}
+
+/**
+ * SQL predicate: `userId` PARTICIPATES in this conversation (§4.2) — the human
+ * face of {@link agentParticipates}, arm for arm:
+ *
+ *   - `workspace` — the two-fact roster edge above.
+ *   - `direct_pair` — a `human` ENDPOINT naming this user. Rosterless by
+ *     construction, so a stray `conversation_users` row on a DM is INERT here,
+ *     exactly as a stray `conversation_agents` row is for the agent face. Whether
+ *     the OTHER endpoint's principal still exists is not asked here either: that
+ *     closes the WRITE gate, not participation.
+ *   - `agent_inbox` — ABSENT, and its absence is the rule rather than a gap. A
+ *     human is never a participant of an inbox, not even the person who created
+ *     the agent: `agents.created_by_user_id` is MANAGEMENT authority, not a
+ *     message ACL (the same wording shared's `resolveParticipation` carries). So
+ *     this predicate is FALSE there by having no arm to be true in, which is why
+ *     there is nothing to keep in sync with the code face.
+ */
+export function userParticipates(
+  conversationAlias: string,
+  userId: string,
+): PlacementSqlFragment {
+  return {
+    sql: `(${workspaceHumanRosterEdge(conversationAlias)}
+           OR (${conversationAlias}.placement_kind = 'direct_pair'
+               AND ((${conversationAlias}.endpoint_a_kind = 'human'
+                     AND ${conversationAlias}.endpoint_a_id = ?)
+                 OR (${conversationAlias}.endpoint_b_kind = 'human'
+                     AND ${conversationAlias}.endpoint_b_id = ?))))`,
+    params: [userId, userId, userId, userId],
   };
 }
