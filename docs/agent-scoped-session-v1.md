@@ -421,8 +421,8 @@ slot**，而且会让 A 会话的 runtime 凭 live membership 去操作 B 会话
 
 ```
 RuntimePrincipal =
-  | AgentSlot(agent_id, generation)                       -- session_scope='agent'
-  | ConversationSlot(conversation_id, agent_id, generation) -- session_scope='conversation'
+  | AgentSlot(agent_id, generation, daemon_instance_id)                       -- session_scope='agent'
+  | ConversationSlot(conversation_id, agent_id, generation, daemon_instance_id) -- session_scope='conversation'
 ```
 
 | principal | target 判据 |
@@ -435,7 +435,9 @@ RuntimePrincipal =
 **没有 generation 概念**（`auth/agent-token-store.ts`）。⇒ verifier 每请求把 token 的 generation 与
 **live slot generation** 比较，不等即 401；`revokeFor` 退化为加速路径而不是正确性来源。
 
-**路由代数**：终局是**一条**路由 `/internal/agents/:aid/*` + 上面这**一个** principal 类型（不是两条路由）。
+**路由代数**：终局是**一条** canonical family
+`/internal/agents/:aid/conversations/:cid/*`（`:cid` 是本次请求的 raw target identity）+ 上面这**一个**
+principal 类型（不是两条 auth 权威）。
 过渡期旧 `/internal/conversations/:cid/agents/:aid/*` 作**桥**，删除条件可观测（无 runtime 在用它）。
 「被移出会话就杀 runtime」从此是 **runtime lifecycle policy（按 `session_scope` 取值）**，不是 auth 机制 ——
 两根轴分开，才能同时满足「conversation-scoped 行为不变」和「agent-scoped 只拒 target」。

@@ -30,6 +30,7 @@ interface Fixture {
   events: Array<{ conv: string; kind: string; payload: unknown }>;
   publisher: EventPublisher;
   projector: DbRuntimeStatusProjector;
+  custody: { generation: number; daemonInstanceId: string };
   cleanup: () => void;
   /** Current joined membership + runtime-slot projection for the seeded pair. */
   row(): { status: string; pid: number | null; cli_session_id: string | null };
@@ -80,6 +81,13 @@ function makeFixture(
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
   const projector = new DbRuntimeStatusProjector(runtimeSlots, publisher);
+  const daemonInstanceId = 'daemon-projector-test';
+  const claimed = runtimeSlots.claimGeneration({
+    scope: { kind: 'conversation', conversationId: channel.id, agentId: agent.id },
+    daemonInstanceId,
+    status: opts.initialStatus ?? 'starting',
+  });
+  if (!claimed) throw new Error('runtime slot claim failed');
 
   return {
     conversations,
@@ -88,6 +96,7 @@ function makeFixture(
     events,
     publisher,
     projector,
+    custody: { generation: claimed.generation, daemonInstanceId },
     cleanup,
     row: () => {
       const r = conversations.getAgent(channel.id, agent.id);
@@ -104,6 +113,7 @@ describe('DbRuntimeStatusProjector — sessionInit', () => {
       fix.projector.sessionInit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         cliSessionId: 'sess-cafe-1234',
       });
       expect(fix.row()).toEqual({
@@ -136,11 +146,13 @@ describe('DbRuntimeStatusProjector — sessionInit', () => {
       fix.projector.sessionInit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         cliSessionId: 'sess-cafe-1234',
       });
       fix.projector.sessionInit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         cliSessionId: 'sess-cafe-1234',
       });
       expect(fix.row().status).toBe('active');
@@ -158,6 +170,7 @@ describe('DbRuntimeStatusProjector — runtimeReady', () => {
       fix.projector.runtimeReady({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
       });
       expect(fix.row()).toEqual({
         status: 'active',
@@ -197,6 +210,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: true,
         code: 0,
         initTimedOut: false,
@@ -221,6 +235,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: false,
         code: 137,
         initTimedOut: false,
@@ -244,6 +259,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: false,
         code: 0,
         initTimedOut: false,
@@ -264,6 +280,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: false,
         code: 0,
         initTimedOut: true,
@@ -283,6 +300,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: true,
         code: 0,
         initTimedOut: false,
@@ -304,6 +322,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: true,
         code: 0,
         initTimedOut: false,
@@ -325,6 +344,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: false,
         code: 1,
         initTimedOut: false,
@@ -354,6 +374,7 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       fix.projector.runtimeExit({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         intentional: true,
         code: 0,
         initTimedOut: false,
@@ -362,6 +383,50 @@ describe('DbRuntimeStatusProjector — runtimeExit', () => {
       });
       expect((fix.events[0]!.payload as { run_state: AgentRunState | null }).run_state)
         .toEqual(baseRunState);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('finalize is terminal: delayed projections and duplicate exits emit nothing and cannot revive the slot', () => {
+    const fix = makeFixture({ initialStatus: 'active' });
+    try {
+      const finalized = fix.projector.runtimeExit({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        custody: fix.custody,
+        intentional: true,
+        code: 0,
+        initTimedOut: false,
+        fatalError: false,
+        runState: null,
+      });
+      expect(finalized).not.toBeNull();
+      expect(fix.events).toHaveLength(1);
+
+      fix.projector.sessionInit({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        custody: fix.custody,
+        cliSessionId: 'late-session',
+      });
+      const duplicate = fix.projector.runtimeExit({
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        custody: fix.custody,
+        intentional: false,
+        code: 1,
+        initTimedOut: false,
+        fatalError: false,
+        runState: null,
+      });
+      expect(duplicate).toBeNull();
+      expect(fix.events).toHaveLength(1);
+      expect(fix.row()).toEqual({
+        status: 'idle',
+        pid: null,
+        cli_session_id: null,
+      });
     } finally {
       fix.cleanup();
     }
@@ -375,6 +440,7 @@ describe('DbRuntimeStatusProjector — initRetrying', () => {
       fix.projector.initRetrying({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         retryAttempt: 2,
         maxRetries: 3,
         timeoutReason: 'silence',
@@ -399,6 +465,7 @@ describe('DbRuntimeStatusProjector — initRetrying', () => {
       fix.projector.initRetrying({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         retryAttempt: 1,
         maxRetries: 3,
         timeoutReason: undefined,
@@ -418,6 +485,7 @@ describe('DbRuntimeStatusProjector — initCooldown', () => {
       fix.projector.initCooldown({
         conversationId: fix.channelId,
         agentId: fix.agentId,
+        custody: fix.custody,
         cooldownUntil: 1700000999000,
         attemptsExhausted: 3,
       });

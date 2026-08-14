@@ -4,7 +4,7 @@
  *
  * # Why this exists
  *
- * The wake path re-frames one batch PER RECIPIENT: `formatDeliveryInstruction`
+ * The wake path re-frames one batch PER RECIPIENT: `formatInboxBatchPresentation`
  * answers "does this batch address me", which is a different question for every
  * agent, so the surrounding text is rebuilt each time. The addressing set it
  * reads to answer is NOT per-recipient, but it was re-derived with the batch, so
@@ -28,8 +28,8 @@
  * import surface of `@silverhand/shared/reference-markdown` is what enforces it
  * (#task:2000 review round 2): the send boundary derives once per send and
  * threads the result to its in-send consumers; this module is the same single
- * authority for the wake phase. That is why `formatDeliveryInstruction` and
- * `formatInboxBatch` take the resolver as a REQUIRED parameter and no longer
+ * authority for the wake phase. That is why `formatInboxBatchPresentation`
+ * takes the resolver as a REQUIRED parameter and no longer
  * import the parser — a formatter with a parse of its own would be a second
  * derivation the type checker could not see.
  *

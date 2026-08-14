@@ -21,8 +21,15 @@
  * path), plus the name-resolver callbacks the formatters call to turn
  * agent/user ids into `@<handle>` text.
  */
-import { resolveAttachmentLabels } from '@silverhand/shared';
-import type { AttachmentSnapshot, FromKind, Reference } from '@silverhand/shared';
+import {
+  composeRuntimeDeliveryPresentation,
+  resolveAttachmentLabels,
+  type AttachmentSnapshot,
+  type FromKind,
+  type Reference,
+  type RuntimeDeliveryInstructionSignal,
+  type RuntimeDeliveryPresentation,
+} from '@silverhand/shared';
 import {
   extractAttachmentSnapshotsFromRow,
   extractSubtypeFromRow,
@@ -103,34 +110,83 @@ export function formatInboxBatch(
   sendMessageTool: string,
   referencesOf: DeliveryReferencesOf,
 ): string {
-  const header =
-    items.length === 1
-      ? 'You have one message waiting since you were last active:'
-      : `You have ${items.length} messages waiting since you were last active (oldest first):`;
-  const body = items
-    .map(({ message }) => {
-      const meta = formatStdinMessageHeader(
-        message,
-        agentNameById,
-        agentComputerIdById,
-        userNameById,
-        defaultUserHandle,
-      );
-      const suffix = formatAttachmentSuffix(
-        extractAttachmentSnapshotsFromRow(message),
-      );
-      return `${meta}\n${message.content}${suffix}`;
-    })
-    .join('\n\n---\n\n');
-  return `${header}\n\n${body}\n\n${formatDeliveryInstruction(
-    items.map(({ message }) => ({
-      ...message,
-      subtype: extractSubtypeFromRow(message),
-    })),
+  return formatInboxBatchPresentation(
+    items,
+    agentNameById,
+    agentComputerIdById,
+    userNameById,
+    defaultUserHandle,
     recipientAgentName,
     sendMessageTool,
     referencesOf,
-  )}`;
+  ).text;
+}
+
+/** Return the canonical batch plus composable per-row presentation metadata. */
+export function formatInboxBatchPresentation(
+  items: readonly InboxBatchEntry[],
+  agentNameById: (id: string) => string | undefined,
+  agentComputerIdById: (id: string) => string | undefined,
+  userNameById: (id: string) => string | undefined,
+  defaultUserHandle: string | undefined,
+  recipientAgentName: string | undefined,
+  sendMessageTool: string,
+  referencesOf: DeliveryReferencesOf,
+): { text: string; presentations: readonly RuntimeDeliveryPresentation[] } {
+  const presentations = items.map(({ message }) => {
+    const meta = formatStdinMessageHeader(
+      message,
+      agentNameById,
+      agentComputerIdById,
+      userNameById,
+      defaultUserHandle,
+    );
+    const suffix = formatAttachmentSuffix(
+      extractAttachmentSnapshotsFromRow(message),
+    );
+    return {
+      body: `${meta}\n${message.content}${suffix}`,
+      instruction: deliveryInstructionSignal(
+        {
+          ...message,
+          subtype: extractSubtypeFromRow(message),
+        },
+        recipientAgentName,
+        referencesOf,
+      ),
+    } satisfies RuntimeDeliveryPresentation;
+  });
+  return {
+    text: composeRuntimeDeliveryPresentation(presentations, sendMessageTool),
+    presentations,
+  };
+}
+
+/**
+ * Classify one message for the shared batch-instruction authority.
+ * Addressing is derived in this wake phase from the required memoized resolver;
+ * an undirected user message addresses every recipient.
+ */
+function deliveryInstructionSignal(
+  message: MessageLite,
+  recipientAgentName: string | undefined,
+  referencesOf: DeliveryReferencesOf,
+): RuntimeDeliveryInstructionSignal {
+  const references = referencesOf(message);
+  const addressesRecipient =
+    recipientAgentName !== undefined
+    && references.some(
+      ref => ref.kind === 'agent' && ref.handle === recipientAgentName,
+    );
+  if (message.from_kind === 'user') {
+    return references.length === 0 || addressesRecipient
+      ? 'user_for_recipient'
+      : 'user_for_other';
+  }
+  if (message.from_kind !== 'system' && addressesRecipient) {
+    return 'non_system_mention';
+  }
+  return message.from_kind === 'system' ? 'system' : 'other';
 }
 
 /**
@@ -253,81 +309,4 @@ export function formatAttachmentSuffix(
       ? '[1 attachment — the label (e.g. `Image #1`) is how the sender refers to it; use `silverhand file view --attachment-id <id>` with the id below to read it]'
       : `[${attachments.length} attachments — the label (e.g. \`Image #1\`) is how the sender refers to each; use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
   return `\n\n${header}\n${lines.join('\n')}`;
-}
-
-/** Append a directive line at the end of the stdin payload that tells
- *  the agent what kind of reply is expected. The directive varies by
- *  whether the batch includes a user-authored message addressed at the
- *  recipient, only references them by mention, or is system-only.
- *
- *  #task:2000 — "addressed" is the reference contract, evaluated in THIS phase
- *  and not inherited from the send path: this is a different phase (a wake batch,
- *  read per recipient) with a different question ("does this batch address me"),
- *  and a value threaded from insert time would be a second, staler authority on
- *  it. Which message addresses whom still comes from one derivation per message
- *  here — see {@link DeliveryReferencesOf}.
- *
- *  The undirected sentinel keeps its meaning — a user message that addresses
- *  nobody is for everyone — and now says so by the same rule the rest of the
- *  system uses. A user message whose only handle sits in a code span or a quote
- *  therefore classifies as undirected, which is a deliberate consequence of
- *  having ONE definition of "addressed" rather than a lexical one here and a
- *  structural one everywhere else. */
-export function formatDeliveryInstruction(
-  messages: MessageLite[],
-  recipientAgentName: string | undefined,
-  sendMessageTool: string,
-  referencesOf: DeliveryReferencesOf,
-): string {
-  const parsed = messages.map(m => ({
-    message: m,
-    references: referencesOf(m),
-  }));
-  const addressesRecipient = (refs: readonly Reference[]): boolean =>
-    recipientAgentName !== undefined
-    && refs.some(
-      ref => ref.kind === 'agent' && ref.handle === recipientAgentName,
-    );
-  const nonSystemMentionsRecipient = parsed.some(
-    p => p.message.from_kind !== 'system' && addressesRecipient(p.references),
-  );
-  const userMessages = parsed.filter(p => p.message.from_kind === 'user');
-  const hasUserMessage = userMessages.length > 0;
-  const hasUserMessageForRecipient = userMessages.some(
-    p => p.references.length === 0 || addressesRecipient(p.references),
-  );
-  const hasOnlySystemMessages = messages.every(m => m.from_kind === 'system');
-
-  if (hasUserMessage && hasUserMessageForRecipient) {
-    return (
-      `Respond as appropriate — call \`${sendMessageTool}\` with a brief reply, ` +
-      `progress update, blocker question, or final summary before stopping. ` +
-      `Complete ALL your work before stopping.`
-    );
-  }
-
-  if (hasUserMessage) {
-    return (
-      `The user message appears addressed to another agent. Do not call ` +
-      `\`${sendMessageTool}\` unless you own or were assigned the relevant ` +
-      `task, or must flag a concrete blocker. Complete ALL work you choose ` +
-      `to take before stopping.`
-    );
-  }
-
-  if (nonSystemMentionsRecipient) {
-    return (
-      `Respond as appropriate — call \`${sendMessageTool}\` before stopping. ` +
-      `Complete ALL your work before stopping.`
-    );
-  }
-
-  if (hasOnlySystemMessages) {
-    return (
-      `Respond as appropriate. System messages do not require a reply ` +
-      `unless they explicitly ask for one.`
-    );
-  }
-
-  return 'Respond as appropriate.';
 }

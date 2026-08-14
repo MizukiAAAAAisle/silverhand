@@ -20,9 +20,9 @@ import {
   ListTasksQuerySchema,
   UnclaimTaskInputSchema,
   UpdateTaskStatusInputSchema,
-  internalPaths,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 export function registerTaskRoutes(
   app: Hono<AppEnv>,
@@ -30,7 +30,7 @@ export function registerTaskRoutes(
 ): void {
   const { ctx, agents, conversations, workspaces } = deps;
 
-  app.get(internalPaths.agentListConversationTasks(':cid', ':aid'), c => {
+  app.get(internalAgentRoutePaths.tasks, c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -107,7 +107,7 @@ export function registerTaskRoutes(
     });
   });
 
-  app.post(internalPaths.agentCreateConversationTasks(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.taskCreate, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -203,7 +203,7 @@ export function registerTaskRoutes(
     return c.json(result);
   });
 
-  app.post(internalPaths.agentClaimConversationTasks(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.taskClaim, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -234,7 +234,7 @@ export function registerTaskRoutes(
     return c.json({ results });
   });
 
-  app.post(internalPaths.agentUnclaimConversationTask(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.taskUnclaim, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -261,7 +261,7 @@ export function registerTaskRoutes(
     return c.json(result);
   });
 
-  app.post(internalPaths.agentUpdateConversationTaskStatus(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.taskUpdateStatus, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -289,7 +289,7 @@ export function registerTaskRoutes(
     return c.json(result);
   });
 
-  app.post(internalPaths.agentEditConversationTask(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.taskEdit, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -325,7 +325,7 @@ export function registerTaskRoutes(
     return c.json(result);
   });
 
-  app.get(internalPaths.agentGetConversationTaskDetail(':cid', ':aid'), c => {
+  app.get(internalAgentRoutePaths.taskDetail, c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {

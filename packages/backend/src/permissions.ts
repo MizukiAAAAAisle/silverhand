@@ -398,7 +398,7 @@ export function canAddConversationMember(
  *      `agents.created_by_user_id` — the creator.
  *   2. `principal.kind === 'agent'` and `principal.agentId === agentId`
  *      — the agent acting as itself. Today only reachable on internal
- *      routes (`/internal/conversations/:cid/agents/:aid/*`); the
+ *      routes (`/internal/agents/:aid/conversations/:cid/*`); the
  *      public PATCH `/api/agents/:id` is gated to user principals by
  *      `installRequireRegisteredViewerMiddleware`. Locked in here so
  *      future internal self-edit endpoints (PR-2/3) stay consistent.

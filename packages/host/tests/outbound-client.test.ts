@@ -114,6 +114,7 @@ describe('outbound daemon websocket client', () => {
       event: 'runtime_state',
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       state: {
         runId: 'r1',
         agentId: 'a1',
@@ -629,6 +630,7 @@ describe('outbound daemon websocket client', () => {
       event: 'runtime_state',
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       state: {
         runId: 'r1',
         agentId: 'a1',

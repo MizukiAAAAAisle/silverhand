@@ -56,6 +56,7 @@ import { mkdirSync } from 'node:fs';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
 import type { RuntimeKind } from '@silverhand/shared';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
+import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import {
   assertOutboundAdapterWired,
   bootDaemonWithSupervisor,
@@ -71,6 +72,11 @@ const FIXTURE = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../../host/tests/_fixtures/echo-runtime.cjs',
 );
+const CLI_PROBE_FIXTURE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../host/tests/_fixtures/cli-probe-runtime.cjs',
+);
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 const SESSION_PREFIX = '__G2_SESSION_INIT__:';
 
@@ -102,6 +108,43 @@ function makeSessionInitDriver(sessionId: string): Driver {
       return [{ kind: 'session_init', sessionId: sid }];
     },
     classifyInitProgress: () => null,
+  };
+}
+
+interface ChildCliProbeResult {
+  sessionId: string;
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  error: string | null;
+}
+
+const CLI_PROBE_PREFIX = '__G2_CHILD_CLI_PROBE__:';
+
+function makeCliProbeDriver(
+  sessionId: string,
+  onProbe: (result: ChildCliProbeResult) => void,
+): Driver {
+  return {
+    ...makeSessionInitDriver(sessionId),
+    binary: CLI_PROBE_FIXTURE,
+    buildArgs: (_ctx: DriverSpawnContext): string[] => [
+      CLI_PROBE_FIXTURE,
+      '--session-id',
+      sessionId,
+    ],
+    parseLine: (line: string): ParsedEvent[] => {
+      const idx = line.indexOf(CLI_PROBE_PREFIX);
+      if (idx < 0) return [];
+      const encoded = line.slice(idx + CLI_PROBE_PREFIX.length).trim();
+      const result = JSON.parse(
+        Buffer.from(encoded, 'base64').toString('utf8'),
+      ) as ChildCliProbeResult;
+      onProbe(result);
+      return result.code === 0
+        ? [{ kind: 'session_init', sessionId: result.sessionId }]
+        : [];
+    },
   };
 }
 
@@ -166,6 +209,7 @@ describe('Standalone G2 — backend restart + persistent attach recovery', () =>
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
         VALUES (?, ?, ?)`,
     ).run(workspaceId, agentId, now);
+    new AgentCapabilityRepo(db).replaceSet(workspaceId, agentId, ['read_messages']);
     db.prepare(
       `INSERT INTO conversations
         (id, workspace_id, placement_kind, roster_policy,
@@ -199,8 +243,19 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     // session id (mirrors a real cli `--resume` that would mint
     // a new session on a clean spawn).
     let pendingSessionId = sessionIdFirst;
+    let probeSecondChild = false;
+    const childCliProbeResults: ChildCliProbeResult[] = [];
     daemon = await bootDaemonWithSupervisor(harness, {
-      driverFor: (_kind: RuntimeKind) => makeSessionInitDriver(pendingSessionId),
+      driverFor: (_kind: RuntimeKind) =>
+        probeSecondChild
+          ? makeCliProbeDriver(pendingSessionId, result => {
+              childCliProbeResults.push(result);
+            })
+          : makeSessionInitDriver(pendingSessionId),
+      localSilverhandCliLauncher: {
+        command: join(REPO_ROOT, 'packages/cli/node_modules/.bin/tsx'),
+        args: [join(REPO_ROOT, 'packages/cli/src/cli.ts')],
+      },
     });
 
     const controller1 = harness.backend.context.hostWsController?.();
@@ -213,18 +268,24 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     const serverUrlBefore = harness.serverUrl;
 
     await harness.backend.context.runtimeHost.start(conversationId, agentId);
-    await waitFor(
+    const firstGeneration = await waitFor(
       () => {
         const row = harness!.backend.context.db
-          .prepare<[string, string], { cli_session_id: string | null }>(
-            `SELECT cli_session_id FROM agent_runtime_slots
+          .prepare<
+            [string, string],
+            { cli_session_id: string | null; generation: number }
+          >(
+            `SELECT cli_session_id, generation FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(conversationId, agentId);
-        return row && row.cli_session_id === sessionIdFirst ? true : null;
+        return row && row.cli_session_id === sessionIdFirst
+          ? row.generation
+          : null;
       },
       { timeoutMs: 10_000, label: 'first session_init projection' },
     );
+    expect(firstGeneration).toBeGreaterThan(0);
 
     // Snapshot host_credentials DB state pre-restart so the
     // assertion can prove `restartBackend` did NOT re-issue a new
@@ -285,40 +346,45 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     expect(attached2.connectionId).toMatch(/^hostws-/);
     expect(attached2.connectionId).not.toBe(connectionIdBefore);
 
-    // ── E2E sanity post-restart: a second runtime_start works ───
+    // ── Lost bearer recovery after restart ─────────────────
     //
-    // The original runtime is still spawned (the daemon never
-    // restarted); the supervisor sees the original handle and
-    // delivers to that runtime rather than respawning. To prove the
-    // post-restart backend can ALSO dispatch a brand-new spawn,
-    // first stop the existing runtime, then seed a fresh inbox
-    // message + start. The new session_init projection lands in
-    // DB via the post-restart backend's fanout.
-    await harness.backend.context.runtimeHost.stop(
-      conversationId,
-      agentId,
-    );
+    // Runtime bearer credentials are deliberately process-local to
+    // the backend. The daemon survives this restart, so its old child
+    // still has generation N but no bearer the new backend can verify.
+    // Reattach must therefore fail forward: reject that status row
+    // before cache/liveness/replay, stop exactly N, and observe a clean
+    // status snapshot. The test must not manually stop the child; that
+    // would hide the permanent-401 failure this contract prevents.
     await waitFor(
       () => {
         const row = harness!.backend.context.db
           .prepare<
             [string, string],
-            { status: string; pid: number | null }
+            {
+              status: string;
+              pid: number | null;
+              claimedDaemonInstanceId: string | null;
+            }
           >(
-            `SELECT observed_status AS status, observed_pid AS pid FROM agent_runtime_slots
+            `SELECT observed_status AS status,
+                    observed_pid AS pid,
+                    claimed_by_daemon_instance_id AS claimedDaemonInstanceId
+               FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(conversationId, agentId);
         if (!row) return null;
-        if (row.status !== 'idle') return null;
+        if (row.status !== 'idle' && row.status !== 'crashed') return null;
         if (row.pid !== null) return null;
+        if (row.claimedDaemonInstanceId !== null) return null;
         return true;
       },
-      { timeoutMs: 10_000, label: 'post-restart stop projection' },
+      { timeoutMs: 10_000, label: 'post-restart lost-bearer cleanup' },
     );
 
     const sessionIdSecond = `g2-b6-session-second-${Date.now()}`;
     pendingSessionId = sessionIdSecond;
+    probeSecondChild = true;
     const secondMessageId = 'msg-g2-b6-second';
     harness.backend.context.db
       .prepare(
@@ -374,6 +440,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
             controllerNow?.getAttachment(hostIdBefore) ?? null;
           return {
             expectedSessionId: sessionIdSecond,
+            childCliProbeResults,
             dbRow: dbRow ?? null,
             attachmentNow,
             activeConnections: controllerNow?.activeConnectionCount() ?? null,
@@ -390,14 +457,40 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     const finalRow = harness.backend.context.db
       .prepare<
         [string, string],
-        { status: string; cli_session_id: string | null }
+        { status: string; cli_session_id: string | null; generation: number }
       >(
-        `SELECT observed_status AS status, cli_session_id FROM agent_runtime_slots
+        `SELECT observed_status AS status, cli_session_id, generation
+           FROM agent_runtime_slots
           WHERE conversation_id = ? AND agent_id = ?`,
       )
       .get(conversationId, agentId);
     expect(finalRow).toBeTruthy();
     expect(finalRow!.status).toBe('active');
     expect(finalRow!.cli_session_id).toBe(sessionIdSecond);
+    expect(finalRow!.generation).toBeGreaterThan(firstGeneration);
+
+    // M2: the post-restart child itself invoked the generated `silverhand`
+    // shim. Its stdout is the canonical history DTO returned by the backend,
+    // so this proves both that the fresh bearer reached the process env/shim
+    // and that the canonical internal route accepted it for real business
+    // work. The test parent never reads or replays the bearer.
+    expect(childCliProbeResults).toHaveLength(1);
+    const childProbe = childCliProbeResults[0]!;
+    expect(childProbe.code).toBe(0);
+    expect(childProbe.error).toBeNull();
+    expect(childProbe.stderr).toBe('');
+    const history = JSON.parse(childProbe.stdout) as {
+      target: { conversation_id: string };
+      messages: Array<{ message_ref: { id: string }; content?: string }>;
+    };
+    expect(history.target.conversation_id).toBe(conversationId);
+    expect(history.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message_ref: expect.objectContaining({ id: secondMessageId }),
+          content: 'second message',
+        }),
+      ]),
+    );
   });
 });

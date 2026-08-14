@@ -253,6 +253,43 @@ describe('RuntimeSlotRepo scoped custody authority', () => {
     }
   });
 
+  it('clears a finalized generation session without reopening or rewriting custody', () => {
+    const t = bootstrap();
+    try {
+      const scope = {
+        kind: 'conversation' as const,
+        conversationId: t.conversationId,
+        agentId: t.agentId,
+      };
+      const claimed = t.runtimeSlots.claimGeneration({
+        scope,
+        daemonInstanceId: 'daemon-clear-session',
+      })!;
+      t.runtimeSlots.compareAndSetProjection({
+        scope,
+        expectedGeneration: claimed.generation,
+        expectedDaemonInstanceId: 'daemon-clear-session',
+        patch: { status: 'active', cliSessionId: 'resume-to-clear' },
+      });
+      t.runtimeSlots.finalizeGeneration({
+        scope,
+        expectedGeneration: claimed.generation,
+        expectedDaemonInstanceId: 'daemon-clear-session',
+        status: 'idle',
+      });
+
+      expect(t.runtimeSlots.clearCliSession(scope)).toMatchObject({
+        generation: claimed.generation,
+        claimed_by_daemon_instance_id: null,
+        observed_status: 'idle',
+        observed_pid: null,
+        cli_session_id: null,
+      });
+    } finally {
+      t.db.close();
+    }
+  });
+
   it('reads current state only from the slot, never by folding historical events', () => {
     const t = bootstrap();
     try {

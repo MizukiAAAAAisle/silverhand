@@ -305,6 +305,10 @@ describe('direct driver ready → dispatched (no ack)', () => {
         seq: 42,
         thread_root_id: null,
         delivery_kind: 'turn',
+        presentation: {
+          body: '[msg_id=m3 sender=system type=system target=channel time=2026-01-01T00:00:00+00:00]\ndelivery-text',
+          instruction: 'system',
+        },
       },
     ];
     await c.submitLiveDelivery(

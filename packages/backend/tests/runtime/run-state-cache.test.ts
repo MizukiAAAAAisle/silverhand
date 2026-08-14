@@ -24,6 +24,7 @@ function dto(
   return {
     conversation_id: conversation,
     agent_id: agent,
+    runtime_generation: 1,
     pid: 9001,
     phase: 'ready',
     run_state: null,
@@ -99,6 +100,7 @@ describe('RunStateCache: applyRuntimeState (state event)', () => {
       DAEMON_A,
       CONV,
       AGENT_X,
+      1,
       runState({ status: 'tool_running', detail: 'bash' }),
       1700000002000,
     );
@@ -114,7 +116,7 @@ describe('RunStateCache: applyRuntimeState (state event)', () => {
 
   it('creates a skeleton entry when no prior hydrate exists, defaulting phase=ready', () => {
     const cache = new RunStateCache();
-    cache.applyRuntimeState(DAEMON_A, CONV, AGENT_X, runState());
+    cache.applyRuntimeState(DAEMON_A, CONV, AGENT_X, 1, runState());
     const entry = cache.get(CONV, AGENT_X)!;
     expect(entry.phase).toBe('ready');
     expect(entry.pid).toBeNull();
@@ -129,6 +131,7 @@ describe('RunStateCache: applyRuntimeState (state event)', () => {
       DAEMON_B,
       CONV,
       AGENT_X,
+      1,
       runState({ status: 'failed', terminalReason: 'crashed' }),
     );
     const entry = cache.get(CONV, AGENT_X)!;
@@ -141,8 +144,8 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
   it('applyPhase merges only the phase field on existing entries', () => {
     const cache = new RunStateCache();
     cache.applyRuntimeStatus(DAEMON_A, [dto(CONV, AGENT_X)]);
-    cache.applyRuntimeState(DAEMON_A, CONV, AGENT_X, runState());
-    cache.applyPhase(DAEMON_A, CONV, AGENT_X, 'draining', 1700000003000);
+    cache.applyRuntimeState(DAEMON_A, CONV, AGENT_X, 1, runState());
+    cache.applyPhase(DAEMON_A, CONV, AGENT_X, 1, 'draining', 1700000003000);
     const entry = cache.get(CONV, AGENT_X)!;
     expect(entry.phase).toBe('draining');
     expect(entry.runState?.runId).toBe('run-1');
@@ -151,7 +154,7 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
 
   it('applyPhase creates a skeleton when no prior entry exists', () => {
     const cache = new RunStateCache();
-    cache.applyPhase(DAEMON_A, CONV, AGENT_X, 'spawning');
+    cache.applyPhase(DAEMON_A, CONV, AGENT_X, 1, 'spawning');
     const entry = cache.get(CONV, AGENT_X)!;
     expect(entry.phase).toBe('spawning');
     expect(entry.runState).toBeNull();
@@ -165,16 +168,17 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
       DAEMON_A,
       CONV,
       AGENT_X,
+      1,
       runState({ status: 'failed', terminalReason: 'crashed' }),
     );
-    const next = cache.applyRuntimeExit(DAEMON_A, CONV, AGENT_X)!;
+    const next = cache.applyRuntimeExit(DAEMON_A, CONV, AGENT_X, 1)!;
     expect(next.phase).toBe('exited');
     expect(next.runState?.terminalReason).toBe('crashed');
   });
 
   it('applyRuntimeExit creates a skeleton entry when none existed', () => {
     const cache = new RunStateCache();
-    const next = cache.applyRuntimeExit(DAEMON_A, CONV, AGENT_X)!;
+    const next = cache.applyRuntimeExit(DAEMON_A, CONV, AGENT_X, 1)!;
     expect(next.phase).toBe('exited');
     expect(next.runState).toBeNull();
   });
@@ -182,9 +186,9 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
   it('drops phase/exit events from a mismatched daemon key', () => {
     const cache = new RunStateCache();
     cache.applyRuntimeStatus(DAEMON_A, [dto(CONV, AGENT_X)]);
-    cache.applyPhase(DAEMON_B, CONV, AGENT_X, 'draining');
+    cache.applyPhase(DAEMON_B, CONV, AGENT_X, 1, 'draining');
     expect(cache.get(CONV, AGENT_X)!.phase).toBe('ready');
-    expect(cache.applyRuntimeExit(DAEMON_B, CONV, AGENT_X)).toBeNull();
+    expect(cache.applyRuntimeExit(DAEMON_B, CONV, AGENT_X, 1)).toBeNull();
   });
 });
 

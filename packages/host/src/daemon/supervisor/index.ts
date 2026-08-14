@@ -16,6 +16,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
   buildSystemPromptFor,
+  composeRuntimeDeliveryPresentation,
   type AgentActivitySnippetKind,
   type AgentRunState,
   decodeObservedSeq,
@@ -27,6 +28,7 @@ import {
   SILVERHAND_AUTH_TOKEN_ENV,
   SILVERHAND_CONVERSATION_ID_ENV,
   SILVERHAND_SERVER_URL_ENV,
+  type RuntimeDeliveryPresentation,
 } from '@silverhand/shared';
 
 import { getDriver as getDefaultDriver, type Driver } from '../../drivers/index.js';
@@ -417,13 +419,6 @@ function strategyBoundaryOpen(handle: RuntimeHandle): boolean {
         )} — refusing live input (fail closed)`,
       );
   }
-}
-
-/** Idempotency key for a deferred batch: the delivery-id SET (order-
- *  independent). Mirrors the coordinator's `dedupKey` so a re-submit of the
- *  same batch cannot double-queue (§11.4). */
-function deferredDedupKey(ids: readonly number[]): string {
-  return [...ids].sort((a, b) => a - b).join(',');
 }
 
 /** Conservative per-entry byte budget for the combined payload's wrapping
@@ -2088,6 +2083,11 @@ export class Supervisor implements SupervisorContract {
     // `deliver()`'s SPAWN arm.
     const existing = this.handles.get(k);
     if (existing && existing.phase !== 'exited') {
+      if (existing.runtimeGeneration !== params.runtime_generation) {
+        throw new Error(
+          `runtime generation mismatch for ${params.conversation_id}/${params.agent_id}`,
+        );
+      }
       return {
         started: true,
         pid: existing.pid,
@@ -2363,6 +2363,7 @@ export class Supervisor implements SupervisorContract {
     const handle: RuntimeHandle = {
       conversationId: params.conversation_id,
       agentId: params.agent_id,
+      runtimeGeneration: params.runtime_generation,
       pid,
       startedAt,
       driver,
@@ -2410,6 +2411,7 @@ export class Supervisor implements SupervisorContract {
       spawnParams: {
         conversation_id: params.conversation_id,
         agent_id: params.agent_id,
+        runtime_generation: params.runtime_generation,
         options: params.options,
       },
       initWatchdogArmed: false,
@@ -2900,6 +2902,7 @@ export class Supervisor implements SupervisorContract {
       event: 'runtime_ready_for_drain',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       ts: this.now(),
     });
   }
@@ -2911,6 +2914,9 @@ export class Supervisor implements SupervisorContract {
     return this.withLifecycleLock(k, async () => {
       const handle = this.handles.get(k);
       if (!handle || handle.phase === 'exited') {
+        return { mode: 'hard', stopped: false, exit_code: null };
+      }
+      if (handle.runtimeGeneration !== params.runtime_generation) {
         return { mode: 'hard', stopped: false, exit_code: null };
       }
       return this.hardStopHandle(handle);
@@ -3100,6 +3106,7 @@ export class Supervisor implements SupervisorContract {
           {
             conversation_id: params.conversation_id,
             agent_id: params.agent_id,
+            runtime_generation: params.runtime_generation,
             options: params.spawn_options,
             startup_delivery: {
               delivery_ids: [...params.delivery_ids],
@@ -3125,6 +3132,47 @@ export class Supervisor implements SupervisorContract {
           disposition: 'refused',
           reason: 'cooldown',
           cooldown_until: result.cooldown_until,
+        };
+      }
+
+      if (handle.runtimeGeneration !== params.runtime_generation) {
+        throw new Error(
+          `runtime generation mismatch for ${params.conversation_id}/${params.agent_id}`,
+        );
+      }
+
+      // Response-loss retries may EXPAND or shrink their batch while daemon
+      // custody is already spread across startup release, stale-pull
+      // reservation, and the deferred FIFO. Partition by individual delivery
+      // id across that complete ownership union. Held ids are rebound to the
+      // current connection owner in place; only novel ids enter the FIFO.
+      // Any non-refused disposition below means daemon custody covers the
+      // caller's whole batch, so backend keeps every row in-flight.
+      const ownership = this.partitionDeliveryOwnership(handle, params, ctx.owner);
+      if (ownership.heldCount > 0) {
+        if (ownership.novel.length > 0) {
+          handle.deferredQueue.push(...ownership.novel);
+          this.wakePullWaiter(handle);
+          this.scheduleReservationStallCheck(handle);
+        }
+        if (handle.phase === 'spawning' || handle.phase === 'startup_pending') {
+          return {
+            disposition: 'spawning',
+            pid: handle.pid,
+            started_at: handle.startedAt,
+          };
+        }
+        if (ownership.novel.length > 0 || !ownership.heldInStartup) {
+          return {
+            disposition: 'deferred',
+            pid: handle.pid,
+            started_at: handle.startedAt,
+          };
+        }
+        return {
+          disposition: 'admitted',
+          pid: handle.pid,
+          started_at: handle.startedAt,
         };
       }
 
@@ -3261,11 +3309,17 @@ export class Supervisor implements SupervisorContract {
         );
       }
       if (handle.deferredQueue.length === 0) continue;
-      const before = handle.deferredQueue.length;
-      handle.deferredQueue = handle.deferredQueue.filter(
-        entry => entry.owner !== owner,
-      );
-      discarded += before - handle.deferredQueue.length;
+      const retained: DeferredEntry[] = [];
+      for (const entry of handle.deferredQueue) {
+        const remainingIds = entry.deliveryIds.filter(
+          id => entry.owners.get(id) !== owner,
+        );
+        discarded += entry.deliveryIds.length - remainingIds.length;
+        if (remainingIds.length > 0) {
+          retained.push(this.subsetDeferredEntry(entry, remainingIds));
+        }
+      }
+      handle.deferredQueue = retained;
     }
     if (discarded > 0) {
       this.logger.info(
@@ -3332,107 +3386,224 @@ export class Supervisor implements SupervisorContract {
     }
   }
 
-  /** Idempotent enqueue into the daemon mid-turn queue. Dedups by the
-   *  delivery-id set so a re-submit of the same batch does not double-queue
-   *  (§11.4), mirroring the backend coordinator's `dedupKey`. Owner-aware
-   *  (Cindy P1): a same-id-set re-submit under a DIFFERENT owner is a
-   *  reconnect/reclaim race — the backend rolled the row off the old
-   *  connection and re-drove it under the new one, and that re-drive can
-   *  reach the daemon BEFORE the old connection's cleanup. Rebind the queued
-   *  entry to the CURRENT owner (which matches the DB's latest in-flight
-   *  owner) so the old owner's cleanup can no longer discard custody the DB
-   *  now attributes to the new connection; otherwise the entry is dropped
-   *  and the row orphaned in-flight with no daemon custody. */
+  /** Enqueue one submitted presentation/ack group. Custody inside it is per id. */
   private enqueueDeferred(
     handle: RuntimeHandle,
     params: RuntimeDeliverParams,
     owner: string,
   ): void {
-    const dedupKey = deferredDedupKey(params.delivery_ids);
-    // P1-1 (#task:1614): the reservation is part of daemon custody for
-    // dedup purposes. A re-submit of a RESERVED id-set (old owner's
-    // connection dropped → backend rolled the rows back → re-drove them
-    // under a new connection) must not enqueue a second copy: the pull
-    // may still hand the SAME bodies to the agent as a tool result, and
-    // a queued copy would additionally release them via stdin at the
-    // next boundary — double exposure. Rebind the reservation entry's
-    // owner in place (mirroring the queue rebind below) so a pre-proof
-    // restore lands in the queue under the DB's current in-flight owner.
-    const reservation = handle.pullReservation;
-    if (reservation) {
-      const reservedIdx = reservation.batch.findIndex(
-        entry => deferredDedupKey(entry.deliveryIds) === dedupKey,
-      );
-      if (reservedIdx !== -1) {
-        const reserved = reservation.batch[reservedIdx]!;
-        if (reserved.owner !== owner) {
-          reservation.batch[reservedIdx] = {
-            deliveryIds: [...params.delivery_ids],
-            ...(params.delivered_up_to_seq !== undefined
-              ? { deliveredUpToSeq: params.delivered_up_to_seq }
-              : {}),
-            ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-            text: params.text,
-            owner,
-          };
-          this.logger.info(
-            {
-              kind: 'process',
-              action: 'stale_receive_reservation_rebind',
-              conversation_id: handle.conversationId,
-              agent_id: handle.agentId,
-              from_owner: reserved.owner,
-              to_owner: owner,
-            },
-            'rebound reserved (pull-in-flight) delivery to current owner (reconnect/reclaim race)',
-          );
-        }
-        return;
+    handle.deferredQueue.push(
+      this.deferredEntryFromParams(params, params.delivery_ids, owner),
+    );
+    // A stale-receive waiter (#task:1614) may now have a takeable prefix.
+    this.wakePullWaiter(handle);
+  }
+
+  /** Full daemon custody union, partitioned by individual delivery id. */
+  private partitionDeliveryOwnership(
+    handle: RuntimeHandle,
+    params: RuntimeDeliverParams,
+    owner: string,
+  ): {
+    heldCount: number;
+    heldInStartup: boolean;
+    novel: DeferredEntry[];
+  } {
+    const incoming = new Set(params.delivery_ids);
+    const held = new Set<number>();
+    let heldInStartup = false;
+    for (const id of handle.startupDelivery?.deliveryIds ?? []) {
+      held.add(id);
+      if (incoming.has(id)) heldInStartup = true;
+    }
+    for (const entry of handle.pullReservation?.batch ?? []) {
+      for (const id of entry.deliveryIds) held.add(id);
+    }
+    for (const entry of handle.deferredQueue) {
+      for (const id of entry.deliveryIds) held.add(id);
+    }
+
+    if (!params.deliveries) {
+      const novelIds = params.delivery_ids.filter(id => !held.has(id));
+      if (novelIds.length > 0 && novelIds.length !== params.delivery_ids.length) {
+        throw new Error(
+          'runtime_deliver partial ownership overlap requires per-delivery payload metadata',
+        );
+      }
+    } else {
+      const novelIds = params.delivery_ids.filter(id => !held.has(id));
+      if (novelIds.length > 0 && novelIds.length !== params.delivery_ids.length) {
+        const novel = new Set(novelIds);
+        this.requireDeliveryPresentations(
+          params.deliveries.filter(delivery => novel.has(delivery.delivery_id)),
+        );
       }
     }
-    const existingIdx = handle.deferredQueue.findIndex(
-      entry => deferredDedupKey(entry.deliveryIds) === dedupKey,
-    );
-    if (existingIdx !== -1) {
-      const existing = handle.deferredQueue[existingIdx]!;
-      if (existing.owner !== owner) {
-        // Rebind in place (preserving FIFO position for direct mode) with
-        // the current owner and the latest payload. DeferredEntry is
-        // readonly, so replace the element rather than mutate it.
-        handle.deferredQueue[existingIdx] = {
-          deliveryIds: [...params.delivery_ids],
-          ...(params.delivered_up_to_seq !== undefined
-            ? { deliveredUpToSeq: params.delivered_up_to_seq }
-            : {}),
-          ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-          text: params.text,
-          owner,
-        };
+
+    const assertOpaqueRebindSafe = (entries: readonly DeferredEntry[]): void => {
+      for (const entry of entries) {
+        if (entry.deliveries) continue;
+        const reboundIds = entry.deliveryIds.filter(
+          id => incoming.has(id) && entry.owners.get(id) !== owner,
+        );
+        if (
+          reboundIds.length > 0
+          && reboundIds.length < entry.deliveryIds.length
+        ) {
+          throw new Error(
+            'runtime_deliver cannot rebind a strict subset of an opaque presentation group',
+          );
+        }
+      }
+    };
+    // Validate the complete mutable custody surface before the first owner
+    // change. An opaque group can move only as a whole; otherwise a later
+    // disconnect cleanup would need presentation metadata it never received.
+    if (handle.pullReservation) {
+      assertOpaqueRebindSafe(handle.pullReservation.batch);
+    }
+    assertOpaqueRebindSafe(handle.deferredQueue);
+
+    const rebind = (
+      entries: DeferredEntry[],
+      action: 'stale_receive_reservation_rebind' | 'deferred_owner_rebind',
+    ): void => {
+      for (let index = 0; index < entries.length; index += 1) {
+        const entry = entries[index]!;
+        const owners = new Map(entry.owners);
+        const rebound: Array<{ id: number; from: string }> = [];
+        for (const id of entry.deliveryIds) {
+          const from = owners.get(id);
+          if (!incoming.has(id) || from === undefined || from === owner) continue;
+          owners.set(id, owner);
+          rebound.push({ id, from });
+        }
+        if (rebound.length === 0) continue;
+        entries[index] = { ...entry, owners };
         this.logger.info(
           {
             kind: 'process',
-            action: 'deferred_owner_rebind',
+            action,
             conversation_id: handle.conversationId,
             agent_id: handle.agentId,
-            from_owner: existing.owner,
+            delivery_ids: rebound.map(item => item.id),
+            from_owners: [...new Set(rebound.map(item => item.from))],
             to_owner: owner,
           },
-          'rebound deferred delivery to current owner (reconnect/reclaim race)',
+          'rebound daemon-held delivery ids to current owner',
         );
       }
-      return;
+    };
+    if (handle.pullReservation) {
+      rebind(
+        handle.pullReservation.batch,
+        'stale_receive_reservation_rebind',
+      );
     }
-    handle.deferredQueue.push({
-      deliveryIds: [...params.delivery_ids],
-      ...(params.delivered_up_to_seq !== undefined
-        ? { deliveredUpToSeq: params.delivered_up_to_seq }
-        : {}),
-      ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-      text: params.text,
-      owner,
+    rebind(handle.deferredQueue, 'deferred_owner_rebind');
+
+    const novelIds = params.delivery_ids.filter(id => !held.has(id));
+    const novel = novelIds.length > 0
+      ? [this.deferredEntryFromParams(params, novelIds, owner)]
+      : [];
+    let heldCount = 0;
+    for (const id of incoming) {
+      if (held.has(id)) heldCount += 1;
+    }
+    return { heldCount, heldInStartup, novel };
+  }
+
+  /** Build one presentation/ack group for all or a selected novel subset. */
+  private deferredEntryFromParams(
+    params: RuntimeDeliverParams,
+    deliveryIds: readonly number[],
+    owner: string,
+  ): DeferredEntry {
+    const isWholeBatch =
+      deliveryIds.length === params.delivery_ids.length
+      && deliveryIds.every((id, index) => id === params.delivery_ids[index]);
+    if (!params.deliveries) {
+      if (!isWholeBatch) {
+        throw new Error(
+          'runtime_deliver partial ownership overlap requires per-delivery presentation metadata',
+        );
+      }
+      return {
+        deliveryIds: [...deliveryIds],
+        ...(params.delivered_up_to_seq !== undefined
+          ? { deliveredUpToSeq: params.delivered_up_to_seq }
+          : {}),
+        text: params.text,
+        owners: new Map(deliveryIds.map(id => [id, owner])),
+      };
+    }
+    const byId = new Map(
+      params.deliveries.map(delivery => [delivery.delivery_id, delivery]),
+    );
+    const deliveries = deliveryIds.map(id => {
+      const delivery = byId.get(id);
+      if (!delivery) {
+        throw new Error(`runtime_deliver missing payload for delivery_id=${id}`);
+      }
+      return delivery;
     });
-    // A stale-receive waiter (#task:1614) may now have a takeable prefix.
-    this.wakePullWaiter(handle);
+    const deliveredUpToSeq = deliveries.length > 0
+      ? Math.max(...deliveries.map(delivery => delivery.seq))
+      : params.delivered_up_to_seq;
+    return {
+      deliveryIds: [...deliveryIds],
+      ...(deliveredUpToSeq !== undefined ? { deliveredUpToSeq } : {}),
+      ...(params.deliveries ? { deliveries } : {}),
+      text: isWholeBatch
+        ? params.text
+        : composeRuntimeDeliveryPresentation(
+            this.requireDeliveryPresentations(deliveries),
+            SEND_MESSAGE_TOOL,
+          ),
+      owners: new Map(deliveryIds.map(id => [id, owner])),
+    };
+  }
+
+  /** Filter a queued presentation group after owner cleanup, preserving one group. */
+  private subsetDeferredEntry(
+    entry: DeferredEntry,
+    deliveryIds: readonly number[],
+  ): DeferredEntry {
+    if (deliveryIds.length === entry.deliveryIds.length) return entry;
+    if (!entry.deliveries) {
+      throw new Error(
+        'cannot split opaque deferred presentation group during owner cleanup',
+      );
+    }
+    const selected = new Set(deliveryIds);
+    const deliveries = entry.deliveries.filter(delivery =>
+      selected.has(delivery.delivery_id)
+    );
+    return {
+      deliveryIds: [...deliveryIds],
+      deliveredUpToSeq: Math.max(...deliveries.map(delivery => delivery.seq)),
+      deliveries,
+      text: composeRuntimeDeliveryPresentation(
+        this.requireDeliveryPresentations(deliveries),
+        SEND_MESSAGE_TOOL,
+      ),
+      owners: new Map(
+        deliveryIds.map(id => [id, entry.owners.get(id)!]),
+      ),
+    };
+  }
+
+  private requireDeliveryPresentations(
+    deliveries: readonly RuntimeDelivery[],
+  ): RuntimeDeliveryPresentation[] {
+    return deliveries.map(delivery => {
+      if (!delivery.presentation) {
+        throw new Error(
+          `runtime_deliver partial ownership overlap requires presentation metadata for delivery_id=${delivery.delivery_id}`,
+        );
+      }
+      return delivery.presentation;
+    });
   }
 
   /**
@@ -3565,6 +3736,7 @@ export class Supervisor implements SupervisorContract {
       out.push({
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
+        runtime_generation: handle.runtimeGeneration,
         pid: handle.phase === 'exited' ? null : handle.pid,
         phase: handle.phase,
         run_state: handle.runState,
@@ -3599,6 +3771,9 @@ export class Supervisor implements SupervisorContract {
     return this.withLifecycleLock(k, async () => {
       const handle = this.handles.get(k);
       if (!handle || handle.phase === 'exited') return { cleared: false };
+      if (handle.runtimeGeneration !== params.runtime_generation) {
+        return { cleared: false };
+      }
       await this.hardStopHandle(handle);
       return { cleared: true };
     });
@@ -3989,6 +4164,7 @@ export class Supervisor implements SupervisorContract {
       event: 'runtime_parsed_event',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       parsed,
       ts: this.now(),
     };
@@ -4537,6 +4713,7 @@ export class Supervisor implements SupervisorContract {
       event: 'runtime_state',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       state: base,
       ts,
     });
@@ -4769,6 +4946,7 @@ export class Supervisor implements SupervisorContract {
         event: 'runtime_init_retrying',
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
+        runtime_generation: handle.runtimeGeneration,
         retry_attempt: newAttempt,
         max_retries: this.initMaxRetries,
         delay_ms: 0,
@@ -4782,6 +4960,7 @@ export class Supervisor implements SupervisorContract {
         event: 'runtime_exit',
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
+        runtime_generation: handle.runtimeGeneration,
         code,
         intentional: false,
         ts,
@@ -4810,6 +4989,7 @@ export class Supervisor implements SupervisorContract {
           event: 'runtime_init_cooldown',
           conversation_id: handle.conversationId,
           agent_id: handle.agentId,
+          runtime_generation: handle.runtimeGeneration,
           cooldown_until: state.cooldownUntil,
           attempts_exhausted: state.failures,
           ts: this.now(),
@@ -4853,6 +5033,7 @@ export class Supervisor implements SupervisorContract {
       event: 'runtime_exit',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       code,
       intentional,
       ts,
@@ -4900,6 +5081,7 @@ export class Supervisor implements SupervisorContract {
       event: 'runtime_state',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       state: base,
       ts,
     });
@@ -5112,6 +5294,7 @@ export class Supervisor implements SupervisorContract {
       event: 'runtime_init_timeout',
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       timeout_reason: reason,
       elapsed_ms: elapsedMs,
       timeout_ms: timeoutMs,

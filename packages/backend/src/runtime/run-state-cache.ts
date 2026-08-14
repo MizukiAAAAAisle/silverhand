@@ -91,6 +91,8 @@ export type RuntimePhase = RuntimeStateDto['phase'];
 export interface CachedRuntimeEntry {
   conversationId: string;
   agentId: string;
+  /** Exact runtime-slot generation represented by this entry. */
+  runtimeGeneration: number;
   phase: RuntimePhase;
   pid: number | null;
   startedAt: number | null;
@@ -147,6 +149,7 @@ export class RunStateCache {
       this.entries.set(k, {
         conversationId: dto.conversation_id,
         agentId: dto.agent_id,
+        runtimeGeneration: dto.runtime_generation,
         phase: dto.phase,
         pid: dto.pid,
         startedAt: dto.started_at,
@@ -183,6 +186,7 @@ export class RunStateCache {
     daemonInstanceKey: string,
     conversationId: string,
     agentId: string,
+    runtimeGeneration: number,
     state: AgentRunState,
     now: number = Date.now(),
   ): void {
@@ -192,6 +196,7 @@ export class RunStateCache {
     this.entries.set(k, {
       conversationId,
       agentId,
+      runtimeGeneration,
       phase: prev?.phase ?? 'ready',
       pid: prev?.pid ?? null,
       startedAt: prev?.startedAt ?? null,
@@ -217,6 +222,7 @@ export class RunStateCache {
     daemonInstanceKey: string,
     conversationId: string,
     agentId: string,
+    runtimeGeneration: number,
     phase: RuntimePhase,
     now: number = Date.now(),
   ): void {
@@ -230,6 +236,7 @@ export class RunStateCache {
       this.entries.set(k, {
         conversationId,
         agentId,
+        runtimeGeneration,
         phase,
         pid: null,
         startedAt: null,
@@ -239,7 +246,13 @@ export class RunStateCache {
       });
       return;
     }
-    this.entries.set(k, { ...prev, phase, daemonInstanceKey, updatedAt: now });
+    this.entries.set(k, {
+      ...prev,
+      runtimeGeneration,
+      phase,
+      daemonInstanceKey,
+      updatedAt: now,
+    });
   }
 
   /**
@@ -257,16 +270,24 @@ export class RunStateCache {
     daemonInstanceKey: string,
     conversationId: string,
     agentId: string,
+    runtimeGeneration: number,
     now: number = Date.now(),
   ): CachedRuntimeEntry | null {
     if (!this.acceptDaemonKey(daemonInstanceKey)) return null;
     const k = key(conversationId, agentId);
     const prev = this.entries.get(k);
     const next: CachedRuntimeEntry = prev
-      ? { ...prev, phase: 'exited', daemonInstanceKey, updatedAt: now }
+      ? {
+          ...prev,
+          runtimeGeneration,
+          phase: 'exited',
+          daemonInstanceKey,
+          updatedAt: now,
+        }
       : {
           conversationId,
           agentId,
+          runtimeGeneration,
           phase: 'exited',
           pid: null,
           startedAt: null,

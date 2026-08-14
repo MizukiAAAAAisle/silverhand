@@ -144,6 +144,8 @@ export interface AgentDeletionLifecyclePort {
 export interface AgentRuntimeSessionFacts {
   conversationId: string;
   status: ConversationAgentStatus;
+  /** Captured before cascade so post-commit stop cannot target a successor. */
+  runtimeGeneration: number;
 }
 
 /**

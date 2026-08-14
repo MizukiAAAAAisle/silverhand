@@ -114,6 +114,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     const r = await client.runtimeStart({
+      runtime_generation: 1,
       conversation_id: 'conv-1',
       agent_id: 'agent-1',
       options: testStartOptions(),
@@ -141,6 +142,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     const r = await client.runtimeDeliver({
+      runtime_generation: 1,
       conversation_id: 'conv-2',
       agent_id: 'agent-2',
       delivery_ids: [101, 102],
@@ -169,6 +171,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     await client.runtimeDeliver({
+      runtime_generation: 1,
       conversation_id: 'conv-3',
       agent_id: 'agent-3',
       delivery_ids: [200],
@@ -197,6 +200,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     await client.runtimeStart({
+      runtime_generation: 1,
       conversation_id: 'conv-4',
       agent_id: 'agent-4',
       options: testStartOptions(),
@@ -207,6 +211,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
         e.event === 'runtime_ready_for_drain' && e.conversation_id === 'conv-4',
     );
     const r = await client.runtimeDeliver({
+      runtime_generation: 1,
       conversation_id: 'conv-4',
       agent_id: 'agent-4',
       delivery_ids: [50, 51, 52],
@@ -230,6 +235,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     clients.push(client);
     await client.connect();
     const r = await client.runtimeDeliver({
+      runtime_generation: 1,
       conversation_id: 'no-such-conv',
       agent_id: 'no-such-agent',
       delivery_ids: [1],
@@ -248,8 +254,8 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const client = new HostClient({ socketPath: f.socketPath });
     clients.push(client);
     await client.connect();
-    await client.runtimeStart({ conversation_id: 'c-A', agent_id: 'ag-A', options: testStartOptions() });
-    await client.runtimeStart({ conversation_id: 'c-B', agent_id: 'ag-B', options: testStartOptions() });
+    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-A', agent_id: 'ag-A', options: testStartOptions() });
+    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-B', agent_id: 'ag-B', options: testStartOptions() });
     const snap = await client.runtimeStatus();
     expect(snap.runtimes).toHaveLength(2);
     const convs = snap.runtimes.map(r => r.conversation_id).sort();
@@ -264,7 +270,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.connect();
     const events: EventFrame[] = [];
     client.subscribe(e => events.push(e));
-    await client.runtimeStart({ conversation_id: 'c-X', agent_id: 'ag-X', options: testStartOptions() });
+    await client.runtimeStart({ runtime_generation: 1, conversation_id: 'c-X', agent_id: 'ag-X', options: testStartOptions() });
     await waitForEvent(
       events,
       (e): e is Extract<EventFrame, { event: 'runtime_ready_for_drain' }> =>
@@ -273,7 +279,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const r = await client.runtimeStop({
       conversation_id: 'c-X',
       agent_id: 'ag-X',
-      mode: 'hard',
+      runtime_generation: 1, mode: 'hard',
     });
     if (r.mode !== 'hard') throw new Error('expected hard stop result');
     expect(r.stopped).toBe(true);
@@ -296,7 +302,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     const evB: EventFrame[] = [];
     a.subscribe(e => evA.push(e));
     b.subscribe(e => evB.push(e));
-    await a.runtimeStart({ conversation_id: 'c-Y', agent_id: 'ag-Y', options: testStartOptions() });
+    await a.runtimeStart({ runtime_generation: 1, conversation_id: 'c-Y', agent_id: 'ag-Y', options: testStartOptions() });
     const has = (events: EventFrame[]): boolean =>
       events.some(
         e => e.event === 'runtime_ready_for_drain' && e.conversation_id === 'c-Y',
@@ -321,6 +327,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     await client.runtimeStart({
+      runtime_generation: 1,
       conversation_id: 'c-state',
       agent_id: 'ag-state',
       options: testStartOptions(),
@@ -347,7 +354,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     await client.runtimeStop({
       conversation_id: 'c-state',
       agent_id: 'ag-state',
-      mode: 'hard',
+      runtime_generation: 1, mode: 'hard',
     });
     await waitForEvent(
       events,
@@ -377,6 +384,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     await client.runtimeDeliver({
+      runtime_generation: 1,
       conversation_id: 'c-crash',
       agent_id: 'ag-crash',
       delivery_ids: [1],
@@ -413,6 +421,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
     client.subscribe(e => events.push(e));
 
     await client.runtimeStart({
+      runtime_generation: 1,
       conversation_id: 'c-flow',
       agent_id: 'ag-flow',
       options: testStartOptions(),

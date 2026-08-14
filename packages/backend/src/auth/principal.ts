@@ -5,9 +5,9 @@ import {
   probePaths,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
+import type { RuntimePrincipal } from './runtime-principal.js';
+import type { RuntimePrincipalVerifier } from './runtime-principal-verifier.js';
 
 /**
  * Public user principal resolved from the request itself. Public API
@@ -30,6 +30,8 @@ export type AppEnv = {
     principal?: Principal;
     /** Correlates one verified internal CLI request with its audit line. */
     cliRequestId?: string;
+    /** Complete live runtime custody authenticated for this request. */
+    runtimePrincipal?: RuntimePrincipal;
     /** Low-cardinality outcome intent for a stale-message disposal attempt.
      *  Set only after the internal route validates and authorizes the request. */
     cliStaleResolutionReason?: AgentStaleResolutionReason | 'unattributed';
@@ -175,30 +177,52 @@ export function installRequireRegisteredViewerMiddleware(
 
 export function installInternalPrincipalMiddleware(
   app: Hono<AppEnv>,
-  repos: { agents: AgentRepo; conversations: ConversationRepo },
+  verifier: RuntimePrincipalVerifier,
 ): void {
-  app.use('/internal/conversations/:cid/agents/:aid/*', async (c, next) => {
+  const authorize = async (
+    c: AppContext,
+    next: () => Promise<void>,
+    targetConversationId: string | undefined,
+  ): Promise<Response | void> => {
     if (c.req.header(X_SILVERHAND_PRINCIPAL_HEADER)) {
       return c.json({ error: 'principal header is not allowed on internal routes' }, 400);
     }
 
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!targetConversationId || !aid) {
+      return c.json({ error: 'target conversation and agent id required' }, 400);
     }
-    if (!repos.conversations.get(cid)) {
-      return c.json({ error: 'conversation not found' }, 404);
-    }
-    if (!repos.agents.get(aid)) {
-      return c.json({ error: 'agent not found' }, 404);
-    }
-    if (!repos.conversations.getAgent(cid, aid)) {
-      return c.json({ error: 'agent is not a member of this conversation' }, 403);
+    const header = c.req.header('authorization') ?? '';
+    const token = header.replace(/^Bearer\s+/i, '').trim();
+    const verified = verifier.verify({
+      token,
+      routeAgentId: aid,
+      targetConversationId,
+    });
+    if (!verified.ok) {
+      return c.json({ error: 'unauthorized' }, 401);
     }
 
-    setPrincipal(c, { kind: 'agent', agentId: aid, conversationId: cid });
+    c.set('runtimePrincipal', verified.principal);
+    setPrincipal(c, {
+      kind: 'agent',
+      agentId: verified.principal.agentId,
+      conversationId: verified.targetConversationId,
+    });
     await next();
+  };
+
+  app.use('/internal/conversations/:cid/agents/:aid/*', (c, next) =>
+    authorize(c, next, c.req.param('cid')),
+  );
+  app.use('/internal/agents/:aid/*', (c, next) => {
+    const match = c.req.path.match(
+      /^\/internal\/agents\/[^/]+\/conversations\/([^/]+)(?:\/|$)/,
+    );
+    const targetConversationId = match?.[1]
+      ? decodeURIComponent(match[1])
+      : undefined;
+    return authorize(c, next, targetConversationId);
   });
 }
 
@@ -238,6 +262,14 @@ export function getAgentPrincipal(c: AppContext): AgentPrincipal {
   const principal = getPrincipal(c);
   if (principal.kind !== 'agent') {
     throw new Error(`expected agent principal, got ${principal.kind}`);
+  }
+  return principal;
+}
+
+export function getRuntimePrincipal(c: AppContext): RuntimePrincipal {
+  const principal = c.get('runtimePrincipal');
+  if (!principal) {
+    throw new Error('runtime principal has not been verified for this request');
   }
   return principal;
 }

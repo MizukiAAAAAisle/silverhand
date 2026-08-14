@@ -258,6 +258,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     const SECRET_TEXT = 'VERY-CONFIDENTIAL-USER-INPUT-XYZ';
     await d.dispatch('req-1', 'runtime_deliver', {
+      runtime_generation: 1,
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [42],
@@ -295,6 +296,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     // Pass a malformed deliver — missing delivery_ids → invalid_params.
     await d.dispatch('req-2', 'runtime_deliver', {
+      runtime_generation: 1,
       conversation_id: 'c1',
       agent_id: 'a1',
       kind: 'message',
@@ -321,6 +323,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     d.markShuttingDown();
     await d.dispatch('req-3', 'runtime_deliver', {
+      runtime_generation: 1,
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],

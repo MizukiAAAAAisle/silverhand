@@ -90,7 +90,17 @@ function bootstrap() {
     capabilities.seedDefaults(workspace.id, agent.id);
     conversations.addAgent(channel.id, agent.id);
   }
-  new RuntimeSlotRepo(db).updateCurrentConversationProjection(channel.id, subject.id, {
+  const runtimeSlots = new RuntimeSlotRepo(db);
+  runtimeSlots.updateCurrentConversationProjection(channel.id, subject.id, {
+    status: 'active',
+  });
+  runtimeSlots.claimGeneration({
+    scope: {
+      kind: 'conversation',
+      conversationId: channel.id,
+      agentId: subject.id,
+    },
+    daemonInstanceId: 'daemon-agent-teardown',
     status: 'active',
   });
 
@@ -345,8 +355,16 @@ describe('AgentTeardownUnitOfWork (SQLite adapter) — FK cascade contract', () 
       a.conversationId.localeCompare(b.conversationId),
     )).toEqual(
       [
-        { conversationId: t.channelId, status: 'active' },
-        { conversationId: t.dmChannelId, status: 'idle' },
+        {
+          conversationId: t.channelId,
+          status: 'active',
+          runtimeGeneration: 1,
+        },
+        {
+          conversationId: t.dmChannelId,
+          status: 'idle',
+          runtimeGeneration: 0,
+        },
       ].sort((a, b) => a.conversationId.localeCompare(b.conversationId)),
     );
     expect(capture.regularWorkspaceCount).toBe(1);

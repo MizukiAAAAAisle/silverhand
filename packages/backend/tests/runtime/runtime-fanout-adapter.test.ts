@@ -183,22 +183,23 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     expect(Object.keys(live[0]!).sort()).toEqual([
       'agentId',
       'conversationId',
+      'daemonInstanceId',
+      'generation',
       'pid',
       'status',
     ]);
     expect(live[0]).toEqual({
       conversationId: f.channelId,
       agentId: f.agentId,
+      generation: 0,
+      daemonInstanceId: null,
       status: 'active',
       pid: 4242,
     });
 
     // `markCrashed`'s constant is in its name — the caller cannot ask for a
     // different status, and the pair leaves the live set afterwards.
-    const updated = f.persistence.hydrateReconcile.markCrashed(
-      f.channelId,
-      f.agentId,
-    );
+    const updated = f.persistence.hydrateReconcile.markCrashed(live[0]!);
     expect(updated?.status).toBe('crashed');
     expect(updated?.pid).toBeNull();
     expect(
@@ -206,7 +207,14 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     ).toEqual([]);
     // a membership row that is gone is `null`, which the caller skips
     expect(
-      f.persistence.hydrateReconcile.markCrashed(f.channelId, 'no-such-agent'),
+      f.persistence.hydrateReconcile.markCrashed({
+        conversationId: f.channelId,
+        agentId: 'no-such-agent',
+        generation: 0,
+        daemonInstanceId: null,
+        status: 'active',
+        pid: null,
+      }),
     ).toBeNull();
   });
 

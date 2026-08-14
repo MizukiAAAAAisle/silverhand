@@ -65,6 +65,9 @@ export interface AgentRuntimeStartPort {
  */
 export interface StopOptions {
   hostId?: string;
+  /** Captured destructive-command authority for post-delete teardown paths.
+   * Normal live-row callers omit it and the runtime slot is read directly. */
+  runtimeGeneration?: number;
 }
 
 /** Pre-clear snapshot returned by `clearSession()`. Callers use this

@@ -75,7 +75,9 @@ import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
+import { conversationRuntimePrincipal } from '../../src/auth/runtime-principal.js';
 import { type EventPublisher } from '../../src/runtime/event-handler.js';
+import { makeDaemonInstanceKey } from '../../src/runtime/daemon-instance-key.js';
 import { EventPerimeterGuard } from '../../src/runtime/event-perimeter.js';
 import type {
   RuntimeEventPerimeterPort,
@@ -86,6 +88,7 @@ import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js'
 import { OutboundRuntimeEventFanout } from '../../src/runtime/outbound-event-fanout.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
+import type { HostWsAttachment } from '../../src/ws/host-ws-server.js';
 import { openTestDb } from '../utils/db.js';
 
 interface PerimeterFixture {
@@ -146,6 +149,19 @@ function makePerimeterFixture(opts?: {
   runtimeSlots.updateCurrentConversationProjection(channelX.id, agentX.id, {
     status: 'starting',
   });
+  const agentTokens = new AgentTokenStore();
+  const daemonInstanceId = makeDaemonInstanceKey(123, 1700000000000);
+  const claimedX = runtimeSlots.claimGeneration({
+    scope: { kind: 'conversation', conversationId: channelX.id, agentId: agentX.id },
+    daemonInstanceId,
+  });
+  if (!claimedX) throw new Error('failed to claim host X fixture runtime');
+  agentTokens.issue(conversationRuntimePrincipal({
+    conversationId: channelX.id,
+    agentId: agentX.id,
+    generation: claimedX.generation,
+    daemonInstanceId,
+  }));
 
   const wsY = workspaces.insert({
     name: 'perimeter-y',
@@ -164,6 +180,17 @@ function makePerimeterFixture(opts?: {
   runtimeSlots.updateCurrentConversationProjection(channelY.id, agentY.id, {
     status: 'starting',
   });
+  const claimedY = runtimeSlots.claimGeneration({
+    scope: { kind: 'conversation', conversationId: channelY.id, agentId: agentY.id },
+    daemonInstanceId,
+  });
+  if (!claimedY) throw new Error('failed to claim host Y fixture runtime');
+  agentTokens.issue(conversationRuntimePrincipal({
+    conversationId: channelY.id,
+    agentId: agentY.id,
+    generation: claimedY.generation,
+    daemonInstanceId,
+  }));
 
   const events: PerimeterFixture['events'] = [];
   const publisher: EventPublisher = {
@@ -190,7 +217,7 @@ function makePerimeterFixture(opts?: {
     transport: () => transport,
     logger,
     silverhandCli: { command: 'silverhand', args: [] },
-    agentTokens: new AgentTokenStore(),
+    agentTokens,
     activityLog: null,
   });
 
@@ -206,6 +233,17 @@ function makePerimeterFixture(opts?: {
       runtimeSlots.updateCurrentConversationProjection(channelY.id, agentX.id, {
         status: 'starting',
       });
+      const claimed = runtimeSlots.claimGeneration({
+        scope: { kind: 'conversation', conversationId: channelY.id, agentId: agentX.id },
+        daemonInstanceId,
+      });
+      if (!claimed) throw new Error('failed to claim cross-host fixture runtime');
+      agentTokens.issue(conversationRuntimePrincipal({
+        conversationId: channelY.id,
+        agentId: agentX.id,
+        generation: claimed.generation,
+        daemonInstanceId,
+      }));
     },
     insertHostXChannelWithoutAgent: (title: string): string => {
       // Fresh channel under hostX's workspace. No `conversation_agents`
@@ -243,8 +281,15 @@ class FakeTransport implements HostWsServerController {
   connectionIdForHost(_hostId: string): string | null {
     return this.connectionId;
   }
-  getAttachment(): null {
-    return null;
+  getAttachment(hostId: string): HostWsAttachment {
+    return {
+      hostId,
+      connectionId: this.connectionId,
+      daemonInstanceId: makeDaemonInstanceKey(123, 1700000000000),
+      attachedAt: 0,
+      hostname: null,
+      capabilities: [],
+    };
   }
   getAdmissionFailure(): null {
     return null;
@@ -305,6 +350,7 @@ function readyForDrainEvent(
   agentId: string,
 ): OutboundDaemonToServerEventFrame {
   return {
+    runtime_generation: 1,
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_ready_for_drain',
@@ -319,6 +365,7 @@ function parsedEventFrame(
   agentId: string,
 ): OutboundDaemonToServerEventFrame {
   return {
+    runtime_generation: 1,
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',

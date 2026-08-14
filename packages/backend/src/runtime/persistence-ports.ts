@@ -39,6 +39,7 @@ import type {
   MessageDto,
   WorkspaceDto,
 } from '@silverhand/shared';
+import type { ConversationRuntimePrincipal } from '../auth/runtime-principal.js';
 
 /**
  * Per-delivery semantics as the runtime consumes them. Mirrors the persisted
@@ -183,11 +184,32 @@ export interface RuntimeHostReadPort {
   routingView(hostId: string): RuntimeHostRoutingView | null;
 }
 
+export interface RuntimeCustodyPort {
+  currentConversation(
+    conversationId: string,
+    agentId: string,
+  ): ConversationRuntimePrincipal | null;
+  claimConversation(input: {
+    conversationId: string;
+    agentId: string;
+    daemonInstanceId: string;
+  }): ConversationRuntimePrincipal | null;
+  finalizeConversation(input: {
+    conversationId: string;
+    agentId: string;
+    generation: number;
+    daemonInstanceId: string;
+    status: 'idle' | 'crashed';
+  }): ConversationRuntimePrincipal | null;
+}
+
 /** A runtime the DB still claims is live. Projection of the
  *  `conversation_agents ⋈ agents` reconcile query. */
 export interface DbLiveRuntime {
   conversationId: string;
   agentId: string;
+  generation: number;
+  daemonInstanceId: string | null;
   status: 'active' | 'starting';
   pid: number | null;
 }
@@ -203,10 +225,7 @@ export interface RuntimeHydrateReconcilePort {
   listDbLiveRuntimesForHost(hostId: string): DbLiveRuntime[];
   /** `status='crashed', pid=null` — the constant is in the name. `null` when
    *  the membership row is gone, which the caller skips. */
-  markCrashed(
-    conversationId: string,
-    agentId: string,
-  ): ConversationAgentDto | null;
+  markCrashed(runtime: DbLiveRuntime): ConversationAgentDto | null;
 }
 
 /** The roster a spawn's platform prompt is built from. */
@@ -270,6 +289,7 @@ export interface RuntimeFanoutPersistence {
   workspaces: RuntimeWorkspaceReadPort;
   users: RuntimeUserReadPort;
   hosts: RuntimeHostReadPort;
+  runtimeCustody: RuntimeCustodyPort;
   hydrateReconcile: RuntimeHydrateReconcilePort;
   session: RuntimeSessionUnitOfWork;
 }

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { apiPaths, internalPaths, AgentChangedEventSchema } from '@silverhand/shared';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 
 /**
  * Agent self-edit profile metadata (#task:1178) — the internal routes
@@ -44,7 +49,7 @@ describe('agent self-profile (internal routes)', () => {
       })
     ).json() as any;
     const channelId = ws.onboarding_channel_id as string;
-    const token = t!.ctx.agentTokens.issue(channelId, agentId);
+    const token = issueTestConversationRuntimeToken(t!, channelId, agentId);
     return { agentId, channelId, token };
   }
 

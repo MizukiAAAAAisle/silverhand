@@ -20,7 +20,6 @@ import {
   AgentResolveStaleMessageInputSchema,
   AgentSearchMessagesInputSchema,
   AgentSendMessageInputSchema,
-  internalPaths,
   normalizeAttachmentRefs,
   MAX_MESSAGE_CONTENT_BYTES,
   MAX_MESSAGE_CONTENT_LABEL,
@@ -29,6 +28,7 @@ import {
   messageContentExceedsLimit,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 export function registerMessageRoutes(
   app: Hono<AppEnv>,
@@ -52,7 +52,7 @@ export function registerMessageRoutes(
       ),
   });
 
-  app.post(internalPaths.agentSendConversationMessage(':cid', ':aid'), sendBodyLimit, async c => {
+  app.post(internalAgentRoutePaths.sendMessage, sendBodyLimit, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -141,7 +141,7 @@ export function registerMessageRoutes(
     }
   });
 
-  app.post(internalPaths.agentResolveStaleMessage(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.resolveStaleMessage, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -175,7 +175,7 @@ export function registerMessageRoutes(
     return c.json({ ok: true });
   });
 
-  app.post(internalPaths.agentReadHistory(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.readHistory, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -232,7 +232,7 @@ export function registerMessageRoutes(
     return c.json(result);
   });
 
-  app.post(internalPaths.agentSearchMessages(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.searchMessages, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {

@@ -83,6 +83,7 @@ export type FakeSupervisorPhase =
 interface FakeRuntime {
   conversation_id: string;
   agent_id: string;
+  runtime_generation: number;
   pid: number;
   phase: FakeSupervisorPhase;
   started_at: number;
@@ -193,6 +194,9 @@ export class FakeSupervisor {
     // `startup_delivery_accepted`), and there is no startup batch here.
     const existing = this.runtimes.get(k);
     if (existing && existing.phase !== 'exited') {
+      if (existing.runtime_generation !== params.runtime_generation) {
+        throw new Error('runtime generation mismatch');
+      }
       return {
         started: true,
         pid: existing.pid,
@@ -204,6 +208,7 @@ export class FakeSupervisor {
     const rt: FakeRuntime = {
       conversation_id: params.conversation_id,
       agent_id: params.agent_id,
+      runtime_generation: params.runtime_generation,
       pid,
       phase: 'spawning',
       started_at: startedAt,
@@ -241,6 +246,9 @@ export class FakeSupervisor {
     if (!rt || rt.phase === 'exited') {
       return { mode: 'hard', stopped: false, exit_code: null };
     }
+    if (rt.runtime_generation !== params.runtime_generation) {
+      return { mode: 'hard', stopped: false, exit_code: null };
+    }
     rt.phase = 'draining';
     this.emitState(rt);
     const exitCode = 137;
@@ -268,6 +276,7 @@ export class FakeSupervisor {
       const next: FakeRuntime = {
         conversation_id: params.conversation_id,
         agent_id: params.agent_id,
+        runtime_generation: params.runtime_generation,
         pid,
         phase: 'startup_pending',
         started_at: startedAt,
@@ -286,6 +295,9 @@ export class FakeSupervisor {
     }
     if (rt.phase === 'spawning' || rt.phase === 'startup_pending') {
       return { disposition: 'refused', reason: 'startup_pending' };
+    }
+    if (rt.runtime_generation !== params.runtime_generation) {
+      throw new Error('runtime generation mismatch');
     }
 
     // WRITE arm — phase === 'ready'. Custody transferred; consumed ack
@@ -322,6 +334,7 @@ export class FakeSupervisor {
       out.push({
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         pid: rt.phase === 'exited' ? null : rt.pid,
         phase: rt.phase,
         run_state: null,
@@ -337,6 +350,9 @@ export class FakeSupervisor {
     const k = key(params.conversation_id, params.agent_id);
     const rt = this.runtimes.get(k);
     if (!rt || rt.phase === 'exited') return { cleared: false };
+    if (rt.runtime_generation !== params.runtime_generation) {
+      return { cleared: false };
+    }
     rt.phase = 'draining';
     // Phase change → emit runtime_state so backend snapshot reconcile
     // sees the draining intermediate (Cindy `9rxtrdT2NXfX2zEs`
@@ -457,6 +473,7 @@ export class FakeSupervisor {
           event: 'runtime_exit',
           conversation_id: rt.conversation_id,
           agent_id: rt.agent_id,
+          runtime_generation: rt.runtime_generation,
           code: 1,
           intentional: false,
           ts: this.now(),
@@ -477,6 +494,7 @@ export class FakeSupervisor {
         event: 'runtime_ready_for_drain',
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         ts: this.now(),
       });
     });
@@ -493,6 +511,7 @@ export class FakeSupervisor {
         event: 'runtime_ready_for_drain',
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         ts: this.now(),
       });
     });
@@ -511,6 +530,7 @@ export class FakeSupervisor {
         event: 'runtime_exit',
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         code,
         intentional,
         ts: this.now(),
@@ -553,6 +573,7 @@ export class FakeSupervisor {
       event: 'runtime_state',
       conversation_id: rt.conversation_id,
       agent_id: rt.agent_id,
+      runtime_generation: rt.runtime_generation,
       state: {
         runId: `fake-${rt.pid}-${rt.started_at}`,
         agentId: rt.agent_id,

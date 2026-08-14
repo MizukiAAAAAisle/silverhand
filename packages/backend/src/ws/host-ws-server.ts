@@ -30,6 +30,7 @@ import {
   type HostRow,
 } from '@silverhand/shared';
 import type { BackendContext, BackendDeploymentMode } from '../context.js';
+import { makeDaemonInstanceKey } from '../runtime/daemon-instance-key.js';
 
 export const HOST_WS_PATH = apiPaths.hostConnect;
 
@@ -72,6 +73,8 @@ export interface HostWsAttachment {
    *  life of one websocket; a replacement connection mints a new one.
    *  Use to distinguish stale vs fresh attachments. */
   connectionId: string;
+  /** Stable daemon-boot identity from the compatible ready frame. */
+  daemonInstanceId?: string;
   /** Epoch ms when the daemon's COMPATIBLE `ready` frame landed and the host
    *  was registered (#task:1966 — not the raw upgrade). This is "post-auth,
    *  post-compatibility, post-registration" so callers can rely on the
@@ -391,7 +394,7 @@ export function installHostWebSocketServer(
         nextCommandId: () => `${commandIdPrefix}-${++commandSeq}`,
         eventSink: opts.eventSink,
         deploymentMode: ctx.deploymentMode,
-        updateAttachmentReady: (hostname, capabilities) => {
+        updateAttachmentReady: (hostname, capabilities, daemonInstanceId) => {
           // #task:1966 — the compatibility gate's one write. A valid `ready` is
           // what CREATES the attachment (and only then announces the change); a
           // repeat `ready` on the same connection just refreshes the reported
@@ -403,6 +406,7 @@ export function installHostWebSocketServer(
               ...current,
               hostname,
               capabilities,
+              daemonInstanceId,
             });
             return;
           }
@@ -413,6 +417,7 @@ export function installHostWebSocketServer(
           attachmentsByHost.set(auth.host.hostId, {
             hostId: auth.host.hostId,
             connectionId,
+            daemonInstanceId,
             attachedAt,
             hostname,
             capabilities,
@@ -684,6 +689,7 @@ class HostWsConnection {
       updateAttachmentReady: (
         hostname: string,
         capabilities: readonly string[],
+        daemonInstanceId: string,
       ) => void;
       recordAdmissionFailure: (failure: HostWsAdmissionFailure) => void;
       clearAdmissionFailure: () => void;
@@ -709,6 +715,7 @@ class HostWsConnection {
   private readonly updateAttachmentReady: (
     hostname: string,
     capabilities: readonly string[],
+    daemonInstanceId: string,
   ) => void;
 
   start(): void {
@@ -1060,6 +1067,7 @@ class HostWsConnection {
       this.updateAttachmentReady(
         frame.host_descriptor.name,
         frame.capabilities,
+        makeDaemonInstanceKey(frame.daemon_pid, frame.started_at),
       );
     }
     if (this.shouldIgnoreEventSink()) {

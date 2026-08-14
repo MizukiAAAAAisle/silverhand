@@ -24,7 +24,6 @@
 import { Hono, type Context } from 'hono';
 import {
   apiPaths,
-  internalPaths,
   AddWorkspaceMemberInputSchema,
   UpdateWorkspaceHumanMemberRoleInputSchema,
   AddConversationMemberInputSchema,
@@ -78,6 +77,7 @@ import type { MembershipPersistence } from '../application/membership-ports.js';
 import { type PostCommitEffect, runPostCommitEffects } from '../application/post-commit.js';
 import { publishViewerWorkspacesChanged } from '../application/viewer-workspaces.js';
 import { conversationMemberResultResponse } from './responses.js';
+import { internalAgentRoutePaths } from './internal-agent/paths.js';
 
 /**
  * Every membership sub-app now reaches persistence through the membership ports
@@ -932,7 +932,7 @@ export function createInternalMembershipApp(
     requireAgentCapability,
   } = deps;
 
-  app.post(internalPaths.agentAddConversationMember(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.members, async c => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = AddConversationMemberByHandleInputSchema.safeParse(body);
     if (!parsed.success) {

@@ -20,6 +20,7 @@ import {
   HostWsCommandTransportError,
 } from '../ws/host-ws-server.js';
 import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
+import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 
 export interface EmbeddedUnixOutboundFrameAdapterOptions {
   /** Path to the daemon's `daemon-outbound.sock`. */
@@ -109,6 +110,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
 
   private socket: Socket | null = null;
   private connectionId: string | null = null;
+  private daemonInstanceId: string | null = null;
   private attachedAt: number | null = null;
   /** Capabilities advertised by the local daemon's `ready` frame (#task:1486).
    *  Reset on disconnect so a replaced daemon generation re-declares its own;
@@ -275,6 +277,9 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     return {
       hostId: this.hostId,
       connectionId: this.connectionId,
+      ...(this.daemonInstanceId
+        ? { daemonInstanceId: this.daemonInstanceId }
+        : {}),
       attachedAt: this.attachedAt ?? 0,
       hostname: null,
       capabilities: this.capabilities,
@@ -475,6 +480,10 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
         // connection (#task:1486); reset on disconnect keeps it generation-local.
         if (event.data.kind === 'ready') {
           this.capabilities = event.data.capabilities;
+          this.daemonInstanceId = makeDaemonInstanceKey(
+            event.data.daemon_pid,
+            event.data.started_at,
+          );
         }
         this.onEvent?.(this.hostId, event.data, this.connectionId);
       }
@@ -560,6 +569,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     if (!hadSocket && this.pending.size === 0) return;
     this.socket = null;
     this.connectionId = null;
+    this.daemonInstanceId = null;
     this.attachedAt = null;
     this.capabilities = [];
     this.rejectAllPending(`host ${this.hostId} outbound socket disconnected (${reason})`);

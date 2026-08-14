@@ -95,6 +95,7 @@ describe('OutputBackpressure — non-droppable events', () => {
       event: 'runtime_state',
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       state: {
         runId: 'r1',
         agentId: 'a1',
@@ -120,6 +121,7 @@ describe('OutputBackpressure — non-droppable events', () => {
         event: 'runtime_exit',
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         code: 0,
         intentional: true,
         ts: 0,
@@ -128,6 +130,7 @@ describe('OutputBackpressure — non-droppable events', () => {
         event: 'runtime_ready_for_drain',
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         ts: 0,
       },
       {

@@ -720,6 +720,17 @@ export class ConversationRepo {
     return row ? { ...row } : null;
   }
 
+  /**
+   * Placement-aware participant authority consumed by runtime target policy.
+   * At schema v70 only workspace placement is representable, so participation
+   * is exactly the roster predicate. P0-b extends this single resolver with the
+   * owner-only AgentInbox arm; callers must not depend on `getAgent` as the
+   * canonical port because an inbox deliberately has no roster row.
+   */
+  isAgentParticipant(conversationId: string, agentId: string): boolean {
+    return this.getAgent(conversationId, agentId) !== null;
+  }
+
   // ── Human (user) membership — `conversation_users` (v25) ─────────
   // Mirrors `addAgent` / `listAgents` / `getAgent` etc. for users.
   // Humans don't run as processes, so this table has no

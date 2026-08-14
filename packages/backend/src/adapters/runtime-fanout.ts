@@ -64,6 +64,7 @@ import type {
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import type { BackendLogger } from '../context.js';
 import type { EventPublisher } from '../runtime/event-handler.js';
+import { conversationRuntimePrincipal } from '../auth/runtime-principal.js';
 
 /**
  * Everything `OutboundRuntimeEventFanout` needs that is DB-backed. Spread into
@@ -194,22 +195,83 @@ export function createRuntimeFanoutDbDeps(deps: {
         return view;
       },
     },
+    runtimeCustody: {
+      currentConversation: (conversationId, agentId) => {
+        const row = runtimeSlots.getConversation(conversationId, agentId);
+        if (!row || !row.claimed_by_daemon_instance_id) return null;
+        return conversationRuntimePrincipal({
+          conversationId,
+          agentId,
+          generation: row.generation,
+          daemonInstanceId: row.claimed_by_daemon_instance_id,
+        });
+      },
+      claimConversation: ({ conversationId, agentId, daemonInstanceId }) => {
+        const row = runtimeSlots.claimGeneration({
+          scope: { kind: 'conversation', conversationId, agentId },
+          daemonInstanceId,
+        });
+        return row
+          ? conversationRuntimePrincipal({
+              conversationId,
+              agentId,
+              generation: row.generation,
+              daemonInstanceId,
+            })
+          : null;
+      },
+      finalizeConversation: input => {
+        const row = runtimeSlots.finalizeGeneration({
+          scope: {
+            kind: 'conversation',
+            conversationId: input.conversationId,
+            agentId: input.agentId,
+          },
+          expectedGeneration: input.generation,
+          expectedDaemonInstanceId: input.daemonInstanceId,
+          status: input.status,
+        });
+        return row
+          ? conversationRuntimePrincipal({
+              conversationId: input.conversationId,
+              agentId: input.agentId,
+              generation: row.generation,
+              daemonInstanceId: input.daemonInstanceId,
+            })
+          : null;
+      },
+    },
     hydrateReconcile: {
       listDbLiveRuntimesForHost: hostId =>
         runtimeSlots.listLiveConversationSlotsForHost(hostId).map<DbLiveRuntime>(row => ({
           conversationId: row.conversation_id!,
           agentId: row.agent_id,
+          generation: row.generation,
+          daemonInstanceId: row.claimed_by_daemon_instance_id,
           status: row.observed_status as 'active' | 'starting',
           pid: row.observed_pid,
         })),
-      markCrashed: (conversationId, agentId) =>
-        runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
-          status: 'crashed',
-          pid: null,
-          claimedByDaemonInstanceId: null,
-        })
-          ? conversations.getAgent(conversationId, agentId)
-          : null,
+      markCrashed: runtime => {
+        const scope = {
+          kind: 'conversation' as const,
+          conversationId: runtime.conversationId,
+          agentId: runtime.agentId,
+        };
+        const updated = runtime.daemonInstanceId
+          ? runtimeSlots.finalizeGeneration({
+              scope,
+              expectedGeneration: runtime.generation,
+              expectedDaemonInstanceId: runtime.daemonInstanceId,
+              status: 'crashed',
+            })
+          : runtimeSlots.updateCurrentProjection(scope, {
+              status: 'crashed',
+              pid: null,
+            });
+        return updated
+          ? conversations.getAgent(runtime.conversationId, runtime.agentId)
+          : null;
+      },
     },
     session: {
       // Plain deferred transaction: both statements are writes, so the write
@@ -221,8 +283,10 @@ export function createRuntimeFanoutDbDeps(deps: {
         deps.db.transaction(() =>
           fn({
             clearCliSession: (conversationId, agentId) =>
-              runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
-                cliSessionId: null,
+              runtimeSlots.clearCliSession({
+                kind: 'conversation',
+                conversationId,
+                agentId,
               })
                 ? conversations.getAgent(conversationId, agentId)
                 : null,

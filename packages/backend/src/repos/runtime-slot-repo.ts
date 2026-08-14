@@ -115,6 +115,32 @@ export class RuntimeSlotRepo {
   }
 
   /**
+   * Human/admin session management authority. This is deliberately not a
+   * runtime projection: it clears only the resumable CLI session and never
+   * changes status, pid, generation, or daemon custody. The generation CAS
+   * prevents a clear racing a fresh claim from mutating the successor.
+   */
+  clearCliSession(scope: RuntimeSlotScope): AgentRuntimeSlotRow | null {
+    return this.db.transaction(() => {
+      const current = this.get(scope);
+      if (!current) return null;
+      if (current.cli_session_id === null) return current;
+      const result = this.db
+        .prepare(
+          `UPDATE agent_runtime_slots
+              SET cli_session_id = NULL
+            WHERE id = ? AND generation = ?`,
+        )
+        .run(current.id, current.generation);
+      if (result.changes !== 1) return null;
+      const updated = this.get(scope);
+      if (!updated) return null;
+      this.insertEvent(updated, 'projection_updated');
+      return updated;
+    })();
+  }
+
+  /**
    * Claim the stable slot for a new custody generation. The slot identity does
    * not change and daemon identity never participates in uniqueness.
    */

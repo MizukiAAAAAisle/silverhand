@@ -339,6 +339,7 @@ export async function deleteComputer(
       await ctx.runtimeHost
         .stop(live.conversationId, entry.agent.id, {
           hostId: entry.agent.hostId,
+          runtimeGeneration: live.runtimeGeneration,
         })
         .catch(err =>
           ctx.logger.warn(

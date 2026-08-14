@@ -267,6 +267,7 @@ describe('LocalOutboundFrameServer', () => {
           {
             conversation_id: 'c1',
             agent_id: 'a1',
+            runtime_generation: 1,
             pid: null,
             phase: 'idle',
             run_state: null,
@@ -448,6 +449,7 @@ describe('LocalOutboundFrameServer', () => {
       event: 'runtime_ready_for_drain',
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       ts: 1717000000,
     } as EventFrame);
 
@@ -468,6 +470,7 @@ describe('LocalOutboundFrameServer', () => {
       event: 'runtime_ready_for_drain',
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       ts: 1717000000,
     } as EventFrame;
     server.broadcast(event);
