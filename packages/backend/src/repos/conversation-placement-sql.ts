@@ -100,6 +100,86 @@ function agentParticipatesSql(
 }
 
 /**
+ * THE SET-SHAPED roster read: the `conversation_agents` rows of ONE workspace
+ * conversation, as agent ids. The twin of {@link workspaceAgentRosterEdge} — same
+ * table, same workspace gating ANDed INSIDE the fragment, same reason it is a
+ * pinned fragment rather than an inline clause — asked in the other DIRECTION.
+ *
+ * Why a second reading of the roster exists at all (@Cindy B9). The predicate
+ * form answers "is THIS agent a participant", so enumerating participants with it
+ * means offering every agent as the candidate: `JOIN agents a ON <predicate>`
+ * plans as a full `SCAN a`, and the send path's recipient enumeration ran that on
+ * EVERY message. Cost tracked the number of agents in the installation instead of
+ * the size of the conversation. "One text read two ways" was the wrong thing to
+ * buy with a table scan: the arms are not symmetric — a roster EXISTS is a
+ * membership TEST while the endpoint / inbox arms are already single-row LOOKUPS —
+ * so the enumeration has to be expressed as "the placement PRODUCES the candidate
+ * ids", which is what {@link PARTICIPANT_AGENT_IDS_SQL} does.
+ *
+ * That leaves TWO texts for one rule, which is a real cost and is paid for
+ * explicitly: Gate 9 counts BOTH roster reads as pinned fragments (so a third one
+ * is still a gate failure), and `tests/read-model/participation-enumeration.test.ts`
+ * asserts the two readings agree over a placement × liveness matrix rather than
+ * trusting that they were edited together.
+ */
+function workspaceAgentRosterMembers(): string {
+  return `SELECT ca_p.agent_id AS agent_id
+              FROM conversations c_p
+              JOIN conversation_agents ca_p
+                ON ca_p.conversation_id = c_p.id
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'workspace'`;
+}
+
+/**
+ * The AGENT PARTICIPANTS of one conversation, as a set of candidate ids produced
+ * by the placement (§4.2) — the enumerating reading of {@link agentParticipates},
+ * arm for arm, and the text every recipient fan-out is built on (#task:2021 P4-5,
+ * @Cindy B9).
+ *
+ * Shape, and why each part of it is deliberate:
+ *
+ *   - ONE ARM PER PLACEMENT, each starting from `conversations` by primary key, so
+ *     the whole set is reached by ≤ 4 index lookups plus a roster prefix seek on
+ *     `PRIMARY KEY (conversation_id, agent_id)`. The three non-workspace arms are
+ *     column reads: a `direct_pair`'s participants ARE its two endpoints, an
+ *     inbox's IS its owner. The plan contract is pinned by an EXPLAIN falsifier —
+ *     regressing to a candidate scan is the failure it exists to report.
+ *   - `UNION`, not `UNION ALL`: this is a SET. The arms are mutually exclusive on
+ *     `placement_kind` today, so the dedup is doing nothing — but "no duplicate
+ *     recipients" is a property the callers rely on (each id becomes one delivery
+ *     and one wake), and it must not depend on arms staying exclusive.
+ *   - `@conv`, bound ONCE by name for all four arms. Positional `?` here would be
+ *     four parameters for one value: the exact miscount
+ *     {@link PlacementSqlFragment} exists to prevent, in a text where the arms are
+ *     meant to grow.
+ *   - CANDIDATES, not recipients: LIVENESS IS NOT HERE. Participation deliberately
+ *     survives a deleted peer (the survivor keeps reading its own DM), so a caller
+ *     that enumerates DELIVERY targets joins live `agents` over this set — see
+ *     `conversation-repo`'s `LIVE_PARTICIPANT_AGENT_IDS_SQL`, which is the
+ *     production statement. Putting the join here would silently redefine
+ *     participation for every future reader of the set.
+ */
+export const PARTICIPANT_AGENT_IDS_SQL = `${workspaceAgentRosterMembers()}
+             UNION
+            SELECT c_p.endpoint_a_id AS agent_id
+              FROM conversations c_p
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_a_kind = 'agent'
+             UNION
+            SELECT c_p.endpoint_b_id AS agent_id
+              FROM conversations c_p
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_b_kind = 'agent'
+             UNION
+            SELECT c_p.inbox_agent_id AS agent_id
+              FROM conversations c_p
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'agent_inbox'`;
+
+/**
  * SQL predicate: `agentId` PARTICIPATES in this conversation (§4.2) — the SQL
  * face of the same rule `permissions.ts`'s `participates` applies in code, with
  * one arm per placement because the placement IS the rule:
@@ -145,15 +225,18 @@ export function agentParticipates(
 /**
  * The SAME predicate as {@link agentParticipates}, with the agent side supplied
  * as an EXPRESSION of the enclosing query — a column, e.g. `a.id` from a
- * `JOIN agents a` — so a query can ENUMERATE a conversation's agent participants
- * instead of asking about one known id (#task:2021 P4-5, the recipient boundary).
+ * `JOIN agents a` — so a query can FILTER a set of candidate agents it has
+ * ALREADY BOUNDED by something else (#task:2021 P4-5).
  *
- * Enumeration needs the predicate for the same reason the point check does: the
- * participants of a `direct_pair` / `agent_inbox` are its endpoint / inbox
- * columns, so a fan-out built on `JOIN conversation_agents` returns ZERO
- * recipients there — which is the whole "a DM delivers to nobody" defect. Doing
- * it as a second, arm-per-arm query in the repo would be a second authority; this
- * is the first one, read differently.
+ * FILTERING, not enumerating (@Cindy B9). This form's one caller reads
+ * `thread_followers` for a thread root and asks the predicate of each follower it
+ * found; the candidate set is bounded by the follower table, and each `?`-free
+ * arm is evaluated against a row already in hand. Using it to ENUMERATE — offering
+ * `agents` as the candidate set — makes the plan a full scan of every agent in the
+ * installation on every send, which is why the recipient fan-out is built on
+ * {@link PARTICIPANT_AGENT_IDS_SQL} instead. If a future caller wants the
+ * participants of a conversation, that constant is the authority; this predicate is
+ * for narrowing a set that is already small.
  *
  * Returns a bare string, NOT a {@link PlacementSqlFragment}: with the agent side
  * correlated there is nothing to bind, and a fragment shape would invite a caller

@@ -7,9 +7,16 @@
 //
 // Persistence discipline (#task:1981): this aggregate holds NO raw DB and no
 // concrete repo. Everything it does inside a transaction takes an explicit
-// `MessageTxScope`; the callback-free voluntary surface uses the narrow
-// read / direct-write ports. It never opens a transaction of its own except
-// through the injected UnitOfWork.
+// `MessageTxScope`; the read-only surface and the voluntary UNFOLLOW use the
+// narrow read / direct-write ports. It never opens a transaction of its own
+// except through the injected UnitOfWork.
+//
+// Every follower-row INSERT is in a transaction and goes through `followAgent` /
+// `followUser` — including the voluntary manual follows, for both principal
+// kinds (#task:2021 P4-5 round 2, @Cindy B10). Those two are the only places the
+// `follower ⊆ live participant` gate is stated, so a writer that bypassed them
+// would be a second, ungated definition of who may follow.
+
 import type {
   MessageDto,
   Reference,
@@ -137,23 +144,37 @@ export class ThreadFollowManager {
     };
   }
 
+  /** Voluntary manual follow by a HUMAN — the twin of {@link followThread}, and
+   *  since #task:2021 P4-5 round 2 (@Cindy B10) the same shape: one transaction,
+   *  the root resolved inside it, and the row written through {@link followUser}.
+   *
+   *  It used to call the direct-write port, which made this a SECOND WRITER of
+   *  follower rows — one that skipped the `follower ⊆ live participant` gate
+   *  entirely and leaned on the route's `canViewConversation` instead. Viewing
+   *  authority is a capability token, not the placement authority: a human who can
+   *  read a conversation is not necessarily a participant of it, and a deleted user
+   *  passes any read check that only asks about the conversation. */
   followHumanThread(params: {
     conversationId: string;
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveRootOutsideTx(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    const { inserted } = this.directWrite.upsert({
-      threadRootId,
-      conversationId: params.conversationId,
-      principalKind: 'human',
-      principalId: params.userId,
-      source: 'manual',
+    return this.uow.atomically(tx => {
+      const threadRootId = resolveThreadRoot(
+        (conversationId, messageId) =>
+          tx.messages.getInConversation(conversationId, messageId),
+        params.conversationId,
+        params.rootMessageId,
+      );
+      const changed = this.followUser(
+        tx,
+        params.conversationId,
+        threadRootId,
+        params.userId,
+        'manual',
+      );
+      return { threadRootId, changed };
     });
-    return { threadRootId, changed: inserted };
   }
 
   unfollowHumanThread(params: {
@@ -325,8 +346,16 @@ export class ThreadFollowManager {
   /** Upsert an agent follower; if it is newly followed AND a current live
    *  participant, backfill the thread's prior history into its inbox.
    *  Non-participants are skipped (follower ⊆ live participant). Returns whether
-   *  a NEW follower row was created (false = already following or not a
-   *  participant → no backfill). */
+   *  a NEW follower row was created (false = already following, not a
+   *  participant, or not live → no backfill).
+   *
+   *  LIVENESS is its own conjunct (#task:2021 P4-5 round 2, @Cindy B10).
+   *  Participation deliberately survives an endpoint tombstone so the SURVIVOR of a
+   *  deleted DM keeps reading — which means `isAgentParticipant` alone still says
+   *  yes for the agent that no longer exists, and this is the wrong place to learn
+   *  that: `thread_followers.principal_id` has no FK to `agents`, so the row would
+   *  persist, and the backfill's `agent_inbox_deliveries` insert would fail on ITS
+   *  FK and take the caller's whole send down with it. */
   private followAgent(
     tx: MessageTxScope,
     conversationId: string,
@@ -336,6 +365,8 @@ export class ThreadFollowManager {
     currentSeq: number,
   ): boolean {
     if (!tx.conversations.isAgentParticipant(conversationId, agentId)) return false;
+    if (!tx.agents.get(agentId)) return false;
+
     const { inserted } = tx.threadFollowers.upsert({
       threadRootId,
       conversationId,
@@ -379,28 +410,37 @@ export class ThreadFollowManager {
   }
 
   /** Upsert a HUMAN follower — the human twin of {@link followAgent}, and the
-   *  ONE place a human follower row is written, so `follower ⊆ live participant`
-   *  is asked once per principal kind rather than at each insertion site.
+   *  ONE place a human follower row is written (auto-follow AND the voluntary
+   *  {@link followHumanThread}), so `follower ⊆ live participant` is asked once
+   *  per principal kind rather than at each insertion site. Returns whether a NEW
+   *  row was created, which is the voluntary surface's `changed`.
    *
    *  A point check, not a participant SET: the question is about ONE person, the
    *  authority answers it directly, and the set form (a `listParticipantUserIds`
    *  enumeration, memoized per send) existed only because its predecessor was a
    *  roster listing. There is no backfill twin either — a human has no inbox, so
-   *  becoming a follower queues nothing. */
+   *  becoming a follower queues nothing.
+   *
+   *  `tx.users.get` is the liveness conjunct, for the same reason as in
+   *  {@link followAgent}: participation outlives a deleted principal on purpose,
+   *  delivery must not. A human follower row feeds notification/UI read surfaces,
+   *  so a lingering one would keep naming a user that no longer exists. */
   private followUser(
     tx: MessageTxScope,
     conversationId: string,
     threadRootId: string,
     userId: string,
     source: ThreadFollowerSource,
-  ): void {
-    if (!tx.conversations.isUserParticipant(conversationId, userId)) return;
-    tx.threadFollowers.upsert({
+  ): boolean {
+    if (!tx.conversations.isUserParticipant(conversationId, userId)) return false;
+    if (!tx.users.get(userId)) return false;
+    const { inserted } = tx.threadFollowers.upsert({
       threadRootId,
       conversationId,
       principalKind: 'human',
       principalId: userId,
       source,
     });
+    return inserted;
   }
 }

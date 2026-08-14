@@ -36,12 +36,13 @@
 // performs what cannot be committed: the runtime wake, the WS frames, and the
 // skip log the decision half returned as data.
 //
-// RESIDUAL, stated so it is not mistaken for a bug: an inbox placement has no
-// session cwd until the agent-scoped RuntimeScope lands (#task:2019), so the
-// wake currently DEFERS (`mention_cc.wake_deferred`). Nothing is lost — the
-// delivery row is committed — but the mentioned agent does not read the copy
-// until it next spawns with a scope. The wrap text below says exactly that
-// rather than promising a reply route that does not exist yet.
+// RESIDUAL, stated so it is not mistaken for a live gap: the
+// `RuntimePlacementUnsupportedError` arm in `dispatchMentionCcEffects` has NO
+// PRODUCER. It was written in v71 for an inbox with no session cwd; #task:2019
+// landed that scope, `buildRuntimeStartOptions` emits `workspace: null` with an
+// agent-scoped `runtime_scope`, and no production site throws the error any
+// more. The arm survives as dead defensive code pending its removal — it is not
+// a rule other callers should mirror (#task:2021 P4-5 round 2, @Cindy B11).
 import { formatReferenceToken, inlineCode } from '@silverhand/shared';
 import { systemSubtype } from '@silverhand/shared';
 import type { ConversationDto, MessageDto, Reference } from '@silverhand/shared';
@@ -340,8 +341,9 @@ export async function dispatchMentionCcEffects(
       await deps.runtimeStart.start(copy.inboxConversationId, copy.agentId);
     } catch (err) {
       if (err instanceof RuntimePlacementUnsupportedError) {
-        // The known, bounded gap — NOT a delivery failure. The row is committed;
-        // the next spawn with a session scope (#task:2019) drains it.
+        // Dead defensive arm: nothing throws this any more (see the module
+        // docblock's RESIDUAL note). Kept only so a host that DID refuse would
+        // not be reported as a lost delivery; the committed row is authoritative.
         deps.logger.warn(
           {
             event: 'mention_cc.wake_deferred',
@@ -353,7 +355,7 @@ export async function dispatchMentionCcEffects(
             sourceConversationId: report.source.conversationId,
             sourceMessageId: report.source.messageId,
           },
-          'mention-cc: copy committed and queued, but the inbox has no runtime scope yet (#task:2019); the agent reads it on its next spawn',
+          'mention-cc: host refused the placement (no producer today); the copy and its durable inbox row are committed and kept',
         );
         continue;
       }

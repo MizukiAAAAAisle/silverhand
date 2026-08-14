@@ -25,6 +25,27 @@ export interface ThreadFollowerUpsert {
   source: ThreadFollowerSource;
 }
 
+/**
+ * The delivery read of the follower table (see
+ * {@link ThreadFollowerRepo.listFollowerAgentIdsParticipating} for what it means).
+ *
+ * Exported because its ACCESS PATH is the argument for keeping the CORRELATED
+ * reading of participation at all (@Cindy B9, #task:2021 P4-5): the candidate set
+ * is bounded by `thread_followers` for one root, so the predicate filters rows
+ * already in hand and `agents` is probed by primary key. `tests/read-model/
+ * participation-enumeration.test.ts` EXPLAINs this exact text — the same rule as
+ * #1967's plan tests, which is that a plan contract has to be asserted over the
+ * statement production runs.
+ */
+export const FOLLOWER_AGENT_IDS_PARTICIPATING_SQL = `SELECT tf.principal_id AS agent_id
+     FROM thread_followers tf
+     JOIN conversations c ON c.id = tf.conversation_id
+     JOIN agents a ON a.id = tf.principal_id
+    WHERE tf.thread_root_id = @root
+      AND tf.principal_kind = 'agent'
+      AND ${agentParticipatesCorrelated('c', 'a.id')}
+    ORDER BY tf.followed_at ASC`;
+
 export class ThreadFollowerRepo {
   constructor(private readonly db: Db) {}
 
@@ -133,17 +154,10 @@ export class ThreadFollowerRepo {
    */
   listFollowerAgentIdsParticipating(threadRootId: string): string[] {
     return this.db
-      .prepare<[string], { agent_id: string }>(
-        `SELECT tf.principal_id AS agent_id
-           FROM thread_followers tf
-           JOIN conversations c ON c.id = tf.conversation_id
-           JOIN agents a ON a.id = tf.principal_id
-          WHERE tf.thread_root_id = ?
-            AND tf.principal_kind = 'agent'
-            AND ${agentParticipatesCorrelated('c', 'a.id')}
-          ORDER BY tf.followed_at ASC`,
+      .prepare<{ root: string }, { agent_id: string }>(
+        FOLLOWER_AGENT_IDS_PARTICIPATING_SQL,
       )
-      .all(threadRootId)
+      .all({ root: threadRootId })
       .map(r => r.agent_id);
   }
 }

@@ -2,7 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import {
   agentParticipates,
-  agentParticipatesCorrelated,
+  PARTICIPANT_AGENT_IDS_SQL,
   userParticipates,
   WORKSPACE_PLACED,
 } from './conversation-placement-sql.js';
@@ -186,6 +186,30 @@ export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.wo
      JOIN conversations c ON c.id = m.conversation_id
     WHERE m.user_id = ? AND c.workspace_id = ?
     ORDER BY c.updated_at DESC`;
+
+/**
+ * The send path's RECIPIENT enumeration: the LIVE agent participants of one
+ * conversation, in a stable order. Exported because its ACCESS PATH is a contract
+ * (@Cindy B9, #task:2021 P4-5) — `tests/read-model/participation-enumeration.test.ts`
+ * EXPLAINs this exact text, following #1967's rule that a plan test must run the
+ * production statement rather than a simplified copy of it.
+ *
+ * Two layers, and the split is the point: the placement produces CANDIDATE ids
+ * ({@link PARTICIPANT_AGENT_IDS_SQL}, the one participation authority in its
+ * set-shaped reading) and this statement adds what DELIVERY needs on top —
+ * liveness, as a primary-key probe of `agents`, and an order. See
+ * {@link ConversationRepo.listParticipantAgentIds} for why liveness is not part of
+ * participation itself.
+ *
+ * `ORDER BY a.created_at ASC, a.id ASC` is the pre-existing recipient order,
+ * unchanged. It sorts the PARTICIPANT SET — bounded by the conversation, a handful
+ * of rows — so the temp b-tree it costs is not a function of how many agents exist;
+ * the plan test pins that distinction rather than banning sorts.
+ */
+export const LIVE_PARTICIPANT_AGENT_IDS_SQL = `SELECT a.id AS agent_id
+     FROM (${PARTICIPANT_AGENT_IDS_SQL}) p
+     JOIN agents a ON a.id = p.agent_id
+    ORDER BY a.created_at ASC, a.id ASC`;
 
 // `pinned_at` is a vestigial column (#task:1209): pin/star became per-viewer
 // state in `user_sort_entry`, so the shared column is no longer read or written
@@ -1251,16 +1275,23 @@ export class ConversationRepo {
    * Why not {@link listAgents}: that returns `conversation_agents` rows, so on a
    * `direct_pair` or an `agent_inbox` — rosterless by construction (§4.2) — it
    * returns the empty set, and a message committed into a DM was delivered to
-   * NOBODY. The participants are named by the placement, so the enumeration has
-   * to be the placement predicate itself
-   * (`agentParticipatesCorrelated`, the one authority read in its correlated
-   * form) rather than a second query with an arm per placement.
+   * NOBODY. The participants are named by the placement, so the enumeration is the
+   * placement's own set-shaped text ({@link PARTICIPANT_AGENT_IDS_SQL}) rather
+   * than a second query with an arm per placement.
    *
    * TWO CONJUNCTS, and the second is not decoration (@Cindy P4-5 boundary 2):
    * participation deliberately ignores `endpoint_*_deleted_at` so a survivor
    * keeps reading its own DM, while a DELIVERY target must also be a LIVE
    * principal — `JOIN agents a` is that conjunct, and it is what keeps a deleted
    * endpoint out of the fan-out without weakening participation for the reader.
+   *
+   * The join is also the ACCESS PATH (@Cindy B9): the placement produces the
+   * candidate ids and `agents` is probed by primary key, so cost tracks the
+   * conversation's own size. The predicate reading of the same rule would have to
+   * offer `agents` as the candidate set — a full scan of every agent in the
+   * installation, once per message — which is what this shape replaced and what
+   * the EXPLAIN falsifier in `tests/read-model/participation-enumeration.test.ts`
+   * forbids coming back.
    *
    * IDS ONLY, deliberately. The callers (delivery, auto-start) need a principal
    * identity; the membership DTO they used to take carries `joined_at` plus the
@@ -1270,15 +1301,8 @@ export class ConversationRepo {
    */
   listParticipantAgentIds(conversationId: string): string[] {
     return this.db
-      .prepare<[string], { agent_id: string }>(
-        `SELECT a.id AS agent_id
-           FROM conversations c
-           JOIN agents a
-             ON ${agentParticipatesCorrelated('c', 'a.id')}
-          WHERE c.id = ?
-          ORDER BY a.created_at ASC, a.id ASC`,
-      )
-      .all(conversationId)
+      .prepare<{ conv: string }, { agent_id: string }>(LIVE_PARTICIPANT_AGENT_IDS_SQL)
+      .all({ conv: conversationId })
       .map(r => r.agent_id);
   }
 

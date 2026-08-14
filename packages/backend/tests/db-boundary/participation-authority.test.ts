@@ -49,6 +49,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agentParticipates,
   agentParticipatesCorrelated,
+  PARTICIPANT_AGENT_IDS_SQL,
   userParticipates,
 } from '../../src/repos/conversation-placement-sql.js';
 import { REPO_ROOT } from './sources.js';
@@ -125,6 +126,14 @@ function codeOf(src: string): string {
 /** Every module specifier the file imports, with whether the import is
  *  type-only. A value import is what would give the module a way to reach a
  *  database handle, so the two are not interchangeable here.
+ *
+ *  Call it on {@link codeOf} output, not on raw source — every call site here does.
+ *  A comment cannot create a dependency, and the scan below is deliberately
+ *  lazy-greedy across newlines to catch a multi-line import list, which makes it
+ *  read a docblock sentence like "each arm starts from `conversations`" after any
+ *  line-initial `export` as a re-export of a module named `conversations`. That
+ *  false positive is worse than a cosmetic annoyance: the fix a future author would
+ *  reach for is deleting the sentence that documents the invariant.
  *
  *  Every form that creates a dependency counts, INCLUDING the ones that carry no
  *  binding (side-effect, dynamic, `require`) and re-exports — a `export { x } from`
@@ -237,6 +246,31 @@ const PINNED_AGENT_ROSTER_FRAGMENT = `(\${conversationAlias}.placement_kind = 'w
             ))`;
 
 /**
+ * The SET-shaped roster read (#task:2021 P4-5 round 2, @Cindy B9). The agent rule
+ * now has TWO readings — a predicate over one agent and a set of candidate ids
+ * produced by the placement — because enumerating with the predicate meant offering
+ * every agent in the installation as a candidate (a full `SCAN a` per message).
+ *
+ * That makes this the SECOND `conversation_agents` mention the file may contain,
+ * and the allowance is a PIN rather than a raised count: the workspace predicate is
+ * ANDed inside this text too, so a set-shaped read that dropped it — handing every
+ * roster row of every placement to the recipient fan-out — matches no pin and is
+ * reported. The count still forbids a THIRD reading.
+ *
+ * No `${…}` interpolation here, unlike the predicate pins: the set form is a
+ * self-contained subquery with its own alias and ONE named parameter, so there is
+ * no caller-supplied alias or principal expression to travel through. That the two
+ * readings AGREE is not checkable from text at all and is asserted over values in
+ * `tests/read-model/participation-enumeration.test.ts`.
+ */
+const PINNED_AGENT_ROSTER_MEMBERS_FRAGMENT = `SELECT ca_p.agent_id AS agent_id
+              FROM conversations c_p
+              JOIN conversation_agents ca_p
+                ON ca_p.conversation_id = c_p.id
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'workspace'`;
+
+/**
  * The human one. TWO subqueries, and the pin is what makes that load-bearing:
  * human participation in a channel is the v25 PAIR — the `conversation_users`
  * seat AND `workspace_users` membership — so a "simplification" to the seat alone
@@ -258,13 +292,15 @@ const PINNED_HUMAN_ROSTER_FRAGMENT = `(\${conversationAlias}.placement_kind = 'w
 
 const PINNED_ROSTER_FRAGMENTS = [
   PINNED_AGENT_ROSTER_FRAGMENT,
+  PINNED_AGENT_ROSTER_MEMBERS_FRAGMENT,
   PINNED_HUMAN_ROSTER_FRAGMENT,
 ];
 
-/** How many roster-table mentions the pinned set accounts for: one agent
- *  (`conversation_agents`) plus the human pair (`conversation_users`,
- *  `workspace_users`). Derived from the pins rather than written as a literal `3`,
- *  so adding a principal kind cannot pass by editing a magic number. */
+/** How many roster-table mentions the pinned set accounts for: the agent rule's
+ *  TWO readings (`conversation_agents` as a membership test and as a set of
+ *  members) plus the human pair (`conversation_users`, `workspace_users`). Derived
+ *  from the pins rather than written as a literal, so adding a principal kind — or a
+ *  third reading of an existing one — cannot pass by editing a magic number. */
 const PINNED_MENTION_COUNT = PINNED_ROSTER_FRAGMENTS.reduce(
   (n, fragment) => n + rosterMentions(squash(fragment)).length,
   0,
@@ -302,7 +338,10 @@ describe('db-boundary: participation authority', () => {
     // `conversation_agents`" is a property of the build and not of its author's
     // discipline. Adding any value import here is the reviewed diff that would
     // change that.
-    expect(importsOf(src), `${PLACEMENT_RULE} gained an import — see this file's header`).toEqual([
+    expect(
+      importsOf(codeOf(src)),
+      `${PLACEMENT_RULE} gained an import — see this file's header`,
+    ).toEqual([
       { specifier: './db/schema.js', typeOnly: true },
     ]);
     // …and belt: the CODE names no table, no statement, and no read port, so even
@@ -328,7 +367,7 @@ describe('db-boundary: participation authority', () => {
     expect(code).toContain(`placement_kind === 'agent_inbox'`);
   });
 
-  it('the SQL face contains exactly ONE roster read per principal kind, and both are the pinned workspace-gated ones', () => {
+  it('the SQL face contains exactly ONE roster read per READING of the rule, and all of them are the pinned workspace-gated ones', () => {
     // `codeOf` first, for two reasons: this file's prose discusses the roster arm
     // at length, and a prose mention would otherwise count toward the allowance.
     const code = codeOf(read(PLACEMENT_SQL));
@@ -353,6 +392,8 @@ describe('db-boundary: participation authority', () => {
     // form bind a placeholder nobody supplies a parameter for.
     expect(code).toContain('workspaceAgentRosterEdge(conversationAlias, agentIdExpr)');
     expect(code).toContain('workspaceHumanRosterEdge(conversationAlias)');
+    // …the SET reading delegates too, so its roster read stays the pinned one …
+    expect(code).toContain('workspaceAgentRosterMembers()');
     // …and the agent face's two PUBLIC readings are two calls on ONE arm text, not
     // two copies of it: the point form is the only place `'?'` is introduced, and
     // the correlated form forwards its caller's expression untouched (P4-5).
@@ -410,6 +451,50 @@ describe('db-boundary: participation authority', () => {
     expect(agentParticipatesCorrelated('c', '?')).toBe(agentParticipates('c', 'x').sql);
   });
 
+  /**
+   * The SET reading's shape (@Cindy B9). Its arms cannot be pinned by the fragment
+   * count — only its roster read can — so the two properties that make it ONE
+   * authority rather than a hand-rolled second query are asserted here:
+   *
+   *   - ARM COVERAGE. Every placement that can have an agent participant produces
+   *     candidates: the workspace roster, BOTH `direct_pair` endpoints, the inbox
+   *     owner. A missing arm is a placement whose recipients are silently nobody —
+   *     the defect P4-5 exists to remove — and it returns an empty list rather than
+   *     an error, so nothing else reports it. The equivalence test in
+   *     `tests/read-model/participation-enumeration.test.ts` is the values-side twin.
+   *   - ONE BINDING FOR ONE VALUE. The conversation id appears once per arm and is
+   *     bound by NAME, so adding an arm cannot shift a caller's parameters — the
+   *     failure `PlacementSqlFragment` exists to prevent, in the text most likely to
+   *     grow an arm.
+   */
+  it('the set reading covers every placement arm and binds the conversation once, by name', () => {
+    const sql = PARTICIPANT_AGENT_IDS_SQL;
+    // A set, not a bag: each id is one delivery and one wake, and the arms being
+    // mutually exclusive today is not what the callers rely on.
+    const arms = sql.split(/\bUNION\b/);
+    expect(arms).toHaveLength(4);
+    expect(sql).not.toContain('UNION ALL');
+    // One arm each, named by the column that answers for it — so an arm cannot be
+    // deleted, nor two arms collapsed into one, and still pass.
+    expect(arms.filter(arm => arm.includes('conversation_agents'))).toHaveLength(1);
+    expect(arms.filter(arm => arm.includes('endpoint_a_id'))).toHaveLength(1);
+    expect(arms.filter(arm => arm.includes('endpoint_b_id'))).toHaveLength(1);
+    expect(arms.filter(arm => arm.includes('inbox_agent_id'))).toHaveLength(1);
+    // Every arm projects the same column name, or the compound SELECT would fail at
+    // prepare time in some arms only.
+    for (const arm of arms) expect(arm).toContain('AS agent_id');
+    // Every arm is anchored on ONE conversation by primary key — this is what keeps
+    // the enumeration bounded by the conversation instead of by the table …
+    expect([...sql.matchAll(/c_p\.id = @conv/g)]).toHaveLength(arms.length);
+    // … and the binding is named, so there is exactly one value to supply.
+    expect(sql.split('?')).toHaveLength(1);
+    // LIVENESS IS NOT HERE (P4-5 boundary 2): the set is candidates. A `JOIN agents`
+    // inside this text would redefine participation for every future reader of it;
+    // the delivery statement adds it (`LIVE_PARTICIPANT_AGENT_IDS_SQL`).
+    expect(sql).not.toContain('agents a');
+    expect(sql).not.toContain('deleted_at');
+  });
+
   it('the SQL face has no dependencies, so no roster edge can arrive from outside it', () => {
     // @Cindy B2.1. The mention count above is a claim about THIS FILE'S TEXT, and
     // an imported `extraRosterEdge(alias)` ORed into the predicate satisfies it
@@ -420,7 +505,7 @@ describe('db-boundary: participation authority', () => {
     // exception to argue about, and gaining one is a reviewed diff.
     const src = read(PLACEMENT_SQL);
     expect(
-      importsOf(src),
+      importsOf(codeOf(src)),
       `${PLACEMENT_SQL} gained a dependency: this module is SQL TEXT ONLY, and an ` +
         'imported fragment builder is a roster authority the single-mention count cannot see',
     ).toEqual([]);
@@ -489,6 +574,31 @@ describe('db-boundary: participation authority', () => {
     // Reindentation is NOT a violation: the claim is the SQL's shape.
     const reindented = gated.replace(/\n\s+/g, '\n  ');
     expect(rosterReadsOutside(reindented, PINNED_ROSTER_FRAGMENTS)).toEqual([]);
+
+    // THE SET READING'S PIN (@Cindy B9), and the bypass it exists to report. The
+    // pinned text passes …
+    const membersGated = `const sql = \`${PINNED_AGENT_ROSTER_MEMBERS_FRAGMENT}\`;`;
+    expect(rosterReadsOutside(membersGated, PINNED_ROSTER_FRAGMENTS)).toEqual([]);
+    // … and the "simplification" that enumerates the roster for EVERY placement
+    // does not. This is the set-shaped version of B2's bypass and the worse of the
+    // two: it does not merely admit a stray roster row as a reader, it hands one to
+    // the recipient fan-out of a DM or an inbox.
+    const ungatedMembers = `const sql = \`SELECT ca_p.agent_id AS agent_id
+              FROM conversations c_p
+              JOIN conversation_agents ca_p
+                ON ca_p.conversation_id = c_p.id
+             WHERE c_p.id = @conv\`;`;
+    expect(rosterReadsOutside(ungatedMembers, PINNED_ROSTER_FRAGMENTS)).toHaveLength(1);
+    // …and so does the same read gated with an `OR`, which is the form that reads as
+    // careful and is wide open.
+    expect(
+      rosterReadsOutside(
+        membersGated.replace(`WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'workspace'`, `WHERE c_p.id = @conv
+               OR c_p.placement_kind = 'workspace'`),
+        PINNED_ROSTER_FRAGMENTS,
+      ),
+    ).toHaveLength(1);
 
     // THE HUMAN PAIR IS THE PIN (@Cindy B7). The whole fragment passes …
     const humanGated = `const sql = \`${PINNED_HUMAN_ROSTER_FRAGMENT}\`;`;
@@ -566,6 +676,20 @@ describe('db-boundary: participation authority', () => {
     expect(importsOf('export const WORKSPACE_PLACED = `c.placement_kind = \'workspace\'`;')).toEqual(
       [],
     );
+    // PROSE IS NOT A DEPENDENCY, which is why both call sites feed `codeOf` output
+    // in: the multi-line scan reads "…starting from `conversations`" after any
+    // line-initial `export` as a re-export, and the natural "fix" for that false
+    // positive is deleting the sentence that documents the arm. Both halves are
+    // asserted, so neither can be dropped as redundant.
+    const prose = [
+      'export const WORKSPACE_PLACED = `c.placement_kind = \'workspace\'`;',
+      '/**',
+      ' * Each arm starts from `conversations` by primary key.',
+      ' */',
+      'export const SQL = `SELECT 1`;',
+    ].join('\n');
+    expect(importsOf(prose)).toEqual([{ specifier: 'conversations', typeOnly: false }]);
+    expect(importsOf(codeOf(prose))).toEqual([]);
   });
 
   /**

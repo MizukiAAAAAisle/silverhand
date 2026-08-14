@@ -2839,3 +2839,208 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
     }
   });
 });
+
+/**
+ * THE TWO FOLLOWER FUNNELS (#task:2021 P4-5 round 2, @Cindy B10).
+ *
+ * `followAgent` / `followUser` are the only writers of a `thread_followers` row,
+ * and each holds `follower ⊆ LIVE participant` as a conjunction of two
+ * independent facts. Both halves need their own falsifier because they fail
+ * differently:
+ *
+ *  - PARTICIPATION is what the manual surface used to skip entirely. A voluntary
+ *    human follow went straight to a direct-write upsert, so the only thing
+ *    standing between a non-participant and a follower row was the route's
+ *    `canViewConversation` — a capability token, checked in a different layer,
+ *    against a different question.
+ *  - LIVENESS is not implied by participation, on purpose: a `direct_pair` arm
+ *    ignores `endpoint_*_deleted_at` so the SURVIVOR keeps reading its own DM,
+ *    which means the predicate still answers YES for the principal that no longer
+ *    exists. `thread_followers.principal_id` is polymorphic and therefore has NO
+ *    foreign key, so nothing downstream would reject the row — while the agent
+ *    funnel's backfill writes `conversation_inboxes.agent_id`, which DOES
+ *    reference `agents`. Without the liveness conjunct the sequence is: insert a
+ *    follower row for a dead principal, then take the CALLER'S TRANSACTION down
+ *    with an FK violation raised on its behalf.
+ *
+ * Both cases construct the state directly instead of routing to it, and that is a
+ * statement about today's coverage rather than a shortcut: the reachable paths
+ * are currently closed EARLIER — `conversation_agents.agent_id` /
+ * `conversations.inbox_agent_id` cascade on agent deletion (so the workspace and
+ * inbox arms lose participation with the principal), and a `direct_pair` whose
+ * peer is gone is read-only for the survivor (so no send reaches the funnel).
+ * These gates therefore hold a claim that is currently defended twice. The claim
+ * is the one the docblocks in three files make, so it is asserted where it is
+ * stated — one layer removing its own guard must not be able to make the other
+ * one's absence invisible.
+ */
+describe('the follower funnels — follower ⊆ live participant (P4-5 round 2)', () => {
+  /** A DM between the fixture human and `bob`, with a root message in it. */
+  function withDirectPair(t: ReturnType<typeof bootstrap>) {
+    const dm = t.conversations.getOrCreateDirectPair(
+      { kind: 'human', id: 'local' },
+      { kind: 'agent', id: t.bob.id },
+      1_700_000_000_000,
+    ).conversation;
+    const root = t.messages.insertForConversation({
+      conversationId: dm.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'root',
+    });
+    return { dm, root };
+  }
+
+  it('refuses an AGENT follow when the principal is gone but still participates', () => {
+    const t = bootstrap();
+    try {
+      const { dm, root } = withDirectPair(t);
+      t.agents.delete(t.bob.id);
+
+      // The two coordinates that make this a falsifier rather than a tautology:
+      // participation says YES (the endpoint arm ignores the tombstone by design)
+      // and the principal is GONE. Remove the liveness conjunct and the follower
+      // row appears, the backfill hits the `conversation_inboxes.agent_id` FK, and
+      // this call throws instead of answering.
+      expect(t.conversations.isAgentParticipant(dm.id, t.bob.id)).toBe(true);
+      expect(t.agents.get(t.bob.id)).toBeNull();
+
+      const result = t.service.followThread({
+        conversationId: dm.id,
+        rootMessageId: root.id,
+        agentId: t.bob.id,
+      });
+
+      expect(result).toEqual({ threadRootId: root.id, changed: false });
+      expect(t.threadFollowers.listFollowers(root.id)).toEqual([]);
+      expect(t.conversationInboxes.listPending(dm.id, t.bob.id)).toEqual([]);
+      // The root is untouched: the refusal is a decision inside the transaction,
+      // not an aborted one.
+      expect(t.messages.getById(root.id)?.id).toBe(root.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a HUMAN follow when the principal is gone but still participates', () => {
+    const t = bootstrap();
+    try {
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'human', id: 'teammate' },
+        { kind: 'agent', id: t.bob.id },
+        1_700_000_000_000,
+      ).conversation;
+      const root = t.messages.insertForConversation({
+        conversationId: dm.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      t.db.prepare(`DELETE FROM users WHERE id = 'teammate'`).run();
+
+      expect(t.conversations.isUserParticipant(dm.id, 'teammate')).toBe(true);
+      expect(t.users.get('teammate')).toBeNull();
+
+      const result = t.service.followHumanThread({
+        conversationId: dm.id,
+        rootMessageId: root.id,
+        userId: 'teammate',
+      });
+
+      expect(result.changed).toBe(false);
+      expect(t.threadFollowers.listFollowers(root.id)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a manual HUMAN follow by a non-participant — the seam the direct write bypassed', () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.alice.id,
+        content: 'root',
+      });
+      // `teammate` loses the channel seat while keeping workspace membership —
+      // v25's pair broken on the half the follow path never asked about, through
+      // the production removal face.
+      t.conversations.removeUser(t.channel.id, 'teammate');
+      expect(t.conversations.isUserParticipant(t.channel.id, 'teammate')).toBe(false);
+
+      const refused = t.service.followHumanThread({
+        conversationId: t.channel.id,
+        rootMessageId: root.id,
+        userId: 'teammate',
+      });
+      expect(refused.changed).toBe(false);
+      expect(t.threadFollowers.listFollowers(root.id)).toEqual([]);
+
+      // POSITIVE CONTROL, so the refusal above cannot be a manual-follow surface
+      // that stopped working: the fixture human still participates and still
+      // follows, `source='manual'`.
+      const accepted = t.service.followHumanThread({
+        conversationId: t.channel.id,
+        rootMessageId: root.id,
+        userId: 'local',
+      });
+      expect(accepted.changed).toBe(true);
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => ({
+          kind: f.principal_kind,
+          id: f.principal_id,
+          source: f.source,
+        })),
+      ).toEqual([{ kind: 'human', id: 'local', source: 'manual' }]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('commits a thread reply whose root author was deleted, and delivers it to the live followers', async () => {
+    const t = bootstrap();
+    try {
+      // The send-shaped twin of the first case, on the arm a route can actually
+      // reach: the root author is deleted, so the auto-follow pass meets a
+      // principal it must not register — and the reply it is registering FOR must
+      // still commit and reach everyone who is live.
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      const carol = t.agents.create(
+        { name: 'carol', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
+      t.agents.delete(t.bob.id);
+
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'reply to a deleted author',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      expect(t.messages.getById(reply.committed.message.id)?.id).toBe(
+        reply.committed.message.id,
+      );
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => f.principal_id),
+      ).not.toContain(t.bob.id);
+      // carol is referenced by nothing and authored nothing, so she is not a
+      // follower — the delivery that proves the send survived is alice's own
+      // follower row being turned into the reply's plan, minus the sender. The
+      // observable end state: the reply exists, and nothing was delivered to the
+      // deleted principal.
+      expect(t.fake.delivered.some(d => d.agentId === t.bob.id)).toBe(false);
+    } finally {
+      t.cleanup();
+    }
+  });
+});

@@ -294,7 +294,14 @@ export interface MessageTxScope {
   workspaces: MessageTxWorkspacesPort;
   notifications: MessageTxNotificationsPort;
   agents: { get(agentId: string): AgentDto | null; getByName(name: string): AgentDto | null };
-  users: { getByName(name: string): PrincipalNameSnapshot | null };
+  /** `get` is the LIVENESS reading (#task:2021 P4-5 round 2, @Cindy B10): the
+   *  human twin of `agents.get`, so `follower ⊆ LIVE participant` can be one
+   *  conjunction per principal kind instead of a participation check that a
+   *  tombstoned principal passes on purpose. */
+  users: {
+    get(userId: string): PrincipalNameSnapshot | null;
+    getByName(name: string): PrincipalNameSnapshot | null;
+  };
   inboxes: {
     ensureDelivery(
       conversationId: string,
@@ -358,10 +365,17 @@ export interface ThreadFollowReadPort {
   listFollowerAgentIdsParticipating(threadRootId: string): string[];
 }
 
-/** Self-atomic single-statement follower writes (idempotent by construction),
- *  so they need no UnitOfWork. */
+/** The callback-free follower write surface: the VOLUNTARY UNFOLLOW, and
+ *  nothing else.
+ *
+ *  There is no `upsert` here (#task:2021 P4-5 round 2, @Cindy B10). Creating a
+ *  follower row requires the `follower ⊆ live participant` gate and — for an
+ *  agent — the history backfill in the same transaction, so every insertion path
+ *  goes through the aggregate's in-transaction funnels. A direct-write upsert was
+ *  a SECOND WRITER around that gate, and the route's earlier `canViewConversation`
+ *  is a capability token, not the placement authority. Removal needs neither: it
+ *  can only narrow delivery, and it is idempotent. */
 export interface ThreadFollowDirectWritePort {
-  upsert(args: ThreadFollowerUpsertArgs): { inserted: boolean };
   remove(
     threadRootId: string,
     principalKind: 'human' | 'agent',

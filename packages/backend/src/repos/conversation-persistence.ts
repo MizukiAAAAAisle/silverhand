@@ -422,7 +422,10 @@ export function createSqliteConversationPersistence(
       get: id => agents.get(id),
       getByName: name => agents.getByName(name),
     },
-    users: { getByName: name => toPrincipalNameSnapshot(users.getByName(name)) },
+    users: {
+      get: id => toPrincipalNameSnapshot(users.get(id)),
+      getByName: name => toPrincipalNameSnapshot(users.getByName(name)),
+    },
     inboxes: {
       ensureDelivery: (conversationId, agentId, messageId, deliveryKind) => {
         inboxes.ensureDelivery(conversationId, agentId, messageId, deliveryKind);
@@ -501,7 +504,6 @@ export function createSqliteConversationPersistence(
   };
 
   const threadFollowDirectWrite: ThreadFollowDirectWritePort = {
-    upsert: args => threadFollowers.upsert(args),
     remove: (rootId, principalKind, principalId) =>
       threadFollowers.remove(rootId, principalKind, principalId),
   };

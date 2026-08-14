@@ -56,24 +56,25 @@ import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 
 /**
- * A runtime host that refuses to start a run in a conversation with no workspace
- * placement — the same rule production applies in
- * `outbound-event-fanout.runtimeStartOptions` (v71 §7.3), and the reason the
- * inbox wake is deferred rather than performed. Mirrored here so the integration
- * cases assert TODAY's end state; a fake that accepted the start would assert a
- * capability that does not exist.
+ * A runtime host that records what it was asked to do and refuses nothing.
+ *
+ * It used to throw `RuntimePlacementUnsupportedError` for a workspace-less
+ * conversation, on the stated grounds that "production applies the same rule".
+ * Production does not, and did not for the life of this file: the only
+ * `throw` sites in the repo are in this test, while
+ * `buildRuntimeStartOptions` emits `workspace: null` with an agent-scoped
+ * `runtime_scope` (#task:2019). A fake that refuses what production performs
+ * does not assert today's end state — it MANUFACTURES a defect, and every
+ * deferral the integration cases below observed was its own (#task:2021 P4-5
+ * round 2, @Cindy B11). The error class and the mention-CC branch that catches
+ * it survive as a residual with no producer; nothing here pretends otherwise.
  */
 class FakeRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
 
-  constructor(private readonly workspaceOf: (conversationId: string) => string | null) {}
-
   async start(conversationId: string, agentId: string): Promise<void> {
     this.starts.push({ conversationId, agentId });
-    if (this.workspaceOf(conversationId) === null) {
-      throw new RuntimePlacementUnsupportedError(conversationId);
-    }
   }
 
   async deliverMessage(
@@ -121,7 +122,7 @@ function bootstrap() {
   const messages = new MessageRepo(db);
   const notifications = new NotificationRepo(db);
   const events = new ScopeEventBus('test-epoch');
-  const fake = new FakeRuntimeHost(id => conversations.get(id)?.workspace_id ?? null);
+  const fake = new FakeRuntimeHost();
   const logger: BackendLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
   const workspace = workspaces.insert({ name: 'eng', description: null });
@@ -263,7 +264,11 @@ describe('mention CC v71 — the copy, in the send transaction', () => {
       });
 
       const result = await send(t, `${canonical('cc-outsider')} can you look at the parser?`);
-      await waitFor(() => logEvents(t.logger.warn).includes('mention_cc.wake_deferred'));
+      // The wake now HAPPENS (see `FakeRuntimeHost`): wait for the copy's own live
+      // dispatch into the inbox, which is the last post-commit effect.
+      await waitFor(() =>
+        t.fake.delivered.some(d => d.conversationId === t.outsiderInbox.id),
+      );
       unsubInbox();
       unsubViewer();
       unsubWorkspace();
@@ -741,12 +746,11 @@ describe('mention CC v71 — a DM source declines the CC without failing the sen
       // …and the CC wrote nothing anywhere.
       expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
       expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
-      // No notification of ANY kind: not a mention CC (declined), and not an
-      // `agent_start_failed` either — the DM endpoint's wake is DEFERRED until
-      // #task:2019 gives a workspace-less placement a session cwd, and reporting a
-      // failed start for a message that arrived would be a false alarm on every DM.
+      // No notification of ANY kind: not a mention CC (declined as data), and not
+      // an `agent_start_failed` either — the DM endpoint's wake is an ORDINARY
+      // one, because a workspace-less placement has a session scope (#task:2019).
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
-      expect(logEvents(t.logger.warn)).toContain('delivery.wake_deferred');
+      expect(logEvents(t.logger.warn)).toEqual([]);
       // The decision is REPORTED, not silent: an operator asking "why did my
       // mention not arrive" has the reason and the handle.
       expect(
@@ -805,15 +809,16 @@ describe('mention CC v71 — the post-commit half is the only best-effort part',
     };
   };
 
-  it('defers the wake — not "delivery failed" — when the inbox has no session scope (#task:2019)', async () => {
+  it('still defers rather than reporting a failure if a host ever refuses a placement (residual branch, no producer)', async () => {
     const h = deps(async (conversationId: string) => {
       throw new RuntimePlacementUnsupportedError(conversationId);
     });
     await dispatchMentionCcEffects(report(), h.deps);
 
-    // The bounded, known gap: the durable row is committed, so the next spawn
-    // with a scope drains it. Nothing may be logged as a delivery failure, and
-    // no live dispatch may be attempted against a runtime that never started.
+    // FAULT INJECTION, not a production path: nothing in the repo throws this
+    // error (#task:2021 P4-5 round 2 / @Cindy B11). The branch and this case
+    // document a residual left from v71 — the durable row is kept and no delivery
+    // failure is claimed — and neither is evidence that a caller should grow one.
     expect(logCalls(h.logger.warn)).toHaveLength(1);
     expect(logCalls(h.logger.warn)[0]).toMatchObject({
       event: 'mention_cc.wake_deferred',

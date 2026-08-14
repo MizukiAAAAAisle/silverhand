@@ -51,7 +51,6 @@ import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import {
   CLEAR_SESSION_EXIT_TIMEOUT_MS,
   ClearSessionInProgressError,
-  RuntimePlacementUnsupportedError,
   type ClearSessionResult,
   type ReapIdleRuntimesOptions,
   type ReapIdleRuntimesResult,

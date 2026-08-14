@@ -28,7 +28,6 @@ import { dispatchMentionCcEffects } from '../../application/mention-cc.js';
 import type { MentionCcReport } from '../../application/mention-cc.js';
 import type { BackendLogger } from '../../context.js';
 import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
-import { RuntimePlacementUnsupportedError } from '../../runtime/agent-runtime-host.js';
 import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
 import type { ConversationUnreadPublishPort } from '../conversation/unread-publish-port.js';
 import type {
@@ -230,19 +229,13 @@ export class MessageDeliveryCoordinator {
 
   /**
    * Tell the HUMAN AUTHOR that a recipient's runtime could not be reached. Every
-   * post-commit delivery path funnels its per-recipient failures here, which is
-   * also why the ONE non-failure lives here rather than in each caller.
+   * post-commit delivery path funnels its per-recipient failures here.
    *
-   * A placement the runtime cannot serve YET is not a start failure
-   * ({@link RuntimePlacementUnsupportedError}): the message is committed and its
-   * durable inbox row is queued, and the agent reads it on its next spawn — the
-   * same rule the mention CC's wake already applies (`mention_cc.wake_deferred`).
-   * Reachable on EVERY human DM send since #task:2021 P4-5 made a `direct_pair`
-   * fan out to its agent endpoint, while the session cwd for a workspace-less
-   * placement lands in #task:2019. Notifying anyway would put a red
-   * "agent failed to start" on the author's screen for a message that arrived,
-   * every single time — a false alarm the human cannot act on, and one that would
-   * train them to ignore the real ones. It is LOGGED, not swallowed.
+   * A workspace-less placement is NOT one of those failures and needs no
+   * exemption: `buildRuntimeStartOptions` already emits `workspace: null` with an
+   * agent-scoped `runtime_scope`, so a `direct_pair` / `agent_inbox` spawn takes
+   * the ordinary path (#task:2019 landed). Every error that arrives here is a real
+   * start/deliver failure and is reported as one.
    */
   notifyAgentStartFailureBestEffort(
     conversation: ConversationDto,
@@ -250,21 +243,6 @@ export class MessageDeliveryCoordinator {
     agentId: string,
     err: unknown,
   ): void {
-    if (err instanceof RuntimePlacementUnsupportedError) {
-      this.logger.warn(
-        {
-          event: 'delivery.wake_deferred',
-          reason: 'runtime_placement_unsupported',
-          conversationId: conversation.id,
-          messageId: message.id,
-          agentId,
-        },
-        'conversation-message-service: message committed and queued, but this '
-          + 'placement has no runtime scope yet (#task:2019); the agent reads it '
-          + 'on its next spawn',
-      );
-      return;
-    }
     if (message.from_kind !== 'user' || !message.from_user_id) return;
     const agent = this.read.getAgent(agentId);
     const error = describeStartFailure(err);
