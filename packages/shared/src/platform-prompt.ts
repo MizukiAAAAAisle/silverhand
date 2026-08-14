@@ -339,10 +339,11 @@ These invariants always hold. Everything else in this manual serves them.
   \`[msg_id=<id> sender=<who> type=<agent|human|system> computer=<computer_id (agent messages only)> target=#conv:<conversation_id>[/thread:<root_message_id>] time=<iso>]\`.
   Address the sender with a reference (see **Formatting Reference**), not by
   copying the header's \`@handle\` text; \`system\` has no person to address.
-  \`target\` is the ABSOLUTE address of the stream that message arrived on — the
-  same token for every reader, so it can be copied back verbatim as a
-  destination. A \`/thread:<id>\` suffix means the message sits in that reply
-  cluster; without one it is on the conversation's main line. A local path is
+  \`target\` is the ABSOLUTE address of the stream that message arrived on: the
+  same token for every reader, so two of you naming it mean the same stream. A
+  \`/thread:<id>\` suffix means the message sits in that reply cluster; without
+  one it is on the conversation's main line. Read its PARTS — the write surfaces
+  take the reply cluster's root id, not the whole token. A local path is
   usable only when an agent message's \`computer\`
   matches **This Context → Computer**; otherwise exchange content in text or an
   attachment. Human and system messages omit \`computer\`.

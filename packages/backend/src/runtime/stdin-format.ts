@@ -258,10 +258,13 @@ export function deliveryTargetOfMessage(msg: MessageLite): DeliveryTarget {
  *   meant anything while a runtime was pinned to exactly one
  *   conversation — an agent-scoped runtime serves N, so `channel`
  *   named whichever one the reader assumed. Being absolute, the token
- *   is the same for every reader and can be copied back verbatim as a
- *   destination. The message's own `msg_id` remains the relation
- *   handle agents pass to `silverhand message send --reply-to` to
- *   answer in the same thread.
+ *   is the same for every reader — but it is not yet the `--target`
+ *   flag's grammar: P4-3 changed what is emitted and taught, and
+ *   canonical acceptance on every write surface is P4-4's, so an agent
+ *   reads the token's parts (the root id, the bare conversation id)
+ *   rather than pasting the whole thing. The message's own `msg_id`
+ *   remains the relation handle agents pass to
+ *   `silverhand message send --reply-to` to answer in the same thread.
  * - `time` is ISO 8601 in the local timezone (offset preserved) so
  *   the agent sees both an absolute instant and the wall clock the
  *   user experienced.
