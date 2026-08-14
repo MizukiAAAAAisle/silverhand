@@ -21,6 +21,7 @@ import {
   ThreadSummaryInvariantSchema,
 } from './thread-summary.js';
 import { MessageSeqSchema } from '../seq.js';
+import { UnresolvedReferencesSchema } from './message-reference.js';
 
 export const MessageDtoSchema = z.object({
   id: z.string(),
@@ -110,6 +111,27 @@ export const MessageEventPayloadSchema = z.object({
   projections: MessageProjectionsSchema.optional(),
 });
 export type MessageEventPayload = z.infer<typeof MessageEventPayloadSchema>;
+
+/**
+ * HTTP ACK of a HUMAN send — a strict SUPERSET of the broadcast
+ * {@link MessageEventPayload}, never a different shape (#task:1749): the
+ * committed payload's own fields verbatim, so the renderer's single idempotent
+ * apply seam consumes the ACK and the WS echo through the same reader.
+ *
+ * The extra key exists because an ACK has an audience of exactly one — the
+ * actor who made this attempt — while the `message` event is read by everyone in
+ * the conversation. So sender-only diagnostics attach HERE and never inside
+ * `MessageEventPayload`, which is why the WS frame stays literally
+ * `result.committed`. `stream_head_before` on the agent surface is the same
+ * pattern: a fact about the attempt, carried by the attempt's answer.
+ */
+export const MessageSendAckSchema = MessageEventPayloadSchema.extend({
+  /** This sender's references that addressed nobody (#task:2021 P4-5-b) — see
+   *  {@link UnresolvedReferencesSchema}, whose single declaration this surface
+   *  shares with the agent send output. */
+  unresolved_references: UnresolvedReferencesSchema,
+});
+export type MessageSendAck = z.infer<typeof MessageSendAckSchema>;
 
 /** Per-root enriched reply-badge data (#task:1073, P1). Optional sidecar
  *  that augments `reply_counts_by_root` with what a Slack-style inline reply

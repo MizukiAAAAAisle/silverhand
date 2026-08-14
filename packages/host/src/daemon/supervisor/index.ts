@@ -1655,6 +1655,29 @@ export class Supervisor implements SupervisorContract {
       AgentSendMessageOutputSchema.shape.unresolved_references.safeParse(
         json['unresolved_references'],
       );
+    if (!unresolvedReferences.success) {
+      // The field is `.optional()`, so an ABSENT key parses successfully: a
+      // failure here means the backend sent something we cannot read. Dropping
+      // it quietly would make protocol/shape drift indistinguishable from "every
+      // reference landed" — the one reading a daemon must never invent. So: one
+      // NAMED warn, synchronous, diagnostic-only. The send stays `ok: true` and
+      // the actor still gets no field, because a committed send is not undone by
+      // a diagnostic. Only the zod issue SHAPE (code + path) is logged: the body
+      // is untrusted input, and a log line is not the place to echo it.
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'send_unresolved_references_shape_mismatch',
+          conversationId: params.conversation_id,
+          agent_id: params.agent_id,
+          issues: unresolvedReferences.error.issues.map(issue => ({
+            code: issue.code,
+            path: issue.path.join('.'),
+          })),
+        },
+        'backend send response carried an unreadable unresolved_references field; omitted from the sender answer',
+      );
+    }
     return {
       ok: true,
       message_id: messageId,

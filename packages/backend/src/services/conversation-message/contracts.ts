@@ -80,9 +80,11 @@ export interface SendMessageResult {
    *
    * SENDER-ONLY, by position: it is a sibling of `committed`, never a field
    * inside it. `committed` is the payload the post-commit WS frame carries to
-   * everyone in the conversation and the human route echoes verbatim (#task:1749),
-   * so anything placed in it is published; this belongs to the caller that wrote
-   * the message and to nobody else.
+   * everyone in the conversation, so anything placed inside it is published.
+   * BOTH send routes carry this alongside it instead — the agent's typed output
+   * field and the human ACK's `MessageSendAck` sibling — and the WS frame stays
+   * literally `committed` (#task:1749). One send semantics, one answer: an actor
+   * kind is no reason to lose the diagnostic.
    *
    * Total, not optional: "which of your references landed" is answered for every
    * send, and an empty array is that answer. An absent field would make "nothing

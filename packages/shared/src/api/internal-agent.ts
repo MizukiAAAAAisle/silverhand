@@ -2,13 +2,12 @@
 // Bounded context: internal-agent. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import { HandleSchema } from '../handle.js';
-import { REFERENCE_KINDS, type Reference } from '../reference.js';
 import {
   ConversationKindSchema,
   ConversationVisibilitySchema,
   WorkspaceKindSchema,
 } from '../db/schema.js';
-import { ParticipantNameSchema } from './name.js';
+import { UnresolvedReferencesSchema } from './message-reference.js';
 import {
   MessageAttachmentIdsInputSchema,
   hasMessagePayload,
@@ -96,25 +95,6 @@ export type AgentResolveStaleMessageInput = z.infer<
   typeof AgentResolveStaleMessageInputSchema
 >;
 
-/**
- * The wire shape of ONE reference (#task:2021 P4-5-b) — annotated as
- * `z.ZodType<Reference>` so it is the DOMAIN shape by compile-time obligation,
- * not by resemblance. A second reference grammar is precisely how a producer and
- * a consumer come to disagree about what a token names, so the schema owes its
- * fields to `reference.ts` and the stored-name domain.
- *
- * `ParticipantNameSchema`, not `HandleSchema`: this is an OUTPUT, and the value
- * is a stored name. `HandleSchema` tolerates a display `@` for command
- * ARGUMENTS; accepting one here would mean the server had emitted a handle no
- * resolver may see.
- */
-export const MessageReferenceSchema: z.ZodType<Reference> = z
-  .object({
-    kind: z.enum(REFERENCE_KINDS),
-    handle: ParticipantNameSchema,
-  })
-  .strict();
-
 export const AgentSendMessageOutputSchema = z.object({
   message_id: z.string(),
   /** Seq assigned by the target conversation allocator. The CLI uses this
@@ -136,23 +116,10 @@ export const AgentSendMessageOutputSchema = z.object({
    *  Absent when the CAS ran (the sender already covers the stream) and for a
    *  cross-conversation send (the sender tracks no cursor there). */
   stream_head_before: z.number().int().nonnegative().optional(),
-  /**
-   * The references in the sent body that addressed NOBODY (#task:2021 P4-5-b):
-   * the handle names no principal, or it names one that does not participate in
-   * the conversation the message landed in. Absent when every reference was
-   * addressed — and for a body that carried none.
-   *
-   * Deliberately reason-free and deliberately sender-only. The two cases above
-   * are ONE outcome because splitting them would let anyone probe whether a name
-   * exists anywhere in the deployment by mentioning it; and it rides the SENDER's
-   * response rather than the message, because a reference that landed nowhere is
-   * a fact about this attempt, not about the message everyone else reads.
-   *
-   * The send still SUCCEEDED. An unresolved reference never withholds delivery
-   * from the recipients who were addressed — it is feedback, not a refusal, and
-   * the author decides whether to resend.
-   */
-  unresolved_references: z.array(MessageReferenceSchema).nonempty().optional(),
+  /** The references in the sent body that addressed NOBODY (#task:2021 P4-5-b)
+   *  — see {@link UnresolvedReferencesSchema}, whose single declaration this
+   *  surface shares with the human send ACK. */
+  unresolved_references: UnresolvedReferencesSchema,
 });
 export type AgentSendMessageOutput = z.infer<typeof AgentSendMessageOutputSchema>;
 

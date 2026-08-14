@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MessageEventPayload } from '@silverhand/shared';
+import { MessageSendAckSchema } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 // S1 projection-level recovery, P1 (#task:1276). Asserts the backend attaches an
@@ -167,5 +168,48 @@ describe('S1 P1 — message event reply_count projection', () => {
       root_id: rootId,
       reply_count: 1,
     });
+  });
+
+  it('gives the HUMAN sender its unresolved references, and the WS frame none of them (#task:2021 P4-5-b)', async () => {
+    // B14: "sender-only" may not mean "agent-sender-only". A human who writes a
+    // name that addressed nobody is the one person who can fix it, so the answer
+    // rides their ACK — and, because the `message` frame is read by the whole
+    // conversation, ONLY their ACK. The ACK stays a superset of the published
+    // payload so the renderer's single apply seam keeps reading one shape.
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+
+    const messageEvents: MessageEventPayload[] = [];
+    const unsub = t.ctx.events.subscribe(channelId, e => {
+      if (e.kind === 'message') messageEvents.push(e.payload as MessageEventPayload);
+    });
+    const res = await http(t).post(`/api/channels/${channelId}/messages`, {
+      content:
+        '<silverhand://agent/alice> and <silverhand://agent/nosuchagent> — ping',
+    });
+    unsub();
+
+    // The send SUCCEEDED: an unresolved reference is feedback, not a refusal.
+    expect(res.status).toBe(201);
+    const ackJson = (await res.json()) as Record<string, unknown>;
+    // Parsed through the shared ACK schema on purpose: the shape the client will
+    // read is the shape asserted here.
+    const ack = MessageSendAckSchema.parse(ackJson);
+    expect(ack.unresolved_references).toEqual([
+      { kind: 'agent', handle: 'nosuchagent' },
+    ]);
+    // Reason-free: `nosuchagent` (no such name) and a real non-participant must
+    // stay ONE indistinguishable outcome, or a mention becomes a probe.
+    for (const ref of ack.unresolved_references ?? []) {
+      expect(Object.keys(ref).sort()).toEqual(['handle', 'kind']);
+    }
+
+    // The published frame is still LITERALLY the committed payload: the ACK
+    // minus its one sender-only sibling deep-equals what everyone else received.
+    const frame = messageEvents.find(p => p.message.id === ack.message.id);
+    expect(frame, 'message event for the human send').toBeDefined();
+    expect('unresolved_references' in (frame as object)).toBe(false);
+    const { unresolved_references: _senderOnly, ...broadcast } = ackJson;
+    expect(broadcast).toEqual(frame);
   });
 });

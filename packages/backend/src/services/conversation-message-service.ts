@@ -398,9 +398,11 @@ export class ConversationMessageService {
     // per send (not per reference), because it is an ANOMALY someone may have to
     // explain after the fact — "I told the agent and nothing happened" — and the
     // default level on a running install is `warn`, so an `info` line would not
-    // be on disk when that question is asked. Only the author's own tokens are
-    // recorded: no reason, and nothing about who does exist (see
-    // `application/reference-addressing.ts`).
+    // be on disk when that question is asked. This is a SUPPLEMENT to the
+    // author's own answer (both send routes return the tokens), never the
+    // substitute for it: a log is not feedback to the person who typed the name.
+    // Only the author's own tokens are recorded: no reason, and nothing about who
+    // does exist (see `application/reference-addressing.ts`).
     if (txResult.unresolvedReferences.length > 0) {
       this.logger.warn(
         {

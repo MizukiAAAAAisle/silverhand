@@ -30,6 +30,7 @@ import {
   messageContentByteLength,
   messageContentExceedsLimit,
 } from '@silverhand/shared';
+import type { MessageSendAck } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -978,7 +979,27 @@ export function createConversationMessagingApp(
       // frame carries. The renderer runs one idempotent apply seam over both
       // the ACK and the WS echo, so the self-sender's root reply block converges
       // immediately without depending on WS echo timing (#task:1749).
-      return c.json(result.committed, 201);
+      //
+      // Plus ONE sender-only sibling: which of this body's references addressed
+      // nobody (#task:2021 P4-5-b). A `MessageSendAck` is a superset of the
+      // broadcast payload, never a different shape — the field sits OUTSIDE
+      // `committed` because the WS frame is read by the whole conversation, and
+      // omitted when empty because it is an answer, not a status line. Humans
+      // get it for the same reason agents do: the actor who wrote a name that
+      // landed nowhere is the only one who can fix it, and an operator log is
+      // not feedback to them.
+      //
+      // Destructured, not length-checked: the wire type says "present ⇒ at least
+      // one", and pulling the head out is the proof of that, so the omit-when-
+      // empty rule and the type agree by construction.
+      const [firstUnresolved, ...restUnresolved] = result.unresolvedReferences;
+      const ack: MessageSendAck = {
+        ...result.committed,
+        ...(firstUnresolved
+          ? { unresolved_references: [firstUnresolved, ...restUnresolved] }
+          : {}),
+      };
+      return c.json(ack, 201);
     } catch (err) {
       const mapped = conversationMessageServiceErrorResponse(c, err);
       if (mapped) return mapped;
