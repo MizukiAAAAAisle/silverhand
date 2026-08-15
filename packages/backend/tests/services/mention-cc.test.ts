@@ -44,10 +44,13 @@ import { createSqliteAgentProvisioningPersistence } from '../../src/repos/agent-
 import { createUnreadPublishAdapter } from '../../src/adapters/unread-publish.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
 import {
-  AgentInboxMissingError,
   dispatchMentionCcEffects,
   writeMentionCcCopies,
 } from '../../src/application/mention-cc.js';
+// The aggregate invariant belongs to the module that creates the aggregate
+// (#task:2034), so the error is imported from there, not from the mention rule
+// that happens to be the first consumer to notice it.
+import { AgentInboxMissingError } from '../../src/application/agent-provisioning-ports.js';
 import type { MentionCcReport } from '../../src/application/mention-cc.js';
 import type { MessageTxScope } from '../../src/services/conversation-message/ports.js';
 import type { BackendLogger } from '../../src/context.js';

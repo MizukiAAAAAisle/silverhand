@@ -347,7 +347,7 @@ describe('createAgent provisioning failure (application integration)', () => {
     expect(fakeHostWs.calls.some(c => c.kind === 'agent_materialize')).toBe(true);
   });
 
-  it('AgentSlot materializes only L1: no home/DM/onboarding graph and one agent-scoped runtime slot', async () => {
+  it('AgentSlot onboards into its own inbox: no home/DM/roster row, and the three post-commit effects wake it there', async () => {
     const { db, deps, runtimeHost, fakeHostWs } = buildDeps();
     const idempotencyKey = freshKey();
     const result = await createAgent(deps, {
@@ -364,6 +364,9 @@ describe('createAgent provisioning failure (application integration)', () => {
     expect(result.kind).toBe('created');
     if (result.kind !== 'created') return;
     const agentId = result.payload.agent.id;
+    // The three coordinates are the HUMAN's navigation target; an AgentSlot has
+    // none — its onboarding message lives in an inbox the human is not a
+    // participant of, so a message id here would be a dangling coordinate.
     expect(result.payload).toMatchObject({
       agent: { session_scope: 'agent' },
       agentHomeWorkspaceId: null,
@@ -375,6 +378,8 @@ describe('createAgent provisioning failure (application integration)', () => {
         'SELECT COUNT(*) AS c FROM workspaces WHERE owner_agent_id = ?',
       ).get(agentId)!.c,
     ).toBe(0);
+    // Rosterless by construction (§4.2): the inbox's participant is its
+    // ownership column, never a projected membership row.
     expect(
       db.prepare<[string], { c: number }>(
         'SELECT COUNT(*) AS c FROM conversation_agents WHERE agent_id = ?',
@@ -386,9 +391,40 @@ describe('createAgent provisioning failure (application integration)', () => {
       conversation_id: null,
       generation: 0,
     });
-    expect(result.effects).toHaveLength(1);
+
+    // Exactly ONE onboarding message, in the agent's own inbox. Read through
+    // the repos rather than raw SQL: these two faces exist in production, so a
+    // whitebox statement here would buy nothing but ledger budget.
+    const inbox = new ConversationRepo(db).getAgentInbox(agentId)!;
+    expect(inbox).not.toBeNull();
+    const inboxMessages = new MessageRepo(db).listForConversation(inbox.id);
+    expect(inboxMessages).toHaveLength(1);
+    const onboarding = inboxMessages[0]!;
+    expect(onboarding.from_kind).toBe('system');
+    // It must not repeat the ConversationSlot's claim of a shared DM, and it
+    // must carry the outbound target the agent is supposed to greet on.
+    expect(onboarding.content).toContain('dm:@local');
+    expect(onboarding.content).not.toContain('personal DM');
+    expect(onboarding.metadata).toMatchObject({
+      subtype: systemSubtype('onboarding'),
+    });
+
+    // Same three effects as the other scope — the onboarding contract is
+    // "woken with a message it must act on", which is scope-blind. Only the
+    // destination differs, and it is the inbox.
+    expect(result.effects).toHaveLength(3);
     expect(runtimeHost.delivered).toHaveLength(0);
     expect(runtimeHost.starts).toHaveLength(0);
+    for (const effect of result.effects) effect();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runtimeHost.delivered).toEqual([
+      { conversationId: inbox.id, agentId, messageId: onboarding.id },
+    ]);
+    expect(runtimeHost.starts).toHaveLength(1);
+    expect(runtimeHost.starts[0]).toMatchObject({
+      conversationId: inbox.id,
+      agentId,
+    });
     expect(fakeHostWs.calls.some(c => c.kind === 'agent_materialize')).toBe(true);
 
     const echo = await createAgent(deps, {
@@ -410,5 +446,8 @@ describe('createAgent provisioning failure (application integration)', () => {
         onboardingMessageId: null,
       },
     });
+    // An echo re-onboards nothing: the second onboarding message is what a
+    // get-or-create graph would have written.
+    expect(new MessageRepo(db).listForConversation(inbox.id)).toHaveLength(1);
   });
 });

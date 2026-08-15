@@ -17,11 +17,14 @@
  * 2. the DEPENDENT GRAPH —
  *    `create-agent.ts::insertProvisioningDependents` flips a
  *    `pending_materialization` agent to `active` and inserts everything that
- *    exists only BECAUSE the daemon materialized a home on disk: the agent-home
- *    workspace, the onboarding DM channel + both membership edges, the
- *    owner-human membership/pointer, and the onboarding system message. All of
- *    those writes plus the authoritative re-read the workspace insert needs are
- *    the faces below.
+ *    exists only BECAUSE the daemon materialized a home on disk. What that is
+ *    depends on the agent's session scope (#task:2034): the CONVERSATION arm
+ *    builds the agent-home workspace, the onboarding DM channel + both
+ *    membership edges, the owner-human membership/pointer, and the onboarding
+ *    system message; the AGENT arm has no home and no DM, so its graph is the
+ *    onboarding system message alone, addressed to the inbox it already owns.
+ *    All of those writes plus the authoritative re-read the workspace insert
+ *    needs are the faces below.
  *
  * The split is the lifecycle: `pending_materialization | active | failed` are all
  * legal states of an Agent, and only (2) is conditional on materialization
@@ -87,6 +90,27 @@ import type {
   CreateAgentInput,
 } from '@silverhand/shared';
 
+/** A broken Agent aggregate: the agent row exists but its inbox does not.
+ *
+ *  Declared HERE, next to {@link AgentProvisioningPersistence.reserveAgentAggregate}
+ *  (#task:2034): that factory is what makes "an agent always has an inbox" true,
+ *  so the violation of the invariant belongs to the module that states it — not
+ *  to whichever consumer happened to notice first (it was `mention-cc.ts`, which
+ *  is a mention rule, not the aggregate's contract). Never recoverable at a read
+ *  site: a get-or-create is exactly what let two `Mentions` DMs exist for one
+ *  agent. */
+export class AgentInboxMissingError extends Error {
+  readonly code = 'agent_inbox_missing' as const;
+  constructor(readonly agentId: string) {
+    super(
+      `agent ${agentId} has no agent_inbox placement; the inbox is created with `
+        + 'the agent (v71 migration + create-agent transaction), so this is a '
+        + 'broken aggregate, not a state to repair from a mention',
+    );
+    this.name = 'AgentInboxMissingError';
+  }
+}
+
 /** The agent face: the conditional transition and the authoritative re-read
  *  that follows it, as ONE operation. */
 export interface AgentProvisioningAgentsTxPort {
@@ -145,8 +169,8 @@ export interface AgentProvisioningWorkspacesTxPort {
   setOwnerUserId(workspaceId: string, userId: string): void;
 }
 
-/** The conversation face: the onboarding DM channel, its two edges, and the
- *  agent's inbox placement. */
+/** The conversation face: the onboarding DM channel, its two edges, the
+ *  agent's inbox placement, and the inbox lookup the agent-scoped arm needs. */
 export interface AgentProvisioningConversationsTxPort {
   /** Insert the DM channel under the (already-inserted) agent-home workspace.
    *  Returns only its id — the edges below and the message insert key off it.
@@ -181,6 +205,24 @@ export interface AgentProvisioningConversationsTxPort {
    * fresh create. Returns `{ id }` like its siblings (R4).
    */
   insertAgentInbox(agentId: string, createdAt: number): { id: string };
+  /**
+   * The agent's inbox id — the destination the AGENT-SCOPED arm's onboarding
+   * message lands in (#task:2034).
+   *
+   * A read inside the write transaction, not a value threaded in from the
+   * caller: the message insert that consumes it is part of this graph, so the
+   * destination must be read under the same atomicity as the write. (The inbox
+   * itself is written by {@link AgentProvisioningPersistence.reserveAgentAggregate}
+   * in an EARLIER transaction — it is an invariant of the `agents` row, not of
+   * the materialized graph.)
+   *
+   * THROWS when the row is absent instead of returning `null`: by the aggregate
+   * factory's invariant an `agents` row always has one, so absence means
+   * external mutation — and the alternative, skipping the onboarding write, is
+   * the exact silent-no-onboarding bug this arm exists to fix. Rolling the graph
+   * back is the honest outcome.
+   */
+  requireInboxId(agentId: string): string;
   /** Owner-agent edge on the DM. */
   addAgent(conversationId: string, agentId: string): void;
   /** Owner-human edge on the DM. */

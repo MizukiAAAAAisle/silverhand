@@ -1,7 +1,8 @@
 import type { Database as Db } from 'better-sqlite3';
-import type {
-  AgentProvisioningPersistence,
-  AgentProvisioningTxScope,
+import {
+  AgentInboxMissingError,
+  type AgentProvisioningPersistence,
+  type AgentProvisioningTxScope,
 } from '../application/agent-provisioning-ports.js';
 import { AgentRepo } from './agent-repo.js';
 import { WorkspaceRepo } from './workspace-repo.js';
@@ -75,6 +76,11 @@ function conversationProvisioningPort(
     insertAgentInbox(agentId, createdAt) {
       const inbox = conversations.insertAgentInbox(agentId, createdAt);
       return { id: inbox.id };
+    },
+    requireInboxId(agentId) {
+      const inbox = conversations.getAgentInbox(agentId);
+      if (!inbox) throw new AgentInboxMissingError(agentId);
+      return inbox.id;
     },
     addAgent(conversationId, agentId): void {
       conversations.addAgent(conversationId, agentId);

@@ -53,6 +53,7 @@ import type {
   AgentRuntimeStartPort,
 } from '../runtime/agent-runtime-host.js';
 import type { BackendLogger } from '../context.js';
+import { AgentInboxMissingError } from './agent-provisioning-ports.js';
 import type { MessageTxScope } from '../services/conversation-message/ports.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 
@@ -67,20 +68,6 @@ export type MentionCcTxScope = Pick<
   MessageTxScope,
   'agents' | 'conversations' | 'workspaces' | 'messages' | 'inboxes' | 'notifications'
 >;
-
-/** A broken Agent aggregate: the agent exists but its inbox does not. Not
- *  recoverable here on purpose — see the module docblock. */
-export class AgentInboxMissingError extends Error {
-  readonly code = 'agent_inbox_missing' as const;
-  constructor(readonly agentId: string) {
-    super(
-      `agent ${agentId} has no agent_inbox placement; the inbox is created with `
-        + 'the agent (v71 migration + create-agent transaction), so this is a '
-        + 'broken aggregate, not a state to repair from a mention',
-    );
-    this.name = 'AgentInboxMissingError';
-  }
-}
 
 export interface MentionCcInput {
   /** The just-inserted source message. Only a `from_kind='user'` send reaches
