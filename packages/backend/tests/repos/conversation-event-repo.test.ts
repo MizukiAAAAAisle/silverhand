@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationEventRepo } from '../../src/repos/conversation-event-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -22,9 +23,8 @@ function bootstrap() {
     description: null,
   });
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'Activity',
+    title: fixedConversationTitle('Activity'),
   });
   conversations.addAgent(channel.id, agent.id);
 

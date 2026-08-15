@@ -111,12 +111,12 @@ function seedOtherPlacements(db: Database.Database): void {
   db.exec(`
     INSERT INTO conversations
       (id, workspace_id, inbox_agent_id, placement_kind, roster_policy, title,
-       status, created_at, updated_at, visibility)
+       title_key, status, created_at, updated_at, visibility)
     VALUES
       ('c_chan', 'ws_reg', NULL, 'workspace', 'open', 'general',
-       'idle', 100, 100, 'public'),
+       'general', 'idle', 100, 100, 'public'),
       ('c_inbox_a1', NULL, 'a1', 'agent_inbox', 'fixed', 'Inbox',
-       'idle', 300, 300, 'private');
+       NULL, 'idle', 300, 300, 'private');
   `);
 }
 

@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import {
-  disambiguateConversationName,
-  slugifyConversationTitle,
-} from '../conversation-name.js';
+  auditConversationTitleAddresses,
+  describeConversationTitleAudit,
+} from '../conversation-title-audit.js';
+import { canonicalizeStoredConversationTitle } from '../conversation-title.js';
 import { BASELINE_SCHEMA_SQL, BASELINE_SCHEMA_VERSION } from './baseline-schema.js';
 
 /**
@@ -1821,56 +1822,82 @@ export const migrations: Migration[] = [
   },
   {
     version: 72,
-    name: 'conversation_names',
-    // agent-scoped-session-v1 §8 P0-c (#task:2016) — a workspace conversation
-    // gains a STABLE ADDRESS, distinct from its display title. `title` keeps the
-    // display half and may be renamed freely; the name is the coordinate a
-    // `#<name>` reference resolves through, and renaming the title must not
-    // change what an address resolves to (the doc's falsifier).
+    name: 'conversation_title_address',
+    // agent-scoped-session-v1 §8 P0-c (#task:2016) — a workspace conversation's
+    // DISPLAY TITLE becomes its ADDRESS. There is no second, semantic name: the
+    // thing a person reads in the sidebar is the thing `<silverhand://…>`
+    // resolves, so a channel can never show one name and answer to another
+    // (shiki, 2026-08-15 — the ruling that retired this migration's first design,
+    // an allocation table of slugs).
     //
-    // The name is NOT a column on `conversations`. It is an ALLOCATION in a
-    // workspace namespace, and the table below is the whole namespace — current
-    // names and retired ones in ONE relation, so `PRIMARY KEY (workspace_id,
-    // name)` alone proves the load-bearing property: a name that has ever been
-    // allocated can never be allocated again, to any conversation, ever. A
-    // column plus a separate reservation table would spread that uniqueness
-    // across two relations, leaving a trigger to maintain what a key would
-    // otherwise decide — two authorities for one fact.
+    // The address is therefore not an entity. It is a UNIQUENESS RULE over a
+    // column that already exists, and the whole rule is:
     //
-    // `conversation_id` carries NO foreign key, for the same reason
-    // `messages.cc_source_message_id` (v71) carries none: it is a HISTORICAL
-    // COORDINATE. A retired row must survive its conversation's deletion, or the
-    // deletion would hand the name back. Dropping the FK is what removes birth
-    // validation, so the trigger below performs it explicitly — and more
-    // narrowly than an FK could, since it also pins the placement and the
-    // workspace.
+    //   title_key = NFC(foldCase(NFC(trim(title))))
+    //   UNIQUE (workspace_id, title_key) WHERE placement_kind = 'workspace'
     //
-    // Three triggers, created BEFORE the backfill so the backfill itself passes
-    // through them. Without them the key proves far less than it looks:
-    // `PRIMARY KEY` only blocks a conflicting INSERT, while `UPDATE name`,
-    // `UPDATE workspace_id`, a plain `DELETE`, or resetting `retired_at` back to
-    // NULL all release an allocated name.
+    // `title_key` is a PLAIN column, not GENERATED: SQLite has no Unicode case
+    // folding, no NFC, and no Unicode whitespace class, so the fold cannot be
+    // written as a SQL expression at all. That is the load-bearing consequence of
+    // this design and it is stated here rather than discovered later — the index
+    // proves only that STORED KEYS are unique. "Two channels in a workspace
+    // cannot display the same title" is a conjunction of three properties, and
+    // only the middle one is a database fact:
     //
-    //   - `_birth` — the INSERT-time validation the missing FK would not have
-    //     given anyway: the target must exist, be workspace-placed, and belong
-    //     to THIS workspace. Cross-workspace allocation is not merely dirty
-    //     data; combined with a resolver that joined on id alone it would be a
-    //     cross-workspace addressing hole.
-    //   - `_immutable` — the only legal UPDATE is retirement. Coordinates and
-    //     `assigned_at` are frozen, and `retired_at` may go NULL → timestamp
-    //     once: no resurrection, and no rewriting when a name died.
-    //   - `_permanent` — an ordinary DELETE fails loud. The one legitimate
-    //     removal is the namespace disappearing with its workspace, and the
-    //     `WHEN EXISTS (workspaces …)` guard admits exactly that: when SQLite
-    //     runs this trigger for an `ON DELETE CASCADE`, the parent row is
-    //     already gone, so the cascade passes and every direct DELETE aborts.
+    //   1. ONE canonicalizer (`canonicalizeStoredConversationTitle` in shared;
+    //      the fold table is pinned data, versioned, not the host's ICU);
+    //   2. a TERMINAL WRITER — title and key are writable only as a branded pair
+    //      the caller cannot forge, so no write path can bring its own fold;
+    //   3. a half-state that is DETECTABLE AT RUNTIME —
+    //      `auditConversationTitleAddresses`, run by the precondition below, at
+    //      boot, and on demand.
     //
-    // Totality — "every live workspace conversation has exactly one current
-    // name" — is deliberately NOT claimed as a DB fact. `conversations` and its
-    // name are mutually prerequisite and SQLite has no deferred constraints, so
-    // the partial UNIQUE proves single-valuedness (AT MOST one current name per
-    // conversation) and the create / backfill / rename units of work provide the
-    // rest.
+    // A rename RELEASES the old title immediately, and nothing here remembers it:
+    // no retired allocations, no reuse ban. Another channel may take it, and so
+    // may the one that gave it up. `#conv:<id>` remains a permanent address for
+    // every conversation, which is what makes the by-name address safe to lose.
+    //
+    // ARCHIVING DOES NOT RELEASE A TITLE. The index has no `archived_at IS NULL`
+    // clause on purpose: an archived channel is restorable, and a restore that
+    // could fail — or worse, silently collide — because someone took its name is
+    // a worse surprise than "that name is still in use by an archived channel".
+    //
+    // Only WORKSPACE placements have an address. `title_key` is NULL for an
+    // `agent_inbox` row and the arc CHECK below enforces exactly that, so a
+    // resolver that forgot its placement predicate still cannot address an inbox
+    // — the same reason v69 declared `CHECK (placement_kind = 'workspace')`
+    // instead of trusting the writer.
+    //
+    // A TABLE REBUILD is required: the new column is NOT NULL for workspace rows,
+    // it participates in the placement arc CHECK, and SQLite cannot alter a
+    // CHECK. Template = the v69 / v71 rebuilds directly above; every surviving
+    // column, constraint and index is reproduced explicitly, because a rebuild's
+    // failure mode is silently losing one of them, and the falsifiers assert the
+    // full normalized schema rather than a sample. `foreignKeyEscape` disables
+    // `foreign_keys` around the migration and runs `foreign_key_check`
+    // afterwards, so `DROP TABLE conversations` cannot cascade-delete children.
+    //
+    // NAMED BEHAVIOR — THIS MIGRATION CHANGES EXISTING DISPLAY TITLES. Where the
+    // stored `title` was padded or not in NFC, the backfill writes the CANONICAL
+    // form back: `title` is not byte-identical across v72 for those rows, and the
+    // change is user-visible in every read surface (sidebar, header, export,
+    // stdin) as well as to any external consumer that pinned the old bytes.
+    // Concretely: `"  design  "` becomes `"design"`, and a decomposed `"café"`
+    // (`e` + U+0301) becomes the composed one. Nothing is lost — no character is
+    // dropped but edge whitespace, and NFC is canonical equivalence, so the two
+    // spellings render identically in a conforming renderer.
+    //
+    // It is not a repair we could skip. Keying without it leaves rows where
+    // `title <> canonical(title)`, which is a defect class the integrity scan must
+    // then TOLERATE FOREVER on legacy data — and a tolerated class is a class the
+    // fail-closed boot cannot use, so the one half-state that means "shows one
+    // name, answers to another" would have to be judged by a scan that already
+    // shrugs at un-normalized titles. Writing it back once, here, is what makes
+    // `title = canonical(title)` a post-migration invariant with no legacy
+    // exemption. RESIDUAL RISK: a row whose title differs only in normalization
+    // changes bytes with no operator prompt; the migration's own backup (see
+    // `onMigrationResult`'s `backupPath`) is the recovery path.
+    foreignKeyEscape: true,
     precondition: (db) => {
       const handle = db as {
         exec: (sql: string) => void;
@@ -1879,183 +1906,177 @@ export const migrations: Migration[] = [
             id: string;
             workspace_id: string;
             title: string;
-            created_at: number;
           }[];
           run: (...params: unknown[]) => void;
         };
       };
-      handle.exec(
-        `DROP TABLE IF EXISTS temp.conversation_name_backfill;
-         CREATE TEMP TABLE conversation_name_backfill (
-           conversation_id TEXT PRIMARY KEY,
-           workspace_id    TEXT NOT NULL,
-           name            TEXT NOT NULL,
-           assigned_at     INTEGER NOT NULL,
-           UNIQUE (workspace_id, name)
-         );`,
-      );
-      const stage = handle.prepare(
-        `INSERT INTO temp.conversation_name_backfill
-           (conversation_id, workspace_id, name, assigned_at)
-         VALUES (?, ?, ?, ?)`,
-      );
-      // SQL cannot derive a slug, so the names are minted here — inside the
-      // migration's own transaction, on the same connection, before `up` — with
-      // the SAME deriver channel creation uses (`slugifyConversationTitle`). A
-      // second copy of the algorithm would make an upgraded database and a
-      // freshly created channel disagree about the obvious name for a title.
-      //
-      // Collisions are inevitable (every CJK-only title derives `channel`) and
-      // are resolved by ordinal, in `(created_at, id)` order so the result
-      // depends only on the data, not on the scan order. Only the BACKFILL may
-      // suffix: it must cover every row and has no requester to refuse.
-      const taken = new Map<string, Set<string>>();
       const rows = handle
         .prepare(
-          `SELECT id, workspace_id, title, created_at
+          `SELECT id, workspace_id, title
              FROM conversations
             WHERE placement_kind = 'workspace'
             ORDER BY workspace_id, created_at, id`,
         )
         .all();
+
+      // FAIL LOUD, BEFORE the index exists. Two channels whose titles fold
+      // together are legal data below this version, and the UNIQUE index is
+      // about to refuse them with `UNIQUE constraint failed:
+      // conversations.workspace_id, conversations.title_key` — a message that
+      // names neither channel and no title. This precondition is the same
+      // detector the boot scan and `admin scan-title-addresses` use, so an
+      // operator can run it on a copy BEFORE upgrading and rename at leisure;
+      // throwing here rolls the transaction back and leaves no `_migrations`
+      // row, so the upgrade retries on the next boot once the data is clean.
+      const audit = auditConversationTitleAddresses(
+        rows.map(row => ({
+          id: row.id,
+          workspaceId: row.workspace_id,
+          title: row.title,
+          titleKey: null,
+        })),
+        { keysExpected: false },
+      );
+      if (audit.defects.length > 0) {
+        throw new Error(
+          `migration v72 (#task:2016): a workspace holds conversations whose `
+            + `titles fold to one address. Rename one of each pair, then restart. `
+            + `\n${describeConversationTitleAudit(audit)}`,
+        );
+      }
+
+      // The keys are minted HERE, in the migration's own transaction, on the
+      // same connection, before `up` — SQL cannot fold, and a second
+      // implementation of the fold is the one thing this design cannot afford
+      // (an upgraded database and a freshly created channel would disagree about
+      // what a title addresses). The staged `title` travels with it because
+      // canonicalization may rewrite the display form.
+      handle.exec(
+        `DROP TABLE IF EXISTS temp.conversation_title_backfill;
+         CREATE TEMP TABLE conversation_title_backfill (
+           conversation_id TEXT PRIMARY KEY,
+           title           TEXT NOT NULL,
+           title_key       TEXT NOT NULL
+         );`,
+      );
+      const stage = handle.prepare(
+        `INSERT INTO temp.conversation_title_backfill
+           (conversation_id, title, title_key)
+         VALUES (?, ?, ?)`,
+      );
       for (const row of rows) {
-        let namespace = taken.get(row.workspace_id);
-        if (!namespace) {
-          namespace = new Set<string>();
-          taken.set(row.workspace_id, namespace);
-        }
-        const stem = slugifyConversationTitle(row.title);
-        let name = stem;
-        for (let ordinal = 2; namespace.has(name); ordinal += 1) {
-          name = disambiguateConversationName(stem, ordinal);
-        }
-        namespace.add(name);
-        // `assigned_at` = the conversation's own `created_at`, the rule v71's
-        // inbox backfill established: the timestamp expresses when the addressed
-        // thing came into being, so an upgraded name and a freshly allocated one
-        // are indistinguishable.
-        stage.run(row.id, row.workspace_id, name, row.created_at);
+        // TOTAL, and deliberately not the validator: rows written under the old
+        // `trim().min(1).max(128)` rule may hold titles the new domain refuses
+        // (a ZWJ emoji sequence, say). Keying every one of them is what keeps
+        // the migration from failing on legal existing data; the validator gates
+        // new writes only.
+        const canonical = canonicalizeStoredConversationTitle(row.title);
+        stage.run(row.id, canonical.title, canonical.key);
       }
     },
     up: `
-      -- The CHECK below is the NAME GRAMMAR as a database fact (@Cindy,
-      -- #task:2016 review): the SQLite GLOB transcription of shared's
-      -- CONVERSATION_NAME_PATTERN = '[a-z](?:[a-z0-9_-]*[a-z0-9])?' plus
-      -- ENTITY_NAME_MAX_LENGTH. First character a lowercase letter, last
-      -- character alphanumeric ('*' matches the empty string, so a one-letter
-      -- name passes both predicates), and no character outside the class
-      -- anywhere (the '-' sits last inside the negated set, where GLOB reads it
-      -- literally). The transcription is not trusted by eye: a test asserts it
-      -- decides exactly what ConversationNameSchema decides, over a corpus that
-      -- includes GLOB's own metacharacters.
+      -- The CHECK on \`title_key\` is deliberately WEAK — it is a spelling guard,
+      -- not the fold. Only four things are decidable in SQLite: non-empty, no
+      -- ASCII uppercase, and no edge space. It exists to catch a write path that
+      -- forgot to fold or to trim (the classic being \`title\` copied straight
+      -- into \`title_key\`), and it is asserted UNREACHABLE from the
+      -- canonicalizer's own output in shared's tests — otherwise a legal title
+      -- would become an insert failure. Everything the CHECK cannot see is the
+      -- integrity scan's job.
       --
-      -- Why the domain is closed HERE and not only in the writer: a name is an
-      -- address and an allocation can never be released, so a value the chat
-      -- tokenizer cannot spell is a permanent, un-referenceable hole in the
-      -- namespace — the one class of bad write no later fix can undo.
-      -- ConversationNameRepo.allocate asserts the same domain to produce a
-      -- legible error; this is what makes the claim true of every connection,
-      -- including one that never goes through that repo.
-      --
-      -- The 64 is a FROZEN COPY of ENTITY_NAME_MAX_LENGTH as of v72, not a
-      -- reference to it: migration text is history and must not change meaning
-      -- when a constant is edited. Widening the stored domain later therefore
-      -- needs its own migration, which is the right amount of friction.
+      -- There is deliberately NO "title changed => key must change" trigger:
+      -- renaming \`General\` to \`general\` is a legal rename with an unchanged
+      -- key, so such a trigger would refuse a rename the product allows.
       --
       -- Comments live OUTSIDE the statements in this migration on purpose:
       -- SQLite keeps a statement's text verbatim from CREATE onward in the schema
       -- catalog, so a rationale written inside the parentheses would be replayed
       -- into the normalized schema oracle.
-      CREATE TABLE conversation_names (
-        workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-        name            TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        assigned_at     INTEGER NOT NULL,
-        retired_at      INTEGER,
-        PRIMARY KEY (workspace_id, name),
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        inbox_agent_id          TEXT REFERENCES agents(id) ON DELETE CASCADE,
+        placement_kind          TEXT NOT NULL
+          CHECK (placement_kind IN ('workspace', 'direct_pair', 'agent_inbox')),
+        roster_policy           TEXT NOT NULL
+          CHECK (roster_policy IN ('open', 'fixed')),
+        kind                    TEXT GENERATED ALWAYS AS
+          (CASE WHEN roster_policy = 'open' THEN 'channel' ELSE 'dm_channel' END) VIRTUAL,
+        title                   TEXT NOT NULL,
+        title_key               TEXT
+          CHECK (
+            title_key IS NULL
+            OR (
+              title_key <> ''
+              AND NOT title_key GLOB '*[A-Z]*'
+              AND NOT title_key GLOB ' *'
+              AND NOT title_key GLOB '* '
+            )
+          ),
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        visibility              TEXT NOT NULL DEFAULT 'private'
+          CHECK (
+            visibility IN ('private', 'public')
+            AND (visibility = 'private' OR roster_policy = 'open')
+          ),
         CHECK (
-          length(name) BETWEEN 1 AND 64
-          AND name GLOB '[a-z]*'
-          AND name GLOB '*[a-z0-9]'
-          AND NOT name GLOB '*[^a-z0-9_-]*'
+          CASE placement_kind
+            WHEN 'workspace'
+              THEN workspace_id IS NOT NULL AND inbox_agent_id IS NULL
+                   AND title_key IS NOT NULL
+            WHEN 'agent_inbox'
+              THEN inbox_agent_id IS NOT NULL AND workspace_id IS NULL
+                   AND roster_policy = 'fixed'
+                   AND title_key IS NULL
+            ELSE 0
+          END
         )
       );
 
-      CREATE UNIQUE INDEX idx_conversation_names_current
-        ON conversation_names(conversation_id) WHERE retired_at IS NULL;
-
-      CREATE TRIGGER trg_conversation_names_birth
-      BEFORE INSERT ON conversation_names
-      WHEN NOT EXISTS (
-        SELECT 1 FROM conversations c
-         WHERE c.id = NEW.conversation_id
-           AND c.placement_kind = 'workspace'
-           AND c.workspace_id = NEW.workspace_id
+      INSERT INTO conversations_new (
+        id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+        title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
+        pinned_at, created_at, updated_at, archived_at, latest_message_seq,
+        visibility
       )
-      BEGIN
-        SELECT RAISE(
-          ABORT,
-          'conversation_names: target must be a workspace-placed conversation of the same workspace'
-        );
-      END;
+        SELECT
+          c.id, c.workspace_id, c.inbox_agent_id, c.placement_kind,
+          c.roster_policy,
+          COALESCE(b.title, c.title), b.title_key,
+          c.status, c.spawned_by_agent_id, c.closed_at, c.close_summary,
+          c.pinned_at, c.created_at, c.updated_at, c.archived_at,
+          c.latest_message_seq, c.visibility
+        FROM conversations c
+        LEFT JOIN temp.conversation_title_backfill b
+          ON b.conversation_id = c.id;
 
-      -- An allocation is BORN CURRENT (@Cindy, #task:2016 review). The legal
-      -- lifecycle has two states in one direction — current, then retired once,
-      -- forever — and trg_conversation_names_immutable already owns the
-      -- transition. Birth was the missing half: a row inserted with retired_at
-      -- already set slips past BOTH the partial unique index (which indexes
-      -- current rows only) and the immutability trigger (which sees no UPDATE),
-      -- and what it leaves behind is unrepairable by construction — it
-      -- permanently occupies a name nobody ever held, fabricates a retirement
-      -- that never happened, and, unconstrained by that index, may be one of
-      -- arbitrarily many such rows for a single conversation. Kept as its own
-      -- trigger rather than folded into the birth predicate above so the refusal
-      -- names which rule was broken.
-      CREATE TRIGGER trg_conversation_names_born_current
-      BEFORE INSERT ON conversation_names
-      WHEN NEW.retired_at IS NOT NULL
-      BEGIN
-        SELECT RAISE(
-          ABORT,
-          'conversation_names: an allocation is born current; retire it in a later write'
-        );
-      END;
+      DROP TABLE temp.conversation_title_backfill;
 
-      CREATE TRIGGER trg_conversation_names_immutable
-      BEFORE UPDATE ON conversation_names
-      WHEN NOT (
-        NEW.workspace_id = OLD.workspace_id
-        AND NEW.name = OLD.name
-        AND NEW.conversation_id = OLD.conversation_id
-        AND NEW.assigned_at = OLD.assigned_at
-        AND OLD.retired_at IS NULL
-        AND NEW.retired_at IS NOT NULL
-      )
-      BEGIN
-        SELECT RAISE(
-          ABORT,
-          'conversation_names: an allocation is immutable; only retirement may be written'
-        );
-      END;
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
 
-      CREATE TRIGGER trg_conversation_names_permanent
-      BEFORE DELETE ON conversation_names
-      WHEN EXISTS (
-        SELECT 1 FROM workspaces w WHERE w.id = OLD.workspace_id
-      )
-      BEGIN
-        SELECT RAISE(
-          ABORT,
-          'conversation_names: an allocation is permanent; retire it instead of deleting it'
-        );
-      END;
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+      CREATE UNIQUE INDEX idx_conversations_inbox_agent
+        ON conversations(inbox_agent_id) WHERE placement_kind = 'agent_inbox';
 
-      INSERT INTO conversation_names
-        (workspace_id, name, conversation_id, assigned_at, retired_at)
-        SELECT b.workspace_id, b.name, b.conversation_id, b.assigned_at, NULL
-          FROM temp.conversation_name_backfill b;
-
-      DROP TABLE temp.conversation_name_backfill;
+      -- THE address rule. Partial on placement, and NOT on \`archived_at\`: an
+      -- archived channel still occupies its title (see the header).
+      CREATE UNIQUE INDEX idx_conversations_title_key
+        ON conversations(workspace_id, title_key)
+        WHERE placement_kind = 'workspace';
     `,
   },
   {
@@ -2114,6 +2135,13 @@ export const migrations: Migration[] = [
     // There is NO data migration: no `direct_pair` row can exist below this
     // version, so every existing row keeps every column byte-for-byte.
     //
+    // `title_key`, its spelling CHECK, its place in the arc CHECK and
+    // `idx_conversations_title_key` are CARRIED FORWARD from v72 (#task:2016)
+    // unchanged. A rebuild reproduces the whole table, so the address rule has to
+    // be re-declared here or this migration would silently drop it; the
+    // `direct_pair` branch keeps it NULL for the same reason `agent_inbox` does —
+    // only a workspace placement has a title address.
+    //
     // What is deliberately NOT here (P3): `pair_key` and its unique index,
     // get-or-create, the wire DTO, delivery and board surfaces. The CANONICAL
     // ORDER check IS here, though, on the same principle that made v69 declare
@@ -2140,6 +2168,16 @@ export const migrations: Migration[] = [
         kind                    TEXT GENERATED ALWAYS AS
           (CASE WHEN roster_policy = 'open' THEN 'channel' ELSE 'dm_channel' END) VIRTUAL,
         title                   TEXT NOT NULL,
+        title_key               TEXT
+          CHECK (
+            title_key IS NULL
+            OR (
+              title_key <> ''
+              AND NOT title_key GLOB '*[A-Z]*'
+              AND NOT title_key GLOB ' *'
+              AND NOT title_key GLOB '* '
+            )
+          ),
         status                  TEXT NOT NULL,
         spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
         closed_at               INTEGER,
@@ -2166,6 +2204,7 @@ export const migrations: Migration[] = [
           CASE placement_kind
             WHEN 'workspace'
               THEN workspace_id IS NOT NULL AND inbox_agent_id IS NULL
+                   AND title_key IS NOT NULL
                    AND endpoint_a_kind IS NULL AND endpoint_a_id IS NULL
                    AND endpoint_b_kind IS NULL AND endpoint_b_id IS NULL
                    AND endpoint_a_deleted_at IS NULL
@@ -2173,6 +2212,7 @@ export const migrations: Migration[] = [
             WHEN 'agent_inbox'
               THEN inbox_agent_id IS NOT NULL AND workspace_id IS NULL
                    AND roster_policy = 'fixed'
+                   AND title_key IS NULL
                    AND endpoint_a_kind IS NULL AND endpoint_a_id IS NULL
                    AND endpoint_b_kind IS NULL AND endpoint_b_id IS NULL
                    AND endpoint_a_deleted_at IS NULL
@@ -2180,6 +2220,7 @@ export const migrations: Migration[] = [
             WHEN 'direct_pair'
               THEN workspace_id IS NULL AND inbox_agent_id IS NULL
                    AND roster_policy = 'fixed'
+                   AND title_key IS NULL
                    AND endpoint_a_kind IS NOT NULL AND endpoint_a_id IS NOT NULL
                    AND endpoint_b_kind IS NOT NULL AND endpoint_b_id IS NOT NULL
             ELSE 0
@@ -2189,12 +2230,14 @@ export const migrations: Migration[] = [
 
       INSERT INTO conversations_new (
         id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
-        title, status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
-        created_at, updated_at, archived_at, latest_message_seq, visibility
+        title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
+        pinned_at, created_at, updated_at, archived_at, latest_message_seq,
+        visibility
       )
         SELECT
           c.id, c.workspace_id, c.inbox_agent_id, c.placement_kind, c.roster_policy,
-          c.title, c.status, c.spawned_by_agent_id, c.closed_at, c.close_summary,
+          c.title, c.title_key, c.status, c.spawned_by_agent_id, c.closed_at,
+          c.close_summary,
           c.pinned_at, c.created_at, c.updated_at, c.archived_at,
           c.latest_message_seq, c.visibility
         FROM conversations c;
@@ -2210,6 +2253,9 @@ export const migrations: Migration[] = [
         ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
       CREATE UNIQUE INDEX idx_conversations_inbox_agent
         ON conversations(inbox_agent_id) WHERE placement_kind = 'agent_inbox';
+      CREATE UNIQUE INDEX idx_conversations_title_key
+        ON conversations(workspace_id, title_key)
+        WHERE placement_kind = 'workspace';
 
       CREATE TRIGGER trg_conversations_endpoints_birth
       BEFORE INSERT ON conversations

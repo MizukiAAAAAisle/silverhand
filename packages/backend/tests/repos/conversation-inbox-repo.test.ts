@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -15,9 +16,8 @@ function bootstrap() {
   });
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 's',
+    title: fixedConversationTitle('s'),
   });
   const messages = new MessageRepo(db);
   const inbox = new ConversationInboxRepo(db);
@@ -225,8 +225,7 @@ describe('ConversationInboxRepo', () => {
     const { db, channel, messages, inbox, agentA, agentB } = bootstrap();
     const channelB = new ConversationRepo(db).insertChannel({
       workspaceId: channel.workspace_id!,
-      name: 'second',
-      title: 'second',
+      title: fixedConversationTitle('second'),
     });
     const enqueue = (conversationId: string, agentId: string, content: string) => {
       const message = messages.insertForConversation({

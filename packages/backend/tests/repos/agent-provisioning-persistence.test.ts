@@ -20,7 +20,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { systemSubtype } from '@silverhand/shared';
+import { fixedConversationTitle, systemSubtype } from '@silverhand/shared';
 import type { AgentProvisioningTxScope } from '../../src/application/agent-provisioning-ports.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -44,9 +44,8 @@ function runProvisioningSequence(
     const flipped = outcome.row;
     const home = tx.workspaces.insertAgentHome({ agent: flipped });
     const dm = tx.conversations.insertDmChannel({
-      name: 'ch-1',
       workspaceId: home.id,
-      title: 'Onboarding',
+      title: fixedConversationTitle('Onboarding'),
       agentId: args.agentId,
     });
     tx.conversations.addAgent(dm.id, args.agentId);

@@ -13,6 +13,7 @@
  * moves the status mapping back into the handler would have to delete
  * an assertion to pass.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { DbRuntimeStatusProjector } from '../../src/runtime/status-projector.js';
 import type { EventPublisher } from '../../src/runtime/event-handler.js';
@@ -64,9 +65,8 @@ function makeFixture(
     viewerUserId,
   );
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: ws.id,
-    title: 'ws-proj',
+    title: fixedConversationTitle('ws-proj'),
     spawnedByAgentId: null,
   });
   conversations.addAgent(channel.id, agent.id);

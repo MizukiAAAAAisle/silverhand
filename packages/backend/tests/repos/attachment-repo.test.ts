@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import {
   AttachmentRepo,
@@ -24,9 +25,8 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 't',
+    title: fixedConversationTitle('t'),
   });
   conversations.addAgent(channel.id, agent.id);
   return { db, channel, conversations, workspaces, workspace, agentId: agent.id, localHostId };
@@ -99,9 +99,8 @@ describe('AttachmentRepo', () => {
   it('cascades on channel delete and SET NULL on source conversation delete', () => {
     const { db, channel, conversations, workspace } = bootstrap();
     const sourceConv = conversations.insertChannel({
-      name: 'ch-2',
       workspaceId: workspace.id,
-      title: 'source',
+      title: fixedConversationTitle('source'),
     });
     const repo = new AttachmentRepo(db);
     const dto = repo.insert({
@@ -447,14 +446,12 @@ describe('AttachmentRepo.listChannelReferences', () => {
     // reassertion.
     const { db, workspace, conversations } = bootstrap();
     const channelA = conversations.insertChannel({
-      name: 'ch-3',
       workspaceId: workspace.id,
-      title: 'A',
+      title: fixedConversationTitle('A'),
     });
     const channelB = conversations.insertChannel({
-      name: 'ch-4',
       workspaceId: workspace.id,
-      title: 'B',
+      title: fixedConversationTitle('B'),
     });
     const attachments = new AttachmentRepo(db);
     const messages = new MessageRepo(db);
@@ -823,12 +820,10 @@ describe('AttachmentRepo.listChannelSenderFacets', () => {
   it('reasserts the channel boundary — a cross-channel reference is not a facet', () => {
     const { db, workspace, conversations } = bootstrap();
     const channelA = conversations.insertChannel({
-      name: 'ch-5',
-      workspaceId: workspace.id, title: 'A',
+      workspaceId: workspace.id, title: fixedConversationTitle('A'),
     });
     const channelB = conversations.insertChannel({
-      name: 'ch-6',
-      workspaceId: workspace.id, title: 'B',
+      workspaceId: workspace.id, title: fixedConversationTitle('B'),
     });
     const attachments = new AttachmentRepo(db);
     const messages = new MessageRepo(db);

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import {
   canDeleteAttachment,
   canEditAgent,
@@ -38,15 +39,13 @@ function seed(t: TestApp) {
   });
   workspaces.insertMembership(workspace.id, alice.id);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'Main',
+    title: fixedConversationTitle('Main'),
   });
   conversations.addAgent(channel.id, alice.id);
   const sibling = conversations.insertChannel({
-    name: 'ch-2',
     workspaceId: workspace.id,
-    title: 'Sibling',
+    title: fixedConversationTitle('Sibling'),
   });
   return {
     agents,
@@ -108,9 +107,8 @@ describe('permission helpers', () => {
         )
         .run(f.workspace.id, Date.now());
       const publicChannel = f.conversations.insertChannel({
-        name: 'ch-3',
         workspaceId: f.workspace.id,
-        title: 'Public',
+        title: fixedConversationTitle('Public'),
         visibility: 'public',
       });
       return { f, user: { kind: 'user', userId: 'local' }, publicChannel };
@@ -316,9 +314,8 @@ describe('permission helpers', () => {
       agent: f.alice,
     });
     const dm = f.conversations.insertDmChannel({
-      name: 'ch-4',
       workspaceId: home.id,
-      title: 'Onboarding',
+      title: fixedConversationTitle('Onboarding'),
       agentId: f.alice.id,
     });
     f.conversations.addAgent(dm.id, f.alice.id);

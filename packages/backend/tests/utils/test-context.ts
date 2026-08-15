@@ -12,7 +12,7 @@
  * fixture empire.
  */
 import type { AgentDto, ConversationDto, RuntimeKind, WorkspaceDto } from '@silverhand/shared';
-import { slugifyConversationTitle } from '@silverhand/shared';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
@@ -73,8 +73,7 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
       channelOrdinal += 1;
       return repos.conversations.insertChannel({
         workspaceId: workspace.id,
-        title,
-        name: `${slugifyConversationTitle(title)}-${channelOrdinal}`,
+        title: fixedConversationTitle(title),
       });
     },
 

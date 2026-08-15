@@ -519,6 +519,21 @@ export interface ConversationRow {
    *  present in `SELECT *` and readable, but never writable. */
   kind: ConversationKind;
   title: string;
+  /** The TITLE AS AN ADDRESS (v72+, #task:2016): `NFC(foldCase(NFC(trim(title))))`,
+   *  unique per workspace among workspace placements, and NOT NULL exactly when
+   *  `placement_kind = 'workspace'` — an inbox or DirectPair holds no title
+   *  address, so a resolver that forgot its placement predicate still cannot
+   *  reach one.
+   *
+   *  A PLAIN column, not GENERATED: SQLite has neither Unicode case folding nor
+   *  NFC, so the fold cannot be a SQL expression and the UNIQUE index proves only
+   *  that STORED KEYS are unique. The claim users are given ("two channels here
+   *  cannot show the same name") holds because
+   *  `canonicalizeStoredConversationTitle` is the ONE canonicalizer, the writer
+   *  only accepts an unforgeable title+key pair, and
+   *  `auditConversationTitleAddresses` can detect a half-state at runtime. Never
+   *  derive this in a query, and never write it from anything but that pair. */
+  title_key: string | null;
   status: ConversationStatus;
   spawned_by_agent_id: string | null;
   closed_at: number | null;

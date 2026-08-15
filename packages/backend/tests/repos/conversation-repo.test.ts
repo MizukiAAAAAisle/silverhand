@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
@@ -36,9 +37,8 @@ describe('ConversationRepo canonical schema', () => {
       });
       t.workspaces.insertMembership(workspace.id, agent.id);
       const channel = t.conversations.insertChannel({
-        name: 'ch-1',
         workspaceId: workspace.id,
-        title: 'Planning',
+        title: fixedConversationTitle('Planning'),
       });
       t.conversations.addAgent(channel.id, agent.id);
       const message = t.messages.insertForConversation({
@@ -92,16 +92,14 @@ describe('ConversationRepo canonical schema', () => {
         agent,
       });
       const dm = t.conversations.insertDmChannel({
-        name: 'ch-2',
         workspaceId: home.id,
-        title: 'dm-cindy',
+        title: fixedConversationTitle('dm-cindy'),
         agentId: agent.id,
       });
       t.conversations.addAgent(dm.id, agent.id);
       const mentions = t.conversations.insertDmChannel({
-        name: 'ch-3',
         workspaceId: home.id,
-        title: 'Mentions',
+        title: fixedConversationTitle('Mentions'),
         agentId: agent.id,
       });
       t.conversations.addAgent(mentions.id, agent.id);

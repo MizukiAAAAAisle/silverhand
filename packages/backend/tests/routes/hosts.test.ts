@@ -1,13 +1,14 @@
 import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  apiPaths,
+  assembleConnectCommand,
+  fixedConversationTitle,
   HOST_DISPLAY_LABEL_MAX_LENGTH,
   HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
   HostStatusResponseSchema,
-  apiPaths,
-  assembleConnectCommand,
 } from '@silverhand/shared';
 import type {
   OutboundServerCommandKind,
@@ -1026,9 +1027,8 @@ describe('host routes', () => {
       workspaces.insertMembership(workspace.id, agentId);
       const conversations = new ConversationRepo(t.ctx.db);
       const channel = conversations.insertChannel({
-        name: 'ch-1',
         workspaceId: workspace.id,
-        title: 'general',
+        title: fixedConversationTitle('general'),
       });
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {

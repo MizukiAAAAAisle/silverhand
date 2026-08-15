@@ -10,6 +10,10 @@ import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
 import type { MigrationRunResult } from './db.js';
 import { createApiRouter } from './routes.js';
+import {
+  ConversationTitleAddressDefectError,
+  scanConversationTitleAddresses,
+} from './read-model/conversation-title-audit.js';
 import { createInternalRouter } from './routes/internal-agent.js';
 import type { AppEnv } from './auth/principal.js';
 import {
@@ -70,6 +74,7 @@ import { UserService } from './services/user-service.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import {
   classifyBindAddressScope,
+  describeConversationTitleAudit,
   HOST_CONNECTION_CHANGED_EVENT,
   type BindAddressScope,
   type ServerConfig,
@@ -287,6 +292,41 @@ export async function startBackend(
       },
       `Migration applied: v${migrationResult.current.beforeVersion} -> v${migrationResult.current.afterVersion}, backup at ${migrationResult.current.backupPath ?? 'none'}`,
     );
+  }
+  // #task:2016 — the third of the three properties that make "no two channels
+  // here show the same name" true. The unique index proves only that stored
+  // `title_key`s differ; that they MEAN the titles differ is maintained by one
+  // canonicalizer and one terminal writer, both of which are code, so the
+  // half-state they would leave behind has to be discoverable at runtime rather
+  // than only in CI. This runs after migrations (the just-migrated shape is the
+  // one that gets audited) and BEFORE anything is composed on top of the handle.
+  //
+  // A clean database says nothing: the log's default level is `warn`, so an
+  // `info` line would not reach the file it exists to be found in, and a boot
+  // that reports "clean" on every start trains operators to skip the line. The
+  // positive answer is the admin command's job, which prints it on demand.
+  //
+  // A defect FAILS CLOSED. Every class of it means the address a person reads is
+  // not the address the row answers to, so a server that keeps going delivers
+  // messages to a channel the sender did not name — silently, with the only
+  // evidence a log line. Refusing to compose is the strictly safer failure: the
+  // data is untouched, `silverhand-server admin scan-title-addresses` still runs
+  // read-only against the same database, and the operator repairs the titles and
+  // restarts. The handle is closed first so that the retry — and the admin
+  // command — get an unlocked file.
+  const titleAudit = scanConversationTitleAddresses(db);
+  if (titleAudit.defects.length > 0) {
+    logger.error(
+      {
+        scanned: titleAudit.scanned,
+        defects: titleAudit.defects.length,
+        kinds: [...new Set(titleAudit.defects.map(defect => defect.kind))],
+        remediation: 'silverhand-server admin scan-title-addresses',
+      },
+      describeConversationTitleAudit(titleAudit),
+    );
+    db.close();
+    throw new ConversationTitleAddressDefectError(titleAudit);
   }
   const blobStorage = createLocalBlobFileStorage({
     rootDir: opts.blobsRootDir,
@@ -952,8 +992,11 @@ export {
 export {
   AdminResetPasswordError,
   resetAdminPassword,
+  scanTitleAddresses,
   type AdminResetPasswordErrorCode,
   type AdminResetPasswordOptions,
+  type AdminScanTitleAddressesOptions,
+  type AdminScanTitleAddressesResult,
 } from './admin.js';
 
 export {

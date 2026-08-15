@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
@@ -26,9 +27,8 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 't',
+    title: fixedConversationTitle('t'),
   });
   conversations.addAgent(channel.id, agent.id);
   return { db, channel, agentId: agent.id, repo: new MessageRepo(db) };

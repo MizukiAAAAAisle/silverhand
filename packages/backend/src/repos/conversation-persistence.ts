@@ -15,7 +15,6 @@ import type { Database as Db } from 'better-sqlite3';
 import { AgentRepo } from './agent-repo.js';
 import { AttachmentRepo } from './attachment-repo.js';
 import { ConversationInboxRepo } from './conversation-inbox-repo.js';
-import { ConversationNameRepo } from './conversation-name-repo.js';
 import { ConversationRepo } from './conversation-repo.js';
 import { createEndpointPrincipalPresence } from './endpoint-principal-presence.js';
 import { MessageRepo } from './message-repo.js';
@@ -105,11 +104,6 @@ export function createSqliteConversationPersistence(
   // participant has a seat and no roster row.
   const runtimeSlots = new RuntimeSlotRepo(db);
   const attachments = new AttachmentRepo(db);
-  // The workspace NAME NAMESPACE. Composed here as well as inside
-  // `ConversationRepo` (which allocates at channel birth): both hold the same
-  // `db`, so both writes land in whatever transaction the caller opened, and
-  // `conversation_names` still has exactly one writing module.
-  const names = new ConversationNameRepo(db);
   // The endpoint-liveness dispatch the write gate's `direct_pair` narrowing needs
   // — the SAME composition the request-layer ACL uses
   // (`authorization-reads.ts`), so both faces of one rule answer identically.
@@ -155,9 +149,9 @@ export function createSqliteConversationPersistence(
    *  another conversation and no runtime binding check is needed to stop it. */
   const channelScopeFor = (channelId: string): ChannelTxScope => {
     /**
-     * The NAMESPACE the keyed conversation is addressed in — derived from the
-     * key, never passed in, so a re-address cannot be checked against or written
-     * into another workspace's namespace.
+     * The WORKSPACE the keyed conversation is addressed in — derived from the
+     * key, never passed in, so a rename cannot be checked against another
+     * workspace's addresses.
      *
      * Throws for a conversation that has no workspace placement (an agent
      * inbox). That is a BACKSTOP, not the error path: the service refuses such a
@@ -167,12 +161,12 @@ export function createSqliteConversationPersistence(
      * .workspace_id` is immutable, the same assumption the UnitOfWork's own
      * key→workspace resolution rests on (see the port doc's step 1).
      */
-    const namespaceOf = (): string => {
+    const addressSpaceOf = (): string => {
       const identity = conversations.getIdentity(channelId);
       if (identity === null || identity.workspace_id === null) {
         throw new Error(
-          `channel UnitOfWork: conversation ${channelId} has no workspace namespace `
-            + 'to allocate a name in',
+          `channel UnitOfWork: conversation ${channelId} has no workspace to hold a `
+            + 'title address',
         );
       }
       return identity.workspace_id;
@@ -185,15 +179,8 @@ export function createSqliteConversationPersistence(
         // — that, not "SQLite is single-writer", is what makes the value read here
         // stable until commit. A pooled adapter owes a `SELECT … FOR UPDATE`.
         getChannelLikeForUpdate: () => conversations.getChannelLike(channelId),
-        isNameAllocated: name => names.isAllocated(namespaceOf(), name),
-        retireCurrentName: retiredAt => names.retireCurrent(channelId, retiredAt),
-        allocateName: (name, assignedAt) =>
-          names.allocate({
-            workspaceId: namespaceOf(),
-            name,
-            conversationId: channelId,
-            assignedAt,
-          }),
+        isTitleTakenByAnother: key =>
+          conversations.isTitleKeyTaken(addressSpaceOf(), key, channelId),
       },
       messages: {
         insert: args => channelTxMessages.insert({ ...args, conversationId: channelId }),
@@ -236,9 +223,9 @@ export function createSqliteConversationPersistence(
         // `workspaceId` comes from the KEY, never from the caller.
         insertChannel: args => conversations.insertChannel({ workspaceId, ...args }),
         insertDmChannel: args => conversations.insertDmChannel({ workspaceId, ...args }),
-        // The coordinated workspace's namespace, from the same key — so the
+        // The coordinated workspace's address space, from the same key — so the
         // conflict this answers is the one the insert would actually hit.
-        isNameAllocated: name => names.isAllocated(workspaceId, name),
+        isTitleTaken: key => conversations.isTitleKeyTaken(workspaceId, key),
         addAgent: (id, agentId) => conversations.addAgent(inWorkspace(id), agentId),
         addUser: (id, userId) => conversations.addUser(inWorkspace(id), userId),
         get: id => conversations.get(inWorkspace(id)),

@@ -731,11 +731,11 @@ describe('database migrations', () => {
             ('ws_main', 'Main', NULL, 'regular',
              NULL, NULL, NULL, 1, 1);
           INSERT INTO conversations
-            (id, workspace_id, placement_kind, roster_policy, title,
+            (id, workspace_id, placement_kind, roster_policy, title, title_key,
              status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
              archived_at, created_at, updated_at)
           VALUES
-            ('conv_main', 'ws_main', 'workspace', 'open', 'general',
+            ('conv_main', 'ws_main', 'workspace', 'open', 'general', 'general',
              'idle', NULL, NULL, NULL, NULL, NULL, 1, 1);
         `);
 
@@ -873,9 +873,9 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
-             (id, workspace_id, placement_kind, roster_policy, title, status,
-              created_at, updated_at)
-           VALUES ('c1', 'ws1', 'workspace', 'open', 't', 'open', ?, ?)`,
+             (id, workspace_id, placement_kind, roster_policy, title, title_key,
+              status, created_at, updated_at)
+           VALUES ('c1', 'ws1', 'workspace', 'open', 't', 't', 'open', ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
@@ -1033,10 +1033,10 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
-             (id, workspace_id, placement_kind, roster_policy, title,
+             (id, workspace_id, placement_kind, roster_policy, title, title_key,
               status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
               archived_at, created_at, updated_at)
-           VALUES ('c1', 'ws1', 'workspace', 'open', 'general',
+           VALUES ('c1', 'ws1', 'workspace', 'open', 'general', 'general',
                    'idle', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
         ).run(now, now);
 
@@ -3167,20 +3167,28 @@ describe('v75 runtime slots placement aware (#task:2020)', () => {
       // 5. The EDGES a seat is derived from are frozen. An UPDATE is neither the
       //    INSERT that mints a seat nor the DELETE that releases it, so a movable
       //    edge would desynchronise the derivation without either trigger firing.
-      const namesBefore = db
-        .prepare<[], { count: number }>(
-          'SELECT COUNT(*) AS count FROM conversation_names',
-        )
-        .get()!.count;
       const seatsBefore = seatKeys();
       db.exec(`
         INSERT INTO conversations (
-          id, workspace_id, placement_kind, roster_policy, title, status,
-          created_at, updated_at, visibility
+          id, workspace_id, placement_kind, roster_policy, title, title_key,
+          status, created_at, updated_at, visibility
         ) VALUES (
-          'c_chan2', 'w_p', 'workspace', 'open', 'chan2', 'open', 9, 9, 'private'
+          'c_chan2', 'w_p', 'workspace', 'open', 'chan2', 'chan2',
+          'open', 9, 9, 'private'
         );
       `);
+      // The ADDRESS aggregate, snapshotted after that insert: since #task:2016 a
+      // workspace-placed row IS its own allocation (`title_key`), so there is no
+      // separate namespace table to count — the occupied address set is a
+      // projection of `conversations` itself.
+      const addressesBefore = db
+        .prepare<[], { keys: string }>(
+          `SELECT group_concat(k, '|') AS keys FROM (
+             SELECT title_key AS k FROM conversations
+              WHERE placement_kind = 'workspace' ORDER BY title_key
+           )`,
+        )
+        .get()!.keys;
       // Relocating a roster row would leave the seat on the old conversation and
       // the new membership with none.
       expect(() =>
@@ -3190,9 +3198,9 @@ describe('v75 runtime slots placement aware (#task:2020)', () => {
         `),
       ).toThrow(/roster edge is immutable/);
       // One level up: a COORDINATED arm conversion that satisfies every CHECK the
-      // schema has. It would hand an inbox a mutable roster, make it eligible for
-      // a v72 name it never allocated, and move its seat's owning edge — all
-      // without an INSERT or a DELETE anywhere.
+      // schema has. It would hand an inbox a mutable roster, drag it into the
+      // workspace ADDRESS SPACE it never entered (#task:2016), and move its seat's
+      // owning edge — all without an INSERT or a DELETE anywhere.
       expect(() =>
         db.exec(`
           UPDATE conversations
@@ -3217,7 +3225,7 @@ describe('v75 runtime slots placement aware (#task:2020)', () => {
         ),
       ).toThrow(/placement is immutable/);
       // Zero drift in all three aggregates the conversion would have bypassed:
-      // the placement row itself, the name namespace, and the seat set.
+      // the placement row itself, the workspace address space, and the seat set.
       expect(
         db
           .prepare(
@@ -3233,16 +3241,22 @@ describe('v75 runtime slots placement aware (#task:2020)', () => {
       });
       expect(
         db
-          .prepare<[], { count: number }>(
-            'SELECT COUNT(*) AS count FROM conversation_names',
+          .prepare<[], { keys: string }>(
+            `SELECT group_concat(k, '|') AS keys FROM (
+               SELECT title_key AS k FROM conversations
+                WHERE placement_kind = 'workspace' ORDER BY title_key
+             )`,
           )
-          .get()!.count,
-      ).toBe(namesBefore);
+          .get()!.keys,
+      ).toBe(addressesBefore);
       expect(seatKeys()).toEqual(seatsBefore);
       // The freeze is a COLUMN LIST, not a blanket ban on updating a placement:
-      // display and lifecycle columns still move, which is why `title` (the
-      // renameable half of v72's split) is asserted here rather than assumed.
-      db.exec(`UPDATE conversations SET title = 'renamed' WHERE id = 'c_chan'`);
+      // display and lifecycle columns still move, which is why the rename pair
+      // (`title` + its folded `title_key`) is asserted here rather than assumed.
+      db.exec(
+        `UPDATE conversations SET title = 'renamed', title_key = 'renamed'
+           WHERE id = 'c_chan'`,
+      );
       expect(
         db
           .prepare<[], { title: string }>(

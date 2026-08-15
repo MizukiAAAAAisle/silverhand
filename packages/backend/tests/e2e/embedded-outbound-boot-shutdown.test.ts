@@ -329,11 +329,20 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     db.prepare(
       `INSERT INTO conversations
         (id, workspace_id, placement_kind, roster_policy,
-title, status, spawned_by_agent_id, closed_at, close_summary,
+         title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
          pinned_at, created_at, updated_at)
-        VALUES (?, ?, 'workspace', 'open', ?, 'active', NULL, NULL, NULL,
+        VALUES (?, ?, 'workspace', 'open', ?, ?, 'active', NULL, NULL, NULL,
                 NULL, ?, ?)`,
-    ).run(conversationId, workspaceId, 'd5a-boot-channel', now, now);
+    ).run(
+      conversationId,
+      workspaceId,
+      'd5a-boot-channel',
+      // Its title IS its address (#task:2016); this literal already folds to
+      // itself, and the fixture stores the pair the writer would have stored.
+      'd5a-boot-channel',
+      now,
+      now,
+    );
     db.prepare(
       `INSERT INTO conversation_agents
         (conversation_id, agent_id, joined_at)

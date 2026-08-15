@@ -13,29 +13,25 @@
 export type ChannelErrorCode =
   | 'not_found'
   /**
-   * The requested NAME has already been allocated in this workspace's namespace
-   * — currently held, or held once and retired (#task:2016). A refusal, never a
-   * silent adjustment: creation and re-addressing never auto-suffix, because a
-   * requester who asked for `#design` and got `#design-2` has been handed a
-   * different address than the one they typed into a doc. 409, not 400: the
-   * request is well-formed and would succeed in another namespace.
+   * Another conversation in this workspace already SHOWS this title, compared
+   * case-insensitively (#task:2016). The title is the address, so two channels a
+   * person cannot tell apart are refused rather than disambiguated: 409, not 400
+   * — the request is well-formed and would succeed in another workspace.
    *
-   * Raised from INSIDE the write transaction, off an `isAllocated` read taken
-   * under the same lock that will write — not decoded from a constraint
-   * violation. The primary key remains the backstop that aborts the transaction
-   * if the check was ever wrong.
-   */
-  | 'conversation_name_taken'
-  /**
-   * The target conversation has no workspace namespace to hold an address, so
-   * "change its name" is not a question about it (#task:2016).
+   * Never auto-suffixed. A requester who typed `Design` and silently got
+   * `Design 2` has been handed a different address than the one they will put in
+   * a doc. (The v72 backfill does not suffix either; it refuses to migrate a
+   * database that already holds a collision, because it has no requester to ask.)
    *
-   * REACHABLE, not defensive: `conversations.kind` is GENERATED from
-   * `roster_policy`, so an agent inbox reports `kind='dm_channel'` and reaches
-   * every channel-like door by id — including this one. Without this arm the
-   * request would fall through to the namespace's birth trigger and surface as a
-   * 500 instead of a stated refusal.
+   * Raised from INSIDE the write transaction, off a read taken under the same
+   * lock that will write — not decoded from a constraint violation. The partial
+   * UNIQUE index remains the backstop that aborts the transaction if this check
+   * was ever wrong.
+   *
+   * Re-titling a channel to a different SPELLING of its own title (`general` →
+   * `General`) is NOT this error: the address does not move, so it succeeds.
    */
+  | 'conversation_title_taken'
   | 'not_addressable';
 
 export class ChannelError extends Error {

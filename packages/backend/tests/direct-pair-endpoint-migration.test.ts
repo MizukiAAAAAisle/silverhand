@@ -140,15 +140,15 @@ function seedV72(db: Database.Database): void {
 
     INSERT INTO conversations
       (id, workspace_id, inbox_agent_id, placement_kind, roster_policy, title,
-       status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
+       title_key, status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
        created_at, updated_at, archived_at, latest_message_seq, visibility)
     VALUES
       ('c_chan', 'ws_reg', NULL, 'workspace', 'open', 'general',
-       'idle', NULL, NULL, NULL, 11, 100, 110, NULL, 2, 'public'),
+       'general', 'idle', NULL, NULL, NULL, 11, 100, 110, NULL, 2, 'public'),
       ('c_dm', 'wsah_a1', NULL, 'workspace', 'fixed', 'a1',
-       'idle', NULL, NULL, NULL, NULL, 200, 210, NULL, 1, 'private'),
+       'a1', 'idle', NULL, NULL, NULL, NULL, 200, 210, NULL, 1, 'private'),
       ('c_inbox_a1', NULL, 'a1', 'agent_inbox', 'fixed', 'Inbox',
-       'idle', NULL, NULL, NULL, NULL, 300, 300, NULL, 0, 'private');
+       NULL, 'idle', NULL, NULL, NULL, NULL, 300, 300, NULL, 0, 'private');
 
     INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at)
       VALUES ('m_chan_1', 'c_chan', 'user', 'u1', 'hello', 1, 120),
@@ -158,20 +158,19 @@ function seedV72(db: Database.Database): void {
       VALUES ('c_chan', 'a1', 122), ('c_dm', 'a1', 221);
     INSERT INTO conversation_users (conversation_id, user_id, joined_at)
       VALUES ('c_chan', 'u1', 123);
-    INSERT INTO conversation_names
-      (workspace_id, name, conversation_id, assigned_at, retired_at)
-      VALUES ('ws_reg', 'general', 'c_chan', 100, NULL),
-             ('wsah_a1', 'a1', 'c_dm', 200, NULL);
   `);
 }
 
 /** Every column `conversations` has BELOW v73 — the differential has to read the
  *  same list on both sides of the rebuild, and reading all of them is the point:
- *  a rebuild that dropped a default or reordered a projection shows up here. */
+ *  a rebuild that dropped a default or reordered a projection shows up here.
+ *  `title_key` is in the list because v72 (#task:2016) put the ADDRESS in this
+ *  table: a rebuild that lost it would silently vacate every channel's address. */
 const PRE_V73_COLUMNS = [
   'id', 'workspace_id', 'inbox_agent_id', 'placement_kind', 'roster_policy', 'kind',
-  'title', 'status', 'spawned_by_agent_id', 'closed_at', 'close_summary', 'pinned_at',
-  'created_at', 'updated_at', 'archived_at', 'latest_message_seq', 'visibility',
+  'title', 'title_key', 'status', 'spawned_by_agent_id', 'closed_at', 'close_summary',
+  'pinned_at', 'created_at', 'updated_at', 'archived_at', 'latest_message_seq',
+  'visibility',
 ].join(', ');
 
 const CONVERSATION_INDEXES = [
@@ -179,6 +178,10 @@ const CONVERSATION_INDEXES = [
   'idx_conversations_status',
   'idx_conversations_archived_at',
   'idx_conversations_inbox_agent',
+  // v72's ADDRESS index (#task:2016). A rebuild that forgot it would not fail
+  // anything else in this file — every row would keep its `title_key` and the
+  // workspace would silently stop being a single address space.
+  'idx_conversations_title_key',
 ];
 
 function schemaSql(db: Database.Database, name: string): string {
@@ -354,12 +357,12 @@ describe('migration v73 direct_pair endpoints — rebuild', () => {
       seedV72(db);
       applyV73(db);
       // `DROP TABLE conversations` with enforcement ON would have taken all of
-      // these; name allocations are here too because v72 deliberately dropped
-      // that FK, so nothing but the escape protects them either.
+      // these. (There is no name-allocation child to count since #task:2016: an
+      // address lives in the rebuilt table itself, so it is covered by the
+      // full-row differential above rather than by a child count.)
       expect(countWhere(db, 'messages', `1 = 1`)).toBe(3);
       expect(countWhere(db, 'conversation_agents', `1 = 1`)).toBe(2);
       expect(countWhere(db, 'conversation_users', `1 = 1`)).toBe(1);
-      expect(countWhere(db, 'conversation_names', `retired_at IS NULL`)).toBe(2);
     } finally {
       db.close();
     }

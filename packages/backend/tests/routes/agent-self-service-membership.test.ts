@@ -24,6 +24,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   encodeUserPrincipalHeader,
+  fixedConversationTitle,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -156,8 +157,7 @@ describe('#task:1683 — DELETE /api/workspaces/:id/members/:agentId', () => {
     await enroll(t, ws, mine);
     const channel = new ConversationRepo(t.ctx.db).insertChannel({
       workspaceId: ws,
-      name: 'agent-slot-target',
-      title: 'AgentSlot target',
+      title: fixedConversationTitle('AgentSlot target'),
     });
     new ConversationRepo(t.ctx.db).addAgent(channel.id, mine);
 

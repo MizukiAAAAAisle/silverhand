@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
@@ -16,8 +17,7 @@ function bootstrap() {
   });
   const conversation = conversations.insertChannel({
     workspaceId: workspace.id,
-    name: 'runtime-slot-authority',
-    title: 'runtime-slot-authority',
+    title: fixedConversationTitle('runtime-slot-authority'),
   });
   const agent = agents.create(
     { name: 'runtime-slot-agent', runtime: 'codex' },

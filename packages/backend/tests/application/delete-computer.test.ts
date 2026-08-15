@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
@@ -104,9 +105,8 @@ async function setup(t: TestApp): Promise<Fixture> {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(t.ctx.db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'cascade channel',
+    title: fixedConversationTitle('cascade channel'),
   });
   conversations.addAgent(channel.id, agent.id);
   // A LIVE run, so the post-commit runtime stop has something to dispatch:
@@ -130,9 +130,8 @@ async function setup(t: TestApp): Promise<Fixture> {
   // home's DM channels).
   const home = workspaces.insertAgentHome({ agent });
   const dm = conversations.insertDmChannel({
-    name: 'ch-2',
     workspaceId: home.id,
-    title: agent.name,
+    title: fixedConversationTitle(agent.name),
     agentId: agent.id,
   });
   conversations.addAgent(dm.id, agent.id);

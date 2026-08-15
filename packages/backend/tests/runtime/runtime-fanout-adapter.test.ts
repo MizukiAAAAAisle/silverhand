@@ -21,6 +21,7 @@
  *    a half state, which is what proves the assertion is load-bearing rather
  *    than vacuously true of this fixture.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -68,9 +69,8 @@ function makeFixture() {
     description: null,
   });
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'fanout-adapter',
+    title: fixedConversationTitle('fanout-adapter'),
   });
   const agent = new AgentRepo(db).create(
     { name: 'agent-adapter', runtime: 'claude', host_id: localHostId },

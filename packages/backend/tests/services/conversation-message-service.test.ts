@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -171,9 +172,8 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, alice.id);
   workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'source',
+    title: fixedConversationTitle('source'),
   });
   conversations.addAgent(channel.id, alice.id);
   conversations.addAgent(channel.id, bob.id);
@@ -613,9 +613,8 @@ describe('ConversationMessageService.sendMessage', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-2',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       await expect(
         t.service.sendMessage({
@@ -634,9 +633,8 @@ describe('ConversationMessageService.sendMessage', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-3',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       const foreign = t.attachments.insert({
         channelId: other.id,
@@ -2098,9 +2096,8 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-4',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       const mine = t.attachments.insert({
         channelId: t.channel.id,
@@ -2163,9 +2160,8 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-5',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       const attachment = t.attachments.insert({
         channelId: reason === 'outside_channel' ? other.id : t.channel.id,
@@ -2658,9 +2654,8 @@ function withForeignChannel(t: ReturnType<typeof bootstrap>) {
   );
   t.workspaces.insertMembership(t.workspace.id, carol.id);
   const other = t.conversations.insertChannel({
-    name: 'ch-2',
     workspaceId: t.workspace.id,
-    title: 'elsewhere',
+    title: fixedConversationTitle('elsewhere'),
   });
   t.conversations.addAgent(other.id, carol.id);
   // The precondition the whole case rests on: carol participates THERE and not

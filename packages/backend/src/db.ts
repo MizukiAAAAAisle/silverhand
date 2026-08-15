@@ -67,6 +67,28 @@ export function openDatabase(filepath: string, opts: OpenDatabaseOptions = {}): 
   }
 }
 
+/**
+ * Open a database for READING ONLY, exactly as it is on disk: no migrations, no
+ * schema guard, no journal-mode change, no `_migrations` table creation.
+ *
+ * `openDatabase` is how every Silverhand PROCESS gets its handle, and it either
+ * upgrades a behind-schema database or refuses to open it. That is the right
+ * policy for anything that then serves requests, and the wrong policy for a
+ * PRE-MIGRATION probe: #task:2016's title-address scan exists so an operator can
+ * see the folded-title collisions that would abort the v72 migration, rename
+ * those channels by hand, and only then upgrade. A probe that has to upgrade the
+ * schema before it can answer is not a probe.
+ *
+ * `readonly` is the enforcement, not the intent: the connection refuses writes
+ * even if a caller asks, so "read-only diagnostic" is a property of the handle
+ * instead of a claim about the SQL above it. Nothing here is a migration bypass
+ * for a serving process — this returns a handle that may be at ANY version,
+ * which is safe only for code that probes the catalog before it queries.
+ */
+export function openDatabaseUnmigratedReadOnly(filepath: string): Db {
+  return new Database(filepath, { readonly: true });
+}
+
 export type DatabaseMigrationErrorCode =
   | 'schema_too_old'
   | 'schema_too_new'

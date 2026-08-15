@@ -1,4 +1,4 @@
-import { DEFAULT_CHANNEL_ATTENTION_MODE } from '@silverhand/shared';
+import { DEFAULT_CHANNEL_ATTENTION_MODE, fixedConversationTitle } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import {
@@ -240,7 +240,7 @@ function buildFixture(): Fixture {
   const wsHome = workspaces.insertAgentHome({ agent: dmAgent }).id;
 
   const channel = (workspaceId: string, title: string): string =>
-    conversations.insertChannel({ name: title, workspaceId, title }).id;
+    conversations.insertChannel({ workspaceId, title: fixedConversationTitle(title) }).id;
 
   const chAll = channel(wsA, 'all-tier');
   const chMentions = channel(wsA, 'mentions-tier');
@@ -251,9 +251,8 @@ function buildFixture(): Fixture {
   const chCursorPastHead = channel(wsA, 'cursor-past-head');
   const chInMutedWs = channel(wsMuted, 'loud-channel-in-muted-ws');
   const dm = conversations.insertDmChannel({
-    name: 'dm-agent',
     workspaceId: wsHome,
-    title: 'dm-agent',
+    title: fixedConversationTitle('dm-agent'),
     agentId: dmAgent.id,
   }).id;
 

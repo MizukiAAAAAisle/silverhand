@@ -34,7 +34,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Database as Db } from 'better-sqlite3';
-import { AGENT_CAPABILITIES } from '@silverhand/shared';
+import { AGENT_CAPABILITIES, fixedConversationTitle } from '@silverhand/shared';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
@@ -82,9 +82,8 @@ function bootstrap() {
   // therefore outside what an agent delete may reach.
   const workspace = workspaces.insert({ name: 'Shared', description: null });
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'general',
+    title: fixedConversationTitle('general'),
   });
   for (const agent of [subject, bystander]) {
     workspaces.insertMembership(workspace.id, agent.id);
@@ -128,9 +127,8 @@ function bootstrap() {
   // it — home workspace → DM channel → that channel's attachment rows.
   const home = workspaces.insertAgentHome({ agent: subject });
   const dm = conversations.insertDmChannel({
-    name: 'ch-2',
     workspaceId: home.id,
-    title: subject.name,
+    title: fixedConversationTitle(subject.name),
     agentId: subject.id,
   });
   conversations.addAgent(dm.id, subject.id);

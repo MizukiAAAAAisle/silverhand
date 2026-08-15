@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
@@ -216,14 +217,12 @@ describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)',
     });
     workspaces.insertMembership(workspace.id, agent.id);
     const live = conversations.insertChannel({
-      name: 'ch-1',
       workspaceId: workspace.id,
-      title: 'live',
+      title: fixedConversationTitle('live'),
     });
     const archived = conversations.insertChannel({
-      name: 'ch-2',
       workspaceId: workspace.id,
-      title: 'archived',
+      title: fixedConversationTitle('archived'),
     });
     conversations.addAgent(live.id, agent.id);
     conversations.addAgent(archived.id, agent.id);

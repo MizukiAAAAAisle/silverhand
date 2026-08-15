@@ -35,7 +35,11 @@
  * way.
  */
 import { describe, expect, it } from 'vitest';
-import { formatDeliveryTarget, type ConversationEndpointIdentity } from '@silverhand/shared';
+import {
+  fixedConversationTitle,
+  formatDeliveryTarget,
+  type ConversationEndpointIdentity,
+} from '@silverhand/shared';
 import {
   resolveDeliveryTarget,
   type DeliveryIntent,
@@ -103,8 +107,7 @@ function setup(): Fixture {
   const ws = new WorkspaceRepo(t.ctx.db).insert({ name: 'dt-ws', description: null });
   const room = conversations.insertChannel({
     workspaceId: ws.id,
-    title: 'room',
-    name: 'room',
+    title: fixedConversationTitle('room'),
     visibility: 'public',
   }).id;
   conversations.addAgent(room, alice.id);
@@ -112,8 +115,7 @@ function setup(): Fixture {
   // not for a visibility rule that would hide the row from any reader.
   const secret = conversations.insertChannel({
     workspaceId: ws.id,
-    title: 'secret',
-    name: 'secret',
+    title: fixedConversationTitle('secret'),
     visibility: 'public',
   }).id;
   conversations.addAgent(secret, bob.id);

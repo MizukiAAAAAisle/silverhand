@@ -24,6 +24,7 @@
  *     them), a fresh connection mints a DISTINCT id (old id never reused),
  *     and a closed adapter delivers no further events.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { createSqliteHostPersistence } from '../../../src/repos/host-uow.js';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
@@ -139,9 +140,8 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     description: null,
   });
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: wsRow.id,
-    title: 'd5a4-stale',
+    title: fixedConversationTitle('d5a4-stale'),
   });
   const agent = agents.create(
     { name: 'd5a4-stale-agent', runtime: 'claude', host_id: hostRow.id },

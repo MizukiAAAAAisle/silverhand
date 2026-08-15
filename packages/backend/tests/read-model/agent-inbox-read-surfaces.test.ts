@@ -30,7 +30,7 @@
  * human-visibility EXISTS become the reason a face excluded the inbox.
  */
 import { describe, expect, it } from 'vitest';
-import { SearchQueryInputSchema } from '@silverhand/shared';
+import { fixedConversationTitle, SearchQueryInputSchema } from '@silverhand/shared';
 import type { ConversationDto } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -64,16 +64,14 @@ function bootstrap() {
   workspaces.addUserMember(eng.id, viewerUserId, 'owner');
 
   const general = conversations.insertChannel({
-    name: 'general',
     workspaceId: eng.id,
-    title: 'general',
+    title: fixedConversationTitle('general'),
   });
   // The CONTROL for every DM-shaped face: workspace-placed, `roster_policy`
   // fixed, so it reports `kind='dm_channel'` exactly like an inbox does.
   const dm = conversations.insertDmChannel({
-    name: 'dm-control',
     workspaceId: eng.id,
-    title: 'dm-control',
+    title: fixedConversationTitle('dm-control'),
   });
   conversations.addUser(general.id, viewerUserId);
   conversations.addUser(dm.id, viewerUserId);

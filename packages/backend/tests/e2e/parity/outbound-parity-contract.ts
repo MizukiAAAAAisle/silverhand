@@ -41,6 +41,7 @@ import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
 import type { TestRunningBackend } from '../../utils/test-backend.js';
 import type { OutboundFrameAdapter } from '../../../src/runtime/outbound-frame-adapter.js';
@@ -200,14 +201,24 @@ async function seedRuntimePair(rig: ParityRig): Promise<SeededRuntimePair> {
     `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
       VALUES (?, ?, ?)`,
   ).run(workspaceId, agentId, now);
+  // A workspace-placed conversation now carries its ADDRESS (#task:2016), and the
+  // key comes from the one canonicalizer rather than a hand-folded literal.
+  const channelTitle = fixedConversationTitle(`parity-channel-${suffix}`);
   db.prepare(
     `INSERT INTO conversations
       (id, workspace_id, placement_kind, roster_policy,
-title, status, spawned_by_agent_id, closed_at, close_summary,
+       title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
        pinned_at, created_at, updated_at)
-      VALUES (?, ?, 'workspace', 'open', ?, 'active', NULL, NULL, NULL,
+      VALUES (?, ?, 'workspace', 'open', ?, ?, 'active', NULL, NULL, NULL,
               NULL, ?, ?)`,
-  ).run(conversationId, workspaceId, `parity-channel-${suffix}`, now, now);
+  ).run(
+    conversationId,
+    workspaceId,
+    channelTitle.title,
+    channelTitle.key,
+    now,
+    now,
+  );
   db.prepare(
     `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
       VALUES (?, ?, ?)`,

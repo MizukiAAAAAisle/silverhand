@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import {
   EventFrameSchema,
   KNOWN_CAPABILITIES_V1,
@@ -126,8 +127,7 @@ describe('OutboundRuntimeEventFanout', () => {
       })).not.toBeNull();
       const second = fix.conversations.insertChannel({
         workspaceId: fix.workspaceId,
-        name: 'second-target',
-        title: 'second target',
+        title: fixedConversationTitle('second target'),
       });
       fix.conversations.addAgent(second.id, fix.agentId);
 
@@ -291,8 +291,7 @@ describe('OutboundRuntimeEventFanout', () => {
     try {
       const channelB = fix.conversations.insertChannel({
         workspaceId: fix.workspaceId,
-        name: 'origin-b',
-        title: 'origin-b',
+        title: fixedConversationTitle('origin-b'),
       });
       fix.conversations.addAgent(channelB.id, fix.agentId);
       const otherAgent = new AgentRepo(fix.db).create(
@@ -1153,8 +1152,7 @@ describe('OutboundRuntimeEventFanout', () => {
       });
       const second = fix.conversations.insertChannel({
         workspaceId: workspace.id,
-        name: 'second-agent-slot-target',
-        title: 'second-agent-slot-target',
+        title: fixedConversationTitle('second-agent-slot-target'),
       });
       fix.conversations.addAgent(second.id, fix.agentId);
 
@@ -1171,8 +1169,7 @@ describe('OutboundRuntimeEventFanout', () => {
       );
       const revoked = fix.conversations.insertChannel({
         workspaceId: workspace.id,
-        name: 'revoked-agent-slot-target',
-        title: 'revoked-agent-slot-target',
+        title: fixedConversationTitle('revoked-agent-slot-target'),
       });
       fix.conversations.addAgent(revoked.id, fix.agentId);
       const revokedMessage = fix.messages.insertForConversation({
@@ -1782,8 +1779,7 @@ describe('OutboundRuntimeEventFanout', () => {
     try {
       const channelB = fix.conversations.insertChannel({
         workspaceId: fix.workspaceId,
-        name: 'origin-b',
-        title: 'origin-b',
+        title: fixedConversationTitle('origin-b'),
       });
       fix.conversations.addAgent(channelB.id, fix.agentId);
       const enqueue = (conversationId: string, content: string) => {
@@ -1844,8 +1840,7 @@ describe('OutboundRuntimeEventFanout', () => {
     try {
       const channelB = fix.conversations.insertChannel({
         workspaceId: fix.workspaceId,
-        name: 'origin-b',
-        title: 'origin-b',
+        title: fixedConversationTitle('origin-b'),
       });
       fix.conversations.addAgent(channelB.id, fix.agentId);
       const message = fix.messages.insertForConversation({
@@ -3600,9 +3595,8 @@ function makeFixture(
   });
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'fanout',
+    title: fixedConversationTitle('fanout'),
   });
   const agent = new AgentRepo(db).create(
     {

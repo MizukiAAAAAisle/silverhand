@@ -216,11 +216,19 @@ describe('Standalone G2 — backend restart + persistent attach recovery', () =>
     db.prepare(
       `INSERT INTO conversations
         (id, workspace_id, placement_kind, roster_policy,
-title, status, spawned_by_agent_id, closed_at, close_summary,
+         title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
          pinned_at, created_at, updated_at)
-        VALUES (?, ?, 'workspace', 'open', ?, 'active', NULL, NULL, NULL,
+        VALUES (?, ?, 'workspace', 'open', ?, ?, 'active', NULL, NULL, NULL,
                 NULL, ?, ?)`,
-    ).run(conversationId, workspaceId, 'g2-b6-channel', now, now);
+    ).run(
+      conversationId,
+      workspaceId,
+      'g2-b6-channel',
+      // Its title IS its address (#task:2016); this literal folds to itself.
+      'g2-b6-channel',
+      now,
+      now,
+    );
     db.prepare(
       `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
         VALUES (?, ?, ?)`,

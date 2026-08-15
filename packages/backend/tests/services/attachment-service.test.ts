@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isSafeOpenExtension } from '@silverhand/shared';
+import { fixedConversationTitle, isSafeOpenExtension } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -28,9 +28,8 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 't',
+    title: fixedConversationTitle('t'),
   });
   conversations.addAgent(channel.id, agent.id);
 
@@ -201,9 +200,8 @@ describe('AttachmentService.locateForAgent', () => {
         description: null,
       });
       const otherChannel = conversations.insertChannel({
-        name: 'ch-2',
         workspaceId: otherWorkspace.id,
-        title: 'o',
+        title: fixedConversationTitle('o'),
       });
       const denied = await service.locateForAgent(dto.id, otherChannel.id);
       expect(denied).toBeNull();
@@ -521,9 +519,8 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
         description: null,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({
-        name: 'ch-3',
         workspaceId: otherWorkspace.id,
-        title: 'o',
+        title: fixedConversationTitle('o'),
       });
       // Creator matches, but the caller's channel is a different one → the
       // channel guard folds to not_found BEFORE the creator check can 403.
@@ -832,9 +829,8 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
         description: null,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({
-        name: 'ch-4',
         workspaceId: otherWorkspace.id,
-        title: 'o',
+        title: fixedConversationTitle('o'),
       });
       const foreign = await service.upload({
         sourceConversationId: otherChannel.id,

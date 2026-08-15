@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   AgentSendMessageOutputSchema,
-  X_SILVERHAND_PRINCIPAL_HEADER,
+  fixedConversationTitle,
   internalPaths,
   legacyInternalPaths,
+  X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import {
   buildTestApp,
@@ -163,8 +164,7 @@ describe('Internal route auth', () => {
     const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
     const unauthorized = t.persistence.repos.conversations.insertChannel({
       workspaceId: channelId,
-      name: 'known-but-unauthorized',
-      title: 'known but unauthorized',
+      title: fixedConversationTitle('known but unauthorized'),
     });
     const request = (targetConversationId: string) => http(t!).post(
       internalPaths.agentSendConversationMessage(targetConversationId, agentId),

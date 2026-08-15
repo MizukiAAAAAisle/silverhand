@@ -3,11 +3,12 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ATTACHMENT_CHANGED_EVENT,
-  X_SILVERHAND_LEGACY_USER_ID_HEADER,
-  X_SILVERHAND_PRINCIPAL_HEADER,
   conversationScope,
   conversationSideScope,
   encodeUserPrincipalHeader,
+  fixedConversationTitle,
+  X_SILVERHAND_LEGACY_USER_ID_HEADER,
+  X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { formatAttachmentSuffix } from '../../src/runtime/stdin-format.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
@@ -508,9 +509,8 @@ describe('Channel attachment list (GET /api/channels/:id/attachments)', () => {
     const { workspaceId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
     const dm = conversations.insertDmChannel({
-      name: 'ch-1',
       workspaceId,
-      title: 'dm',
+      title: fixedConversationTitle('dm'),
     });
     // Seed the 'local' user as a dm_channel member so canViewConversation
     // resolves to true — otherwise this test would land on the 403 branch

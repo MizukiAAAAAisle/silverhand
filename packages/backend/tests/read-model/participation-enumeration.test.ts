@@ -38,6 +38,7 @@
  * the follower query ever starts scanning, the correlated form has been used to
  * enumerate again.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -104,9 +105,8 @@ function buildMatrix(): Matrix {
   }
 
   const channel = conversations.insertChannel({
-    name: 'general',
     workspaceId: eng.id,
-    title: 'general',
+    title: fixedConversationTitle('general'),
   });
   conversations.addAgent(channel.id, alpha.id);
   conversations.addAgent(channel.id, beta.id);

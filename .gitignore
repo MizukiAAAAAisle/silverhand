@@ -7,6 +7,9 @@ out
 .vite
 .cache
 coverage
+# `scripts/unicode_pin.py` is imported by the table generators, so CPython
+# byte-compiles it next to the sources (#task:2016).
+__pycache__/
 
 # Electron
 release/

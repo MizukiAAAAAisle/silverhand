@@ -27,6 +27,7 @@
  * where. The write half is called directly only for the two states a user send
  * cannot produce (a legacy authorless row, a workspace-less source).
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import type { ConversationDto, MessageDto, Reference } from '@silverhand/shared';
@@ -122,9 +123,8 @@ function bootstrap() {
 
   const workspace = workspaces.insert({ name: 'eng', description: null });
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'general',
+    title: fixedConversationTitle('general'),
   });
   // The author's own participation, written the way production writes it (a route
   // / ChannelService insert) rather than by the dropped seed trigger. BOTH facts,

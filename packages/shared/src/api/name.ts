@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  INVISIBLE_CODE_POINTS,
+  findForbiddenCodePoint,
+} from '../display-name-charset.js';
 
 /** Max length for user-chosen entity names (agents, workspaces). The QUANTITY
  *  is shared; the unit is per-schema (see each schema's docblock). */
@@ -19,61 +23,6 @@ export const ENTITY_NAME_MAX_LENGTH = 64;
  * the full stored domain must apply both.
  */
 export const PARTICIPANT_HANDLE_PATTERN = '[a-zA-Z][a-zA-Z0-9_-]*';
-
-/**
- * The conversation-NAME character grammar (#task:2016), as an unanchored regex
- * source fragment with no capture group — same shape and same reason as
- * {@link PARTICIPANT_HANDLE_PATTERN} above.
- *
- * A conversation name is an ADDRESS, not a label: `conversations.title` keeps
- * the display half and may be renamed freely, while the name is the stable
- * coordinate a `#<name>` reference resolves through. Three properties are
- * load-bearing, and each one is a constraint the title deliberately does not
- * carry:
- *
- *  - **Lowercase only.** Uniqueness is enforced by a DB index, so binary
- *    equality has to mean visual equality. Admitting `Design` next to `design`
- *    would need `COLLATE NOCASE` — which is ASCII-only in SQLite and therefore
- *    silently inconsistent the moment the domain grows — so the domain excludes
- *    the confusion instead of folding it.
- *  - **First character a LETTER, last character alphanumeric.** Not cosmetic:
- *    the chat tokenizer (`REF_RE`, renderer `Markdown.tsx`) spells the channel
- *    form as `#[a-zA-Z][a-zA-Z0-9_-]*` and reserves bare `#<number ≥ 11>` for
- *    tasks. A digit-leading name is therefore either inert (`#2`) or resolves to
- *    a TASK (`#42`) — an address that silently points at another entity kind.
- *    Admitting one would require settling that collision and changing the target
- *    grammar, which is a different ticket (@Cindy, B4). A separator on either
- *    end is barred for the milder reason that it is invisible in a chip.
- *  - **A subset of the tokenizer's character class.** A name the tokenizer
- *    cannot capture is a name nobody can reference, so an admissible name is
- *    always spellable — and, with the rule above, always spellable AS A CHANNEL.
- *
- * The LENGTH half of the domain is {@link ENTITY_NAME_MAX_LENGTH}, shared with
- * the other entity names; a consumer that needs the full stored domain must
- * apply both, or just use {@link ConversationNameSchema}.
- */
-export const CONVERSATION_NAME_PATTERN = '[a-z](?:[a-z0-9_-]*[a-z0-9])?';
-
-/**
- * Stored conversation-name grammar: FORMAT only.
- *
- * Uniqueness is a database fact, not a schema fact — a name is allocated in the
- * `conversation_names` registry, whose primary key spans current AND retired
- * names so a retired name can never be reallocated. This schema therefore says
- * nothing about availability, and passing it is not permission to write.
- *
- * Kept separate from `ChannelTitleSchema` on purpose: they are two concepts with
- * two rules (freeform display text vs. addressable identity), and the whole
- * point of #task:2016 is that renaming the first does not touch the second.
- */
-export const ConversationNameSchema = z
-  .string()
-  .min(1)
-  .max(ENTITY_NAME_MAX_LENGTH)
-  .regex(
-    new RegExp(`^${CONVERSATION_NAME_PATTERN}$`),
-    'conversation name must be lowercase letters, numbers, dash or underscore, starting with a letter and ending alphanumeric',
-  );
 
 /**
  * Stored participant-name grammar. A participant name is a durable mention
@@ -153,35 +102,6 @@ export function normalizeWorkspaceName(name: string): string {
 }
 
 /**
- * Code points that must not appear in a workspace name. All of them are barred
- * for ONE reason — they are unreadable in the field that has to be RETYPED to
- * select a workspace, so two different names can be pixel-identical:
- *   - `Cc` / `Zl` / `Zp` — controls and line separators; not renderable on one
- *     line at all.
- *   - `Cf` / `Cs` — zero-width spaces, BOM, bidi overrides, lone surrogates.
- *   - `Default_Ignorable_Code_Point` — the binary property is what actually
- *     names "renders as nothing": the general categories above miss members
- *     that are `Mn` or `Lo`, e.g. U+034F COMBINING GRAPHEME JOINER, U+115F
- *     HANGUL CHOSEONG FILLER, U+FE0F VARIATION SELECTOR-16. Approximating this
- *     class by general category is what let those through.
- *   - `Noncharacter_Code_Point` — U+FDD0..U+FDEF and the U+xFFFE/U+xFFFF pairs
- *     are permanently reserved as non-interchange, so no future revision can
- *     assign them a glyph.
- *
- * Costs, stated rather than hidden: a family emoji (a ZWJ sequence, U+1F468
- * U+200D U+1F469 U+200D U+1F467) and a heart with the emoji presentation
- * selector (U+2764 U+FE0F) are rejected; their single-code-point neighbours
- * (`🎨`, `❤`) are fine. Named by code point on purpose — a docblock that pastes
- * the joiner raw hides the very character being discussed. Unassigned code
- * points (`Cn`) are NOT barred as a class: that class shrinks with every
- * Unicode revision, so blocking it would reject tomorrow's characters on
- * today's engine; only the permanent subset (`Noncharacter_Code_Point`) is
- * listed.
- */
-const WORKSPACE_NAME_FORBIDDEN =
-  /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Noncharacter_Code_Point}]/u;
-
-/**
  * Stored workspace-name FORMAT rule, and the NFC normalizer for the value it
  * admits (parse output is the canonical form, so every write path that goes
  * through this schema stores one spelling).
@@ -202,6 +122,13 @@ const WORKSPACE_NAME_FORBIDDEN =
  * purpose: the renderer's advisory validator classifies length-vs-charset by
  * issue code, and a plain `.refine` would report `custom` and be shown as a
  * charset error.
+ *
+ * The invisible-character rule is no longer spelled here: it comes from
+ * {@link INVISIBLE_CODE_POINTS}, the character domain shared with conversation
+ * titles (#task:2016). Both fields are name-shaped identifiers a person retypes
+ * off the screen, so one class is the point — a private-use or default-ignorable
+ * code point that a title refuses must not survive in a workspace name that
+ * addresses the same coordinate.
  *
  * FORMAT only — uniqueness is a separate, server-only concern (see the
  * name-availability endpoints + {@link NameAvailabilityDtoSchema}), and it is
@@ -236,7 +163,7 @@ export const WorkspaceNameSchema = z
         message: 'workspace name must not start or end with whitespace',
       });
     }
-    if (WORKSPACE_NAME_FORBIDDEN.test(name)) {
+    if (findForbiddenCodePoint(name, [INVISIBLE_CODE_POINTS])) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'workspace name must not contain control or invisible characters',
