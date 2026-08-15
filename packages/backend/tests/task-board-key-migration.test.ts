@@ -96,11 +96,11 @@ function seedPlaces(db: Database.Database): void {
     VALUES ('ws-a', 'A', 'regular', 0, 0), ('ws-b', 'B', 'regular', 0, 0);
 
     INSERT INTO conversations (
-      id, workspace_id, placement_kind, roster_policy, title, status,
+      id, workspace_id, placement_kind, roster_policy, title, title_key, status,
       created_at, updated_at
     ) VALUES
-      ('conv-a', 'ws-a', 'workspace', 'open', 'chan a', 'idle', 0, 0),
-      ('conv-b', 'ws-b', 'workspace', 'open', 'chan b', 'idle', 0, 0);
+      ('conv-a', 'ws-a', 'workspace', 'open', 'chan a', 'chan a', 'idle', 0, 0),
+      ('conv-b', 'ws-b', 'workspace', 'open', 'chan b', 'chan b', 'idle', 0, 0);
 
     INSERT INTO conversations (
       id, inbox_agent_id, placement_kind, roster_policy, title, status,

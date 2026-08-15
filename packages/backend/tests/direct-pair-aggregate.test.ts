@@ -30,6 +30,7 @@
  * subject now HAS a production constructor, so a native INSERT here would be
  * testing a row this feature no longer needs anyone to hand-write.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import type { ConversationEndpointIdentity } from '@silverhand/shared';
 import { addConversationMember, removeConversationMember } from '../src/application/conversation-member.js';
@@ -344,8 +345,7 @@ describe('DirectPair aggregate: participation authority', () => {
       const ws = workspaces.insert({ name: 'dp-room-ws', description: null });
       const channel = f.conversations.insertChannel({
         workspaceId: ws.id,
-        title: 'room',
-        name: 'room',
+        title: fixedConversationTitle('room'),
         visibility: 'public',
       });
       expect(f.conversations.isAgentParticipant(channel.id, f.alice.id)).toBe(false);
@@ -443,8 +443,7 @@ describe('DirectPair aggregate: member-add capability', () => {
       workspaces.addUserMember(ws.id, admin, 'admin');
       const legacyDm = f.conversations.insertDmChannel({
         workspaceId: ws.id,
-        title: 'legacy dm',
-        name: 'legacy-dm',
+        title: fixedConversationTitle('legacy dm'),
       });
       f.conversations.addUser(legacyDm.id, admin);
       f.conversations.addAgent(legacyDm.id, f.alice.id);
@@ -483,8 +482,7 @@ describe('DirectPair aggregate: member-add capability', () => {
       workspaces.addUserMember(ws.id, f.t.viewerUserId, 'admin');
       const channel = f.conversations.insertChannel({
         workspaceId: ws.id,
-        title: 'room',
-        name: 'open-room',
+        title: fixedConversationTitle('room'),
         visibility: 'private',
       });
       // Floor first: not a conversation member yet ⇒ false even though the roster

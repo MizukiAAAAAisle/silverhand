@@ -17,6 +17,7 @@
 // max row vanished). The one native DELETE stands in for the cascade because
 // no product task-deletion path exists (ledgered in db-boundary inventory).
 import { describe, expect, it, vi } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -80,7 +81,10 @@ function bootstrap() {
   const workspace = workspaces.insert({ name: 'eng', description: null });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   workspaces.insertMembership(workspace.id, alice.id);
-  const channel = conversations.insertChannel({ name: 'main', workspaceId: workspace.id, title: 'main' });
+  const channel = conversations.insertChannel({
+    workspaceId: workspace.id,
+    title: fixedConversationTitle('main'),
+  });
   conversations.addAgent(channel.id, alice.id);
 
   const actor = {

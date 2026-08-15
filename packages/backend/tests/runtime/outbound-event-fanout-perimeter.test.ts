@@ -59,6 +59,7 @@
  * check applied to outbound event frames; no wire envelope shape
  * changes.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import {
   KNOWN_CAPABILITIES_V1,
@@ -137,9 +138,8 @@ function makePerimeterFixture(opts?: {
     description: null,
   });
   const channelX = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: wsX.id,
-    title: 'perimeter-x',
+    title: fixedConversationTitle('perimeter-x'),
   });
   const agentX = agents.create(
     { name: 'agent-x', runtime: 'claude', host_id: hostXId },
@@ -169,9 +169,8 @@ function makePerimeterFixture(opts?: {
     description: null,
   });
   const channelY = conversations.insertChannel({
-    name: 'ch-2',
     workspaceId: wsY.id,
-    title: 'perimeter-y',
+    title: fixedConversationTitle('perimeter-y'),
   });
   const agentY = agents.create(
     { name: 'agent-y', runtime: 'claude', host_id: hostY.id },
@@ -254,9 +253,8 @@ function makePerimeterFixture(opts?: {
       // the perimeter rejects events whose `(cid, aid)` claim has no
       // membership backing.
       const channel = conversations.insertChannel({
-        name: 'ch-3',
         workspaceId: wsX.id,
-        title,
+        title: fixedConversationTitle(title),
       });
       return channel.id;
     },

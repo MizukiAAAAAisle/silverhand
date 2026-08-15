@@ -18,6 +18,7 @@
  */
 import type {
   AgentDto,
+  CanonicalConversationTitle,
   ChannelConversationDto,
   ConversationAgentDto,
   ConversationDto,
@@ -75,7 +76,28 @@ export interface ChannelAgentReadPort {
  *  unexpressible rather than merely refused. Creating a channel and placing
  *  members in it are NOT here — they belong to the workspace-keyed axis below. */
 export interface ChannelTxChannelsPort {
-  updateTitle(title: string): ChannelConversationDto | DmChannelDto | null;
+  /**
+   * Rewrite the keyed conversation's title — which MOVES ITS ADDRESS
+   * (#task:2016), because they are the same string.
+   *
+   * Takes the canonical pair, so this port cannot be handed a title without the
+   * key the unique index compares, or a key belonging to a different title. The
+   * old address is released by the same statement and NOTHING REMEMBERS IT: there
+   * is no retirement, no successor pointer, and a subsequent rename may take it
+   * back.
+   *
+   * It therefore RETURNS the released key next to the new row — the writer is the
+   * only place both addresses exist at once, and the observation face that stands
+   * in for the deleted retirement history has no other source for it. The value
+   * is the one that was stored, so a drifted key is reported as it was rather
+   * than as it should have been.
+   */
+  updateTitle(
+    title: CanonicalConversationTitle,
+  ): {
+    channel: ChannelConversationDto | DmChannelDto;
+    releasedKey: string | null;
+  } | null;
   /**
    * Read the authoritative current row of THE KEYED channel-like conversation
    * FOR A SUBSEQUENT WRITE in the same transaction (rename's from-title audit).
@@ -90,43 +112,26 @@ export interface ChannelTxChannelsPort {
    * one writes a from-title that never existed. The method name carries the
    * obligation — plain `get` is NOT a substitute.
    *
-   * Carries the keyed conversation's ADDRESS too (`name`, #task:2016), under the
-   * same obligation and for the same reason: the re-address audit names the
-   * address it replaced.
+   * The row it returns carries the OLD ADDRESS, because the address is `title`:
+   * the rename audit names the title it replaced, read under the same obligation.
    */
   getChannelLikeForUpdate(): ChannelConversationDto | DmChannelDto | null;
   /**
-   * Is `name` already allocated in the keyed conversation's WORKSPACE NAMESPACE
-   * — currently held or retired (#task:2016)?
+   * Is `key` held by ANOTHER conversation in the keyed conversation's workspace
+   * (#task:2016)?
    *
-   * Takes no workspace: the adapter derives it from the key, so a re-address
-   * cannot be checked against the wrong namespace. `true` for a name this very
-   * conversation holds, which is what makes a no-op re-address a refusal rather
-   * than a retire-and-reallocate that would burn the name and leave the channel
-   * addressed by a fresh copy of it.
+   * Takes no workspace: the adapter derives it from the key, so a rename cannot
+   * be checked against the wrong workspace. EXCLUDES the keyed conversation
+   * itself — re-titling `general` to `General` keeps the same address and must
+   * succeed, which is the difference from the retired-slug design, where
+   * re-taking your own address was a refusal.
    *
    * Authoritative only under the transaction's write lock — same obligation as
    * {@link getChannelLikeForUpdate}. Outside it this is a stale hint, which is
-   * why no read port exposes it.
+   * why no read port exposes it. The partial UNIQUE index remains the backstop
+   * for a caller that skips this.
    */
-  isNameAllocated(name: string): boolean;
-  /**
-   * Retire the keyed conversation's current allocation, returning the name that
-   * was retired (or `null` when it held none).
-   *
-   * Retire-then-allocate, never an update: the old address stays in the
-   * namespace forever, un-takeable and still pointing here, so a reference to it
-   * can say what succeeded it. There is no `unretire`.
-   */
-  retireCurrentName(retiredAt: number): string | null;
-  /**
-   * Allocate `name` to the keyed conversation. Aborts the transaction if the
-   * namespace already holds it, or if the keyed conversation has no namespace
-   * (an inbox) — both are the adapter's/schema's backstop for a caller that
-   * skipped {@link isNameAllocated} or the `not_addressable` gate, not the
-   * intended error path.
-   */
-  allocateName(name: string, assignedAt: number): void;
+  isTitleTakenByAnother(key: string): boolean;
 }
 
 /**
@@ -155,34 +160,30 @@ export interface ChannelTxChannelsPort {
  */
 export interface WorkspaceChannelTxChannelsPort {
   /**
-   * Create a channel in the coordinated workspace, AT an address.
+   * Create a channel in the coordinated workspace. Its TITLE IS its address
+   * (#task:2016), so there is no second argument and no unnamed form: the
+   * canonical pair is the title, and a row cannot exist at no address.
    *
-   * `name` is required and there is no unnamed form (#task:2016): a
-   * workspace-placed conversation and its allocation are mutually prerequisite,
-   * so a port that could create the row alone would let a caller commit a channel
-   * no `#reference` can reach — and no constraint would notice, since totality is
-   * a property of this unit of work rather than a DB fact. The caller decides the
-   * name (requested, or derived from the title) and refuses a conflict via
-   * {@link isNameAllocated} first; the namespace key is the backstop.
+   * The caller refuses a conflict via {@link isTitleTaken} first so the user gets
+   * a typed `title_taken`; the workspace-unique index is the backstop.
    */
   insertChannel(args: {
-    title: string;
-    name: string;
+    title: CanonicalConversationTitle;
     spawnedByAgentId?: string | null;
     visibility?: ConversationVisibility;
   }): ChannelConversationDto;
   /** The DM twin of {@link insertChannel}, addressed by the same rules — a DM
-   *  channel is a workspace placement today, so it holds an allocation too. */
+   *  channel is a workspace placement today, so its title is an address too. */
   insertDmChannel(args: {
-    title: string;
-    name: string;
+    title: CanonicalConversationTitle;
     agentId?: string | null;
   }): DmChannelDto;
-  /** Is `name` already allocated in the COORDINATED workspace's namespace —
-   *  currently held or retired? Takes no workspace for the same reason the insert
-   *  faces do not: it comes from the key. Authoritative under this
-   *  transaction's write lock; a pre-lock probe would be a stale hint. */
-  isNameAllocated(name: string): boolean;
+  /** Is `key` already held by a conversation of the COORDINATED workspace? Takes
+   *  no workspace for the same reason the insert faces do not: it comes from the
+   *  key. No self-exclusion arm here — nothing exists yet to exclude.
+   *  Authoritative under this transaction's write lock; a pre-lock probe would be
+   *  a stale hint. */
+  isTitleTaken(key: string): boolean;
   addAgent(conversationId: string, agentId: string): ConversationAgentDto;
   addUser(conversationId: string, userId: string): ConversationUserMemberDto;
   /** Source-conversation snapshot for the seed system message. */

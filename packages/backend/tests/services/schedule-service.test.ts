@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  fixedConversationTitle,
+  readScheduleFireMetadata,
   SCHEDULE_MAX_ACTIVE_PER_AGENT,
   SCHEDULE_MIN_DELAY_SECONDS,
   type ScheduleCreateInput,
   type ScheduleDto,
-  readScheduleFireMetadata,
 } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -109,9 +110,8 @@ function bootstrap(
     agent: owner,
   });
   const dm = conversations.insertDmChannel({
-    name: 'ch-1',
     workspaceId: home.id,
-    title: `dm-${owner.name}`,
+    title: fixedConversationTitle(`dm-${owner.name}`),
   });
   conversations.addAgent(dm.id, owner.id);
 
@@ -436,9 +436,8 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
-      name: 'ch-2',
       workspaceId: ws.id,
-      title: 'general',
+      title: fixedConversationTitle('general'),
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);
 
@@ -469,9 +468,8 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
-      name: 'ch-3',
       workspaceId: ws.id,
-      title: 'release',
+      title: fixedConversationTitle('release'),
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);
 
@@ -584,9 +582,8 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
-      name: 'ch-4',
       workspaceId: ws.id,
-      title: 'closed-room',
+      title: fixedConversationTitle('closed-room'),
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);
     // Mark the channel closed via the conversation lifecycle setter.
@@ -617,9 +614,8 @@ describe('ScheduleService.create', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
-      name: 'ch-5',
       workspaceId: ws.id,
-      title: 'no-entry',
+      title: fixedConversationTitle('no-entry'),
     });
     // Note: ownerAgentId NOT added as a member.
 
@@ -1040,9 +1036,8 @@ describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
       description: null,
     });
     const channel = f.conversations.insertChannel({
-      name: 'ch-6',
       workspaceId: ws.id,
-      title: 'fire-here',
+      title: fixedConversationTitle('fire-here'),
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);
     return channel.id;

@@ -5,6 +5,7 @@ import {
   MIN_SUPPORTED_SCHEMA_VERSION,
   migrations,
 } from '@silverhand/shared/db/migrations';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { currentSchemaVersion, runMigrations } from '../src/db.js';
 import { AgentRepo } from '../src/repos/agent-repo.js';
 import { ConversationRepo } from '../src/repos/conversation-repo.js';
@@ -77,8 +78,7 @@ describe('migration v77 agent_runtime_control_audit', () => {
     const workspace = workspaces.insert({ name: 'claim-lifecycle', description: null });
     const channel = conversations.insertChannel({
       workspaceId: workspace.id,
-      name: 'claim-lifecycle',
-      title: 'Claim lifecycle',
+      title: fixedConversationTitle('Claim lifecycle'),
     });
     const agent = agents.create(
       { name: 'claim-lifecycle-agent', runtime: 'claude', host_id: fixture.localHostId },

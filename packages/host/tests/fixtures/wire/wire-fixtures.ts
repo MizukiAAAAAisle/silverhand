@@ -75,7 +75,11 @@ export interface WireFixture {
 
 // ── Helper canonical scalars (kept identical across fixtures so a
 //    diff highlights the structural variation, not the field values).
-const C = 'c1';
+// `C` is production-shaped — 16 base64url chars (#task:2021 P4-3) — because a
+// canonical delivery frame carries a rendered stdin header, and that header's
+// `target=#conv:<id>` must be an address a reader can actually parse. The wire
+// schema itself does not constrain id shape; the presentation inside it does.
+const C = 'wireFixtureConv1';
 const A = 'a1';
 const TS = 1_700_000_000_000;
 const COOLDOWN = 1_700_000_300_000;
@@ -333,7 +337,7 @@ const REQUESTS: WireFixture[] = [
             thread_root_id: null,
             delivery_kind: 'turn',
             presentation: {
-              body: '[msg_id=msg-200 sender=system type=system target=channel time=2026-08-14T13:00:00+08:00]\nfirst',
+              body: `[msg_id=msg-200 sender=system type=system target=#conv:${C} time=2026-08-14T13:00:00+08:00]\nfirst`,
               instruction: 'system',
             },
           },
@@ -344,7 +348,7 @@ const REQUESTS: WireFixture[] = [
             thread_root_id: null,
             delivery_kind: 'turn',
             presentation: {
-              body: '[msg_id=msg-201 sender=system type=system target=channel time=2026-08-14T13:00:01+08:00]\nsecond',
+              body: `[msg_id=msg-201 sender=system type=system target=#conv:${C} time=2026-08-14T13:00:01+08:00]\nsecond`,
               instruction: 'system',
             },
           },

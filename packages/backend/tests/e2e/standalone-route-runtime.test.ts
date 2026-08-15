@@ -41,8 +41,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
 import type { RuntimeKind } from '@silverhand/shared';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AuthSessionService } from '../../src/auth/session.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
@@ -119,7 +121,11 @@ async function seedRouteEnv(harness: G2Harness, suffix: string): Promise<RouteEn
   const now = Date.now();
   const workspaceId = `ws-g2-route-${suffix}`;
   const agentId = `agent-g2-route-${suffix}`;
-  const conversationId = `conv-g2-route-${suffix}`;
+  // Minted with the production generator, not a readable suffix
+  // (#task:2021 P4-3): a delivery header renders this id as the stream's
+  // absolute `target`, whose domain is exactly 16 base64url chars. The
+  // run-distinguishing suffix stays on the channel's NAME below.
+  const conversationId = randomBytes(12).toString('base64url');
   const sessionId = `g2-route-${suffix}-${now}`;
   const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);
   mkdirSync(workspacePath, { recursive: true });
@@ -154,14 +160,24 @@ async function seedRouteEnv(harness: G2Harness, suffix: string): Promise<RouteEn
     `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
       VALUES (?, ?, ?)`,
   ).run(workspaceId, agentId, now);
+  // The channel's TITLE IS ITS ADDRESS since #task:2016 — key from the one
+  // canonicalizer, never a hand-folded literal.
+  const channelTitle = fixedConversationTitle(`g2-route-${suffix}-channel`);
   db.prepare(
     `INSERT INTO conversations
       (id, workspace_id, placement_kind, roster_policy,
-title, status, spawned_by_agent_id, closed_at, close_summary,
+       title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
        pinned_at, created_at, updated_at)
-      VALUES (?, ?, 'workspace', 'open', ?, 'active', NULL, NULL, NULL,
+      VALUES (?, ?, 'workspace', 'open', ?, ?, 'active', NULL, NULL, NULL,
               NULL, ?, ?)`,
-  ).run(conversationId, workspaceId, `g2-route-${suffix}-channel`, now, now);
+  ).run(
+    conversationId,
+    workspaceId,
+    channelTitle.title,
+    channelTitle.key,
+    now,
+    now,
+  );
   db.prepare(
     `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
       VALUES (?, ?, ?)`,

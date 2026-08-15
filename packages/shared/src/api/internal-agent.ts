@@ -7,6 +7,8 @@ import {
   ConversationVisibilitySchema,
   WorkspaceKindSchema,
 } from '../db/schema.js';
+import { ChannelTitleSchema } from './conversation.js';
+import { UnresolvedReferencesSchema } from './message-reference.js';
 import {
   MessageAttachmentIdsInputSchema,
   hasMessagePayload,
@@ -115,15 +117,27 @@ export const AgentSendMessageOutputSchema = z.object({
    *  Absent when the CAS ran (the sender already covers the stream) and for a
    *  cross-conversation send (the sender tracks no cursor there). */
   stream_head_before: z.number().int().nonnegative().optional(),
+  /** The references in the sent body that addressed NOBODY (#task:2021 P4-5-b)
+   *  — see {@link UnresolvedReferencesSchema}, whose single declaration this
+   *  surface shares with the human send ACK. */
+  unresolved_references: UnresolvedReferencesSchema,
 });
 export type AgentSendMessageOutput = z.infer<typeof AgentSendMessageOutputSchema>;
 
 export const AgentCreateChannelInputSchema = z.object({
-  title: z.string().min(1).max(128),
+  /** The channel's title, WHICH IS ITS ADDRESS (#task:2016) — so the agent door
+   *  states no rule of its own: it shares {@link ChannelTitleSchema} with the
+   *  human door. An agent-created channel that a human could not have created,
+   *  or that occupies an address no reference can spell, is not a thing this API
+   *  is allowed to admit. */
+  title: ChannelTitleSchema,
   context_summary: z.string().min(1),
   initial_prompt: z.string().min(1),
 });
-export type AgentCreateChannelInput = z.infer<
+/** The REQUEST BODY an agent's CLI constructs — `z.input`, for the same reason as
+ *  `CreateConversationChannelInput`: the title travels as the string the agent
+ *  wrote, and the branded canonical pair exists only after the server parses it. */
+export type AgentCreateChannelInput = z.input<
   typeof AgentCreateChannelInputSchema
 >;
 

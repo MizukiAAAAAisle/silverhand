@@ -1194,17 +1194,19 @@ describe('PATCH /api/channels/:id (rename)', () => {
   });
 });
 
-describe('PATCH /api/channels/:id (re-address) + name on create (#task:2016)', () => {
+describe('PATCH /api/channels/:id + POST channels — the title IS the address (#task:2016)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  /** A workspace with one member agent and a channel, by the human doors. */
+  /** A workspace with one member agent and a channel, by the human doors. There
+   *  is no second addressing field to pass: the TITLE is the address, so the
+   *  create body carries exactly one name for the channel. */
   async function seed(
     workspaceName: string,
-    channel: { title: string; name?: string },
+    title: string,
   ): Promise<{ app: TestApp; workspaceId: string; agentId: string; created: any }> {
     const app = buildTestApp();
     t = app;
@@ -1217,7 +1219,7 @@ describe('PATCH /api/channels/:id (re-address) + name on create (#task:2016)', (
     ).json() as any;
     const res = await http(app).post(
       `/api/workspaces/${workspace.workspace.id}/channels`,
-      { ...channel, member_agent_ids: [agentId] },
+      { title, member_agent_ids: [agentId] },
     );
     expect(res.status).toBe(201);
     return {
@@ -1228,71 +1230,75 @@ describe('PATCH /api/channels/:id (re-address) + name on create (#task:2016)', (
     };
   }
 
-  it('creation carries the address on the wire — chosen or derived from the title', async () => {
-    const chosen = await seed('addrchosen', { title: 'Release Planning', name: 'q3' });
-    expect(chosen.created.channel.name).toBe('q3');
-    expect(chosen.created.channel.title).toBe('Release Planning');
-    chosen.app.cleanup();
-    t = null;
+  it('creation refuses a title another channel already shows — 409, never a suffixed 201', async () => {
+    const s = await seed('addrtaken', 'Release Planning');
 
-    const derived = await seed('addrderived', { title: 'Release Planning' });
-    expect(derived.created.channel.name).toBe('release-planning');
-  });
-
-  it('a taken address is 409 conversation_name_taken, not a suffixed 201', async () => {
-    const s = await seed('addrtaken', { title: 'Planning', name: 'planning' });
-
+    // A DIFFERENT SPELLING of the same address: uniqueness is case-insensitive
+    // (and NFC-insensitive), so the refusal cannot be dodged by shift-key.
     const conflict = await http(s.app).post(`/api/workspaces/${s.workspaceId}/channels`, {
-      title: 'Other',
-      name: 'planning',
+      title: 'release PLANNING',
       member_agent_ids: [],
     });
     expect(conflict.status).toBe(409);
-    expect(((await conflict.json()) as any).code).toBe('conversation_name_taken');
+    expect(((await conflict.json()) as any).code).toBe('conversation_title_taken');
+
+    // The refusal is not a rename-with-a-suffix: nothing new exists.
+    const listed = ((await (
+      await http(s.app).get(`/api/workspaces/${s.workspaceId}/channels`)
+    ).json()) as any).channels.map((c: any) => c.title);
+    expect(listed.filter((x: string) => /release/i.test(x))).toEqual(['Release Planning']);
   });
 
-  it('re-addresses a channel: 200, new name, same title, audited on the wire', async () => {
-    const s = await seed('addrmove', { title: 'Planning', name: 'planning' });
-    const channelId: string = s.created.channel.id;
-    s.app.fake.delivered = [];
-
-    const res = await http(s.app).patch(`/api/channels/${channelId}`, { name: 'roadmap' });
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.channel.name).toBe('roadmap');
-    expect(body.channel.title).toBe('Planning');
-
-    const msgs = await (
-      await http(s.app).get(`/api/channels/${channelId}/messages`)
-    ).json() as any;
-    const audit = msgs.messages.find(
-      (m: any) => m.metadata?.subtype === 'conversation_name_changed',
-    );
-    expect(audit).toBeTruthy();
-    expect(audit.metadata.old_name).toBe('planning');
-    expect(audit.metadata.new_name).toBe('roadmap');
-    expect(s.app.fake.delivered.some(d => d.messageId === audit.id)).toBe(true);
-  });
-
-  it('a re-address onto a taken address is 409 and leaves the channel where it was', async () => {
-    const s = await seed('addrconflict', { title: 'Planning', name: 'planning' });
+  it('a rename onto a taken title is 409 and leaves the channel where it was', async () => {
+    const s = await seed('addrconflict', 'Planning');
     const other = await http(s.app).post(`/api/workspaces/${s.workspaceId}/channels`, {
       title: 'Roadmap',
-      name: 'roadmap',
       member_agent_ids: [],
     });
     expect(other.status).toBe(201);
 
     const res = await http(s.app).patch(`/api/channels/${s.created.channel.id}`, {
-      name: 'roadmap',
+      title: 'roadmap',
     });
     expect(res.status).toBe(409);
-    expect(((await res.json()) as any).code).toBe('conversation_name_taken');
+    expect(((await res.json()) as any).code).toBe('conversation_title_taken');
 
     const still = await http(s.app).get(`/api/workspaces/${s.workspaceId}/channels`);
     const listed = ((await still.json()) as any).channels
       .find((c: any) => c.id === s.created.channel.id);
-    expect(listed.name).toBe('planning');
+    expect(listed.title).toBe('Planning');
+  });
+
+  it('a rename RELEASES the old title at once — the next creation may take it', async () => {
+    const s = await seed('addrrelease', 'Planning');
+
+    const moved = await http(s.app).patch(`/api/channels/${s.created.channel.id}`, {
+      title: 'Roadmap',
+    });
+    expect(moved.status).toBe(200);
+
+    // No retirement, no successor pointer, no cooling-off period: `planning` is
+    // free the instant the rename commits, which is the whole difference from the
+    // retired-name model this replaced.
+    const reuse = await http(s.app).post(`/api/workspaces/${s.workspaceId}/channels`, {
+      title: 'planning',
+      member_agent_ids: [],
+    });
+    expect(reuse.status).toBe(201);
+    expect(((await reuse.json()) as any).channel.title).toBe('planning');
+  });
+
+  it('re-spelling a channel to its OWN address succeeds (self is excluded)', async () => {
+    const s = await seed('addrrespell', 'planning');
+
+    // Same address, different display text. A collision check without a
+    // self-exclusion arm would refuse this — it is the one case where the key
+    // being taken is not a conflict.
+    const res = await http(s.app).patch(`/api/channels/${s.created.channel.id}`, {
+      title: 'Planning',
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).channel.title).toBe('Planning');
   });
 
   it('an addressless conversation is refused by AUTHORITY before addressability', async () => {
@@ -1302,7 +1308,7 @@ describe('PATCH /api/channels/:id (re-address) + name on create (#task:2016)', (
     // Reached through the CHANNEL door on purpose: `kind` is GENERATED from
     // `roster_policy`, so an inbox reads as `dm_channel` and passes every
     // kind-shaped gate. What stops it is not the kind and not — here — the
-    // absence of a namespace: `canGovernConversationWorkspace(..., 'admin')`
+    // absence of an address: `canGovernConversationWorkspace(..., 'admin')`
     // admits only a `system` principal for a workspace-less conversation, and
     // this door cannot carry one. So the wire answer is 403, and the service's
     // `not_addressable` (400) is unreachable through it; that refusal is pinned
@@ -1310,32 +1316,45 @@ describe('PATCH /api/channels/:id (re-address) + name on create (#task:2016)', (
     // here so the LAYERING is the recorded fact rather than an assumption.
     const inboxId = new ConversationRepo(app.ctx.db).getAgentInbox(agentId)!.id;
 
-    const res = await http(app).patch(`/api/channels/${inboxId}`, { name: 'alice-inbox' });
+    const res = await http(app).patch(`/api/channels/${inboxId}`, { title: 'Alice Inbox' });
     expect(res.status).toBe(403);
   });
 
-  it('rejects a body that asks for more than one thing, and an inadmissible name', async () => {
-    const s = await seed('addrbadbody', { title: 'Planning', name: 'planning' });
+  it('rejects a body that asks for more than one thing, and an inadmissible title', async () => {
+    const s = await seed('addrbadbody', 'Planning');
     const channelId: string = s.created.channel.id;
 
-    // The PATCH body is EXACTLY-ONE-OF title | visibility | name: a request that
-    // renames and re-addresses at once has no defined order, and the whole point
-    // of the split is that the two are separate decisions.
+    // The PATCH body is EXACTLY-ONE-OF title | visibility: a request that
+    // re-addresses and re-scopes at once has no defined order, and the two are
+    // separate decisions.
     const both = await http(s.app).patch(`/api/channels/${channelId}`, {
       title: 'Roadmap',
-      name: 'roadmap',
+      visibility: 'private',
     });
     expect(both.status).toBe(400);
 
     const empty = await http(s.app).patch(`/api/channels/${channelId}`, {});
     expect(empty.status).toBe(400);
 
-    // The grammar is enforced at the boundary, so an inadmissible address never
-    // reaches the namespace: no uppercase, no spaces, no leading digit or dash.
-    const inadmissible = ['Roadmap', 'road map', '-roadmap', '9roadmap', 'roadmap-', 'x'.repeat(65)];
-    for (const name of inadmissible) {
-      const res = await http(s.app).patch(`/api/channels/${channelId}`, { name });
-      expect(res.status, name).toBe(400);
+    // The grammar is enforced at the BOUNDARY, so an unstorable title never
+    // reaches the address space. Two-character escapes on purpose — a real
+    // control byte in a source file makes the file binary to every gate.
+    const inadmissible = [
+      '',
+      '   ',
+      'x'.repeat(129),
+      'road\u200Bmap', // ZERO WIDTH SPACE — invisible, so it would forge a twin
+      'road\uFE0Fmap', // VARIATION SELECTOR-16 — a sequence-forming emoji part
+    ];
+    for (const title of inadmissible) {
+      const res = await http(s.app).patch(`/api/channels/${channelId}`, { title });
+      expect(res.status, JSON.stringify(title)).toBe(400);
+      // …and the same grammar at the creation door, which shares the schema.
+      const created = await http(s.app).post(`/api/workspaces/${s.workspaceId}/channels`, {
+        title,
+        member_agent_ids: [],
+      });
+      expect(created.status, JSON.stringify(title)).toBe(400);
     }
   });
 });

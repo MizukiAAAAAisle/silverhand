@@ -24,6 +24,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { performance } from 'node:perf_hooks';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { openTestDb } from './utils/db.js';
 
 const BULK_MESSAGES = 30_000;
@@ -96,9 +97,15 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
        VALUES (?, ?, 'regular', 'local', ?, ?)`,
     );
     const insertConversation = db.prepare(
-      `INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, status, created_at, updated_at)
-       VALUES (?, ?, 'workspace', 'open', ?, 'active', ?, ?)`,
+      `INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
+       VALUES (?, ?, 'workspace', 'open', ?, ?, 'active', ?, ?)`,
     );
+    // A workspace placement carries its ADDRESS (#task:2016); the key comes from
+    // the one canonicalizer so a fixture cannot invent a folding of its own.
+    const addConversation = (id: string, workspaceId: string, raw: string) => {
+      const title = fixedConversationTitle(raw);
+      insertConversation.run(id, workspaceId, title.title, title.key, now, now);
+    };
     const insertMessage = db.prepare(
       `INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at, thread_root_id)
        VALUES (?, ?, 'user', 'local', ?, ?, ?, ?)`,
@@ -134,7 +141,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
 
       // ── Unrelated GLOBAL bulk: the amplification substrate ─────────
       insertWorkspace.run('ws-bulk', 'bulk', now, now);
-      insertConversation.run('conv-bulk', 'ws-bulk', 'bulk', now, now);
+      addConversation('conv-bulk', 'ws-bulk', 'bulk');
       for (let i = 0; i < BULK_MESSAGES; i += 1) {
         insertMessage.run(`m-bulk-${i}`, 'conv-bulk', 'x', i + 1, now, null);
       }
@@ -172,7 +179,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
       // ── Small TARGET workspace (dalaran-shaped) ────────────────────
       insertWorkspace.run('ws-target', 'target', now, now);
       for (const conv of ['conv-t1', 'conv-t2']) {
-        insertConversation.run(conv, 'ws-target', conv, now, now);
+        addConversation(conv, 'ws-target', conv);
         for (let i = 0; i < 30; i += 1) {
           const id = `${conv}-m${i}`;
           // A third of the target messages are thread replies so the

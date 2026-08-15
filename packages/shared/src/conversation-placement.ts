@@ -152,6 +152,58 @@ export interface ConversationEndpointIdentity {
 }
 
 /**
+ * Does the principal this endpoint names still exist? Supplied by the caller
+ * because it is a LOOKUP, and this module resolves participation without a read
+ * port on purpose (see `directPairEndpointsOf`). Passing it as a predicate is
+ * what lets the rule below have ONE definition while the request layer answers
+ * it from its ACL read port and the write transaction answers it from the
+ * transaction's own scope.
+ */
+export type EndpointPrincipalExists = (
+  endpoint: ConversationEndpointIdentity,
+) => boolean;
+
+/**
+ * Is this conversation READ-ONLY because a `direct_pair` endpoint's principal is
+ * gone? THE one definition of the write gate's only placement-specific
+ * narrowing (#task:2021 P4-4): a DM whose other side has been deleted has nobody
+ * to deliver to, so the survivor may still read it and may not post. There is no
+ * `readonly` column and no second state machine — the DM's status, archive and
+ * close state are all unchanged, so the answer is derived from the endpoints
+ * every time it is asked.
+ *
+ * FALSE for every other placement, vacuously: no other arm has endpoints. That
+ * is why the name says `directPair` and says `readOnly` rather than reading like
+ * the whole gate — postability is a CONJUNCTION (participation ∧ lifecycle ∧
+ * this), and a caller that mistook this for the whole of it would be admitting
+ * strangers to every channel.
+ *
+ * BOTH endpoints are tested, not just "the other one": a principal whose own
+ * record is gone cannot be the caller, so testing both costs nothing and keeps
+ * the rule stated as a property of the conversation rather than of whoever is
+ * asking — which is also why this takes no actor.
+ *
+ * The stamp is ORed in, never trusted alone. `endpoint_*_deleted_at` is written
+ * by a `BEFORE DELETE` trigger today, and a future delete path that failed to
+ * stamp must not thereby hand the survivor a live write gate; the lookup alone
+ * suffices for correctness (endpoint coordinates are validated at birth and
+ * immutable, so a miss can only mean "deleted"), and the stamp alone answers
+ * without a query in the common case.
+ */
+export function directPairIsReadOnlyForSurvivor(
+  conversation: ConversationEndpointRef,
+  endpointPrincipalExists: EndpointPrincipalExists,
+): boolean {
+  const endpoints = directPairEndpointsOf(conversation);
+  if (endpoints === null) return false;
+  return endpoints.some(
+    endpoint =>
+      endpoint.deletedAt !== null
+      || !endpointPrincipalExists({ kind: endpoint.kind, id: endpoint.id }),
+  );
+}
+
+/**
  * Compare two strings the way SQLite's BINARY collation does: by UTF-8 bytes.
  *
  * Needed because JS `<` compares UTF-16 CODE UNITS, and that is a different

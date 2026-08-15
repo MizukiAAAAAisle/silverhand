@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
@@ -15,14 +16,12 @@ function bootstrap() {
   });
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 's1',
+    title: fixedConversationTitle('s1'),
   });
   const otherChannel = conversations.insertChannel({
-    name: 'ch-2',
     workspaceId: workspace.id,
-    title: 's2',
+    title: fixedConversationTitle('s2'),
   });
   return {
     workspace,

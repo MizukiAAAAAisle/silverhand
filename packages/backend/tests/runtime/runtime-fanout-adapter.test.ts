@@ -21,6 +21,7 @@
  *    a half state, which is what proves the assertion is load-bearing rather
  *    than vacuously true of this fixture.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -46,6 +47,7 @@ const NOOP_PUBLISHER: EventPublisher = {
 /** Exactly the fields `RuntimeInboxMessage` declares. */
 const RUNTIME_INBOX_MESSAGE_KEYS = [
   'content',
+  'conversation_id',
   'created_at',
   'from_agent_id',
   'from_kind',
@@ -67,9 +69,8 @@ function makeFixture() {
     description: null,
   });
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'fanout-adapter',
+    title: fixedConversationTitle('fanout-adapter'),
   });
   const agent = new AgentRepo(db).create(
     { name: 'agent-adapter', runtime: 'claude', host_id: localHostId },
@@ -125,9 +126,15 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     );
     // The joined row this came from HAS these columns; the projection drops
     // them, so no runtime decision can start reading one by accident.
-    for (const surplus of ['conversation_id', 'inbox_id', 'delivery_kind']) {
+    for (const surplus of ['inbox_id', 'delivery_kind']) {
       expect(pending[0]!.message, surplus).not.toHaveProperty(surplus);
     }
+    // `conversation_id` is IN the projection (#task:2021 P4-3) and carries the
+    // row's OWN stream, because the stdin header renders it as an absolute
+    // target. Today's claim is per stream, so this equals the claimed
+    // conversation; the column exists so the coordinate travels WITH the row
+    // rather than being re-supplied by whoever assembled the batch.
+    expect(pending[0]!.message.conversation_id).toBe(f.channelId);
 
     const claimed = f.persistence.inbox.claimPending(
       f.channelId,

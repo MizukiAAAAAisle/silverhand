@@ -1,19 +1,17 @@
 import type { Database as Db } from 'better-sqlite3';
 import type {
-  ConversationAgentDto,
-  ConversationAgentRow,
   ThreadFollowerRow,
   ThreadFollowerSource,
 } from '@silverhand/shared';
-
-type FollowerAgentProjectionRow = ConversationAgentRow;
+import { agentParticipatesCorrelated } from './conversation-placement-sql.js';
 
 /**
  * Thread followers are a delivery/notification subscription, NOT a
- * permission. `follower ⊆ parent channel member` is enforced at
- * query time (see {@link ThreadFollowerRepo.listFollowerAgentsVisible}),
- * never as a table invariant — the follower table is not authoritative,
- * channel membership is. See docs/thread-reply-cluster-v1.md §4.1/§5/§9.
+ * permission. `follower ⊆ live participant of the parent conversation` is
+ * enforced at query time (see
+ * {@link ThreadFollowerRepo.listFollowerAgentIdsParticipating}), never as a table
+ * invariant — the follower table is not authoritative, the PLACEMENT is
+ * (agent-scoped-session-v1 §4.2). See docs/thread-reply-cluster-v1.md §4.1/§5/§9.
  *
  * A thread is identified by its root message id; replies carry
  * `messages.thread_root_id = <root id>` (the root itself has NULL).
@@ -26,6 +24,27 @@ export interface ThreadFollowerUpsert {
   principalId: string;
   source: ThreadFollowerSource;
 }
+
+/**
+ * The delivery read of the follower table (see
+ * {@link ThreadFollowerRepo.listFollowerAgentIdsParticipating} for what it means).
+ *
+ * Exported because its ACCESS PATH is the argument for keeping the CORRELATED
+ * reading of participation at all (#task:2021 P4-5): the candidate set
+ * is bounded by `thread_followers` for one root, so the predicate filters rows
+ * already in hand and `agents` is probed by primary key. `tests/read-model/
+ * participation-enumeration.test.ts` EXPLAINs this exact text — the same rule as
+ * #1967's plan tests, which is that a plan contract has to be asserted over the
+ * statement production runs.
+ */
+export const FOLLOWER_AGENT_IDS_PARTICIPATING_SQL = `SELECT tf.principal_id AS agent_id
+     FROM thread_followers tf
+     JOIN conversations c ON c.id = tf.conversation_id
+     JOIN agents a ON a.id = tf.principal_id
+    WHERE tf.thread_root_id = @root
+      AND tf.principal_kind = 'agent'
+      AND ${agentParticipatesCorrelated('c', 'a.id')}
+    ORDER BY tf.followed_at ASC`;
 
 export class ThreadFollowerRepo {
   constructor(private readonly db: Db) {}
@@ -110,29 +129,35 @@ export class ThreadFollowerRepo {
   }
 
   /**
-   * Agent followers that are CURRENTLY channel members. The inner join on
-   * `conversation_agents` is the visibility filter (invariant 7): a
-   * principal whose follower row lingers after it lost channel membership
-   * is excluded, so delivery never reaches a non-member. Shape mirrors
-   * {@link import('./conversation-repo.js').ConversationRepo.listAgents}
-   * so the send path's delivery/auto-start planning can consume followers
-   * and plain channel members uniformly.
+   * Agent followers that are CURRENT PARTICIPANTS of the thread's conversation —
+   * the delivery/notification read of the follower table (invariant 7): a
+   * principal whose follower row lingers after it lost participation is excluded,
+   * so a revoked seat cannot keep receiving replies on the strength of an old
+   * follower row.
+   *
+   * The gate is `agentParticipatesCorrelated`, the ONE placement authority read in
+   * its correlated form — not the `JOIN conversation_agents` this replaced
+   * (#task:2021 P4-5). The roster join answered only the workspace arm, so on a
+   * `direct_pair` / `agent_inbox` thread it returned ZERO followers and a reply
+   * delivered to nobody; and because both principal kinds now ask the same
+   * authority (an agent through this correlated form, a human through the point
+   * form in `followUser`), "follower ⊆ live participant" is one sentence about
+   * placement rather than two roster-shaped approximations.
+   *
+   * `JOIN agents a` is the LIVENESS conjunct and is load-bearing for the same
+   * reason as in `listParticipantAgentIds`: participation survives an endpoint
+   * tombstone on purpose, delivery must not.
+   *
+   * IDS ONLY. Every caller (the send's delivery plan, the thread-follower read
+   * surface) read `agent_id` and nothing else; the seat columns this used to
+   * project do not exist for a rosterless participant.
    */
-  listFollowerAgentsVisible(threadRootId: string): ConversationAgentDto[] {
+  listFollowerAgentIdsParticipating(threadRootId: string): string[] {
     return this.db
-      .prepare<[string], FollowerAgentProjectionRow>(
-        `SELECT ca.conversation_id,
-                ca.agent_id,
-                ca.joined_at
-           FROM thread_followers tf
-           JOIN conversation_agents ca
-             ON ca.conversation_id = tf.conversation_id
-            AND ca.agent_id = tf.principal_id
-          WHERE tf.thread_root_id = ?
-            AND tf.principal_kind = 'agent'
-          ORDER BY ca.joined_at ASC`,
+      .prepare<{ root: string }, { agent_id: string }>(
+        FOLLOWER_AGENT_IDS_PARTICIPATING_SQL,
       )
-      .all(threadRootId)
-      .map(r => ({ ...r }));
+      .all({ root: threadRootId })
+      .map(r => r.agent_id);
   }
 }

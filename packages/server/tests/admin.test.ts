@@ -236,6 +236,83 @@ describe('silverhand-server admin reset-password', () => {
   });
 });
 
+describe('silverhand-server admin scan-title-addresses', () => {
+  it('reports a clean database on stdout, exits 0, and audits at warn', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'silverhand-server-admin-test-'));
+    tmpDirs.push(dataDir);
+    const env = {
+      SILVERHAND_LISTEN: '127.0.0.1:0',
+      SILVERHAND_DATA_DIR: dataDir,
+      SILVERHAND_LOG_LEVEL: 'warn',
+    };
+
+    // The server run exists only to MIGRATE: the scan is asked about a database
+    // at the current schema version, which nothing but a real boot produces.
+    const running = await startStandaloneSilverhandServer({ env });
+    await running.close();
+
+    const stdout = new MemorySink();
+    const stderr = new MemorySink();
+    const code = await runAdminCommand(['scan-title-addresses'], env, {
+      stdout,
+      stderr,
+    });
+
+    // Exit 0 / exit 1 is the whole machine-facing contract — a pre-upgrade
+    // script gates on it — so a clean database must not write to stderr: this
+    // command answering "nothing to fix" is a result, never an error.
+    expect(code).toBe(0);
+    expect(stderr.text).toBe('');
+    expect(stdout.text).toContain('title addresses clean:');
+    expect(stdout.text.endsWith('\n')).toBe(true);
+
+    // The audit line is emitted at warn on purpose: the default runtime level
+    // hides info, and an operator who ran the probe must be able to prove it
+    // from the log alone.
+    const logFiles = (await readdir(join(dataDir, 'logs'))).filter(name =>
+      name.startsWith('cli-'),
+    );
+    expect(logFiles.length).toBeGreaterThan(0);
+    const logBody = (
+      await Promise.all(
+        logFiles.map(name => readFile(join(dataDir, 'logs', name), 'utf8')),
+      )
+    ).join('\n');
+    expect(logBody).toContain('"admin_op":"scan-title-addresses"');
+    expect(logBody).toContain('"defects":0');
+  });
+
+  it('takes no arguments, and the usage text advertises it', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'silverhand-server-admin-test-'));
+    tmpDirs.push(dataDir);
+    const env = {
+      SILVERHAND_DATA_DIR: dataDir,
+      SILVERHAND_LOG_LEVEL: 'warn',
+    };
+
+    // Every knob an operator could turn here (which rows, which defect classes)
+    // would be a way to be told a cleaner story than the truth, so an argument
+    // is a usage error rather than something quietly ignored.
+    const stderr = new MemorySink();
+    const rejected = await runAdminCommand(
+      ['scan-title-addresses', '--workspace', 'w_1'],
+      env,
+      { stdout: new MemorySink(), stderr },
+    );
+    expect(rejected).toBe(1);
+    expect(stderr.text).toContain('unknown argument: --workspace');
+
+    const help = new MemorySink();
+    const helpCode = await runAdminCommand(['--help'], env, {
+      stdout: help,
+      stderr: new MemorySink(),
+    });
+    expect(helpCode).toBe(0);
+    expect(help.text).toContain('admin scan-title-addresses');
+    expect(help.text).toContain('without migrating it');
+  });
+});
+
 class MemorySink {
   text = '';
 

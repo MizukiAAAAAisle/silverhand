@@ -58,12 +58,16 @@ export type RuntimeInboxDeliveryKind = 'turn' | 'observe';
  * The message fields a queued delivery carries into the runtime: the stdin
  * batch header/body (`MessageLite`) plus `seq`, which delivery bookkeeping uses
  * as the observed-cursor high-water mark. A RUNTIME PROJECTION — the physical
- * `messages` row additionally carries `conversation_id`, the author snapshot
- * and the retired `task_*` columns, none of which the runtime reads.
+ * `messages` row additionally carries the author snapshot and the retired
+ * `task_*` columns, which the runtime does not read. `conversation_id` IS read
+ * (#task:2021 P4-3): the stdin header's `target` is the stream's absolute
+ * address, so the coordinate has to travel with the row rather than be supplied
+ * by whoever assembled the batch.
  */
 export interface RuntimeInboxMessage {
   id: string;
   seq: number;
+  conversation_id: string;
   thread_root_id: string | null;
   from_kind: FromKind;
   from_agent_id: string | null;

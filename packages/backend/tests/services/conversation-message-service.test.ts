@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -22,6 +23,7 @@ import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { writeMentionCcCopies } from '../../src/application/mention-cc.js';
+import type { MessageDto } from '@silverhand/shared';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
@@ -144,8 +146,16 @@ function bootstrap() {
   // tx scope. `txWrap.current` is read per transaction, so a test arms its
   // fault / authority swap AFTER its setup writes committed normally.
   const txWrap: { current: ((tx: MessageTxScope) => MessageTxScope) | null } = { current: null };
+  // The GAP instrument: a rival's write that COMMITS between the
+  // request layer's authorization answer and BEGIN. `txWrap` cannot express it —
+  // a write from inside the callback rolls back with the transaction under test.
+  const txSeam: { current: (() => void) | null } = { current: null };
   const service = new ConversationMessageService({
-    uow: uowWithScopeWrap(persistence.message.uow, () => txWrap.current),
+    uow: uowWithScopeWrap(
+      persistence.message.uow,
+      () => txWrap.current,
+      () => txSeam.current,
+    ),
     threadFollow: persistence.threadFollow,
     delivery: persistence.delivery,
     unreadPublish: createUnreadPublishAdapter({ db, events }),
@@ -162,9 +172,8 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, alice.id);
   workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'source',
+    title: fixedConversationTitle('source'),
   });
   conversations.addAgent(channel.id, alice.id);
   conversations.addAgent(channel.id, bob.id);
@@ -188,6 +197,7 @@ function bootstrap() {
     service,
     persistence,
     txWrap,
+    txSeam,
     workspace,
     channel,
     alice,
@@ -603,9 +613,8 @@ describe('ConversationMessageService.sendMessage', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-2',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       await expect(
         t.service.sendMessage({
@@ -624,9 +633,8 @@ describe('ConversationMessageService.sendMessage', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-3',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       const foreign = t.attachments.insert({
         channelId: other.id,
@@ -2001,17 +2009,13 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       // "bob". The plan must follow the tx scope — reading it through a
       // captured factory repo would compute the plan on another connection's
       // snapshot under a pooled engine (R1).
-      const carolMembership = t.conversations.getAgent(t.channel.id, carol.id);
-      const bobMembership = t.conversations.getAgent(t.channel.id, t.bob.id);
-      expect(carolMembership).not.toBeNull();
-      expect(bobMembership).not.toBeNull();
       const outsideRead = vi
-        .spyOn(t.persistence.threadFollow.read, 'listFollowerAgentsVisible')
-        .mockReturnValue([bobMembership!]);
+        .spyOn(t.persistence.threadFollow.read, 'listFollowerAgentIdsParticipating')
+        .mockReturnValue([t.bob.id]);
       t.txWrap.current = tx =>
         overrideScope(tx, {
           threadFollowers: overrideScope(tx.threadFollowers, {
-            listFollowerAgentsVisible: () => [carolMembership!],
+            listFollowerAgentIdsParticipating: () => [carol.id],
           }),
         });
 
@@ -2083,7 +2087,7 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       expect(touched).toContain('messages.getInConversation');
       expect(touched).toContain('messages.insertForConversation');
       expect(touched).toContain('threadFollowers.upsert');
-      expect(touched).toContain('threadFollowers.listFollowerAgentsVisible');
+      expect(touched).toContain('threadFollowers.listFollowerAgentIdsParticipating');
     } finally {
       t.cleanup();
     }
@@ -2104,9 +2108,8 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-4',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       const mine = t.attachments.insert({
         channelId: t.channel.id,
@@ -2169,9 +2172,8 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-5',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       const attachment = t.attachments.insert({
         channelId: reason === 'outside_channel' ? other.id : t.channel.id,
@@ -2201,6 +2203,1088 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
       expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
       expect(t.messages.latestSeqForConversation(t.channel.id)).toBe(0);
       expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE SEND WRITE GATE (#task:2021 P4-4, finding (b)).
+ *
+ * `canPostToConversation` answers the same question at the request layer, and
+ * `direct-pair-endpoint-acl.test.ts` pins it there. This block is about the
+ * OTHER copy — the one inside the send transaction — and the two claims that
+ * only it can make:
+ *
+ *  1. PARTICIPATION IS THE PLACEMENT, INSIDE THE TRANSACTION TOO. The gate used
+ *     to ask "is there a `conversation_agents` row", which `direct_pair` and
+ *     `agent_inbox` never have by construction (§4.2). That refused EVERY agent
+ *     send into a DM — the same fact as `dm:@handle` not working at all — while
+ *     the ACL above it said yes. Both faces now resolve through one placement
+ *     authority, so the falsifiers are symmetric: an endpoint may post with NO
+ *     roster row, and a roster row on a DM makes NOBODY a participant.
+ *  2. THE ANSWER IS THE TRANSACTION'S, AT COMMIT TIME. Every conjunct
+ *     (lifecycle, participation, survivor) can change between the request
+ *     layer's resolution and the insert, so the request-layer answer is a
+ *     SNAPSHOT, never a capability token. The scope overrides below are how that
+ *     is stated without a production-only hook: swapping what the SCOPE answers
+ *     changes the refusal, which is only possible if the gate read through it
+ *     (R1) rather than through a captured outside port.
+ *
+ * The `direct_pair` rows come from `ConversationRepo.getOrCreateDirectPair()`,
+ * the aggregate's only constructor: a fixture that assembled the placement's
+ * columns itself would be a second construction authority, and these tests would
+ * then be asserting against a row production can never produce.
+ */
+function openAliceBobDm(t: ReturnType<typeof bootstrap>): string {
+  return t.conversations.getOrCreateDirectPair(
+    { kind: 'agent', id: t.alice.id },
+    { kind: 'agent', id: t.bob.id },
+    1_700_000_000_000,
+  ).conversation.id;
+}
+
+describe('ConversationMessageService.sendMessage — the write gate', () => {
+  it('lets an agent endpoint post into its DM, which has no roster row at all', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      const viewerEvents: Array<{ kind: string }> = [];
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        viewerEvents.push({ kind: e.kind });
+      });
+
+      const result = await t.service.sendMessage({
+        conversationId: dm,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+        content: 'hi',
+      });
+      unsubViewer();
+
+      expect(result.targetConversationId).toBe(dm);
+      const stored = t.messages.listForConversation(dm);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toMatchObject({
+        from_kind: 'agent',
+        from_agent_id: t.alice.id,
+      });
+      // THE falsifier: the send cannot have been admitted by a roster row,
+      // because the placement has none — if this list ever becomes non-empty the
+      // test stops proving anything.
+      expect(t.conversations.listAgents(dm)).toEqual([]);
+      // …and it is delivered to the OTHER ENDPOINT anyway (#task:2021 P4-5): the
+      // recipient set is the placement's participants, not the roster the line
+      // above proves is empty. This pinned the opposite until P4-5 — "a DM delivers
+      // to nobody" — which was a committed message with no reader.
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === stored[0]!.id,
+        ),
+      );
+      // The SENDER is excluded at the plan boundary, so a send does not wake the
+      // session that made it.
+      expect(t.fake.delivered.some(d => d.agentId === t.alice.id)).toBe(false);
+      // The unread read model is keyed by (human viewer, WORKSPACE), so this
+      // placement has no frame to emit — and emitting one anyway means the
+      // publisher THREW post-commit, which reported a durable message as a failed
+      // send. The skip is the contract until the DM read surface exists.
+      expect(viewerEvents.filter(e => e.kind === 'unread_updated')).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('treats a stray roster row on a DM as inert, not as participation', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      const stranger = t.agents.create(
+        { name: 'stranger', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      // The row a future "fix" would fall through to. On a placement whose
+      // participants ARE its endpoints it must mean nothing.
+      t.conversations.addAgent(dm, stranger.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: stranger.id, conversationId: dm },
+          content: 'let me in',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'agent_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+      expect(t.messages.latestSeqForConversation(dm)).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses the survivor of a half-dead DM with conversation_endpoint_gone', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      t.agents.delete(t.bob.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          content: 'anyone there',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ConversationError',
+        code: 'conversation_endpoint_gone',
+      });
+      // Read-only, not closed: history survives and the lifecycle columns are
+      // untouched, so the refusal is derived from the endpoints every time.
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+      expect(t.conversations.get(dm)).toMatchObject({
+        closed_at: null,
+        archived_at: null,
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('takes participation from the transaction scope, not from a request-layer answer', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      // Armed AFTER setup: the placement really does say "participant", so a
+      // refusal can only come from the scope the callback was handed.
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          conversations: overrideScope(tx.conversations, {
+            isAgentParticipant: () => false,
+          }),
+        });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          content: 'removed in the gap',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'agent_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('takes endpoint liveness from the transaction scope, and only on direct_pair', async () => {
+    const t = bootstrap();
+    try {
+      const dm = openAliceBobDm(t);
+      // Both principals are alive and neither endpoint is stamped; the ONLY
+      // source of "gone" is the scope's lookup.
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          conversations: overrideScope(tx.conversations, {
+            endpointPrincipalExists: () => false,
+          }),
+        });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          content: 'peer died in the gap',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ConversationError',
+        code: 'conversation_endpoint_gone',
+      });
+
+      // The same injection on a WORKSPACE placement is vacuous: a channel has no
+      // endpoints, so the narrowing is false there by construction. Without this
+      // arm, a gate that asked the lookup unconditionally would pass the test
+      // above while quietly closing every channel.
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'channels are unaffected',
+      });
+      expect(sent.targetConversationId).toBe(t.channel.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('still judges a workspace channel by its roster', async () => {
+    const t = bootstrap();
+    try {
+      // The other half of "participation is the placement": on the workspace arm
+      // the roster IS the authority, so losing the seat refuses the send even
+      // though the agent is still a workspace member.
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'agent_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE HUMAN ARM of the same gate (#task:2021 P4-4).
+ *
+ * A human's participation is a fact the WRITE TRANSACTION asks, unconditionally
+ * and through the same placement authority as an agent's. It is not a per-actor
+ * policy: the request layer's `canPostToConversation` answers before the
+ * transaction opens, so treating its YES as sufficient spends a snapshot as a
+ * capability token. Two consequences, and each gets a falsifier below — a person
+ * whose seat (or whose WORKSPACE membership) is revoked in the gap, and a direct
+ * service caller for whom no route ever ran.
+ *
+ * The refusals are asserted as ZERO WRITES, not as an error alone: an error thrown
+ * after the insert would satisfy a `rejects` assertion while leaving the message in
+ * the stream, which is the whole failure being ruled out.
+ */
+describe('ConversationMessageService.sendMessage — the write gate, human arm', () => {
+  it('refuses a human whose seat was revoked in the gap after the route said yes', async () => {
+    const t = bootstrap();
+    try {
+      // The route's answer, taken from the authority the route actually uses. It
+      // says YES here — which is exactly what makes the sequence a falsifier
+      // rather than a restatement of the refusal.
+      expect(t.conversations.isUserParticipant(t.channel.id, 'local')).toBe(true);
+
+      // …and the rival commits in the GAP: after that answer, before BEGIN.
+      t.txSeam.current = () => {
+        t.conversations.removeUser(t.channel.id, 'local');
+      };
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'removed while I was typing',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+      expect(t.messages.latestSeqForConversation(t.channel.id)).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a human removed from the WORKSPACE though the channel seat survives', async () => {
+    const t = bootstrap();
+    try {
+      // v25's pair, and the reason the human predicate has two conjuncts: the
+      // channel row outlives a workspace removal, so a seat-only rule would keep
+      // admitting this person. Nothing about the conversation changed.
+      t.workspaces.removeUserMember(t.workspace.id, 'local');
+      expect(t.conversations.isUserParticipant(t.channel.id, 'local')).toBe(false);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'ex-member',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('lets a human endpoint post into its DM, which has no roster row at all', async () => {
+    const t = bootstrap();
+    try {
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: t.alice.id },
+        { kind: 'human', id: 'local' },
+        1_700_000_000_000,
+      ).conversation.id;
+
+      const result = await t.service.sendMessage({
+        conversationId: dm,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'hi alice',
+      });
+
+      expect(result.targetConversationId).toBe(dm);
+      expect(t.messages.listForConversation(dm)).toHaveLength(1);
+      // THE falsifier for the endpoint arm: admission cannot have come from a
+      // workspace hop, because this placement HAS no workspace.
+      expect(t.conversations.get(dm)?.workspace_id).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('treats a stray conversation_users row on a DM as inert, not as participation', async () => {
+    const t = bootstrap();
+    try {
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: t.alice.id },
+        { kind: 'agent', id: t.bob.id },
+        1_700_000_000_000,
+      ).conversation.id;
+      // The row a future "fix" would fall through to — here it is not even
+      // planted by the test: the fixture's compatibility trigger seeds every
+      // fixture user into every new conversation, DMs included. So the assertion
+      // is that the row EXISTS and still means nothing.
+      t.conversations.addUser(dm, 'teammate');
+      expect(t.conversations.listUsers(dm).map(u => u.user_id)).toContain('teammate');
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: dm,
+          actor: { kind: 'user', userId: 'teammate' },
+          content: 'let me in',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('takes human participation from the transaction scope, not from a request-layer answer', async () => {
+    const t = bootstrap();
+    try {
+      // The seat and the workspace membership are both real, so a refusal can only
+      // come from the scope the callback was handed (R1).
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          conversations: overrideScope(tx.conversations, {
+            isUserParticipant: () => false,
+          }),
+        });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'removed in the gap',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('never admits a human to an agent_inbox, whoever created the agent', async () => {
+    const t = bootstrap();
+    try {
+      // `created_by_user_id` is MANAGEMENT authority, not a message ACL (§4.2), so
+      // the human predicate has NO inbox arm at all — the creator included. The
+      // inbox is inserted explicitly because `AgentRepo.create` does not carry the
+      // aggregate's inbox invariant (see its docblock).
+      const inbox = t.conversations.insertAgentInbox(t.alice.id, 1_700_000_000_000);
+      expect(t.conversations.getAgentInbox(t.alice.id)?.id).toBe(inbox.id);
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: inbox.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'writing into your inbox',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_not_participant_of_conversation',
+      });
+      expect(t.messages.listForConversation(inbox.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE RECIPIENT BOUNDARY (#task:2021 P4-5).
+ *
+ * Who RECEIVES a committed message, as opposed to who may send one. Three
+ * separate claims, and each one has a way of going wrong that the other two stay
+ * green for:
+ *
+ *  1. PARTICIPATION, NOT THE ROSTER. Main-line recipients are the target's
+ *     placement participants, so a DM fans out to its endpoints — pinned on the
+ *     DM itself in the write-gate block above, because that is where "the send is
+ *     admitted" and "the message reaches someone" have to be one fact.
+ *  2. FOLLOWER ⊆ LIVE PARTICIPANT, ON EVERY PATH. A reference is the ONE way a
+ *     recipient set can widen (#task:2000 layer ②), and it may only widen it
+ *     WITHIN the conversation. Both directions are here: a foreign principal is
+ *     not admitted, a local one is — and the second is what keeps the first from
+ *     passing by way of a follower path that stopped working at all.
+ *  3. REFERENCES NEVER TOUCH THE MAIN LINE (layer ①). The counter-example is
+ *     explicit rather than implied, because "reference ⇒ recipient" is exactly the
+ *     shortcut this boundary invites.
+ *
+ * The falsifier's coordinates are the load-bearing part (#task:2021 P4-5):
+ * the claim is that the FOREIGN principal gets nothing WHILE the conversation's
+ * own recipients still receive. Asserting "nothing was delivered" instead would
+ * be satisfied by a total fan-out shutdown — the failure this slice exists to
+ * repair — and would report it as a pass.
+ */
+/** A second channel in the same workspace whose only agent participant is a
+ *  newly created `carol`. Same workspace on purpose: the falsifier is about the
+ *  CONVERSATION boundary, and a foreign workspace would let a coarser gate pass
+ *  it. */
+function withForeignChannel(t: ReturnType<typeof bootstrap>) {
+  const carol = t.agents.create(
+    { name: 'carol', runtime: 'claude' },
+    t.localHostId,
+    'local',
+  );
+  t.workspaces.insertMembership(t.workspace.id, carol.id);
+  const other = t.conversations.insertChannel({
+    workspaceId: t.workspace.id,
+    title: fixedConversationTitle('elsewhere'),
+  });
+  t.conversations.addAgent(other.id, carol.id);
+  // The precondition the whole case rests on: carol participates THERE and not
+  // HERE. Asserted rather than assumed — if a future fixture change added her to
+  // the source channel, every expectation below would still pass and mean
+  // nothing.
+  expect(t.conversations.isAgentParticipant(other.id, carol.id)).toBe(true);
+  expect(t.conversations.isAgentParticipant(t.channel.id, carol.id)).toBe(false);
+  return { carol, other };
+}
+
+describe('ConversationMessageService.sendMessage — the recipient boundary (P4-5)', () => {
+
+  it('does not admit a referenced agent from ANOTHER conversation, while this conversation’s own recipients still receive', async () => {
+    const t = bootstrap();
+    try {
+      const { carol } = withForeignChannel(t);
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/carol> look at this',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      // HALF ONE — the foreign principal gets NOTHING: no follower row (so no
+      // future reply reaches her either) and no delivery of this one. A reference
+      // is an address, not an invitation.
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => f.principal_id),
+      ).not.toContain(carol.id);
+      expect(t.fake.delivered.some(d => d.agentId === carol.id)).toBe(false);
+      // …and nothing was queued for her in either conversation, which is where a
+      // "harmless" backfill would have landed.
+      expect(t.conversationInboxes.listPending(t.channel.id, carol.id)).toEqual([]);
+
+      // HALF TWO — and the reply is NOT lost: bob, the root author, is a follower
+      // and a participant, so he receives it. Without this the assertions above
+      // would also hold if the send delivered to nobody at all.
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === reply.committed.message.id,
+        ),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('DOES admit a referenced agent that participates here — the reverse control', async () => {
+    const t = bootstrap();
+    try {
+      // Same shape as the case above, with the ONE coordinate flipped: the
+      // referenced agent is a participant of THIS conversation. Only a rule that
+      // reads participation can tell these two sends apart; a rule that reads a
+      // roster gets the same answer for both only because this channel happens to
+      // have one.
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: '<silverhand://agent/alice> look at this',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      expect(
+        t.threadFollowers.listFollowers(root.id).find(f => f.principal_id === t.alice.id)
+          ?.source,
+      ).toBe('mention');
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.alice.id && d.messageId === reply.committed.message.id,
+        ),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('stops delivering on a surviving follower row once participation is revoked', async () => {
+    const t = bootstrap();
+    try {
+      // bob becomes a follower the ordinary way (he authored the root), THEN loses
+      // his seat. The follower row outlives the removal — nothing deletes it — so
+      // the delivery read is the only thing standing between an ex-participant and
+      // the rest of the thread (#task:2021 P4-5).
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'first reply',
+        target: { kind: 'thread', message_id: root.id },
+      });
+      await waitFor(() => t.fake.delivered.some(d => d.agentId === t.bob.id));
+
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => f.principal_id),
+      ).toContain(t.bob.id);
+      const deliveredBefore = t.fake.delivered.length;
+
+      const after = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'second reply',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      // Nothing more was delivered at all: bob was the only other follower, and a
+      // stale follower row must not keep a removed agent in the thread.
+      expect(t.fake.delivered.slice(deliveredBefore)).toEqual([]);
+      expect(
+        t.conversationInboxes
+          .listPending(t.channel.id, t.bob.id)
+          .map(i => i.message.id),
+      ).not.toContain(after.committed.message.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('gives a MAIN-LINE send the same recipients whether or not it references anyone (layer ①)', async () => {
+    const t = bootstrap();
+    try {
+      const { carol } = withForeignChannel(t);
+      // Two main-line sends from the same actor into the same channel, differing
+      // ONLY in whether the body addresses anyone — including an agent who is not
+      // here at all. The main line is a full fan-out over participants, so the
+      // reference must be inert on this path.
+      const plain = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'no addresses here',
+      });
+      const referencing = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/carol> and <silverhand://agent/bob> both',
+      });
+      await waitFor(() =>
+        t.fake.delivered.some(d => d.messageId === referencing.committed.message.id),
+      );
+
+      const recipientsOf = (messageId: string): string[] =>
+        t.fake.delivered
+          .filter(d => d.messageId === messageId)
+          .map(d => d.agentId)
+          .sort();
+      // bob, and only bob: the sender is excluded at the plan boundary and carol
+      // is not a participant. Identical for both messages — that equality IS the
+      // claim, so a future "referenced agents also receive" would break it.
+      expect(recipientsOf(plain.committed.message.id)).toEqual([t.bob.id]);
+      expect(recipientsOf(referencing.committed.message.id)).toEqual([t.bob.id]);
+      expect(t.fake.delivered.some(d => d.agentId === carol.id)).toBe(false);
+      // The reference was really PARSED — otherwise this test would pass on a
+      // build where addressing did not work at all.
+      expect(vi.mocked(extractMessageReferences)).toHaveBeenCalledWith(
+        '<silverhand://agent/carol> and <silverhand://agent/bob> both',
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE SENDER-ONLY UNRESOLVED REPORT (#task:2021 P4-5-b).
+ *
+ * Every consumer of the addressing contract fails CLOSED, which is correct
+ * delivery behaviour and silent reporting behaviour: the cases above prove the
+ * referenced outsider gets nothing, and nothing anywhere told the AUTHOR that.
+ * This suite is about the answer the author gets back, and it has exactly three
+ * claims — each with its own failure mode:
+ *
+ *  1. THE ANSWER IS TRUE — it is derived from the participation authority the
+ *     fan-out itself uses (plus what the CC actually copied), so it cannot say
+ *     "delivered" where no row was written, nor "unresolved" for a principal that
+ *     was reached out of band.
+ *  2. THE ANSWER CARRIES NO REASON — `unknown handle` and `not a participant
+ *     here` are ONE outcome. Splitting them turns the send response into an
+ *     existence oracle for every name in the deployment.
+ *  3. THE ANSWER IS THE SENDER'S ALONE — it never enters the stored row, the
+ *     published frame, or any recipient's queue. It is a fact about this attempt,
+ *     and publishing it would both leak the probe of (2) and rewrite what
+ *     everyone else sees of the message.
+ */
+describe('references that addressed nobody — the sender-only report (P4-5-b)', () => {
+  const eventOf = (t: ReturnType<typeof bootstrap>) =>
+    vi
+      .mocked(t.logger.warn)
+      .mock.calls.map(call => call[0] as { event?: string })
+      .filter(obj => obj?.event === 'send.references_unresolved');
+
+  it('reports the author’s own token for a reference that participates only ELSEWHERE', async () => {
+    const t = bootstrap();
+    try {
+      const { carol } = withForeignChannel(t);
+
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/carol> please look',
+      });
+
+      // The author's token, verbatim and alone. `toEqual` on the whole array is
+      // the assertion: an extra entry would mean a landed reference was reported
+      // as failed, which is the same lie in the other direction.
+      expect(sent.unresolvedReferences).toEqual([{ kind: 'agent', handle: 'carol' }]);
+      // The send SUCCEEDED and delivered to everyone it did address — an
+      // unresolved reference is feedback, never a refusal.
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === sent.committed.message.id,
+        ),
+      );
+      expect(t.fake.delivered.some(d => d.agentId === carol.id)).toBe(false);
+
+      // One WARN per send (not per reference), carrying only the author's tokens.
+      expect(eventOf(t)).toEqual([
+        expect.objectContaining({
+          event: 'send.references_unresolved',
+          sourceConversationId: t.channel.id,
+          targetConversationId: t.channel.id,
+          messageId: sent.committed.message.id,
+          actorKind: 'agent',
+          actorId: t.alice.id,
+          unresolved: [{ kind: 'agent', handle: 'carol' }],
+        }),
+      ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('merges “unknown handle” with “not a participant here” into ONE reason-free outcome', async () => {
+    const t = bootstrap();
+    try {
+      withForeignChannel(t);
+
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content:
+          '<silverhand://agent/nosuchagent> <silverhand://human/local-test> '
+          + '<silverhand://agent/carol>',
+      });
+
+      // `nosuchagent` names nobody in the deployment; `carol` names a real agent
+      // that participates elsewhere. INDISTINGUISHABLE here, and in the author's
+      // own order — the middle token addressed a participant and is absent.
+      expect(sent.unresolvedReferences).toEqual([
+        { kind: 'agent', handle: 'nosuchagent' },
+        { kind: 'agent', handle: 'carol' },
+      ]);
+      // Reason-free by SHAPE, not by inspection: `kind` + `handle` and nothing
+      // else. A `reason` / `exists` / `conversation_id` field added later fails
+      // here rather than after it has shipped as an oracle.
+      for (const ref of sent.unresolvedReferences) {
+        expect(Object.keys(ref).sort()).toEqual(['handle', 'kind']);
+      }
+      expect(eventOf(t)[0]).toMatchObject({
+        unresolved: [
+          { kind: 'agent', handle: 'nosuchagent' },
+          { kind: 'agent', handle: 'carol' },
+        ],
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('answers with an EMPTY list when every reference landed, and logs nothing', async () => {
+    const t = bootstrap();
+    try {
+      const outsider = t.users.create({
+        id: 'outsider',
+        name: 'outsider-test',
+        displayName: 'Outsider',
+      });
+      // Created AFTER the channel, so the fixture's membership trigger never saw
+      // them: a real person who is not here. The HUMAN namespace answers through
+      // its own predicate, and this test pins both arms of the same send.
+      expect(t.conversations.isUserParticipant(t.channel.id, outsider.id)).toBe(false);
+      expect(t.conversations.isUserParticipant(t.channel.id, 'local')).toBe(true);
+
+      const landed = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/bob> <silverhand://human/local-test> hi',
+      });
+      // The total-not-optional half of the contract: "nothing unresolved" is an
+      // ANSWER, and it is this one.
+      expect(landed.unresolvedReferences).toEqual([]);
+      expect(eventOf(t)).toEqual([]);
+
+      const missed = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://human/outsider-test> hi',
+      });
+      expect(missed.unresolvedReferences).toEqual([
+        { kind: 'human', handle: 'outsider-test' },
+      ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('treats an agent the mention CC actually copied to as ADDRESSED', async () => {
+    const t = bootstrap();
+    try {
+      const { carol, other } = withForeignChannel(t);
+      // The CC exists to reach a referenced agent BECAUSE it is not a participant
+      // here, so participation alone would report the one mechanism built for this
+      // case as a failure to reach her. Only `agentId` is read by the derivation;
+      // the rest of the copy is the mocked CC's own contract, exercised for real
+      // in `tests/services/mention-cc.test.ts`.
+      vi.mocked(writeMentionCcCopies).mockReturnValueOnce({
+        copies: [
+          {
+            agentId: carol.id,
+            agentHandle: 'carol',
+            inboxConversationId: other.id,
+            notifiedUserId: 'local',
+            wrapped: { id: 'cc-wrapped' } as unknown as MessageDto,
+          },
+        ],
+        skipped: [],
+        source: { conversationId: t.channel.id, messageId: 'unused' },
+      });
+
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        // A user actor: `POLICIES.user.ccMentions` is the only arm that CCs.
+        actor: { kind: 'user', userId: 'local' },
+        content: '<silverhand://agent/carol> please look',
+      });
+
+      expect(sent.unresolvedReferences).toEqual([]);
+      expect(eventOf(t)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('never leaves the sender’s own response — not the stored row, the published frame, or a recipient’s queue', async () => {
+    const t = bootstrap();
+    try {
+      withForeignChannel(t);
+      const published: Array<{ kind: string; payload: unknown }> = [];
+      const unsub = t.events.subscribeScope(`conversation:${t.channel.id}`, e => {
+        published.push({ kind: e.kind, payload: e.payload });
+      });
+      const content = '<silverhand://agent/carol> please look';
+      const sent = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content,
+      });
+      await waitFor(() =>
+        t.fake.delivered.some(d => d.messageId === sent.committed.message.id),
+      );
+      unsub();
+
+      // The committed payload is what the human route echoes VERBATIM and what
+      // the WS frame carries to everyone (#task:1749) — so the field must not be
+      // reachable through it, and the two must stay identical.
+      expect(sent.committed).not.toHaveProperty('unresolvedReferences');
+      expect(sent.committed).not.toHaveProperty('unresolved_references');
+      const frame = published.find(e => e.kind === 'message');
+      expect(frame?.payload).toEqual(sent.committed);
+
+      // The stored row: content byte-identical to what the author piped, and no
+      // projection of the report anywhere on the message.
+      const stored = t.messages.getById(sent.committed.message.id);
+      expect(stored?.content).toBe(content);
+      expect(JSON.stringify(stored)).not.toContain('unresolved');
+      // …and nothing was queued for anyone about it.
+      expect(
+        JSON.stringify(t.conversationInboxes.listPending(t.channel.id, t.bob.id)),
+      ).not.toContain('unresolved');
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE TWO FOLLOWER FUNNELS (#task:2021 P4-5).
+ *
+ * `followAgent` / `followUser` are the only writers of a `thread_followers` row,
+ * and each holds `follower ⊆ LIVE participant` as a conjunction of two
+ * independent facts. Both halves need their own falsifier because they fail
+ * differently:
+ *
+ *  - PARTICIPATION is what the manual surface used to skip entirely. A voluntary
+ *    human follow went straight to a direct-write upsert, so the only thing
+ *    standing between a non-participant and a follower row was the route's
+ *    `canViewConversation` — a capability token, checked in a different layer,
+ *    against a different question.
+ *  - LIVENESS is not implied by participation, on purpose: a `direct_pair` arm
+ *    ignores `endpoint_*_deleted_at` so the SURVIVOR keeps reading its own DM,
+ *    which means the predicate still answers YES for the principal that no longer
+ *    exists. `thread_followers.principal_id` is polymorphic and therefore has NO
+ *    foreign key, so nothing downstream would reject the row — while the agent
+ *    funnel's backfill writes `conversation_inboxes.agent_id`, which DOES
+ *    reference `agents`. Without the liveness conjunct the sequence is: insert a
+ *    follower row for a dead principal, then take the CALLER'S TRANSACTION down
+ *    with an FK violation raised on its behalf.
+ *
+ * Both cases construct the state directly instead of routing to it, and that is a
+ * statement about today's coverage rather than a shortcut: the reachable paths
+ * are currently closed EARLIER — `conversation_agents.agent_id` /
+ * `conversations.inbox_agent_id` cascade on agent deletion (so the workspace and
+ * inbox arms lose participation with the principal), and a `direct_pair` whose
+ * peer is gone is read-only for the survivor (so no send reaches the funnel).
+ * These gates therefore hold a claim that is currently defended twice. The claim
+ * is the one the docblocks in three files make, so it is asserted where it is
+ * stated — one layer removing its own guard must not be able to make the other
+ * one's absence invisible.
+ */
+describe('the follower funnels — follower ⊆ live participant (P4-5)', () => {
+  /** A DM between the fixture human and `bob`, with a root message in it. */
+  function withDirectPair(t: ReturnType<typeof bootstrap>) {
+    const dm = t.conversations.getOrCreateDirectPair(
+      { kind: 'human', id: 'local' },
+      { kind: 'agent', id: t.bob.id },
+      1_700_000_000_000,
+    ).conversation;
+    const root = t.messages.insertForConversation({
+      conversationId: dm.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'root',
+    });
+    return { dm, root };
+  }
+
+  it('refuses an AGENT follow when the principal is gone but still participates', () => {
+    const t = bootstrap();
+    try {
+      const { dm, root } = withDirectPair(t);
+      t.agents.delete(t.bob.id);
+
+      // The two coordinates that make this a falsifier rather than a tautology:
+      // participation says YES (the endpoint arm ignores the tombstone by design)
+      // and the principal is GONE. Remove the liveness conjunct and the follower
+      // row appears, the backfill hits the `conversation_inboxes.agent_id` FK, and
+      // this call throws instead of answering.
+      expect(t.conversations.isAgentParticipant(dm.id, t.bob.id)).toBe(true);
+      expect(t.agents.get(t.bob.id)).toBeNull();
+
+      const result = t.service.followThread({
+        conversationId: dm.id,
+        rootMessageId: root.id,
+        agentId: t.bob.id,
+      });
+
+      expect(result).toEqual({ threadRootId: root.id, changed: false });
+      expect(t.threadFollowers.listFollowers(root.id)).toEqual([]);
+      expect(t.conversationInboxes.listPending(dm.id, t.bob.id)).toEqual([]);
+      // The root is untouched: the refusal is a decision inside the transaction,
+      // not an aborted one.
+      expect(t.messages.getById(root.id)?.id).toBe(root.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a HUMAN follow when the principal is gone but still participates', () => {
+    const t = bootstrap();
+    try {
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'human', id: 'teammate' },
+        { kind: 'agent', id: t.bob.id },
+        1_700_000_000_000,
+      ).conversation;
+      const root = t.messages.insertForConversation({
+        conversationId: dm.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      t.db.prepare(`DELETE FROM users WHERE id = 'teammate'`).run();
+
+      expect(t.conversations.isUserParticipant(dm.id, 'teammate')).toBe(true);
+      expect(t.users.get('teammate')).toBeNull();
+
+      const result = t.service.followHumanThread({
+        conversationId: dm.id,
+        rootMessageId: root.id,
+        userId: 'teammate',
+      });
+
+      expect(result.changed).toBe(false);
+      expect(t.threadFollowers.listFollowers(root.id)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refuses a manual HUMAN follow by a non-participant — the seam the direct write bypassed', () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.alice.id,
+        content: 'root',
+      });
+      // `teammate` loses the channel seat while keeping workspace membership —
+      // v25's pair broken on the half the follow path never asked about, through
+      // the production removal face.
+      t.conversations.removeUser(t.channel.id, 'teammate');
+      expect(t.conversations.isUserParticipant(t.channel.id, 'teammate')).toBe(false);
+
+      const refused = t.service.followHumanThread({
+        conversationId: t.channel.id,
+        rootMessageId: root.id,
+        userId: 'teammate',
+      });
+      expect(refused.changed).toBe(false);
+      expect(t.threadFollowers.listFollowers(root.id)).toEqual([]);
+
+      // POSITIVE CONTROL, so the refusal above cannot be a manual-follow surface
+      // that stopped working: the fixture human still participates and still
+      // follows, `source='manual'`.
+      const accepted = t.service.followHumanThread({
+        conversationId: t.channel.id,
+        rootMessageId: root.id,
+        userId: 'local',
+      });
+      expect(accepted.changed).toBe(true);
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => ({
+          kind: f.principal_kind,
+          id: f.principal_id,
+          source: f.source,
+        })),
+      ).toEqual([{ kind: 'human', id: 'local', source: 'manual' }]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('commits a thread reply whose root author was deleted, and still delivers it to the live follower', async () => {
+    const t = bootstrap();
+    try {
+      // The send-shaped twin of the first case, on the arm a route can actually
+      // reach: the root author is deleted, so the auto-follow pass meets a
+      // principal it must not register — and the reply it is registering FOR must
+      // still commit and reach everyone who is live.
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      const carol = t.agents.create(
+        { name: 'carol', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
+      // A LIVE FOLLOWER, and the reason this case has one: without
+      // carol the only follower is alice, who is the SENDER and therefore excluded
+      // from her own plan — so "delivers to the live followers" would have been
+      // asserted by an EMPTY delivery list, which any broken plan also produces.
+      // The claim is that a dead principal is skipped WITHOUT taking the live ones
+      // down with it, and that needs a live one to survive.
+      expect(
+        t.service.followThread({
+          conversationId: t.channel.id,
+          rootMessageId: root.id,
+          agentId: carol.id,
+        }).changed,
+      ).toBe(true);
+      t.agents.delete(t.bob.id);
+
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'reply to a deleted author',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      expect(t.messages.getById(reply.committed.message.id)?.id).toBe(
+        reply.committed.message.id,
+      );
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => f.principal_id),
+      ).not.toContain(t.bob.id);
+      // The whole plan, as a set: carol and ONLY carol. bob is dead, alice is the
+      // sender — so this single assertion carries both the positive control and
+      // the two exclusions, and it cannot be satisfied by delivering nothing.
+      expect(
+        t.fake.delivered
+          .filter(d => d.messageId === reply.committed.message.id)
+          .map(d => d.agentId),
+      ).toEqual([carol.id]);
     } finally {
       t.cleanup();
     }

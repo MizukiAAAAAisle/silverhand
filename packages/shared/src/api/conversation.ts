@@ -2,7 +2,11 @@
 // Bounded context: conversation. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import { HandleSchema } from '../handle.js';
-import { ConversationNameSchema } from './name.js';
+import {
+  CONVERSATION_TITLE_MAX_CODE_POINTS,
+  describeConversationTitleIssue,
+  parseConversationTitle,
+} from '../conversation-title.js';
 import {
   ConversationAgentStatusSchema,
   ConversationEventKindSchema,
@@ -47,77 +51,67 @@ export const ConversationDtoSchema = z.object({
 });
 export type ConversationDto = z.infer<typeof ConversationDtoSchema>;
 
-/**
- * The channel-like conversation's STABLE SEMANTIC NAME (#task:2016) — the
- * allocated address, `null` when the row holds no current allocation.
- *
- * Not on `ConversationDtoSchema`. A name is an allocation in a WORKSPACE
- * namespace (`conversation_names`), so only workspace-placed conversations have
- * one at all, and reading it costs a join — a cost the base DTO's producers must
- * not pay: they include the aggregate read paths whose query plans are pinned to
- * production constants (#1967). Widening the base type would quietly conscript
- * every one of them.
- *
- * NULLABLE, and the null arm is reachable — deliberately not "always a string
- * because the backfill is total". `kind` is GENERATED from `roster_policy`, so an
- * `agent_inbox` row reports `kind='dm_channel'` and can reach a channel-like
- * mapper (`getChannelLike(id)` by id, for instance); an inbox is addressed by
- * its owning principal and never enters a workspace namespace. A consumer that
- * needs an address therefore has to handle its absence at typecheck instead of
- * discovering an `undefined` at render time.
- *
- * `title` is the DISPLAY name and is now nothing else: renaming the title leaves
- * this field untouched, which is the whole point of the field existing.
- *
- * The NON-NULL arm is {@link ConversationNameSchema}, not `z.string()` (@Cindy,
- * #task:2016 review): "present" and "well-formed" are not the same claim, and
- * this DTO is what a consumer trusts when it turns the value back into an
- * address — a `#<name>` sigil, a CLI selector, a line in a MEMORY.md. A value
- * outside the grammar is not spellable in any of those, so admitting it here
- * would publish a name that the surface reading this field cannot render as a
- * reference. The storage domain is closed by the v72 `CHECK` plus
- * `ConversationNameRepo.allocate`; stating the same domain on the wire type is
- * what makes that closure legible to every consumer instead of a fact one has to
- * go read the DDL to learn.
- */
-const conversationNameField = {
-  name: ConversationNameSchema.nullable(),
-} as const;
-
 export const ChannelConversationDtoSchema = ConversationDtoSchema.extend({
   kind: z.literal('channel'),
-  ...conversationNameField,
 });
 export type ChannelConversationDto = z.infer<typeof ChannelConversationDtoSchema>;
 
 export const DmChannelDtoSchema = ConversationDtoSchema.extend({
   kind: z.literal('dm_channel'),
-  ...conversationNameField,
 });
 export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
 
-/** The single constraint for a channel's display title — shared by
- *  channel creation and rename so the two paths cannot drift (one
- *  concept, one rule). Freeform (spaces / CJK allowed), but trimmed
- *  and non-empty: a pure-whitespace title is rejected at the API
- *  boundary, not just by the UI. */
-export const ChannelTitleSchema = z.string().trim().min(1).max(128);
+/**
+ * The wire rule for a channel's display title — which is now also its ADDRESS
+ * (#task:2016), so this schema no longer states a rule of its own. It delegates
+ * to `parseConversationTitle`, the single canonicalizer + validator: creation,
+ * rename, the renderer's advisory check and the write transaction must all decide
+ * the same way, and the only way to guarantee that is for none of them to own a
+ * copy of the decision.
+ *
+ * Output is the CANONICAL PAIR, not a string: the boundary parses once and the
+ * brand carries inward, so no layer between here and the UPDATE can hand the
+ * repo a title without its key or a key belonging to another title. Uniqueness is
+ * not decided here — a folded collision with a sibling conversation is a database
+ * fact answered in the write transaction.
+ *
+ * Issue codes are mapped rather than all reported as `custom` because the
+ * renderer classifies length-vs-charset by code: a title that is merely too long
+ * is a counter to show, a title carrying an invisible character is a sentence to
+ * read.
+ */
+export const ChannelTitleSchema = z.string().transform((raw, ctx) => {
+  const result = parseConversationTitle(raw);
+  if (result.ok) return result.value;
+  const message = describeConversationTitleIssue(result.issue);
+  switch (result.issue.kind) {
+    case 'empty':
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_small,
+        minimum: 1,
+        type: 'string',
+        inclusive: true,
+        message,
+      });
+      break;
+    case 'too_long':
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: CONVERSATION_TITLE_MAX_CODE_POINTS,
+        type: 'string',
+        inclusive: true,
+        message,
+      });
+      break;
+    case 'forbidden_code_point':
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+      break;
+  }
+  return z.NEVER;
+});
 
 export const CreateConversationChannelInputSchema = z.object({
   title: ChannelTitleSchema,
-  /**
-   * The channel's stable semantic NAME (#task:2016). Omitted = derived from
-   * `title` by the shared deriver, so an ordinary caller never has to think about
-   * addresses; spelled explicitly when the requester wants a specific address.
-   *
-   * A conflict in the workspace namespace is a 409 `conversation_name_taken` —
-   * creation NEVER auto-suffixes. The address you asked for must be the address
-   * you got, and silently handing back `design-2` would make the requester's own
-   * follow-up reference point at someone else's channel. (The v72 backfill does
-   * suffix: it must cover every pre-existing row and has no requester to tell.
-   * The asymmetry is intentional.)
-   */
-  name: ConversationNameSchema.optional(),
   member_agent_ids: z.array(z.string()).default([]),
   member_user_ids: z.array(z.string()).optional(),
   // Channel visibility. Omitted = server default 'private'. `public` is a
@@ -125,7 +119,18 @@ export const CreateConversationChannelInputSchema = z.object({
   // service rejects a non-user actor requesting `public`.
   visibility: ConversationVisibilitySchema.optional(),
 });
-export type CreateConversationChannelInput = z.infer<
+/**
+ * The REQUEST BODY a client constructs — `z.input`, not `z.infer` (#task:2016).
+ *
+ * `ChannelTitleSchema` outputs a branded {@link CanonicalConversationTitle} pair,
+ * which is a SERVER-SIDE value: it exists only after a parse, it cannot be
+ * constructed outside `conversation-title.ts`, and it is not what goes on the
+ * wire. A client sends `title` as the string a person typed; the boundary turns it
+ * into the pair. Naming the output type here would tell every caller to serialize
+ * `{ title: { title, key } }`, which no route accepts. Route handlers read the
+ * parsed value off `safeParse` and never need this name.
+ */
+export type CreateConversationChannelInput = z.input<
   typeof CreateConversationChannelInputSchema
 >;
 
@@ -461,35 +466,31 @@ export const ArchiveChannelInputSchema = z.object({
 export type ArchiveChannelInput = z.infer<typeof ArchiveChannelInputSchema>;
 
 /** Body for `PATCH /api/channels/:id` — mutate a top-level channel's title OR
- *  visibility OR name. EXACTLY ONE field per request (v1): the settings modal
- *  submits each mutation independently (rename vs private/public toggle vs
- *  re-address are separate actions), so the handler dispatches to a single
- *  service call and there is no half-committed multi-field state. `title` reuses
- *  `ChannelTitleSchema` (trimmed, 1–128) so rename and create validate titles
- *  identically, and `name` reuses `ConversationNameSchema` for the same reason;
- *  setting several (or none) is a 400. Archive / pin have their own dedicated
+ *  visibility. EXACTLY ONE field per request (v1): the settings modal submits each
+ *  mutation independently (rename vs private/public toggle are separate actions),
+ *  so the handler dispatches to a single service call and there is no
+ *  half-committed multi-field state. Archive / pin have their own dedicated
  *  routes.
  *
- *  `title` and `name` are two different mutations, not two spellings of one
- *  (#task:2016): a title change is display-only and MUST NOT move the address,
- *  and a name change retires the old address — every reference to it fails closed
- *  from then on — so it carries its own audit event. That asymmetry is why they
- *  are separate fields of a one-of rather than a single "rename". */
+ *  There is ONE rename (#task:2016). The title IS the address, so display text and
+ *  coordinate move together, in one transaction, under one audit event — the
+ *  separate `name` mutation is gone, and with it the class of bug where a channel
+ *  shows one thing and answers to another. */
 export const UpdateChannelInputSchema = z
   .object({
     title: ChannelTitleSchema.optional(),
     visibility: ConversationVisibilitySchema.optional(),
-    name: ConversationNameSchema.optional(),
   })
   .refine(
     input =>
       (input.title !== undefined ? 1 : 0)
         + (input.visibility !== undefined ? 1 : 0)
-        + (input.name !== undefined ? 1 : 0)
       === 1,
-    { message: 'exactly one of `title`, `visibility` or `name` must be provided' },
+    { message: 'exactly one of `title` or `visibility` must be provided' },
   );
-export type UpdateChannelInput = z.infer<typeof UpdateChannelInputSchema>;
+/** The REQUEST BODY, `z.input` — see {@link CreateConversationChannelInput} for
+ *  why the branded output type is never the wire shape. */
+export type UpdateChannelInput = z.input<typeof UpdateChannelInputSchema>;
 
 /** Query for `GET /api/archived-channels`. `since` is epoch ms (inclusive
  *  lower bound on `archived_at`); the frontend converts 30d/14d/7d

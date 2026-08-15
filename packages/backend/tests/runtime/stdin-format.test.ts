@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { composeRuntimeDeliveryPresentation } from '@silverhand/shared';
+import {
+  composeRuntimeDeliveryPresentation,
+  parseDeliveryTarget,
+} from '@silverhand/shared';
 import {
   formatInboxBatch,
   formatInboxBatchPresentation,
@@ -9,6 +12,16 @@ import {
 import { createReferenceMemo } from '../../src/runtime/reference-memo.js';
 
 const TOOL = 'silverhand message send';
+
+// Real id shapes (#task:2021 P4-3): the header's `target` is rendered by the
+// shared codec, whose domain is exactly `randomBytes(12).toString('base64url')`
+// — 16 base64url characters — so a fixture id like `c1` is not a small
+// inaccuracy here, it is an unspellable coordinate and fails loud. Two
+// conversations on purpose: the target is a fact about the ROW, and that is only
+// observable when one batch carries messages from more than one stream.
+const CONV = 'Q1VI9x6vUK1a9oN9';
+const CONV_OTHER = 'aBcDeFgHiJkLmNoP';
+const ROOT = 'NbBXIEpDUnSWW48x';
 
 // #task:2000 — the formatter no longer parses; it asks the phase's one
 // derivation for the addressing set. A fresh memo per call keeps these cases
@@ -23,6 +36,7 @@ describe('runtime delivery presentation single authority', () => {
       messages: [
         {
           id: 'm-user-all',
+          conversation_id: CONV,
           thread_root_id: null,
           from_kind: 'user',
           from_agent_id: null,
@@ -37,6 +51,7 @@ describe('runtime delivery presentation single authority', () => {
       messages: [
         {
           id: 'm-user-other',
+          conversation_id: CONV,
           thread_root_id: null,
           from_kind: 'user',
           from_agent_id: null,
@@ -51,6 +66,7 @@ describe('runtime delivery presentation single authority', () => {
       messages: [
         {
           id: 'm-agent-mention',
+          conversation_id: CONV,
           thread_root_id: null,
           from_kind: 'agent',
           from_agent_id: 'a1',
@@ -66,6 +82,7 @@ describe('runtime delivery presentation single authority', () => {
         systemMessage({ id: 'm-system-mixed' }),
         {
           id: 'm-user-recipient',
+          conversation_id: CONV,
           thread_root_id: null,
           from_kind: 'user',
           from_agent_id: null,
@@ -103,10 +120,11 @@ describe('runtime delivery presentation single authority', () => {
 });
 
 describe('formatStdinMessageHeader reply-cluster metadata', () => {
-  it('omits thread metadata for main-line messages', () => {
+  it('names the main line by the conversation address alone', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-main',
+        conversation_id: CONV,
         thread_root_id: null,
         from_kind: 'user',
         from_agent_id: null,
@@ -121,7 +139,9 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^\[msg_id=m-main sender=@shiki type=human target=channel time=/,
+      new RegExp(
+        `^\\[msg_id=m-main sender=@shiki type=human target=#conv:${CONV} time=`,
+      ),
     );
     expect(header).not.toContain('thread:');
   });
@@ -130,7 +150,8 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-reply',
-        thread_root_id: 'm-root',
+        conversation_id: CONV,
+        thread_root_id: ROOT,
         from_kind: 'agent',
         from_agent_id: 'a1',
         from_user_id: null,
@@ -144,7 +165,10 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^\[msg_id=m-reply sender=@Alice type=agent computer=host-alice target=thread:m-root time=/,
+      new RegExp(
+        `^\\[msg_id=m-reply sender=@Alice type=agent computer=host-alice `
+        + `target=#conv:${CONV}/thread:${ROOT} time=`,
+      ),
     );
   });
 
@@ -152,6 +176,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-task',
+        conversation_id: CONV,
         thread_root_id: null,
         from_kind: 'user',
         from_agent_id: null,
@@ -173,7 +198,10 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
 
     expect(header).toMatch(
-      /^\[msg_id=m-task sender=@shiki type=human target=channel time=\S+ task=#123 status=todo\]$/,
+      new RegExp(
+        `^\\[msg_id=m-task sender=@shiki type=human target=#conv:${CONV} `
+        + `time=\\S+ task=#123 status=todo\\]$`,
+      ),
     );
   });
 
@@ -181,6 +209,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-plain',
+        conversation_id: CONV,
         thread_root_id: null,
         from_kind: 'user',
         from_agent_id: null,
@@ -203,6 +232,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-claimed',
+        conversation_id: CONV,
         thread_root_id: null,
         from_kind: 'agent',
         from_agent_id: 'a1',
@@ -230,6 +260,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-a',
+        conversation_id: CONV,
         thread_root_id: null,
         from_kind: 'agent',
         from_agent_id: 'a1',
@@ -243,7 +274,10 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       undefined,
     );
     expect(header).toMatch(
-      /^\[msg_id=m-a sender=@Alice type=agent computer=host-alice target=channel time=/,
+      new RegExp(
+        `^\\[msg_id=m-a sender=@Alice type=agent computer=host-alice `
+        + `target=#conv:${CONV} time=`,
+      ),
     );
   });
 
@@ -251,6 +285,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     const human = formatStdinMessageHeader(
       {
         id: 'm-h',
+        conversation_id: CONV,
         thread_root_id: null,
         from_kind: 'user',
         from_agent_id: null,
@@ -278,6 +313,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-gone',
+        conversation_id: CONV,
         thread_root_id: null,
         from_kind: 'agent',
         from_agent_id: 'a-deleted',
@@ -295,9 +331,164 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
   });
 });
 
+/**
+ * #task:2021 P4-3 — the header's `target` is an ABSOLUTE address.
+ *
+ * The three properties that make it one: it is derived per ROW (the formatter
+ * has no authority over a row's coordinate, per-call or ambient), it parses back
+ * through the codec to the stream it names (so the emitted token is a coordinate
+ * and not just a label), and the relative token `channel` is gone everywhere — a
+ * header that still emitted it would be naming whichever stream the reader
+ * assumed, which is the whole failure this slice removes.
+ *
+ * What the token is NOT, yet: a destination you can paste into `--target`.
+ * Canonical acceptance across the CLI is P4-4; until then an agent reads the
+ * token's parts.
+ */
+describe('the header target is absolute', () => {
+  it('addresses each row by its own stream, even in one batch', () => {
+    // Row-wise invariant, proved adversarially: production claims per stream
+    // today (`claimPending(conversationId, agentId)` filters on
+    // `conversation_id`), so a single batch carrying two origins is NOT a
+    // currently reachable path — it is the shape that must stay impossible to
+    // get wrong. Handing the formatter two origins at once is the only way to
+    // show it never reintroduces a per-call or ambient coordinate: a
+    // conversation parameter passed once per batch would render both rows with
+    // the same address, and the second agent would reply into the first stream.
+    // Agent-scoped drain is what makes that reachable, and this test is the
+    // fence that will already be standing.
+    const { presentations } = formatInboxBatchPresentation(
+      [
+        {
+          message: {
+            id: 'm-here',
+            conversation_id: CONV,
+            thread_root_id: null,
+            from_kind: 'user',
+            from_agent_id: null,
+            from_user_id: 'u1',
+            content: 'here',
+            created_at: 0,
+            metadata: null,
+          },
+        },
+        {
+          message: {
+            id: 'm-there',
+            conversation_id: CONV_OTHER,
+            thread_root_id: ROOT,
+            from_kind: 'user',
+            from_agent_id: null,
+            from_user_id: 'u1',
+            content: 'there',
+            created_at: 1,
+            metadata: null,
+          },
+        },
+      ],
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+      'Cindy',
+      TOOL,
+      REFERENCES(),
+    );
+
+    expect(presentations[0]!.body).toContain(`target=#conv:${CONV} `);
+    expect(presentations[1]!.body).toContain(
+      `target=#conv:${CONV_OTHER}/thread:${ROOT} `,
+    );
+  });
+
+  it('round-trips through the codec: the emitted token names that stream', () => {
+    for (const threadRootId of [null, ROOT]) {
+      const header = formatStdinMessageHeader(
+        {
+          id: 'm-rt',
+          conversation_id: CONV,
+          thread_root_id: threadRootId,
+          from_kind: 'user',
+          from_agent_id: null,
+          from_user_id: 'u1',
+          content: 'x',
+          created_at: 0,
+        },
+        agentName,
+        agentComputer,
+        userName,
+        undefined,
+      );
+      const token = /target=(\S+)/.exec(header)![1]!;
+      expect(parseDeliveryTarget(token)).toEqual({
+        conversationId: CONV,
+        threadRootId,
+      });
+    }
+  });
+
+  it('emits one whitespace-free token, so the header stays splittable', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-token',
+        conversation_id: CONV,
+        thread_root_id: ROOT,
+        from_kind: 'system',
+        from_agent_id: null,
+        from_user_id: null,
+        content: 'x',
+        created_at: 0,
+      },
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+    );
+    expect(header.split(/\s+/).filter(f => f.startsWith('target='))).toEqual([
+      `target=#conv:${CONV}/thread:${ROOT}`,
+    ]);
+  });
+
+  it('has retired the relative `channel` token', () => {
+    const header = formatStdinMessageHeader(
+      systemMessage({}),
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+    );
+    expect(header).not.toContain('channel');
+  });
+
+  it('fails loud for a coordinate no address can carry', () => {
+    // Corruption, not input: every `conversations.id` and every `messages.id` is
+    // 16 base64url characters, so there is no branch to take here — omitting
+    // `target=` would hand the reader back the ambient guess.
+    expect(() =>
+      formatStdinMessageHeader(
+        systemMessage({ conversation_id: 'c1' }),
+        agentName,
+        agentComputer,
+        userName,
+        undefined,
+      ),
+    ).toThrow(/messages\.conversation_id is not spellable/);
+    expect(() =>
+      formatStdinMessageHeader(
+        systemMessage({ thread_root_id: 'm-root' }),
+        agentName,
+        agentComputer,
+        userName,
+        undefined,
+      ),
+    ).toThrow(/messages\.thread_root_id is not spellable/);
+  });
+});
+
 function systemMessage(overrides: Partial<MessageLite> = {}): MessageLite {
   return {
     id: 'm-system',
+    conversation_id: CONV,
     thread_root_id: null,
     from_kind: 'system',
     from_agent_id: null,

@@ -9,12 +9,12 @@ import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
   AttachmentRefInput,
-  ConversationAgentDto,
   ConversationDto,
   LegacySendMessageTarget,
   MessageDto,
   MessageEventPayload,
   MessageProjections,
+  Reference,
   SendMessageTarget,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../../context.js';
@@ -72,6 +72,25 @@ export interface SendMessageResult {
    *  and this return — there is no second, projection-less payload shape. */
   committed: MessageEventPayload;
   targetConversationId: string;
+  /**
+   * The references in this message that addressed NOBODY (#task:2021 P4-5-b) —
+   * the author's own tokens, in their own order, with no reason attached (see
+   * `application/reference-addressing.ts` for why a reason would be an existence
+   * oracle).
+   *
+   * SENDER-ONLY, by position: it is a sibling of `committed`, never a field
+   * inside it. `committed` is the payload the post-commit WS frame carries to
+   * everyone in the conversation, so anything placed inside it is published.
+   * BOTH send routes carry this alongside it instead — the agent's typed output
+   * field and the human ACK's `MessageSendAck` sibling — and the WS frame stays
+   * literally `committed` (#task:1749). One send semantics, one answer: an actor
+   * kind is no reason to lose the diagnostic.
+   *
+   * Total, not optional: "which of your references landed" is answered for every
+   * send, and an empty array is that answer. An absent field would make "nothing
+   * unresolved" indistinguishable from "not computed".
+   */
+  unresolvedReferences: readonly Reference[];
   /** Stream head at the moment BEFORE this message was inserted. Set for an
    *  agent send whose insert SKIPPED the freshness CAS — an explicit
    *  `freshnessBypass`, or a loose first touch that carried no
@@ -99,8 +118,20 @@ export interface ResolveStaleMessageInput {
   resolutionReason: 'obsolete';
 }
 
+/**
+ * Per-actor-kind DIFFERENCES in how a send behaves. Every field here is a real
+ * product choice with more than one legal value.
+ *
+ * The send's write authority — lifecycle ∧ participation ∧
+ * not-survivor-read-only — is deliberately NOT here. It used to be, as
+ * `requireSenderParticipation`, and by the end of #task:2021 P4-4 both arms
+ * filled it with `true`: a boolean with no legal current value is not a seam,
+ * it is a security invariant demoted to a switch someone can later set to
+ * `false`. `assertPostAuthority` therefore takes no policy at all,
+ * and a future actor kind has to widen the discriminated union and state its
+ * arm there, which is where a reviewer looks for it.
+ */
 export interface SendMessagePolicy {
-  requireSenderMembership: boolean;
   allowTarget: boolean;
   distributeExcludeSender: boolean;
   /**
@@ -120,7 +151,6 @@ export interface SendMessagePolicy {
 
 export const POLICIES: Record<SendMessageActor['kind'], SendMessagePolicy> = {
   user: {
-    requireSenderMembership: false,
     allowTarget: false,
     distributeExcludeSender: false,
     autoStartIdleRecipients: true,
@@ -128,7 +158,6 @@ export const POLICIES: Record<SendMessageActor['kind'], SendMessagePolicy> = {
     resolveRun: false,
   },
   agent: {
-    requireSenderMembership: true,
     allowTarget: true,
     distributeExcludeSender: true,
     // Same-target (self) baseline: no auto-start. Cross-target sends are
@@ -142,7 +171,15 @@ export const POLICIES: Record<SendMessageActor['kind'], SendMessagePolicy> = {
 export type ConversationErrorCode =
   | 'conversation_not_found'
   | 'conversation_closed'
-  | 'conversation_archived';
+  | 'conversation_archived'
+  /**
+   * The `direct_pair` narrowing of the write gate: the other endpoint's principal
+   * is gone, so the DM is READ-ONLY for the survivor (#task:2021 P4-4). Not a
+   * lifecycle state — the conversation is neither closed nor archived, and it
+   * never becomes postable again — which is why it maps to 403 rather than 409,
+   * the same answer the request-layer gate gives for the identical fact.
+   */
+  | 'conversation_endpoint_gone';
 
 export class ConversationError extends Error {
   constructor(
@@ -156,7 +193,25 @@ export class ConversationError extends Error {
 
 export type ActorErrorCode =
   | 'agent_not_found'
-  | 'agent_not_member_of_conversation';
+  /**
+   * PARTICIPATION, not roster membership: renamed with the rule it reports
+   * (#task:2021 P4-4). `direct_pair` / `agent_inbox` have no `conversation_agents`
+   * rows, so "not a member" was the wrong question for two of the three
+   * placements and refused every agent send into a DM.
+   */
+  | 'agent_not_participant_of_conversation'
+  /**
+   * The human arm of the same refusal (#task:2021 P4-4). A SEPARATE
+   * code rather than a shared "not a participant": the two actor kinds reach the
+   * wire through different clients, and an operator reading `agent_…` for a
+   * person's refused send would look for the wrong subject. Both resolve through
+   * one authority; only the reporting is per kind.
+   *
+   * Same 403 as its agent twin, and deliberately the same code the ROUTE already
+   * answers with for a non-participant human — the in-transaction copy exists to
+   * catch the gap, not to publish a new concurrency reason.
+   */
+  | 'user_not_participant_of_conversation';
 
 export class ActorError extends Error {
   constructor(
@@ -270,24 +325,47 @@ export interface ConversationMessageServiceOptions {
 }
 
 /**
+ * A DELIVERY RECIPIENT of a message: the minimal principal identity, and
+ * deliberately nothing more (#task:2021 P4-5).
+ *
+ * It replaced `ConversationAgentDto` on every recipient-shaped signature of the
+ * send path. That DTO is a MEMBERSHIP FACT — `joined_at` plus the runtime seat's
+ * projected columns — and a `direct_pair` endpoint or an inbox owner has no
+ * membership row at all, so widening the fan-out to reach them while keeping the
+ * DTO would have meant fabricating a row for a placement that has none: a
+ * membership assertion invented by the delivery path, then free to be filtered or
+ * joined on downstream.
+ *
+ * A named object rather than a bare `string[]`: an id list of one principal kind
+ * is assignable to an id list of any other, and this set is agents only.
+ *
+ * Not a participation claim either — it is the OUTPUT of one. The set is
+ * enumerated inside the send transaction from the placement authority conjoined
+ * with a live `agents` row, and sender exclusion stays at the plan boundary where
+ * the plan can be read.
+ */
+export interface MessageRecipient {
+  agentId: string;
+}
+
+/**
  * Per-recipient plan for delivering a thread reply (§6 reply-cluster).
  * Current thread messages align with main-line channel delivery: follower
- * agents that are visible in the channel receive a `turn`, excluding the
- * sender. `observe` is reserved for non-waking context paths such as
- * backfill/pull history.
+ * agents that are live participants receive a `turn`, excluding the sender.
+ * `observe` is reserved for non-waking context paths such as backfill/pull
+ * history.
  */
 export type ThreadDeliveryKind = 'turn' | 'observe';
 
-export interface ThreadDeliveryRecipient {
-  agentId: string;
+export interface ThreadDeliveryRecipient extends MessageRecipient {
   kind: ThreadDeliveryKind;
 }
 
 export interface ThreadDeliveryPlan {
   threadRootId: string;
-  /** Follower agents that are current channel members, EXCLUDING the
-   *  reply sender. Computed inside the send transaction after auto-follow
-   *  upserts so newly-followed agents are included. */
+  /** Follower agents that are CURRENT LIVE PARTICIPANTS of the conversation,
+   *  EXCLUDING the reply sender. Computed inside the send transaction after
+   *  auto-follow upserts so newly-followed agents are included. */
   recipients: ThreadDeliveryRecipient[];
 }
 
@@ -295,7 +373,11 @@ export interface SendMessageTxResult {
   sourceConversation: ConversationDto;
   targetConversation: ConversationDto;
   message: MessageDto;
-  recipients: ConversationAgentDto[];
+  /** MAIN-LINE recipients: the target conversation's live agent participants,
+   *  enumerated in this transaction. Empty for a thread reply, which delivers
+   *  through `threadDelivery` instead. References NEVER change this set — the
+   *  main line is a full fan-out (#task:2000 layer ①). */
+  recipients: MessageRecipient[];
   /** What the in-transaction mention CC wrote, for the post-commit half to
    *  finish (wake / WS frames / skip log). Null when the actor's policy carries
    *  no CC (`POLICIES.agent`), which is NOT the same as an empty report: an
@@ -304,6 +386,11 @@ export interface SendMessageTxResult {
   /** Non-null when this send is a thread reply: drives follower-gated
    *  delivery instead of the main-line channel-member fan-out. */
   threadDelivery: ThreadDeliveryPlan | null;
+  /** The references that addressed nobody, computed in this transaction from the
+   *  same participation authority the fan-out above is built from, plus what the
+   *  CC actually copied. Reported to the SENDER after commit; see
+   *  {@link SendMessageResult.unresolvedReferences}. */
+  unresolvedReferences: Reference[];
   skippedFreshnessReason: string | null;
   /** S1 (#task:1276) authoritative projection deltas computed IN this
    *  transaction, attached to the post-commit `message` event. Null when the

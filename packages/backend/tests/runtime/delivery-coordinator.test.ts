@@ -308,7 +308,7 @@ describe('direct driver ready → dispatched (no ack)', () => {
         thread_root_id: null,
         delivery_kind: 'turn',
         presentation: {
-          body: '[msg_id=m3 sender=system type=system target=channel time=2026-01-01T00:00:00+00:00]\ndelivery-text',
+          body: '[msg_id=m3 sender=system type=system target=#conv:coordinatorConv1 time=2026-01-01T00:00:00+00:00]\ndelivery-text',
           instruction: 'system',
         },
       },

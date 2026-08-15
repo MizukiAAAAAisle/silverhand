@@ -7,9 +7,16 @@
 //
 // Persistence discipline (#task:1981): this aggregate holds NO raw DB and no
 // concrete repo. Everything it does inside a transaction takes an explicit
-// `MessageTxScope`; the callback-free voluntary surface uses the narrow
-// read / direct-write ports. It never opens a transaction of its own except
-// through the injected UnitOfWork.
+// `MessageTxScope`; the read-only surface and the voluntary UNFOLLOW use the
+// narrow read / direct-write ports. It never opens a transaction of its own
+// except through the injected UnitOfWork.
+//
+// Every follower-row INSERT is in a transaction and goes through `followAgent` /
+// `followUser` — including the voluntary manual follows, for both principal
+// kinds (#task:2021 P4-5). Those two are the only places the
+// `follower ⊆ live participant` gate is stated, so a writer that bypassed them
+// would be a second, ungated definition of who may follow.
+
 import type {
   MessageDto,
   Reference,
@@ -133,29 +140,41 @@ export class ThreadFollowManager {
     return {
       threadRootId,
       viewerFollowing: this.read.isFollower(threadRootId, 'human', params.userId),
-      followerAgentIds: this.read
-        .listFollowerAgentsVisible(threadRootId)
-        .map(f => f.agent_id),
+      followerAgentIds: this.read.listFollowerAgentIdsParticipating(threadRootId),
     };
   }
 
+  /** Voluntary manual follow by a HUMAN — the twin of {@link followThread}, and
+   *  since #task:2021 P4-5 the same shape: one transaction,
+   *  the root resolved inside it, and the row written through {@link followUser}.
+   *
+   *  It used to call the direct-write port, which made this a SECOND WRITER of
+   *  follower rows — one that skipped the `follower ⊆ live participant` gate
+   *  entirely and leaned on the route's `canViewConversation` instead. Viewing
+   *  authority is a capability token, not the placement authority: a human who can
+   *  read a conversation is not necessarily a participant of it, and a deleted user
+   *  passes any read check that only asks about the conversation. */
   followHumanThread(params: {
     conversationId: string;
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveRootOutsideTx(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    const { inserted } = this.directWrite.upsert({
-      threadRootId,
-      conversationId: params.conversationId,
-      principalKind: 'human',
-      principalId: params.userId,
-      source: 'manual',
+    return this.uow.atomically(tx => {
+      const threadRootId = resolveThreadRoot(
+        (conversationId, messageId) =>
+          tx.messages.getInConversation(conversationId, messageId),
+        params.conversationId,
+        params.rootMessageId,
+      );
+      const changed = this.followUser(
+        tx,
+        params.conversationId,
+        threadRootId,
+        params.userId,
+        'manual',
+      );
+      return { threadRootId, changed };
     });
-    return { threadRootId, changed: inserted };
   }
 
   unfollowHumanThread(params: {
@@ -193,12 +212,20 @@ export class ThreadFollowManager {
    * (Cindy ruling). Registers as followers of the thread:
    *   - the reply author (`source='reply'`),
    *   - the root message author (`source='target_author'`),
-   *   - every @mentioned principal that is a current channel member
+   *   - every @mentioned principal that is a current LIVE PARTICIPANT
    *     (`source='mention'`).
    * For each AGENT principal becoming a follower now (newly-inserted row)
-   * that is a current channel member, backfills the thread's prior replies
+   * that is a current participant, backfills the thread's prior replies
    * (plus the root) into its inbox. Returns the follower-gated delivery plan
    * for the current reply, executed best-effort after commit.
+   *
+   * EVERY gate below is `follower ⊆ live participant`, asked of the one placement
+   * authority (§4.2) for BOTH principal kinds (#task:2021 P4-5). They used to be
+   * roster questions — `conversation_agents` for an agent,
+   * `conversation_users` for a human — which are the participants of the WORKSPACE
+   * arm only: on a `direct_pair` / `agent_inbox` thread nothing was ever eligible,
+   * not even the endpoint principal replying in its own DM, so no follower row was
+   * created and the reply delivered to nobody.
    */
   applyThreadFollowEffects(
     tx: MessageTxScope,
@@ -234,38 +261,38 @@ export class ThreadFollowManager {
       );
     }
 
-    // Referenced channel members → follower. Mention no longer changes
+    // Referenced LIVE PARTICIPANTS → follower. Mention no longer changes
     // delivery kind because current thread messages already turn every
-    // visible follower agent; it still creates a follower row for the mention.
-    // Non-members are never followed via mention (§4.1: follow is not a
-    // membership backdoor); their visibility is filtered at delivery anyway.
+    // participating follower agent; it still creates a follower row for the
+    // mention. A referenced principal that does NOT participate is never followed
+    // (§4.1: follow is not a membership backdoor) — which is why a reference to
+    // someone else's member expands nothing here, while a reference to a live
+    // participant of THIS conversation does (the reply-cluster is the one layer
+    // where a reference can widen the recipient set, #task:2000 layer ②).
+    //
+    // The participation gate is NOT restated here: `followAgent` / `followUser`
+    // hold it, and every insertion path in this class goes through one of them. A
+    // copy of the check at this call site would be a second place to keep it in
+    // sync while being impossible to reach with the first one intact — and the
+    // reference loop is precisely where a reviewer would look for a bypass, so the
+    // one gate has to be somewhere a bypass CANNOT be written.
     //
     // #task:2000: the reference contract decides who is addressed, and the
     // reference's KIND decides which namespace answers for it. The old
     // agent-then-user fallback existed because a bare `@handle` carried no kind
     // and a handle is unique across both tables; a typed pointer states which
     // one it means, so `silverhand://human/x` must not follow an agent `x`.
-    let userMemberIds: Set<string> | null = null;
     for (const ref of params.references) {
       if (ref.kind === 'agent') {
         const agent = tx.agents.getByName(ref.handle);
-        if (agent && tx.conversations.getAgent(conversationId, agent.id)) {
+        if (agent) {
           this.followAgent(tx, conversationId, threadRootId, agent.id, 'mention', currentSeq);
         }
         continue;
       }
       const user = tx.users.getByName(ref.handle);
       if (user) {
-        userMemberIds ??= this.conversationUserMemberIds(tx, conversationId);
-        if (userMemberIds.has(user.id)) {
-          tx.threadFollowers.upsert({
-            threadRootId,
-            conversationId,
-            principalKind: 'human',
-            principalId: user.id,
-            source: 'mention',
-          });
-        }
+        this.followUser(tx, conversationId, threadRootId, user.id, 'mention');
       }
     }
 
@@ -279,20 +306,18 @@ export class ThreadFollowManager {
     const senderAgentId =
       message.from_kind === 'agent' ? message.from_agent_id : null;
     const recipients: ThreadDeliveryRecipient[] = tx.threadFollowers
-      .listFollowerAgentsVisible(threadRootId)
-      .filter(ca => ca.agent_id !== senderAgentId)
-      .map(ca => ({
-        agentId: ca.agent_id,
-        kind: 'turn',
-      }));
+      .listFollowerAgentIdsParticipating(threadRootId)
+      .filter(agentId => agentId !== senderAgentId)
+      .map(agentId => ({ agentId, kind: 'turn' }));
     return { threadRootId, recipients };
   }
 
   /** Follow the author of `msg` (agent or human). Agent authors get history
    *  backfill when newly followed; human authors are recorded as followers
-   *  (UI/notification consumer) but have no inbox. Only current channel
-   *  members are recorded (follower ⊆ member, enforced again at delivery).
-   *  Returns the agent id only when a NEW agent follower row was inserted. */
+   *  (UI/notification consumer) but have no inbox. Only current LIVE
+   *  PARTICIPANTS are recorded (follower ⊆ live participant, enforced again at
+   *  delivery). Returns the agent id only when a NEW agent follower row was
+   *  inserted. */
   private followMessageAuthor(
     tx: MessageTxScope,
     conversationId: string,
@@ -313,23 +338,24 @@ export class ThreadFollowManager {
         ? msg.from_agent_id
         : null;
     } else if (msg.from_kind === 'user' && msg.from_user_id) {
-      if (this.conversationUserMemberIds(tx, conversationId).has(msg.from_user_id)) {
-        tx.threadFollowers.upsert({
-          threadRootId,
-          conversationId,
-          principalKind: 'human',
-          principalId: msg.from_user_id,
-          source,
-        });
-      }
+      this.followUser(tx, conversationId, threadRootId, msg.from_user_id, source);
     }
     return null;
   }
 
-  /** Upsert an agent follower; if it is newly followed AND a current channel
-   *  member, backfill the thread's prior history into its inbox. Non-members
-   *  are skipped (follower ⊆ member). Returns whether a NEW follower row was
-   *  created (false = already following or not a member → no backfill). */
+  /** Upsert an agent follower; if it is newly followed AND a current live
+   *  participant, backfill the thread's prior history into its inbox.
+   *  Non-participants are skipped (follower ⊆ live participant). Returns whether
+   *  a NEW follower row was created (false = already following, not a
+   *  participant, or not live → no backfill).
+   *
+   *  LIVENESS is its own conjunct (#task:2021 P4-5).
+   *  Participation deliberately survives an endpoint tombstone so the SURVIVOR of a
+   *  deleted DM keeps reading — which means `isAgentParticipant` alone still says
+   *  yes for the agent that no longer exists, and this is the wrong place to learn
+   *  that: `thread_followers.principal_id` has no FK to `agents`, so the row would
+   *  persist, and the backfill's `agent_inbox_deliveries` insert would fail on ITS
+   *  FK and take the caller's whole send down with it. */
   private followAgent(
     tx: MessageTxScope,
     conversationId: string,
@@ -338,7 +364,9 @@ export class ThreadFollowManager {
     source: ThreadFollowerSource,
     currentSeq: number,
   ): boolean {
-    if (!tx.conversations.getAgent(conversationId, agentId)) return false;
+    if (!tx.conversations.isAgentParticipant(conversationId, agentId)) return false;
+    if (!tx.agents.get(agentId)) return false;
+
     const { inserted } = tx.threadFollowers.upsert({
       threadRootId,
       conversationId,
@@ -381,10 +409,38 @@ export class ThreadFollowManager {
     }
   }
 
-  private conversationUserMemberIds(
+  /** Upsert a HUMAN follower — the human twin of {@link followAgent}, and the
+   *  ONE place a human follower row is written (auto-follow AND the voluntary
+   *  {@link followHumanThread}), so `follower ⊆ live participant` is asked once
+   *  per principal kind rather than at each insertion site. Returns whether a NEW
+   *  row was created, which is the voluntary surface's `changed`.
+   *
+   *  A point check, not a participant SET: the question is about ONE person, the
+   *  authority answers it directly, and the set form (a `listParticipantUserIds`
+   *  enumeration, memoized per send) existed only because its predecessor was a
+   *  roster listing. There is no backfill twin either — a human has no inbox, so
+   *  becoming a follower queues nothing.
+   *
+   *  `tx.users.get` is the liveness conjunct, for the same reason as in
+   *  {@link followAgent}: participation outlives a deleted principal on purpose,
+   *  delivery must not. A human follower row feeds notification/UI read surfaces,
+   *  so a lingering one would keep naming a user that no longer exists. */
+  private followUser(
     tx: MessageTxScope,
     conversationId: string,
-  ): Set<string> {
-    return new Set(tx.conversations.listUserMemberIds(conversationId));
+    threadRootId: string,
+    userId: string,
+    source: ThreadFollowerSource,
+  ): boolean {
+    if (!tx.conversations.isUserParticipant(conversationId, userId)) return false;
+    if (!tx.users.get(userId)) return false;
+    const { inserted } = tx.threadFollowers.upsert({
+      threadRootId,
+      conversationId,
+      principalKind: 'human',
+      principalId: userId,
+      source,
+    });
+    return inserted;
   }
 }

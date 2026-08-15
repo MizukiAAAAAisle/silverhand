@@ -15,8 +15,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
+  AgentSendMessageOutputSchema,
   buildSystemPromptFor,
   composeRuntimeDeliveryPresentation,
+  CONVERSATION_ADDRESS_PREFIX,
   type AgentActivitySnippetKind,
   type AgentRunState,
   decodeObservedSeq,
@@ -341,8 +343,14 @@ function runtimeActionText(
   text: string,
 ): string {
   if (scope.kind === 'conversation') return text;
+  // Same prefix constant the stdin header's codec uses (#task:2021 P4-3), so
+  // the two agent-facing spellings of a conversation address cannot drift. The
+  // full codec is deliberately NOT used: it takes branded, validated ids, and
+  // this id arrives over the wire, where the frame schema does not constrain id
+  // shape — a compose-time throw here would turn a peer's bad coordinate into a
+  // dead AgentSlot rather than a routed delivery.
   return (
-    `[runtime_scope=agent target=#conv:${conversationId} `
+    `[runtime_scope=agent target=${CONVERSATION_ADDRESS_PREFIX}${conversationId} `
     + `workdir=${JSON.stringify(cwd)}]\n\n${text}`
   );
 }
@@ -1637,11 +1645,47 @@ export class Supervisor implements SupervisorContract {
       }
     }
     handle.pendingStaleEvents.delete(params.conversation_id);
+    // Sender-only feedback, FORWARDED and never derived (#task:2021 P4-5-b):
+    // the daemon holds no participation authority, so it validates the shape
+    // against the backend's own output contract and hands the answer through
+    // unchanged. A field we cannot read is DROPPED, not repaired: the CLI must
+    // never learn "every reference landed" from a response the daemon failed to
+    // parse, and the send itself succeeded either way.
+    const unresolvedReferences =
+      AgentSendMessageOutputSchema.shape.unresolved_references.safeParse(
+        json['unresolved_references'],
+      );
+    if (!unresolvedReferences.success) {
+      // The field is `.optional()`, so an ABSENT key parses successfully: a
+      // failure here means the backend sent something we cannot read. Dropping
+      // it quietly would make protocol/shape drift indistinguishable from "every
+      // reference landed" — the one reading a daemon must never invent. So: one
+      // NAMED warn, synchronous, diagnostic-only. The send stays `ok: true` and
+      // the actor still gets no field, because a committed send is not undone by
+      // a diagnostic. Only the zod issue SHAPE (code + path) is logged: the body
+      // is untrusted input, and a log line is not the place to echo it.
+      this.logger.warn(
+        {
+          kind: 'process',
+          action: 'send_unresolved_references_shape_mismatch',
+          conversationId: params.conversation_id,
+          agent_id: params.agent_id,
+          issues: unresolvedReferences.error.issues.map(issue => ({
+            code: issue.code,
+            path: issue.path.join('.'),
+          })),
+        },
+        'backend send response carried an unreadable unresolved_references field; omitted from the sender answer',
+      );
+    }
     return {
       ok: true,
       message_id: messageId,
       ...(typeof messageSeq === 'number' ? { message_seq: messageSeq } : {}),
       thread_root_id: resolvedRoot,
+      ...(unresolvedReferences.success && unresolvedReferences.data
+        ? { unresolved_references: unresolvedReferences.data }
+        : {}),
     };
   }
 

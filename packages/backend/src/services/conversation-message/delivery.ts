@@ -19,11 +19,11 @@
 // persistence capability at all and needs no port: this coordinator just drives
 // the in-transaction report through `dispatchMentionCcEffects`.
 import type {
-  ConversationAgentDto,
   ConversationDto,
   MessageDto,
   Reference,
 } from '@silverhand/shared';
+import { isWorkspacePlaced } from '@silverhand/shared';
 import { dispatchMentionCcEffects } from '../../application/mention-cc.js';
 import type { MentionCcReport } from '../../application/mention-cc.js';
 import type { BackendLogger } from '../../context.js';
@@ -38,6 +38,7 @@ import {
   excerpt,
   nonEmptyName,
   describeStartFailure,
+  type MessageRecipient,
   type ThreadDeliveryPlan,
 } from './contracts.js';
 
@@ -69,8 +70,27 @@ export class MessageDeliveryCoordinator {
 
   /** Publish `unread_updated` to every human member of this conversation.
    *  The adapter behind this port co-emits the tiered attention badge
-   *  (#task:1870) — that pairing stays enforced inside `viewer-scope.ts`. */
+   *  (#task:1870) — that pairing stays enforced inside `viewer-scope.ts`.
+   *
+   *  WORKSPACE PLACEMENTS ONLY, and the split is HERE rather than in the
+   *  publisher (#task:2021 P4-4). That read model's unit is (human viewer,
+   *  WORKSPACE): a workspace-less placement has no coordinate in it, so
+   *  `publishUnreadUpdatedToConversationViewers` throws on one — deliberately,
+   *  because for a channel a missing workspace means a corrupt row, and it will
+   *  not turn a routing bug into a silent no-op. Once a `direct_pair` send is
+   *  reachable that stops being a bug and becomes a placement the read model
+   *  does not cover yet: the send commits and then this post-commit call throws,
+   *  i.e. the caller is told its message failed while the row is durable.
+   *
+   *  So the CALLER side answers it, as an honest branch on the placement instead
+   *  of a widened publisher. What is skipped is real and named: a `direct_pair`
+   *  with a human endpoint has a human who ought to see unread, and giving them
+   *  one needs an unread coordinate that is not workspace-keyed — the DM read
+   *  surface, a separate slice. The skip is pinned by test rather than logged:
+   *  it happens on every DM message, so a log line would be pure volume. */
   publishUnreadUpdated(conversationId: string): void {
+    const conversation = this.read.getConversation(conversationId);
+    if (!conversation || !isWorkspacePlaced(conversation)) return;
     this.unreadPublish.publishUnreadUpdatedToConversationViewers(conversationId);
   }
 
@@ -166,24 +186,29 @@ export class MessageDeliveryCoordinator {
     return null;
   }
 
+  /** Main-line fan-out. `recipients` is the send transaction's enumeration of the
+   *  target's LIVE AGENT PARTICIPANTS — principal ids only (`MessageRecipient`),
+   *  never membership rows, because two of the three placements have none. Sender
+   *  exclusion happens HERE rather than in the enumeration, so the plan the log
+   *  records is the full set and the one omission is visible as a parameter. */
   async deliverBestEffort(
     conversationId: string,
     messageId: string,
-    recipients: readonly ConversationAgentDto[],
+    recipients: readonly MessageRecipient[],
     excludeAgentId: string | null,
   ): Promise<void> {
-    const selected = recipients.filter(ca => ca.agent_id !== excludeAgentId);
+    const selected = recipients.filter(r => r.agentId !== excludeAgentId);
     const failures: Array<{ agentId: string; err: unknown }> = [];
     await Promise.all(
-      selected.map(async ca => {
+      selected.map(async r => {
         try {
           await this.runtimeHost.deliverMessage(
             conversationId,
-            ca.agent_id,
+            r.agentId,
             messageId,
           );
         } catch (err) {
-          failures.push({ agentId: ca.agent_id, err });
+          failures.push({ agentId: r.agentId, err });
         }
       }),
     );
@@ -202,6 +227,16 @@ export class MessageDeliveryCoordinator {
     );
   }
 
+  /**
+   * Tell the HUMAN AUTHOR that a recipient's runtime could not be reached. Every
+   * post-commit delivery path funnels its per-recipient failures here.
+   *
+   * A workspace-less placement is NOT one of those failures and needs no
+   * exemption: `buildRuntimeStartOptions` already emits `workspace: null` with an
+   * agent-scoped `runtime_scope`, so a `direct_pair` / `agent_inbox` spawn takes
+   * the ordinary path (#task:2019 landed). Every error that arrives here is a real
+   * start/deliver failure and is reported as one.
+   */
   notifyAgentStartFailureBestEffort(
     conversation: ConversationDto,
     message: MessageDto,
@@ -329,29 +364,44 @@ export class MessageDeliveryCoordinator {
     }
   }
 
+  /**
+   * Wake the recipients that are not already running (§ auto-start).
+   *
+   * The "already running" fact comes from the agent's RUNTIME SEAT
+   * (`runtimeSeatStatus`), not from a membership row's projected `status` column:
+   * the recipient unit is a principal id now, and a `direct_pair` / `agent_inbox`
+   * participant has a seat but no membership row at all, so the old pre-filter
+   * could not have answered for one (#task:2021 P4-5). The RULE — which statuses
+   * count as running — stays here, where a test of the use case can see it; the
+   * port only reports the status.
+   *
+   * It remains a PRE-FILTER, not the authority: `AgentRuntimeHost.start` re-checks
+   * the live phase before spawning. What this avoids is asking the host to
+   * re-examine every already-busy recipient on every send.
+   */
   async startIdleRecipientsBestEffort(
     conversation: ConversationDto,
     message: MessageDto,
-    recipients: readonly ConversationAgentDto[],
+    recipients: readonly MessageRecipient[],
   ): Promise<void> {
     await Promise.all(
       recipients
-        .filter(ca => {
-          const status = this.read.runtimeStatus(conversation.id, ca.agent_id);
+        .filter(r => {
+          const status = this.read.runtimeSeatStatus(conversation.id, r.agentId);
           return status !== 'active' && status !== 'starting';
         })
-        .map(async ca => {
+        .map(async r => {
           try {
-            await this.runtimeHost.start(conversation.id, ca.agent_id);
+            await this.runtimeHost.start(conversation.id, r.agentId);
           } catch (err) {
             this.notifyAgentStartFailureBestEffort(
               conversation,
               message,
-              ca.agent_id,
+              r.agentId,
               err,
             );
             this.logger.warn(
-              { conversationId: conversation.id, agentId: ca.agent_id, err },
+              { conversationId: conversation.id, agentId: r.agentId, err },
               'conversation-message-service: auto-start on message send failed',
             );
           }

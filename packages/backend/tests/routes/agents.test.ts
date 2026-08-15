@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   encodeUserPrincipalHeader,
+  fixedConversationTitle,
   RUNTIME_CATALOG,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
@@ -1335,8 +1336,7 @@ describe('PUT /api/agents/:id/runtime', () => {
     const conversations = new ConversationRepo(t.ctx.db);
     const channel = conversations.insertChannel({
       workspaceId: workspace.id,
-      title: 'switch-target',
-      name: 'switch-target',
+      title: fixedConversationTitle('switch-target'),
     });
     conversations.addAgent(channel.id, agentId);
 
@@ -1429,20 +1429,17 @@ describe('PUT /api/agents/:id/runtime', () => {
       const conversations = new ConversationRepo(t.ctx.db);
       const first = conversations.insertChannel({
         workspaceId: workspace.id,
-        title: 'first visible binding',
-        name: `first-${focusKind ?? 'none'}`,
+        title: fixedConversationTitle(`first-${focusKind ?? 'none'}`),
       });
       const second = conversations.insertChannel({
         workspaceId: workspace.id,
-        title: 'second visible binding',
-        name: `second-${focusKind ?? 'none'}`,
+        title: fixedConversationTitle(`second-${focusKind ?? 'none'}`),
       });
       conversations.addAgent(first.id, agentId);
       conversations.addAgent(second.id, agentId);
       const stale = conversations.insertChannel({
         workspaceId: workspace.id,
-        title: 'stale focus',
-        name: `stale-${focusKind ?? 'none'}`,
+        title: fixedConversationTitle(`stale-${focusKind ?? 'none'}`),
       });
 
       expect(new RuntimeSlotRepo(t.ctx.db).updateCurrentProjection(

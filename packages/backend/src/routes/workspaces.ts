@@ -502,11 +502,10 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     try {
       const result = await ctx.channelService.createChannel({
         workspaceId: id,
+        // #task:2016 — the title IS the address; there is no second field to
+        // choose it with. A conflict with another channel's title is a 409, never
+        // a silent suffix: the title the caller asked for is the one they publish.
         title: parsed.data.title,
-        // #task:2016 — the caller MAY choose the address; omitted means "derive it
-        // from the title with the one shared deriver". A conflict is a 409, never a
-        // silent suffix: the name the caller asked for is the one they will publish.
-        name: parsed.data.name,
         memberAgentIds: parsed.data.member_agent_ids,
         memberUserIds: parsed.data.member_user_ids,
         visibility: parsed.data.visibility,

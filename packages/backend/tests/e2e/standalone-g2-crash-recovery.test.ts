@@ -147,7 +147,10 @@ describe('Standalone G2 — unintentional crash recovery + crashed projection', 
     const now = Date.now();
     const workspaceId = 'ws-g2-b5';
     const agentId = 'agent-g2-b5';
-    const conversationId = 'conv-g2-b5';
+    // Production-shaped (#task:2021 P4-3): a delivery header renders this id as
+    // the stream's absolute `target`, so it must be spellable — 16 base64url
+    // chars, exactly what `conversations.id` is minted as.
+    const conversationId = 'g2b5CrashRecover';
     const expectedSessionId = `g2-b5-session-${now}`;
     const workspacePath = join(harness.silverhandDir, 'workspaces', workspaceId);
     mkdirSync(workspacePath, { recursive: true });
@@ -185,11 +188,19 @@ describe('Standalone G2 — unintentional crash recovery + crashed projection', 
     db.prepare(
       `INSERT INTO conversations
         (id, workspace_id, placement_kind, roster_policy,
-title, status, spawned_by_agent_id, closed_at, close_summary,
+         title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
          pinned_at, created_at, updated_at)
-        VALUES (?, ?, 'workspace', 'open', ?, 'active', NULL, NULL, NULL,
+        VALUES (?, ?, 'workspace', 'open', ?, ?, 'active', NULL, NULL, NULL,
                 NULL, ?, ?)`,
-    ).run(conversationId, workspaceId, 'g2-b5-channel', now, now);
+    ).run(
+      conversationId,
+      workspaceId,
+      'g2-b5-channel',
+      // Its title IS its address (#task:2016); this literal folds to itself.
+      'g2-b5-channel',
+      now,
+      now,
+    );
     db.prepare(
       `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
         VALUES (?, ?, ?)`,

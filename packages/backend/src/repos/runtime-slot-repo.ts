@@ -5,6 +5,7 @@ import type {
   AgentRuntimeEventKind,
   AgentRuntimeEventRow,
   AgentRuntimeSlotRow,
+  AgentSessionScope,
   ConversationAgentStatus,
 } from '@silverhand/shared';
 
@@ -50,6 +51,26 @@ export interface AgentRuntimeSeat {
   generation: number;
   claimedByDaemonInstanceId: string | null;
   cliSessionId: string | null;
+}
+
+/**
+ * WHICH SEAT serves this agent inside this conversation — the scope derivation
+ * itself, beside the type it produces, so a caller that holds an agent and a
+ * coordinate does not restate the rule (#task:2021 P4-5).
+ *
+ * `session_scope` is the discriminant and the ONLY input: an agent-scoped agent
+ * has exactly one seat and the conversation is not part of its identity, so
+ * passing the coordinate is not the same as using it. A caller that resolves this
+ * by hand and forgets the branch reads the WRONG seat for an agent-scoped agent —
+ * a row that does not exist — and then treats "no seat" as "idle".
+ */
+export function runtimeSlotScopeFor(
+  agent: { id: string; session_scope: AgentSessionScope },
+  conversationId: string,
+): RuntimeSlotScope {
+  return agent.session_scope === 'agent'
+    ? { kind: 'agent', agentId: agent.id }
+    : { kind: 'conversation', conversationId, agentId: agent.id };
 }
 
 /** The slot row's identity as a discriminated value: `conversation_id IS NULL`
@@ -144,7 +165,7 @@ export class RuntimeSlotRepo {
 
   /**
    * EVERY SEAT this agent holds — the row set of the slot table for one agent,
-   * unjoined and unfiltered, which is the whole point of the face (@Cindy B3).
+   * unjoined and unfiltered, which is the whole point of the face.
    *
    * Unjoined is the load-bearing part: there is no conversation table here to
    * resolve a coordinate through, so no edit can reintroduce the projection that

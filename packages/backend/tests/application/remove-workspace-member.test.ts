@@ -23,6 +23,7 @@
  * is a non-locking read, a concurrent add/remove commits, and only then does the
  * cascade's transaction open.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -125,7 +126,7 @@ function fixture(cleanups: Array<() => void>): Fixture {
     conversations,
     workspaces,
     channel: title =>
-      conversations.insertChannel({ name: title, workspaceId: workspace.id, title }).id,
+      conversations.insertChannel({ workspaceId: workspace.id, title: fixedConversationTitle(title) }).id,
     messageCount: conversationId => messages.listForConversation(conversationId).length,
   };
 }
@@ -354,9 +355,8 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
     const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
     t.workspaces.insertMembership(foreignWs.id, t.agentId);
     const foreign = t.conversations.insertChannel({
-      name: 'ch-2',
       workspaceId: foreignWs.id,
-      title: 'theirs',
+      title: fixedConversationTitle('theirs'),
     }).id;
     t.conversations.addAgent(foreign, t.agentId);
     const persistence = createSqliteMembershipPersistence(t.db);
@@ -398,9 +398,8 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
     const t = fixture(cleanups);
     const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
     const foreign = t.conversations.insertChannel({
-      name: 'ch-3',
       workspaceId: foreignWs.id,
-      title: 'theirs',
+      title: fixedConversationTitle('theirs'),
     }).id;
     t.conversations.addUser(foreign, OTHER_USER);
     const persistence = createSqliteMembershipPersistence(t.db);
@@ -507,9 +506,8 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
     const mine = t.channel('mine');
     const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
     const foreign = t.conversations.insertChannel({
-      name: 'ch-4',
       workspaceId: foreignWs.id,
-      title: 'theirs',
+      title: fixedConversationTitle('theirs'),
     }).id;
     new UserRepo(t.db).create({ id: NEWCOMER, name: 'newcomer', displayName: 'New' });
     const persistence = createSqliteMembershipPersistence(t.db);

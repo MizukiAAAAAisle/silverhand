@@ -21,7 +21,7 @@
 //     `cc_source_message_id` (partial UNIQUE per inbox) makes a duplicate a
 //     constraint failure rather than a second notification.
 //
-//  3. THE INBOX HAS NO HUMAN PARTICIPANT (§4.2, @Cindy 裁定 1). That deletes the
+//  3. THE INBOX HAS NO HUMAN PARTICIPANT (§4.2). That deletes the
 //     entire `#task:1989` admission block this module used to perform — the
 //     author's conversation edge, the agent's edge, the author's home-workspace
 //     row — along with the `workspace_channels_changed` fan-out and the viewer
@@ -36,16 +36,18 @@
 // performs what cannot be committed: the runtime wake, the WS frames, and the
 // skip log the decision half returned as data.
 //
-// RESIDUAL, stated so it is not mistaken for a bug: an inbox placement has no
-// session cwd until the agent-scoped RuntimeScope lands (#task:2019), so the
-// wake currently DEFERS (`mention_cc.wake_deferred`). Nothing is lost — the
-// delivery row is committed — but the mentioned agent does not read the copy
-// until it next spawns with a scope. The wrap text below says exactly that
-// rather than promising a reply route that does not exist yet.
+// A WAKE FAILURE IS NEVER A LOST MENTION, and there is exactly ONE arm saying so.
+// v71 gave this module a second, typed arm for "the host refused the placement
+// because the inbox has no session cwd"; #task:2019 landed the agent-scoped
+// RuntimeScope, which made that refusal impossible, and #task:2021 P4-5 deleted
+// it rather than keeping it as defensive contract — a failure
+// shape only a test fake can construct reads to the next caller as a supported
+// host semantics to mirror. Any throw from `start` now lands in the generic arm
+// below: the copy and its durable inbox delivery row are already committed, so the
+// next spawn drains them.
 import { formatReferenceToken, inlineCode } from '@silverhand/shared';
 import { systemSubtype } from '@silverhand/shared';
 import type { ConversationDto, MessageDto, Reference } from '@silverhand/shared';
-import { RuntimePlacementUnsupportedError } from '../runtime/agent-runtime-host.js';
 import type {
   AgentMessageDeliveryPort,
   AgentRuntimeStartPort,
@@ -123,7 +125,24 @@ export type MentionCcSkipReason =
   /** The source message carries no author id (legacy rows only). Option A has no
    *  viewer without one, and a guessed viewer would send someone else's mention
    *  notification to whoever happens to be the sole human. */
-  | 'unresolved_author';
+  | 'unresolved_author'
+  /**
+   * The SOURCE conversation is not workspace-placed — a `direct_pair` (a DM).
+   * Reachable since P4-4 opened the write gate for the human endpoint of a DM,
+   * and #task:2021 P4-5 makes such a send actually deliver.
+   *
+   * A SKIP rather than the `throw` this used to be: the copy's wrap text and its
+   * `mention_external` row are both keyed by the source WORKSPACE (name in the
+   * body, id in the notification), so a DM source has no coordinate to write one
+   * with — and throwing rolled the human's committed-and-gated DM send back with a
+   * 500 for the crime of naming a third agent in it. Skipping is not "silently
+   * dropping a mention": the reference still addresses whoever it addresses IN the
+   * DM, and this decision is reported in the CC report and logged after commit.
+   *
+   * DM-sourced CC — a workspace-less wrap plus a notification whose coordinate is
+   * the DM — is a product change with its own read surfaces, filed separately.
+   */
+  | 'source_not_workspace_placed';
 
 export interface MentionCcSkip {
   handle: string;
@@ -170,12 +189,13 @@ export function writeMentionCcCopies(
 
   const sourceWorkspaceId = input.sourceConversation.workspace_id;
   if (sourceWorkspaceId === null) {
-    // Not `requireWorkspacePlacement`'s job to explain this one: the failure is
-    // about WHO can send, not about a surface that lacks a coordinate.
-    throw new Error(
-      `mention cc: source conversation ${input.sourceConversation.id} has no `
-        + 'workspace placement, so its message cannot be user-authored (§4.2)',
-    );
+    // A DM source: no workspace coordinate to name the copy after. Reported per
+    // handle so the post-commit log says which mentions were not copied — see
+    // `source_not_workspace_placed`.
+    for (const handle of handles) {
+      report.skipped.push({ handle, reason: 'source_not_workspace_placed' });
+    }
+    return report;
   }
   const sourceWorkspaceName = tx.workspaces.nameOf(sourceWorkspaceId);
   if (sourceWorkspaceName === null) {
@@ -185,9 +205,6 @@ export function writeMentionCcCopies(
     );
   }
 
-  const sourceMembers = new Set(
-    tx.conversations.listAgents(input.sourceConversation.id).map(ca => ca.agent_id),
-  );
   const copiedTo = new Set<string>();
 
   for (const handle of handles) {
@@ -196,7 +213,12 @@ export function writeMentionCcCopies(
       report.skipped.push({ handle, reason: 'unknown_handle' });
       continue;
     }
-    if (sourceMembers.has(agent.id)) {
+    // PARTICIPATION, not a roster listing (#task:2021 P4-5): the question is
+    // "did this agent already receive the original", which is exactly who the
+    // placement says participates. Identical for the workspace arm — its
+    // participants ARE its roster rows — and it is the only form that stays true
+    // if a non-workspace source ever gains a CC.
+    if (tx.conversations.isAgentParticipant(input.sourceConversation.id, agent.id)) {
       report.skipped.push({ handle, reason: 'already_member', agentId: agent.id });
       continue;
     }
@@ -319,24 +341,6 @@ export async function dispatchMentionCcEffects(
     try {
       await deps.runtimeStart.start(copy.inboxConversationId, copy.agentId);
     } catch (err) {
-      if (err instanceof RuntimePlacementUnsupportedError) {
-        // The known, bounded gap — NOT a delivery failure. The row is committed;
-        // the next spawn with a session scope (#task:2019) drains it.
-        deps.logger.warn(
-          {
-            event: 'mention_cc.wake_deferred',
-            reason: 'runtime_placement_unsupported',
-            agentId: copy.agentId,
-            handle: copy.agentHandle,
-            inboxConversationId: copy.inboxConversationId,
-            wrappedMessageId: copy.wrapped.id,
-            sourceConversationId: report.source.conversationId,
-            sourceMessageId: report.source.messageId,
-          },
-          'mention-cc: copy committed and queued, but the inbox has no runtime scope yet (#task:2019); the agent reads it on its next spawn',
-        );
-        continue;
-      }
       deps.logger.warn(
         {
           event: 'mention_cc.wake_failed',

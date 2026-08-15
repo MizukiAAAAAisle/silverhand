@@ -22,6 +22,7 @@ import type { AgentRepo } from './agent-repo.js';
 import type { AgentCapabilityRepo } from './agent-capability-repo.js';
 import type { AttachmentRepo } from './attachment-repo.js';
 import type { ConversationRepo } from './conversation-repo.js';
+import { createEndpointPrincipalPresence } from './endpoint-principal-presence.js';
 import type { UserRepo } from './user-repo.js';
 import type { WorkspaceRepo } from './workspace-repo.js';
 
@@ -41,6 +42,7 @@ export function createSqliteAuthorizationReads(
 ): AuthorizationReadPort {
   const { workspaces, conversations, agents, users, capabilities, attachments } =
     deps;
+  const endpointPrincipalExists = createEndpointPrincipalPresence({ agents, users });
   return {
     workspace: (workspaceId): AuthorizationWorkspaceFacts | null => {
       const row = workspaces.get(workspaceId);
@@ -79,16 +81,13 @@ export function createSqliteAuthorizationReads(
         endpoint_b_deleted_at: row.endpoint_b_deleted_at,
       };
     },
-    // Liveness by LOOKUP, kind-directed: the endpoint's `_kind` says which
-    // namespace its id belongs to, so asking the wrong table would report a live
-    // principal as gone (and, on the other side, a `human` endpoint could be
-    // satisfied by an agent that happens to share the id). Collapsed to a boolean
-    // like the membership reads above — an ACL must not be able to reach a
+    // Liveness by LOOKUP, kind-directed — composed from the ONE dispatch
+    // (`endpoint-principal-presence.ts`) that the send transaction's scope also
+    // uses, so the request-layer gate and the in-transaction gate cannot answer
+    // "is the other side still there" differently. Collapsed to a boolean like
+    // the membership reads above: an ACL must not be able to reach a
     // deleted-or-not principal's other columns through this port.
-    endpointPrincipalExists: endpoint =>
-      endpoint.kind === 'agent'
-        ? agents.get(endpoint.id) !== null
-        : users.get(endpoint.id) !== null,
+    endpointPrincipalExists,
     isConversationAgent: (conversationId, agentId) =>
       conversations.getAgent(conversationId, agentId) !== null,
     isConversationUser: (conversationId, userId) =>

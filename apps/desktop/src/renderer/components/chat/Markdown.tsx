@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { AtSign, Check, Copy, Hash } from 'lucide-react';
 import { rehypeHighlightTerm } from './rehypeHighlightTerm';
 import type { AgentDto, UserDto } from '@silverhand/shared';
+import { ADDRESSABLE_ID_PATTERN } from '@silverhand/shared';
 import { isAutolink } from '@silverhand/shared/reference-markdown';
 import {
   exceedsRenderBudget,
@@ -814,7 +815,13 @@ function markReferenceAutolink(node: MdastNode, source: string): void {
 // matching a valid-looking prefix inside a longer id-like token.
 //
 // Typed sigil grammar: `#<type>:<value>`. We currently recognize:
-//  - `#conv:<id>`  — 16-char base64url conversation id
+//  - `#conv:<id>`  — a conversation id, whose domain is the ONE constant
+//                    `ADDRESSABLE_ID_PATTERN` (#task:2021 B3). Interpolated
+//                    rather than re-spelled here on purpose: the same token
+//                    has to mean the same thing in a delivery header and in
+//                    prose, so a scanner that were WIDER than the header codec
+//                    would draw a chip for a string no `target=` can carry
+//                    (live address in one read face, dead text in the other).
 //  - `#task:<n>`   — workspace-scoped positive integer task number;
 //                    `[1-9]\d*` rejects zero AND leading zeros so the
 //                    chip never points at a row that can't exist. The
@@ -838,8 +845,14 @@ function markReferenceAutolink(node: MdastNode, source: string): void {
 // `#task:abc` doesn't fall back to matching `#conv` / `#task` as a
 // stray channel reference. A digit-first `#<n>` never collides with the
 // alpha-first channel branch.
-const REF_RE =
-  /(?:#conv:([A-Za-z0-9_-]{16})(?![A-Za-z0-9_-])|#task:([1-9]\d*)(?!\w)|@([a-zA-Z][a-zA-Z0-9_-]*)|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)|#((?:1[1-9]|[2-9]\d|[1-9]\d{2,}))(?!\w))/g;
+const REF_RE = new RegExp(
+  `(?:#conv:(${ADDRESSABLE_ID_PATTERN})(?![A-Za-z0-9_-])`
+  + `|#task:([1-9]\\d*)(?!\\w)`
+  + `|@([a-zA-Z][a-zA-Z0-9_-]*)`
+  + `|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)`
+  + `|#((?:1[1-9]|[2-9]\\d|[1-9]\\d{2,}))(?!\\w))`,
+  'g',
+);
 
 function pushSplit(text: string, out: MdastNode[]): void {
   let last = 0;

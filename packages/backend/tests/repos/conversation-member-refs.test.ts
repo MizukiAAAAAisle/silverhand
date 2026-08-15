@@ -25,6 +25,7 @@
  * decides those messages' `seq`. That contract is `updated_at DESC` and nothing
  * more — ties stay undefined, exactly as before this change.
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type {
@@ -146,7 +147,7 @@ function buildFixture(): Fixture {
   const wsB = workspaces.insert({ name: 'refs-b', description: null }).id;
 
   const channel = (workspaceId: string, title: string): string =>
-    conversations.insertChannel({ name: title, workspaceId, title }).id;
+    conversations.insertChannel({ workspaceId, title: fixedConversationTitle(title) }).id;
   const chA1 = channel(wsA, 'a1');
   const chA2 = channel(wsA, 'a2');
   const chA3 = channel(wsA, 'a3-no-subject');
@@ -262,17 +263,15 @@ describe('#task:1987 membership cascade read shape — cost', () => {
   function grow(f: Fixture, withMember: number, bystanders: number): void {
     for (let i = 0; i < withMember; i += 1) {
       const id = f.conversations.insertChannel({
-        name: `grow-${i}`,
         workspaceId: f.wsA,
-        title: `grow-${i}`,
+        title: fixedConversationTitle(`grow-${i}`),
       }).id;
       f.conversations.addAgent(id, f.subjectAgent);
     }
     for (let i = 0; i < bystanders; i += 1) {
       f.conversations.insertChannel({
-        name: `bystander-${i}`,
         workspaceId: f.wsB,
-        title: `bystander-${i}`,
+        title: fixedConversationTitle(`bystander-${i}`),
       });
     }
   }

@@ -27,6 +27,7 @@
  * where. The write half is called directly only for the two states a user send
  * cannot produce (a legacy authorless row, a workspace-less source).
  */
+import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import type { ConversationDto, MessageDto, Reference } from '@silverhand/shared';
@@ -50,30 +51,26 @@ import type { MentionCcReport } from '../../src/application/mention-cc.js';
 import type { MessageTxScope } from '../../src/services/conversation-message/ports.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
-import { RuntimePlacementUnsupportedError } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 
 /**
- * A runtime host that refuses to start a run in a conversation with no workspace
- * placement — the same rule production applies in
- * `outbound-event-fanout.runtimeStartOptions` (v71 §7.3), and the reason the
- * inbox wake is deferred rather than performed. Mirrored here so the integration
- * cases assert TODAY's end state; a fake that accepted the start would assert a
- * capability that does not exist.
+ * A runtime host that records what it was asked to do and refuses nothing.
+ *
+ * Refusing nothing is the only shape it may have: production wakes an agent in a
+ * workspace-less conversation exactly like any other — `buildRuntimeStartOptions`
+ * emits `workspace: null` with an agent-scoped `runtime_scope` (#task:2019) — so a
+ * fake that rejected such a placement would not assert today's end state but
+ * manufacture a defect, and every deferral the integration cases below observe
+ * would be its own.
  */
 class FakeRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   delivered: Array<{ conversationId: string; agentId: string; messageId: string }> = [];
 
-  constructor(private readonly workspaceOf: (conversationId: string) => string | null) {}
-
   async start(conversationId: string, agentId: string): Promise<void> {
     this.starts.push({ conversationId, agentId });
-    if (this.workspaceOf(conversationId) === null) {
-      throw new RuntimePlacementUnsupportedError(conversationId);
-    }
   }
 
   async deliverMessage(
@@ -121,17 +118,22 @@ function bootstrap() {
   const messages = new MessageRepo(db);
   const notifications = new NotificationRepo(db);
   const events = new ScopeEventBus('test-epoch');
-  const fake = new FakeRuntimeHost(id => conversations.get(id)?.workspace_id ?? null);
+  const fake = new FakeRuntimeHost();
   const logger: BackendLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
   const workspace = workspaces.insert({ name: 'eng', description: null });
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'general',
+    title: fixedConversationTitle('general'),
   });
-  // The author's own membership, written the way production writes it (a route /
-  // ChannelService insert) rather than by the dropped seed trigger.
+  // The author's own participation, written the way production writes it (a route
+  // / ChannelService insert) rather than by the dropped seed trigger. BOTH facts,
+  // because human channel participation is the v25 PAIR — the `conversation_users`
+  // seat AND `workspace_users` membership — and since #task:2021 P4-4 the send's
+  // write gate asks for it INSIDE the transaction. With the seat alone this
+  // fixture's author was less privileged than any real one, and every send here
+  // would be refused.
+  workspaces.addUserMember(workspace.id, 'local');
   conversations.addUser(channel.id, 'local');
 
   // `insider` receives the original message; `outsider` is the mention target and
@@ -257,7 +259,11 @@ describe('mention CC v71 — the copy, in the send transaction', () => {
       });
 
       const result = await send(t, `${canonical('cc-outsider')} can you look at the parser?`);
-      await waitFor(() => logEvents(t.logger.warn).includes('mention_cc.wake_deferred'));
+      // The wake now HAPPENS (see `FakeRuntimeHost`): wait for the copy's own live
+      // dispatch into the inbox, which is the last post-commit effect.
+      await waitFor(() =>
+        t.fake.delivered.some(d => d.conversationId === t.outsiderInbox.id),
+      );
       unsubInbox();
       unsubViewer();
       unsubWorkspace();
@@ -668,20 +674,99 @@ describe('mention CC v71 — the write half on states a user send cannot produce
     }
   });
 
-  it('refuses a workspace-less source: a human is never a participant of one (§4.2)', () => {
+  it('skips a workspace-less source instead of throwing: the copy has no coordinate, the send is still valid', () => {
     const t = bootstrap();
     try {
       const message = authoredMessage(t, `${canonical('cc-outsider')} from an inbox`);
-      // The insider's own inbox as the SOURCE. The invariant is that no
-      // user-authored message can originate there; if that ever becomes false,
-      // this must be redesigned rather than defaulted to some workspace.
-      expect(() =>
-        runWrite(t, {
-          message,
-          sourceConversation: t.conversations.get(t.insiderInbox.id)!,
-        }),
-      ).toThrow(/has no workspace placement/);
+      // The insider's own inbox as the SOURCE — still a state a user send cannot
+      // produce, which is why it is called directly here. What changed in
+      // #task:2021 P4-5 is the ANSWER: this used to throw, and throwing from inside
+      // the send transaction rolls back a message the write gate had already
+      // admitted. A source with no workspace has no coordinate to name the copy
+      // after (the wrap text and the `mention_external` row are both keyed by it),
+      // so the CC is declined AS DATA and the send commits.
+      const report = runWrite(t, {
+        message,
+        sourceConversation: t.conversations.get(t.insiderInbox.id)!,
+      });
+
+      expect(report.copies).toEqual([]);
+      expect(report.skipped).toEqual([
+        { handle: 'cc-outsider', reason: 'source_not_workspace_placed' },
+      ]);
+      // A skip, not a partial write: no copy, no queued delivery, no notification.
       expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * The workspace-less source is REACHABLE (#task:2021: P4-4 opened the write gate
+ * for a DM's human endpoint, P4-5 makes such a send deliver). So the case above
+ * gets an integration twin: the exact human send that used to 500 AFTER passing
+ * every gate — a durable-looking failure on the human's screen for the crime of
+ * naming a third agent in a DM.
+ */
+describe('mention CC v71 — a DM source declines the CC without failing the send', () => {
+  it('commits the DM message, writes no copy, and reports the skip after commit', async () => {
+    const t = bootstrap();
+    try {
+      // The human endpoint of a DM with `insider`, built through the aggregate's
+      // only constructor.
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'human', id: 'local' },
+        { kind: 'agent', id: t.insider.id },
+        1_700_000_000_000,
+      ).conversation.id;
+      expect(t.conversations.get(dm)!.workspace_id).toBeNull();
+
+      const result = await t.service.sendMessage({
+        conversationId: dm,
+        actor: { kind: 'user', userId: 'local' },
+        content: `${canonical('cc-outsider')} take a look`,
+      });
+      await waitFor(() => logEvents(t.logger.info).includes('mention_cc.skip'));
+
+      // The send is intact: one message in the DM, content unchanged.
+      expect(t.messages.listForConversation(dm).map(m => m.id)).toEqual([
+        result.committed.message.id,
+      ]);
+      expect(result.committed.message.content).toBe(
+        `${canonical('cc-outsider')} take a look`,
+      );
+      // …and the CC wrote nothing anywhere.
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      // No notification of ANY kind: not a mention CC (declined as data), and not
+      // an `agent_start_failed` either — the DM endpoint's wake is an ORDINARY
+      // one, because a workspace-less placement has a session scope (#task:2019).
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      // The ONE warn this send produces is the author's own report (#task:2021
+      // P4-5-b): the CC declined and `cc-outsider` is not an endpoint of this DM,
+      // so the reference reached nobody — which is exactly what the human is told,
+      // while the message itself stands.
+      expect(logEvents(t.logger.warn)).toEqual(['send.references_unresolved']);
+      expect(result.unresolvedReferences).toEqual([
+        { kind: 'agent', handle: 'cc-outsider' },
+      ]);
+      // The decision is REPORTED, not silent: an operator asking "why did my
+      // mention not arrive" has the reason and the handle.
+      expect(
+        logCalls(t.logger.info)
+          .filter(fields => fields.event === 'mention_cc.skip')
+          .map(fields => ({ handle: fields.handle, reason: fields.reason })),
+      ).toEqual([{ handle: 'cc-outsider', reason: 'source_not_workspace_placed' }]);
+      // The other endpoint still receives the message itself — the CC declining is
+      // not the delivery path (#task:2021 P4-5 layer ①).
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.insider.id && d.messageId === result.committed.message.id,
+        ),
+      );
     } finally {
       t.cleanup();
     }
@@ -726,34 +811,21 @@ describe('mention CC v71 — the post-commit half is the only best-effort part',
     };
   };
 
-  it('defers the wake — not "delivery failed" — when the inbox has no session scope (#task:2019)', async () => {
-    const h = deps(async (conversationId: string) => {
-      throw new RuntimePlacementUnsupportedError(conversationId);
-    });
-    await dispatchMentionCcEffects(report(), h.deps);
-
-    // The bounded, known gap: the durable row is committed, so the next spawn
-    // with a scope drains it. Nothing may be logged as a delivery failure, and
-    // no live dispatch may be attempted against a runtime that never started.
-    expect(logCalls(h.logger.warn)).toHaveLength(1);
-    expect(logCalls(h.logger.warn)[0]).toMatchObject({
-      event: 'mention_cc.wake_deferred',
-      reason: 'runtime_placement_unsupported',
-      agentId: 'agent-1',
-      inboxConversationId: 'inbox-1',
-      wrappedMessageId: 'copy-1',
-      sourceConversationId: 'channel-1',
-      sourceMessageId: 'source-1',
-    });
-    expect(h.delivered).toEqual([]);
-  });
-
-  it('keeps the durable row when the wake fails for any other reason', async () => {
+  it('keeps the durable row when the wake fails — one arm, for every reason', async () => {
     const h = deps(async () => {
       throw new Error('spawn refused');
     });
     await dispatchMentionCcEffects(report(), h.deps);
 
+    // ONE arm on purpose. v71 also had a typed
+    // `runtime_placement_unsupported` deferral here, and its only `throw` site in
+    // the whole repo was a fake in THIS file — a failure shape no production host
+    // can produce, asserted by manufacturing it. #task:2019 made the refusal
+    // impossible and P4-5 deleted the class, the branch and that case
+    // rather than keeping them as defensive contract, because a caller reading
+    // them would take the shape for supported host semantics. What survives is the
+    // claim that actually holds for every refusal: the copy and its durable inbox
+    // row are already committed, so a failed wake is a delayed wake.
     expect(logEvents(h.logger.warn)).toEqual(['mention_cc.wake_failed']);
     expect(h.delivered).toEqual([]);
   });

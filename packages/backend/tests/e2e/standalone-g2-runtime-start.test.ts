@@ -144,7 +144,10 @@ describe('Standalone G2 — runtime_start dispatch + session_init projection', (
     const now = Date.now();
     const workspaceId = 'ws-g2-b2';
     const agentId = 'agent-g2-b2';
-    const conversationId = 'conv-g2-b2';
+    // Production-shaped (#task:2021 P4-3): a delivery header renders this id as
+    // the stream's absolute `target`, so it must be spellable — 16 base64url
+    // chars, exactly what `conversations.id` is minted as.
+    const conversationId = 'g2b2RuntimeStart';
     const expectedSessionId = `g2-b2-session-${now}`;
     // Supervisor sets `cwd: spawnCtx.workspacePath` on the spawn —
     // an inexistent dir causes ENOENT before the binary runs and
@@ -189,11 +192,19 @@ describe('Standalone G2 — runtime_start dispatch + session_init projection', (
     db.prepare(
       `INSERT INTO conversations
         (id, workspace_id, placement_kind, roster_policy,
-title, status, spawned_by_agent_id, closed_at, close_summary,
+         title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
          pinned_at, created_at, updated_at)
-        VALUES (?, ?, 'workspace', 'open', ?, 'active', NULL, NULL, NULL,
+        VALUES (?, ?, 'workspace', 'open', ?, ?, 'active', NULL, NULL, NULL,
                 NULL, ?, ?)`,
-    ).run(conversationId, workspaceId, 'g2-b2-channel', now, now);
+    ).run(
+      conversationId,
+      workspaceId,
+      'g2-b2-channel',
+      // Its title IS its address (#task:2016); this literal folds to itself.
+      'g2-b2-channel',
+      now,
+      now,
+    );
     db.prepare(
       `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
         VALUES (?, ?, ?)`,

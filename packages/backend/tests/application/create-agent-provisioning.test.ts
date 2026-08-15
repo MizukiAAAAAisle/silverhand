@@ -17,7 +17,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { systemSubtype } from '@silverhand/shared';
+import { fixedConversationTitle, systemSubtype } from '@silverhand/shared';
 import type {
   OutboundServerCommandParams,
 } from '@silverhand/host';
@@ -246,9 +246,8 @@ describe('createAgent provisioning failure (application integration)', () => {
           if (outcome.status !== 'transitioned') throw new Error('setup lost');
           const home = tx.workspaces.insertAgentHome({ agent: outcome.row });
           const dm = tx.conversations.insertDmChannel({
-            name: 'ch-1',
             workspaceId: home.id,
-            title: 'Onboarding',
+            title: fixedConversationTitle('Onboarding'),
             agentId,
           });
           tx.conversations.addAgent(dm.id, agentId);

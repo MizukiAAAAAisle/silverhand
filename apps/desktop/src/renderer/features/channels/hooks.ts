@@ -30,6 +30,7 @@ import type {
   ConversationMessagesDto,
   MessageDto,
   MessageEventPayload,
+  MessageSendAck,
   ReplyBadgeSummary,
   MessageSeq,
   ThreadFollowerStateDto,
@@ -1024,7 +1025,13 @@ export function useSendMessage(
         input,
         threadRootId,
       });
-      const res = await api<MessageEventPayload>(
+      // `MessageSendAck`, not `MessageEventPayload`: the ACK is a superset of
+      // the broadcast payload and additionally carries this sender's own
+      // `unresolved_references` — the references in the body that addressed
+      // nobody (#task:2021 P4-5-b). Typed here so the client HOLDS the answer;
+      // the apply seam below consumes only the committed fields, and whether the
+      // composer renders it is a separate call.
+      const res = await api<MessageSendAck>(
         path,
         { method: 'POST', body: JSON.stringify(body) },
       );

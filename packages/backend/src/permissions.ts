@@ -7,11 +7,11 @@
 // only field any of them reads is that port (W6's Gate 8 keeps every OTHER
 // production file out of it — it is this module's private source, not an
 // ambient repository).
-import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, ConversationActor, ConversationEndpointCoordinate, WorkspaceRole } from '@silverhand/shared';
+import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, ConversationActor, WorkspaceRole } from '@silverhand/shared';
 import {
   conversationScope,
   conversationSideScope,
-  directPairEndpointsOf as sharedDirectPairEndpointsOf,
+  directPairIsReadOnlyForSurvivor,
   resolveParticipation,
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
@@ -367,36 +367,6 @@ function actorOf(principal: UserPrincipal | AgentPrincipal): ConversationActor {
 }
 
 /**
- * The two endpoints of a `direct_pair` row, non-null by the placement arc CHECK.
- * A thin wrapper over shared's accessor so both call sites below read the
- * columns through ONE narrowing, and so the impossible half-pair fails loud
- * instead of degrading into "no endpoints" — which on the write gate would fail
- * OPEN.
- */
-function directPairEndpointsOf(
-  conversation: AuthorizationConversationFacts,
-): readonly ConversationEndpointCoordinate[] {
-  return sharedDirectPairEndpointsOf(conversation) ?? [];
-}
-
-/**
- * Is this endpoint's principal GONE? The lookup is the authority and the stamp
- * is a shortcut, ORed in rather than trusted: `endpoint_*_deleted_at` is written
- * by a `BEFORE DELETE` trigger today, but a delete path that ever failed to
- * stamp must not thereby hand the survivor a live write gate. The lookup alone
- * suffices for correctness — endpoint coordinates are validated at birth and
- * immutable, so a miss can only mean "deleted" — and the stamp alone answers
- * without a query in the common case.
- */
-function isEndpointGone(
-  ctx: BackendContext,
-  endpoint: ConversationEndpointCoordinate,
-): boolean {
-  if (endpoint.deletedAt !== null) return true;
-  return !ctx.authorizationReads.endpointPrincipalExists(endpoint);
-}
-
-/**
  * The PUBLIC-aware READ gate. Distinct from
  * `canViewConversation`, which stays the strict membership/interaction gate
  * (post, react, save, follow, read-state, observe, member ops). This predicate
@@ -490,14 +460,15 @@ export function canJoinPublicChannel(
 /**
  * The WRITE gate. Membership (or endpoint participation) plus one narrowing that
  * only `direct_pair` has: a DM whose OTHER endpoint's principal is gone is
- * READ-ONLY for the survivor. There is no `readonly` column and no second state
- * machine — the DM has not changed status, archived, or closed; it simply has
- * nobody to deliver to, which is a fact about the endpoint, so the gate derives
- * it from the endpoint every time it is asked.
+ * READ-ONLY for the survivor.
  *
- * Both endpoints are tested, not just "the other one": a principal whose own
- * record is gone cannot be the caller, so testing both costs nothing and keeps
- * the rule stated as a property of the conversation rather than of the caller.
+ * Both halves delegate: participation to {@link canViewConversation} (the one
+ * placement gate), the narrowing to shared's `directPairIsReadOnlyForSurvivor`.
+ * The narrowing is NOT stated here because the SEND TRANSACTION asks the same
+ * question again at commit time (#task:2021 P4-4): this predicate is a
+ * request-layer shaping read, not a capability token, and two copies of the rule
+ * would let the two answers disagree — the request 403s while the transaction
+ * commits, or worse the other way round.
  */
 export function canPostToConversation(
   ctx: BackendContext,
@@ -507,8 +478,8 @@ export function canPostToConversation(
   if (!canViewConversation(ctx, principal, conversationId)) return false;
   const conversation = ctx.authorizationReads.conversation(conversationId);
   if (!conversation) return false;
-  return !directPairEndpointsOf(conversation).some(endpoint =>
-    isEndpointGone(ctx, endpoint),
+  return !directPairIsReadOnlyForSurvivor(conversation, endpoint =>
+    ctx.authorizationReads.endpointPrincipalExists(endpoint),
   );
 }
 

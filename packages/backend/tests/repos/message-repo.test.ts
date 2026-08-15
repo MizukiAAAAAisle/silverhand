@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import {
@@ -19,9 +20,8 @@ function bootstrapConversation() {
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 't',
+    title: fixedConversationTitle('t'),
   });
   conversations.addAgent(channel.id, agent.id);
   return { db, workspace, channel, agentId: agent.id, conversations };
@@ -109,9 +109,8 @@ describe('MessageRepo', () => {
   it('seq counters are independent per conversation', () => {
     const { db, workspace, channel, conversations } = bootstrapConversation();
     const channel2 = conversations.insertChannel({
-      name: 'ch-2',
       workspaceId: workspace.id,
-      title: 't2',
+      title: fixedConversationTitle('t2'),
     });
     const repo = new MessageRepo(db);
 
@@ -277,9 +276,8 @@ describe('MessageRepo', () => {
   it('listWindowForConversation throws when around_message_id is not in this conversation', () => {
     const { db, workspace, channel, conversations } = bootstrapConversation();
     const channel2 = conversations.insertChannel({
-      name: 'ch-3',
       workspaceId: workspace.id,
-      title: 't2',
+      title: fixedConversationTitle('t2'),
     });
     const repo = new MessageRepo(db);
     const own = repo.insertForConversation({
@@ -675,9 +673,8 @@ describe('v43 derived-table root-valid triggers', () => {
   function twoChannels() {
     const { db, workspace, channel, conversations } = bootstrapConversation();
     const channel2 = conversations.insertChannel({
-      name: 'ch-4',
       workspaceId: workspace.id,
-      title: 't2',
+      title: fixedConversationTitle('t2'),
     });
     const repo = new MessageRepo(db);
     const root = repo.insertForConversation({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SearchQueryInputSchema } from '@silverhand/shared';
+import { fixedConversationTitle, SearchQueryInputSchema } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
@@ -37,9 +37,8 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, ren.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 't',
+    title: fixedConversationTitle('t'),
   });
   conversations.addAgent(channel.id, del.id);
   conversations.addAgent(channel.id, ren.id);

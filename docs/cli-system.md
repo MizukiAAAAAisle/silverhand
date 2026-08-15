@@ -572,11 +572,31 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
 (see the maintenance checklist).
 
 ```
-[msg_id=<id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root_message_id> time=<iso>]
+[msg_id=<id> sender=@<handle>|system type=agent|human|system target=#conv:<conversation_id>[/thread:<root_message_id>] time=<iso>]
 ```
 
-- `target=channel` is the main line; `target=thread:<root_message_id>` is a
-  reply inside that message's cluster.
+- `target` is the **absolute** address of the stream the row belongs to
+  (#task:2021 P4-3), rendered by the one codec
+  (`packages/shared/src/delivery-target.ts`): `#conv:<conversation_id>` on the
+  main line, with a `/thread:<root_message_id>` suffix inside that message's
+  reply cluster. It is derived from the ROW: the coordinate travels with the
+  message, and no caller — ambient or per-batch — has authority over it. Today
+  the claim is per stream (`claimPending(conversationId, agentId)`), so a batch
+  has exactly one origin; the row-wise derivation is what keeps that from being
+  load-bearing, since agent-scoped drain is what makes a multi-origin batch
+  reachable and a per-batch parameter would then mislabel every row of it
+  without erroring. Being absolute the token is viewer-independent; it replaced
+  the relative token `channel`, which only named whichever conversation the
+  reader assumed.
+- **The header's grammar is not yet the `--target` flag's grammar.** P4-3
+  changed only what is EMITTED and TAUGHT. The write flag still takes
+  `channel|thread:<root_message_id>` and the read flag
+  `self|conversation:<id>|thread:<root_message_id>`, so an agent reads the
+  token's PARTS (the root id for a cluster reply, the bare conversation id for
+  `--route-conversation-id`) rather than pasting the whole token. Canonical
+  acceptance — one strict codec on every `--target`, with `channel` and
+  `conversation:<id>` retired — is P4-4, and it is a human-visible flag change
+  reviewed on its own. Do not teach verbatim reuse before that lands.
 - **Task notice suffix.** When the delivered row is a task **system
   event** (task created, claimed, status-changed, or **edited**), the header
   gains a trailing ` task=#<number> status=<status>` **inside the brackets**

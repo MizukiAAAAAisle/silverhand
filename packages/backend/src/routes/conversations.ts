@@ -30,6 +30,7 @@ import {
   messageContentByteLength,
   messageContentExceedsLimit,
 } from '@silverhand/shared';
+import type { MessageSendAck } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -680,19 +681,17 @@ export function createConversationMessagingApp(
     }
   });
 
-  // Update a top-level channel's title OR visibility OR name (EXACTLY ONE per
-  // request — the schema rejects more than one and neither). All three mutations
-  // share the workspace `admin` gate (agents fail it, so `public` stays
-  // human-only) and the same error mapping; the service owns each write + its
-  // post-commit broadcast. Splitting the dispatch here (not a combined service
-  // call) keeps each mutation atomic — there is no half-committed
-  // title+visibility state, and no request in which a display rename half-happens
-  // alongside an address change.
+  // Update a top-level channel's title OR visibility (EXACTLY ONE per request —
+  // the schema rejects both and neither). Both mutations share the workspace
+  // `admin` gate (agents fail it, so `public` stays human-only) and the same
+  // error mapping; the service owns each write + its post-commit broadcast.
+  // Splitting the dispatch here (not a combined service call) keeps each mutation
+  // atomic — there is no half-committed title+visibility state.
   //
-  // `name` is a DIFFERENT KIND of change from `title` (#task:2016): it retires an
-  // address permanently. Keeping it a third arm of the same exactly-one schema is
-  // what makes that visible at the protocol level rather than hidden behind a
-  // field that looks like another rename.
+  // There is ONE rename door (#task:2016): the title IS the address, so there is
+  // no second field to move a channel's coordinate independently of the text a
+  // person reads. A rename releases the old title immediately, which the service
+  // announces in-channel.
   app.patch(apiPaths.conversationChannel(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
@@ -708,22 +707,20 @@ export function createConversationMessagingApp(
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     try {
-      const result = parsed.data.visibility !== undefined
+      const { title, visibility } = parsed.data;
+      const result = visibility !== undefined
         ? await ctx.channelService.setChannelVisibility({
             channelId: id,
-            visibility: parsed.data.visibility,
+            visibility,
             actor: principal,
-          })
-        : parsed.data.name !== undefined
-        ? await ctx.channelService.setChannelName({
-            channelId: id,
-            name: parsed.data.name,
           })
         : await ctx.channelService.renameChannel({
             channelId: id,
-            // `title` is present whenever `visibility` and `name` are absent
-            // (schema exactly-one refinement).
-            title: parsed.data.title as string,
+            // `title` is present whenever `visibility` is absent (the schema's
+            // exactly-one refinement), which the compiler cannot see through
+            // `.refine()`. Nothing is forged: this value came out of
+            // `ChannelTitleSchema`, so it is a canonical pair or it is absent.
+            title: title!,
           });
       return c.json({ channel: result.channel });
     } catch (err) {
@@ -995,7 +992,27 @@ export function createConversationMessagingApp(
       // frame carries. The renderer runs one idempotent apply seam over both
       // the ACK and the WS echo, so the self-sender's root reply block converges
       // immediately without depending on WS echo timing (#task:1749).
-      return c.json(result.committed, 201);
+      //
+      // Plus ONE sender-only sibling: which of this body's references addressed
+      // nobody (#task:2021 P4-5-b). A `MessageSendAck` is a superset of the
+      // broadcast payload, never a different shape — the field sits OUTSIDE
+      // `committed` because the WS frame is read by the whole conversation, and
+      // omitted when empty because it is an answer, not a status line. Humans
+      // get it for the same reason agents do: the actor who wrote a name that
+      // landed nowhere is the only one who can fix it, and an operator log is
+      // not feedback to them.
+      //
+      // Destructured, not length-checked: the wire type says "present ⇒ at least
+      // one", and pulling the head out is the proof of that, so the omit-when-
+      // empty rule and the type agree by construction.
+      const [firstUnresolved, ...restUnresolved] = result.unresolvedReferences;
+      const ack: MessageSendAck = {
+        ...result.committed,
+        ...(firstUnresolved
+          ? { unresolved_references: [firstUnresolved, ...restUnresolved] }
+          : {}),
+      };
+      return c.json(ack, 201);
     } catch (err) {
       const mapped = conversationMessageServiceErrorResponse(c, err);
       if (mapped) return mapped;

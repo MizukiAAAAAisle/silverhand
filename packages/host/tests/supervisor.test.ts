@@ -5413,6 +5413,96 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
+  it('forwards the sender-only unresolved references verbatim, and drops a field it cannot read WITH a named warn (#task:2021 P4-5-b)', async () => {
+    const warnRecords: Record<string, unknown>[] = [];
+    const logger: DaemonLogger = {
+      ...silentLogger(),
+      warn: obj => warnRecords.push(obj as Record<string, unknown>),
+    };
+    const { supervisor } = makeSupervisor({ logger });
+    // Three backend answers, in order: a well-formed report, no report at all,
+    // and a report the daemon must refuse to interpret.
+    const responses: Array<Record<string, unknown>> = [
+      { unresolved_references: [{ kind: 'agent', handle: 'nosuchagent' }] },
+      {},
+      // Malformed on purpose (a `reason` the contract forbids, plus a bad kind):
+      // a version skew must not reach the agent as a half-understood answer.
+      { unresolved_references: [{ kind: 'robot', handle: 'x', reason: 'unknown' }] },
+    ];
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const extra = responses[call] ?? {};
+        call += 1;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${call}`,
+            message_seq: 50 + call,
+            thread_root_id: null,
+            ...extra,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    const mismatches = (): Record<string, unknown>[] =>
+      warnRecords.filter(
+        record => record['action'] === 'send_unresolved_references_shape_mismatch',
+      );
+    try {
+      await supervisor.start(baseStartParams);
+      const send = (content: string) =>
+        supervisor.agentMessageSend({ conversation_id: 'c1', agent_id: 'a1', content });
+
+      // FORWARDED, never derived: the daemon holds no participation authority, so
+      // the token it emits is byte-identical to the one the backend answered with.
+      expect(await send('<silverhand://agent/nosuchagent> hi')).toMatchObject({
+        ok: true,
+        unresolved_references: [{ kind: 'agent', handle: 'nosuchagent' }],
+      });
+      // Absent stays absent — the daemon never fabricates the empty case.
+      expect(await send('nothing addressed')).not.toHaveProperty(
+        'unresolved_references',
+      );
+      // Neither readable answer is a shape mismatch: an absent field is the
+      // CONTRACT's quiet case, so warning on it would train everyone to ignore
+      // the warn that matters.
+      expect(mismatches()).toEqual([]);
+
+      // Unreadable is DROPPED, and the send still succeeds: an unparsable
+      // diagnostic must not fail a message that the backend committed.
+      const skewed = await send('<silverhand://agent/x> hi');
+      expect(skewed).toMatchObject({ ok: true, message_id: 'm3' });
+      expect(skewed).not.toHaveProperty('unresolved_references');
+      // …but it does NOT evaporate: exactly one named warn, so backend/daemon
+      // shape drift is distinguishable from "every reference landed".
+      const mismatch = mismatches();
+      expect(mismatch).toHaveLength(1);
+      expect(mismatch[0]).toMatchObject({
+        kind: 'process',
+        conversationId: 'c1',
+        agent_id: 'a1',
+      });
+      // Issue SHAPE only (code + path). The offending body is untrusted input:
+      // no handle, no `reason`, nothing from the payload reaches the log.
+      expect(mismatch[0]!['issues']).toEqual([
+        { code: 'invalid_enum_value', path: '0.kind' },
+        { code: 'unrecognized_keys', path: '0' },
+      ]);
+      expect(JSON.stringify(mismatch[0])).not.toContain('robot');
+      // `unrecognized_keys` names the offending key in zod's own issue object;
+      // mapping to code+path is what keeps it out of the log.
+      expect(JSON.stringify(mismatch[0])).not.toContain('reason');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('defaults a bare send to the channel main line across mixed and observe-only wakes', async () => {
     const { supervisor, events } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
@@ -7214,8 +7304,8 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     async mode => {
       const h = makeDriven(mode);
       const presentations = [
-        { body: '[msg_id=mA sender=system type=system target=channel time=2026-01-01T00:00:00+00:00]\nA', instruction: 'system' as const },
-        { body: '[msg_id=mB sender=system type=system target=channel time=2026-01-01T00:00:01+00:00]\nB', instruction: 'system' as const },
+        { body: '[msg_id=mA sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:00+00:00]\nA', instruction: 'system' as const },
+        { body: '[msg_id=mB sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:01+00:00]\nB', instruction: 'system' as const },
       ];
       const canonical = composeRuntimeDeliveryPresentation(
         presentations,

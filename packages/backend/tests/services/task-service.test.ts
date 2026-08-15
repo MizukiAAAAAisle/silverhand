@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readTaskSystemMetadata, type CreateTasksResult } from '@silverhand/shared';
+import {
+  fixedConversationTitle,
+  readTaskSystemMetadata,
+  type CreateTasksResult,
+} from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -91,9 +95,8 @@ function bootstrap(
   workspaces.insertMembership(workspace.id, alice.id);
   workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
-    name: 'ch-1',
     workspaceId: workspace.id,
-    title: 'main',
+    title: fixedConversationTitle('main'),
   });
   conversations.addAgent(channel.id, alice.id);
   conversations.addAgent(channel.id, bob.id);
@@ -229,9 +232,8 @@ describe('TaskService.createTasks', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-2',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       t.conversations.addAgent(other.id, t.alice.id);
       const otherMsg = t.messages.insertForConversation({
@@ -434,9 +436,8 @@ describe('TaskService.claimTask — agent actor', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-3',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       t.conversations.addAgent(other.id, t.alice.id);
       // create task in `other`
@@ -739,9 +740,8 @@ describe('TaskService.unclaimTask', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-4',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       t.conversations.addAgent(other.id, t.alice.id);
       // Alice creates AND claims in `other`.
@@ -972,9 +972,8 @@ describe('TaskService.updateStatus', () => {
     const t = bootstrap();
     try {
       const other = t.conversations.insertChannel({
-        name: 'ch-5',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       t.conversations.addAgent(other.id, t.alice.id);
       await t.service.createTasks({
@@ -1130,9 +1129,8 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
-        name: 'ch-6',
         workspaceId: ws2.id,
-        title: 'ch2',
+        title: fixedConversationTitle('ch2'),
       });
       t.conversations.addAgent(ch2.id, t.alice.id);
       await createTask(t, t.alice.id, 'task1');
@@ -1219,9 +1217,8 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
-        name: 'ch-7',
         workspaceId: ws2.id,
-        title: 'ch2',
+        title: fixedConversationTitle('ch2'),
       });
       t.conversations.addAgent(ch2.id, t.alice.id);
       await createTask(t, t.alice.id, 'task1');
@@ -1250,9 +1247,8 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
-        name: 'ch-8',
         workspaceId: ws2.id,
-        title: 'ch2',
+        title: fixedConversationTitle('ch2'),
       });
       t.conversations.addAgent(ch2.id, t.alice.id);
       await createTask(t, t.alice.id, 'in-channel');
@@ -1282,9 +1278,8 @@ describe('TaskService.list / getTaskDetail', () => {
     const t = bootstrap();
     try {
       const sibling = t.conversations.insertChannel({
-        name: 'ch-9',
         workspaceId: t.workspace.id,
-        title: 'sibling',
+        title: fixedConversationTitle('sibling'),
       });
       t.conversations.addAgent(sibling.id, t.alice.id);
       await createTask(t, t.alice.id, 'main-task');
@@ -1313,9 +1308,8 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
-        name: 'ch-10',
         workspaceId: ws2.id,
-        title: 'ch2',
+        title: fixedConversationTitle('ch2'),
       });
       t.conversations.addAgent(ch2.id, t.alice.id);
       await t.service.createTasks({
@@ -1342,9 +1336,8 @@ describe('TaskService.list / getTaskDetail', () => {
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
       const ch2 = t.conversations.insertChannel({
-        name: 'ch-11',
         workspaceId: ws2.id,
-        title: 'ch2',
+        title: fixedConversationTitle('ch2'),
       });
       t.conversations.addAgent(ch2.id, t.alice.id);
       const created = await t.service.createTasks({
@@ -1377,9 +1370,8 @@ describe('TaskService agent-actor validation', () => {
       // sole service-level gate (the route holds the create-specific narrow
       // authorization). So this SUCCEEDS and the row belongs to the destination.
       const other = t.conversations.insertChannel({
-        name: 'ch-12',
         workspaceId: t.workspace.id,
-        title: 'other',
+        title: fixedConversationTitle('other'),
       });
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
@@ -1980,9 +1972,8 @@ function bootstrapTwoWorkspaces() {
     description: null,
   });
   const ws2Channel = t.conversations.insertChannel({
-    name: 'ch-13',
     workspaceId: ws2.id,
-    title: 'platform-main',
+    title: fixedConversationTitle('platform-main'),
   });
   t.conversations.addAgent(ws2Channel.id, t.bob.id);
   t.workspaces.insertMembership(ws2.id, t.bob.id);
@@ -2567,9 +2558,8 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
       // channel in the SAME workspace is not close enough — same-workspace is
       // not sufficient, only same-conversation is.
       const sibling = t.conversations.insertChannel({
-        name: 'ch-14',
         workspaceId: t.workspace.id,
-        title: 'sibling',
+        title: fixedConversationTitle('sibling'),
       });
       t.conversations.addAgent(sibling.id, t.alice.id);
       const siblingSrc = t.messages.insertForConversation({
@@ -2687,9 +2677,8 @@ describe('TaskService.editTask', () => {
       });
       t.workspaces.insertMembership(otherWs.id, t.alice.id);
       const otherChannel = t.conversations.insertChannel({
-        name: 'ch-15',
         workspaceId: otherWs.id,
-        title: 'other-main',
+        title: fixedConversationTitle('other-main'),
       });
       t.conversations.addAgent(otherChannel.id, t.alice.id);
       // Task lives in otherWs (task_number 1 in that workspace).

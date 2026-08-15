@@ -576,6 +576,47 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     expect(out.thread_root_id).toBe('m-root');
   });
 
+  it('prints the sender-only unresolved references on stdout, and only when the backend reported some (#task:2021 P4-5-b)', async () => {
+    captured.length = 0;
+    nextSendResponse = {
+      status: 200,
+      body: {
+        message_id: 'm-missed',
+        message_seq: 13,
+        thread_root_id: null,
+        unresolved_references: [{ kind: 'agent', handle: 'nosuchagent' }],
+      },
+    };
+    const missed = await runSend({
+      argv: [],
+      stdin: '<silverhand://agent/nosuchagent> please look',
+    });
+    // Exit 0: the message was sent. An unresolved reference is FEEDBACK, and an
+    // agent that treated it as a failed send would resend a message everyone
+    // already received.
+    expect(missed.code, missed.stderr).toBe(0);
+    const missedOut = JSON.parse(missed.stdout) as {
+      message_id: string;
+      unresolved_references?: unknown;
+    };
+    expect(missedOut.message_id).toBe('m-missed');
+    // Verbatim, and with no reason: the author reads back its own token.
+    expect(missedOut.unresolved_references).toEqual([
+      { kind: 'agent', handle: 'nosuchagent' },
+    ]);
+
+    nextSendResponse = {
+      status: 200,
+      body: { message_id: 'm-fine', message_seq: 14, thread_root_id: null },
+    };
+    const landed = await runSend({ argv: [], stdin: 'nothing addressed' });
+    expect(landed.code, landed.stderr).toBe(0);
+    // ABSENT on an ordinary send — the CLI adds no empty array of its own.
+    expect(Object.keys(JSON.parse(landed.stdout) as object)).not.toContain(
+      'unresolved_references',
+    );
+  });
+
   it('keeps --reply-to as a hidden compatibility alias for the public thread target', async () => {
     captured.length = 0;
     const r = await runSend({

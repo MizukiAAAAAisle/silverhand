@@ -1,17 +1,18 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { agentParticipates, WORKSPACE_PLACED } from './conversation-placement-sql.js';
 import {
-  CURRENT_NAME,
-  CURRENT_NAME_UNALIASED,
-} from './conversation-name-sql.js';
-import { ConversationNameRepo } from './conversation-name-repo.js';
+  agentParticipates,
+  PARTICIPANT_AGENT_IDS_SQL,
+  userParticipates,
+  WORKSPACE_PLACED,
+} from './conversation-placement-sql.js';
 import {
   AGENT_INBOX_TITLE,
   canonicalEndpointOrder,
   requireWorkspacePlacement,
 } from '@silverhand/shared';
 import type {
+  CanonicalConversationTitle,
   ChannelConversationDto,
   ConversationAgentDto,
   ConversationAgentRow,
@@ -88,8 +89,8 @@ export interface ConversationIdentity {
   /** Whether the participant set can be CHANGED at all, which is a different
    *  question from who is in it — and the one `kind` cannot answer, being a
    *  generated projection of this column plus history. Carried on identity
-   *  because the ACL asks it (`canAddConversationMember`, @Cindy M1 on
-   *  #task:2020) before it asks anything about the caller. */
+   *  because the ACL asks it (`canAddConversationMember`, #task:2020) before it
+   *  asks anything about the caller. */
   roster_policy: ConversationRosterPolicy;
   workspace_id: string | null;
   inbox_agent_id: string | null;
@@ -142,10 +143,39 @@ export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.wo
     WHERE m.user_id = ? AND c.workspace_id = ?
     ORDER BY c.updated_at DESC`;
 
+/**
+ * The send path's RECIPIENT enumeration: the LIVE agent participants of one
+ * conversation, in a stable order. Exported because its ACCESS PATH is a contract
+ * (#task:2021 P4-5) — `tests/read-model/participation-enumeration.test.ts`
+ * EXPLAINs this exact text, following #1967's rule that a plan test must run the
+ * production statement rather than a simplified copy of it.
+ *
+ * Two layers, and the split is the point: the placement produces CANDIDATE ids
+ * ({@link PARTICIPANT_AGENT_IDS_SQL}, the one participation authority in its
+ * set-shaped reading) and this statement adds what DELIVERY needs on top —
+ * liveness, as a primary-key probe of `agents`, and an order. See
+ * {@link ConversationRepo.listParticipantAgentIds} for why liveness is not part of
+ * participation itself.
+ *
+ * `ORDER BY a.created_at ASC, a.id ASC` is the pre-existing recipient order,
+ * unchanged. It sorts the PARTICIPANT SET — bounded by the conversation, a handful
+ * of rows — so the temp b-tree it costs is not a function of how many agents exist;
+ * the plan test pins that distinction rather than banning sorts.
+ */
+export const LIVE_PARTICIPANT_AGENT_IDS_SQL = `SELECT a.id AS agent_id
+     FROM (${PARTICIPANT_AGENT_IDS_SQL}) p
+     JOIN agents a ON a.id = p.agent_id
+    ORDER BY a.created_at ASC, a.id ASC`;
+
 // `pinned_at` is a vestigial column (#task:1209): pin/star became per-viewer
 // state in `user_sort_entry`, so the shared column is no longer read or written
 // and must never reach the wire. These mappers strip it from the row before it
 // becomes a DTO — the type drops it too, but stripping kills the runtime leak.
+//
+// `title_key` (v72, #task:2016) is stripped for a third reason: it is not a
+// second field, it is a DERIVED SPELLING of `title`. The wire carries the display
+// title and the client folds nothing; shipping the key would invite a comparison
+// that only the one canonicalizer may make.
 //
 // `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1),
 // `inbox_agent_id` (v71), the six `endpoint_*` columns (v73) and the derived
@@ -173,6 +203,7 @@ function stripInternalColumns(row: ConversationRow): Omit<
   | 'endpoint_a_deleted_at'
   | 'endpoint_b_deleted_at'
   | 'pair_key'
+  | 'title_key'
 > {
   const {
     pinned_at: _pinnedAt,
@@ -186,6 +217,7 @@ function stripInternalColumns(row: ConversationRow): Omit<
     endpoint_a_deleted_at: _endpointADeletedAt,
     endpoint_b_deleted_at: _endpointBDeletedAt,
     pair_key: _pairKey,
+    title_key: _titleKey,
     ...rest
   } = row;
   return rest;
@@ -232,71 +264,33 @@ function rowToDto(row: ConversationRow): ConversationDto {
 }
 
 /**
- * A conversation row PLUS its current name (#task:2016) — the input every
- * CHANNEL-LIKE mapper takes, because a channel-like DTO carries the allocated
- * address and a bare `conversations` row cannot answer for it.
- *
- * The column is a separate type rather than part of `ConversationRow` on
- * purpose: it is not a column of that table, it is a projection of the workspace
- * namespace ({@link currentNameProjection}), and only the queries that actually
- * join it may produce this shape. `null` is reachable — see the DTO field's
- * docstring in `api/conversation.ts`.
+ * A channel-like DTO carries NO separate address field (#task:2016): the address
+ * IS `title`, so these mappers take the plain row every other mapper takes and
+ * there is nothing left to join or to split off.
  */
-type NamedConversationRow = ConversationRow & { current_name: string | null };
-
-/** Split the projected name off the row, so it cannot ride into the DTO as an
- *  undeclared `current_name` field (a spread is not excess-property-checked —
- *  the same reason `stripInternalColumns` exists). */
-function splitCurrentName(row: NamedConversationRow): {
-  conversation: ConversationRow;
-  name: string | null;
-} {
-  const { current_name, ...conversation } = row;
-  return { conversation, name: current_name };
-}
-
 function assertChannelLike(
-  row: NamedConversationRow,
+  row: ConversationRow,
 ): ChannelConversationDto | DmChannelDto {
   if (row.kind === 'dm_channel') return rowToDmChannel(row);
   return rowToChannel(row);
 }
 
-function rowToChannel(row: NamedConversationRow): ChannelConversationDto {
-  const { conversation, name } = splitCurrentName(row);
-  if (conversation.kind !== 'channel') {
+function rowToChannel(row: ConversationRow): ChannelConversationDto {
+  if (row.kind !== 'channel') {
     throw new Error('conversation is not a channel');
   }
-  return { ...stripInternalColumns(conversation), kind: 'channel', name };
+  return { ...stripInternalColumns(row), kind: 'channel' };
 }
 
-function rowToDmChannel(row: NamedConversationRow): DmChannelDto {
-  const { conversation, name } = splitCurrentName(row);
-  if (conversation.kind !== 'dm_channel') {
+function rowToDmChannel(row: ConversationRow): DmChannelDto {
+  if (row.kind !== 'dm_channel') {
     throw new Error('conversation is not a dm_channel');
   }
-  return { ...stripInternalColumns(conversation), kind: 'dm_channel', name };
+  return { ...stripInternalColumns(row), kind: 'dm_channel' };
 }
 
 export class ConversationRepo {
-  /**
-   * The workspace NAME NAMESPACE, composed rather than injected (#task:2016).
-   *
-   * A workspace-placed conversation and its ADDRESS are mutually prerequisite —
-   * neither is a legal state without the other — which makes them ONE aggregate
-   * with the conversation as its root. So the allocation is not a second thing a
-   * caller must remember to do: the channel-like insert faces below take a
-   * `name` and write both rows, and the only way to reach a workspace placement
-   * without an address is to go around this class. `conversation_names` still has
-   * exactly one WRITER ({@link ConversationNameRepo}); this is the root composing
-   * it, on the same connection and therefore inside whatever transaction the
-   * caller opened.
-   */
-  private readonly names: ConversationNameRepo;
-
-  constructor(private readonly db: Db) {
-    this.names = new ConversationNameRepo(db);
-  }
+  constructor(private readonly db: Db) {}
 
   list(): ConversationDto[] {
     const rows = this.db
@@ -461,8 +455,8 @@ export class ConversationRepo {
 
   getChannel(id: string): ChannelConversationDto | null {
     const row = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT *, ${CURRENT_NAME_UNALIASED} AS current_name
+      .prepare<[string], ConversationRow>(
+        `SELECT *
            FROM conversations
           WHERE id = ? AND kind = 'channel'`,
       )
@@ -472,8 +466,8 @@ export class ConversationRepo {
 
   getDmChannel(id: string): DmChannelDto | null {
     const row = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT *, ${CURRENT_NAME_UNALIASED} AS current_name
+      .prepare<[string], ConversationRow>(
+        `SELECT *
            FROM conversations
           WHERE id = ? AND kind = 'dm_channel'`,
       )
@@ -483,8 +477,8 @@ export class ConversationRepo {
 
   getChannelLike(id: string): ChannelConversationDto | DmChannelDto | null {
     const row = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT *, ${CURRENT_NAME_UNALIASED} AS current_name
+      .prepare<[string], ConversationRow>(
+        `SELECT *
            FROM conversations
           WHERE id = ? AND kind IN ('channel', 'dm_channel')`,
       )
@@ -500,8 +494,8 @@ export class ConversationRepo {
    *  `listActiveChannelsForViewer`. */
   listActiveChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
     const rows = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT *, ${CURRENT_NAME_UNALIASED} AS current_name
+      .prepare<[string], ConversationRow>(
+        `SELECT *
            FROM conversations
           WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
           ORDER BY created_at ASC`,
@@ -531,9 +525,8 @@ export class ConversationRepo {
     viewerUserId: string,
   ): WorkspaceChannelListItem[] {
     const rows = this.db
-      .prepare<[string, string, string], NamedConversationRow & { is_member: number }>(
+      .prepare<[string, string, string], ConversationRow & { is_member: number }>(
         `SELECT conversations.*,
-                ${CURRENT_NAME_UNALIASED} AS current_name,
                 EXISTS (
                   SELECT 1 FROM conversation_users cu
                    WHERE cu.conversation_id = conversations.id AND cu.user_id = ?
@@ -580,10 +573,9 @@ export class ConversationRepo {
     viewerUserId: string,
   ): WorkspaceChannelListItem[] {
     const rows = this.db
-      .prepare<[string, string], NamedConversationRow & { is_member: number }>(
+      .prepare<[string, string], ConversationRow & { is_member: number }>(
         `SELECT * FROM (
            SELECT conversations.*,
-                  ${CURRENT_NAME_UNALIASED} AS current_name,
                   EXISTS (
                     SELECT 1 FROM conversation_users cu
                      WHERE cu.conversation_id = conversations.id
@@ -608,8 +600,8 @@ export class ConversationRepo {
    *  rename announce) and shouldn't silently skip archived channels. */
   listAllChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
     const rows = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT *, ${CURRENT_NAME_UNALIASED} AS current_name
+      .prepare<[string], ConversationRow>(
+        `SELECT *
            FROM conversations
           WHERE workspace_id = ? AND kind = 'channel'
           ORDER BY created_at ASC`,
@@ -655,13 +647,12 @@ export class ConversationRepo {
       args.push(opts.forUserId);
     }
     const rows = this.db
-      .prepare<typeof args, NamedConversationRow & {
+      .prepare<typeof args, ConversationRow & {
         workspace_name: string;
         workspace_archived_at: number | null;
       }>(
         `SELECT
            c.*,
-           ${CURRENT_NAME} AS current_name,
            w.name AS workspace_name,
            w.archived_at AS workspace_archived_at
          FROM conversations c
@@ -700,8 +691,8 @@ export class ConversationRepo {
    *  new placement leaks IN rather than dropping out. */
   listDmChannels(): DmChannelDto[] {
     const rows = this.db
-      .prepare<[], NamedConversationRow>(
-        `SELECT c.*, ${CURRENT_NAME} AS current_name
+      .prepare<[], ConversationRow>(
+        `SELECT c.*
            FROM conversations c
           WHERE ${WORKSPACE_PLACED}
             AND c.kind = 'dm_channel'
@@ -713,13 +704,13 @@ export class ConversationRepo {
 
   listDmChannelForWorkspace(workspaceId: string): DmChannelDto | null {
     const row = this.db
-      .prepare<[string], NamedConversationRow>(
+      .prepare<[string], ConversationRow>(
         // Placement: the caller's UNIT IS A WORKSPACE, and `c.workspace_id = ?`
         // is itself the domain filter — a placement without a workspace has a
         // NULL there, which never equals a bound id. The `JOIN workspaces` only
         // resolves the owner agent for the title ordering; it excludes nothing
         // the WHERE clause had not already excluded.
-        `SELECT c.*, ${CURRENT_NAME} AS current_name
+        `SELECT c.*
            FROM conversations c
            JOIN workspaces w ON w.id = c.workspace_id
            LEFT JOIN agents owner ON owner.id = w.owner_agent_id
@@ -823,8 +814,8 @@ export class ConversationRepo {
                    END,
                    c.created_at ASC`;
     const rows = this.db
-      .prepare<typeof args, NamedConversationRow>(
-        `SELECT c.*, ${CURRENT_NAME} AS current_name
+      .prepare<typeof args, ConversationRow>(
+        `SELECT c.*
            FROM conversations c
            JOIN workspaces w ON w.id = c.workspace_id
            LEFT JOIN agents owner ON owner.id = w.owner_agent_id
@@ -849,8 +840,8 @@ export class ConversationRepo {
    */
   findDmChannelForAgent(agentId: string): DmChannelDto | null {
     const row = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT c.*, ${CURRENT_NAME} AS current_name
+      .prepare<[string], ConversationRow>(
+        `SELECT c.*
            FROM conversations c
            JOIN conversation_agents ca ON ca.conversation_id = c.id
           WHERE c.kind = 'dm_channel'
@@ -864,8 +855,8 @@ export class ConversationRepo {
 
   listDmChannelsForAgent(agentId: string): DmChannelDto[] {
     const rows = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT c.*, ${CURRENT_NAME} AS current_name
+      .prepare<[string], ConversationRow>(
+        `SELECT c.*
            FROM conversations c
            JOIN conversation_agents ca ON ca.conversation_id = c.id
           WHERE c.kind = 'dm_channel'
@@ -895,63 +886,56 @@ export class ConversationRepo {
   }
 
   /**
-   * Create a regular channel AND allocate its address, as one act (#task:2016).
+   * Create a regular channel. Its TITLE IS its address (#task:2016).
    *
-   * `name` is REQUIRED — the whole reason this face writes both rows. It is the
-   * caller's business to decide the name (an explicit request, or
-   * `slugifyConversationTitle` of the title) and to have refused a conflict with
-   * a typed error first ({@link ConversationNameRepo.isAllocated}); the primary
-   * key here is the backstop that aborts the transaction if that check was wrong
-   * or raced. `assigned_at` is the conversation's own `created_at`, so a channel
-   * created now and one the v72 backfill addressed are indistinguishable.
+   * There is no second name to allocate and no second row to write: the display
+   * title and the key the workspace-unique index compares arrive as ONE
+   * {@link CanonicalConversationTitle}, so this face cannot store a title under
+   * a key that is not its fold. A caller that already refused a conflict with a
+   * typed error can still race; the partial UNIQUE index is the backstop that
+   * aborts the transaction, and the service maps that to `title_taken`.
    */
   insertChannel(params: {
     workspaceId: string;
-    title: string;
-    name: string;
+    title: CanonicalConversationTitle;
     spawnedByAgentId?: string | null;
     /** Channel visibility; defaults to 'private'. */
     visibility?: ConversationVisibility;
   }): ChannelConversationDto {
-    const row = this.insert({
-      placement: { kind: 'workspace', workspaceId: params.workspaceId },
-      rosterPolicy: 'open',
-      title: params.title,
-      spawnedByAgentId: params.spawnedByAgentId ?? null,
-      visibility: params.visibility ?? 'private',
-    });
-    this.names.allocate({
-      workspaceId: params.workspaceId,
-      name: params.name,
-      conversationId: row.id,
-      assignedAt: row.created_at,
-    });
-    return rowToChannel({ ...row, current_name: params.name });
+    return rowToChannel(
+      this.insert({
+        placement: {
+          kind: 'workspace',
+          workspaceId: params.workspaceId,
+          title: params.title,
+        },
+        rosterPolicy: 'open',
+        spawnedByAgentId: params.spawnedByAgentId ?? null,
+        visibility: params.visibility ?? 'private',
+      }),
+    );
   }
 
-  /** The DM twin of {@link insertChannel} — same namespace, same rules. A DM
-   *  channel is `placement_kind='workspace'` today, so it holds an address like
-   *  any other workspace placement; when P3 moves direct conversations to their
-   *  own placement they leave the namespace and this face goes with them. */
+  /** The DM twin of {@link insertChannel} — same address space, same rules. A DM
+   *  channel is `placement_kind='workspace'` today, so it holds a title address
+   *  like any other workspace placement; when P3 moves direct conversations onto
+   *  their own placement they stop holding one, and this face goes with them. */
   insertDmChannel(params: {
     workspaceId: string;
-    title: string;
-    name: string;
+    title: CanonicalConversationTitle;
     agentId?: string | null;
   }): DmChannelDto {
-    const row = this.insert({
-      placement: { kind: 'workspace', workspaceId: params.workspaceId },
-      rosterPolicy: 'fixed',
-      title: params.title,
-      spawnedByAgentId: null,
-    });
-    this.names.allocate({
-      workspaceId: params.workspaceId,
-      name: params.name,
-      conversationId: row.id,
-      assignedAt: row.created_at,
-    });
-    return rowToDmChannel({ ...row, current_name: params.name });
+    return rowToDmChannel(
+      this.insert({
+        placement: {
+          kind: 'workspace',
+          workspaceId: params.workspaceId,
+          title: params.title,
+        },
+        rosterPolicy: 'fixed',
+        spawnedByAgentId: null,
+      }),
+    );
   }
 
   /**
@@ -988,7 +972,8 @@ export class ConversationRepo {
       // The arc's CHECK requires `fixed`: an inbox roster is not open to
       // placement at all, so "open" would not merely be wrong, it is refused.
       rosterPolicy: 'fixed',
-      title: AGENT_INBOX_TITLE,
+      // No title argument: an inbox's label is {@link AGENT_INBOX_TITLE} and its
+      // `title_key` is NULL, both settled by the arc rather than by this caller.
       spawnedByAgentId: null,
       createdAt,
     });
@@ -1012,25 +997,89 @@ export class ConversationRepo {
     return row ? assertChannelLike(row) : null;
   }
 
-  /** Rename a channel-like conversation (`channel | dm_channel`). Gated to
-   *  those kinds in the WHERE clause so a thread id silently matches
-   *  nothing and returns null — the service layer turns that into a typed
-   *  `not_renamable` / `not_found` error. */
+  /**
+   * Is `key` held by a workspace-placed conversation of `workspaceId`
+   * (#task:2016)?
+   *
+   * The predicate is the INDEX's, spelled the same way: `placement_kind =
+   * 'workspace'` is not redundant with `workspace_id = ?` for the planner (it is
+   * what makes this read the partial unique index), and it is the same clause the
+   * insert must satisfy — so this answers the conflict the write would actually
+   * hit, not a similar one.
+   *
+   * `exceptConversationId` is how a rename asks "taken by SOMEONE ELSE": a
+   * conversation re-titling to a form of its own current title (`general` →
+   * `General`) keeps the address it already holds, and that must succeed.
+   *
+   * Authoritative only under a write lock. The caller (a UnitOfWork scope) owns
+   * that obligation; nothing outside a transaction may treat this as more than a
+   * hint, which is why no read model exposes it.
+   */
+  isTitleKeyTaken(
+    workspaceId: string,
+    key: string,
+    exceptConversationId?: string,
+  ): boolean {
+    const row = this.db
+      .prepare<[string, string, string], { one: number }>(
+        `SELECT 1 AS one
+           FROM conversations
+          WHERE placement_kind = 'workspace'
+            AND workspace_id = ?
+            AND title_key = ?
+            AND id <> ?
+          LIMIT 1`,
+      )
+      .get(workspaceId, key, exceptConversationId ?? '');
+    return row !== undefined;
+  }
+
+  /**
+   * Rename a channel-like conversation — which MOVES ITS ADDRESS (#task:2016).
+   *
+   * `title` and `title_key` are written by the same statement from the same
+   * {@link CanonicalConversationTitle}, so there is no instant at which the row
+   * shows one name and answers to another, and no caller that can update one
+   * without the other. The old address is released by this statement and nothing
+   * remembers it: the next rename may take it, including back again.
+   *
+   * Gated to those kinds in the WHERE clause so a thread id silently matches
+   * nothing and returns null — the service layer turns that into a typed
+   * `not_renamable` / `not_found` error. A UNIQUE violation is NOT swallowed
+   * here: it propagates, and the service maps it to `title_taken`.
+   *
+   * It reports the address it RELEASED alongside the row it wrote, because it is
+   * the only thing that ever holds both: nothing remembers the old key
+   * afterwards, and the observation face that replaced retired-title ownership
+   * (`observability/title-address-log.ts`) is the sole record that key ever
+   * belonged here. `releasedKey` is the STORED value, not `canonicalize(old
+   * title)` — a stored key that has drifted from its title is a detectable
+   * runtime state rather than an impossible one, and the address that was
+   * actually occupied is whatever the column said.
+   */
   updateTitle(
     id: string,
-    title: string,
-  ): ChannelConversationDto | DmChannelDto | null {
+    title: CanonicalConversationTitle,
+  ): {
+    channel: ChannelConversationDto | DmChannelDto;
+    releasedKey: string | null;
+  } | null {
+    const before = this.getRaw(id);
     const now = Date.now();
     const result = this.db
       .prepare(
         `UPDATE conversations
-         SET title = ?, updated_at = ?
+         SET title = ?, title_key = ?, updated_at = ?
          WHERE id = ? AND kind IN ('channel', 'dm_channel')`,
       )
-      .run(title, now, id);
+      .run(title.title, title.key, now, id);
     if (result.changes === 0) return null;
     const row = this.getRaw(id);
-    return row ? assertChannelLike(row) : null;
+    if (!row) return null;
+    return {
+      channel: assertChannelLike(row),
+      releasedKey: before?.title_key ?? null,
+    };
   }
 
   /** Set a channel's visibility (`private | public`). Gated to `kind='channel'`
@@ -1067,32 +1116,20 @@ export class ConversationRepo {
   }
 
   /**
-   * Delete a conversation AND retire its current name in one transaction
-   * (#task:2016 §scope-5).
+   * Delete a conversation. One statement, no companion bookkeeping (#task:2016).
    *
-   * The retirement is not optional bookkeeping: `conversation_names.conversation_id`
-   * carries NO foreign key on purpose (it is a historical coordinate that must
-   * outlive the row it points at), so deleting the conversation alone would leave
-   * a `retired_at IS NULL` allocation forever pointing at a vanished id. That
-   * name would then be permanently unusable — `isAllocated` refuses it and
-   * `resolve` answers `conversation_gone` — with no operation able to free it.
+   * Deleting the row RELEASES its title, because the address lives in that row:
+   * there is no allocation table left to retire, and therefore no half-state in
+   * which a vanished conversation still holds a name — the class of leak the
+   * retired-slug design needed a transaction to avoid.
    *
-   * Atomic because a half-state is exactly the fault this scope forbids: a
-   * committed row-delete with an un-retired name is the "leaked address" case the
-   * injection test pins.
-   *
-   * NOTE (stated rather than silently assumed): today no production path calls
-   * this face. The only production code that removes conversation rows is
-   * workspace deletion, where `conversation_names.workspace_id`'s
-   * `ON DELETE CASCADE` retires the whole namespace with the workspace. This face
-   * exists for tests and is kept correct so a future per-conversation delete
-   * entrance inherits the invariant instead of re-deriving it.
+   * NOTE (stated rather than silently assumed): no production path calls this
+   * face today. The only production code that removes conversation rows is
+   * workspace deletion, whose `workspace_id` cascade drops the whole workspace's
+   * conversations and with them their addresses.
    */
   delete(id: string): void {
-    this.db.transaction(() => {
-      this.names.retireCurrent(id, Date.now());
-      this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
-    })();
+    this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
   }
 
   addAgent(conversationId: string, agentId: string): ConversationAgentDto {
@@ -1173,6 +1210,67 @@ export class ConversationRepo {
       )
       .get(conversationId, ...params);
     return row !== undefined;
+  }
+
+  /**
+   * PARTICIPATION for a HUMAN — the same question as
+   * {@link isAgentParticipant}, asked of the other principal kind, and answered
+   * by the same authority (`userParticipates`, the SQL face of §4.2). One
+   * predicate per kind rather than one polymorphic one: the arms differ (a human
+   * channel seat is two facts, an inbox has no human arm at all), and a shared
+   * signature would have to take a tagged principal and branch inside the SQL.
+   *
+   * Its first caller is the send's write gate, which asks participation of every
+   * actor kind INSIDE the transaction (#task:2021 P4-4) — before that
+   * the human answer was only ever computed at the request layer, so a person
+   * removed from a channel could still win the race to write into it.
+   */
+  isUserParticipant(conversationId: string, userId: string): boolean {
+    const { sql, params } = userParticipates('c', userId);
+    const row = this.db
+      .prepare<string[], { ok: number }>(
+        `SELECT 1 AS ok FROM conversations c WHERE c.id = ? AND ${sql}`,
+      )
+      .get(conversationId, ...params);
+    return row !== undefined;
+  }
+
+  /**
+   * The conversation's AGENT PARTICIPANTS, as ids and nothing else — the
+   * recipient enumeration of the send path (#task:2021 P4-5).
+   *
+   * Why not {@link listAgents}: that returns `conversation_agents` rows, so on a
+   * `direct_pair` or an `agent_inbox` — rosterless by construction (§4.2) — it
+   * returns the empty set, and a message committed into a DM was delivered to
+   * NOBODY. The participants are named by the placement, so the enumeration is the
+   * placement's own set-shaped text ({@link PARTICIPANT_AGENT_IDS_SQL}) rather
+   * than a second query with an arm per placement.
+   *
+   * TWO CONJUNCTS, and the second is not decoration (#task:2021 P4-5):
+   * participation deliberately ignores `endpoint_*_deleted_at` so a survivor
+   * keeps reading its own DM, while a DELIVERY target must also be a LIVE
+   * principal — `JOIN agents a` is that conjunct, and it is what keeps a deleted
+   * endpoint out of the fan-out without weakening participation for the reader.
+   *
+   * The join is also the ACCESS PATH: the placement produces the
+   * candidate ids and `agents` is probed by primary key, so cost tracks the
+   * conversation's own size. The predicate reading of the same rule would have to
+   * offer `agents` as the candidate set — a full scan of every agent in the
+   * installation, once per message — which is what this shape replaced and what
+   * the EXPLAIN falsifier in `tests/read-model/participation-enumeration.test.ts`
+   * forbids coming back.
+   *
+   * IDS ONLY, deliberately. The callers (delivery, auto-start) need a principal
+   * identity; the membership DTO they used to take carries `joined_at` plus the
+   * runtime seat columns, which a DM participant does not have at all — and
+   * fabricating a row for one would put a membership fact into a placement that
+   * has none.
+   */
+  listParticipantAgentIds(conversationId: string): string[] {
+    return this.db
+      .prepare<{ conv: string }, { agent_id: string }>(LIVE_PARTICIPANT_AGENT_IDS_SQL)
+      .all({ conv: conversationId })
+      .map(r => r.agent_id);
   }
 
   // ── Human (user) membership — `conversation_users` (v25) ─────────
@@ -1259,14 +1357,25 @@ export class ConversationRepo {
    * failure standing in for a type error.
    */
   private insert(params: {
+    /**
+     * The placement CARRIES the title address (#task:2016), because holding one
+     * is a property of the placement and not of a conversation: a workspace
+     * placement must supply the canonical pair, an inbox has no address to give.
+     * That makes the arc CHECK (`title_key IS NOT NULL` exactly on the workspace
+     * arc) a fact of this type too, so the impossible combination cannot be
+     * spelled here and then be refused by SQLite at runtime.
+     */
     placement:
-      | { kind: 'workspace'; workspaceId: string }
+      | {
+          kind: 'workspace';
+          workspaceId: string;
+          title: CanonicalConversationTitle;
+        }
       | { kind: 'agent_inbox'; agentId: string };
     /** The roster axis (v69). `kind` is NOT passed and NOT written: the DB
      *  derives it from `roster_policy` as a generated column, so this layer must
      *  not carry a mirrored derivation. */
     rosterPolicy: ConversationRosterPolicy;
-    title: string;
     spawnedByAgentId: string | null;
     /** Defaults to the DB column default ('private') when
      *  omitted. Only an open roster may be 'public' (the DB CHECK enforces it). */
@@ -1281,13 +1390,20 @@ export class ConversationRepo {
     // no arc may mint a shape of its own.
     const id = newId();
     const now = params.createdAt ?? Date.now();
+    // An inbox's title is a fixed label rather than an address: it is the same
+    // string for every agent, it is never renamed, and `title_key` stays NULL so
+    // it occupies nothing in any workspace's namespace.
+    const { title, titleKey } =
+      params.placement.kind === 'workspace'
+        ? { title: params.placement.title.title, titleKey: params.placement.title.key }
+        : { title: AGENT_INBOX_TITLE, titleKey: null };
     this.db
       .prepare(
         `INSERT INTO conversations
          (id, workspace_id, inbox_agent_id, placement_kind, roster_policy, title,
-          status, spawned_by_agent_id, closed_at, close_summary,
+          title_key, status, spawned_by_agent_id, closed_at, close_summary,
           created_at, updated_at, visibility)
-         VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1295,7 +1411,8 @@ export class ConversationRepo {
         params.placement.kind === 'agent_inbox' ? params.placement.agentId : null,
         params.placement.kind,
         params.rosterPolicy,
-        params.title,
+        title,
+        titleKey,
         params.spawnedByAgentId,
         now,
         now,
@@ -1308,24 +1425,14 @@ export class ConversationRepo {
     return row;
   }
 
-  /**
-   * Re-read a conversation WITH its current name, for the three single-statement
-   * UPDATE faces above.
-   *
-   * Named rather than raw: all three return a channel-like DTO, and that DTO
-   * carries the address. Reading the row without the projection and letting the
-   * mapper fill `null` would make an ordinary archive or title change LOOK like
-   * it had dropped the channel's address on the wire — the failure the ticket's
-   * "changing `title` must not move the target" falsifier is about.
-   */
-  private getRaw(id: string): NamedConversationRow | null {
-    const row = this.db
-      .prepare<[string], NamedConversationRow>(
-        `SELECT *, ${CURRENT_NAME_UNALIASED} AS current_name
-           FROM conversations WHERE id = ?`,
-      )
-      .get(id);
-    return row ?? null;
+  /** Re-read a conversation for the three single-statement UPDATE faces above,
+   *  each of which returns a DTO built from the row it just wrote. */
+  private getRaw(id: string): ConversationRow | null {
+    return (
+      this.db
+        .prepare<[string], ConversationRow>('SELECT * FROM conversations WHERE id = ?')
+        .get(id) ?? null
+    );
   }
 }
 

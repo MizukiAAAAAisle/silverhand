@@ -53,6 +53,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fixedConversationTitle } from '@silverhand/shared';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -283,18 +284,21 @@ describe('D4.c C3 — workspace route preflights (standalone guard lift)', () =>
     // preflight must also cover; a raw INSERT gives us the row.
     const dmId = `cross-host-dm-${Date.now()}`;
     const now = Date.now();
+    // Its title is its ADDRESS (#task:2016), keyed by the one canonicalizer.
+    const dmTitle = fixedConversationTitle('dm under workspace');
     t.ctx.db
       .prepare(
         `INSERT INTO conversations
           (id, workspace_id, placement_kind, roster_policy,
-title, status, spawned_by_agent_id, closed_at, close_summary,
+           title, title_key, status, spawned_by_agent_id, closed_at, close_summary,
            pinned_at, created_at, updated_at)
-         VALUES (?, ?, 'workspace', 'fixed', ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, 'workspace', 'fixed', ?, ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
       )
       .run(
         dmId,
         ws.workspace.id,
-        'dm under workspace',
+        dmTitle.title,
+        dmTitle.key,
         now,
         now,
       );

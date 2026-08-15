@@ -7,6 +7,7 @@ import {
   createLogLevelControl,
   DatabaseMigrationError,
   resetAdminPassword,
+  scanTitleAddresses,
   type CategorizedLoggers,
   type FileLogger,
 } from '@silverhand/backend';
@@ -54,16 +55,14 @@ export async function runAdminCommand(
 
   let loggers: CategorizedLoggers | null = null;
   let emailForAudit: string | null = null;
+  let opForAudit = 'reset-password';
   try {
     const parsed = parseAdminCommand(argv);
     if (parsed.kind === 'help') {
       stdout.write(adminUsage());
       return 0;
     }
-    if (parsed.kind !== 'reset-password') {
-      throw new AdminCommandError('usage', adminUsage());
-    }
-    emailForAudit = parsed.email;
+    opForAudit = parsed.kind;
 
     const config = resolveStandaloneAdminEnv(env);
     loggers = createCategorizedLoggers({
@@ -74,6 +73,23 @@ export async function runAdminCommand(
       // runtime log level is warn/error.
       logControl: createLogLevelControl('info'),
     });
+
+    if (parsed.kind === 'scan-title-addresses') {
+      // #task:2016 — read-only, and the ONLY admin command that can run against
+      // a database the server would refuse to open: its whole purpose is to be
+      // usable BEFORE the migration it protects. A non-zero exit means "there is
+      // something to fix", so a pre-upgrade script can gate on it; it is not an
+      // error, which is why the report goes to stdout and nothing is written to
+      // stderr.
+      const scan = scanTitleAddresses({
+        dbPath: resolveServerDataPaths(config.dataDir.value).database,
+        logger: loggers.cli,
+      });
+      stdout.write(`${scan.description}\n`);
+      return scan.report.defects.length === 0 ? 0 : 1;
+    }
+
+    emailForAudit = parsed.email;
 
     const password = parsed.passwordFromFile
       ? await readPasswordFile(parsed.passwordFromFile)
@@ -103,6 +119,7 @@ export async function runAdminCommand(
   } catch (err) {
     const mapped = mapAdminCommandError(err);
     logAdminFailure(loggers?.cli ?? null, {
+      op: opForAudit,
       email: emailForAudit,
       code: mapped.code,
     });
@@ -115,6 +132,7 @@ export async function runAdminCommand(
 
 type ParsedAdminCommand =
   | { kind: 'help' }
+  | { kind: 'scan-title-addresses' }
   | {
       kind: 'reset-password';
       email: string;
@@ -128,6 +146,16 @@ function parseAdminCommand(argv: string[]): ParsedAdminCommand {
   }
   if (!subcommand) {
     throw new AdminCommandError('usage', adminUsage());
+  }
+  if (subcommand === 'scan-title-addresses') {
+    // No flags: the command's answer is a property of the database, and every
+    // knob an operator could turn (which rows, which defect classes) would be a
+    // way to be told a cleaner story than the truth.
+    const [unexpected] = rest;
+    if (unexpected !== undefined) {
+      throw new AdminCommandError('usage', `unknown argument: ${unexpected}`);
+    }
+    return { kind: 'scan-title-addresses' };
   }
   if (subcommand !== 'reset-password') {
     throw new AdminCommandError('usage', adminUsage());
@@ -317,17 +345,17 @@ function resolveAdminValue<T>(
 
 function logAdminFailure(
   logger: FileLogger | null,
-  failure: { email: string | null; code: string },
+  failure: { op: string; email: string | null; code: string },
 ): void {
   logger?.warn(
     {
-      admin_op: 'reset-password',
+      admin_op: failure.op,
       user_email: failure.email,
       success: false,
       code: failure.code,
       ts: Date.now(),
     },
-    'admin reset-password failed',
+    `admin ${failure.op} failed`,
   );
 }
 
@@ -382,10 +410,13 @@ function adminUsage(): string {
   return [
     'Usage:',
     '  silverhand-server admin reset-password --email <email> [--password-from-file <path>]',
+    '  silverhand-server admin scan-title-addresses',
     '',
     'Notes:',
     '  --password is intentionally unsupported.',
     '  Without --password-from-file, the command reads a masked TTY prompt.',
+    '  scan-title-addresses reads the database without migrating it, so it also',
+    '    works before an upgrade; it exits 1 when it reports any defect.',
     '',
   ].join('\n');
 }

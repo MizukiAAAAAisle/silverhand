@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
+import { directPairIsReadOnlyForSurvivor } from '@silverhand/shared';
 import type {
   AttachmentRefInput,
   AttachmentSnapshot,
@@ -14,6 +15,7 @@ import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { assertActorConversationMatch } from '../auth/principal.js';
 import { writeMentionCcCopies } from '../application/mention-cc.js';
+import { collectUnresolvedReferences } from '../application/reference-addressing.js';
 import { resolveSnapshotsFromSources } from './attachment/snapshot-resolution.js';
 import type { MessageTxScope, MessageUnitOfWork } from './conversation-message/ports.js';
 import {
@@ -31,7 +33,6 @@ import {
   type ResolveStaleMessageInput,
   type SendMessageActor,
   type SendMessageInput,
-  type SendMessagePolicy,
   type SendMessageResult,
   type SendMessageTxResult,
 } from './conversation-message/contracts.js';
@@ -158,19 +159,7 @@ export class ConversationMessageService {
             'conversation not found',
           );
         }
-        if (sourceConversation.closed_at !== null) {
-          throw new ConversationError(
-            'conversation_closed',
-            'conversation is closed',
-          );
-        }
-        if (sourceConversation.archived_at !== null) {
-          throw new ConversationError(
-            'conversation_archived',
-            'conversation is archived',
-          );
-        }
-        this.validateActor(tx, input.actor, policy, sourceConversation.id);
+        this.assertPostAuthority(tx, sourceConversation, input.actor);
 
         const targetConversation = target.kind === 'legacy'
           ? this.resolveLegacyTarget(sourceConversation, target.target)
@@ -215,6 +204,39 @@ export class ConversationMessageService {
                 references,
               })
             : null;
+        // Mention CC, IN THIS TRANSACTION (v71 §5, #task:2014). It was a
+        // post-commit `void ccMentionsBestEffort(...)`: a crash in the gap
+        // committed the human's message and lost the copy permanently, with
+        // nothing said to anyone. The copy, its durable inbox delivery row and
+        // the author's `mention_external` notification are all facts the domain
+        // cannot afford to lose, so they commit or roll back WITH the message
+        // that caused them. What it returns is the report the post-commit half
+        // needs (wake / WS frames / skip log) — no effect ran here.
+        //
+        // `sourceConversation`, not the target: the CC answers "who did this
+        // message address that cannot see the channel it was written in", and a
+        // user send never has a foreign target (`allowTarget: false`), so the
+        // two are the same conversation on this path anyway.
+        const mentionCc = policy.ccMentions
+          ? writeMentionCcCopies(tx, {
+              message,
+              sourceConversation,
+              references,
+            })
+          : null;
+        // What the author addressed and this send could not reach (#task:2021
+        // P4-5-b). Computed AFTER the two mechanisms that can reach a referenced
+        // principal have run — the follower rows above and the CC copies just
+        // written — because it reports on their outcome; it decides nothing and
+        // writes nothing itself. Judged against the TARGET conversation, which is
+        // where the message landed and therefore what "addressed" can mean.
+        const unresolvedReferences = collectUnresolvedReferences(tx, {
+          references,
+          targetConversationId: targetConversation.id,
+          ccReachedAgentIds: new Set(
+            (mentionCc?.copies ?? []).map(copy => copy.agentId),
+          ),
+        });
         // S1 (#task:1276) P1+P2: a thread reply changes the root's authoritative
         // reply badge (P1) and its threads-list entry (P2). Both are computed IN
         // THIS TRANSACTION (after the insert, so they INCLUDE this reply — never a
@@ -247,33 +269,30 @@ export class ConversationMessageService {
           sourceConversation,
           targetConversation,
           message,
-          // Mention CC, IN THIS TRANSACTION (v71 §5, #task:2014). It was a
-          // post-commit `void ccMentionsBestEffort(...)`: a crash in the gap
-          // committed the human's message and lost the copy permanently, with
-          // nothing said to anyone. The copy, its durable inbox delivery row and
-          // the author's `mention_external` notification are all facts the domain
-          // cannot afford to lose, so they commit or roll back WITH the message
-          // that caused them. What is returned is the report the post-commit half
-          // needs (wake / WS frames / skip log) — no effect ran here.
-          //
-          // `sourceConversation`, not the target: the CC answers "who did this
-          // message address that cannot see the channel it was written in", and a
-          // user send never has a foreign target (`allowTarget: false`), so the
-          // two are the same conversation on this path anyway.
-          mentionCc: policy.ccMentions
-            ? writeMentionCcCopies(tx, {
-                message,
-                sourceConversation,
-                references,
-              })
-            : null,
+          mentionCc,
           // Main-line recipients only; thread replies deliver via
-          // `threadDelivery` (follower-gated), not the channel-wide fan-out.
+          // `threadDelivery` (follower-gated), not the conversation-wide fan-out.
+          //
+          // The set is the target's LIVE AGENT PARTICIPANTS — the placement
+          // authority conjoined with a live `agents` row (#task:2021 P4-5), not
+          // the `conversation_agents` listing this replaced: a `direct_pair` /
+          // `agent_inbox` has no roster rows, so a committed DM message
+          // enumerated ZERO recipients and was delivered to nobody. Enumerated
+          // INSIDE this transaction, so the fan-out is the set that held when the
+          // gate said yes.
+          //
+          // `references` is deliberately not consulted here: the main line is a
+          // full fan-out and a reference never adds or removes a recipient of it
+          // (#task:2000 layer ①). The reply-cluster is the one layer where a
+          // reference can widen delivery, via a follower row.
           recipients:
             threadDelivery === null
-              ? tx.conversations.listAgents(targetConversation.id)
+              ? tx.conversations
+                  .listParticipantAgentIds(targetConversation.id)
+                  .map(agentId => ({ agentId }))
               : [],
           threadDelivery,
+          unresolvedReferences,
           skippedFreshnessReason,
           streamHeadBeforeSend,
           projections,
@@ -375,6 +394,34 @@ export class ConversationMessageService {
       'conversation-message-service: message inserted',
     );
 
+    // The author addressed someone this send could not reach. Logged at WARN and
+    // per send (not per reference), because it is an ANOMALY someone may have to
+    // explain after the fact — "I told the agent and nothing happened" — and the
+    // default level on a running install is `warn`, so an `info` line would not
+    // be on disk when that question is asked. This is a SUPPLEMENT to the
+    // author's own answer (both send routes return the tokens), never the
+    // substitute for it: a log is not feedback to the person who typed the name.
+    // Only the author's own tokens are recorded: no reason, and nothing about who
+    // does exist (see `application/reference-addressing.ts`).
+    if (txResult.unresolvedReferences.length > 0) {
+      this.logger.warn(
+        {
+          event: 'send.references_unresolved',
+          sourceConversationId: txResult.sourceConversation.id,
+          targetConversationId: txResult.targetConversation.id,
+          messageId: txResult.message.id,
+          actorKind: input.actor.kind,
+          actorId:
+            input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
+          unresolved: txResult.unresolvedReferences.map(ref => ({
+            kind: ref.kind,
+            handle: ref.handle,
+          })),
+        },
+        'conversation-message-service: references addressed nobody in the target',
+      );
+    }
+
     // The committed-message payload: persisted message + in-transaction
     // absolute projections. Built ONCE here and reused verbatim for both the
     // WS publish (below) and the caller-facing result — the human send route
@@ -400,6 +447,10 @@ export class ConversationMessageService {
     const result: SendMessageResult = {
       committed,
       targetConversationId: txResult.targetConversation.id,
+      // A SIBLING of `committed`, never a field inside it: `committed` is
+      // published to the whole conversation, and who the author failed to
+      // address is theirs alone (#task:2021 P4-5-b).
+      unresolvedReferences: txResult.unresolvedReferences,
       ...(txResult.streamHeadBeforeSend !== null
         ? { streamHeadBeforeSend: txResult.streamHeadBeforeSend }
         : {}),
@@ -438,8 +489,7 @@ export class ConversationMessageService {
     // thread where a separate Cindy@thread session exists, the thread
     // session is the actual recipient and must receive the message in
     // its inbox. Excluding by agent id would deliver to nobody and the
-    // started session would wake without a message to process — exactly
-    // the bug @Cindy caught on `f28ed08` review.
+    // started session would wake without a message to process.
     const deliveryExcludeAgentId =
       policy.distributeExcludeSender
       && input.actor.kind === 'agent'
@@ -799,23 +849,101 @@ export class ConversationMessageService {
     );
   }
 
-  private validateActor(
+  /**
+   * MAY THIS SEND HAPPEN? The write gate, as ONE conjunction evaluated INSIDE the
+   * write transaction (#task:2021 P4-4 finding (b)):
+   *
+   *     lifecycle ∧ participation ∧ not-survivor-read-only
+   *
+   * All three are in here because all three can change between the request's
+   * resolution and this commit — the conversation can be archived, the actor
+   * removed, the DM's other endpoint deleted — and the request-layer answers
+   * (`resolveDeliveryTarget`, `canPostToConversation`) are SHAPING reads, never
+   * capability tokens. Splitting them across layers is what let a stale
+   * "authorized" survive: two of the three used to be checked here and the third
+   * only at the route.
+   *
+   * PARTICIPATION IS PLACEMENT-BASED, not roster-based. The predicate this
+   * replaced was `tx.conversations.getAgent(...)` — a `conversation_agents` row —
+   * and `direct_pair` / `agent_inbox` have no roster rows by construction (§4.2),
+   * so an agent posting into a new-model DM was refused unconditionally. That was
+   * not a policy: it was the roster question being asked about placements whose
+   * participants live on the row.
+   *
+   * ORDER IS PART OF THE CONTRACT. Existence (the caller's `get`) → lifecycle →
+   * participation → the DM narrowing. The narrowing goes LAST so only a
+   * participant can distinguish "this DM is read-only because your peer is gone"
+   * from a plain refusal; and lifecycle stays ahead of participation because that
+   * is the pre-existing order, so a legitimate member's closed-channel send keeps
+   * reporting the reason it always did.
+   *
+   * EVERY ACTOR KIND, through the same authority. The human arm used
+   * to stop at the route, and that was not a smaller version of this gate but a
+   * different one: `canPostToConversation` answers before the transaction opens,
+   * so a person removed from the channel — or from the workspace — in the gap
+   * still wrote, and a direct service caller was never gated at all. The human
+   * rule's extra hop (`conversation_users` seat AND `workspace_users` membership,
+   * v25) is not a reason to leave it there; it is a reason for the SCOPE to expose
+   * the placement authority's human face, which it now does.
+   *
+   * AND UNCONDITIONALLY, which is why this takes no `SendMessagePolicy`.
+   * Participation was briefly a policy field that both arms set to `true`;
+   * a flag with no legal current value only offers a future reader somewhere to
+   * turn a security invariant off. A new actor kind must widen
+   * {@link SendMessageActor} and state its arm HERE, in the gate.
+   */
+  private assertPostAuthority(
     tx: MessageTxScope,
+    conversation: ConversationDto,
     actor: SendMessageActor,
-    policy: SendMessagePolicy,
-    sourceConversationId: string,
   ): void {
-    if (actor.kind !== 'agent') return;
-    if (!tx.agents.get(actor.agentId)) {
-      throw new ActorError('agent_not_found', 'agent not found');
+    if (conversation.closed_at !== null) {
+      throw new ConversationError('conversation_closed', 'conversation is closed');
     }
+    if (conversation.archived_at !== null) {
+      throw new ConversationError(
+        'conversation_archived',
+        'conversation is archived',
+      );
+    }
+    if (actor.kind === 'agent') {
+      if (!tx.agents.get(actor.agentId)) {
+        throw new ActorError('agent_not_found', 'agent not found');
+      }
+      if (!tx.conversations.isAgentParticipant(conversation.id, actor.agentId)) {
+        throw new ActorError(
+          'agent_not_participant_of_conversation',
+          'agent is not a participant of this conversation',
+        );
+      }
+    }
+    if (actor.kind === 'user') {
+      // No existence check to mirror `agents.get`: the actor id here is an
+      // authenticated principal, and participation is FALSE for an id that names
+      // nobody — a missing user cannot hold a seat, be an endpoint, or be a
+      // workspace member — so a separate lookup would add a second refusal for a
+      // case this one already covers.
+      if (!tx.conversations.isUserParticipant(conversation.id, actor.userId)) {
+        throw new ActorError(
+          'user_not_participant_of_conversation',
+          'user is not a participant of this conversation',
+        );
+      }
+    }
+    // A property of the CONVERSATION, so it is asked for every actor kind: a
+    // human's send into a DM whose agent was deleted is refused by the same fact
+    // as the agent's. The rule itself lives in shared, shared with
+    // `canPostToConversation`; only the two facts it reads come from this scope.
+    const endpoints = tx.conversations.endpointFacts(conversation.id);
     if (
-      policy.requireSenderMembership
-      && !tx.conversations.getAgent(sourceConversationId, actor.agentId)
+      endpoints !== null
+      && directPairIsReadOnlyForSurvivor(endpoints, endpoint =>
+        tx.conversations.endpointPrincipalExists(endpoint),
+      )
     ) {
-      throw new ActorError(
-        'agent_not_member_of_conversation',
-        'agent is not a member of this conversation',
+      throw new ConversationError(
+        'conversation_endpoint_gone',
+        'the other endpoint of this direct conversation no longer exists',
       );
     }
   }

@@ -264,13 +264,13 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
   thread: 400,
   not_archivable: 400,
   not_renamable: 400,
-  // #task:2016 — the namespace refusals. `conversation_name_taken` is a
-  // CONFLICT (well-formed request, the address is spoken for and permanently so);
-  // `not_addressable` is a bad request (this conversation has no namespace at
-  // all — see `ChannelErrorCode`).
+  // #task:2016 — the addressing refusals. `conversation_title_taken` is a
+  // CONFLICT (well-formed request; another channel in this workspace already
+  // shows that title, and the title is the address); `not_addressable` is a bad
+  // request (this conversation holds no address at all — see `ChannelErrorCode`).
   //
   // `not_addressable` is SHADOWED at today's only wire entrance: the sole caller
-  // of `setChannelName` is the human PATCH door, which gates on
+  // of `renameChannel` is the human PATCH door, which gates on
   // `canGovernConversationWorkspace(..., 'admin')`, and a conversation with no
   // workspace admits only a `system` principal — a principal that door cannot
   // carry (`getUserPrincipal` throws on it). So the addressless case is refused
@@ -278,7 +278,7 @@ const repoErrorStatusMap: Record<string, 400 | 404 | 409 | 429> = {
   // SERVICE contract (proved in `tests/services/channel-service.test.ts`), not
   // for a reachable HTTP shape. Kept rather than dropped because the alternative
   // for a future non-human caller is a 500, and the cost is this one row.
-  conversation_name_taken: 409,
+  conversation_title_taken: 409,
   not_addressable: 400,
 };
 
@@ -336,7 +336,17 @@ export function conversationMessageServiceErrorResponse(
   err: unknown,
 ): Response | null {
   if (err instanceof ConversationError) {
-    const status = err.code === 'conversation_not_found' ? 404 : 409;
+    // 404 for "no such conversation"; 403 for the `direct_pair` narrowing, whose
+    // fact is an AUTHORIZATION one and is what `canPostToConversation` already
+    // answers 403 to at the request layer (#task:2021 P4-4) — the in-transaction
+    // re-check must not report the same refusal as a lifecycle 409, or a client
+    // would retry a state that never changes; 409 for the lifecycle codes.
+    const status =
+      err.code === 'conversation_not_found'
+        ? 404
+        : err.code === 'conversation_endpoint_gone'
+          ? 403
+          : 409;
     return c.json({ error: err.message, code: err.code }, status);
   }
   if (err instanceof MessageActorError) {

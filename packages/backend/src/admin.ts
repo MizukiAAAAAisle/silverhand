@@ -1,5 +1,5 @@
 import type { BackendLogger } from './context.js';
-import { openDatabase } from './db.js';
+import { openDatabase, openDatabaseUnmigratedReadOnly } from './db.js';
 import { isSqliteContention } from './db-errors.js';
 import { PasswordCredentialService } from './auth/password.js';
 import {
@@ -12,6 +12,11 @@ import {
   createHandleNamespacePort,
   createSqliteAuthUnitOfWork,
 } from './repos/auth-uow.js';
+import { scanConversationTitleAddresses } from './read-model/conversation-title-audit.js';
+import {
+  describeConversationTitleAudit,
+  type ConversationTitleAuditReport,
+} from '@silverhand/shared';
 
 export type AdminResetPasswordErrorCode = 'user_not_found' | 'db_locked';
 
@@ -82,6 +87,56 @@ export async function resetAdminPassword(
     return reset.reset;
   } catch (err) {
     mapAdminDbError(err);
+  } finally {
+    db.close();
+  }
+}
+
+export interface AdminScanTitleAddressesOptions {
+  dbPath: string;
+  logger?: BackendLogger;
+}
+
+export interface AdminScanTitleAddressesResult {
+  report: ConversationTitleAuditReport;
+  /** The operator-facing rendering, produced by the shared describer. */
+  description: string;
+}
+
+/**
+ * Report every title-address half-state in a database, on demand (#task:2016).
+ *
+ * Two jobs in one command, deliberately not split: it is the PRE-migration
+ * cleanup probe (the v72 migration aborts on folded-title collisions and refuses
+ * to rename anyone's channel for them, so the operator needs to see the pairs
+ * first) and it is the POST-migration answer to "is this database clean?" — a
+ * question boot can only answer negatively, since a clean scan at `info` would
+ * not survive the default `warn` log level.
+ *
+ * The connection is read-only and UNMIGRATED: a diagnostic that upgraded the
+ * schema before answering would destroy the state it was asked about. That is
+ * also why nothing here maps contention — the command takes no lock a writer can
+ * hold, and a WAL reader does not wait for one.
+ */
+export function scanTitleAddresses(
+  opts: AdminScanTitleAddressesOptions,
+): AdminScanTitleAddressesResult {
+  const db = openDatabaseUnmigratedReadOnly(opts.dbPath);
+  try {
+    const report = scanConversationTitleAddresses(db);
+    const description = describeConversationTitleAudit(report);
+    opts.logger?.warn(
+      {
+        admin_op: 'scan-title-addresses',
+        scanned: report.scanned,
+        keys_expected: report.keysExpected,
+        defects: report.defects.length,
+        kinds: [...new Set(report.defects.map(defect => defect.kind))],
+        ts: Date.now(),
+      },
+      description,
+    );
+    return { report, description };
   } finally {
     db.close();
   }
