@@ -6,6 +6,7 @@ import {
 } from '../../src/read-model/activity.js';
 import { LIVE_CONVERSATION_PREDICATE } from '../../src/repos/conversation-liveness.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { stream } from '../utils/destination.js';
 
 // #task:1410 — Class A hardening: Activity source × lifecycle conformance.
 //
@@ -78,10 +79,8 @@ async function sendAsAgent(
   const result = await t.ctx.conversationMessageService.sendMessage({
     conversationId: channelId,
     actor: { kind: 'agent', agentId, conversationId: channelId },
+    destination: stream(channelId, rootMsgId ?? null),
     content,
-    ...(rootMsgId
-      ? { target: { kind: 'thread' as const, message_id: rootMsgId } }
-      : {}),
   });
   return result.committed.message.id;
 }

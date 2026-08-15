@@ -10,12 +10,11 @@ import type {
   AgentSendStaleResolutionReason,
   AttachmentRefInput,
   ConversationDto,
-  LegacySendMessageTarget,
+  DeliveryTarget,
   MessageDto,
   MessageEventPayload,
   MessageProjections,
   Reference,
-  SendMessageTarget,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../../context.js';
 import type { MentionCcReport } from '../../application/mention-cc.js';
@@ -38,23 +37,49 @@ export type SendMessageActor =
   | UserPrincipal
   | AgentPrincipal;
 
+/**
+ * WHERE a send goes, as the caller has ALREADY DECIDED IT (#task:2021 P4-4).
+ *
+ * Two arms because there are two doors, and they resolve a destination by
+ * different authorities:
+ *
+ *  - `stream` — an absolute coordinate that `resolveDeliveryTarget` produced from
+ *    the address the agent spelled. Participation, placement and the thread-root
+ *    rule were all decided there, against the target itself; the service does not
+ *    re-parse an address and cannot be handed one.
+ *  - `own_main_line` / `own_reply_cluster` — a PLACEMENT inside the actor's own
+ *    conversation, which is all the human door can express (a person's client
+ *    posts where the person is looking). `messageId` may be any message in the
+ *    cluster and is normalized to its root in the send transaction — deliberately
+ *    NOT the agent rule, which requires the address to name a root already: the
+ *    two doors differ in what the sender can be expected to know.
+ *
+ * There is no default arm and no optional field. An absent destination used to
+ * mean "the current conversation", which is the ambient spelling #task:2021
+ * exists to remove: it is the one form that becomes silently wrong as soon as a
+ * session serves more than one stream.
+ */
+export type SendMessageDestination =
+  | { kind: 'stream'; stream: DeliveryTarget }
+  | { kind: 'own_main_line' }
+  | { kind: 'own_reply_cluster'; messageId: string };
+
 export interface SendMessageInput {
+  /** The conversation the ACTOR is acting from — where its credential lives, and
+   *  the run this send resolves. Not where the message goes: that is
+   *  {@link destination}, and the two are routinely different now. */
   conversationId: string;
   actor: SendMessageActor;
   content: string;
   /** Attachment references (id + optional compose-time label), already
    *  normalized from the wire union at the route boundary. */
   attachmentRefs?: AttachmentRefInput[];
-  /** Public send destination. Omitted means the current channel main line. */
-  target?: SendMessageTarget;
-  /** @deprecated Compatibility alias for old agent/runtime callers. New
-   *  callers must pass `target: { kind: 'thread', message_id }`. */
-  legacyReplyToMessageId?: string;
-  /** Daemon's assertion of which per-stream boundary `seenUpToSeq` was
-   *  read against (`'main'` or `thread:<rootMessageId>`). When present it
-   *  is cross-checked against the stream the backend resolves from `target`;
-   *  a mismatch hard-rejects (§6.4). */
-  assertedStreamKey?: string;
+  destination: SendMessageDestination;
+  /** The sender's claim about WHICH STREAM {@link seenUpToSeq} was measured
+   *  against, as the canonical id-form token (`#conv:<id>[/thread:<root>]`).
+   *  Cross-checked against the stream this send actually resolved to; a mismatch
+   *  hard-rejects rather than CAS-ing a boundary read somewhere else (§6.4). */
+  assertedStream?: string;
   seenUpToSeq?: number;
   staleEventId?: string;
   staleResolutionReason?: AgentSendStaleResolutionReason;
@@ -99,17 +124,12 @@ export interface SendMessageResult {
    *  once its observed cursor covers everything below this message, the own
    *  seq joins the watermark. Without it, such a send in a quiet stream
    *  leaves the sender permanently stale on its own head (countgame P1,
-   *  #task:1854). Absent for a passing CAS (the sender already covers the
-   *  stream) and for a cross-conversation send (the sender keeps no cursor
-   *  for the target's stream). Carried uniformly for main-line AND
-   *  thread-reply sends. */
+   *  #task:1854). Absent exactly when the CAS ran — the sender already covered
+   *  the stream it wrote into, which is a fact about that stream and not about
+   *  whether it was the sender's own conversation (#task:2021 P4-4). Carried
+   *  uniformly for main-line AND thread-reply sends. */
   streamHeadBeforeSend?: number;
 }
-
-export type NormalizedMessageTarget =
-  | { kind: 'channel' }
-  | { kind: 'thread'; messageId: string }
-  | { kind: 'legacy'; target: LegacySendMessageTarget };
 
 export interface ResolveStaleMessageInput {
   conversationId: string;
@@ -132,17 +152,23 @@ export interface ResolveStaleMessageInput {
  * arm there, which is where a reviewer looks for it.
  */
 export interface SendMessagePolicy {
-  allowTarget: boolean;
+  /** May this actor kind address a stream that is NOT the conversation it is
+   *  acting from? Two real values: an agent's whole job is cross-stream
+   *  collaboration, while a person's client posts where the person is looking —
+   *  a human request that named a foreign stream would be a client defect, and
+   *  answering it would make the send path a target-existence oracle for
+   *  someone who was never shown the target. */
+  allowForeignStream: boolean;
   distributeExcludeSender: boolean;
   /**
    * Default auto-start behavior for the actor. The runtime decision in
-   * `sendMessage` overrides this for agent cross-target sends — see the
-   * `shouldAutoStartIdle` derivation. Agents sending to their own
-   * conversation (`target = self`) keep this `false` so in-channel
-   * back-and-forth does not ping-pong every idle member; agents sending
-   * across conversations (`target = thread:<message_id>`) always
-   * auto-start the target's idle members so the receiving session
-   * can take over the work.
+   * `sendMessage` overrides this for an agent send that lands OUTSIDE the
+   * conversation it was sent from — see the `shouldAutoStartIdle` derivation.
+   * An agent sending into its own conversation keeps this `false` so in-channel
+   * back-and-forth does not ping-pong every idle member; an agent addressing
+   * another stream always auto-starts that stream's idle members, because the
+   * send is an explicit hand-off and an idle recipient would otherwise leave the
+   * message sitting in an inbox.
    */
   autoStartIdleRecipients: boolean;
   ccMentions: boolean;
@@ -151,17 +177,17 @@ export interface SendMessagePolicy {
 
 export const POLICIES: Record<SendMessageActor['kind'], SendMessagePolicy> = {
   user: {
-    allowTarget: false,
+    allowForeignStream: false,
     distributeExcludeSender: false,
     autoStartIdleRecipients: true,
     ccMentions: true,
     resolveRun: false,
   },
   agent: {
-    allowTarget: true,
+    allowForeignStream: true,
     distributeExcludeSender: true,
-    // Same-target (self) baseline: no auto-start. Cross-target sends are
-    // promoted to auto-start at runtime in `sendMessage`.
+    // Own-conversation baseline: no auto-start. A send that lands in another
+    // stream is promoted to auto-start at runtime in `sendMessage`.
     autoStartIdleRecipients: false,
     ccMentions: false,
     resolveRun: true,
@@ -224,11 +250,14 @@ export class ActorError extends Error {
 }
 
 export type TargetErrorCode =
-  | 'target_closed'
-  | 'target_archived'
-  | 'target_conflict'
   | 'reply_target_not_found'
-  | 'stream_key_mismatch';
+  /**
+   * The sender measured its freshness boundary against a DIFFERENT stream from
+   * the one this send resolved to (#task:2021 P4-4). 409, like the stale
+   * conflict it protects: the sender's view of where it is has to be re-earned
+   * before the CAS means anything.
+   */
+  | 'asserted_stream_mismatch';
 
 export class TargetError extends Error {
   constructor(

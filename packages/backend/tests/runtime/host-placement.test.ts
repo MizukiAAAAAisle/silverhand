@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -237,7 +238,7 @@ describe('RuntimeHostPlacementResolver', () => {
       t.viewerUserId,
     );
     const workspace = t.workspaces.insert({
-      name: 'engineering',
+      name: fixedWorkspaceName('engineering'),
       description: null,
     });
 

@@ -4,8 +4,9 @@ import {
   SCHEDULE_MAX_DELAY_SECONDS,
   SCHEDULE_MIN_DELAY_SECONDS,
   SCHEDULE_MIN_INTERVAL_SECONDS,
-  ScheduleCreateInputSchema,
-  type ScheduleCreateInput,
+  ScheduleDefinitionSchema,
+  isWorkspacePlaced,
+  type ScheduleDefinition,
   type ScheduleDto,
   type ScheduleListStatusFilter,
   type ScheduleSpec,
@@ -64,8 +65,9 @@ export class ScheduleError extends Error {
 /**
  * Agent-capability gate signature (graded-permissions cut 2). The
  * injected closure binds the real `canAgentUseCapability` so the
- * agent_home exemption + table lookup live in ONE place. `manage_schedules`
- * is evaluated on the schedule's target conversation's workspace.
+ * agent_home exemption + table lookup live in ONE place. Used by `cancel`
+ * only: `create`'s `manage_schedules` gate moved to the door, where the
+ * destination's PLACEMENT is what decides (#task:2021 P4-4).
  */
 export type ScheduleCapabilityChecker = (
   agentId: string,
@@ -76,8 +78,9 @@ export type ScheduleCapabilityChecker = (
 export interface ScheduleServiceOptions {
   schedules: ScheduleRepo;
   workspaces: WorkspaceRepo;
-  /** Used to validate `target_conversation_id` (existence, not closed)
-   *  and the owner agent's membership at create time. */
+  /** Used to re-validate the resolved wake destination at create time
+   *  (existence, not closed, owner still a PARTICIPANT per placement) and again
+   *  at fire time. */
   conversations: ConversationRepo;
   /** Authoritative unread read-model for the enriched `unread_updated` frame
    *  (#task:1283). */
@@ -94,9 +97,8 @@ export interface ScheduleServiceOptions {
   /**
    * Agent-capability gate (graded-permissions cut 2) — injected so the
    * agent_home exemption + table lookup have a SINGLE source
-   * (`canAgentUseCapability`). Evaluated on the schedule's TARGET
-   * conversation's workspace (create) / the resolved schedule's target
-   * workspace (cancel) — `manage_schedules`.
+   * (`canAgentUseCapability`). Evaluated on the resolved schedule's target
+   * workspace (cancel) — `manage_schedules`. Create's gate is the door's.
    */
   canUseCapability: ScheduleCapabilityChecker;
   /** Override `Date.now()` in tests so the scheduler clock is
@@ -225,21 +227,32 @@ export class ScheduleService {
    * `next_fire_at`, persist. Throws `ScheduleError` for any caller
    * fault; never throws for transient I/O.
    *
-   * `callingConversationId` is the conversation the create call landed
-   * in (the route's `:cid` path param). It's used as the default for
-   * `target_conversation_id` when the input doesn't specify one — so
-   * creating in DM defaults to firing in DM, creating in a channel
-   * defaults to firing in that channel, etc. The principle is "the
-   * `(conversation, agent)` runtime that posts the result is the one
-   * that did the work" — splitting fire-target from execution-target
-   * would break the subject-continuity invariant.
+   * `targetConversationId` is the RESOLVED wake destination — the conversation
+   * the door's address named (#task:2021 P4-4), not the conversation the call
+   * arrived from and not a default. The address grammar, the unknown/unauthorized
+   * collapse and `manage_schedules` are the door's (`routes/internal-agent/
+   * schedule-routes.ts`); what stays here is what the SERVICE owns: the row must
+   * still exist, must not be closed, and the owner must still participate in it.
+   *
+   * Those three are re-asked rather than trusted because a resolved target is a
+   * snapshot, not a capability token — and because they are exactly the facts the
+   * fire path will need to be true LATER (`deliverWake` asks the same three).
+   *
+   * `input` is a {@link ScheduleDefinition}, which is the wire input MINUS its
+   * address: the destination is stated exactly once per call, as an id, so there
+   * is no second spelling for this method to ignore or contradict.
+   *
+   * The principle behind the destination itself is unchanged: "the
+   * `(conversation, agent)` runtime that posts the result is the one that did the
+   * work" — splitting fire-target from execution-target would break the
+   * subject-continuity invariant.
    */
   create(
-    input: ScheduleCreateInput,
+    input: ScheduleDefinition,
     ownerAgentId: string,
-    callingConversationId: string,
+    targetConversationId: string,
   ): ScheduleDto {
-    const parsed = ScheduleCreateInputSchema.safeParse(input);
+    const parsed = ScheduleDefinitionSchema.safeParse(input);
     if (!parsed.success) {
       throw new ScheduleError(
         'invalid_input',
@@ -266,15 +279,12 @@ export class ScheduleService {
       );
     }
 
-    // Resolve and validate the execution target. Default = the calling
-    // conversation; explicit override via input.target_conversation_id.
-    // Validation: target conversation must exist, must not be closed,
-    // and the owner agent must be a member. We do NOT also check
-    // `archived_at` here — archived channels still accept new messages
-    // (archive is a soft-list-out flag, not a write barrier); closure
-    // (`closed_at`) is the hard "no more messages" predicate.
-    const targetConversationId =
-      data.target_conversation_id ?? callingConversationId;
+    // Re-validate the resolved destination. The address is already gone by here;
+    // what is checked is the ROW: it must exist, must not be closed, and must
+    // still have the owner as a participant. We do NOT also check `archived_at` —
+    // archived channels still accept new messages (archive is a soft-list-out
+    // flag, not a write barrier); closure (`closed_at`) is the hard "no more
+    // messages" predicate.
     const target = this.conversations.get(targetConversationId);
     if (!target) {
       throw new ScheduleError(
@@ -288,52 +298,33 @@ export class ScheduleService {
         `target conversation ${targetConversationId} is closed`,
       );
     }
-    const membership = this.conversations.getAgent(
-      targetConversationId,
-      ownerAgentId,
-    );
-    if (!membership) {
+    // PARTICIPATION per placement, through the one authority — not a
+    // `conversation_agents` lookup. A roster row is inert on a `direct_pair` and
+    // absent on an `agent_inbox` (§4.2), so the old roster gate refused every
+    // placement outside a workspace channel: a DM was unschedulable for a reason
+    // that had nothing to do with authority. Reaching this arm now needs a race
+    // (the door already resolved participation microseconds ago), which is
+    // precisely why it stays: the window between resolve and insert is real.
+    if (!this.conversations.isAgentParticipant(targetConversationId, ownerAgentId)) {
       throw new ScheduleError(
         'agent_not_in_target_conversation',
-        `agent ${ownerAgentId} is not a member of target conversation ${targetConversationId}`,
+        `agent ${ownerAgentId} is not a participant of target conversation ${targetConversationId}`,
       );
     }
 
-    // Capability gate (graded-permissions cut 2): scheduling fires a wake
-    // into the TARGET conversation's workspace, so `manage_schedules` is
-    // evaluated there (not the calling conversation's workspace). The
-    // injected checker carries the agent_home exemption.
+    // NO capability gate here. `manage_schedules` is judged at the DOOR, against
+    // the destination's PLACEMENT (`requireAgentConversationCapability`), because
+    // a capability is a grant inside a workspace and two of the three placements
+    // have no workspace at all: a `direct_pair`'s endpoints are its authority and
+    // an inbox's single participant is its own. The previous version read
+    // `target.workspace_id` directly and refused a null one as "no grant can
+    // exist here", which was defensible only while the roster gate above made
+    // every workspace-less placement unreachable anyway. It no longer does, and
+    // one rule for placement authority beats two that must agree.
     //
-    // A capability is granted IN a workspace, so a target placement without one
-    // has no scope in which the grant could exist — refused as
-    // `capability_denied` (the same answer as an ungranted bucket), never
-    // coerced onto the calling conversation's workspace: that would let an agent
-    // borrow authority from one board to schedule a wake somewhere else. The
-    // roster check above already rejects the only such placement that exists
-    // today (an agent inbox has no `conversation_agents` row — §4.2), so this is
-    // the second, authority-side statement of the same refusal rather than its
-    // only line of defense.
-    if (target.workspace_id === null) {
-      throw new ScheduleError(
-        'capability_denied',
-        `target conversation ${targetConversationId} belongs to no workspace, `
-          + 'so manage_schedules cannot be granted for it',
-        'manage_schedules',
-      );
-    }
-    if (
-      !this.canUseCapability(
-        ownerAgentId,
-        target.workspace_id,
-        'manage_schedules',
-      )
-    ) {
-      throw new ScheduleError(
-        'capability_denied',
-        `agent ${ownerAgentId} lacks manage_schedules in workspace ${target.workspace_id}`,
-        'manage_schedules',
-      );
-    }
+    // `cancel` still asks `canUseCapability` itself — it resolves its target from
+    // a stored schedule rather than from an address, and it deliberately treats a
+    // workspace-less target as cancellable (see the comment there).
 
     const active = this.schedules.countActive(ownerAgentId);
     if (active >= SCHEDULE_MAX_ACTIVE_PER_AGENT) {
@@ -757,6 +748,13 @@ export class ScheduleService {
     // fail loudly (not silently fall back to agent_home), and the
     // owner needs an out-of-band signal so they don't keep waiting
     // for a wake that will never land.
+    //
+    // The third check is PARTICIPATION per placement, the same authority create
+    // used, and it has to be: a schedule may target a DM pair, whose participants
+    // are its endpoint columns and never a roster row (§4.2). A
+    // `conversation_agents` lookup here would let every DM-targeted schedule fire
+    // exactly zero times and report "owner not member" about a conversation the
+    // owner is half of.
     const targetConvId = dto.target_conversation_id;
     const target = this.conversations.get(targetConvId);
     if (!target) {
@@ -771,10 +769,10 @@ export class ScheduleService {
         `target_conversation_unavailable: ${targetConvId} (closed)`,
       );
     }
-    if (!this.conversations.getAgent(targetConvId, dto.owner_agent_id)) {
+    if (!this.conversations.isAgentParticipant(targetConvId, dto.owner_agent_id)) {
       this.notifyOwnerOfDeadTarget(dto, 'not_member');
       throw new Error(
-        `target_conversation_unavailable: ${targetConvId} (owner not member)`,
+        `target_conversation_unavailable: ${targetConvId} (owner not participant)`,
       );
     }
 
@@ -817,13 +815,30 @@ export class ScheduleService {
       kind: 'message',
       payload: { message: msg },
     });
-    publishUnreadUpdatedToConversationViewers(
-      this.events,
-      this.attentionBadges,
-      this.conversations,
-      this.conversationReads,
-      targetConvId,
-    );
+    // WORKSPACE PLACEMENTS ONLY, branched HERE rather than inside the publisher
+    // (#task:2021 P4-4, same split as `conversation-message/delivery.ts`). The
+    // unread read model is keyed by workspace, so it has no coordinate for a
+    // workspace-less placement and the publisher says so by throwing. Since P4-4
+    // the wake destination is whatever the address named — a `direct_pair` is now
+    // reachable here — and an unguarded call would turn every DM-targeted fire
+    // into `status='failed'` with a placement error as its `failure_reason`:
+    // schedules that create cleanly and then fire exactly zero times.
+    //
+    // What is skipped is real and named: a pair with a human endpoint has a human
+    // who ought to see this wake as unread, and giving them one needs an unread
+    // coordinate that is not workspace-keyed — the DM read surface, a separate
+    // slice. The renderer's live path is unaffected: the `message` event above is
+    // published for every placement. Pinned by test, not logged — it happens on
+    // every DM fire, so a log line would be pure volume.
+    if (isWorkspacePlaced(target)) {
+      publishUnreadUpdatedToConversationViewers(
+        this.events,
+        this.attentionBadges,
+        this.conversations,
+        this.conversationReads,
+        targetConvId,
+      );
+    }
     // Order matters: `start()` is required for non-oneShot drivers
     // (claude). If start fails, the inbox row sits unread until some
     // other path starts the agent — which is misleading because the
@@ -860,7 +875,7 @@ export class ScheduleService {
           ? 'no longer exists'
           : reason === 'closed'
           ? 'has been closed'
-          : 'no longer has you as a member';
+          : 'no longer has you as a participant';
       const content =
         `Schedule "${dto.title || dto.id}" could not fire: target ` +
         `conversation ${dto.target_conversation_id} ${reasonText}. ` +
@@ -920,7 +935,7 @@ export class ScheduleService {
     }
   }
 
-  private assertRepeatBounded(input: ScheduleCreateInput): void {
+  private assertRepeatBounded(input: ScheduleDefinition): void {
     const hasCap =
       input.max_occurrences !== undefined || input.until_at !== undefined;
     if (!hasCap && input.allow_unbounded !== true) {

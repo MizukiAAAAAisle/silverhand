@@ -1,26 +1,33 @@
 // Percent-escaping for ONE SEGMENT of a name-shaped address (#task:2016).
 //
 // An address token spells a coordinate out of names a person typed:
-// `silverhand://conversation/<workspace>/<title>`, optionally plus
-// `/thread:<id>`. `/` is the STRUCTURAL separator and stays raw; three characters
-// inside a segment must be escaped, and each one is load-bearing:
+// `#<workspace>/<title>`, optionally plus `/thread:<id>`. `/` is the STRUCTURAL separator and stays raw; three KINDS of
+// character inside a segment must be escaped, and each one is load-bearing:
 //
 //   - `/` → `%2F`. Unescaped, a title containing a slash makes the segment
 //     boundary ambiguous.
 //   - `%` → `%25`. Unescaped, a literal `%2F` typed into a title decodes exactly
 //     like an escaped slash — the escape mechanism has to be escapable or it is
 //     not a codec.
-//   - space → `%20`. Unescaped, the token stops being a single token: the message
-//     header spells `target=<token>` UNQUOTED, so a raw space re-creates the
-//     un-splittable coordinate that absolute targets exist to eliminate. This is
-//     the one that looks optional and is not.
+//   - EVERY SPACE SEPARATOR — ASCII space plus the rest of Unicode `Zs`
+//     ({@link SPACE_SEPARATOR_RANGES}) → its UTF-8 bytes, percent-encoded.
+//     Unescaped, the token stops being a single token: the message header spells
+//     `target=<token>` UNQUOTED, so any space re-creates the un-splittable
+//     coordinate that absolute targets exist to eliminate. This is the one that
+//     looks optional and is not.
+//
+// THE SPACE RULE IS THE WHOLE CATEGORY, not the ASCII member of it, because the
+// readers are not JS: `\s`, `split()` and `strip()` in JS, Python, Go and every
+// shell-adjacent tokenizer treat U+00A0 and U+3000 as whitespace, so a channel
+// named `设计　讨论` with a full-width space — one keystroke on any CJK IME, and
+// legal in a title (`Zs` is inside `NAME_RENDERABLE_RANGES` on purpose) — would
+// emit a `target=` field that its reader splits in two and then cannot resolve.
+// Escaping ASCII space alone would make the header's "one whitespace-free token"
+// promise false for exactly the users this product is being dogfooded by.
 //
 // Everything else stays RAW, CJK and pictographs included: escaping them would
 // make the common case unreadable in a header a person has to be able to skim,
-// and none of them is a separator in any grammar we parse. Non-ASCII whitespace
-// (U+00A0, U+3000) is therefore raw too — it is not a separator anywhere, so the
-// token stays one token; that it can look like a space is the same confusable
-// class as Cyrillic `а` vs Latin `a`, ruled out of scope on this ticket.
+// and none of them is a separator in any grammar we parse.
 //
 // The parser accepts ONLY the canonical spelling. Lowercase hex (`%2f`),
 // over-escaping (`%41` for `A`), and `%` followed by anything else are all
@@ -28,16 +35,65 @@
 // round-trip uniqueness back to whoever typed it — and uniqueness of the decoded
 // title is exactly what the address depends on.
 
-/** The three escapes, canonical spelling. Uppercase hex, and this map is the only
- *  place either direction is written down. */
-const ESCAPES: ReadonlyMap<string, string> = new Map([
-  [' ', '%20'],
-  ['%', '%25'],
-  ['/', '%2F'],
-]);
+const encoder = new TextEncoder();
+
+/**
+ * Unicode `Zs` — the code points that render as horizontal space and are legal in
+ * a name. PINNED DATA, for the reason `display-name-charset.ts` gives at length: a
+ * runtime `\p{Zs}` would make the escape set depend on whichever ICU revision the
+ * backend, the renderer, the CLI or a packaged daemon happens to carry, and an
+ * escape set that differs between two processes is a coordinate one of them cannot
+ * spell.
+ *
+ * `Zs` and not "everything `\s` matches": the other members of that class are
+ * already impossible in a name — `Cc` controls, `Zl`/`Zp` and the `Cf` BOM all sit
+ * outside `NAME_RENDERABLE_RANGES` — so escaping them would be dead data. U+180E
+ * is likewise absent: it left `Zs` in Unicode 6.3 and is barred as `Cf`.
+ */
+const SPACE_SEPARATOR_RANGES: readonly (readonly [number, number])[] = [
+  [0x0020, 0x0020],
+  [0x00a0, 0x00a0],
+  [0x1680, 0x1680],
+  [0x2000, 0x200a],
+  [0x202f, 0x202f],
+  [0x205f, 0x205f],
+  [0x3000, 0x3000],
+];
+
+/** UTF-8 bytes as canonical uppercase `%XX` triplets — one triplet for an ASCII
+ *  character, three for U+3000. The ONE spelling of an escape. */
+function percentEncode(character: string): string {
+  return [...encoder.encode(character)]
+    .map(byte => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
+    .join('');
+}
+
+/** The escape set, DERIVED from the rule above rather than transcribed: the two
+ *  structural characters and every space separator. Both directions are built from
+ *  this one map, so `encode` and `decode` cannot disagree about a member. */
+const ESCAPES: ReadonlyMap<string, string> = new Map(
+  [
+    '%',
+    '/',
+    ...SPACE_SEPARATOR_RANGES.flatMap(([first, last]) => {
+      const characters: string[] = [];
+      for (let point = first; point <= last; point += 1) {
+        characters.push(String.fromCodePoint(point));
+      }
+      return characters;
+    }),
+  ].map(character => [character, percentEncode(character)]),
+);
 
 const UNESCAPES: ReadonlyMap<string, string> = new Map(
   [...ESCAPES].map(([raw, escaped]) => [escaped, raw]),
+);
+
+/** Escape lengths are 3 (ASCII), 6 or 9 (a 3-byte space separator) characters, so
+ *  the decoder tries the longest first. Derived, so adding a member to the set
+ *  cannot leave the decoder scanning too short a window. */
+const MAX_ESCAPE_LENGTH = Math.max(
+  ...[...ESCAPES.values()].map(escape => escape.length),
 );
 
 /**
@@ -66,8 +122,6 @@ const UNESCAPES: ReadonlyMap<string, string> = new Map(
  */
 export const ADDRESS_TOKEN_MAX_BYTES = 512;
 
-const encoder = new TextEncoder();
-
 /**
  * The wire size of a formatted address token — the ONE measure the budget is
  * judged on, so no caller re-derives it with `.length`.
@@ -81,11 +135,16 @@ export function addressTokenByteLength(token: string): number {
 /**
  * Escape one segment. Total: every string has exactly one encoding.
  *
- * Single pass, so the ordering hazard does not exist — escaping `/` first and
- * `%` second would re-escape the `%` of the `%2F` it just produced.
+ * Iterates CODE POINTS rather than replacing over a character class, so an astral
+ * character is never cut in half and the escape set stays the map's key set — one
+ * place to read what is escaped. Single pass, so the ordering hazard does not
+ * exist: escaping `/` first and `%` second would re-escape the `%` of the `%2F` it
+ * just produced.
  */
 export function encodeAddressSegment(value: string): string {
-  return value.replace(/[%/ ]/g, character => ESCAPES.get(character)!);
+  let out = '';
+  for (const character of value) out += ESCAPES.get(character) ?? character;
+  return out;
 }
 
 /**
@@ -95,6 +154,11 @@ export function encodeAddressSegment(value: string): string {
  * coordinate with a typo, it is a second spelling of a coordinate, and accepting
  * it would mean one title has more than one address. An empty segment is also
  * `null` — no title normalizes to the empty string.
+ *
+ * LONGEST MATCH FIRST, because an escape is 3, 6 or 9 characters now. That is a
+ * total rule and not a heuristic: no escape is a prefix of another (every
+ * multi-triplet escape starts with a UTF-8 lead byte ≥ `%C2`, which is not itself a
+ * member), so exactly one length can match at any position.
  */
 export function decodeAddressSegment(segment: string): string | null {
   if (segment.length === 0) return null;
@@ -103,18 +167,30 @@ export function decodeAddressSegment(segment: string): string | null {
   while (index < segment.length) {
     const character = segment[index]!;
     if (character === '%') {
-      const raw = UNESCAPES.get(segment.slice(index, index + 3));
-      if (raw === undefined) return null;
-      out += raw;
-      index += 3;
+      const escape = matchEscape(segment, index);
+      if (escape === null) return null;
+      out += escape.raw;
+      index += escape.length;
       continue;
     }
-    // A raw separator inside a segment means the token was never split
-    // correctly, or was assembled without the codec. Either way it is not this
-    // segment's content.
-    if (character === '/' || character === ' ') return null;
+    // A raw member of the escape set inside a segment means the token was never
+    // split correctly, or was assembled without the codec. Either way it is not
+    // this segment's content — and a raw space would already have ended the field
+    // it travelled in.
+    if (ESCAPES.has(character)) return null;
     out += character;
     index += 1;
   }
   return out;
+}
+
+function matchEscape(
+  segment: string,
+  index: number,
+): { raw: string; length: number } | null {
+  for (let length = MAX_ESCAPE_LENGTH; length >= 3; length -= 3) {
+    const raw = UNESCAPES.get(segment.slice(index, index + length));
+    if (raw !== undefined) return { raw, length };
+  }
+  return null;
 }

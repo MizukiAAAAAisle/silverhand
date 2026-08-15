@@ -632,6 +632,10 @@ const REQUESTS: WireFixture[] = [
         conversation_id: 'conv_A',
         agent_id: 'agent_A',
         content: 'hello',
+        // Required and absolute (#task:2021 P4-4): a reply is addressed by its
+        // cluster root, and the SOURCE `conversation_id` above is a credential
+        // coordinate that no longer doubles as the destination.
+        target: '#conv:AddressedStream1/thread:ClusterRoot0001',
         stale_resolution_reason: 'revised',
       },
     }),
@@ -655,16 +659,16 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_stream_observed',
     description:
-      'Agent runtime tells the daemon it observed a reply cluster via an HTTP pull (history --target thread:<root>); daemon advances the thread:<root> observed boundary and records the surfaced ids as known reply targets. Daemon-local, no backend call.',
+      'Agent runtime tells the daemon it observed a reply cluster via an HTTP pull (history --target <address>/thread:<root>); daemon advances that stream\'s observed boundary and records the root as a cluster this session has seen. `conversation_id` is the session handle, `stream_conversation_id` is where the observed cluster lives. Daemon-local, no backend call.',
     frame: enc({
       id: 'req-agent-stream-observed-1',
       intent: 'agent_stream_observed',
       params: {
         conversation_id: 'conv_A',
+        stream_conversation_id: 'conv_B',
         agent_id: 'agent_A',
         thread_root_id: 'msg_root',
         observed_seq: 14,
-        reply_target_messages: ['msg_root', 'msg_reply_1', 'msg_reply_2'],
       },
     }),
     kind: { kind: 'request', intent: 'agent_stream_observed' },
@@ -693,7 +697,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/hello',
     description:
-      'v14 hello result — protocol_version + daemon identity + capabilities.',
+      'hello result — protocol_version + daemon identity + capabilities.',
     frame: enc({
       id: 'req-hello',
       result: {
@@ -833,7 +837,15 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       'Daemon-owned freshness send success returns backend message id and seq.',
     frame: enc({
       id: 'req-agent-message-send-1',
-      result: { ok: true, message_id: 'msg_123', message_seq: 14 },
+      result: {
+        ok: true,
+        message_id: 'msg_123',
+        message_seq: 14,
+        // Total: every send answers "which stream did my words land in",
+        // because only the backend knows what a NAME denoted at insert time.
+        conversation_id: 'AddressedStream1',
+        thread_root_id: 'ClusterRoot0001',
+      },
     }),
     kind: { kind: 'response_success', intent: 'agent_message_send' },
   },

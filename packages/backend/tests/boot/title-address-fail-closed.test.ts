@@ -78,9 +78,9 @@ function seedWorkspaceConversation(
 ): void {
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, description, workspace_kind, owner_agent_id, archived_at,
+       (id, name, name_key, description, workspace_kind, owner_agent_id, archived_at,
         created_at, updated_at)
-     VALUES ('w_fc', 'fail-closed', NULL, 'regular', NULL, NULL, 1, 1)`,
+     VALUES ('w_fc', 'fail-closed', 'fail-closed', NULL, 'regular', NULL, NULL, 1, 1)`,
   ).run();
   db.prepare(
     `INSERT INTO conversations
@@ -190,5 +190,43 @@ describe('startBackend — title address defects fail closed (#task:2016)', () =
     expect(
       entries.filter(e => e.msg?.includes('title address')),
     ).toHaveLength(0);
+  });
+
+  it('also refuses before ready when a regular workspace shows one root and answers to another', async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'silverhand-workspace-fail-closed-'));
+    const { logger, entries } = collectLogger();
+    let handle: Db | undefined;
+
+    await expect(startBackend({
+      mode: 'standalone',
+      dbPath: join(tmp, 'silverhand.db'),
+      ...resolveBackendDataPaths(tmp),
+      serverConfig: makeServerConfig(),
+      authConfig: { signupEnabled: false, sessionTtlMs: 86_400_000 },
+      logger,
+      listen: { hostname: '127.0.0.1', port: 0 },
+      testHooks: {
+        onDatabaseOpened: db => {
+          handle = db;
+          db.prepare(
+            `INSERT INTO workspaces
+               (id, name, name_key, description, workspace_kind,
+                owner_agent_id, archived_at, created_at, updated_at)
+             VALUES ('w_bad', 'Renamed', 'design', NULL, 'regular',
+                     NULL, NULL, 1, 1)`,
+          ).run();
+        },
+      },
+    })).rejects.toMatchObject({ code: 'workspace_name_address_defects' });
+
+    expect(entries.filter(entry => entry.msg === 'backend listening')).toHaveLength(0);
+    expect(handle?.open).toBe(false);
+    expect(entries.find(entry => entry.level === 'error'
+      && entry.msg === 'workspace address integrity audit failed')?.obj).toMatchObject({
+      scanned: 1,
+      defects: 1,
+      kinds: ['stale_key'],
+      remediation: 'silverhand-server admin scan-workspace-addresses',
+    });
   });
 });

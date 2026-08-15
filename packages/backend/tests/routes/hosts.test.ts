@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -551,12 +552,12 @@ describe('host routes', () => {
       // Cascades with its owner agent, so it is not a separately listed resource.
       workspaces.insertAgentHome({ agent: agent! });
       const mine = workspaces.insert({
-        name: 'Mine',
+        name: fixedWorkspaceName('Mine'),
         description: null,
       });
       workspaces.addUserMember(mine.id, t.viewerUserId, 'owner');
       const theirs = workspaces.insert({
-        name: 'Theirs',
+        name: fixedWorkspaceName('Theirs'),
         description: null,
       });
       workspaces.addUserMember(theirs.id, t.viewerUserId, 'member');
@@ -569,7 +570,7 @@ describe('host routes', () => {
       // `workspaces` response shell too, so the dimension must be ABSENT, not
       // present-and-empty.
       const elsewhere = workspaces.insert({
-        name: 'Elsewhere',
+        name: fixedWorkspaceName('Elsewhere'),
         description: null,
       });
       workspaces.addUserMember(elsewhere.id, t.viewerUserId, 'owner');
@@ -753,7 +754,7 @@ describe('host routes', () => {
       // empty `workspaces` count/list shells from the payload as well, so the
       // dimension is ABSENT here, not present-and-zero.
       const workspace = workspaces.insert({
-        name: 'Dependent Workspace',
+        name: fixedWorkspaceName('Dependent Workspace'),
         description: null,
       });
       workspaces.addUserMember(workspace.id, t.viewerUserId, 'owner');
@@ -803,7 +804,7 @@ describe('host routes', () => {
       repo.markFinalized(created.host_id, 1_700_000_000_100);
       const workspaces = new WorkspaceRepo(t.ctx.db);
       const workspace = workspaces.insert({
-        name: 'Someone Elses Workspace',
+        name: fixedWorkspaceName('Someone Elses Workspace'),
         description: null,
       });
       // Member, not owner — under the retired projection this row both made the
@@ -834,7 +835,7 @@ describe('host routes', () => {
       repo.markFinalized(created.host_id, 1_700_000_000_100);
       const workspaces = new WorkspaceRepo(t.ctx.db);
       const workspace = workspaces.insert({
-        name: 'Someone Elses Workspace',
+        name: fixedWorkspaceName('Someone Elses Workspace'),
         description: null,
       });
       workspaces.addUserMember(workspace.id, t.viewerUserId, 'member');
@@ -1020,7 +1021,7 @@ describe('host routes', () => {
       // this whole tree died with the computer. It is DB-backed, computer-
       // independent content now, so it must survive.
       const workspace = workspaces.insert({
-        name: 'Surviving Workspace',
+        name: fixedWorkspaceName('Surviving Workspace'),
         description: null,
       });
       workspaces.addUserMember(workspace.id, t.viewerUserId, 'owner');
@@ -1065,7 +1066,7 @@ describe('host routes', () => {
       }
       const workspaces = new WorkspaceRepo(t.ctx.db);
       const shared = workspaces.insert({
-        name: 'Shared Workspace',
+        name: fixedWorkspaceName('Shared Workspace'),
         description: null,
       });
       workspaces.addUserMember(shared.id, t.viewerUserId, 'owner');

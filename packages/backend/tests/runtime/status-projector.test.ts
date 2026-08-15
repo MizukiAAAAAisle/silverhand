@@ -13,6 +13,7 @@
  * moves the status mapping back into the handler would have to delete
  * an assertion to pass.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -59,7 +60,7 @@ function makeFixture(
   const runtimeSlots = new RuntimeSlotRepo(db);
 
   const ws = workspaces.insert({
-    name: 'ws-proj',
+    name: fixedWorkspaceName('ws-proj'),
     description: null,
   });
   const agent = agents.create(

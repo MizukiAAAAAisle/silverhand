@@ -23,15 +23,17 @@
  */
 import {
   composeRuntimeDeliveryPresentation,
-  formatDeliveryTarget,
+  formatStreamAddressToken,
   requireAddressableId,
   resolveAttachmentLabels,
+  type AddressFallbackReason,
   type AttachmentSnapshot,
   type DeliveryTarget,
   type FromKind,
   type Reference,
   type RuntimeDeliveryInstructionSignal,
   type RuntimeDeliveryPresentation,
+  type StreamNaming,
 } from '@silverhand/shared';
 import {
   extractAttachmentSnapshotsFromRow,
@@ -107,6 +109,36 @@ export type DeliveryReferencesOf = (
 ) => readonly Reference[];
 
 /**
+ * How a formatter learns how to SPELL a message's stream — and where the price of
+ * not being able to goes (#task:2021 P4-4).
+ *
+ * ONE parameter carrying both halves, deliberately: a naming source that arrived
+ * without its counter would make every fall back to `#conv:<id>` invisible, and
+ * readability is a capability requirement here rather than a nicety — the whole
+ * point of the count is to answer "should names get more machinery" (see
+ * `AddressFallbackReason`). Binding them in a single type means a call site cannot
+ * take one and forget the other.
+ *
+ * `namingOf` is keyed by the MESSAGE for the same reason `DeliveryReferencesOf` is:
+ * the coordinate is a fact about the row (see {@link MessageLite}), not about the
+ * batch. Unlike references, though, it must be memoized PER FRAMING and never
+ * longer: `messages.content` is write-once, but a workspace name and a channel
+ * title are both MUTABLE, so a naming cached across framings would keep spelling a
+ * renamed stream by its old address — which now resolves to nothing or, after the
+ * name is reused, to somebody else's conversation.
+ *
+ * The formatters never call the codec's fallback path themselves and never inspect
+ * the reason: rendering stays in `formatStreamAddressToken`, the POLICY stays in
+ * `application/stream-naming.ts`, and the aggregation stays in the fanout's
+ * `WorkspaceAddressFallbackWindow`. `recordFallback` is expected to be silent —
+ * a per-message warn is explicitly forbidden.
+ */
+export interface DeliveryStreamAddressing {
+  namingOf(message: MessageLite): StreamNaming;
+  recordFallback(reason: AddressFallbackReason): void;
+}
+
+/**
  * Format an inbox batch as one human-readable user message. Mirrors §3.1
  * "A 档" payload shape — gives the agent enough metadata to address each
  * sender appropriately. Order = enqueue order.
@@ -120,6 +152,7 @@ export function formatInboxBatch(
   recipientAgentName: string | undefined,
   sendMessageTool: string,
   referencesOf: DeliveryReferencesOf,
+  addressing: DeliveryStreamAddressing,
 ): string {
   return formatInboxBatchPresentation(
     items,
@@ -130,6 +163,7 @@ export function formatInboxBatch(
     recipientAgentName,
     sendMessageTool,
     referencesOf,
+    addressing,
   ).text;
 }
 
@@ -143,6 +177,7 @@ export function formatInboxBatchPresentation(
   recipientAgentName: string | undefined,
   sendMessageTool: string,
   referencesOf: DeliveryReferencesOf,
+  addressing: DeliveryStreamAddressing,
 ): { text: string; presentations: readonly RuntimeDeliveryPresentation[] } {
   const presentations = items.map(({ message }) => {
     const meta = formatStdinMessageHeader(
@@ -151,6 +186,7 @@ export function formatInboxBatchPresentation(
       agentComputerIdById,
       userNameById,
       defaultUserHandle,
+      addressing,
     );
     const suffix = formatAttachmentSuffix(
       extractAttachmentSnapshotsFromRow(message),
@@ -233,7 +269,7 @@ export function deliveryTargetOfMessage(msg: MessageLite): DeliveryTarget {
  * in `[...]` so it is visually distinct from the body, which follows on the
  * next line):
  *
- *     [msg_id=<full-id> sender=@<handle>|system type=agent|human|system computer=<host-id (agent rows only)> target=#conv:<conversation-id>[/thread:<root-id>] time=<ISO8601>]
+ *     [msg_id=<full-id> sender=@<handle>|system type=agent|human|system computer=<host-id (agent rows only)> target=<stream-address> time=<ISO8601>]
  *
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
@@ -252,21 +288,34 @@ export function deliveryTargetOfMessage(msg: MessageLite): DeliveryTarget {
  *   as "same computer" (the prompt behavior contract says exactly
  *   this). Receivers compare it against their own Computer id to
  *   decide whether the sender shares this filesystem.
- * - `target` is the ABSOLUTE address of the stream this message belongs
- *   to (#task:2021 P4-3), rendered by the one codec
- *   (`shared/delivery-target.ts`): `#conv:<conversation-id>` for the
- *   main line, with a `/thread:<root-id>` suffix inside a reply
- *   cluster. It replaced the relative token `channel`, which only
- *   meant anything while a runtime was pinned to exactly one
- *   conversation — an agent-scoped runtime serves N, so `channel`
- *   named whichever one the reader assumed. Being absolute, the token
- *   is the same for every reader — but it is not yet the `--target`
- *   flag's grammar: P4-3 changed what is emitted and taught, and
- *   canonical acceptance on every write surface is P4-4's, so an agent
- *   reads the token's parts (the root id, the bare conversation id)
- *   rather than pasting the whole thing. The message's own `msg_id`
- *   remains the relation handle agents pass to
- *   `silverhand message send --reply-to` to answer in the same thread.
+ * - `target` is the ABSOLUTE address of the stream this message
+ *   belongs to, rendered by the one codec
+ *   (`shared/delivery-target.ts`) and — since #task:2021 P4-4 — in
+ *   the SAME grammar every write surface accepts, so an agent may
+ *   paste it verbatim into `--target`. It replaced the relative token
+ *   `channel`, which only meant anything while a runtime was pinned
+ *   to exactly one conversation; an agent-scoped runtime serves N, so
+ *   `channel` named whichever one the reader assumed.
+ *
+ *   Which of the codec's forms appears is decided by
+ *   {@link DeliveryStreamAddressing}, never here:
+ *   `#<workspace>/<title>` for a workspace-placed stream whose two
+ *   names round-trip, `dm:@<other handle>` for a DirectPair (the one PER-VIEWER token — the same row
+ *   spells differently for its two participants, which is why it exists
+ *   only in this header and never in anything durable), and
+ *   `#conv:<conversation-id>` otherwise — for an agent inbox, an
+ *   agent-home placement, a name that does not fit the token budget, or
+ *   a row the current name domain would refuse. Any of those forms
+ *   carries the `/thread:<root-id>` suffix inside a reply cluster.
+ *
+ *   The row's own `msg_id` is NOT a destination — `--reply-to` is gone
+ *   with the relative grammar, because a message id says which row was
+ *   answered and not which stream the answer goes to (the two came apart
+ *   the moment one runtime served N conversations). Replying inside this
+ *   cluster means carrying this header's `/thread:<root-id>` suffix;
+ *   opening one on a main-line row means spelling that row's id as the
+ *   suffix. `msg_id` stays the ROW handle: what `message react` and
+ *   `task create --source-message-id` name.
  * - `time` is ISO 8601 in the local timezone (offset preserved) so
  *   the agent sees both an absolute instant and the wall clock the
  *   user experienced.
@@ -277,9 +326,15 @@ export function formatStdinMessageHeader(
   agentComputerIdById: (id: string) => string | undefined,
   userNameById: (id: string) => string | undefined,
   defaultUserHandle: string | undefined,
+  addressing: DeliveryStreamAddressing,
 ): string {
   const time = formatStdinTimestamp(msg.created_at);
-  const target = formatDeliveryTarget(deliveryTargetOfMessage(msg));
+  const rendered = formatStreamAddressToken(
+    deliveryTargetOfMessage(msg),
+    addressing.namingOf(msg),
+  );
+  if (rendered.fallback !== null) addressing.recordFallback(rendered.fallback);
+  const target = rendered.token;
   // Task suffix — appended to every kind's header when the row is a task
   // system event, so an agent sees `task=#<n> status=<status>` regardless of
   // who sent it. Derived from the event's immutable metadata snapshot (v60:

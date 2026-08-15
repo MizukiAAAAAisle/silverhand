@@ -82,8 +82,11 @@ export const ScheduleDtoSchema = z.object({
   /** The conversation whose `(conversation, owner_agent)` runtime is woken
    *  up when this schedule fires. The wake message — and the agent's
    *  response/report — both happen in this conversation. Set at create
-   *  time and validated against owner agent's membership; v28 backfilled
-   *  existing rows from owner's agent_home DM. Never null after v28. */
+   *  time from the addressed `target_conversation` and validated against the
+   *  owner agent's PARTICIPATION (per placement, so a DM pair qualifies);
+   *  v28 backfilled existing rows from owner's agent_home DM. Never null
+   *  after v28. A stable id, never an address: the address was the input
+   *  shape, and this column is what the fire path reads. */
   target_conversation_id: z.string(),
   /** Server-side derived label for `target_conversation_id`, projected
    *  by the agent-facing schedule list/create response. Format:
@@ -141,68 +144,113 @@ export type ScheduleCreateOnceInput = z.infer<
   typeof ScheduleCreateOnceInputSchema
 >;
 
+/** WHAT to schedule, with no WHERE in it — title, message, time policy, caps.
+ *  Everything about a schedule except its destination.
+ *
+ *  The split is deliberate (#task:2021 P4-4). The wire input carries an ADDRESS;
+ *  the service is handed a RESOLVED conversation id as a separate argument. If
+ *  the service's input type still carried the address, one call would state the
+ *  destination twice in two different vocabularies, and the two could disagree
+ *  silently (the id wins, the address is ignored). Removing the field from the
+ *  service's view makes that disagreement unrepresentable rather than merely
+ *  unlikely — the service cannot read an address because it has none. */
+const scheduleDefinitionShape = {
+  title: z.string().trim().min(1).max(SCHEDULE_TITLE_MAX_LEN),
+  message: z.string().min(1).max(SCHEDULE_MESSAGE_MAX_LEN),
+  spec: z.discriminatedUnion('kind', [
+    ScheduleCreateOnceInputSchema,
+    ScheduleSpecIntervalSchema,
+    ScheduleSpecCronSchema,
+  ]),
+  /** Optional epoch-ms termination for repeat specs. REJECTED on `once`. */
+  until_at: z.number().int().positive().optional(),
+  /** Optional max-fire-count cap for repeat specs. REJECTED on `once`. */
+  max_occurrences: z.number().int().positive().optional(),
+  /** Required `true` for repeat specs without `until_at`/`max_occurrences`.
+   *  REJECTED on `once` (one-shots fire exactly once and don't need
+   *  a "no upper bound" opt-in). */
+  allow_unbounded: z.boolean().optional(),
+} as const;
+
+/** The cross-field rules, all of which are about the TIME POLICY — so they are
+ *  shared verbatim by both schemas instead of being re-stated on the wider one.
+ *  The destination has no cross-field rule: it is required, and everything else
+ *  about it is the resolver's verdict. */
+const refineScheduleDefinition = (
+  v: {
+    spec: ScheduleCreateOnceInput | ScheduleSpecInterval | ScheduleSpecCron;
+    until_at?: number | undefined;
+    max_occurrences?: number | undefined;
+    allow_unbounded?: boolean | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void => {
+  if (v.spec.kind === 'once') {
+    // Strict-reject (vs silent-ignore) for repeat-only knobs on a one-shot.
+    // Silent-ignore would let the agent see a non-canonical DTO that
+    // claims `max_occurrences=N` for a row that can only ever fire once,
+    // which is worse than a clear 400.
+    if (v.until_at !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['until_at'],
+        message: 'until_at is not valid on a `once` schedule',
+      });
+    }
+    if (v.max_occurrences !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['max_occurrences'],
+        message: 'max_occurrences is not valid on a `once` schedule',
+      });
+    }
+    if (v.allow_unbounded !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['allow_unbounded'],
+        message: 'allow_unbounded is not valid on a `once` schedule',
+      });
+    }
+    if (!!v.spec.fire_at === !!v.spec.delay_seconds) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['spec', 'fire_at'],
+        message: 'once spec requires exactly one of fire_at or delay_seconds',
+      });
+    }
+  }
+};
+
+export const ScheduleDefinitionSchema = z
+  .object(scheduleDefinitionShape)
+  .superRefine(refineScheduleDefinition);
+export type ScheduleDefinition = z.infer<typeof ScheduleDefinitionSchema>;
+
 export const ScheduleCreateInputSchema = z
   .object({
-    title: z.string().trim().min(1).max(SCHEDULE_TITLE_MAX_LEN),
-    message: z.string().min(1).max(SCHEDULE_MESSAGE_MAX_LEN),
-    /** Optional. The conversation whose `(conversation, owner_agent)`
-     *  runtime should be woken up on each fire — that runtime owns the
-     *  full lifecycle: receive wake → produce work → post result, all
-     *  in its own context. If omitted, the server defaults to the
-     *  conversation the create call was made from (so creating in DM
-     *  fires in DM, in a channel fires in that channel, etc.). The
-     *  caller must be a member of the target conversation. */
-    target_conversation_id: z.string().optional(),
-    spec: z.discriminatedUnion('kind', [
-      ScheduleCreateOnceInputSchema,
-      ScheduleSpecIntervalSchema,
-      ScheduleSpecCronSchema,
-    ]),
-    /** Optional epoch-ms termination for repeat specs. REJECTED on `once`. */
-    until_at: z.number().int().positive().optional(),
-    /** Optional max-fire-count cap for repeat specs. REJECTED on `once`. */
-    max_occurrences: z.number().int().positive().optional(),
-    /** Required `true` for repeat specs without `until_at`/`max_occurrences`.
-     *  REJECTED on `once` (one-shots fire exactly once and don't need
-     *  a "no upper bound" opt-in). */
-    allow_unbounded: z.boolean().optional(),
+    ...scheduleDefinitionShape,
+    /** REQUIRED, and an ADDRESS rather than an id (#task:2021 P4-4): the
+     *  conversation whose `(conversation, owner_agent)` runtime is woken up on
+     *  each fire — that runtime owns the full lifecycle: receive wake → produce
+     *  work → post result, all in its own context.
+     *
+     *  Spelled in the one delivery-target grammar (`delivery-target.ts`), so the
+     *  `target=` token of any message pastes in here. It is CONVERSATION-granular:
+     *  a reply cluster shares its parent's runtime, so a `/thread:` suffix names
+     *  nothing this field could act on and is refused rather than dropped.
+     *
+     *  There is no default. The conversation the create call arrives from is where
+     *  the caller's CREDENTIAL lives, not a destination — under an agent-scoped
+     *  session one process serves many conversations, so "here" is not a place.
+     *  Splitting fire-target from execution-target stays unsupported: the session
+     *  that posts is the one that did the work.
+     *
+     *  This field exists on the WIRE only. It is resolved at the door and never
+     *  reaches the service, which sees {@link ScheduleDefinitionSchema} plus the
+     *  resolved id. */
+    target_conversation: z.string().min(1),
   })
-  .superRefine((v, ctx) => {
-    if (v.spec.kind === 'once') {
-      // Strict-reject (vs silent-ignore) for repeat-only knobs on a one-shot.
-      // Silent-ignore would let the agent see a non-canonical DTO that
-      // claims `max_occurrences=N` for a row that can only ever fire once,
-      // which is worse than a clear 400.
-      if (v.until_at !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['until_at'],
-          message: 'until_at is not valid on a `once` schedule',
-        });
-      }
-      if (v.max_occurrences !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['max_occurrences'],
-          message: 'max_occurrences is not valid on a `once` schedule',
-        });
-      }
-      if (v.allow_unbounded !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['allow_unbounded'],
-          message: 'allow_unbounded is not valid on a `once` schedule',
-        });
-      }
-      if (!!v.spec.fire_at === !!v.spec.delay_seconds) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['spec', 'fire_at'],
-          message: 'once spec requires exactly one of fire_at or delay_seconds',
-        });
-      }
-    }
-  });
+  .superRefine(refineScheduleDefinition);
 export type ScheduleCreateInput = z.infer<typeof ScheduleCreateInputSchema>;
 
 // MCP `list_schedules` input. `status='active'` is a query-side alias

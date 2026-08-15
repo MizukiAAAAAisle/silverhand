@@ -58,6 +58,7 @@ describe('POST /internal/.../read-history', () => {
     );
 
     const latest = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       limit: 2,
       include_system: false,
     });
@@ -80,6 +81,7 @@ describe('POST /internal/.../read-history', () => {
     const aliceId = agentIds.alice!;
 
     const latest = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       include_system: false,
     });
     expect(latest.status).toBe(200);
@@ -96,6 +98,7 @@ describe('POST /internal/.../read-history', () => {
     const aliceId = agentIds.alice!;
 
     const mixed = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       before_seq: 10,
       after_seq: 1,
     });
@@ -134,6 +137,7 @@ describe('POST /internal/.../read-history', () => {
       .run(channelId, aliceId, second.id, Date.now());
 
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       before_seq: third.seq,
       limit: 2,
     });
@@ -183,6 +187,7 @@ describe('POST /internal/.../read-history', () => {
     });
 
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       around_message_id: anchor.id,
       include_content: true,
       include_system: false,
@@ -227,6 +232,7 @@ describe('POST /internal/.../read-history', () => {
     t.ctx.db.prepare(`DELETE FROM agents WHERE id = ?`).run(delId);
 
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       include_system: true,
       limit: 10,
     });
@@ -286,6 +292,7 @@ describe('POST /internal/.../read-history', () => {
     // Below msg2 there is msg1 (has_more_before); above msg3 there are msg4,
     // msg5 (has_more_after).
     const mid = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       before_seq: m[3]!.seq,
       limit: 2,
       include_system: false,
@@ -301,6 +308,7 @@ describe('POST /internal/.../read-history', () => {
 
     // A page that spans every user message: nothing remains on either side.
     const full = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       before_seq: m[4]!.seq + 1,
       limit: 10,
       include_system: false,
@@ -315,8 +323,8 @@ describe('POST /internal/.../read-history', () => {
   });
 
   // Reply-cluster read path (docs/thread-reply-cluster-v1.md §6; cut2 2-B2).
-  // `target: { thread_root_id }` reads the cluster INSIDE the root message's
-  // channel — the root (anchor) plus every reply (thread_root_id = root) —
+  // A `/thread:<root_message_id>` suffix reads the cluster INSIDE the addressed
+  // conversation — the root (anchor) plus every reply (thread_root_id = root) —
   // and nothing else. The DTO target echoes the canonical root so the daemon
   // side can tell the anchor root apart from its replies (observed advances
   // on replies only).
@@ -363,7 +371,7 @@ describe('POST /internal/.../read-history', () => {
     });
 
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
-      target: { thread_root_id: root.id },
+      target: `#conv:${channelId}/thread:${root.id}`,
       after_seq: 0,
       limit: 50,
     });
@@ -378,7 +386,7 @@ describe('POST /internal/.../read-history', () => {
     ]);
   });
 
-  it('normalizes a reply id to its canonical root when reading a cluster', async () => {
+  it('refuses a mid-cluster reply id instead of widening it to the cluster', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const aliceId = agentIds.alice!;
@@ -395,27 +403,26 @@ describe('POST /internal/.../read-history', () => {
       content: 'reply one',
       threadRootId: root.id,
     });
-    const reply2 = messages.insertForConversation({
+    messages.insertForConversation({
       conversationId: channelId,
       fromKind: 'user',
       content: 'reply two',
       threadRootId: root.id,
     });
 
-    // Target a REPLY id, not the root — the server normalizes to the root
-    // (symmetry with send-side resolveThreadRoot) and reads the whole cluster.
+    // Behavior change (#task:2021 P4-4): a reply id used to be normalized to its
+    // root here, so two different addresses named one stream. `/thread:` takes a
+    // ROOT — on the read door for exactly the reason it does on the send door —
+    // and an id that is not one names no stream at all.
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
-      target: { thread_root_id: reply1.id },
+      target: `#conv:${channelId}/thread:${reply1.id}`,
       after_seq: 0,
     });
-    expect(res.status).toBe(200);
-    const body = await res.json() as any;
-    expect(body.target.thread_root_id).toBe(root.id);
-    expect(body.messages.map((m: any) => m.message_ref.id)).toEqual([
-      root.id,
-      reply1.id,
-      reply2.id,
-    ]);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: 'thread_not_in_target',
+    });
   });
 
   it('lets a channel member read a cluster without following it (channel-visibility gate, not follow gate)', async () => {
@@ -441,7 +448,7 @@ describe('POST /internal/.../read-history', () => {
     // bob is a channel member but has NO thread_followers row — he can still
     // pull the cluster (pull is channel-visibility gated, never follow gated).
     const res = await http(t).post(readHistoryPath(channelId, bobId), {
-      target: { thread_root_id: root.id },
+      target: `#conv:${channelId}/thread:${root.id}`,
       after_seq: 0,
     });
     expect(res.status).toBe(200);
@@ -452,17 +459,22 @@ describe('POST /internal/.../read-history', () => {
     ]);
   });
 
-  it('rejects an unknown thread root message id with thread_root_not_found', async () => {
+  it('refuses an unknown thread root id the same way as a mid-cluster one', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
     const aliceId = agentIds.alice!;
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
-      target: { thread_root_id: 'does-not-exist' },
+      // A well-formed message id that names no row: "no such root" and "a root of
+      // some other conversation" are one answer, so this cannot be used to ask
+      // whether a message id exists.
+      target: `#conv:${channelId}/thread:zzzzMISSINGzzz01`,
       after_seq: 0,
     });
     expect(res.status).toBe(404);
-    const body = await res.json() as any;
-    expect(body.code).toBe('thread_root_not_found');
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: 'thread_not_in_target',
+    });
   });
 
   it('returns only the root for a cluster with no replies (underpins seen=0 on first reply)', async () => {
@@ -482,7 +494,7 @@ describe('POST /internal/.../read-history', () => {
     });
 
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
-      target: { thread_root_id: root.id },
+      target: `#conv:${channelId}/thread:${root.id}`,
       after_seq: 0,
     });
     expect(res.status).toBe(200);
@@ -522,6 +534,7 @@ describe('POST /internal/.../read-history', () => {
     new MessageReactionRepo(t.ctx.db).add(reacted.id, 'user', 'local', '🎉', Date.now());
 
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      target: `#conv:${channelId}`,
       after_seq: 0,
       limit: 50,
     });
@@ -567,7 +580,7 @@ describe('POST /internal/.../read-history', () => {
     expect(react.status).toBe(200);
 
     const res = await http(t).post(readHistoryPath(channelId, aliceId), {
-      target: { thread_root_id: root.id },
+      target: `#conv:${channelId}/thread:${root.id}`,
       after_seq: 0,
       limit: 50,
     });

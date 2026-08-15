@@ -194,6 +194,15 @@ describe('buildPlatformPrompt', () => {
     // budget must be asserted against that render — the legacy
     // `./.silverhand/agents/<id>` coordinate the other cases use only exists to
     // exercise path normalization.
+    //
+    // The cap stays 19KB (#task:2021 P4-4, @Cindy B3): raising it is a
+    // product-owner decision per docs/platform-prompt-design.md, and an
+    // implementation ticket may not self-approve a permanent per-turn cost. The
+    // reach boundary was paid for by de-duplicating the manual instead — the
+    // claim rules that the Operating Contract already stated once, the Active
+    // Context handoff stated in three places, and the workspace-index preamble
+    // that repeated the L2 bullet. Net: the render is smaller than before the
+    // paragraph existed.
     const byteLength = new TextEncoder().encode(
       prompt({ activeProfileDir: '.' }),
     ).length;

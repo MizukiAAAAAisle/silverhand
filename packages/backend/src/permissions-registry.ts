@@ -151,7 +151,11 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   // via the internal route, where the `manage_conversation_members` capability
   // gate is already enforced
   // (AGENT_ROUTE_CAPABILITIES.agentAddConversationMember, status:'enforced')
-  // before the request reaches this entry.
+  // before the request reaches this entry — asked of the conversation the
+  // ADDRESS resolved to, since #task:2021 P4-4 made that door take one absolute
+  // address instead of inheriting its credential's conversation. The floor is
+  // unchanged by that and is why it survives the change: membership of the
+  // conversation being written, whichever way it was named.
   {
     method: 'POST',
     path: '/api/conversations/:id/members',
@@ -382,7 +386,7 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   agentSendConversationMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
   agentResolveStaleMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
   agentReactMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
-  agentCreateChannel: { status: 'enforced', capability: 'create_channels', scope: 'principal conversation\'s workspace' },
+  agentCreateChannel: { status: 'enforced', capability: 'create_channels', scope: 'addressed fork source\'s workspace (#task:2021 P4-4)' },
   agentListConversationTasks: { status: 'enforced', capability: 'read_tasks', scope: 'effective workspace (workspace_id arg supported)' },
   agentCreateConversationTasks: { status: 'enforced', capability: 'create_tasks', scope: 'principal conversation\'s workspace; `--claim` (atomic self-assign) additionally requires write_tasks' },
   // Task claim/unclaim/status gate INSIDE task-service: the target task's
@@ -398,16 +402,18 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   // write_tasks agent may edit. Detail read gates on read_tasks.
   agentEditConversationTask: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
   agentGetConversationTaskDetail: { status: 'enforced', capability: 'read_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
-  agentUploadAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'principal conversation\'s workspace' },
+  agentUploadAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'addressed destination conversation\'s placement (#task:2021 P4-4)' },
   agentUpdateAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'principal conversation\'s workspace' },
   agentLocateAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },
   agentDownloadAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },
   agentAddConversationMember: { status: 'enforced', capability: 'manage_conversation_members', scope: 'target conversation\'s workspace' },
-  // Schedule create/cancel gate INSIDE schedule-service: the target
-  // workspace is the schedule's target conversation's workspace, resolved
-  // per-call in the service. Typed `capability_denied`/`manage_schedules`
-  // shape preserved on ScheduleError.
-  agentScheduleCreate: { status: 'enforced', capability: 'manage_schedules', scope: 'target_conversation_id\'s workspace (default principal\'s) (service-level gate)' },
+  // Schedule CANCEL gates inside schedule-service: the target workspace is the
+  // stored schedule's target conversation's workspace, resolved per-call.
+  // Typed `capability_denied`/`manage_schedules` shape preserved on
+  // ScheduleError. Schedule CREATE gates at the ROUTE instead (#task:2021 P4-4),
+  // because the destination arrives as an address and the placement that
+  // destination has — workspace channel, DM pair, inbox — is what decides.
+  agentScheduleCreate: { status: 'enforced', capability: 'manage_schedules', scope: 'addressed wake destination\'s placement (#task:2021 P4-4)' },
   agentScheduleCancel: { status: 'enforced', capability: 'manage_schedules', scope: 'resolved schedule → target conversation\'s workspace (service-level gate)' },
 };
 

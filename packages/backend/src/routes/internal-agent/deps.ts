@@ -3,6 +3,7 @@ import type { AgentRepo } from '../../repos/agent-repo.js';
 import type { ConversationRepo } from '../../repos/conversation-repo.js';
 import type { MessageRepo } from '../../repos/message-repo.js';
 import type { MessageReactionRepo } from '../../repos/message-reaction-repo.js';
+import type { UserRepo } from '../../repos/user-repo.js';
 import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
 import type { AgentReadModel } from '../../read-model/agent-read.js';
 
@@ -23,5 +24,9 @@ export interface InternalRouteDeps {
   conversations: ConversationRepo;
   messages: MessageRepo;
   reactions: MessageReactionRepo;
+  /** Needed by ONE thing: `dm:@handle` resolution, where a handle names a user
+   *  OR an agent and the two namespaces are disjoint (#task:2021 P4-4). Not a
+   *  general user surface for the agent routes. */
+  users: UserRepo;
   workspaces: WorkspaceRepo;
 }

@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import {
-  INVISIBLE_CODE_POINTS,
-  findForbiddenCodePoint,
-} from '../display-name-charset.js';
+  canonicalizeStoredWorkspaceName,
+  parseWorkspaceName,
+  WORKSPACE_NAME_MAX_CODE_POINTS,
+} from '../workspace-name.js';
 
 /** Max length for user-chosen entity names (agents, workspaces). The QUANTITY
  *  is shared; the unit is per-schema (see each schema's docblock). */
@@ -85,8 +86,9 @@ export function suggestParticipantNameFromEmail(email: string): string {
 /**
  * Canonical form for a stored workspace name.
  *
- * A workspace name is display text AND a selector: it carries a uniqueness
- * index and resolves `--workspace <name>` on the agent task commands. Unicode
+ * A regular workspace name is display text AND the root segment of its
+ * semantic address (#task:2027). It carries a folded uniqueness key and is
+ * resolved by the shared DeliveryTarget grammar. Unicode
  * lets one visible name be spelled with different code-point sequences, so
  * without a normal form two identical-looking names compare unequal — the user
  * reads a name off the screen and cannot select it. NFC is an equivalence
@@ -98,20 +100,20 @@ export function suggestParticipantNameFromEmail(email: string): string {
  * recourse, whereas merely looking alike is visible and fixable by renaming.
  */
 export function normalizeWorkspaceName(name: string): string {
-  return name.normalize('NFC');
+  return canonicalizeStoredWorkspaceName(name).name;
 }
 
 /**
- * Stored workspace-name FORMAT rule, and the NFC normalizer for the value it
- * admits (parse output is the canonical form, so every write path that goes
- * through this schema stores one spelling).
+ * Stored workspace-name FORMAT rule. Parse output is the branded
+ * `{name,key}` terminal pair, so a persistence writer cannot receive display
+ * bytes without the key derived from the same parse.
  *
  * A workspace name is a LABEL, not a handle: shiki's 2026-08-05 ruling is that
  * it must accept Chinese, and it deliberately does not inherit the participant
  * addressing grammar ({@link ParticipantNameSchema}). `@`, `#` and `/` are
- * legal — no reference form spells a workspace (the renderer's `REF_RE` has
- * five forms, none of them a workspace), so there is no contract to protect by
- * banning them, and channel titles already set the precedent of free text.
+ * legal: the semantic address uses the shared reversible percent codec rather
+ * than shrinking the display-name domain. `/` is structural only after
+ * encoding (`%2F` inside this segment), and `@` / `#` are ordinary data here.
  *
  * Length is 64 CODE POINTS (`Array.from`), not UTF-16 units, so an astral
  * character costs one. Grapheme clusters are explicitly not promised: a
@@ -130,15 +132,16 @@ export function normalizeWorkspaceName(name: string): string {
  * code point that a title refuses must not survive in a workspace name that
  * addresses the same coordinate.
  *
- * FORMAT only — uniqueness is a separate, server-only concern (see the
- * name-availability endpoints + {@link NameAvailabilityDtoSchema}), and it is
- * judged on the normalized form because every write stores it normalized.
+ * FORMAT only — current regular-workspace uniqueness is a separate DB-backed
+ * concern over the returned folded key (see the name-availability endpoint).
+ * Agent-home workspaces never carry that key and do not enter the namespace.
  */
 export const WorkspaceNameSchema = z
   .string()
-  .transform(normalizeWorkspaceName)
-  .superRefine((name, ctx) => {
-    if (name.length === 0) {
+  .transform((raw, ctx) => {
+    const parsed = parseWorkspaceName(raw);
+    if (parsed.ok) return parsed.value;
+    if (parsed.issue.kind === 'empty') {
       ctx.addIssue({
         code: z.ZodIssueCode.too_small,
         minimum: 1,
@@ -146,29 +149,23 @@ export const WorkspaceNameSchema = z
         inclusive: true,
         message: 'workspace name must not be empty',
       });
-      return;
+      return z.NEVER;
     }
-    if (Array.from(name).length > ENTITY_NAME_MAX_LENGTH) {
+    if (parsed.issue.kind === 'too_long') {
       ctx.addIssue({
         code: z.ZodIssueCode.too_big,
-        maximum: ENTITY_NAME_MAX_LENGTH,
+        maximum: WORKSPACE_NAME_MAX_CODE_POINTS,
         type: 'string',
         inclusive: true,
-        message: `workspace name must be at most ${ENTITY_NAME_MAX_LENGTH} characters`,
+        message: `workspace name must be at most ${WORKSPACE_NAME_MAX_CODE_POINTS} characters`,
       });
+      return z.NEVER;
     }
-    if (name !== name.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'workspace name must not start or end with whitespace',
-      });
-    }
-    if (findForbiddenCodePoint(name, [INVISIBLE_CODE_POINTS])) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'workspace name must not contain control or invisible characters',
-      });
-    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'workspace name contains a character that is not addressable',
+    });
+    return z.NEVER;
   });
 
 /** Why a proposed name is / isn't usable. Invariant: a name is usable iff

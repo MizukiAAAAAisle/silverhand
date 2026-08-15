@@ -59,6 +59,7 @@
  * check applied to outbound event frames; no wire envelope shape
  * changes.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -134,7 +135,7 @@ function makePerimeterFixture(opts?: {
   const agents = new AgentRepo(db);
 
   const wsX = workspaces.insert({
-    name: 'perimeter-x',
+    name: fixedWorkspaceName('perimeter-x'),
     description: null,
   });
   const channelX = conversations.insertChannel({
@@ -165,7 +166,7 @@ function makePerimeterFixture(opts?: {
   }));
 
   const wsY = workspaces.insert({
-    name: 'perimeter-y',
+    name: fixedWorkspaceName('perimeter-y'),
     description: null,
   });
   const channelY = conversations.insertChannel({

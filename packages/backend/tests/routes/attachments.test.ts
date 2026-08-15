@@ -60,7 +60,11 @@ function internalAuthHeaders(
 
 /** Direct multipart upload — bypasses the JSON-shaped `http().post`
  *  helper because FormData needs to set its own Content-Type with
- *  boundary. */
+ *  boundary.
+ *
+ *  `target` is the AGENT door's destination address, which travels as a form
+ *  field beside the bytes (#task:2021 P4-4). The human channel route carries its
+ *  conversation in the path and passes none. */
 async function uploadFile(
   t: TestApp,
   path: string,
@@ -68,8 +72,10 @@ async function uploadFile(
   contentType: string,
   bytes: Buffer,
   extraHeaders?: Record<string, string>,
+  target?: string,
 ): Promise<Response> {
   const form = new FormData();
+  if (target !== undefined) form.append('target', target);
   form.append('file', new Blob([bytes], { type: contentType }), filename);
   const headers: Record<string, string> = {
     ...CURRENT_DESKTOP_EPOCH_HEADERS,
@@ -782,6 +788,7 @@ describe('Internal agent attachment routes', () => {
       'image/png',
       PNG_BYTES,
       internalAuthHeaders(t, channelId, aliceId),
+      `#conv:${channelId}`,
     );
     expect(upload.status).toBe(201);
     const dto = await upload.json() as any;
@@ -817,6 +824,7 @@ describe('Internal agent attachment routes', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, a.channelId, aliceA),
+        `#conv:${a.channelId}`,
       )
     ).json() as any;
 
@@ -841,6 +849,7 @@ describe('Internal agent attachment routes', () => {
       'image/png',
       PNG_BYTES,
       internalAuthHeaders(t, channelId, aliceId),
+      `#conv:${channelId}`,
     );
     expect(upload.status).toBe(201);
     const dto = await upload.json() as any;
@@ -871,6 +880,7 @@ describe('Internal agent attachment routes', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, a.channelId, aliceA),
+        `#conv:${a.channelId}`,
       )
     ).json() as any;
 
@@ -895,6 +905,7 @@ describe('Internal agent attachment routes', () => {
       'image/png',
       PNG_BYTES,
       internalAuthHeaders(t, a.channelId, b.agentIds.bob!),
+      `#conv:${a.channelId}`,
     );
     expect(res.status).toBe(401);
   });
@@ -911,12 +922,13 @@ describe('Internal agent attachment routes', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, channelId, aliceId),
+        `#conv:${channelId}`,
       )
     ).json() as any;
 
     const send = await http(t).post(
       `/internal/conversations/${channelId}/agents/${aliceId}/send-message`,
-      { content: 'with file', attachment_ids: [dto.id] },
+      { content: 'with file', attachment_ids: [dto.id], target: `#conv:${channelId}` },
       { headers: internalAuthHeaders(t, channelId, aliceId) },
     );
     expect(send.status).toBe(200);
@@ -951,12 +963,13 @@ describe('Internal agent attachment routes', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, channelId, aliceId),
+        `#conv:${channelId}`,
       )
     ).json() as any;
 
     const send = await http(t).post(
       `/internal/conversations/${channelId}/agents/${aliceId}/send-message`,
-      { content: '', attachment_ids: [dto.id] },
+      { content: '', attachment_ids: [dto.id], target: `#conv:${channelId}` },
       { headers: internalAuthHeaders(t, channelId, aliceId) },
     );
     expect(send.status).toBe(200);
@@ -991,12 +1004,13 @@ describe('Internal agent attachment routes', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, a.channelId, aliceA),
+        `#conv:${a.channelId}`,
       )
     ).json() as any;
 
     const res = await http(t).post(
       `/internal/conversations/${b.channelId}/agents/${aliceB}/send-message`,
-      { content: 'cross', attachment_ids: [foreign.id] },
+      { content: 'cross', attachment_ids: [foreign.id], target: `#conv:${b.channelId}` },
       { headers: internalAuthHeaders(t, b.channelId, aliceB) },
     );
     expect(res.status).toBe(400);
@@ -1010,7 +1024,7 @@ describe('Internal agent attachment routes', () => {
     const b = await createWorkspaceChannel(t, ['bob']);
     const res = await http(t).post(
       `/internal/conversations/${a.channelId}/agents/${b.agentIds.bob}/send-message`,
-      { content: 'forged' },
+      { content: 'forged', target: `#conv:${a.channelId}` },
       { headers: internalAuthHeaders(t, a.channelId, b.agentIds.bob!) },
     );
     expect(res.status).toBe(401);
@@ -1170,6 +1184,7 @@ describe('Single attachment DELETE (orphan-only)', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, channelId, aliceId),
+        `#conv:${channelId}`,
       )
     ).json() as any;
 
@@ -1348,6 +1363,7 @@ describe('Attachment content update (PATCH)', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, channelId, aliceId),
+        `#conv:${channelId}`,
       )
     ).json() as any;
 
@@ -1386,6 +1402,7 @@ describe('Attachment content update (PATCH)', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, channelId, aliceId),
+        `#conv:${channelId}`,
       )
     ).json() as any;
 
@@ -1426,6 +1443,7 @@ describe('Attachment content update (PATCH)', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, a.channelId, aliceA),
+        `#conv:${a.channelId}`,
       )
     ).json() as any;
 
@@ -1452,6 +1470,7 @@ describe('Attachment content update (PATCH)', () => {
         'image/png',
         PNG_BYTES,
         internalAuthHeaders(t, a.channelId, a.agentIds.alice!),
+        `#conv:${a.channelId}`,
       )
     ).json() as any;
 

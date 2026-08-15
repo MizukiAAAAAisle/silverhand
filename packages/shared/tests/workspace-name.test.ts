@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { WorkspaceNameSchema, normalizeWorkspaceName } from '../src/index.js';
+import {
+  WorkspaceNameSchema,
+  type CanonicalWorkspaceName,
+  fixedWorkspaceName,
+  formatWorkspaceAddressSegment,
+  normalizeWorkspaceName,
+  parseWorkspaceAddressSegment,
+} from '../src/index.js';
 
 /**
  * Workspace-name grammar (#task:1827). shiki's ruling: workspace names are
@@ -18,6 +25,13 @@ import { WorkspaceNameSchema, normalizeWorkspaceName } from '../src/index.js';
  * negative case itself would be unauditable (and editors silently strip some).
  */
 describe('WorkspaceNameSchema', () => {
+  it('makes name/key construction a branded terminal value', () => {
+    const canonical: CanonicalWorkspaceName = fixedWorkspaceName('General');
+    expect(canonical).toMatchObject({ name: 'General', key: 'general' });
+    // @ts-expect-error a second folder cannot construct the terminal pair
+    const forged: CanonicalWorkspaceName = { name: 'General', key: 'wrong' };
+    expect(forged.key).toBe('wrong');
+  });
   it('accepts Chinese, internal spaces, and @ # / punctuation', () => {
     for (const name of ['设计评审', 'UI 优化', '设计　评审', '@ # / ok', '2b', '🎨']) {
       expect(WorkspaceNameSchema.safeParse(name)).toMatchObject({
@@ -33,8 +47,9 @@ describe('WorkspaceNameSchema', () => {
     const decomposed = 'cafe\u0301-team';
     const parsed = WorkspaceNameSchema.safeParse(decomposed);
     expect(parsed.success).toBe(true);
-    expect(parsed.success && parsed.data).toBe('café-team'.normalize('NFC'));
-    expect(parsed.success && parsed.data).not.toBe(decomposed);
+    expect(parsed.success && parsed.data.name).toBe('café-team'.normalize('NFC'));
+    expect(parsed.success && parsed.data.name).not.toBe(decomposed);
+    expect(parsed.success && parsed.data.key).toBe('café-team');
   });
 
   it('normalizeWorkspaceName is idempotent', () => {
@@ -42,10 +57,12 @@ describe('WorkspaceNameSchema', () => {
     expect(normalizeWorkspaceName(once)).toBe(once);
   });
 
-  it('rejects empty, all-whitespace, and edge-whitespace names', () => {
-    for (const name of ['', '   ', '　', ' lead', 'trail ']) {
+  it('rejects empty/all-whitespace and canonicalizes edge whitespace', () => {
+    for (const name of ['', '   ', '　']) {
       expect(WorkspaceNameSchema.safeParse(name).success).toBe(false);
     }
+    expect(WorkspaceNameSchema.parse(' lead ').name).toBe('lead');
+    expect(WorkspaceNameSchema.parse('\u3000trail\u00A0').name).toBe('trail');
   });
 
   it('rejects control and invisible code points', () => {
@@ -79,17 +96,21 @@ describe('WorkspaceNameSchema', () => {
     }
   });
 
-  it('keeps assigned-but-unusual characters legal', () => {
-    // The forbidden set is named by PERMANENT properties, never by `Cn`:
-    // barring unassigned code points as a class would reject tomorrow's
-    // characters on today's engine. Bare emoji stay legal — only the
-    // presentation-selector and ZWJ spellings are refused.
+  it('keeps assigned-but-unusual characters legal under the shipped Unicode table', () => {
     for (const name of ['❤', '🎨', 'ᅡ', '设计', 'ß']) {
       expect(
         WorkspaceNameSchema.safeParse(name).success,
         `${JSON.stringify(name)} must be accepted`,
       ).toBe(true);
     }
+  });
+
+  it('uses the same pinned verdict as conversation titles', () => {
+    // Unassigned code points fail closed until the reviewed Unicode table is
+    // regenerated; a workspace cannot admit a segment a channel refuses.
+    expect(WorkspaceNameSchema.safeParse('a\u0378b').success).toBe(false);
+    expect(WorkspaceNameSchema.safeParse('👩‍💻').success).toBe(false);
+    expect(WorkspaceNameSchema.safeParse('🎨').success).toBe(true);
   });
 
   it('measures length in code points, not UTF-16 units', () => {
@@ -118,5 +139,33 @@ describe('WorkspaceNameSchema', () => {
     expect(
       !parsed.success && parsed.error.issues.some(i => i.code === 'too_big'),
     ).toBe(false);
+  });
+
+  it('round-trips readable segments without slugifying display text', () => {
+    for (const name of ['Design Review', '设计/评审', '100% Ready', '🎨']) {
+      const canonical = fixedWorkspaceName(name);
+      const segment = formatWorkspaceAddressSegment(canonical);
+      expect(parseWorkspaceAddressSegment(segment)).toEqual(canonical);
+    }
+    expect(formatWorkspaceAddressSegment(fixedWorkspaceName('设计/100% Ready')))
+      .toBe('设计%2F100%25%20Ready');
+  });
+
+  it('rejects delimiter injection and non-canonical equivalent spellings', () => {
+    for (const segment of [
+      'Design/Review',
+      'Design%2fReview',
+      '%44esign',
+      '%20Design',
+      'Design%',
+      'Design%ZZ',
+      'cafe\u0301',
+    ]) {
+      expect(parseWorkspaceAddressSegment(segment), segment).toBeNull();
+    }
+    // One decode only: this is the canonical address of the literal name
+    // `Design%2FReview`, never an alias for `Design/Review`.
+    expect(parseWorkspaceAddressSegment('Design%252FReview')?.name)
+      .toBe('Design%2FReview');
   });
 });

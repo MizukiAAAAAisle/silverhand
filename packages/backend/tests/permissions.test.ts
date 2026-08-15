@@ -1,8 +1,10 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fixedConversationTitle } from '@silverhand/shared';
 import {
+  canAddConversationMember,
   canDeleteAttachment,
   canEditAgent,
   canViewAgent,
@@ -34,7 +36,7 @@ function seed(t: TestApp) {
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, host.id, 'local');
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, host.id, 'local');
   const workspace = workspaces.insert({
-    name: `ws-${randomUUID().slice(0, 8)}`,
+    name: fixedWorkspaceName(`ws-${randomUUID().slice(0, 8)}`),
     description: null,
   });
   workspaces.insertMembership(workspace.id, alice.id);
@@ -305,6 +307,36 @@ describe('permission helpers', () => {
     expect(canViewConversation(t.ctx, alice, f.sibling.id)).toBe(false);
     expect(canViewWorkspace(t.ctx, bob, f.workspace.id)).toBe(false);
     expect(canViewConversation(t.ctx, bob, f.channel.id)).toBe(false);
+  });
+
+  it('asks the roster, not the credential frame, for the member-add floor', () => {
+    t = buildTestApp();
+    const f = seed(t);
+    // alice belongs to BOTH channels but her token was minted for one of them.
+    f.conversations.addAgent(f.sibling.id, f.alice.id);
+    const alice: AgentPrincipal = {
+      kind: 'agent',
+      agentId: f.alice.id,
+      conversationId: f.channel.id,
+    };
+    const bob: AgentPrincipal = {
+      kind: 'agent',
+      agentId: f.bob.id,
+      conversationId: f.channel.id,
+    };
+
+    // The FRAME gate stays narrow, deliberately: what an agent may read straight
+    // out of the conversation its credential names is a fact about that frame.
+    expect(canViewConversation(t.ctx, alice, f.sibling.id)).toBe(false);
+    // The member-add FLOOR is a fact about the DESTINATION, which since
+    // #task:2021 P4-4 arrives as an address. Same question the in-lock authority
+    // asks, so the pre-lock gate can no longer refuse an add the transaction
+    // would have allowed.
+    expect(canAddConversationMember(t.ctx, alice, f.sibling.id)).toBe(true);
+    // Still a floor, not a widening: an agent outside the destination's roster is
+    // refused no matter which conversation its credential names.
+    expect(canAddConversationMember(t.ctx, bob, f.sibling.id)).toBe(false);
+    expect(canAddConversationMember(t.ctx, bob, f.channel.id)).toBe(false);
   });
 
   it('models agent_home as owner-agent plus v1 local human viewable', () => {

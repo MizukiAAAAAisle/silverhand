@@ -8,13 +8,14 @@ import type {
 } from '@silverhand/shared';
 import { CliError } from '../errors.js';
 import { flagBool, flagNumber, flagString } from '../parse.js';
+import { requireTargetFlag } from '../target-flag.js';
 import type { Command } from './index.js';
 
 const createCommand: Command = {
   verb: 'create',
   summary: 'Create a self-wake schedule for this agent.',
   help: `silverhand schedule create --title <text> --message <text> --kind once|interval|cron
-                            [--target-conversation-id <id>]
+                            --target-conversation <address>
                             [<kind-specific flags>]
                             [--until-at <epoch_ms>] [--max-occurrences N]
                             [--allow-unbounded]
@@ -26,20 +27,26 @@ Common flags:
                            the actual instruction to your future self.
                            1..500 chars.
   --kind once|interval|cron Required. Time policy.
-  --target-conversation-id <id>
-                           Optional. The conversation whose
+  --target-conversation <address>
+                           Required. The conversation whose
                            (conversation, you) runtime is woken up on
                            each fire — that runtime owns the full
                            lifecycle: receive wake → produce work →
-                           post result, all in its own context. You
-                           must already be a member of the target.
-                           Defaults to the conversation this command
-                           is running in (so creating in a DM fires in
-                           that DM, in a channel fires in that channel,
-                           etc.). Splitting fire-target from
-                           execution-target is intentionally NOT
-                           supported — the session that posts is the
-                           one that did the work.
+                           post result, all in its own context.
+                           Splitting fire-target from execution-target
+                           is intentionally NOT supported: the session
+                           that posts is the one that did the work.
+                           Spelled like any other address —
+                           \`#conv:<conversation_id>\`,
+                           \`#<workspace>/<title>\`,
+                           or \`dm:@<handle>\` — so the \`target=\` token of
+                           the message you are reading pastes straight in.
+                           A CONVERSATION, not a stream inside it: a reply
+                           cluster shares its parent's runtime, so a
+                           \`/thread:\` suffix is refused rather than
+                           quietly ignored. There is no default — the
+                           conversation this CLI is authenticated in is
+                           where your credential lives, not a destination.
 
 once flags (exactly one):
   --fire-at <epoch_ms>     Absolute UTC fire time.
@@ -59,12 +66,23 @@ Repeat-only options (rejected on once):
   --allow-unbounded        Required true for repeat schedules with neither
                            --until-at nor --max-occurrences set.
 
+Errors:
+  target_required               --target-conversation was omitted (when you
+                                were woken in one stream, the reply names it
+                                as \`correct_target\`)
+  target_malformed              the value is not an address
+  target_unresolved             it names no conversation you can use — the
+                                same answer for one that does not exist
+  thread_suffix_not_supported   a \`/thread:\` suffix was appended
+  inbox_not_writable            an agent inbox is not a wake destination
+  capability_denied             manage_schedules, judged where the wake lands
+
 stdout: { "schedule": ScheduleDto }`,
   flags: [
     'title',
     'message',
     'kind',
-    'target-conversation-id',
+    'target-conversation',
     'fire-at',
     'delay-seconds',
     'every-seconds',
@@ -75,7 +93,18 @@ stdout: { "schedule": ScheduleDto }`,
     'max-occurrences',
   ] as const,
   booleanFlags: ['allow-unbounded'],
-  async run({ client, args }) {
+  removedFlags: {
+    'target-conversation-id': {
+      replacement: '--target-conversation',
+      hint:
+        'the wake destination is an ADDRESS now, not a bare id: ' +
+        "`--target-conversation '#conv:<conversation_id>'` (or the readable " +
+        '`#<workspace>/<title>`, or `dm:@<handle>`). ' +
+        'It is also required — there is no longer a default to the ' +
+        'conversation you are calling from.',
+    },
+  },
+  async run({ env, client, args }) {
     const title = flagString(args, 'title');
     const message = flagString(args, 'message');
     const kind = flagString(args, 'kind') as
@@ -115,10 +144,22 @@ stdout: { "schedule": ScheduleDto }`,
     const untilAt = flagNumber(args, 'until-at');
     const maxOccurrences = flagNumber(args, 'max-occurrences');
     const allowUnbounded = flagBool(args, 'allow-unbounded');
-    const targetConversationId = flagString(args, 'target-conversation-id');
-    const targetField = targetConversationId !== undefined
-      ? { target_conversation_id: targetConversationId }
-      : {};
+    // A wake destination is an address like any other, and the same policy
+    // applies to it (#task:2021 P4-4) — including the one correction, which for a
+    // schedule is usually exactly what the caller meant: wake me where I am. The
+    // raw token travels verbatim; whether it resolves is the backend's answer.
+    const targetConversation = requireTargetFlag(
+      flagString(args, 'target-conversation'),
+      env,
+      {
+        command: 'silverhand schedule create',
+        flag: 'target-conversation',
+        because:
+          'a fire wakes the (conversation, you) runtime of ONE conversation, ' +
+          'and the conversation this CLI is authenticated in is where your ' +
+          'credential lives, not a default destination.',
+      },
+    );
 
     let input: ScheduleCreateInput;
     if (kind === 'once') {
@@ -127,7 +168,7 @@ stdout: { "schedule": ScheduleDto }`,
       input = {
         title,
         message,
-        ...targetField,
+        target_conversation: targetConversation,
         spec: {
           kind: 'once',
           ...(fireAt !== undefined ? { fire_at: fireAt } : {}),
@@ -147,7 +188,7 @@ stdout: { "schedule": ScheduleDto }`,
       input = {
         title,
         message,
-        ...targetField,
+        target_conversation: targetConversation,
         spec: {
           kind: 'interval',
           every_seconds: everySeconds,
@@ -170,7 +211,7 @@ stdout: { "schedule": ScheduleDto }`,
       input = {
         title,
         message,
-        ...targetField,
+        target_conversation: targetConversation,
         spec: { kind: 'cron', expression, timezone },
         ...(untilAt !== undefined ? { until_at: untilAt } : {}),
         ...(maxOccurrences !== undefined ? { max_occurrences: maxOccurrences } : {}),

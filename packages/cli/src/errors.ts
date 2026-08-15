@@ -8,6 +8,12 @@
  *   `internal/*` routes either return one of these directly in
  *   `{error: {code, message}}` shape, or the CLI infers it from the
  *   HTTP status. Either way, the agent gets the same code.
+ * - `subkind`: a finer classification the agent may branch on without
+ *   the closed `code` enum having to grow. Raised locally by pre-flight
+ *   refusals, and ADOPTED from the backend for the address vocabulary
+ *   (`DELIVERY_TARGET_REFUSAL_CODES`, #task:2021 P4-4) — otherwise the
+ *   status would be all that survived, and "an inbox is not a write
+ *   destination" would reach the agent as a bare 400.
  * - `retriable`: whether the agent can retry without changing input.
  *   Validation/auth/not-found are NOT retriable; rate-limit and
  *   upstream-unavailable are.
@@ -26,6 +32,12 @@
  * The contract is exercised by `tests/errors.test.ts` and is the
  * agreement Cindy's backend slice (#193) maps backend errors onto.
  */
+
+import {
+  CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE,
+  DELIVERY_TARGET_REFUSAL_CODES,
+  SLOT_REACH_REFUSAL_CODE,
+} from '@silverhand/shared';
 
 export const ERROR_CODES = [
   'not_found',
@@ -77,6 +89,51 @@ export type ErrorSubkind =
   | 'unknown_flag'
   | 'enum_invalid'
   | 'mutually_exclusive'
+  /** A destination-taking door was called without `--target` (#task:2021 P4-4).
+   *  Its own subkind rather than `missing_required_flag` because it is the one
+   *  omission the cutover guarantees — an agent carrying the old habit sends
+   *  with no address at all — and because the refusal carries the correction:
+   *  `details.correct_target` is the id form of the caller's own stream, which
+   *  is what an agent answering where it was woken should have passed. */
+  | 'target_required'
+  /** `--target` was spelled but is not an address. Mirrors the backend
+   *  resolver's `target_malformed` 1:1 (same shared grammar decides both), and
+   *  raised pre-flight so a body is never read — let alone uploaded — for a
+   *  send that could not have landed. Says nothing about what exists: no
+   *  lookup happened.
+   *
+   *  Also ADOPTED from the backend on the rare path where a token this CLI
+   *  accepted is refused there (a door with a narrower grammar): same subkind
+   *  for the same fact, whichever side noticed. */
+  | 'target_malformed'
+  /* The rest of the address vocabulary, ADOPTED from the backend's refusal —
+   * one subkind per published code, no reinterpretation (#task:2021 P4-4).
+   * They carry no branch: `target_unresolved` is where unknown and
+   * unauthorized collapse, and `thread_not_in_target` where all three ways a
+   * suffix can miss do, so publishing them tells the actor what to DO
+   * (fix the token / ask for access / drop the suffix) without telling them
+   * what exists. `tests/delivery-target-refusal-subkind.test.ts` fails if the
+   * published set ever grows past this list. */
+  /** The address names no stream this agent may use. */
+  | 'target_unresolved'
+  /** An agent inbox is a read face, never a write destination. */
+  | 'inbox_not_writable'
+  /** The `/thread:<root>` suffix names no reply cluster of that conversation. */
+  | 'thread_not_in_target'
+  /** `dm:@<own handle>` — a direct message needs another participant. */
+  | 'self_pair_not_addressable'
+  /** The door acts on a conversation and was handed a reply cluster: the
+   *  address resolved, the SUFFIX has no operation here. Drop it. */
+  | 'thread_suffix_not_supported'
+  /** The address is fine and the stream is the agent's; this DOOR still acts
+   *  only where the session is anchored (#task:2021 P4-4). Adopted for the same
+   *  reason as the rest: without it a 403 says "you may not", when the fact the
+   *  agent needs is narrower — a conversation-scoped session writes, uploads,
+   *  adds members and forks in ITS OWN conversation, and reads / files tasks /
+   *  schedules anywhere it participates. Not retriable and not fixable by
+   *  changing the address: either run the door from the session anchored there,
+   *  or ask a human. */
+  | 'slot_out_of_scope'
   /** A by-number `task` verb (`detail`/`edit`/`status`/`unclaim`/`claim`) was
    *  called without its positional `<task_number>` operand. Distinct from
    *  `missing_required_flag`: the task number is no longer a flag, so an
@@ -157,16 +214,38 @@ export class CliError extends Error {
   }
 }
 
-/** Map an HTTP status + optional `{error:{code,message}}` body from the
- *  backend onto a `CliError` with a stable code. The CLI's job is to
- *  hide raw HTTP from the agent; if the backend already supplies a
- *  stable code we use it, otherwise we infer from status.
+/**
+ * The backend refusal codes this CLI ADOPTS as a subkind (#task:2021 P4-4).
+ *
+ * Derived from the shared vocabulary rather than listed here, so a code the
+ * resolver starts raising cannot reach an agent as a bare HTTP status: the set is
+ * closed on the shared side and this file only decides where it lands. Adoption is
+ * as a SUBKIND, never as a `code` — `code` drives the exit class and retriability
+ * and stays the closed enum above, while the status already carries the right
+ * class for every one of these (400 for "fix your token", 404 for "not for you",
+ * 403 for "not through this door from here" — which lands as `forbidden`, i.e.
+ * exit 3: stop and report, exactly the right class for a boundary no retry moves).
+ */
+const ADOPTED_REFUSAL_SUBKINDS: readonly string[] = [
+  ...DELIVERY_TARGET_REFUSAL_CODES,
+  CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE,
+  SLOT_REACH_REFUSAL_CODE,
+];
+
+/** Map an HTTP status + an error body from the backend onto a `CliError` with a
+ *  stable code. The CLI's job is to hide raw HTTP from the agent; if the backend
+ *  already supplies a stable code we use it, otherwise we infer from status and
+ *  keep the backend's own finer code as `subkind` when it is one we publish.
  *
  *  The `bodyText` parameter is the raw response body (already read
  *  upstream). We try JSON-parse defensively — backends sometimes return
  *  HTML for proxy errors. */
 export function mapHttpError(status: number, bodyText: string): CliError {
   const parsed = safeParseErrorBody(bodyText);
+  const subkind =
+    parsed?.code && ADOPTED_REFUSAL_SUBKINDS.includes(parsed.code)
+      ? { subkind: parsed.code as ErrorSubkind }
+      : {};
 
   // Trust an explicit backend code only when it's in our enum.
   if (parsed?.code && (ERROR_CODES as readonly string[]).includes(parsed.code)) {
@@ -182,6 +261,7 @@ export function mapHttpError(status: number, bodyText: string): CliError {
   const code = inferCodeFromStatus(status);
   return new CliError({
     code,
+    ...subkind,
     message: parsed?.message ?? defaultMessageForStatus(status, code),
     retriable: isRetriableCode(code),
     ...(parsed?.details ? { details: parsed.details } : {}),
@@ -367,8 +447,17 @@ function safeParseErrorBody(bodyText: string): ParsedErrorBody | null {
           ? (obj.error as Record<string, unknown>)
           : obj;
       const code = typeof inner.code === 'string' ? inner.code : undefined;
+      // `{error: "<sentence>", code?}` is what `internal/*` routes actually
+      // send — the message IS the `error` field there. Reading only
+      // `error.message` is why every one of those sentences used to reach the
+      // agent as `... (HTTP 400)`: the backend named the problem and the CLI
+      // replaced it with a status. The nested form wins when both exist.
       const message =
-        typeof inner.message === 'string' ? inner.message : undefined;
+        typeof inner.message === 'string'
+          ? inner.message
+          : typeof obj.error === 'string'
+            ? obj.error
+            : undefined;
       const details =
         inner.details && typeof inner.details === 'object'
           ? (inner.details as Record<string, unknown>)

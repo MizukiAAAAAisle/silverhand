@@ -3,11 +3,11 @@
  */
 import type {
   AgentSendStaleResolutionReason,
-  MessageSendTarget,
   Reference,
-  SendMessageTarget,
 } from '@silverhand/shared';
 import {
+  NAMED_STREAM_ADDRESS_PREFIX,
+  conversationAddressOf,
   MAX_MESSAGE_CONTENT_LABEL,
   messageContentExceedsLimit,
 } from '@silverhand/shared';
@@ -25,6 +25,7 @@ import {
 } from '@silverhand/host';
 import { CliError, mapHttpError } from '../errors.js';
 import type { BackendClient } from '../client.js';
+import type { CliEnv } from '../env.js';
 import {
   flagBool,
   flagNumber,
@@ -32,40 +33,57 @@ import {
   flagStringArray,
 } from '../parse.js';
 import { decodeStdinUtf8, readAllStdin } from '../stdin.js';
+import { reachHelpParagraphSection } from '../reach-help.js';
+import {
+  requireAddressBeforeSideEffects,
+  requireTargetFlag,
+} from '../target-flag.js';
 import type { Command } from './index.js';
 
 const sendCommand: Command = {
   verb: 'send',
-  summary: 'Send a message to the current channel/thread.',
-  help: `silverhand message send [--target channel|thread:<message_id>]
+  summary: 'Send a message to one addressed stream.',
+  help: `silverhand message send --target <address>
                           [--attachment-id <id> ...]
                           [--stale-resolution unaffected|revised]
                           [--anyway]
 
-Reads the message body from STDIN and sends it to the current
-conversation (channel or thread). A message must include text or at
-least one attachment. Pipe text via stdin; attachment-only sends may
-omit stdin and pass \`--attachment-id <id>\`.
+Reads the message body from STDIN and sends it to the stream named by
+\`--target\`. A message must include text or at least one attachment.
+Pipe text via stdin; attachment-only sends may omit stdin and pass
+\`--attachment-id <id>\`.
 
-The old \`--content <text>\` flag was removed because shell quoting
+\`--target\` is REQUIRED and says where the message goes. There is no
+"here": the conversation this CLI is authenticated in is where your
+credential lives, not a default destination — one runtime serves many
+streams, so an omitted target would mean whichever one the reader
+assumed. To post to the stream you were woken in, copy the \`target=\`
+token from the message header you are answering.
+
+${reachHelpParagraphSection('message_send')}The old \`--content <text>\` flag was removed because shell quoting
 of a value containing \`"\`, backticks, or \`$\` silently truncated
 the body before reaching this CLI.
 
 Two recommended call shapes:
 
   # short body
-  printf "%s" "hello" | silverhand message send
+  printf "%s" "hello" | silverhand message send --target '#conv:QVI9x6vU_K1a9oN9'
 
   # multi-line / contains quotes / contains $/backticks
-  silverhand message send <<'SILVERHAND_EOF'
+  silverhand message send --target '#conv:QVI9x6vU_K1a9oN9' <<'SILVERHAND_EOF'
   Any text. Quotes, backticks, $vars, multi-line markdown — all safe.
   SILVERHAND_EOF
 
   # attachment-only
-  silverhand message send --attachment-id att_123
+  silverhand message send --target '#conv:QVI9x6vU_K1a9oN9' --attachment-id att_123
 
-  # explicitly send to a thread (reply cluster) under message m_123
-  printf "%s" "in-thread answer" | silverhand message send --target thread:m_123
+  # into the reply cluster rooted at message QVI9x6vU_K1a9oN9
+  printf "%s" "in-thread answer" | silverhand message send \\
+    --target '#conv:QVI9x6vU_K1a9oN9/thread:Rp9mXk2fLb7QwZ0t'
+
+  # by name, and to a direct pair
+  silverhand message send --target '#silverhand/UI%2FUX'
+  silverhand message send --target 'dm:@shiki'
 
 The single-quoted heredoc delimiter (\`<<'SILVERHAND_EOF'\`) disables
 shell expansion of \`$\`, backticks, and \`\\\`. The body is read as
@@ -77,16 +95,28 @@ Bodies larger than 64KiB (UTF-8 bytes) are automatically uploaded as a
 line. The backend rejects oversized raw content with 413.
 
 Flags:
-  --target channel|thread:<id>
-                        Optional explicit destination. Omit it to post to
-                        the channel main line. "channel" is the same main
-                        line, stated explicitly. "thread:<id>" sends to
-                        the reply cluster containing that message; a main-line
-                        message id opens/targets its thread, and a reply id
-                        joins the same thread (no nesting).
+  --target <address>    REQUIRED. The stream this message goes to. Three
+                        spellings, and quote it — a leading \`#\` starts a
+                        shell comment:
+                          #conv:<conversation_id>
+                                      the form every stream always has.
+                          #<workspace>/<title>
+                                      the readable coordinate; a space in a
+                                      name is %20, a slash is %2F.
+                          dm:@<handle>
+                                      your direct pair with that principal.
+                                      Sending to the main line opens the pair
+                                      if it does not exist yet.
+                        Append \`/thread:<root_message_id>\` to any of them to
+                        post into a reply cluster. A cluster is addressed by
+                        its ROOT — the id under \`thread_root_id\`, or the
+                        message id itself when you are answering a main-line
+                        message. Answering a reply with that reply's own id
+                        names a stream that does not exist (threads do not
+                        nest) and is refused.
   --attachment-id <id>  Optional, repeatable. Attachment ids returned by
                         \`silverhand file upload\`. All ids must belong
-                        to the current channel.
+                        to the same channel as the addressed stream.
   --stale-resolution    Optional. After a message_stale conflict, explain
                         why this retry is being sent:
                         "unaffected" means the original draft still applies;
@@ -98,6 +128,12 @@ Flags:
                         or when the message must be posted despite stale risk.
 
 Pre-flight failures (exit 1):
+  --target was omitted          → target_required (when you were woken in one
+                                   stream, the reply names it as
+                                   \`correct_target\`; with no ambient stream
+                                   there is nothing to suggest and none is given)
+  --target is not an address    → target_malformed (fix the spelling; nothing
+                                   was looked up and nothing was sent)
   --content was supplied         → flag_removed (use stdin instead)
   --text / --message was supplied → flag_removed (use stdin instead;
                                     these were never accepted but are
@@ -114,9 +150,16 @@ the message landed in. The send still succeeded and everyone it did address
 received it; fix the spelling (or add the member) and send again if that
 reference mattered. No reason is given per token, and its absence means
 nothing was reported, not that every reference landed.`,
-  flags: ['target', 'reply-to', 'attachment-id', 'stale-resolution'] as const,
+  flags: ['target', 'attachment-id', 'stale-resolution'] as const,
   booleanFlags: ['anyway'],
   removedFlags: {
+    'reply-to': {
+      replacement: '--target',
+      hint:
+        'a reply is addressed like any other send, by the stream it lands in: ' +
+        "`--target '#conv:<conversation_id>/thread:<root_message_id>'`. The root " +
+        'is the cluster id (`thread_root_id`), not the message you are answering.',
+    },
     attachment: {
       replacement: '--attachment-id',
       hint:
@@ -163,10 +206,12 @@ nothing was reported, not that every reference landed.`,
     // --stale-resolution value) were only rejected afterwards, an
     // inherited never-closing stdin pipe would hang the process forever
     // instead of failing fast with a typed error.
-    const destination = parseSendDestination(
-      flagString(args, 'target'),
-      flagString(args, 'reply-to'),
-    );
+    const target = requireAddressBeforeSideEffects(flagString(args, 'target'), env, {
+      command: 'silverhand message send',
+      because:
+        'the conversation this CLI is authenticated in is where your ' +
+        'credential lives, not a default destination.',
+    });
     const anyway = flagBool(args, 'anyway') ?? false;
     const staleResolution = parseSendStaleResolution(
       flagString(args, 'stale-resolution'),
@@ -225,7 +270,7 @@ nothing was reported, not that every reference landed.`,
       // pins the desktop renderer). Convert to a text attachment
       // automatically and keep a short pointer line as the visible body.
       if (messageContentExceedsLimit(content)) {
-        const uploaded = await uploadBodyAsAttachment(client, buffer);
+        const uploaded = await uploadBodyAsAttachment(client, buffer, target);
         attachmentIds = [...(attachmentIds ?? []), uploaded.id];
         content =
           `Sent the long body as a text attachment (${uploaded.filename}, ` +
@@ -237,7 +282,7 @@ nothing was reported, not that every reference landed.`,
       conversation_id: env.conversationId,
       agent_id: env.agentId,
       content,
-      ...(destination.target ? { target: destination.target } : {}),
+      target,
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
         : {}),
@@ -254,7 +299,7 @@ nothing was reported, not that every reference landed.`,
     // polluted boundary.
     return await client.sendMessage({
       content,
-      ...(destination.target ? { target: destination.target } : {}),
+      target,
       ...(anyway ? { freshness_bypass: true } : {}),
       ...(attachmentIds && attachmentIds.length > 0
         ? { attachment_ids: attachmentIds }
@@ -433,38 +478,56 @@ stdout: { "changed": <bool>, "emoji": "<emoji>", "count": <n> }`,
 
 const historyCommand: Command = {
   verb: 'history',
-  summary: 'Read message history; omit the anchor for the latest window.',
-  help: `silverhand message history [--before-seq N | --after-seq N | --around <id>]
-                             [--target self|conversation:<id>|thread:<id>]
+  summary: 'Read one addressed stream; omit the anchor for the latest window.',
+  help: `silverhand message history --target <address>
+                             [--before-seq N | --after-seq N | --around <id>]
                              [--include-content] [--no-include-system]
                              [--limit N]
 
-Read a window of messages. With no anchor, returns the latest window in
-ascending seq order. Pass at most one of --before-seq, --after-seq, or --around.
+Read a window of messages from ONE stream. With no anchor, returns the latest
+window in ascending seq order. Pass at most one of --before-seq, --after-seq,
+or --around.
 
 Flags:
+  --target <address>    Required. WHICH stream to read — the same absolute
+                        address the send door takes, in the same three forms:
+                          #conv:<conversation_id>
+                          ${NAMED_STREAM_ADDRESS_PREFIX}<workspace>/<title>
+                          dm:@<handle>
+                        Append \`/thread:<root_message_id>\` to read a reply
+                        cluster instead of the main line. There is no "here":
+                        the conversation this CLI is authenticated in is where
+                        your credential lives, not a stream it reads by default.
   (no anchor)          Read the latest window.
   --before-seq N        Read messages with seq < N.
   --after-seq N         Read messages with seq > N.
   --around <message_id> Read a window centered on this message id.
-  --target              Where to read.
-                          self                    (default; current conv)
-                          thread:<root_msg_id>    (a reply cluster, by its
-                                                  root message id)
-                          conversation:<conv_id>  (any conv you can reach)
   --include-content     Return full content. Default is snippets only.
   --no-include-system   Skip system messages. Default keeps them.
   --limit N             Max messages. Default 50, max 100.
 
-Reading a reply cluster (\`--target thread:<root_msg_id>\`) is a pull:
+Reading a reply cluster (a \`/thread:<root_message_id>\` suffix) is a pull:
 gated by parent-channel visibility, it does NOT make you a follower, but
-it advances your observed boundary for that thread so a later
-\`message send --target thread:<message_id>\` is judged fresh against what you just read.
+it advances your observed boundary for that cluster so a later
+\`message send\` to the same address is judged fresh against what you just
+read. The suffix must name the cluster ROOT — the id under
+\`thread_root_id\` — exactly as on the send door; a mid-cluster reply id
+names no stream and is refused rather than quietly widened to its cluster.
+
+A read never creates anything: \`dm:@<handle>\` finds an existing pair and
+does not open one, so a mistyped handle stays an error instead of becoming
+a permanent empty conversation.
 
 stdout: full AgentReadHistoryDto JSON.`,
   flags: ['before-seq', 'after-seq', 'around', 'target', 'limit'] as const,
   booleanFlags: ['include-content', 'include-system'],
   async run({ env, client, args }) {
+    const target = requireTargetFlag(flagString(args, 'target'), env, {
+      command: 'silverhand message history',
+      because:
+        'a read acts on one stream, and the conversation this CLI is ' +
+        'authenticated in is not a default subject.',
+    });
     const before = flagNumber(args, 'before-seq');
     const after = flagNumber(args, 'after-seq');
     const around = flagString(args, 'around');
@@ -480,12 +543,11 @@ stdout: full AgentReadHistoryDto JSON.`,
     const includeContent = flagBool(args, 'include-content') ?? false;
     const includeSystem = flagBool(args, 'include-system') ?? true;
     const limit = flagNumber(args, 'limit') ?? 50;
-    const target = parseHistoryTarget(flagString(args, 'target'));
     const dto = await client.readHistory({
       ...(before !== undefined ? { before_seq: before } : {}),
       ...(after !== undefined ? { after_seq: after } : {}),
       ...(around !== undefined ? { around_message_id: around } : {}),
-      ...(target ? { target } : {}),
+      target,
       include_content: includeContent,
       include_system: includeSystem,
       limit,
@@ -495,11 +557,21 @@ stdout: full AgentReadHistoryDto JSON.`,
     // a successful reply-cluster read enters the model's context, so it
     // is a real observe. The read itself reaches the backend over plain
     // HTTP (the daemon never sees it), so when a daemon socket is present
-    // we fire a daemon-local `agent_stream_observed` intent to advance
-    // the `thread:<root>` observed boundary and map the surfaced ids —
-    // otherwise a read-then-`--target thread:<message_id>` would be judged
-    // stale against a boundary the daemon never learned about. Gated on
-    // `target.thread_root_id` (set only for the cluster read form).
+    // we fire a daemon-local `agent_stream_observed` intent to advance the
+    // `thread:<root>` observed boundary — otherwise a read-then-send into
+    // the same cluster would be judged stale against a boundary the daemon
+    // never learned about. Gated on the RESOLVED `thread_root_id` from the
+    // response, not on how the address was spelled: a readable pair and an
+    // id name the same cluster, and only the server can say which.
+    //
+    // The ROOT is the whole of what this intent teaches (#task:2021 P4-4).
+    // It used to also hand over every id the window surfaced, because a
+    // reply was addressed by the message it answered, so the daemon needed
+    // a map from any of them back to this cluster. A cluster is now
+    // addressed by its root and nothing else, so that map had no reader
+    // left — and keeping it would leave the daemon holding a second
+    // opinion about what an address denotes.
+    //
     // Direct/non-daemon fallback degrades to "A": no intent, no boundary
     // (no daemon owns observed state to advance). Best-effort: the read
     // already succeeded and was returned, so an intent failure must not
@@ -510,20 +582,18 @@ stdout: full AgentReadHistoryDto JSON.`,
         .filter(m => m.message_ref.id !== root)
         .map(m => m.message_ref.seq);
       const observedSeq = replySeqs.length > 0 ? Math.max(...replySeqs) : 0;
-      // root id is ALWAYS first so the array is non-empty (schema .min(1))
-      // and reply-to-root resolves a known stream even with zero replies.
-      const replyTargetMessages = [
-        root,
-        ...dto.messages
-          .map(m => m.message_ref.id)
-          .filter(id => id !== root),
-      ];
       await observeStreamViaDaemon(env.daemonSocketPath, {
+        // Two coordinates, deliberately: which SESSION observed (the handle
+        // lookup — for an AgentSlot this is the route anchor) and WHERE the
+        // observed stream lives. An AgentSlot's boundaries are keyed by
+        // conversation and a send keys by the address's conversation, so the
+        // stream's own id has to come from the RESOLVED target, never from the
+        // conversation this CLI is authenticated in.
         conversation_id: env.conversationId,
+        stream_conversation_id: dto.target.conversation_id,
         agent_id: env.agentId,
         thread_root_id: root,
         observed_seq: observedSeq,
-        reply_target_messages: replyTargetMessages,
       });
     }
 
@@ -710,66 +780,6 @@ export const messageCommands: readonly Command[] = [
   searchCommand,
 ];
 
-function parseSendDestination(
-  rawTarget: string | undefined,
-  rawReplyTo: string | undefined,
-): { target?: SendMessageTarget } {
-  const target = parseSendTarget(rawTarget);
-  if (rawReplyTo !== undefined && target !== undefined) {
-    throw new CliError({
-      code: 'validation_error',
-      subkind: 'mutually_exclusive',
-      message:
-        '--reply-to and --target are mutually exclusive: use ' +
-        '`--target thread:<message_id>` for thread sends.',
-      retriable: false,
-      details: { flags: ['reply-to', 'target'] },
-    });
-  }
-  if (rawReplyTo !== undefined) {
-    return { target: { kind: 'thread', message_id: rawReplyTo } };
-  }
-  return target ? { target } : {};
-}
-
-function parseSendTarget(raw: string | undefined): SendMessageTarget | undefined {
-  if (raw === undefined) return undefined;
-  if (raw.length === 0) {
-    throw new CliError({
-      code: 'validation_error',
-      subkind: 'enum_invalid',
-      message: '--target must be channel or thread:<message_id>',
-      retriable: false,
-      details: { flag: 'target', value: raw },
-    });
-  }
-  if (raw === 'channel') return { kind: 'channel' };
-  if (raw === 'self') return { kind: 'channel' };
-  if (raw.startsWith('thread:')) {
-    const messageId = raw.slice('thread:'.length);
-    if (!messageId) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'enum_invalid',
-        message: '--target thread:<message_id> requires a message id after thread:',
-        retriable: false,
-        details: { flag: 'target', value: raw },
-      });
-    }
-    const target: MessageSendTarget = { kind: 'thread', message_id: messageId };
-    return target;
-  }
-  // Isolated-thread conversations were retired (#task:1303); the only
-  // targets are `channel` and `thread:<message_id>` (reply cluster).
-  throw new CliError({
-    code: 'validation_error',
-    subkind: 'enum_invalid',
-    message: '--target must be channel or thread:<message_id>',
-    retriable: false,
-    details: { flag: 'target', value: raw },
-  });
-}
-
 function parseSendStaleResolution(
   raw: string | undefined,
 ): AgentSendStaleResolutionReason | undefined {
@@ -921,10 +931,19 @@ async function staleReceiveViaDaemon(
 /** Spool an oversized stdin body to a temp file and upload it as a
  *  `text/plain` attachment. The temp file is best-effort removed; the
  *  attachment itself survives a later failed send and can be reused by
- *  passing its id to `--attachment-id` on the retry. */
+ *  passing its id to `--attachment-id` on the retry.
+ *
+ *  `target` is the SEND's address; the attachment is owned by its conversation,
+ *  so the upload is addressed at the head (#task:2021 P4-4) — a body spooled on
+ *  the way into a reply cluster belongs to the conversation that cluster is in,
+ *  and the upload door refuses a suffix rather than dropping one. The `?? target`
+ *  is not a fallback policy: the address was parsed before stdin was read, so the
+ *  head is always spellable, and forwarding the raw token lets the resolver be
+ *  the only thing that ever says otherwise. */
 async function uploadBodyAsAttachment(
   client: BackendClient,
   body: Buffer,
+  target: string,
 ): Promise<{ id: string; filename: string; size: number }> {
   const dir = await mkdtemp(join(tmpdir(), 'silverhand-body-'));
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -933,6 +952,7 @@ async function uploadBodyAsAttachment(
     await writeFile(tmpPath, body);
     const att = await client.uploadAttachment({
       path: tmpPath,
+      target: conversationAddressOf(target) ?? target,
       contentType: 'text/plain; charset=utf-8',
     });
     return { id: att.id, filename: att.filename, size: att.size };
@@ -944,33 +964,6 @@ async function uploadBodyAsAttachment(
 function formatByteSize(n: number): string {
   if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${Math.ceil(n / 1024)} KB`;
-}
-
-function parseHistoryTarget(
-  raw: string | undefined,
-):
-  | 'self'
-  | { thread_root_id: string }
-  | { conversation_id: string }
-  | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === 'self') return raw;
-  // `thread:<id>` now means a reply cluster identified by its ROOT
-  // message id (docs/thread-reply-cluster-v1.md §8) — threads are not
-  // separate conversations. Read any other conversation by its id via
-  // `conversation:<id>`.
-  if (raw.startsWith('thread:')) {
-    return { thread_root_id: raw.slice('thread:'.length) };
-  }
-  if (raw.startsWith('conversation:')) {
-    return { conversation_id: raw.slice('conversation:'.length) };
-  }
-  throw new CliError({
-    code: 'validation_error',
-    message:
-      '--target must be self | thread:<root_msg_id> | conversation:<id>',
-    retriable: false,
-  });
 }
 
 /**

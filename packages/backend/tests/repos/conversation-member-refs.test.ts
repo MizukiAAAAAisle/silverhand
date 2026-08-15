@@ -25,6 +25,7 @@
  * decides those messages' `seq`. That contract is `updated_at DESC` and nothing
  * more — ties stay undefined, exactly as before this change.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
@@ -143,8 +144,8 @@ function buildFixture(): Fixture {
   const subject = agents.create({ name: 'refs-subject', runtime: 'claude' }, localHostId, 'local');
   const decoy = agents.create({ name: 'refs-decoy', runtime: 'claude' }, localHostId, 'local');
 
-  const wsA = workspaces.insert({ name: 'refs-a', description: null }).id;
-  const wsB = workspaces.insert({ name: 'refs-b', description: null }).id;
+  const wsA = workspaces.insert({ name: fixedWorkspaceName('refs-a'), description: null }).id;
+  const wsB = workspaces.insert({ name: fixedWorkspaceName('refs-b'), description: null }).id;
 
   const channel = (workspaceId: string, title: string): string =>
     conversations.insertChannel({ workspaceId, title: fixedConversationTitle(title) }).id;

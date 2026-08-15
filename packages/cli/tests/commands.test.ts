@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AVATAR_MAX_BYTES } from '@silverhand/shared';
+import { AVATAR_MAX_BYTES, parseDeliveryTarget } from '@silverhand/shared';
 import {
   COMMAND_GROUPS,
   findCommand,
@@ -638,6 +638,23 @@ describe('profile update behavior (#task:1178)', () => {
 });
 
 describe('thread legacy verbs', () => {
+  /** Every address a hint TEACHES, resolved against the real codec.
+   *
+   *  A migration hint is the one place an agent is most likely to copy a
+   *  spelling verbatim, and both of these hints shipped the retired
+   *  `thread:<message_id>` / `conversation:<id>` grammars long after the codec
+   *  stopped accepting them (#task:2021 P4-4). Asserting on a substring only
+   *  pins whatever the hint happens to say today; substituting real ids into
+   *  the placeholders and parsing pins the thing that matters — the hint
+   *  teaches an address the CLI would actually accept. */
+  function taughtAddresses(hint: string): string[] {
+    return [...hint.matchAll(/`[^`]*--target '([^']+)'/g)].map(m =>
+      m[1]!
+        .replace('<conversation_id>', 'convAAAAAAAAAA01')
+        .replace('<root_message_id>', 'msgBBBBBBBBBBB02'),
+    );
+  }
+
   it('removes create/close and keeps explicit migration hints', () => {
     expect(findCommand('thread', 'create')).toBeUndefined();
     expect(findCommand('thread', 'close')).toBeUndefined();
@@ -645,11 +662,27 @@ describe('thread legacy verbs', () => {
     expect(group?.removedVerbs?.create).toMatchObject({
       replacement: 'follow',
     });
-    expect(group?.removedVerbs?.create?.hint).toContain('--target thread:');
     expect(group?.removedVerbs?.close).toMatchObject({
       replacement: 'unfollow',
     });
     expect(group?.removedVerbs?.close?.hint).toContain('thread unfollow');
+
+    // `create` must send the agent to a reply cluster, `close` to a whole
+    // conversation — so the two hints are not interchangeable, and each one's
+    // address must both parse and name the right SHAPE.
+    const created = taughtAddresses(group!.removedVerbs!.create!.hint);
+    expect(created).toHaveLength(1);
+    expect(parseDeliveryTarget(created[0]!)).toMatchObject({
+      conversationId: 'convAAAAAAAAAA01',
+      threadRootId: 'msgBBBBBBBBBBB02',
+    });
+
+    const closed = taughtAddresses(group!.removedVerbs!.close!.hint);
+    expect(closed).toHaveLength(1);
+    expect(parseDeliveryTarget(closed[0]!)).toMatchObject({
+      conversationId: 'convAAAAAAAAAA01',
+      threadRootId: null,
+    });
   });
 });
 
@@ -756,19 +789,24 @@ describe('file view command', () => {
   });
 });
 
-describe('task create --target thread:<message_id>', () => {
-  // Locks the load-bearing contract: the optional thread target must
-  // reach the wire as the public `target` object, and OMITTING it must
-  // leave the field absent entirely (so the backend keeps the main-line
-  // default `thread_root_id = NULL`). Without this, the flag could
-  // silently regress to "accepted but never forwarded" — backend/schema/
-  // typecheck would all stay green (#task:1056 review).
+describe('task create --target <address>', () => {
+  // Locks the load-bearing contract of the collapsed door (#task:2021 P4-4): the
+  // task's stream is ONE required address, it reaches the wire VERBATIM as
+  // `target`, and it is never conditional — a create with no `target` field on
+  // the wire would be the ambient "current conversation" default this shard
+  // removed, and backend/schema/typecheck would all stay green if the CLI
+  // silently dropped it.
+  const CONV = 'convAAAAAAAAAA01';
+  const ROOT = 'rootBBBBBBBBBB02';
+
   function captureCreateTasks(flags: Record<string, string>) {
     const cmd = findCommand('task', 'create');
     expect(cmd).toBeDefined();
     let captured: unknown;
+    let calls = 0;
     const client = {
       createTasks: async (input: unknown) => {
+        calls += 1;
         captured = input;
         return { tasks: [] };
       },
@@ -776,7 +814,8 @@ describe('task create --target thread:<message_id>', () => {
     return cmd!
       .run({
         env: {
-          conversationId: 'conv',
+          conversationId: CONV,
+          slot: 'conversation',
           agentId: 'agent',
           serverUrl: 'http://127.0.0.1:4488',
           authToken: 'token',
@@ -784,75 +823,95 @@ describe('task create --target thread:<message_id>', () => {
         client,
       args: { flags, positional: [], rest: [] },
     } as any)
-      .then(() => captured as { tasks: unknown[]; target?: unknown; reply_to_message_id?: string; conversation_id?: string });
+      .then(() => ({
+        input: captured as { tasks: unknown[]; target?: unknown; conversation_id?: unknown },
+        calls,
+      }));
   }
 
-  it('keeps --reply-to as a hidden compatibility alias for the public thread target', async () => {
-    const input = await captureCreateTasks({ title: 'T', 'reply-to': 'm1' });
-    expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect(input.target).toEqual({ kind: 'thread', message_id: 'm1' });
-    expect('reply_to_message_id' in input).toBe(false);
-  });
-
-  it('forwards --target thread:<message_id> as the public thread target', async () => {
-    const input = await captureCreateTasks({ title: 'T', target: 'thread:m1' });
-    expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect(input.target).toEqual({ kind: 'thread', message_id: 'm1' });
-    expect('reply_to_message_id' in input).toBe(false);
-  });
-
-  it('treats --target channel as the explicit main-line destination', async () => {
-    const input = await captureCreateTasks({ title: 'T', target: 'channel' });
-    expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect(input.target).toEqual({ kind: 'channel' });
-    expect('reply_to_message_id' in input).toBe(false);
-  });
-
-  it('rejects --reply-to with --target as mutually_exclusive', async () => {
+  /** The same door with a client that MUST NOT be reached. */
+  async function runExpectingNoRequest(flags: Record<string, string>) {
     const cmd = findCommand('task', 'create');
-    await expect(
-      cmd!.run({
-        env: {
-          conversationId: 'conv',
-          agentId: 'agent',
-          serverUrl: 'http://127.0.0.1:4488',
-          authToken: 'token',
+    return cmd!.run({
+      env: {
+        conversationId: CONV,
+        slot: 'conversation',
+        agentId: 'agent',
+        serverUrl: 'http://127.0.0.1:4488',
+        authToken: 'token',
+      },
+      client: {
+        createTasks: async () => {
+          throw new Error('the door must refuse before any request');
         },
-        client: {} as BackendClient,
-        args: {
-          flags: { title: 'T', target: 'thread:m1', 'reply-to': 'm2' },
-          positional: [],
-          rest: [],
-        },
-      } as any),
-    ).rejects.toMatchObject({ subkind: 'mutually_exclusive' });
-  });
+      } as unknown as BackendClient,
+      args: { flags, positional: [], rest: [] },
+    } as any);
+  }
 
-  it('omits target and reply_to_message_id when no target is provided (main-line default)', async () => {
-    const input = await captureCreateTasks({ title: 'T' });
+  it('forwards --target verbatim, and unconditionally', async () => {
+    const { input, calls } = await captureCreateTasks({ title: 'T', target: `#conv:${CONV}` });
+    expect(calls).toBe(1);
     expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect('target' in input).toBe(false);
+    expect(input.target).toBe(`#conv:${CONV}`);
+    // The retired place-naming fields are GONE from the wire, not merely unused.
+    expect('conversation_id' in input).toBe(false);
     expect('reply_to_message_id' in input).toBe(false);
   });
 
-  // Locks the ONLY new wire behavior of the cross-channel create: an explicit
-  // --conversation-id must reach the body as `conversation_id`, and omitting it
-  // must leave the field absent so the backend applies its origin-conversation
-  // default. Without this, the flag could regress to "accepted but never
-  // forwarded" with backend/schema/typecheck all green (#task:1738 review).
-  it('forwards --conversation-id as the wire `conversation_id` destination', async () => {
-    const input = await captureCreateTasks({ title: 'T', 'conversation-id': 'convB' });
-    expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect(input.conversation_id).toBe('convB');
+  it('forwards a thread suffix as part of the ONE address, undecomposed', async () => {
+    // The CLI does not split the address into conversation + root: the resolver
+    // is the only thing that decides what the suffix denotes, so a client-side
+    // split would be a second opinion that could disagree with it.
+    const { input } = await captureCreateTasks({
+      title: 'T',
+      target: `#conv:${CONV}/thread:${ROOT}`,
+    });
+    expect(input.target).toBe(`#conv:${CONV}/thread:${ROOT}`);
   });
 
-  it('omits conversation_id when --conversation-id is not provided (backend defaults to the origin conversation)', async () => {
-    const input = await captureCreateTasks({ title: 'T' });
-    expect(input.tasks).toEqual([{ title: 'T' }]);
-    expect('conversation_id' in input).toBe(false);
+  it.each([
+    ['the readable name form', '#silverhand/roadmap'],
+    ['the direct-pair shorthand', 'dm:@norman'],
+  ])('forwards %s verbatim too — the CLI has no opinion on which spelling', async (_label, address) => {
+    const { input } = await captureCreateTasks({ title: 'T', target: address });
+    expect(input.target).toBe(address);
   });
 
-  // The route refuses cross-channel + --claim with the typed
+  it('refuses a missing --target as target_required, before any request', async () => {
+    await expect(runExpectingNoRequest({ title: 'T' })).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'target_required',
+      // The one correction: a ConversationSlot inhabits exactly one stream, and
+      // the id form of it is always spellable.
+      details: { flag: 'target', correct_target: `#conv:${CONV}` },
+    });
+  });
+
+  it('refuses a --target that is not an address as target_malformed, before stdin is read', async () => {
+    // `task create` reads its body from stdin, so a target that could never land
+    // must fail before the caller's piped body is drained.
+    await expect(runExpectingNoRequest({ title: 'T', target: 'channel' })).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'target_malformed',
+    });
+  });
+
+  it('retires --conversation-id and --reply-to as removed flags that teach the address', () => {
+    const cmd = findCommand('task', 'create')!;
+    expect(cmd.flags).toContain('target');
+    for (const flag of ['conversation-id', 'reply-to']) {
+      const removed = cmd.removedFlags?.[flag];
+      expect(removed, flag).toBeDefined();
+      // An actionable `flag_removed` hint, never an accepted alias: both used to
+      // name a PLACE, and both places are now part of the one address.
+      expect(removed!.hint).toContain('--target');
+    }
+    expect(cmd.flags).not.toContain('conversation-id');
+    expect(cmd.flags).not.toContain('reply-to');
+  });
+
+  // The route refuses cross-conversation + --claim with the typed
   // `cross_conversation_claim` op error and carries NO human-readable reason;
   // this mapper is the SINGLE source of that reason. Lock the classification
   // (code + subkind) so the CLI keys on the code, not the message text.
@@ -864,14 +923,493 @@ describe('task create --target thread:<message_id>', () => {
     await expect(
       cmd!.run({
         env: {
-          conversationId: 'conv',
+          conversationId: CONV,
+          slot: 'conversation',
           agentId: 'agent',
           serverUrl: 'http://127.0.0.1:4488',
           authToken: 'token',
         },
         client,
-        args: { flags: { title: 'T' }, positional: [], rest: [] },
+        args: { flags: { title: 'T', target: `#conv:${CONV}` }, positional: [], rest: [] },
       } as any),
     ).rejects.toMatchObject({ code: 'conflict', subkind: 'cross_conversation_claim' });
+  });
+});
+
+describe('member add --target <address>', () => {
+  // The same collapsed-door contract on a NON-message door (#task:2021 P4-4): a
+  // roster change belongs to exactly one conversation, so the address is required
+  // and reaches the wire verbatim. The credential's conversation is where the
+  // token is valid, never a default destination.
+  const CONV = 'convAAAAAAAAAA01';
+  const ROOT = 'rootBBBBBBBBBB02';
+
+  function run(flags: Record<string, string>, client: BackendClient) {
+    const cmd = findCommand('member', 'add');
+    expect(cmd).toBeDefined();
+    return cmd!.run({
+      env: {
+        conversationId: CONV,
+        slot: 'conversation',
+        agentId: 'agent',
+        serverUrl: 'http://127.0.0.1:4488',
+        authToken: 'token',
+      },
+      client,
+      args: { flags, positional: [], rest: [] },
+    } as any);
+  }
+
+  function capture(flags: Record<string, string>) {
+    let captured: unknown;
+    let calls = 0;
+    const client = {
+      addConversationMember: async (input: unknown) => {
+        calls += 1;
+        captured = input;
+        return { members: [] };
+      },
+    } as unknown as BackendClient;
+    return run(flags, client).then(() => ({
+      input: captured as { handle?: unknown; target?: unknown },
+      calls,
+    }));
+  }
+
+  const refusing = {
+    addConversationMember: async () => {
+      throw new Error('the door must refuse before any request');
+    },
+  } as unknown as BackendClient;
+
+  it('forwards handle + --target verbatim, and unconditionally', async () => {
+    const { input, calls } = await capture({ handle: '@bob', target: `#conv:${CONV}` });
+    expect(calls).toBe(1);
+    expect(input).toEqual({ handle: '@bob', target: `#conv:${CONV}` });
+  });
+
+  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+    // The CLI does not strip the suffix to "help": which conversation a reply
+    // cluster belongs to is the resolver's answer, and a client-side strip would
+    // silently turn a refused request into a different, accepted one.
+    const { input } = await capture({
+      handle: '@bob',
+      target: `#conv:${CONV}/thread:${ROOT}`,
+    });
+    expect(input.target).toBe(`#conv:${CONV}/thread:${ROOT}`);
+  });
+
+  it('refuses a missing --target as target_required, before any request', async () => {
+    await expect(run({ handle: '@bob' }, refusing)).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'target_required',
+      details: { flag: 'target', correct_target: `#conv:${CONV}` },
+    });
+  });
+
+  it('does not second-guess the grammar — a malformed address goes to the resolver', async () => {
+    // The local grammar check is bought by SIDE EFFECTS (`message send` and
+    // `task create` drain stdin before they can send). This door has none, so it
+    // pays for no second opinion: the resolver answers `target_malformed` once.
+    const { input, calls } = await capture({ handle: '@bob', target: 'the planning channel' });
+    expect(calls).toBe(1);
+    expect(input.target).toBe('the planning channel');
+  });
+
+  it('still refuses a missing --handle, and names the flag', async () => {
+    await expect(
+      run({ target: `#conv:${CONV}` }, refusing),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'missing_required_flag',
+      details: { command: 'member add', flag: 'handle' },
+    });
+  });
+});
+
+describe('channel create --target <address>', () => {
+  // The hardest door of #task:2021 P4-4, and the one that could not be deferred:
+  // `channel create` has no object id of its own and posts nowhere, so its
+  // `--target` is the FORK SOURCE — the conversation whose placement and roster the
+  // new channel is made from. Until P4-4 both came from `--route-conversation-id`,
+  // i.e. from a transport anchor, which #task:2030 deletes.
+  const CONV = 'convAAAAAAAAAA01';
+  const ANCHOR = 'ancCCCCCCCCCC03';
+  const ROOT = 'rootBBBBBBBBBB02';
+
+  const REQUIRED = {
+    title: 'release signing',
+    'context-summary': 'the user asked to split this out',
+    'initial-prompt': 'continue here',
+  };
+
+  function run(
+    flags: Record<string, string>,
+    client: BackendClient,
+    env: { conversationId: string; slot: 'conversation' | 'agent' } = {
+      conversationId: CONV,
+      slot: 'conversation',
+    },
+  ) {
+    const cmd = findCommand('channel', 'create');
+    expect(cmd).toBeDefined();
+    return cmd!.run({
+      env: {
+        conversationId: env.conversationId,
+        slot: env.slot,
+        agentId: 'agent',
+        serverUrl: 'http://127.0.0.1:4488',
+        authToken: 'token',
+      },
+      client,
+      args: { flags, positional: [], rest: [] },
+    } as any);
+  }
+
+  function capture(
+    flags: Record<string, string>,
+    env?: { conversationId: string; slot: 'conversation' | 'agent' },
+  ) {
+    let captured: unknown;
+    let calls = 0;
+    const client = {
+      createChannel: async (input: unknown) => {
+        calls += 1;
+        captured = input;
+        return { channel_id: 'newAAAAAAAAAA04' };
+      },
+    } as unknown as BackendClient;
+    return run(flags, client, env).then(() => ({
+      input: captured as Record<string, unknown>,
+      calls,
+    }));
+  }
+
+  const refusing = {
+    createChannel: async () => {
+      throw new Error('the door must refuse before any request');
+    },
+  } as unknown as BackendClient;
+
+  it('forwards the fork source verbatim alongside the channel fields', async () => {
+    const { input, calls } = await capture({ ...REQUIRED, target: `#conv:${CONV}` });
+    expect(calls).toBe(1);
+    expect(input).toEqual({
+      target: `#conv:${CONV}`,
+      title: 'release signing',
+      context_summary: 'the user asked to split this out',
+      initial_prompt: 'continue here',
+    });
+  });
+
+  it('AGENT SLOT: the route anchor never becomes the fork source', async () => {
+    // @Cindy's counter-example. Under an agent-scoped session the CLI is still
+    // authenticated through ONE conversation — `--route-conversation-id`, here the
+    // env's `conversationId` — and that anchor may be an inbox nobody can fork.
+    // Only the named source may reach the wire, so the request that goes out must
+    // mention the target and NOT the anchor. This is what makes #task:2030's
+    // deletion of the anchor a no-op for this door.
+    const { input } = await capture(
+      { ...REQUIRED, target: `#conv:${CONV}` },
+      { conversationId: ANCHOR, slot: 'agent' },
+    );
+    expect(input.target).toBe(`#conv:${CONV}`);
+    expect(JSON.stringify(input)).not.toContain(ANCHOR);
+  });
+
+  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+    // Same rule as `member add`: a reply cluster is refused
+    // (`thread_suffix_not_supported`), and it is refused by the RESOLVER. Stripping
+    // the suffix here would quietly fork the parent instead.
+    const { input } = await capture({
+      ...REQUIRED,
+      target: `#conv:${CONV}/thread:${ROOT}`,
+    });
+    expect(input.target).toBe(`#conv:${CONV}/thread:${ROOT}`);
+  });
+
+  it('refuses a missing --target as target_required, before any request', async () => {
+    await expect(run(REQUIRED, refusing)).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'target_required',
+      details: { flag: 'target', correct_target: `#conv:${CONV}` },
+    });
+  });
+
+  it('AGENT SLOT: the same refusal, with no correction invented', async () => {
+    // An AgentSlot inhabits no stream, so there is no "the one you are in" to
+    // suggest — and the anchor must not be offered as one, which is exactly the
+    // mistake the flag exists to prevent.
+    await expect(
+      run(REQUIRED, refusing, { conversationId: ANCHOR, slot: 'agent' }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'target_required',
+      details: { flag: 'target' },
+    });
+    await expect(
+      run(REQUIRED, refusing, { conversationId: ANCHOR, slot: 'agent' }),
+    ).rejects.not.toMatchObject({ details: { correct_target: expect.anything() } });
+  });
+
+  it('checks the address FIRST: a missing title does not mask a missing target', async () => {
+    // Order matters for the report as much as for the actor: two independent
+    // omissions must not collapse into whichever check happens to run first, and
+    // the address is the one that changes WHERE the act lands.
+    await expect(run({ title: 'x' }, refusing)).rejects.toMatchObject({
+      subkind: 'target_required',
+    });
+    await expect(
+      run({ target: `#conv:${CONV}`, title: 'x' }, refusing),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+});
+
+describe('file upload --target <address>', () => {
+  // An attachment is owned by ONE conversation (#task:2021 P4-4). The bytes are
+  // local, the destination is not: the credential's conversation is where the
+  // token is valid, never a default place to leave a file.
+  const CONV = 'convAAAAAAAAAA01';
+  const ROOT = 'rootBBBBBBBBBB02';
+
+  function run(flags: Record<string, string>, client: BackendClient) {
+    const cmd = findCommand('file', 'upload');
+    expect(cmd).toBeDefined();
+    return cmd!.run({
+      env: {
+        conversationId: CONV,
+        slot: 'conversation',
+        agentId: 'agent',
+        serverUrl: 'http://127.0.0.1:4488',
+        authToken: 'token',
+      },
+      client,
+      args: { flags, positional: [], rest: [] },
+    } as any);
+  }
+
+  function capture(flags: Record<string, string>) {
+    let captured: unknown;
+    let calls = 0;
+    const client = {
+      uploadAttachment: async (input: unknown) => {
+        calls += 1;
+        captured = input;
+        return { id: 'att_1' };
+      },
+    } as unknown as BackendClient;
+    return run(flags, client).then(() => ({
+      input: captured as Record<string, unknown>,
+      calls,
+    }));
+  }
+
+  const refusing = {
+    uploadAttachment: async () => {
+      throw new Error('the door must refuse before any request');
+    },
+  } as unknown as BackendClient;
+
+  it('forwards --target verbatim beside the path, and unconditionally', async () => {
+    const { input, calls } = await capture({
+      path: '/tmp/shot.png',
+      target: `#conv:${CONV}`,
+    });
+    expect(calls).toBe(1);
+    expect(input).toEqual({ path: '/tmp/shot.png', target: `#conv:${CONV}` });
+  });
+
+  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+    // Threads inherit their parent's files, so this address has no upload
+    // destination; a client-side strip would turn a refusal into a different,
+    // accepted request.
+    const { input } = await capture({
+      path: '/tmp/shot.png',
+      target: `#conv:${CONV}/thread:${ROOT}`,
+    });
+    expect(input.target).toBe(`#conv:${CONV}/thread:${ROOT}`);
+  });
+
+  it('refuses a missing --target as target_required, before the file is read', async () => {
+    await expect(run({ path: '/tmp/shot.png' }, refusing)).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'target_required',
+      details: { flag: 'target', correct_target: `#conv:${CONV}` },
+    });
+  });
+
+  it('asks for the destination before the bytes when both are missing', async () => {
+    // Order is deliberate: the address is the fact the caller cannot recover
+    // from the environment, so it is the first thing named.
+    await expect(run({}, refusing)).rejects.toMatchObject({
+      code: 'validation_error',
+      subkind: 'target_required',
+    });
+  });
+
+  it('still refuses a missing --path once the destination is named', async () => {
+    await expect(
+      run({ target: `#conv:${CONV}` }, refusing),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('does not second-guess the grammar — a malformed address goes to the resolver', async () => {
+    // No stdin to drain, so this door buys no local grammar check: the resolver
+    // answers `target_malformed` exactly once.
+    const { input, calls } = await capture({
+      path: '/tmp/shot.png',
+      target: 'the design channel',
+    });
+    expect(calls).toBe(1);
+    expect(input.target).toBe('the design channel');
+  });
+
+  it('declares --target as a flag of the upload door', () => {
+    expect(findCommand('file', 'upload')!.flags).toContain('target');
+  });
+});
+
+describe('schedule create --target-conversation <address>', () => {
+  // The one grammar on a door whose address is a business VALUE rather than the
+  // operation's own place (#task:2021 P4-4). A schedule is owned by the AGENT —
+  // `list` is a union over its whole set and `cancel` is addressed by the
+  // schedule's id — so the door itself takes no `--target`. What needs an address
+  // is the WAKE: which conversation's `(conversation, you)` runtime is started.
+  // Hence the door's own flag name, and an otherwise identical refusal.
+  const CONV = 'convAAAAAAAAAA01';
+  const ROOT = 'rootBBBBBBBBBB02';
+
+  function run(flags: Record<string, string>, client: BackendClient) {
+    const cmd = findCommand('schedule', 'create');
+    expect(cmd).toBeDefined();
+    return cmd!.run({
+      env: {
+        conversationId: CONV,
+        slot: 'conversation',
+        agentId: 'agent',
+        serverUrl: 'http://127.0.0.1:4488',
+        authToken: 'token',
+      },
+      client,
+      args: { flags, positional: [], rest: [] },
+    } as any);
+  }
+
+  function capture(flags: Record<string, string>) {
+    let captured: unknown;
+    let calls = 0;
+    const client = {
+      createSchedule: async (input: unknown) => {
+        calls += 1;
+        captured = input;
+        return { schedule: {} };
+      },
+    } as unknown as BackendClient;
+    return run(flags, client).then(() => ({
+      input: captured as Record<string, unknown>,
+      calls,
+    }));
+  }
+
+  const refusing = {
+    createSchedule: async () => {
+      throw new Error('the door must refuse before any request');
+    },
+  } as unknown as BackendClient;
+
+  it('forwards the address verbatim as target_conversation, and never an id field', async () => {
+    const { input, calls } = await capture({
+      title: 'standup',
+      message: 'post the standup',
+      kind: 'once',
+      'delay-seconds': '600',
+      'target-conversation': `#conv:${CONV}`,
+    });
+    expect(calls).toBe(1);
+    expect(input.target_conversation).toBe(`#conv:${CONV}`);
+    // The retired field named a place as a bare id; it is gone from the wire, not
+    // merely unset beside the address.
+    expect('target_conversation_id' in input).toBe(false);
+  });
+
+  it.each([
+    ['interval', { kind: 'interval', 'every-seconds': '3600' }],
+    ['cron', { kind: 'cron', expression: '0 9 * * 1-5', timezone: 'Asia/Shanghai' }],
+  ])('carries the destination on a %s spec too — one door, one address', async (_label, spec) => {
+    // Each spec kind builds its own input literal, which is exactly where a
+    // destination gets forgotten: the branch that repeats is the branch that drifts.
+    const { input } = await capture({
+      title: 'weekly',
+      message: 'do the weekly thing',
+      ...(spec as Record<string, string>),
+      'target-conversation': `#conv:${CONV}`,
+    });
+    expect(input.target_conversation).toBe(`#conv:${CONV}`);
+  });
+
+  it('refuses a missing --target-conversation as target_required, before any request', async () => {
+    await expect(
+      run(
+        { title: 'standup', message: 'post it', kind: 'once', 'delay-seconds': '600' },
+        refusing,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      // The SAME subkind as every other door: an agent that learned the rule on
+      // `message send` already knows it here, even though the flag is named for
+      // what it means rather than for where the call acts.
+      subkind: 'target_required',
+      details: { flag: 'target-conversation', correct_target: `#conv:${CONV}` },
+    });
+  });
+
+  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+    // A reply cluster shares its parent's runtime, so this address names nothing a
+    // wake could act on. The CLI still does not strip it: stripping would silently
+    // turn a refused request into a different, accepted one that wakes the parent.
+    const { input } = await capture({
+      title: 'standup',
+      message: 'post it',
+      kind: 'once',
+      'delay-seconds': '600',
+      'target-conversation': `#conv:${CONV}/thread:${ROOT}`,
+    });
+    expect(input.target_conversation).toBe(`#conv:${CONV}/thread:${ROOT}`);
+  });
+
+  it('does not second-guess the grammar — a malformed address goes to the resolver', async () => {
+    // No stdin to drain and nothing uploaded, so this door buys no local grammar
+    // check: the resolver answers `target_malformed` exactly once.
+    const { input, calls } = await capture({
+      title: 'standup',
+      message: 'post it',
+      kind: 'once',
+      'delay-seconds': '600',
+      'target-conversation': 'the standup channel',
+    });
+    expect(calls).toBe(1);
+    expect(input.target_conversation).toBe('the standup channel');
+  });
+
+  it('retires --target-conversation-id, and the hint teaches both changes', () => {
+    const cmd = findCommand('schedule', 'create')!;
+    expect(cmd.flags).toContain('target-conversation');
+    expect(cmd.flags).not.toContain('target-conversation-id');
+    const removed = cmd.removedFlags?.['target-conversation-id'];
+    expect(removed).toBeDefined();
+    expect(removed!.replacement).toBe('--target-conversation');
+    // A rename by one word is beyond `closestFlag`'s edit-distance reach, so
+    // without this entry the old flag reads as an unknown one — and the hint has
+    // to carry the second change too, since the flag also stopped being optional.
+    expect(removed!.hint).toContain('#conv:');
+    expect(removed!.hint).toContain('required');
+  });
+
+  it('leaves list and cancel address-free: an agent-owned set has no one stream', () => {
+    for (const verb of ['list', 'cancel']) {
+      const cmd = findCommand('schedule', verb)!;
+      expect(cmd.flags, verb).not.toContain('target');
+      expect(cmd.flags, verb).not.toContain('target-conversation');
+    }
   });
 });

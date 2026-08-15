@@ -354,14 +354,11 @@ export function conversationMessageServiceErrorResponse(
     return c.json({ error: err.message, code: err.code }, status);
   }
   if (err instanceof TargetError) {
-    const status =
-      err.code === 'reply_target_not_found'
-        ? 404
-        : err.code === 'target_closed'
-          || err.code === 'target_archived'
-          || err.code === 'stream_key_mismatch'
-          ? 409
-          : 400;
+    // 404 for a reply target that is not in the conversation — the same answer
+    // the resolver gives an address that names nothing. 409 for the freshness
+    // assertion mismatch: the sender's view of where it is has to be re-earned,
+    // which is exactly the retry the stale conflict asks for (#task:2021 P4-4).
+    const status = err.code === 'reply_target_not_found' ? 404 : 409;
     return c.json({ error: err.message, code: err.code }, status);
   }
   if (err instanceof PolicyError) {

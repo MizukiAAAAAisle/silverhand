@@ -29,6 +29,7 @@
  * conversation including the inbox, which both contradicts §4.2 and would let a
  * human-visibility EXISTS become the reason a face excluded the inbox.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { fixedConversationTitle, SearchQueryInputSchema } from '@silverhand/shared';
 import type { ConversationDto } from '@silverhand/shared';
@@ -43,10 +44,7 @@ import { SqliteTaskRepo } from '../../src/repos/task-repo.js';
 import { taskConversationAccessPort } from '../../src/repos/task-persistence.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { listFavorites } from '../../src/read-model/favorites.js';
-import {
-  buildAgentSearchMessagesDto,
-  resolveAgentReadHistoryTarget,
-} from '../../src/read-model/agent-read.js';
+import { buildAgentSearchMessagesDto } from '../../src/read-model/agent-read.js';
 import { openTestDb } from '../utils/db.js';
 
 const NEEDLE = 'zqx-needle';
@@ -60,7 +58,7 @@ function bootstrap() {
   const agents = new AgentRepo(db);
   const messages = new MessageRepo(db);
 
-  const eng = workspaces.insert({ name: 'eng', description: null });
+  const eng = workspaces.insert({ name: fixedWorkspaceName('eng'), description: null });
   workspaces.addUserMember(eng.id, viewerUserId, 'owner');
 
   const general = conversations.insertChannel({
@@ -253,37 +251,14 @@ describe('agent inbox — its one participant CAN read it', () => {
     expect(t.conversations.getAgent(t.inbox.id, t.alpha.id)).toBeNull();
   });
 
-  it('resolves as a read-history target for its owner, by id and as `self`', () => {
-    const t = bootstrap();
-    const fromChannel = resolveAgentReadHistoryTarget(
-      t.db,
-      t.conversations,
-      t.conversations.get(t.general.id)!,
-      t.alpha.id,
-      { conversation_id: t.inbox.id },
-    );
-    expect(fromChannel).toMatchObject({ ok: true });
-    // `self`, the shape it takes once a session runs there (#task:2019).
-    expect(
-      resolveAgentReadHistoryTarget(
-        t.db,
-        t.conversations,
-        t.inboxConversation(),
-        t.alpha.id,
-        'self',
-      ),
-    ).toMatchObject({ ok: true });
-    // Another agent is refused — the placement names ONE participant.
-    expect(
-      resolveAgentReadHistoryTarget(
-        t.db,
-        t.conversations,
-        t.conversations.get(t.general.id)!,
-        t.beta.id,
-        { conversation_id: t.inbox.id },
-      ),
-    ).toMatchObject({ ok: false, status: 403 });
-  });
+  // The read-history ADDRESS arm used to be asserted here, against
+  // `resolveAgentReadHistoryTarget` — the read door's own target taxonomy, which
+  // #task:2021 P4-4 deleted in favour of the one resolver. Its successor
+  // assertions live where that resolver's do: `an inbox is a read face, not a
+  // write destination` in `tests/delivery-target-resolution.test.ts` proves the
+  // owner resolves `#conv:<inbox>` at `intent: 'read'` and that anyone else is
+  // refused as `target_unresolved`. What stays this file's own business is the
+  // participation face those assertions consult, above.
 
   it('is searchable by its owner in conversation scope, and by nobody else', () => {
     const t = bootstrap();

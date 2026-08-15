@@ -70,6 +70,43 @@ export interface ConversationRef {
 }
 
 /**
+ * How a stream is SPELLED, as columns: the placement that decides which address
+ * form it has, plus the stored title and the stored fold of it (#task:2021 P4-4).
+ *
+ * A third projection rather than a widening of {@link ConversationIdentity},
+ * because these are two different questions asked by two different layers. Identity
+ * answers "who may act here" and is read on every permission check, so it carries
+ * no display prose; this one answers "what does its address say" and is read once
+ * per framed batch. Putting `title` on identity would put a display string in front
+ * of every ACL decision, and putting `roster_policy` / `visibility` here would let
+ * an address renderer start judging membership.
+ *
+ * BOTH the title and its stored KEY are here, and the key is the load-bearing one:
+ * the renderer emits a name only when re-folding the stored title reproduces the
+ * stored key, which is what makes the emitted token resolve back to THIS row (the
+ * resolver looks up by key). A half state — a stored key that no longer matches its
+ * title — is exactly what `observability/title-address-log.ts` says must stay
+ * detectable, so the renderer detects it instead of emitting an address that
+ * resolves to nothing.
+ */
+export interface ConversationAddressFacts {
+  id: string;
+  placement_kind: ConversationPlacementKind;
+  workspace_id: string | null;
+  inbox_agent_id: string | null;
+  /** `''` for a `direct_pair` — see {@link DIRECT_PAIR_STORED_TITLE}. */
+  title: string;
+  /** `NULL` for every placement that is not workspace-placed. */
+  title_key: string | null;
+  endpoint_a_kind: ConversationRow['endpoint_a_kind'];
+  endpoint_a_id: string | null;
+  endpoint_b_kind: ConversationRow['endpoint_b_kind'];
+  endpoint_b_id: string | null;
+  endpoint_a_deleted_at: number | null;
+  endpoint_b_deleted_at: number | null;
+}
+
+/**
  * Identity + PLACEMENT: what a conversation is and WHERE it lives
  * (agent-scoped-session-v1 §4.1), with no UI read model attached.
  *
@@ -263,6 +300,33 @@ function rowToDto(row: ConversationRow): ConversationDto {
   return { ...stripInternalColumns(row) };
 }
 
+/** Row → {@link ConversationAddressFacts}, and the column list its one query
+ *  selects. Spelled the same way as the identity pair above, for the same reason:
+ *  a spelling decision that silently lost `title_key` would emit a name whose
+ *  fold nobody checked. */
+function rowToAddressFacts(row: ConversationRow): ConversationAddressFacts {
+  return {
+    id: row.id,
+    placement_kind: row.placement_kind,
+    workspace_id: row.workspace_id,
+    inbox_agent_id: row.inbox_agent_id,
+    title: row.title,
+    title_key: row.title_key,
+    endpoint_a_kind: row.endpoint_a_kind,
+    endpoint_a_id: row.endpoint_a_id,
+    endpoint_b_kind: row.endpoint_b_kind,
+    endpoint_b_id: row.endpoint_b_id,
+    endpoint_a_deleted_at: row.endpoint_a_deleted_at,
+    endpoint_b_deleted_at: row.endpoint_b_deleted_at,
+  };
+}
+
+const ADDRESS_FACTS_COLUMNS = `id, placement_kind, workspace_id, inbox_agent_id,
+       title, title_key,
+       endpoint_a_kind, endpoint_a_id,
+       endpoint_b_kind, endpoint_b_id,
+       endpoint_a_deleted_at, endpoint_b_deleted_at`;
+
 /**
  * A channel-like DTO carries NO separate address field (#task:2016): the address
  * IS `title`, so these mappers take the plain row every other mapper takes and
@@ -319,6 +383,21 @@ export class ConversationRepo {
       )
       .get(id);
     return row ? rowToIdentity(row) : null;
+  }
+
+  /**
+   * The columns a stream's ADDRESS is spelled from — see
+   * {@link ConversationAddressFacts}. Read once per framed delivery batch, by
+   * primary key.
+   */
+  addressFacts(id: string): ConversationAddressFacts | null {
+    const row = this.db
+      .prepare<[string], ConversationRow>(
+        `SELECT ${ADDRESS_FACTS_COLUMNS}
+           FROM conversations WHERE id = ?`,
+      )
+      .get(id);
+    return row ? rowToAddressFacts(row) : null;
   }
 
   /**
@@ -1032,6 +1111,41 @@ export class ConversationRepo {
       )
       .get(workspaceId, key, exceptConversationId ?? '');
     return row !== undefined;
+  }
+
+  /**
+   * The workspace-placed conversation of `workspaceId` holding `key` — the second
+   * half of a readable address (#task:2021 P4-4).
+   *
+   * The SAME predicate as {@link isTitleKeyTaken}, for the same planner reason
+   * (`placement_kind = 'workspace'` is what reaches the partial unique index), but
+   * a different question and therefore a different method: this one is a READ
+   * outside any write lock and returns the row, while the other answers "would my
+   * insert conflict" and is authoritative only under one. Sharing an
+   * implementation would have made the second answer look available to a read
+   * surface.
+   *
+   * Returns the identity projection: an address resolver needs the id and the
+   * placement arm, and a DTO would hand it columns whose freshness it has no lock
+   * for.
+   *
+   * `LIMIT 1` is a statement of what the index already guarantees, not a
+   * tie-break: the partial UNIQUE makes two holders impossible, so there is no
+   * ordering question to answer here — a second row would be corruption, which
+   * the boot audit reports and this read must not paper over by choosing one.
+   */
+  findWorkspaceTitle(workspaceId: string, key: string): ConversationIdentity | null {
+    const row = this.db
+      .prepare<[string, string], ConversationRow>(
+        `SELECT ${IDENTITY_COLUMNS}
+           FROM conversations
+          WHERE placement_kind = 'workspace'
+            AND workspace_id = ?
+            AND title_key = ?
+          LIMIT 1`,
+      )
+      .get(workspaceId, key);
+    return row ? rowToIdentity(row) : null;
   }
 
   /**

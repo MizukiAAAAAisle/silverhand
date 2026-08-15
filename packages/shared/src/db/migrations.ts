@@ -4,6 +4,11 @@ import {
   describeConversationTitleAudit,
 } from '../conversation-title-audit.js';
 import { canonicalizeStoredConversationTitle } from '../conversation-title.js';
+import {
+  auditWorkspaceNameAddresses,
+  describeWorkspaceNameAudit,
+} from '../workspace-name-audit.js';
+import { canonicalizeStoredWorkspaceName } from '../workspace-name.js';
 import { BASELINE_SCHEMA_SQL, BASELINE_SCHEMA_VERSION } from './baseline-schema.js';
 
 /**
@@ -3079,6 +3084,131 @@ export const migrations: Migration[] = [
         BEGIN
           SELECT RAISE(ABORT, 'agent_runtime_control_events is append-only');
         END;
+    `,
+  },
+  {
+    version: 78,
+    name: 'workspace_display_name_address',
+    // #task:2027 — a REGULAR workspace's display name is the root segment of
+    // its readable delivery target. There is no independent slug and no retired
+    // allocation: a rename releases the old folded key immediately. Agent-home
+    // workspaces are deliberately outside this namespace and carry NULL here.
+    //
+    // As with v72, SQLite cannot compute the pinned Unicode fold. The migration
+    // stages canonical display bytes and keys with the shared canonicalizer,
+    // rebuilds the table so the kind/key arc is a DB fact, and then creates the
+    // unique index over CURRENT regular rows. The precondition fails before DDL
+    // on a folded collision, naming the rows instead of letting UNIQUE fail with
+    // an opaque pair of column names.
+    foreignKeyEscape: true,
+    precondition: (db) => {
+      const handle = db as {
+        exec: (sql: string) => void;
+        prepare: (sql: string) => {
+          all: () => { id: string; workspace_kind: 'regular' | 'agent_home'; name: string }[];
+          run: (...params: unknown[]) => void;
+        };
+      };
+      const rows = handle
+        .prepare(
+          `SELECT id, workspace_kind, name
+             FROM workspaces
+            ORDER BY CASE workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
+                     created_at, id`,
+        )
+        .all();
+      const audit = auditWorkspaceNameAddresses(
+        rows.map(row => ({
+          id: row.id,
+          kind: row.workspace_kind,
+          name: row.name,
+          nameKey: null,
+        })),
+        { keysExpected: false },
+      );
+      if (audit.defects.length > 0) {
+        throw new Error(
+          `migration v78 (#task:2027): regular workspace display names fold to `
+            + `one current address. Rename one of each pair, then restart.\n`
+            + describeWorkspaceNameAudit(audit),
+        );
+      }
+
+      handle.exec(
+        `DROP TABLE IF EXISTS temp.workspace_name_backfill;
+         CREATE TEMP TABLE workspace_name_backfill (
+           workspace_id TEXT PRIMARY KEY,
+           name         TEXT NOT NULL,
+           name_key     TEXT NOT NULL
+         );`,
+      );
+      const stage = handle.prepare(
+        `INSERT INTO temp.workspace_name_backfill
+           (workspace_id, name, name_key)
+         VALUES (?, ?, ?)`,
+      );
+      for (const row of rows) {
+        if (row.workspace_kind !== 'regular') continue;
+        const canonical = canonicalizeStoredWorkspaceName(row.name);
+        stage.run(row.id, canonical.name, canonical.key);
+      }
+    },
+    up: `
+      CREATE TABLE workspaces_new (
+        id                 TEXT PRIMARY KEY,
+        name               TEXT NOT NULL,
+        name_key           TEXT
+          CHECK (
+            name_key IS NULL
+            OR (
+              name_key <> ''
+              AND NOT name_key GLOB '*[A-Z]*'
+              AND NOT name_key GLOB ' *'
+              AND NOT name_key GLOB '* '
+            )
+          ),
+        description        TEXT,
+        workspace_kind     TEXT NOT NULL
+          CHECK (workspace_kind IN ('regular', 'agent_home')),
+        owner_agent_id     TEXT UNIQUE REFERENCES agents(id) ON DELETE CASCADE,
+        archived_at        INTEGER,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL,
+        pinned_at          INTEGER,
+        owner_user_id      TEXT REFERENCES users(id),
+        CHECK (
+          (workspace_kind = 'agent_home' AND owner_agent_id IS NOT NULL)
+          OR
+          (workspace_kind = 'regular' AND owner_agent_id IS NULL)
+        ),
+        CHECK (
+          CASE workspace_kind
+            WHEN 'regular' THEN name_key IS NOT NULL
+            WHEN 'agent_home' THEN name_key IS NULL
+            ELSE 0
+          END
+        )
+      );
+
+      INSERT INTO workspaces_new (
+        id, name, name_key, description, workspace_kind, owner_agent_id,
+        archived_at, created_at, updated_at, pinned_at, owner_user_id
+      )
+        SELECT
+          w.id, COALESCE(b.name, w.name), b.name_key, w.description,
+          w.workspace_kind, w.owner_agent_id, w.archived_at, w.created_at,
+          w.updated_at, w.pinned_at, w.owner_user_id
+        FROM workspaces w
+        LEFT JOIN temp.workspace_name_backfill b ON b.workspace_id = w.id;
+
+      DROP TABLE temp.workspace_name_backfill;
+      DROP TABLE workspaces;
+      ALTER TABLE workspaces_new RENAME TO workspaces;
+
+      CREATE UNIQUE INDEX idx_workspaces_name_key
+        ON workspaces(name_key) WHERE workspace_kind = 'regular';
+      CREATE INDEX idx_workspaces_pinned_at
+        ON workspaces(workspace_kind, pinned_at) WHERE pinned_at IS NOT NULL;
     `,
   },
 ];

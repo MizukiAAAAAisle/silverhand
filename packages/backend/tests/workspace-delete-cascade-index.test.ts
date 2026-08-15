@@ -93,8 +93,8 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
        VALUES (?, ?, 'claude', ?, ?, ?, 'local')`,
     );
     const insertWorkspace = db.prepare(
-      `INSERT INTO workspaces (id, name, workspace_kind, owner_user_id, created_at, updated_at)
-       VALUES (?, ?, 'regular', 'local', ?, ?)`,
+      `INSERT INTO workspaces (id, name, name_key, workspace_kind, owner_user_id, created_at, updated_at)
+       VALUES (?, ?, ?, 'regular', 'local', ?, ?)`,
     );
     const insertConversation = db.prepare(
       `INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
@@ -140,7 +140,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
       insertAgent.run('agent-bulk-2', 'bulk-agent-2', localHostId, now, now);
 
       // ── Unrelated GLOBAL bulk: the amplification substrate ─────────
-      insertWorkspace.run('ws-bulk', 'bulk', now, now);
+      insertWorkspace.run('ws-bulk', 'bulk', 'bulk', now, now);
       addConversation('conv-bulk', 'ws-bulk', 'bulk');
       for (let i = 0; i < BULK_MESSAGES; i += 1) {
         insertMessage.run(`m-bulk-${i}`, 'conv-bulk', 'x', i + 1, now, null);
@@ -177,7 +177,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
       }
 
       // ── Small TARGET workspace (dalaran-shaped) ────────────────────
-      insertWorkspace.run('ws-target', 'target', now, now);
+      insertWorkspace.run('ws-target', 'target', 'target', now, now);
       for (const conv of ['conv-t1', 'conv-t2']) {
         addConversation(conv, 'ws-target', conv);
         for (let i = 0; i < 30; i += 1) {

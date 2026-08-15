@@ -12,7 +12,7 @@
  * fixture empire.
  */
 import type { AgentDto, ConversationDto, RuntimeKind, WorkspaceDto } from '@silverhand/shared';
-import { fixedConversationTitle } from '@silverhand/shared';
+import { fixedConversationTitle, fixedWorkspaceName } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
@@ -66,7 +66,7 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
     tempDirs: tmp,
 
     createWorkspace(name = 'eng'): WorkspaceDto {
-      return repos.workspaces.insert({ name, description: null });
+      return repos.workspaces.insert({ name: fixedWorkspaceName(name), description: null });
     },
 
     createChannel(workspace: WorkspaceDto, title = 'general'): ConversationDto {

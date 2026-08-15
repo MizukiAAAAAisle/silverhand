@@ -13,9 +13,12 @@ import {
   createSqliteAuthUnitOfWork,
 } from './repos/auth-uow.js';
 import { scanConversationTitleAddresses } from './read-model/conversation-title-audit.js';
+import { scanWorkspaceNameAddresses } from './read-model/workspace-name-audit.js';
 import {
   describeConversationTitleAudit,
+  describeWorkspaceNameAudit,
   type ConversationTitleAuditReport,
+  type WorkspaceNameAuditReport,
 } from '@silverhand/shared';
 
 export type AdminResetPasswordErrorCode = 'user_not_found' | 'db_locked';
@@ -136,6 +139,33 @@ export function scanTitleAddresses(
       },
       description,
     );
+    return { report, description };
+  } finally {
+    db.close();
+  }
+}
+
+export interface AdminScanWorkspaceAddressesResult {
+  report: WorkspaceNameAuditReport;
+  description: string;
+}
+
+/** Read-only pre/post migration diagnostic for the workspace root namespace. */
+export function scanWorkspaceAddresses(
+  opts: AdminScanTitleAddressesOptions,
+): AdminScanWorkspaceAddressesResult {
+  const db = openDatabaseUnmigratedReadOnly(opts.dbPath);
+  try {
+    const report = scanWorkspaceNameAddresses(db);
+    const description = describeWorkspaceNameAudit(report);
+    opts.logger?.warn({
+      admin_op: 'scan-workspace-addresses',
+      scanned: report.regularScanned,
+      keys_expected: report.keysExpected,
+      defects: report.defects.length,
+      kinds: [...new Set(report.defects.map(defect => defect.kind))],
+      ts: Date.now(),
+    }, 'workspace address scan completed');
     return { report, description };
   } finally {
     db.close();

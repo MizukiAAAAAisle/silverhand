@@ -14,9 +14,14 @@ const marker = '__G2_CHILD_CLI_PROBE__:';
 
 process.stdin.resume();
 
+// A read names ONE stream (#task:2021 P4-4): there is no ambient "here" on the
+// read door either, so the probe spells the id form of the stream it was spawned
+// for — exactly what a real runtime does with the conversation it was given.
+const target = '#conv:' + (process.env.SILVERHAND_CONVERSATION_ID || '');
+
 const cli = spawn(
   'silverhand',
-  ['message', 'history', '--limit', '2', '--include-content'],
+  ['message', 'history', '--target', target, '--limit', '2', '--include-content'],
   {
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],

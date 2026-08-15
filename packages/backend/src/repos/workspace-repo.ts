@@ -2,7 +2,8 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import {
   agentHomeWorkspaceId,
-  normalizeWorkspaceName,
+  parseWorkspaceName,
+  type CanonicalWorkspaceName,
   type AgentDto,
   type AgentRow,
   type UserRow,
@@ -31,6 +32,22 @@ type WorkspaceSelectRow = WorkspaceRow & {
   dm_channel_ids_json: string | null;
 };
 
+/**
+ * A workspace as an ADDRESS ROOT and nothing else: the kind that decides whether
+ * it has a name namespace at all, the stored display name, and the stored fold of
+ * it (#task:2021 P4-4, see {@link WorkspaceRepo.addressRoot}).
+ *
+ * A projection rather than the DTO because `name_key` is deliberately absent from
+ * the DTO, and because an address renderer has no business with a workspace's
+ * description, owner or archive state.
+ */
+export interface WorkspaceAddressRoot {
+  workspace_kind: WorkspaceKind;
+  name: string;
+  /** `NULL` for `agent_home`: no name namespace, so no address root. */
+  name_key: string | null;
+}
+
 function rowToDto(
   row: WorkspaceSelectRow & { sort_group?: number; sort_name?: string },
 ): WorkspaceDto {
@@ -43,6 +60,7 @@ function rowToDto(
     // when the container star was retired (#task:1899). The shared column is no
     // longer read/written and must never reach the wire. Strip it here.
     pinned_at: _pinnedAt,
+    name_key: _nameKey,
     ...workspace
   } = row;
   const dmChannelIds =
@@ -118,19 +136,59 @@ export class WorkspaceRepo {
     return row ? rowToDto(row) : null;
   }
 
-  /** Name equality is defined in NFC, not by raw bytes: `WorkspaceNameSchema`
-   *  normalizes on every write, so a lookup argument must be normalized too or
-   *  a canonically-equivalent spelling (a pasted NFD name, common on macOS)
-   *  would silently miss a row that displays identically. */
-  getByName(name: string): WorkspaceDto | null {
+  /**
+   * The ADDRESS ROOT of a workspace: its kind, its display name and the stored
+   * fold of that name (#task:2021 P4-4).
+   *
+   * Not `get()`: `name_key` is stripped from the DTO on purpose (it must never
+   * reach the wire), and the key is the whole point here — a renderer may emit a
+   * workspace name as an address segment only when re-folding the stored name
+   * reproduces the stored key, so that the token it emits resolves back to this
+   * row. `name_key IS NULL` is the agent_home case (#task:2027): a private
+   * workspace has no name namespace and therefore no address root.
+   */
+  addressRoot(id: string): WorkspaceAddressRoot | null {
+    const row = this.db
+      .prepare<[string], Pick<WorkspaceRow, 'workspace_kind' | 'name' | 'name_key'>>(
+        `SELECT workspace_kind, name, name_key FROM workspaces WHERE id = ?`,
+      )
+      .get(id);
+    return row
+      ? {
+          workspace_kind: row.workspace_kind,
+          name: row.name,
+          name_key: row.name_key,
+        }
+      : null;
+  }
+
+  /** Resolve only the regular semantic namespace. The key is the same pinned
+   * Unicode fold the terminal writer stores; agent_home never participates. */
+  getByName(name: string | CanonicalWorkspaceName): WorkspaceDto | null {
+    const canonical = typeof name === 'string' ? parseWorkspaceName(name) : { ok: true as const, value: name };
+    if (!canonical.ok) return null;
     const row = this.db
       .prepare<[string], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
-         WHERE w.name = ?
+         WHERE w.name_key = ?
            AND w.workspace_kind = 'regular'`,
       )
-      .get(normalizeWorkspaceName(name));
+      .get(canonical.value.key);
     return row ? rowToDto(row) : null;
+  }
+
+  /** Resolver-facing SET read. UNIQUE makes >1 unreachable on a clean DB, but
+   * retaining the set lets the resolver distinguish corruption from absence
+   * and emit the dogfood `ambiguous` signal instead of choosing a row. */
+  listRegularByNameKey(key: string): WorkspaceDto[] {
+    return this.db
+      .prepare<[string], WorkspaceSelectRow>(
+        `${WORKSPACE_SELECT}
+         WHERE w.workspace_kind = 'regular' AND w.name_key = ?
+         ORDER BY w.created_at ASC, w.id ASC`,
+      )
+      .all(key)
+      .map(rowToDto);
   }
 
   /** Match by `workspaces.name` across ALL kinds (regular + agent_home).
@@ -140,15 +198,17 @@ export class WorkspaceRepo {
    *  unique index, agent_home names mirror the agent's name and may
    *  collide across the two kinds. Compares in NFC — see `getByName`. */
   findAllByName(name: string): WorkspaceDto[] {
+    const canonical = parseWorkspaceName(name);
+    if (!canonical.ok) return [];
     return this.db
-      .prepare<[string], WorkspaceSelectRow>(
+      .prepare<[string, string], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
-         WHERE w.name = ?
-           AND w.workspace_kind IN ('regular', 'agent_home')
+         WHERE (w.workspace_kind = 'regular' AND w.name_key = ?)
+            OR (w.workspace_kind = 'agent_home' AND w.name = ?)
          ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
                   w.created_at ASC`,
       )
-      .all(normalizeWorkspaceName(name))
+      .all(canonical.value.key, canonical.value.name)
       .map(rowToDto);
   }
 
@@ -215,16 +275,15 @@ export class WorkspaceRepo {
 
   insert(params: {
     id?: string;
-    name: string;
+    name: CanonicalWorkspaceName;
     description: string | null;
     workspaceKind?: WorkspaceKind;
   }): WorkspaceDto {
     if (params.workspaceKind && params.workspaceKind !== 'regular') {
       throw new Error('use insertAgentHome for agent_home workspaces');
     }
-    // `name` is NFC-normalized at this write boundary (see
-    // {@link updateMutableMetadata}) — "every stored name is NFC" must not rest
-    // on the caller having parsed through `WorkspaceNameSchema`.
+    // `name` is the branded terminal pair from #task:2027: display bytes and
+    // folded key were produced by one parse and cannot be supplied separately.
     // relocation-v1 §7 — a regular workspace no longer carries a host binding
     // or a working directory. Its bundle resolves daemon-side to a terminal
     // deterministic agent-centric coordinate at first spawn; the row is a pure
@@ -234,13 +293,14 @@ export class WorkspaceRepo {
     this.db
       .prepare(
         `INSERT INTO workspaces
-         (id, name, description, workspace_kind,
+         (id, name, name_key, description, workspace_kind,
           owner_agent_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, 'regular', NULL, NULL, ?, ?)`,
+         VALUES (?, ?, ?, ?, 'regular', NULL, NULL, ?, ?)`,
       )
       .run(
         id,
-        normalizeWorkspaceName(params.name),
+        params.name.name,
+        params.name.key,
         params.description,
         now,
         now,
@@ -258,9 +318,9 @@ export class WorkspaceRepo {
     this.db
       .prepare(
         `INSERT INTO workspaces
-         (id, name, description, workspace_kind,
+         (id, name, name_key, description, workspace_kind,
           owner_agent_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, 'agent_home', ?, NULL, ?, ?)`,
+         VALUES (?, ?, NULL, ?, 'agent_home', ?, NULL, ?, ?)`,
       )
       .run(
         id,
@@ -291,36 +351,36 @@ export class WorkspaceRepo {
   }
 
   /**
-   * Mutable-metadata update. `name` is normalized on the way in for the same
-   * reason {@link insert} does it: the name is a SELECTOR (`getByName` looks up
-   * `normalizeWorkspaceName(name)`), so a row stored in a non-NFC spelling is
-   * permanently unaddressable by the name the user reads off the screen. The
-   * fence lives here, at the write boundary, rather than resting on every
-   * caller having gone through `WorkspaceNameSchema` — the CLI selector path
-   * never does. Normalize, do not reject: NFC is an equivalence over spellings
-   * of the same characters, so it costs no name and FORMAT validation stays the
-   * schema's job (no full re-parse here, and no DB CHECK).
+   * Mutable metadata update. The address pair is terminal: the repo accepts a
+   * branded `CanonicalWorkspaceName`, writes `name` and `name_key` in one SQL
+   * statement, and has no overload that can mutate either coordinate alone.
+   * A source fence inventories every production SQL writer as the second half
+   * of that invariant; boot audit is the fail-closed final backstop.
    */
   updateMutableMetadata(
     id: string,
-    fields: { name?: string; description?: string | null },
+    fields: { name?: CanonicalWorkspaceName; description?: string | null },
   ): WorkspaceDto | null {
-    const sets: string[] = [];
-    const values: Array<string | number | null> = [];
-    if (fields.name !== undefined) {
-      sets.push('name = ?');
-      values.push(normalizeWorkspaceName(fields.name));
+    const now = Date.now();
+    if (fields.name !== undefined && fields.description !== undefined) {
+      this.db.prepare(
+        `UPDATE workspaces
+            SET name = ?, name_key = ?, description = ?, updated_at = ?
+          WHERE id = ? AND workspace_kind = 'regular'`,
+      ).run(fields.name.name, fields.name.key, fields.description, now, id);
+    } else if (fields.name !== undefined) {
+      this.db.prepare(
+        `UPDATE workspaces
+            SET name = ?, name_key = ?, updated_at = ?
+          WHERE id = ? AND workspace_kind = 'regular'`,
+      ).run(fields.name.name, fields.name.key, now, id);
+    } else if (fields.description !== undefined) {
+      this.db.prepare(
+        `UPDATE workspaces SET description = ?, updated_at = ? WHERE id = ?`,
+      ).run(fields.description, now, id);
+    } else {
+      return this.get(id);
     }
-    if (fields.description !== undefined) {
-      sets.push('description = ?');
-      values.push(fields.description);
-    }
-    if (sets.length === 0) return this.get(id);
-    sets.push('updated_at = ?');
-    values.push(Date.now(), id);
-    this.db
-      .prepare(`UPDATE workspaces SET ${sets.join(', ')} WHERE id = ?`)
-      .run(...values);
     return this.get(id);
   }
 

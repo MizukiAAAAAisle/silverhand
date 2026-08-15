@@ -33,6 +33,7 @@ import {
   findForbiddenCodePoint,
 } from './display-name-charset.js';
 import { foldCase } from './unicode-case-fold.js';
+import { decodeAddressSegment, encodeAddressSegment } from './address-segment.js';
 
 /**
  * Title length, in CODE POINTS — `Array.from`, not UTF-16 units, so an astral
@@ -195,6 +196,38 @@ export function fixedConversationTitle(literal: string): CanonicalConversationTi
 
 /** Human-readable form of an issue, shared by the wire schema and the service
  *  error so a user reads the same sentence wherever the title was refused. */
+/** Canonical readable-address segment for a workspace-placed conversation —
+ *  the second segment of `#<workspace>/<title>` (#task:2021 P4-4). Symmetric with `formatWorkspaceAddressSegment`, so the two
+ *  segments of one token are escaped by the same codec. */
+export function formatConversationAddressSegment(
+  title: CanonicalConversationTitle,
+): string {
+  return encodeAddressSegment(title.title);
+}
+
+/**
+ * Strict inverse of {@link formatConversationAddressSegment}.
+ *
+ * Three conditions, all necessary, and the same set the workspace segment
+ * applies: the percent codec's own canonicality, the decoded display bytes being
+ * ALREADY NFC+trim canonical (so an encoded leading space is not an alias for the
+ * trimmed title), and the re-encoding being byte-identical to the input (so
+ * nothing that escapes a character the codec leaves raw resolves at all). One
+ * title, one spelling — otherwise per-workspace uniqueness of the stored key
+ * would not make the ADDRESS unique.
+ */
+export function parseConversationAddressSegment(
+  segment: string,
+): CanonicalConversationTitle | null {
+  const decoded = decodeAddressSegment(segment);
+  if (decoded === null) return null;
+  const parsed = parseConversationTitle(decoded);
+  if (!parsed.ok || parsed.value.title !== decoded) return null;
+  return formatConversationAddressSegment(parsed.value) === segment
+    ? parsed.value
+    : null;
+}
+
 export function describeConversationTitleIssue(
   issue: ConversationTitleIssue,
 ): string {

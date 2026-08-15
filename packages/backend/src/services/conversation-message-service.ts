@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
-import { directPairIsReadOnlyForSurvivor } from '@silverhand/shared';
+import { directPairIsReadOnlyForSurvivor, parseDeliveryTarget } from '@silverhand/shared';
 import type {
   AttachmentRefInput,
   AttachmentSnapshot,
   ConversationDto,
-  LegacySendMessageTarget,
   MessageDto,
   MessageEventPayload,
   MessageProjections,
@@ -29,9 +28,9 @@ import {
   MessageFreshnessError,
   MessageFreshnessGuardError,
   type ConversationMessageServiceOptions,
-  type NormalizedMessageTarget,
   type ResolveStaleMessageInput,
   type SendMessageActor,
+  type SendMessageDestination,
   type SendMessageInput,
   type SendMessageResult,
   type SendMessageTxResult,
@@ -57,6 +56,7 @@ export type {
   PolicyErrorCode,
   AttachmentErrorCode,
   SendMessageActor,
+  SendMessageDestination,
   SendMessageInput,
   SendMessageResult,
   ResolveStaleMessageInput,
@@ -128,11 +128,11 @@ export class ConversationMessageService {
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
     assertActorConversationMatch(input.actor, input.conversationId);
     const policy = POLICIES[input.actor.kind];
-    const target = this.normalizeMessageTarget(input);
-    if (!policy.allowTarget && target.kind === 'legacy') {
+    const destination = input.destination;
+    if (!policy.allowForeignStream && destination.kind === 'stream') {
       throw new PolicyError(
         'target_not_allowed_for_user',
-        'user messages cannot target another conversation',
+        'user messages cannot address another conversation',
       );
     }
 
@@ -159,17 +159,25 @@ export class ConversationMessageService {
             'conversation not found',
           );
         }
-        this.assertPostAuthority(tx, sourceConversation, input.actor);
-
-        const targetConversation = target.kind === 'legacy'
-          ? this.resolveLegacyTarget(sourceConversation, target.target)
-          : sourceConversation;
-        const threadRootId = this.resolveThreadRootForTarget(
+        // The TARGET is what the send has to be authorized against, and it is
+        // read HERE rather than trusted from the resolver's snapshot: a resolved
+        // target is a coordinate, not a capability token (#task:2021 P4-4), so
+        // the row and every fact the gate reads from it come from this
+        // transaction. A row that vanished in the gap answers the same 404 the
+        // resolver answers for an address that names nothing — "unknown" and
+        // "gone" are one outcome, by design.
+        const targetConversation =
+          destination.kind === 'stream'
+          && destination.stream.conversationId !== sourceConversation.id
+            ? this.requireConversation(tx, destination.stream.conversationId)
+            : sourceConversation;
+        this.assertPostAuthority(tx, targetConversation, input.actor);
+        const threadRootId = this.resolveThreadRootForDestination(
           tx,
           targetConversation.id,
-          target,
+          destination,
         );
-        this.assertStreamKeyConsistent(input, threadRootId);
+        this.assertAssertedStreamMatches(input, targetConversation.id, threadRootId);
         const attachmentRefs = input.attachmentRefs ?? [];
         const snapshots = this.resolveAttachmentSnapshots(
           tx,
@@ -183,7 +191,6 @@ export class ConversationMessageService {
           this.insertMessageWithFreshnessIfApplicable({
             tx,
             input,
-            sourceConversationId: sourceConversation.id,
             targetConversationId: targetConversation.id,
             threadRootId,
             snapshots,
@@ -215,8 +222,8 @@ export class ConversationMessageService {
         //
         // `sourceConversation`, not the target: the CC answers "who did this
         // message address that cannot see the channel it was written in", and a
-        // user send never has a foreign target (`allowTarget: false`), so the
-        // two are the same conversation on this path anyway.
+        // user send never addresses a foreign stream (`allowForeignStream:
+        // false`), so the two are the same conversation on this path anyway.
         const mentionCc = policy.ccMentions
           ? writeMentionCcCopies(tx, {
               message,
@@ -384,7 +391,7 @@ export class ConversationMessageService {
         messageId: txResult.message.id,
         actorKind: input.actor.kind,
         actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
-        target,
+        destination: destination.kind,
         contentBytes: input.content.length,
         recipientCount:
           txResult.threadDelivery?.recipients.length
@@ -571,7 +578,6 @@ export class ConversationMessageService {
   private insertMessageWithFreshnessIfApplicable(params: {
     tx: MessageTxScope;
     input: SendMessageInput;
-    sourceConversationId: string;
     targetConversationId: string;
     threadRootId: string | null;
     snapshots: AttachmentSnapshot[];
@@ -599,27 +605,32 @@ export class ConversationMessageService {
     // delivers its own seq back to it (#task:1854 generalises what the
     // `--anyway` path already needed).
     //
+    // EVERY skip, with no exception per destination (#task:2021 P4-4). There
+    // used to be one for a send that landed outside the sender's own
+    // conversation, on the theory that a foreign stream has no cursor to merge
+    // into. That was a per-conversation-session artifact: a cursor is kept per
+    // OBSERVED STREAM, and the stream a send addressed is one the sender is by
+    // definition watching, so withholding the prerequisite there is exactly the
+    // self-stale bug the prerequisite exists to prevent.
+    //
     // Deciding "did the CAS run" and reading the head are ONE act, and it
     // lives here: the head must predate the insert while the skip is this
     // function's own branch, so a caller-side copy of the predicate would be a
     // second authority that silently drifts back into self-stale.
-    const insertWithoutFreshness = (opts: {
-      reason: string;
-      prerequisite: boolean;
-    }): {
+    const insertWithoutFreshness = (
+      reason: string,
+    ): {
       message: MessageDto;
       skippedFreshnessReason: string;
-      streamHeadBeforeSend: number | null;
+      streamHeadBeforeSend: number;
     } => {
-      const streamHeadBeforeSend = opts.prerequisite
-        ? tx.messages.streamHeadLatestSeq(
-            params.targetConversationId,
-            params.threadRootId,
-          )
-        : null;
+      const streamHeadBeforeSend = tx.messages.streamHeadLatestSeq(
+        params.targetConversationId,
+        params.threadRootId,
+      );
       return {
         message: tx.messages.insertForConversation(base),
-        skippedFreshnessReason: opts.reason,
+        skippedFreshnessReason: reason,
         streamHeadBeforeSend,
       };
     };
@@ -633,32 +644,13 @@ export class ConversationMessageService {
       };
     }
     if (input.freshnessBypass) {
-      return insertWithoutFreshness({
-        reason: 'freshness_bypass_explicit',
-        prerequisite: true,
-      });
-    }
-    if (params.sourceConversationId !== params.targetConversationId) {
-      // Cross-conversation send: the sender's cursor governs the conversation
-      // it is attached to, not this one. Its own seq here belongs to a stream
-      // it keeps no cursor for, so there is no watermark to merge into —
-      // handing back a prerequisite would only invite the daemon to file
-      // foreign seq numbers under its local stream. Unreachable today
-      // (`self` is the only scalar target left, so target === source); the
-      // branch states the rule for the model, not for a live path.
-      return insertWithoutFreshness({
-        reason: 'cross_target_send',
-        prerequisite: false,
-      });
+      return insertWithoutFreshness('freshness_bypass_explicit');
     }
     if (input.seenUpToSeq === undefined) {
       // Loose first touch: the daemon has never observed this stream, so it
       // omitted the CAS fields rather than claim a false `seen`. The send is
       // allowed, and this is the case that most needs the prerequisite.
-      return insertWithoutFreshness({
-        reason: 'missing_seen_up_to_seq',
-        prerequisite: true,
-      });
+      return insertWithoutFreshness('missing_seen_up_to_seq');
     }
 
     // Freshness CAS: the port contract binds the adapter to run the seq
@@ -687,39 +679,51 @@ export class ConversationMessageService {
     );
   }
 
-  private normalizeMessageTarget(input: SendMessageInput): NormalizedMessageTarget {
-    if (input.legacyReplyToMessageId !== undefined) {
-      if (input.target !== undefined) {
-        throw new TargetError(
-          'target_conflict',
-          'target and legacyReplyToMessageId are mutually exclusive',
-        );
-      }
-      return { kind: 'thread', messageId: input.legacyReplyToMessageId };
+  /** Read a conversation the caller already named, inside the send transaction.
+   *  Absence is `conversation_not_found` — the same 404 an address that names
+   *  nothing gets, so a target that disappeared in the gap between resolution
+   *  and this write is not distinguishable from one that never existed. */
+  private requireConversation(
+    tx: MessageTxScope,
+    conversationId: string,
+  ): ConversationDto {
+    const conversation = tx.conversations.get(conversationId);
+    if (!conversation) {
+      throw new ConversationError(
+        'conversation_not_found',
+        'conversation not found',
+      );
     }
-    const target = input.target;
-    if (target === undefined) return { kind: 'channel' };
-    if (typeof target === 'object' && 'kind' in target) {
-      return target.kind === 'thread'
-        ? { kind: 'thread', messageId: target.message_id }
-        : { kind: 'channel' };
-    }
-    return { kind: 'legacy', target };
+    return conversation;
   }
 
-  /** Resolve a `target: {kind:'thread'}` message id into its thread root. A
-   *  main-line message roots a new thread at that message; an existing reply
-   *  joins the same root (no nested threads). Returns null for channel/main
-   *  sends. Throws when the target message is not in the conversation. */
-  private resolveThreadRootForTarget(
+  /**
+   * Which STREAM of the target conversation this send lands in: `null` for the
+   * main line, else the reply cluster's root message id.
+   *
+   * The two arms answer it by different authorities, on purpose (#task:2021
+   * P4-4). An address arrives with its cluster ALREADY VALIDATED as a root by
+   * `resolveDeliveryTarget` — mid-cluster ids are refused there rather than
+   * normalized, because an agent copies a target it was GIVEN and a silently
+   * re-cut coordinate would put its words in a stream it did not name. The human
+   * door has the opposite problem: a person clicks "reply" on whatever message is
+   * in front of them, so any message in the cluster stands for the cluster and is
+   * normalized here.
+   *
+   * The `stream` arm re-reads nothing: `thread_root_id` and a message's
+   * conversation are both write-once, so there is no gap for the resolver's read
+   * to have gone stale in.
+   */
+  private resolveThreadRootForDestination(
     tx: MessageTxScope,
     targetConversationId: string,
-    target: NormalizedMessageTarget,
+    destination: SendMessageDestination,
   ): string | null {
-    if (target.kind !== 'thread') return null;
+    if (destination.kind === 'stream') return destination.stream.threadRootId;
+    if (destination.kind === 'own_main_line') return null;
     const replied = tx.messages.getInConversation(
       targetConversationId,
-      target.messageId,
+      destination.messageId,
     );
     if (!replied) {
       throw new TargetError(
@@ -730,33 +734,51 @@ export class ConversationMessageService {
     return replied.thread_root_id ?? replied.id;
   }
 
-  /** Cross-check the daemon's asserted `stream_key` against the stream the
-   *  backend resolved from `reply_to`. They must agree, otherwise the
-   *  daemon picked the wrong per-stream seen boundary and the freshness
-   *  CAS would be meaningless (§6.4). A backend contract bug → hard
-   *  reject + warn. No-op when the caller did not assert a stream_key. */
-  private assertStreamKeyConsistent(
+  /**
+   * Cross-check the sender's claim about WHICH STREAM it measured
+   * `seenUpToSeq` against, against the stream this send actually resolved to.
+   *
+   * Not redundancy with the target itself (#task:2021 P4-4). A readable address
+   * resolves by NAME, and a name can have been rebound to a different
+   * conversation since the sender last saw it resolve — so the boundary it
+   * measured and the stream it is now writing into genuinely differ, and the CAS
+   * would compare a seq against the wrong stream's head and PASS. Rejecting is
+   * the only safe answer: the sender must re-earn its view of where it is.
+   *
+   * READS the assertion through the grammar rather than formatting the resolved
+   * stream and comparing strings: `parseDeliveryTarget` is total on arbitrary
+   * input, so an assertion that is not the canonical id form fails closed here
+   * instead of at a formatter that would have to be handed unbranded ids.
+   * No-op when the sender made no claim — that is the loose first touch, which
+   * carries no `seenUpToSeq` either.
+   */
+  private assertAssertedStreamMatches(
     input: SendMessageInput,
+    targetConversationId: string,
     threadRootId: string | null,
   ): void {
-    if (input.assertedStreamKey === undefined) return;
-    const canonical = threadRootId ? `thread:${threadRootId}` : 'main';
-    if (input.assertedStreamKey === canonical) return;
+    if (input.assertedStream === undefined) return;
+    const asserted = parseDeliveryTarget(input.assertedStream);
+    if (
+      asserted !== null
+      && asserted.conversationId === targetConversationId
+      && (asserted.threadRootId ?? null) === threadRootId
+    ) return;
     this.logger.warn(
       {
-        conversationId: input.conversationId,
+        sourceConversationId: input.conversationId,
         actorKind: input.actor.kind,
-        target: input.target ?? null,
-        legacyReplyToMessageId: input.legacyReplyToMessageId ?? null,
-        asserted_stream_key: input.assertedStreamKey,
-        resolved_stream_key: canonical,
+        destination: input.destination.kind,
+        asserted_stream: input.assertedStream,
+        resolved_conversation_id: targetConversationId,
+        resolved_thread_root_id: threadRootId,
       },
-      'conversation-message-service: stream_key assertion mismatch (rejecting)',
+      'conversation-message-service: asserted stream does not match the resolved stream (rejecting)',
     );
     throw new TargetError(
-      'stream_key_mismatch',
-      `stream_key assertion ${input.assertedStreamKey} does not match `
-        + `resolved stream ${canonical}`,
+      'asserted_stream_mismatch',
+      `the freshness boundary was measured against ${input.assertedStream}, `
+        + 'which is not the stream this send resolved to',
     );
   }
 
@@ -946,16 +968,6 @@ export class ConversationMessageService {
         'the other endpoint of this direct conversation no longer exists',
       );
     }
-  }
-
-  private resolveLegacyTarget(
-    sourceConversation: ConversationDto,
-    _target: LegacySendMessageTarget,
-  ): ConversationDto {
-    // `self` (the current conversation) is now the only scalar send
-    // target; `parent` was retired with the isolated-thread fossil
-    // (#task:1303/2d).
-    return sourceConversation;
   }
 
   /** Validate the sender's attachment refs against the target channel and

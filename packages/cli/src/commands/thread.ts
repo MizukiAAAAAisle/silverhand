@@ -22,6 +22,11 @@ in nor replied to — those make you a follower automatically.
 
 Flags:
   --root <message_id>  Required. The cluster root, or any reply in it.
+                       An OBJECT id, not an address: no \`#conv:\` prefix,
+                       and no way to name a cluster in another
+                       conversation — this door resolves the root inside
+                       the conversation you are running in, so a root
+                       from elsewhere reads as not found.
 
 stdout: { "thread_root_id": "<root_id>", "changed": <bool> }
         changed=false means you were already following (no re-backfill).`,
@@ -52,6 +57,8 @@ later reference or reply in the cluster re-follows you automatically.
 
 Flags:
   --root <message_id>  Required. The cluster root, or any reply in it.
+                       An OBJECT id, not an address — same scoping as
+                       \`thread follow\`.
 
 stdout: { "thread_root_id": "<root_id>", "changed": <bool> }
         changed=false means you were not following.`,

@@ -13,28 +13,63 @@ import {
 } from '@silverhand/shared/app-data-layout';
 import { CliError } from '../errors.js';
 import { flagString } from '../parse.js';
+import { requireTargetFlag } from '../target-flag.js';
+import { reachHelpErrorRow } from '../reach-help.js';
 import type { Command } from './index.js';
 
 const uploadCommand: Command = {
   verb: 'upload',
-  summary: 'Upload a local file as a chat attachment.',
-  help: `silverhand file upload --path <abs_path> [--filename <name>]
-                        [--content-type <mime>]
+  summary: 'Upload a local file as an attachment of an addressed conversation.',
+  help: `silverhand file upload --target <address> --path <abs_path>
+                        [--filename <name>] [--content-type <mime>]
 
 Reads the file at --path (must be absolute) and uploads it as an
-attachment scoped to the current channel. Returns an attachment id you
-pass to \`silverhand message send --attachment-id <id>\`.
+attachment of the conversation --target names. Returns an attachment id
+you pass to \`silverhand message send --attachment-id <id>\` — send takes
+its OWN --target, so upload where you are going to send.
+
+An attachment belongs to a CONVERSATION and threads inherit their
+parent's files, so --target must name a conversation: a
+\`/thread:<root_message_id>\` suffix is refused
+(\`thread_suffix_not_supported\`) rather than silently dropped. Upload to
+the parent and send the message into the thread.
 
 Flags:
+  --target         Required. The conversation to attach the file to, e.g.
+                   \`#conv:<conversation_id>\`,
+                   \`dm:@<handle>\`, or
+                   \`#<workspace>/<title>\`. Copy the \`target=\` token from a
+                   message header when it is the stream you mean. One you cannot post to is refused
+                   exactly like one that does not exist.
   --path           Required. Absolute path on local disk.
   --filename       Optional display filename. Defaults to basename(path).
                    The backend sanitizes path separators and control chars.
   --content-type   Optional MIME hint. Backend sniffs magic bytes and
                    falls back to file extension when omitted.
 
-stdout: AttachmentDto JSON.`,
-  flags: ['path', 'filename', 'content-type'] as const,
-  async run({ client, args }) {
+stdout: AttachmentDto JSON.
+
+Errors:
+  target_required (validation)       --target was omitted
+  target_malformed (400)             --target is not an address; the
+                                     resolver answers this, so the message
+                                     names the accepted forms
+  target_unresolved (404)            --target names no stream you can
+                                     write to — the same answer an id
+                                     nobody holds gets
+  thread_suffix_not_supported (400)  --target named a reply cluster
+  inbox_not_writable (400)           --target named an agent inbox
+${reachHelpErrorRow('file_upload', 37)}  capability_denied (403)            you lack \`upload_attachments\` where
+                                     --target points`,
+  flags: ['target', 'path', 'filename', 'content-type'] as const,
+  async run({ env, client, args }) {
+    const target = requireTargetFlag(flagString(args, 'target'), env, {
+      command: 'silverhand file upload',
+      because:
+        'an attachment is owned by ONE conversation, and the conversation this ' +
+        'CLI is authenticated in is where your credential lives, not a default ' +
+        'destination.',
+    });
     const path = flagString(args, 'path');
     if (!path) {
       throw new CliError({
@@ -47,6 +82,7 @@ stdout: AttachmentDto JSON.`,
     const contentType = flagString(args, 'content-type');
     return client.uploadAttachment({
       path,
+      target,
       ...(filename ? { filename } : {}),
       ...(contentType ? { contentType } : {}),
     });

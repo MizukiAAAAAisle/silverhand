@@ -16,6 +16,7 @@
 // reallocation is the production allocator's own behavior (MAX+1 after the
 // max row vanished). The one native DELETE stands in for the cascade because
 // no product task-deletion path exists (ledgered in db-boundary inventory).
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -78,7 +79,7 @@ function bootstrap() {
   });
   const service = new TaskService(serviceOptions(trippedUow));
 
-  const workspace = workspaces.insert({ name: 'eng', description: null });
+  const workspace = workspaces.insert({ name: fixedWorkspaceName('eng'), description: null });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   workspaces.insertMembership(workspace.id, alice.id);
   const channel = conversations.insertChannel({

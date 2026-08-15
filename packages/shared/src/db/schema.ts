@@ -357,6 +357,9 @@ export interface AuthSessionRow {
 export interface WorkspaceRow {
   id: string;
   name: string;
+  /** Internal current-address key. Present only on regular workspaces and
+   * stripped from WorkspaceDto; agent_home is outside the namespace. */
+  name_key: string | null;
   description: string | null;
   workspace_kind: WorkspaceKind;
   owner_agent_id: string | null;

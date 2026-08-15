@@ -131,6 +131,7 @@ describe('cli invoke middleware', () => {
         `/internal/conversations/${conversationId}/agents/${agentId}/send-message`,
         {
           content: 'resolved draft',
+          target: `#conv:${conversationId}`,
           stale_event_id: `evt-${expectedReason}`,
           ...fields,
         },
@@ -153,11 +154,15 @@ describe('cli invoke middleware', () => {
     const path =
       `/internal/conversations/${conversationId}/agents/${agentId}/send-message`;
 
-    expect((await h.post(path, { content: 'newer context' })).status).toBe(200);
+    expect((await h.post(path, {
+      content: 'newer context',
+      target: `#conv:${conversationId}`,
+    })).status).toBe(200);
     const res = await h.post(path, {
       content: 'still stale draft',
+      target: `#conv:${conversationId}`,
       seen_up_to_seq: 0,
-      stream_key: 'main',
+      asserted_stream: `#conv:${conversationId}`,
       stale_event_id: 'evt-prior-conflict',
       stale_resolution_reason: 'revised',
     });
@@ -179,6 +184,7 @@ describe('cli invoke middleware', () => {
 
     expect((await h.post(`${base}/send-message`, {
       content: 'ordinary send',
+      target: `#conv:${conversationId}`,
       // A reason without a stale event is not an actual disposal attempt and
       // must not enter the report denominator.
       stale_resolution_reason: 'revised',

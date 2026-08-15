@@ -27,6 +27,7 @@
  * where. The write half is called directly only for the two states a user send
  * cannot produce (a legacy authorless row, a workspace-less source).
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
@@ -53,6 +54,7 @@ import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
+import { stream } from '../utils/destination.js';
 import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 
 /**
@@ -121,7 +123,7 @@ function bootstrap() {
   const fake = new FakeRuntimeHost();
   const logger: BackendLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
-  const workspace = workspaces.insert({ name: 'eng', description: null });
+  const workspace = workspaces.insert({ name: fixedWorkspaceName('eng'), description: null });
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
     title: fixedConversationTitle('general'),
@@ -211,6 +213,7 @@ const send = (t: Fixture, content: string) =>
   t.service.sendMessage({
     conversationId: t.channel.id,
     actor: { kind: 'user', userId: 'local' },
+    destination: { kind: 'own_main_line' },
     content,
   });
 
@@ -469,6 +472,7 @@ describe('mention CC v71 — what does NOT get copied', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.insider.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: `${canonical('cc-outsider')} take this over`,
       });
 
@@ -727,6 +731,7 @@ describe('mention CC v71 — a DM source declines the CC without failing the sen
       const result = await t.service.sendMessage({
         conversationId: dm,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: `${canonical('cc-outsider')} take a look`,
       });
       await waitFor(() => logEvents(t.logger.info).includes('mention_cc.skip'));

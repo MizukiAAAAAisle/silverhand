@@ -146,17 +146,17 @@ const REMOVED_VERBS: Partial<
       replacement: 'follow',
       hint:
         'isolated thread creation has been removed. Reply to a message with ' +
-        '`silverhand message send --target thread:<message_id>`; use ' +
-        '`silverhand channel create` only when the user explicitly asks for ' +
-        'an isolated channel.',
+        "`silverhand message send --target '#conv:<conversation_id>/thread:<root_message_id>'`; " +
+        'use `silverhand channel create` only when the user explicitly asks ' +
+        'for an isolated channel.',
     },
     close: {
       replacement: 'unfollow',
       hint:
         'reply clusters have no close operation. Use ' +
         '`silverhand thread unfollow --root <message_id>` to stop ' +
-        'receiving a cluster, or read a legacy isolated thread via ' +
-        '`message history --target conversation:<conversation_id>`.',
+        'receiving a cluster, or read a conversation via ' +
+        "`silverhand message history --target '#conv:<conversation_id>'`.",
     },
   },
 };

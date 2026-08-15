@@ -23,6 +23,13 @@ import goldenSnapshot from './api-barrel-export-snapshot.json' with { type: 'jso
  *  2. Source-import guard — no file may import the deleted `api/dto` path,
  *     so the per-context barrel can never be bypassed by a resurrected
  *     deep-import.
+ *
+ * The golden list is a LEDGER, not a freeze: a symbol that is deliberately
+ * deleted comes out of it in the same commit that deletes it (#task:2021 P4-4
+ * retired `SendMessageTargetSchema` and `LegacySendMessageTargetSchema` when the
+ * send door became one absolute address). What the guard exists to catch is the
+ * accident — a symbol still defined somewhere but no longer reachable through
+ * the barrel.
  */
 describe('api barrel export drift (#task:963)', () => {
   it('re-exports exactly the same runtime value set as before the split', () => {

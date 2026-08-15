@@ -110,6 +110,10 @@ describe('silverhand task create — business-failure never prints as success (r
       },
     };
     const r = await runCreate([
+      // The address is required on every single-stream door (#task:2021 P4-4);
+      // this case is about the FAILURE ENVELOPE, so it spells the plainest one.
+      '--target',
+      '#conv:Conversation0001',
       '--title',
       'derived',
       '--source-message-id',

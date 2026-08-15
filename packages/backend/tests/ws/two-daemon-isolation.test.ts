@@ -66,6 +66,7 @@
  * multiplexer is host-isolated; no wire envelope shape change, no
  * new wire fields.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { createServer, type Server as HttpServer } from 'node:http';
@@ -152,7 +153,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   const agents = new AgentRepo(db);
 
   const wsXRow = workspaces.insert({
-    name: 'c6-x',
+    name: fixedWorkspaceName('c6-x'),
     description: null,
   });
   const channelX = conversations.insertChannel({
@@ -167,7 +168,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   conversations.addAgent(channelX.id, agentX.id);
 
   const wsYRow = workspaces.insert({
-    name: 'c6-y',
+    name: fixedWorkspaceName('c6-y'),
     description: null,
   });
   const channelY = conversations.insertChannel({

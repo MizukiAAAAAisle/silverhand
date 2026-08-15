@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { fixedConversationTitle } from '@silverhand/shared';
@@ -32,7 +33,7 @@ describe('ConversationRepo canonical schema', () => {
     try {
       const agent = t.agents.create({ name: 'alice', runtime: 'claude' }, t.localHostId, 'local');
       const workspace = t.workspaces.insert({
-        name: 'eng',
+        name: fixedWorkspaceName('eng'),
         description: 'Engineering',
       });
       t.workspaces.insertMembership(workspace.id, agent.id);

@@ -45,6 +45,10 @@ import type {
   RuntimePrincipal,
   RuntimePrincipalScope,
 } from '../auth/runtime-principal.js';
+import type {
+  StreamNamingConversation,
+  StreamNamingRoot,
+} from '../application/stream-naming.js';
 
 /**
  * Per-delivery semantics as the runtime consumes them. Mirrors the persisted
@@ -183,12 +187,21 @@ export interface RuntimeConversationReadPort {
    *  to pick the fallback `@handle` for legacy null-author rows in the stdin
    *  header; a non-unique answer degrades to the bare `user` token. */
   singleViewerUserId(conversationId: string): string | null;
+  /** WHAT THIS ROW'S ADDRESS SAYS — placement arc, title, and the stored fold of
+   *  the title (#task:2021 P4-4). A third projection rather than `get()`: the DTO
+   *  cannot carry `title_key` (it must never reach the wire) and the key is what
+   *  makes an emitted readable token resolve back to this row. */
+  addressFacts(conversationId: string): StreamNamingConversation | null;
 }
 
 export interface RuntimeWorkspaceReadPort {
   get(workspaceId: string): WorkspaceDto | null;
   /** Every workspace the agent is a member of — the spawn's memory index. */
   listForAgent(agentId: string): WorkspaceDto[];
+  /** The ADDRESS ROOT of a workspace: kind, display name, stored fold. Same
+   *  reason as `conversations.addressFacts` — `name_key` is stripped from the DTO
+   *  on purpose, and `name_key IS NULL` is the agent-home fallback. */
+  addressRoot(workspaceId: string): StreamNamingRoot | null;
 }
 
 export interface RuntimeUserReadPort {

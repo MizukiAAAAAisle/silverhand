@@ -223,19 +223,6 @@ export interface PullWaiter {
   readonly wake: (reason: PullWakeReason) => void;
 }
 
-/** Gated legacy default-reply-target inference shape (see
- *  DEFAULT_REPLY_TARGET_INFERENCE_ENABLED). Active bare sends resolve to the
- *  channel main line and never construct this; remove with the gated
- *  inference once dogfood comparison is done. */
-export type DefaultReplyTarget =
-  | { readonly kind: 'channel' }
-  | {
-      readonly kind: 'thread';
-      readonly messageId: string;
-      readonly streamKey: string;
-    }
-  | { readonly kind: 'ambiguous'; readonly streamKeys: readonly string[] };
-
 export interface RuntimeHandle {
   /** Stable session identity. Never reconstructed from the current target. */
   readonly runtimeScope: RuntimeScope;
@@ -286,25 +273,50 @@ export interface RuntimeHandle {
    *  yet admitted as precedent context for a new model action. Flushed
    *  into `observedSeqByStream` at the next turn boundary. */
   pendingAdmissionSeqByStream: Map<string, ObservedSeq>;
-  /** Bounded memory of where a `--reply-to <messageId>` send should go:
-   *  the message id the agent may reply to → that reply's target
-   *  `stream_key`. Populated as deliveries are admitted and as the
-   *  agent's own sends resolve. A reply target absent from this map is
-   *  "unknown" — the send omits seen+stream_key (Case A loose). */
-  replyTargetStreamByMessageId: Map<string, string>;
-  /** Gated legacy comparator ONLY. The active bare `message send` resolves to
-   *  the channel main line (see DEFAULT_REPLY_TARGET_INFERENCE_ENABLED); this
-   *  per-turn inferred default is written and read solely while that gate is
-   *  on. When on it keeps main / one-thread / ambiguous multi-thread distinct
-   *  so an ambiguous bare send fails loud instead of falling back to main.
-   *  Remove with the gated inference once dogfood comparison is done. */
-  defaultReplyTarget: DefaultReplyTarget;
-  /** Gated legacy comparator ONLY (paired with {@link defaultReplyTarget}):
-   *  the same inferred default for deliveries written mid-turn but not yet
-   *  admitted as precedent. `undefined` means no pending turn delivery has
-   *  contributed one. Meaningful only while the inference gate is on; remove
-   *  with it. */
-  pendingDefaultReplyTarget: DefaultReplyTarget | undefined;
+  /** Bounded set of the cluster ROOTS this handle has actually seen: message ids
+   *  that reached this session as a main-line message (delivered, or our own
+   *  send's commit) plus the roots of clusters it pulled and observed.
+   *
+   *  Membership answers exactly one question, asked by a send whose address
+   *  carries `/thread:<root>`: has this session SEEN the message that cluster is
+   *  rooted at? If it has, "that cluster is still empty" is an observed fact
+   *  rather than a guess, so a first reply into it may carry
+   *  `seen_up_to_seq=0` and the CAS can still catch a concurrent first reply.
+   *  Without membership (and without an observed cursor for the cluster) the send
+   *  is a loose first touch and omits freshness instead of manufacturing a
+   *  boundary.
+   *
+   *  A SET of roots, not a map from any message id to its cluster: until
+   *  #task:2021 P4-4 a reply was addressed by the message it answered, so the
+   *  daemon had to know which cluster a mid-cluster id belonged to. An address's
+   *  `/thread:<root>` is a root id now — the resolver owns that verdict — and
+   *  keeping the wider mapping would leave this process holding the one thing
+   *  P4-4 deleted: a second opinion about which stream an address denotes. */
+  seenClusterRootIds: Set<string>;
+  /** Bounded memory of what a NAME-shaped delivery address resolved to: the
+   *  address HEAD (the token minus any `/thread:<root>` suffix) → the
+   *  conversation id the backend resolved it to on a previous send.
+   *
+   *  Learned ONLY from a send response's `conversation_id` (#task:2021 P4-4): the
+   *  daemon holds no lookup authority — a title or a `dm:@handle` is resolved by
+   *  the backend, and the delivery header the agent reads is rendered
+   *  backend-side, so nothing else in this process ever learns the mapping. The
+   *  residual cost is stated rather than hidden: the FIRST send to a given
+   *  name-shaped head in a session has no entry, so it cannot key a freshness
+   *  boundary and skips the CAS (merging through
+   *  `pendingSkippedCasMergeByStream` like any other skipped-CAS send). At most
+   *  one such send per (session, address head), and never for the id form, which
+   *  needs no resolution.
+   *
+   *  A rename is why this is a per-session memo and not a cache with a TTL: a
+   *  head may be rebound to a different conversation at any time, and the send
+   *  response is the only thing that can correct it — which it does, because
+   *  every send rewrites the entry from the answer the backend just gave. The
+   *  `asserted_stream` field on the send is the guard for the window in between:
+   *  the backend compares the stream the daemon measured against the one the
+   *  address resolves to NOW and refuses the mismatch instead of CAS-ing against
+   *  a stranger's head. */
+  resolvedConversationByAddressHead: Map<string, string>;
   /** True once an admitted input batch is expected to be driving the
    *  current model action. Cleared on turn_end/runtime resolution.
    *  This covers the pre-first-output window where runState is still

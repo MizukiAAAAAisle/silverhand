@@ -1,7 +1,9 @@
 import type { MemberDto } from './api/conversation.js';
 import type { RuntimeKind } from './db/schema.js';
 import { SILVERHAND_COMMAND_DOMAINS } from './cli-command-manifest.js';
+import { reachTaughtCommands } from './delivery-reach.js';
 import { inlineCode } from './markdown-escape.js';
+import { TAUGHT_AGENT_RUNTIME_SCOPE_BANNER } from './runtime-scope-banner.js';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 type ToolName =
@@ -213,6 +215,31 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const workspaceLess =
     input.sessionContext.kind === 'conversation'
     && !('workspaceName' in input.sessionContext);
+  /**
+   * REACH, taught from the ruling itself (#task:2021 P4-4).
+   *
+   * Derived from the shared table rather than written out, because the boundary is a
+   * product ruling the backend ENFORCES, and a paragraph restating it goes stale
+   * silently — with the worst failure mode a prompt has: an agent that learns its own
+   * limits by being refused. Both lists are rendered, so no door can be left
+   * unmentioned; which of the two sentences appears is decided by the table, not by
+   * this file.
+   */
+  const reach = reachTaughtCommands(agentScoped ? 'agent_slot' : 'conversation_slot');
+  const reachCommands = (commands: readonly string[]): string =>
+    commands.map(command => inlineCode(`silverhand ${command}`)).join(', ');
+  const reachContract = reach.confined.length === 0
+    ? `- **No door is confined to one conversation.** Every addressed command —
+  ${reachCommands(reach.participation)} —
+  acts on any conversation you participate in; the route banner is transport, never
+  a limit. An address you do not participate in comes back unresolved.`
+    : `- **Reach follows the session, not the address.**
+  ${reachCommands(reach.confined)}
+  act only in THIS conversation; elsewhere they are refused
+  \`slot_out_of_scope\`.
+  ${reachCommands(reach.participation)}
+  act on any conversation you participate in. An address you do not participate in
+  comes back unresolved.`;
   const memoryBlock = renderInjectedFile({
     title: agentScoped
       ? 'Active Agent Memory'
@@ -270,13 +297,16 @@ makes durable global notes discoverable. Target under 10KB / 80–120 lines
 
 ### Action targeting
 
-AgentSlot has no ambient conversation. Every \`silverhand\` action must pass
-\`--route-conversation-id <id>\` using the conversation id in the delivered
-header's \`target=#conv:<id>\` token — that bare id, without the \`#conv:\`
-prefix or any \`/thread:\` suffix. Command-local \`--conversation-id\` remains a
-separate range/destination filter and must be passed only when that command
-needs it.
-Every filesystem action must use the explicit absolute workdir. Omission
+AgentSlot has no ambient conversation. Every delivery to you is PREFIXED with a
+runtime-scope banner of its own, one layer above the message header:
+\`${TAUGHT_AGENT_RUNTIME_SCOPE_BANNER}\`. Every
+\`silverhand\` action must pass \`--route-conversation-id <id>\` using THAT
+banner's bare id — without the \`#conv:\` prefix. It is a transport route, not a
+destination: the message header's own \`target=\` is the absolute address you
+reply to, and you paste it whole into \`--target\`. Command-local
+\`--conversation-id\` remains a separate range/destination filter and must be
+passed only when that command needs it.
+Every filesystem action must use the banner's \`workdir\`. Omission
 must fail loud instead of falling back to the conversation that spawned the
 runtime.`
     : workspaceLess
@@ -307,8 +337,7 @@ Organize durable agent knowledge by scope:
 ### MEMORY.md — recovery index
 
 MEMORY.md is a concise recovery index: immediate rules/high-cost traps, pinned
-**Key Knowledge** routes, and live **Active Context**. The catalog makes durable
-notes discoverable.
+**Key Knowledge** routes, and live **Active Context**.
 Target under 10KB / 80–120 lines (injection truncates beyond 16KB).
 
 Active Context is workspace-wide and shared by every channel session in this
@@ -336,14 +365,19 @@ These invariants always hold. Everything else in this manual serves them.
   \`silverhand\` command families for communication and Silverhand management.
 - **Read each message's header.** Every incoming message starts with a meta
   header:
-  \`[msg_id=<id> sender=<who> type=<agent|human|system> computer=<computer_id (agent messages only)> target=#conv:<conversation_id>[/thread:<root_message_id>] time=<iso>]\`.
+  \`[msg_id=<id> sender=<who> type=<agent|human|system> computer=<computer_id (agent messages only)> target=<address> time=<iso>]\`.
   Address the sender with a reference (see **Formatting Reference**), not by
   copying the header's \`@handle\` text; \`system\` has no person to address.
-  \`target\` is the ABSOLUTE address of the stream that message arrived on: the
-  same token for every reader, so two of you naming it mean the same stream. A
-  \`/thread:<id>\` suffix means the message sits in that reply cluster; without
-  one it is on the conversation's main line. Read its PARTS — the write surfaces
-  take the reply cluster's root id, not the whole token. A local path is
+  \`target\` is the ABSOLUTE address of the stream it arrived on, in the grammar
+  write surfaces accept: **paste the whole token verbatim** into
+  \`--target\` to answer where you were woken — never rewrite it, strip a prefix,
+  or pull an id from it. Three spellings, never your choice:
+  \`#<workspace>/<title>\` for a named channel, \`dm:@<handle>\` for a direct pair (per-VIEWER: your counterpart's header
+  spells that same stream \`dm:@<your handle>\`, so never quote it as shared), and
+  \`#conv:<id>\` otherwise. Any of them may carry a \`/thread:<root_message_id>\`
+  suffix: the message sits in that reply cluster, addressed by that ROOT id, so
+  answering a reply reuses the token rather than naming the reply. No suffix
+  means the main line. A local path is
   usable only when an agent message's \`computer\`
   matches **This Context → Computer**; otherwise exchange content in text or an
   attachment. Human and system messages omit \`computer\`.
@@ -351,9 +385,10 @@ These invariants always hold. Everything else in this manual serves them.
   A \`task_edit\` changes the definition, not status, and reaches every channel
   agent. Read ${detailTask} \`--help\`
   and inspect the task before deciding whether it affects you.
+${reachContract}
 - **Claim work, not messages.** Before starting substantive work *not already
-  tracked by a task*, claim it. A failed claim means stop. Follow-ups and review
-  fixes continue the existing task; plain Q&A and clarification need no claim.
+  tracked by a task*, claim it. A failed claim means stop. **Work Coordination →
+  Tasks** decides what counts.
 - **System messages do not require a chat reply by default.** Evaluate each
   message's semantics and your current responsibilities to decide whether action
   is required.
@@ -373,9 +408,8 @@ ${turnOrientation}
 2. Acknowledge briefly when useful, then gather the required context.
 3. Claim new substantive work or continue its existing task.
 4. Carry the requested work through research, implementation, and verification.
-5. Update task state before reporting the result. Maintain **Active Context** for
-   continuation and context-compaction handoff. Update durable L2 memory only
-   when the Durable Memory criteria are satisfied.
+5. Update task state before reporting the result, and keep **Active Context**
+   current for continuation and context-compaction handoff.
 
 ## Your Profile
 
@@ -416,8 +450,7 @@ not edit it. Invalid frontmatter means the note is not indexed.
 
 ### Checkpoint discipline
 
-Role, MEMORY.md, and the catalog are re-injected after compaction. Before long
-work, add a short Active Context handoff under its source-channel label. Change
+Before long work, add a short Active Context handoff. Change
 MEMORY.md only for an immediate rule, route, or live handoff. On \`done\` /
 \`closed\`, remove the task from Active Context; do not convert the handoff into
 a task summary or work log.
@@ -481,8 +514,9 @@ chains that carry no real dependency.
 
 ### Threads
 Threads are focused side-discussions attached to a specific message. They share
-the channel context and do not nest. Reply with ${sendMessage} using the source
-message/root id. Keep your thread follow state aligned with your part in the
+the channel context and do not nest. Reply with ${sendMessage} using the
+header's \`target=\` token unchanged. Keep your thread follow state aligned with
+your part in the
 work. Unfollowing is silent; announce your departure before unfollowing. A later
 reference brings you back.
 
@@ -505,8 +539,8 @@ parallelize. After creation, announce it here as \`#conv:<channel_id>\`.
 
 ### Members
 Use ${addMember} \`--handle <name>\` to bring an existing workspace member into
-the current channel/thread. The human manages workspace membership; this command
-only adds an existing workspace member here. A reference only addresses current
+the current channel/thread; the human manages workspace membership itself.
+A reference only addresses current
 members: one that names someone who is not here addresses nobody — the send
 still succeeds, and reports that token back to you as
 \`unresolved_references\` on its stdout.
@@ -516,7 +550,8 @@ Use \`silverhand member --help\`.
 
 Use ${uploadFile} for generated binary artifacts and ${viewFile} for received
 attachments; paste short text inline. Attachments are channel-scoped and threads
-inherit the parent channel's files. To revise an artifact you uploaded, use
+inherit the parent channel's files. To revise
+an artifact you uploaded, use
 ${updateFile} rather than a second upload: the attachment id and everyone's
 resolved local path stay fixed, so a reviewer re-opens the same path for your
 latest version. You can update only your own uploads. Exact usage is in
@@ -524,8 +559,7 @@ latest version. You can update only your own uploads. Exact usage is in
 
 ## History and search
 
-You receive new messages automatically via stdin push — **do not poll**. These
-commands only recover context.
+These commands only recover context; they are not how you learn of new messages.
 
 **When the user refers to a past discussion, decision, or owner and that context
 isn't already in hand, search before answering.** Use ${searchMessages}, then
@@ -535,7 +569,8 @@ Use \`silverhand message --help\` for scopes, anchors, and thread-read semantics
 
 ## Schedules
 
-Use ${schedule} to wake yourself at a future time when no human message will
+Use ${schedule} \`--target-conversation <address>\` to wake yourself at a future
+time when no human message will
 trigger the follow-up. Do not schedule work that can await the next user message
 or needs fresh instructions. A fire wakes the target conversation's runtime,
 which both performs and reports the work. Check ${listSchedules} before creating
@@ -564,9 +599,10 @@ These are chat-output contracts. Copy values from CLI output; never invent ids.
 ### Rules
 - A reference addresses someone only in prose: inside a code span, a fenced
   block, or a quoted line it is literal text.
-- Use sigils only in chat text, as plain words outside code spans; CLI arguments
-  take raw values. \`#\` / \`#conv:\` are places and \`#task:\` is work. Never
-  combine these prefixes.
+- Sigils belong in chat text, outside code spans. CLI arguments take raw values
+  — except an address flag, which takes a delivery address verbatim, \`#conv:\`
+  and all. \`#\` / \`#conv:\` are places and \`#task:\` is work. Never combine
+  these prefixes.
 
 ### URLs next to non-ASCII punctuation
 Wrap a URL next to non-ASCII punctuation in \`<...>\` or Markdown link syntax;
@@ -681,10 +717,8 @@ function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): strin
     '## Workspace Memory Index\n\n' +
     'Every workspace you are a member of, with the absolute path to its ' +
     "MEMORY.md for you. The current workspace's MEMORY.md is already " +
-    'auto-loaded above as **Active Workspace Memory**; the other entries ' +
-    'are reference paths — open one with your file tools only when you ' +
-    'have a concrete reason to consult that workspace (the user asked, ' +
-    'a hand-off references it, etc.). Do not bulk-read them. An entry ' +
+    'auto-loaded above as **Active Workspace Memory**; the others are ' +
+    'reference paths — do not bulk-read them. An entry ' +
     'marked "unavailable on this computer" has no local files here — do ' +
     'not guess a path for it; it becomes available when that workspace ' +
     'next runs on this computer.';
@@ -797,7 +831,7 @@ examples, outputs, and recovery guidance.
   heredoc so \`$\`, backticks, and \`\\\` remain literal:
 
   \`\`\`bash
-  silverhand message send <<'SILVERHAND_EOF'
+  silverhand message send --target '#conv:<conversation_id>' <<'SILVERHAND_EOF'
   Multi-line Markdown with quotes, $vars, and backticks is safe.
   SILVERHAND_EOF
   \`\`\`

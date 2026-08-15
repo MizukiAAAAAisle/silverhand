@@ -1,5 +1,6 @@
 import {
   type AgentDto,
+  type CanonicalWorkspaceName,
   formatReferenceToken,
   inlineCode,
   fixedConversationTitle,
@@ -16,6 +17,7 @@ import type { MembershipPersistence } from './membership-ports.js';
 import { canEnrollAgent } from '../permissions.js';
 import { enrollAgentIntoWorkspace } from './add-workspace-agent-member.js';
 import { isWorkspaceNameAvailable } from './name-availability.js';
+import { logWorkspaceAddressAssignment } from '../observability/workspace-address-log.js';
 
 /**
  * CreateWorkspace saga.
@@ -61,7 +63,7 @@ export type CreateWorkspaceDeps = {
 };
 
 export type CreateWorkspaceCommand = {
-  name: string;
+  name: CanonicalWorkspaceName;
   description: string | null;
   memberAgentIds: string[];
   memberUserIds: string[];
@@ -136,6 +138,17 @@ export async function createWorkspace(
     id: workspaceId,
     name: cmd.name,
     description: cmd.description,
+  });
+  // Address allocation is the successful workspace INSERT, not completion of
+  // this multi-step saga. Record it before any later membership/onboarding
+  // effect can throw: those failures leave the allocated row committed, so an
+  // HTTP-success-only observation would misclassify the next attempt as a pure
+  // conflict with no preceding assignment.
+  logWorkspaceAddressAssignment(ctx.logger, {
+    workspaceId: workspace.id,
+    action: 'create',
+    oldKey: null,
+    newKey: cmd.name.key,
   });
 
   // Graded-permissions (v40): the creator is the workspace OWNER; additional

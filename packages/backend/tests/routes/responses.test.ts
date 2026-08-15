@@ -40,17 +40,17 @@ describe('conversationMessageServiceErrorResponse — TargetError mapping', () =
     ).toBe(404);
   });
 
-  it('keeps closed/archived targets at 409', async () => {
+  it('keeps a freshness-assertion mismatch at 409', async () => {
+    // The sender measured its boundary against a different stream, so its view of
+    // where it is has to be re-earned — the same retry the stale conflict asks
+    // for, hence the same status (#task:2021 P4-4). Target LIFECYCLE is not here
+    // at all: closed/archived now answer through `ConversationError` on the
+    // resolved target, which is the one authority for "may I post there".
     expect(
-      await statusFor(new TargetError('target_closed', 'closed')),
+      await statusFor(
+        new TargetError('asserted_stream_mismatch', 'measured elsewhere'),
+      ),
     ).toBe(409);
-    expect(
-      await statusFor(new TargetError('target_archived', 'archived')),
-    ).toBe(409);
-  });
-
-  it('defaults other target errors to 400', async () => {
-    expect(await statusFor(new TargetError('target_conflict', 'conflict'))).toBe(400);
   });
 });
 

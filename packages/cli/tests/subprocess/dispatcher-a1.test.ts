@@ -208,7 +208,9 @@ describe('dispatcher A1 hard guard (real subprocess)', { timeout: 20_000 }, () =
     // first. The test still proves the structured shape — code +
     // subkind + details + message — exactly what the daily report
     // groups on.
-    const r = await runCli(['task', 'create'], {
+    // `--target` is checked first (it gates the stdin drain), so this case
+    // supplies a valid address in order to reach the --title gate at all.
+    const r = await runCli(['task', 'create', '--target', '#conv:Conversation0001'], {
       env: {
         SILVERHAND_CONVERSATION_ID: 'conv-test',
         SILVERHAND_AGENT_ID: 'agent-test',
@@ -226,8 +228,12 @@ describe('dispatcher A1 hard guard (real subprocess)', { timeout: 20_000 }, () =
     });
     // Message must show the minimal call AND the source-message redirect —
     // the report-side bucket is structural, but the agent reads the
-    // line right now and decides what to do next.
-    expect(body.error.message).toContain('silverhand task create --title');
+    // line right now and decides what to do next. The minimal call now leads
+    // with the address, because a create with no stream is not a call at all
+    // (#task:2021 P4-4).
+    expect(body.error.message).toContain(
+      "silverhand task create --target '#conv:<conversation_id>' --title",
+    );
     expect(body.error.message).toContain('--source-message-id');
   });
 });

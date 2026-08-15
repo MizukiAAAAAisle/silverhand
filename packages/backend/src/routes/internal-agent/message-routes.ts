@@ -29,6 +29,7 @@ import {
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 import { requireAgentConversationCapability } from './capability-scope.js';
+import { resolveDeliveryTargetForRoute } from './delivery-target.js';
 import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 import { internalAgentRoutePaths } from './paths.js';
 
@@ -78,15 +79,6 @@ export function registerMessageRoutes(
       );
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    if (parsed.data.target !== undefined && parsed.data.reply_to_message_id !== undefined) {
-      return c.json(
-        {
-          error: 'target and reply_to_message_id are mutually exclusive',
-          code: 'target_conflict',
-        },
-        400,
-      );
-    }
     if (messageContentExceedsLimit(parsed.data.content)) {
       return c.json(
         {
@@ -99,12 +91,36 @@ export function registerMessageRoutes(
       );
     }
     const principal = getAgentPrincipal(c);
+    // TWO GATES, TWO SUBJECTS (#task:2021 P4-4).
+    //
+    // This one is the CREDENTIAL: may this principal post AT ALL, from the
+    // conversation its token is scoped to. `canPostToConversation` is the right
+    // authority for that and the wrong one for the target — its participation face
+    // narrows `direct_pair` / `agent_inbox` with `runningInConversationId`, so
+    // asking it about a foreign stream would refuse every cross-conversation DM
+    // send, which is the whole point of the address. The TARGET's authority is the
+    // resolver below (participation, placement) plus the send transaction's own
+    // in-tx `assertPostAuthority` (postability, re-read after resolution).
     if (!canPostToConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    const resolved = resolveDeliveryTargetForRoute(c, deps, {
+      address: parsed.data.target,
+      operation: 'message_send',
+      intent: 'write',
+      now: Date.now(),
+    });
+    if (!resolved.ok) return resolved.response;
     {
+      // The TARGET conversation's placement governs the capability, exactly as it
+      // does on the read side: its workspace grant, self-authority for the
+      // caller's own inbox, or endpoint authority for a DM. Asking it of the
+      // SOURCE would grant a send into any stream to anyone who could post in
+      // their own — the credential gate above is about the caller, this is about
+      // where the words land.
       const denied = requireAgentConversationCapability(c, ctx, principal,
-        'send_messages', conversations.getIdentity(principal.conversationId));
+        'send_messages',
+        conversations.getIdentity(resolved.target.stream.conversationId));
       if (denied) return denied;
     }
     if (parsed.data.stale_event_id !== undefined) {
@@ -120,9 +136,8 @@ export function registerMessageRoutes(
         actor: principal,
         content: parsed.data.content,
         attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
-        target: parsed.data.target,
-        legacyReplyToMessageId: parsed.data.reply_to_message_id,
-        assertedStreamKey: parsed.data.stream_key,
+        destination: { kind: 'stream', stream: resolved.target.stream },
+        assertedStream: parsed.data.asserted_stream,
         seenUpToSeq: parsed.data.seen_up_to_seq,
         staleEventId: parsed.data.stale_event_id,
         staleResolutionReason: parsed.data.stale_resolution_reason,
@@ -131,6 +146,12 @@ export function registerMessageRoutes(
       return c.json({
         message_id: result.committed.message.id,
         message_seq: result.committed.message.seq,
+        // WHERE the address resolved TO — the absolute coordinate the caller can
+        // cache, so a `dm:@handle` or a readable pair is spelled once and every
+        // follow-up in that stream carries the id form. Total, not conditional on
+        // the address having been readable: "which stream did my words land in" has
+        // one answer for every send.
+        conversation_id: result.targetConversationId,
         thread_root_id: result.committed.message.thread_root_id,
         ...(result.streamHeadBeforeSend !== undefined
           ? { stream_head_before: result.streamHeadBeforeSend }
@@ -200,22 +221,41 @@ export function registerMessageRoutes(
     if (!canViewConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const sourceConversation = conversations.get(principal.conversationId);
-    if (!sourceConversation) return c.json({ error: 'conversation not found' }, 404);
-    const target = agentReads.resolveHistoryTarget(
-      conversations,
-      sourceConversation,
-      principal.agentId,
-      parsed.data.target,
+    // ONE resolver for both doors (#task:2021 P4-4). The read intent differs from
+    // the write only in what it refuses to do — never allocate a direct pair — and
+    // that asymmetry lives inside the resolver, so this route carries no rule of
+    // its own about what an address denotes.
+    //
+    // What this replaced is worth naming, because it was the read side's own
+    // taxonomy: a missing target meant "here", `{conversation_id}` and
+    // `{thread_root_id}` were separate arms, a mid-cluster id was normalized to its
+    // root, and a non-participant got 403 `not_target_conversation_member` while an
+    // unknown id got 404. That last pair is the reason this had to go: two statuses
+    // for "unknown" and "not yours" is an existence oracle over every conversation
+    // id in the installation, and the read door is the cheapest place to query it.
+    // Both are now 404 `target_unresolved`, byte-identical (see the resolver's
+    // "UNKNOWN AND UNAUTHORIZED ARE ONE OUTCOME"), with the branch that actually
+    // fired leaving through the operator observer.
+    const resolved = resolveDeliveryTargetForRoute(c, deps, {
+      address: parsed.data.target,
+      operation: 'message_history',
+      intent: 'read',
+      now: Date.now(),
+    });
+    if (!resolved.ok) return resolved.response;
+    const targetConversation = conversations.get(
+      resolved.target.stream.conversationId,
     );
-    if (!target.ok) {
-      return c.json({ error: target.message, code: target.code }, target.status);
+    // The resolver already proved participation in this row; a miss here is the
+    // row vanishing between two statements of the same request, not a caller error.
+    if (!targetConversation) {
+      return c.json({ error: 'conversation not found' }, 404);
     }
     {
       // The TARGET conversation's placement governs: its workspace grant, or
       // self-authority when the target is the caller's own inbox (v71).
       const denied = requireAgentConversationCapability(c, ctx, principal,
-        'read_messages', conversations.getIdentity(target.conversation.id));
+        'read_messages', conversations.getIdentity(targetConversation.id));
       if (denied) return denied;
     }
     const result = timedRouteSpan(
@@ -223,15 +263,15 @@ export function registerMessageRoutes(
       'agent.read_history',
       {
         sourceConversationId: principal.conversationId,
-        targetConversationId: target.conversation.id,
+        targetConversationId: targetConversation.id,
         agentId: principal.agentId,
         limit: parsed.data.limit,
       },
       () =>
         agentReads.buildReadHistoryDto(
-          target.conversation,
+          targetConversation,
           parsed.data,
-          target.threadRootId,
+          resolved.target.stream.threadRootId,
           { kind: 'agent', id: principal.agentId },
         ),
       out => ({

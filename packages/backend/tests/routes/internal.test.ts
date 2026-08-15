@@ -61,7 +61,7 @@ describe('Internal route auth', () => {
     const { conversationId, agentIds } = await setupSession(t);
     const r = await http(t.app).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'hi' },
+      { content: 'hi', target: `#conv:${conversationId}` },
     );
     expect(r.status).toBe(401);
   });
@@ -71,7 +71,7 @@ describe('Internal route auth', () => {
     const { conversationId, agentIds } = await setupSession(t);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'hi' },
+      { content: 'hi', target: `#conv:${conversationId}` },
       { headers: authHeaders('wrong') },
     );
     expect(r.status).toBe(401);
@@ -116,7 +116,7 @@ describe('Internal route auth', () => {
     const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'hi' },
+      { content: 'hi', target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r.status).toBe(200);
@@ -184,7 +184,7 @@ describe('Internal route auth', () => {
     const aliceToken = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.bob}/send-message`,
-      { content: 'hi' },
+      { content: 'hi', target: `#conv:${conversationId}` },
       { headers: authHeaders(aliceToken) },
     );
     expect(r.status).toBe(401);
@@ -197,7 +197,7 @@ describe('Internal route auth', () => {
       const { conversationId, agentIds } = await setupSession(t);
       const r = await http(t).post(
         `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-        { content: 'hi' },
+        { content: 'hi', target: `#conv:${conversationId}` },
         {
           headers: {
             ...authHeaders(t.authToken),
@@ -246,7 +246,7 @@ describe('POST /internal/.../send-message', () => {
     });
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'hello team' },
+      { content: 'hello team', target: `#conv:${conversationId}` },
       { headers: authHeaders(t.authToken) },
     );
     unsubViewer();
@@ -286,7 +286,7 @@ describe('POST /internal/.../send-message', () => {
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const send = (content: string) => http(t!).post(
       internalPaths.agentSendConversationMessage(conversationId, agentIds.alice!),
-      { content },
+      { content, target: `#conv:${conversationId}` },
       { headers: authHeaders(t!.authToken) },
     );
 
@@ -310,24 +310,25 @@ describe('POST /internal/.../send-message', () => {
     expect(t.fake.delivered.map(d => d.messageId)).toContain(missedBody.message_id);
   });
 
-  it('returns a stale_event_id when same-conversation agent send is stale', async () => {    t = buildTestApp();
+  it('returns a stale_event_id when same-conversation agent send is stale', async () => {
+    t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const observed = await (
       await http(t).post(
         `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-        { content: 'observed' },
+        { content: 'observed', target: `#conv:${conversationId}` },
         { headers: authHeaders(t.authToken) },
       )
     ).json() as any;
     await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.bob}/send-message`,
-      { content: 'newer context' },
+      { content: 'newer context', target: `#conv:${conversationId}` },
       { headers: authHeaders(t.authToken) },
     );
 
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'stale draft', seen_up_to_seq: observed.message_seq },
+      { content: 'stale draft', seen_up_to_seq: observed.message_seq, target: `#conv:${conversationId}` },
       { headers: authHeaders(t.authToken) },
     );
 
@@ -381,6 +382,7 @@ describe('POST /internal/.../create-channel', () => {
         title: 'release signing',
         context_summary: 'user explicitly asked to split release signing out',
         initial_prompt: 'Discuss release signing separately.',
+        target: `#conv:${conversationId}`,
         channel_id: 'other-channel',
         members: [outsider.agent.id],
       },
@@ -453,6 +455,7 @@ describe('POST /internal/.../create-channel', () => {
       {
         title: 'missing prompt',
         context_summary: 'x',
+        target: `#conv:${conversationId}`,
       },
       { headers: authHeaders(t.authToken) },
     );
@@ -468,6 +471,7 @@ describe('POST /internal/.../create-channel', () => {
         title: 'missing actor',
         context_summary: 'x',
         initial_prompt: 'go',
+        target: `#conv:${conversationId}`,
       },
       { headers: authHeaders(t.authToken) },
     );
@@ -488,7 +492,7 @@ describe('agent send-message — content byte cap', () => {
     const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'a'.repeat(64 * 1024 + 1) },
+      { content: 'a'.repeat(64 * 1024 + 1), target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r.status).toBe(413);
@@ -588,7 +592,7 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
     }
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'stale draft', seen_up_to_seq: seenUpToSeq },
+      { content: 'stale draft', seen_up_to_seq: seenUpToSeq, target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r.status).toBe(409);
@@ -611,7 +615,7 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
     // boundary still conflicts — only real admission unlocks it.
     const r2 = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'stale draft 2', seen_up_to_seq: seenUpToSeq },
+      { content: 'stale draft 2', seen_up_to_seq: seenUpToSeq, target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r2.status).toBe(409);
@@ -620,7 +624,7 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
     // the agent here), the send goes through.
     const r3 = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
-      { content: 'fresh send', seen_up_to_seq: details.current_seq },
+      { content: 'fresh send', seen_up_to_seq: details.current_seq, target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r3.status).toBe(200);

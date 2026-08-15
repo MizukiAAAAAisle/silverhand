@@ -921,6 +921,19 @@ export interface BuildTestAppOptions {
    * observation-bridge value (0).
    */
   desktopApiEpoch?: { minimumClientEpoch?: number };
+  /**
+   * The clock the fixture's `ScheduleService` reads (#task:2021 P4-4). The
+   * service already takes an injectable `now` — production passes none — and a
+   * route-level test that wants to see a fire needs the same handle: a schedule
+   * is due only relative to a clock, and the minimum one-shot delay is 30s of
+   * real time. Injecting the clock is the alternative to UPDATE-ing
+   * `next_fire_at` from a route test, which would put a business column's write
+   * back into a place the db-boundary gate deliberately keeps it out of.
+   *
+   * `vi.useFakeTimers()` cannot substitute: the service captures `Date.now`
+   * once, at construction, so a later fake never reaches it.
+   */
+  scheduleNow?: () => number;
 }
 
 /**
@@ -1175,6 +1188,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
         { workspaceId },
       ),
     disableAutoTick: true,
+    ...(options.scheduleNow ? { now: options.scheduleNow } : {}),
   });
   ctx.idleReaperService = new IdleReaperService({
     runtimeHost: ctx.runtimeHost,

@@ -6,7 +6,6 @@ import {
   TaskStatusSchema,
   type TaskStatus,
 } from '../db/schema.js';
-import { MessageSendTargetSchema } from './internal-agent.js';
 import { AgentCapabilitySchema } from './workspace.js';
 
 // ── Task title / content input spec (single source of truth) ──────────
@@ -465,28 +464,27 @@ export const CreateTasksInputSchema = z.object({
       }),
     )
     .min(1),
-  /** Explicit destination conversation the task(s) belong to. OMITTED = the
-   *  agent's current conversation (the calling `:cid`), preserving the legacy
-   *  same-conversation default. When supplied, the task lands in THAT
-   *  conversation (cross-conversation create; the destination may be any
-   *  conversation, including a DM): the row, number, `task_create` event, and
-   *  all downstream workflow belong to the destination, and the backend
-   *  authorizes membership / closed-archived / capability / source / thread
-   *  against the destination — never the calling conversation. The agent must be
-   *  a member of the destination; a non-member (or unknown) destination is
-   *  refused fail-closed without leaking whether it exists. `source_message_id`,
-   *  if given, must live in the destination too (else
-   *  `source_conversation_mismatch`). */
-  conversation_id: z.string().min(1).optional(),
   /** Agent-only: atomically self-claim the created task(s) (status
    *  in_progress + assignee = the creating agent) in the same write as the
    *  create. Ignored for human creates. In addition to `create_tasks`, an
    *  agent claim requires the `write_tasks` capability. */
   claim: z.boolean().optional(),
-  target: MessageSendTargetSchema.optional(),
-  /** @deprecated Compatibility alias for pre-`target: {kind:'thread'}`
-   *  agent runtimes. New callers must use `target`. */
-  reply_to_message_id: z.string().min(1).optional(),
+  /** The ONE stream the task is filed against, as an absolute address
+   *  (#task:2021 P4-4) — required, because a board coordinate no one spelled is
+   *  the ambient guess P4 exists to remove.
+   *
+   *  Filing a task is a single-stream operation, so the address carries BOTH
+   *  degrees of freedom that used to be three fields (`conversation_id`,
+   *  `target`, `reply_to_message_id`): the conversation decides the board, the
+   *  row, its number, the `task_create` event and every downstream
+   *  authorization (membership / lifecycle / capability / source), and the
+   *  optional `/thread:<root_message_id>` suffix places the task's lifecycle
+   *  notices under that reply cluster instead of the main line. Naming a
+   *  conversation other than the caller's own IS the cross-conversation create;
+   *  it is no longer a second flag. Unknown and unauthorized collapse to one
+   *  answer, and a mid-cluster reply id is refused rather than widened to its
+   *  root — both are properties of the one resolver, not of this door. */
+  target: z.string().min(1),
 });
 export type CreateTasksInput = z.infer<typeof CreateTasksInputSchema>;
 
@@ -496,7 +494,11 @@ export const CreateTasksOpErrorSchema = z.enum([
   'conversation_archived',
   'not_conversation_member',
   'agent_not_found',
-  'reply_target_not_found',
+  // `reply_target_not_found` is gone with the two-field target: a thread suffix
+  // is validated as a ROOT OF THE ADDRESSED CONVERSATION by the one resolver,
+  // which answers `thread_not_in_target` before the service runs. Keeping a
+  // second code for the same fact would let the two drift, and the service no
+  // longer looks the message up at all (#task:2021 P4-4).
   /** `source_message_id` referenced a message that does not exist. */
   'source_message_not_found',
   /** The actor cannot read the source message's conversation. */
@@ -507,13 +509,17 @@ export const CreateTasksOpErrorSchema = z.enum([
   /** A task already exists for this source message (permanent 1:1). The
    *  failure carries `existing_task` so the caller can point at it. */
   'source_conflict',
-  /** `--claim` was combined with a cross-conversation create (an explicit
-   *  `conversation_id` that differs from the calling conversation). A
+  /** `--claim` was combined with a cross-conversation create (a `target` naming a
+   *  conversation other than the caller's own). A
    *  cross-conversation create is a DISPATCH — the task is filed UNCLAIMED so a
    *  member of the destination conversation picks it up — so self-claiming to the
-   *  caller is refused. Decided at the route BEFORE any destination lookup, so
-   *  it writes no task/event and never probes whether the destination exists.
-   *  The human-readable reason lives only in the CLI mapper. */
+   *  caller is refused. Decided at the route on the RESOLVED destination — the
+   *  conflict is a fact about which stream the address named, so it can only be
+   *  answered after resolution, and an address that resolves to nothing is
+   *  answered by the resolver instead (#task:2021 P4-4). Either way no task or
+   *  event is written, and the two refusals are not distinguishable by anyone who
+   *  could not already see the destination. The human-readable reason lives only
+   *  in the CLI mapper. */
   'cross_conversation_claim',
   /** The destination conversation is READ-ONLY: a direct-pair endpoint is
    *  gone (P0-e survivor-readonly). Nothing may write a task row or its

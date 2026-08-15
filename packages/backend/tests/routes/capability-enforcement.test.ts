@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 
 /**
  * Graded-permissions cut 2 — request-time capability enforcement.
@@ -72,7 +73,10 @@ describe('capability enforcement — route-level gates', () => {
 
     const denied = await http(t).post(
       internal(team.channelId, team.alice, 'read-history'),
-      { before_seq: 9999 },
+      // Same rule as send: the capability is asked of the stream the address
+      // resolves to, so a read must be addressable before it can be judged
+      // (#task:2021 P4-4).
+      { target: `#conv:${team.channelId}`, before_seq: 9999 },
     );
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({
@@ -83,7 +87,7 @@ describe('capability enforcement — route-level gates', () => {
     caps(t).replaceSet(team.workspaceId, team.alice, ['read_messages']);
     const ok = await http(t).post(
       internal(team.channelId, team.alice, 'read-history'),
-      { before_seq: 9999 },
+      { target: `#conv:${team.channelId}`, before_seq: 9999 },
     );
     expect(ok.status).toBe(200);
   });
@@ -95,7 +99,10 @@ describe('capability enforcement — route-level gates', () => {
 
     const denied = await http(t).post(
       internal(team.channelId, team.alice, 'send-message'),
-      { content: 'hello' },
+      // The capability is asked of the TARGET the address resolves to, so a send
+      // must be addressable before it can be judged: a bodiless send is a 400
+      // here, not a 403 (#task:2021 P4-4).
+      { content: 'hello', target: `#conv:${team.channelId}` },
     );
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({
@@ -139,7 +146,7 @@ describe('capability enforcement — route-level gates', () => {
 
     const denied = await http(t).post(
       internal(team.channelId, team.alice, 'tasks/create'),
-      { tasks: [{ title: 'do a thing' }] },
+      { target: `#conv:${team.channelId}`, tasks: [{ title: 'do a thing' }] },
     );
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({
@@ -155,13 +162,70 @@ describe('capability enforcement — route-level gates', () => {
 
     const denied = await http(t).post(
       internal(team.channelId, team.alice, 'members'),
-      { handle: 'bob' },
+      { handle: 'bob', target: `#conv:${team.channelId}` },
     );
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({
       code: 'capability_denied',
       capability: 'manage_conversation_members',
     });
+  });
+
+  it('add conversation member: judged in the DESTINATION workspace, not the credential\'s', async () => {
+    t = buildTestApp();
+    const seed = await makeAgent(t, 'seed');
+    // `member_add` reaches across streams only for an AgentSlot bearer (#task:2021
+    // P4-4, ruled 2026-08-15): from a ConversationSlot the reach gate would refuse
+    // this request before any capability was consulted, and the gate under test
+    // here is the capability one.
+    const alice = insertAgentScopedAgent(t, seed, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const auth = agentSlotAuth(t, alice);
+    const workspace = async (name: string) => {
+      const created = (await (
+        await http(t!).post('/api/workspaces', { name, member_agent_ids: [alice, bob] })
+      ).json()) as any;
+      t!.fake.starts = [];
+      t!.fake.delivered = [];
+      return { id: created.workspace.id, channelId: created.onboarding_channel_id };
+    };
+    const home = await workspace('where-i-run');
+    const away = await workspace('where-it-lands');
+    const awayRoom = (await (
+      await http(t).post(`/api/workspaces/${away.id}/channels`, {
+        title: 'away-room',
+        member_agent_ids: [alice],
+      })
+    ).json()) as any;
+
+    // A capability set is per (workspace, agent). Since the destination now comes
+    // from the address (#task:2021 P4-4), holding the bucket where the agent
+    // happens to be RUNNING must not authorize a roster change elsewhere.
+    caps(t).replaceSet(away.id, alice, ['read_messages']);
+    const denied = await http(t, auth).post(
+      internal(home.channelId, alice, 'members'),
+      { handle: 'bob', target: `#conv:${awayRoom.channel.id}` },
+    );
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({
+      code: 'capability_denied',
+      capability: 'manage_conversation_members',
+    });
+
+    // The mirror: narrowing the CREDENTIAL's workspace changes nothing, because
+    // that workspace is not where the fact lands.
+    caps(t).replaceSet(away.id, alice, ['manage_conversation_members']);
+    caps(t).replaceSet(home.id, alice, ['read_messages']);
+    const ok = await http(t, auth).post(
+      internal(home.channelId, alice, 'members'),
+      { handle: 'bob', target: `#conv:${awayRoom.channel.id}` },
+    );
+    expect(ok.status).toBe(200);
+    expect(
+      ((await ok.json()) as any).members
+        .filter((m: any) => m.kind === 'agent')
+        .map((m: any) => m.agent_id),
+    ).toContain(bob);
   });
 
   it('agent_home exemption: own-DM routes work with no cap row', async () => {
@@ -180,7 +244,7 @@ describe('capability enforcement — route-level gates', () => {
     expect(dm?.id).toBeTruthy();
     const ok = await http(t).post(
       internal(dm!.id, alice, 'read-history'),
-      { before_seq: 9999 },
+      { target: `#conv:${dm!.id}`, before_seq: 9999 },
     );
     expect(ok.status).toBe(200);
   });
@@ -200,6 +264,7 @@ describe('capability enforcement — service-level gates (typed shape)', () => {
     // write_tasks before claiming.
     const created = (await (
       await http(t).post(internal(team.channelId, team.alice, 'tasks/create'), {
+        target: `#conv:${team.channelId}`,
         tasks: [{ title: 'claimable task' }],
       })
     ).json()) as any;
@@ -229,6 +294,9 @@ describe('capability enforcement — service-level gates (typed shape)', () => {
       {
         title: 'wake',
         message: 'check in',
+        // The grant is judged where the wake LANDS (#task:2021 P4-4), so the
+        // destination has to be addressed for the gate to have a subject.
+        target_conversation: `#conv:${team.channelId}`,
         spec: { kind: 'once', delay_seconds: 120 },
       },
     );

@@ -1,10 +1,11 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   fixedConversationTitle,
   readScheduleFireMetadata,
   SCHEDULE_MAX_ACTIVE_PER_AGENT,
   SCHEDULE_MIN_DELAY_SECONDS,
-  type ScheduleCreateInput,
+  type ScheduleDefinition,
   type ScheduleDto,
 } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -203,7 +204,7 @@ describe('ScheduleService.create', () => {
     const f = setup();
     expect(() =>
       f.service.create(
-        { title: 'Test schedule', message: 'm', spec: { kind: 'once' } as ScheduleCreateInput['spec'] },
+        { title: 'Test schedule', message: 'm', spec: { kind: 'once' } as ScheduleDefinition['spec'] },
         f.ownerAgentId,
         f.homeDmId,
       ),
@@ -404,7 +405,7 @@ describe('ScheduleService.create', () => {
     expect(err?.code).toBe('agent_home_not_found');
   });
 
-  // ── target_conversation_id (#task:478) ────────────────────────────
+  // ── the resolved wake destination (#task:478, re-cut by #task:2021 P4-4) ──
   // The schedule's "target" is the conversation whose
   // (conversation, owner_agent) runtime wakes up on each fire — that
   // runtime owns the full lifecycle: receive wake → produce work →
@@ -413,26 +414,28 @@ describe('ScheduleService.create', () => {
   // (target-Alice has no memory of authoring the report posted under
   // her name); therefore there is intentionally no `report_target_id`
   // and no fan-out from one session to another.
+  //
+  // What P4-4 changed is WHO NAMES IT. The destination arrives as the third
+  // argument, already resolved from an address by the door, and the input carries
+  // no destination at all — there is no `target_conversation_id` input field and
+  // no default to the calling conversation, because a service that could read
+  // both would have two spellings of one fact.
 
-  it('defaults target_conversation_id to the calling conversation', () => {
+  it('stores the resolved destination it is handed', () => {
     const f = setup();
     const created = f.service.create(
       { title: 'Test schedule', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
       f.homeDmId,
     );
-    // Default = the calling conversation (here: agent_home DM, mirroring
-    // the legacy hardcoded fire target so existing tests don't change
-    // semantics). When the agent calls from a channel, this would be
-    // the channel id.
     expect(created.target_conversation_id).toBe(f.homeDmId);
   });
 
-  it('accepts an explicit target_conversation_id when the owner is a member', () => {
+  it('stores a destination that is not the agent_home DM', () => {
     const f = setup();
     // Provision a regular workspace + channel that the owner joins.
     const ws = f.workspaces.insert({
-      name: 'team',
+      name: fixedWorkspaceName('team'),
       description: null,
     });
     const channel = f.conversations.insertChannel({
@@ -445,11 +448,10 @@ describe('ScheduleService.create', () => {
       {
         title: 'Channel cron',
         message: 'fire in the channel',
-        target_conversation_id: channel.id,
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
-      f.homeDmId,
+      channel.id,
     );
     expect(created.target_conversation_id).toBe(channel.id);
   });
@@ -464,7 +466,7 @@ describe('ScheduleService.create', () => {
     // projection). Format spec: '#<title>'.
     const f = setup();
     const ws = f.workspaces.insert({
-      name: 'team',
+      name: fixedWorkspaceName('team'),
       description: null,
     });
     const channel = f.conversations.insertChannel({
@@ -477,11 +479,10 @@ describe('ScheduleService.create', () => {
       {
         title: 'Channel cron',
         message: 'fire',
-        target_conversation_id: channel.id,
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
-      f.homeDmId,
+      channel.id,
     );
     expect(created.target_label).toBe('#release');
   });
@@ -496,7 +497,6 @@ describe('ScheduleService.create', () => {
       {
         title: 'DM cron',
         message: 'fire here',
-        target_conversation_id: f.homeDmId,
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
@@ -508,7 +508,10 @@ describe('ScheduleService.create', () => {
     expect(created.target_label.startsWith('@')).toBe(true);
   });
 
-  it('rejects when target_conversation_id does not exist', () => {
+  it('rejects when the resolved destination no longer exists', () => {
+    // Reachable only by a race — the door resolved this id microseconds ago —
+    // which is exactly why the service re-asks: a resolved target is a snapshot,
+    // not a capability token.
     const f = setup();
     let err: ScheduleError | undefined;
     try {
@@ -516,11 +519,10 @@ describe('ScheduleService.create', () => {
         {
           title: 'Test schedule',
           message: 'm',
-          target_conversation_id: 'no-such-conv',
           spec: { kind: 'once', delay_seconds: 60 },
         },
         f.ownerAgentId,
-        f.homeDmId,
+        'no-such-conv',
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -528,17 +530,19 @@ describe('ScheduleService.create', () => {
     expect(err?.code).toBe('target_conversation_not_found');
   });
 
-  it('rejects an agent inbox as the target: the placement has no roster seat', () => {
+  it('rejects an agent inbox as the target: the placement has no participant seat for a stranger', () => {
     // Placement (agent-scoped-session-v1 §4.1/§4.2, #task:2014). An inbox is
-    // never a wake destination, and the refusal has to be a DOMAIN one: the
-    // inbox exists (so this is not `target_conversation_not_found`) and is open
-    // (so it is not `target_conversation_closed`), yet it has no
-    // `conversation_agents` row, because for that placement the placement IS the
-    // membership. `AgentRepo.create` writes the raw agent row without the
-    // aggregate's inbox, so the fixture makes one explicitly.
+    // never a wake destination, and the door refuses it outright
+    // (`inbox_not_writable`). Here we bypass the door to pin the service's own
+    // arm: participation is asked through the placement authority, so ANOTHER
+    // agent's inbox is refused for a DOMAIN reason — the inbox exists (so this is
+    // not `target_conversation_not_found`) and is open (so it is not
+    // `target_conversation_closed`), yet the owner does not participate in it.
+    // `AgentRepo.create` writes the raw agent row without the aggregate's inbox,
+    // so the fixture makes one explicitly.
     const f = setup();
-    const owner = f.agents.get(f.ownerAgentId)!;
-    const inbox = f.conversations.insertAgentInbox(owner.id, owner.created_at);
+    const stranger = f.agents.get(f.otherAgentId)!;
+    const inbox = f.conversations.insertAgentInbox(stranger.id, stranger.created_at);
     expect(f.conversations.get(inbox.id)?.closed_at).toBeNull();
 
     let err: ScheduleError | undefined;
@@ -547,26 +551,24 @@ describe('ScheduleService.create', () => {
         {
           title: 'Inbox cron',
           message: 'm',
-          target_conversation_id: inbox.id,
           spec: { kind: 'once', delay_seconds: 60 },
         },
         f.ownerAgentId,
-        f.homeDmId,
+        inbox.id,
       );
     } catch (e) {
       err = e as ScheduleError;
     }
     expect(err?.code).toBe('agent_not_in_target_conversation');
     expect(f.schedules.countActive(f.ownerAgentId)).toBe(0);
-    // The control: the identical call against a workspace-placed conversation
-    // the same agent owns a seat in succeeds, so the refusal above is about the
-    // placement and not about this agent or this spec.
+    // The control: the identical call against a conversation the same agent DOES
+    // participate in succeeds, so the refusal above is about participation and
+    // not about this agent or this spec.
     expect(
       f.service.create(
         {
           title: 'Inbox cron',
           message: 'm',
-          target_conversation_id: f.homeDmId,
           spec: { kind: 'once', delay_seconds: 60 },
         },
         f.ownerAgentId,
@@ -575,10 +577,28 @@ describe('ScheduleService.create', () => {
     ).toBe(f.homeDmId);
   });
 
+  it('accepts its OWN inbox: for that placement the placement IS the membership', () => {
+    // The mirror of the case above, and the reason the service cannot use a
+    // roster lookup: an `agent_inbox` has zero `conversation_agents` rows by
+    // construction (§4.2), so a roster gate would refuse the owner's own inbox
+    // even though it is the one conversation whose participation is definitional.
+    // The DOOR still refuses an inbox as a wake destination — that is a policy
+    // about destinations, not about participation, and it lives there alone.
+    const f = setup();
+    const owner = f.agents.get(f.ownerAgentId)!;
+    const inbox = f.conversations.insertAgentInbox(owner.id, owner.created_at);
+    const created = f.service.create(
+      { title: 'Own inbox', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+      inbox.id,
+    );
+    expect(created.target_conversation_id).toBe(inbox.id);
+  });
+
   it('rejects when target conversation is closed', () => {
     const f = setup();
     const ws = f.workspaces.insert({
-      name: 'team',
+      name: fixedWorkspaceName('team'),
       description: null,
     });
     const channel = f.conversations.insertChannel({
@@ -595,11 +615,10 @@ describe('ScheduleService.create', () => {
         {
           title: 'Test schedule',
           message: 'm',
-          target_conversation_id: channel.id,
           spec: { kind: 'once', delay_seconds: 60 },
         },
         f.ownerAgentId,
-        f.homeDmId,
+        channel.id,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -610,7 +629,7 @@ describe('ScheduleService.create', () => {
   it('rejects when owner is not a member of target conversation', () => {
     const f = setup();
     const ws = f.workspaces.insert({
-      name: 'team',
+      name: fixedWorkspaceName('team'),
       description: null,
     });
     const channel = f.conversations.insertChannel({
@@ -625,11 +644,10 @@ describe('ScheduleService.create', () => {
         {
           title: 'Test schedule',
           message: 'm',
-          target_conversation_id: channel.id,
           spec: { kind: 'once', delay_seconds: 60 },
         },
         f.ownerAgentId,
-        f.homeDmId,
+        channel.id,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -691,7 +709,7 @@ describe('ScheduleService.create', () => {
     'rejects once spec carrying repeat-only field %s',
     field => {
       const f = setup();
-      const input: ScheduleCreateInput = {
+      const input: ScheduleDefinition = {
         title: 'Test schedule',
         message: 'm',
         spec: { kind: 'once', delay_seconds: 600 },
@@ -811,33 +829,39 @@ describe('ScheduleService.cancel', () => {
   });
 });
 
-describe('ScheduleService — manage_schedules capability gate (graded-permissions cut 2)', () => {
-  it('create denied → typed capability_denied/manage_schedules', () => {
-    const f = setupWithCap(() => false);
-    let err: ScheduleError | undefined;
-    try {
-      f.service.create(
-        { title: 'wake', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
-        f.ownerAgentId,
-        f.homeDmId,
-      );
-    } catch (e) {
-      err = e as ScheduleError;
-    }
-    expect(err?.code).toBe('capability_denied');
-    expect(err?.capability).toBe('manage_schedules');
+describe('ScheduleService — manage_schedules capability gate (cancel-only after #task:2021 P4-4)', () => {
+  it('create does not consult the capability checker: that gate lives at the door', () => {
+    // `manage_schedules` on create is judged at the ROUTE, against the resolved
+    // destination's PLACEMENT (`requireAgentConversationCapability`) — a
+    // capability is a grant inside a workspace, and two of the three placements
+    // have no workspace at all. A second opinion here could only duplicate that
+    // verdict or contradict it, and the version that used to live here
+    // contradicted it: it read `target.workspace_id` directly and refused a null
+    // one as "no grant can exist here", which refuses every `direct_pair` and
+    // every inbox regardless of authority.
+    let asked = 0;
+    const f = setupWithCap(() => {
+      asked++;
+      return false;
+    });
+    const created = f.service.create(
+      { title: 'wake', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    expect(created.status).toBe('pending');
+    expect(asked).toBe(0);
   });
 
   it('cancel denied → typed capability_denied/manage_schedules', () => {
-    // Live closure: allow create, then deny manage_schedules before cancel.
-    let deny = false;
-    const f = setupWithCap(() => !deny);
+    // Cancel keeps its own gate: it resolves its target from a STORED schedule
+    // rather than from an address, so no door resolved anything for it.
+    const f = setupWithCap(() => false);
     const s = f.service.create(
       { title: 'wake', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
       f.homeDmId,
     );
-    deny = true;
     let err: ScheduleError | undefined;
     try {
       f.service.cancel(s.id, f.ownerAgentId);
@@ -1027,12 +1051,12 @@ describe('ScheduleService.tick — fire & advance', () => {
   });
 });
 
-describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
+describe('ScheduleService.tick — the wake destination (#task:478)', () => {
   // Provision a regular workspace + channel where the owner is a member.
   // Returns the channel id; the caller drives the rest.
   function provisionChannel(f: ReturnType<typeof setup>, name: string): string {
     const ws = f.workspaces.insert({
-      name,
+      name: fixedWorkspaceName(name),
       description: null,
     });
     const channel = f.conversations.insertChannel({
@@ -1050,11 +1074,10 @@ describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
       {
         title: 'channel cron',
         message: 'go',
-        target_conversation_id: channelId,
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
-      f.homeDmId,
+      channelId,
     );
     f.setNow(currentNow + 60_000);
     await f.service.tick();
@@ -1075,11 +1098,10 @@ describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
       {
         title: 'doomed',
         message: 'go',
-        target_conversation_id: channelId,
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
-      f.homeDmId,
+      channelId,
     );
     // Delete the channel between create and fire.
     f.conversations.delete(channelId);
@@ -1112,11 +1134,10 @@ describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
       {
         title: 'closing time',
         message: 'go',
-        target_conversation_id: channelId,
         spec: { kind: 'once', delay_seconds: 60 },
       },
       f.ownerAgentId,
-      f.homeDmId,
+      channelId,
     );
     f.conversations.close(channelId, 'archived for test');
     f.setNow(currentNow + 60_000);

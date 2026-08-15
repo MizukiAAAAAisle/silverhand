@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { fixedConversationTitle, SearchQueryInputSchema } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
@@ -25,7 +26,7 @@ function bootstrap() {
   const { db, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
   const workspace = workspaces.insert({
-    name: 'author-surfaces-ws',
+    name: fixedWorkspaceName('author-surfaces-ws'),
     description: null,
   });
   const agents = new AgentRepo(db);

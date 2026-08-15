@@ -145,6 +145,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     // create (frame = destination = the DM): numbering starts at 1.
     const created = (await (
       await h.post(agentBase(pair.id, agentIds.alice!) + '/create', {
+        target: `#conv:${pair.id}`,
         tasks: [{ title: 'pair work' }, { title: 'second' }],
       })
     ).json()) as any;
@@ -226,27 +227,95 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     const chan = await channel(t, workspaceId, 'general', [agentIds.alice!]);
     // Workspace board history first.
     await h.post(agentBase(chan, agentIds.alice!) + '/create', {
+      target: `#conv:${chan}`,
       tasks: [{ title: 'ws one' }, { title: 'ws two' }],
     });
     const p1 = directPair(t, agentIds.alice!, agentIds.bob!);
     const p2 = directPair(t, agentIds.alice!, agentIds.carol!);
     const c1 = (await (
-      await h.post(agentBase(p1.id, agentIds.alice!) + '/create', { tasks: [{ title: 'p1 a' }] })
+      await h.post(agentBase(p1.id, agentIds.alice!) + '/create', {
+        target: `#conv:${p1.id}`,
+        tasks: [{ title: 'p1 a' }],
+      })
     ).json()) as any;
     const c2 = (await (
-      await h.post(agentBase(p2.id, agentIds.alice!) + '/create', { tasks: [{ title: 'p2 a' }] })
+      await h.post(agentBase(p2.id, agentIds.alice!) + '/create', {
+        target: `#conv:${p2.id}`,
+        tasks: [{ title: 'p2 a' }],
+      })
     ).json()) as any;
     const c1b = (await (
-      await h.post(agentBase(p1.id, agentIds.alice!) + '/create', { tasks: [{ title: 'p1 b' }] })
+      await h.post(agentBase(p1.id, agentIds.alice!) + '/create', {
+        target: `#conv:${p1.id}`,
+        tasks: [{ title: 'p1 b' }],
+      })
     ).json()) as any;
     // Each pair owns 1,2,…; the workspace board's next number is untouched.
     expect(c1.tasks[0].task_number).toBe(1);
     expect(c2.tasks[0].task_number).toBe(1);
     expect(c1b.tasks[0].task_number).toBe(2);
     const wsNext = (await (
-      await h.post(agentBase(chan, agentIds.alice!) + '/create', { tasks: [{ title: 'ws three' }] })
+      await h.post(agentBase(chan, agentIds.alice!) + '/create', {
+        target: `#conv:${chan}`,
+        tasks: [{ title: 'ws three' }],
+      })
     ).json()) as any;
     expect(wsNext.tasks[0].task_number).toBe(3);
+  });
+
+  it('files on the pair board addressed as dm:@handle — from a workspace frame, and opening the pair if there is none', async () => {
+    t = buildTestApp();
+    const { workspaceId, agentIds } = await setup(t);
+    const h = http(t);
+    const chan = await channel(t, workspaceId, 'ws-frame', [agentIds.alice!, agentIds.bob!]);
+    const existing = directPair(t, agentIds.alice!, agentIds.bob!);
+
+    // The ADDRESS decides the board, not the frame the agent is woken in
+    // (#task:2021 P4-4): alice is working in a workspace channel and files onto
+    // her DM with bob by naming it the way a person would.
+    const toExisting = (await (
+      await h.post(agentBase(chan, agentIds.alice!) + '/create', {
+        target: 'dm:@bob',
+        tasks: [{ title: 'dm-addressed' }],
+      })
+    ).json()) as any;
+    expect(toExisting.error).toBeUndefined();
+    const onPair = (await (
+      await h.get(agentBase(existing.id, agentIds.alice!))
+    ).json()) as any;
+    expect(onPair.tasks.map((r: any) => r.title)).toEqual(['dm-addressed']);
+    expect(onPair.tasks[0].board).toEqual({ kind: 'direct_pair', pair_key: existing.pairKey });
+
+    // No pair with carol yet. `dm:@handle` is the one arm that ALLOCATES for a
+    // write intent, so the create opens the pair and files there — the board is
+    // created by addressing it, not by a separate "open a DM" step.
+    const toNew = (await (
+      await h.post(agentBase(chan, agentIds.alice!) + '/create', {
+        target: 'dm:@carol',
+        tasks: [{ title: 'opened by addressing' }],
+      })
+    ).json()) as any;
+    expect(toNew.error).toBeUndefined();
+    // Re-resolving the same unordered pair returns the conversation the create
+    // allocated (getOrCreateDirectPair is idempotent), so this is the board the
+    // address named — not a second one.
+    const opened = directPair(t, agentIds.alice!, agentIds.carol!);
+    expect(opened.id).not.toBe(existing.id);
+    const onOpened = (await (
+      await h.get(agentBase(opened.id, agentIds.alice!))
+    ).json()) as any;
+    expect(onOpened.tasks.map((r: any) => r.title)).toEqual(['opened by addressing']);
+    expect(onOpened.tasks[0].board).toEqual({ kind: 'direct_pair', pair_key: opened.pairKey });
+    // Per-pair numbering, so both boards start at 1 — the workspace channel the
+    // caller was framed in got neither row.
+    expect(onPair.tasks[0].task_number).toBe(1);
+    expect(onOpened.tasks[0].task_number).toBe(1);
+    const inFrame = (await (
+      await h.get(agentBase(chan, agentIds.alice!))
+    ).json()) as any;
+    expect(
+      inFrame.tasks.filter((r: any) => r.board?.kind !== 'direct_pair'),
+    ).toEqual([]);
   });
 
   it('ACL is endpoint-ness: a same-workspace non-endpoint is indistinguishably blind on every face', async () => {
@@ -256,6 +325,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     const pair = directPair(t, agentIds.alice!, agentIds.bob!);
     const created = (await (
       await h.post(agentBase(pair.id, agentIds.alice!) + '/create', {
+        target: `#conv:${pair.id}`,
         tasks: [{ title: 'private line' }],
       })
     ).json()) as any;
@@ -289,12 +359,21 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
       reason: 'task not found',
       id: task.id,
     });
-    // create into the pair from a non-endpoint: the single 403 shape.
+    // create into the pair from a non-endpoint: since #task:2021 P4-4 the
+    // destination is an ADDRESS, so this refusal is the resolver's — carol is not a
+    // participant, which is the same answer an id naming nothing gets, and it folds
+    // with the `detail` pair above rather than being a create-specific 403.
     const create = await h.post(agentBase(chanCarol, agentIds.carol!) + '/create', {
-      conversation_id: pair.id,
+      target: `#conv:${pair.id}`,
       tasks: [{ title: 'intrude' }],
     });
-    expect(create.status).toBe(403);
+    const createUnknown = await h.post(agentBase(chanCarol, agentIds.carol!) + '/create', {
+      target: '#conv:zzzzzzzzzzzzzzzz',
+      tasks: [{ title: 'intrude' }],
+    });
+    expect(create.status).toBe(404);
+    expect(createUnknown.status).toBe(404);
+    expect(await create.text()).toBe(await createUnknown.text());
   });
 
   it('AgentSlot: the no-filter union contains the pair board, and the global id crosses frames', async () => {
@@ -309,7 +388,11 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     const auth = agentSlotAuth(t, twin);
     const pair = directPair(t, twin, agentIds.bob!);
     const created = (await (
-      await h.post(canonicalTasksPath(twin, pair.id, '/create'), { tasks: [{ title: 'twin pair task' }] }, { headers: auth })
+      await h.post(
+        canonicalTasksPath(twin, pair.id, '/create'),
+        { target: `#conv:${pair.id}`, tasks: [{ title: 'twin pair task' }] },
+        { headers: auth },
+      )
     ).json()) as any;
     const task = created.tasks[0];
 
@@ -348,6 +431,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
 
     const created = (await (
       await h.post(agentBase(pair.id, agentIds.alice!) + '/create', {
+        target: `#conv:${pair.id}`,
         tasks: [{ title: 'from pair source', source_message_id: source.id }],
       })
     ).json()) as any;
@@ -392,6 +476,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
 
     const created = (await (
       await h.post(pairPath + '/create', {
+        target: `#conv:${pair.id}`,
         tasks: [{ title: 'claim later' }, { title: 'already assigned' }],
       }, { headers: auth })
     ).json()) as any;
@@ -407,6 +492,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     const unsubscribe = t.ctx.events.subscribe(pair.id, event => events.push(event.kind));
     try {
       const create = await h.post(pairPath + '/create', {
+        target: `#conv:${pair.id}`,
         tasks: [{ title: 'must not be born' }],
       }, { headers: auth });
       expect(create.status).toBe(200);
@@ -476,6 +562,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     interposeTaskTransaction(t, () => hardDeleteAgent(t!, agentIds.bob!));
     const result = (await (
       await h.post(agentBase(pair.id, agentIds.alice!) + '/create', {
+        target: `#conv:${pair.id}`,
         tasks: [{ title: 'raced write' }],
       })
     ).json()) as any;
@@ -495,6 +582,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     const pair = directPair(t, agentIds.alice!, agentIds.bob!);
     const created = (await (
       await h.post(agentBase(pair.id, agentIds.alice!) + '/create', {
+        target: `#conv:${pair.id}`,
         tasks: [{ title: 'survivor work' }],
       })
     ).json()) as any;

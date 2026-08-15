@@ -708,7 +708,11 @@ describe('db-boundary: participation authority', () => {
 
     // Not a vacuous scan: the file's OTHER policy fields are still found here, so
     // a rename of the policy module cannot silently empty this assertion.
-    for (const field of ['allowTarget', 'distributeExcludeSender', 'resolveRun']) {
+    for (const field of [
+      'allowForeignStream',
+      'distributeExcludeSender',
+      'resolveRun',
+    ]) {
       expect(code).toContain(field);
     }
   });

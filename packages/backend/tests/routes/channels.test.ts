@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
@@ -106,18 +106,39 @@ describe('POST /api/workspaces', () => {
 
   it('rejects invalid and duplicate workspace names', async () => {
     t = buildTestApp();
-    // Internal spaces and Chinese are legal in a workspace name (#task:1827):
-    // it is a display label, not an addressable handle. What create must still
-    // refuse is a code point the name field cannot render — here a zero-width
-    // space, which would make two different names pixel-identical.
+    const addressWarn = vi.spyOn(t.ctx.logger, 'warn');
+    // Internal spaces and Chinese are legal in a workspace name (#task:2027):
+    // the semantic address percent-encodes structure instead of shrinking the
+    // display-name domain. What create must still refuse is a code point the
+    // name field cannot render — here a zero-width space, which would make two
+    // different address keys pixel-identical.
     expect((await http(t).post('/api/workspaces', { name: 'has\u200Bspaces' })).status)
       .toBe(400);
     expect((await http(t).post('/api/workspaces', { name: '设计 评审' })).status)
       .toBe(201);
-    expect((await http(t).post('/api/workspaces', { name: 'eng' })).status)
+    expect((await http(t).post('/api/workspaces', { name: ' General ' })).status)
       .toBe(201);
-    expect((await http(t).post('/api/workspaces', { name: 'eng' })).status)
+    expect((await http(t).post('/api/workspaces', { name: 'general' })).status)
       .toBe(409);
+    expect((await http(t).post('/api/workspaces', { name: 'cafe\u0301' })).status)
+      .toBe(201);
+    expect((await http(t).post('/api/workspaces', { name: 'CAFÉ' })).status)
+      .toBe(409);
+
+    const addressLogs = addressWarn.mock.calls
+      .map(call => call[0] as Record<string, unknown>)
+      .filter(fields => fields.workspace_address_event !== undefined);
+    expect(addressLogs.map(fields => fields.workspace_address_event)).toEqual([
+      'assignment',
+      'assignment',
+      'conflict',
+      'assignment',
+      'conflict',
+    ]);
+    const serialized = JSON.stringify(addressLogs);
+    for (const raw of ['设计 评审', 'General', 'general', 'café', 'CAFÉ']) {
+      expect(serialized).not.toContain(raw);
+    }
   });
 });
 
@@ -130,6 +151,7 @@ describe('workspace metadata and membership routes', () => {
 
   it('renames a workspace and broadcasts into open channels', async () => {
     t = buildTestApp();
+    const addressWarn = vi.spyOn(t.ctx.logger, 'warn');
     const aliceId = await makeAgent(t, 'alice');
     const created = await (
       await http(t).post('/api/workspaces', {
@@ -162,6 +184,17 @@ describe('workspace metadata and membership routes', () => {
     expect(renameParsed!.new_name).toBe('newname');
     expect(renameParsed!.scope).toBe('workspace');
     expect(t.fake.delivered.some(d => d.messageId === renameMsg.id)).toBe(true);
+    const renameLog = addressWarn.mock.calls
+      .map(call => call[0] as Record<string, unknown>)
+      .find(fields => fields.workspace_address_event === 'assignment'
+        && fields.action === 'rename');
+    expect(renameLog).toMatchObject({
+      workspace_id: created.workspace.id,
+      action: 'rename',
+    });
+    const renameValues = JSON.stringify(Object.values(renameLog ?? {}));
+    expect(renameValues).not.toContain('old');
+    expect(renameValues).not.toContain('newname');
   });
 
   // #task:1827 — a workspace name is free text, and these two bodies reach an
@@ -859,6 +892,7 @@ describe('workspace channel routes', () => {
           title: 'agent-created',
           context_summary: 'split out',
           initial_prompt: 'continue here',
+          target: `#conv:${workspace.onboarding_channel_id}`,
         },
       )
     ).json() as any;
@@ -2079,7 +2113,7 @@ describe('channel detail is_member + messages viewer_reacted neutralization', ()
     }).id;
     const created = await http(t).post(
       `/internal/conversations/${channelId}/agents/${agentId}/tasks/create`,
-      { tasks: [{ title: 'fix flaky test', source_message_id: sourceId }] },
+      { target: `#conv:${channelId}`, tasks: [{ title: 'fix flaky test', source_message_id: sourceId }] },
     );
     expect(created.status).toBe(200);
 

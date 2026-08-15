@@ -46,12 +46,13 @@ import { roleGovernsWorkspace } from '../auth/workspace-role.js';
  *   subset they pass. Omitted or empty both mean creator-only — there is NO
  *   full-workspace snapshot; others reach a `public` channel via browse +
  *   self-join and never see a `private` one they weren't added to.
- *   Agent actors inherit humans from the source conversation instead.
- * - Agent actors must be members of their source conversation, and that
- *   source conversation must belong to the target workspace.
- * - Agent routes explicitly snapshot `memberAgentIds` from the current
- *   conversation before calling the service. From a thread, that means thread
- *   members, not parent-channel members.
+ *   Agent actors inherit humans from the fork source instead.
+ * - Agent actors must be members of the fork source they NAMED, and that source
+ *   must belong to the target workspace. The source is
+ *   {@link ChannelForkActor.forkSourceConversationId} — never the credential's
+ *   conversation (#task:2021 P4-4).
+ * - Agent routes explicitly snapshot `memberAgentIds` from the addressed source
+ *   before calling the service.
  * - Seed messages are agent-only.
  * - Channel create / archive publish `workspace_channels_changed` after the
  *   DB mutation commits.
@@ -60,6 +61,31 @@ import { roleGovernsWorkspace } from '../auth/workspace-role.js';
 export type ChannelActor =
   | UserPrincipal
   | AgentPrincipal;
+
+/**
+ * The agent arm of {@link CreateChannelInput.actor}: who forks, and WHAT.
+ *
+ * Deliberately NOT `AgentPrincipal`, and that is the whole point of the type. A
+ * principal carries `conversationId` — the conversation its CREDENTIAL was minted
+ * for — and this service used to read that field as the fork source: the workspace
+ * the channel is born into, the agent roster it inherits, the human members it
+ * inherits, and the `source_conversation_id` stamped into the seed message all came
+ * from the caller's transport anchor. Under an agent-scoped session that anchor is
+ * not a place the actor chose (#task:2021 P4-4) and #task:2030 deletes it outright,
+ * so the source now arrives as an ADDRESS the route resolves.
+ *
+ * Handing the service a principal would leave the old field in reach, one
+ * `input.actor.forkSourceConversationId` away from silently restoring the ambient default.
+ * An actor with no frame to fall back to makes that a type error instead.
+ */
+export interface ChannelForkActor {
+  readonly kind: 'agent';
+  readonly agentId: string;
+  /** The RESOLVED fork source. The caller has already established that this agent
+   *  participates in it (so this is not a discovery oracle) and that it is
+   *  workspace-placed; the service re-derives both under its own write lock. */
+  readonly forkSourceConversationId: string;
+}
 
 export interface CreateChannelInput {
   workspaceId: string;
@@ -76,7 +102,9 @@ export interface CreateChannelInput {
   /** Channel visibility. Omitted → 'private'. `public` requires a user actor
    *  (agents have no public-creation path); the service rejects otherwise. */
   visibility?: ConversationVisibility;
-  actor: ChannelActor;
+  /** A human creator, or an agent forking a conversation it NAMED — see
+   *  {@link ChannelForkActor} for why the agent arm is not a principal. */
+  actor: UserPrincipal | ChannelForkActor;
   seed?: {
     systemMessageBody: string;
     initialPrompt: string;
@@ -281,14 +309,14 @@ export class ChannelService {
       if (!this.agents.get(input.actor.agentId)) {
         throw new ActorError('agent_not_found', 'agent not found');
       }
-      const sourceConversation = this.channels.get(input.actor.conversationId);
+      const sourceConversation = this.channels.get(input.actor.forkSourceConversationId);
       if (!sourceConversation) {
         throw new ActorError(
           'source_conversation_not_found',
           'source conversation not found',
         );
       }
-      if (!this.channels.getAgent(input.actor.conversationId, input.actor.agentId)) {
+      if (!this.channels.getAgent(input.actor.forkSourceConversationId, input.actor.agentId)) {
         throw new ActorError(
           'agent_not_member_of_source_conv',
           'agent is not a member of the source conversation',
@@ -366,7 +394,7 @@ export class ChannelService {
           // pre-lock mismatch gate cannot go stale and this read cannot trip the
           // scope's workspace binding; the edge, however, can be revoked in the
           // seam.
-          if (!tx.channels.getAgent(input.actor.conversationId, input.actor.agentId)) {
+          if (!tx.channels.getAgent(input.actor.forkSourceConversationId, input.actor.agentId)) {
             throw new ActorError(
               'agent_not_member_of_source_conv',
               'agent is not a member of the source conversation',
@@ -425,7 +453,7 @@ export class ChannelService {
         //     `private` one they weren't added to.
         const userMemberIds = input.actor.kind === 'agent'
           ? tx.channels
-              .listUsers(input.actor.conversationId)
+              .listUsers(input.actor.forkSourceConversationId)
               .map(u => u.user_id)
           : Array.from(
               new Set([input.actor.userId, ...(explicitUserMemberIds ?? [])]),
@@ -457,7 +485,7 @@ export class ChannelService {
           // Snapshot source identity at insert time so the renderer can
           // draw the Spawned-from chip without a follow-up join, even if
           // the source conversation or agent is later renamed/archived.
-          const sourceConv = tx.channels.get(input.actor.conversationId);
+          const sourceConv = tx.channels.get(input.actor.forkSourceConversationId);
           const sourceAgent = tx.agents.get(input.actor.agentId);
           contextMsg = tx.messages.insert({
             conversationId: channel.id,
@@ -465,7 +493,7 @@ export class ChannelService {
             content: input.seed.systemMessageBody,
             metadata: {
               subtype: systemSubtype('channel_context'),
-              source_conversation_id: input.actor.conversationId,
+              source_conversation_id: input.actor.forkSourceConversationId,
               source_conversation_title: sourceConv?.title ?? undefined,
               created_by_agent_id: input.actor.agentId,
               created_by_agent_name: sourceAgent?.name ?? undefined,

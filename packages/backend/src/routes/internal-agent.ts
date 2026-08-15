@@ -21,8 +21,8 @@ import {
   createCliInvokeMiddleware,
 } from '../observability/cli-invoke-middleware.js';
 import {
-  requireAgentCapability,
-} from './capability.js';
+  requireAgentConversationCapability,
+} from './internal-agent/capability-scope.js';
 import {
   createInternalMembershipApp,
 } from './membership.js';
@@ -64,6 +64,7 @@ export function createInternalRouter(
     conversations,
     messages,
     reactions,
+    users,
     workspaces,
   };
 
@@ -123,13 +124,18 @@ export function createInternalRouter(
       users,
       workspaces,
       conversations,
+      // Read-only, and for one purpose: the add's `--target` address is resolved
+      // by the same resolver every P4 door uses (#task:2021 P4-4).
+      messages,
       // The SAME port instance the public router writes through. Coordination
       // was never object identity — it is the connection's write lock (BEGIN
       // IMMEDIATE), see `membership-ports.ts` — but there is no longer a second
       // assembly here to keep in step with the first.
       membershipPersistence: persistence.membership,
       membership,
-      requireAgentCapability,
+      // Placement-scoped: the add's destination is an ADDRESS now, and a pair or
+      // an inbox has no workspace to grant in (#task:2021 P4-4).
+      requireAgentConversationCapability,
     }),
   );
 

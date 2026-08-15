@@ -79,6 +79,12 @@ afterAll(async () => {
   await new Promise<void>(r => server.close(() => r()));
 });
 
+/** `task create` files against ONE addressed stream, and the flag is required
+ *  (#task:2021 P4-4). These cases are about the --body switch, so they all use the
+ *  same plain id-form address; `conv-1` is the ROUTE (the credential's path) and is
+ *  not an address at all. */
+const CREATE_TARGET = ['--target', '#conv:Conversation0001'] as const;
+
 const ENV = {
   SILVERHAND_CONVERSATION_ID: 'conv-1',
   SILVERHAND_AGENT_ID: 'agent-1',
@@ -410,7 +416,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'create',
-      argv: ['--title', 'x', '--body'],
+      argv: [...CREATE_TARGET, '--title', 'x', '--body'],
       stdin: 'a'.repeat(MAX_LEN + 1),
     });
     expect(r.code).toBe(1);
@@ -422,7 +428,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'create',
-      argv: ['--title', 'Fix login', '--body'],
+      argv: [...CREATE_TARGET, '--title', 'Fix login', '--body'],
       stdin: '## Context\nrepro steps',
     });
     expect(r.code, r.stderr).toBe(0);
@@ -435,7 +441,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'create',
-      argv: ['--title', 'Fix login'],
+      argv: [...CREATE_TARGET, '--title', 'Fix login'],
       stdin: '',
     });
     expect(r.code, r.stderr).toBe(0);
@@ -447,7 +453,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
   it('task create: rejects an inline --body value as body_requires_stdin', async () => {
     const r = await runTask({
       verb: 'create',
-      argv: ['--title', 'x', '--body', 'inline'],
+      argv: [...CREATE_TARGET, '--title', 'x', '--body', 'inline'],
       stdin: '',
     });
     expect(r.code).toBe(1);
@@ -460,7 +466,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'create',
-      argv: ['--title', 'x', '--body'],
+      argv: [...CREATE_TARGET, '--title', 'x', '--body'],
       stdin: '',
     });
     expect(r.code).toBe(1);

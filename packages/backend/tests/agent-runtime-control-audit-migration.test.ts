@@ -1,10 +1,7 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import Sqlite, { type Database } from 'better-sqlite3';
-import {
-  CURRENT_SCHEMA_VERSION,
-  MIN_SUPPORTED_SCHEMA_VERSION,
-  migrations,
-} from '@silverhand/shared/db/migrations';
+import { MIN_SUPPORTED_SCHEMA_VERSION, migrations } from '@silverhand/shared/db/migrations';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { currentSchemaVersion, runMigrations } from '../src/db.js';
 import { AgentRepo } from '../src/repos/agent-repo.js';
@@ -42,7 +39,8 @@ describe('migration v77 agent_runtime_control_audit', () => {
         .map(row => row.name),
     );
     const upgraded = runMigrations(database, {
-      expectedVersion: CURRENT_SCHEMA_VERSION,
+      migrations: migrations.filter(migration => migration.version <= 77),
+      expectedVersion: 77,
       minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
     });
     expect(upgraded).toMatchObject({
@@ -75,7 +73,7 @@ describe('migration v77 agent_runtime_control_audit', () => {
     const conversations = new ConversationRepo(fixture.db);
     const agents = new AgentRepo(fixture.db);
     const slots = new RuntimeSlotRepo(fixture.db);
-    const workspace = workspaces.insert({ name: 'claim-lifecycle', description: null });
+    const workspace = workspaces.insert({ name: fixedWorkspaceName('claim-lifecycle'), description: null });
     const channel = conversations.insertChannel({
       workspaceId: workspace.id,
       title: fixedConversationTitle('Claim lifecycle'),

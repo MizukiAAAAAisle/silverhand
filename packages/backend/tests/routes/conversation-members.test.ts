@@ -4,6 +4,7 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 
 /**
  * Stage-2 P2: a membership flow emits `message` on the message-stream (compat)
@@ -721,7 +722,7 @@ describe('POST /api/conversations/:id/members', () => {
 
     const res = await http(t).post(
       internalPaths.agentAddConversationMember(channelId, alice.agentId),
-      { handle: '@bob' },
+      { handle: '@bob', target: `#conv:${channelId}` },
     );
     unsubscribeConversation();
     expect(res.status).toBe(200);
@@ -765,7 +766,7 @@ describe('POST /api/conversations/:id/members', () => {
 
     const res = await http(t).post(
       internalPaths.agentAddConversationMember(channelId, alice.agentId),
-      { handle: '@teammate-test' },
+      { handle: '@teammate-test', target: `#conv:${channelId}` },
     );
 
     expect(res.status).toBe(422);
@@ -795,7 +796,7 @@ describe('POST /api/conversations/:id/members', () => {
 
     const res = await http(t).post(
       internalPaths.agentAddConversationMember(channelId, alice.agentId),
-      { handle: '@bob' },
+      { handle: '@bob', target: `#conv:${channelId}` },
     );
 
     expect(res.status).toBe(422);
@@ -829,6 +830,171 @@ describe('POST /api/conversations/:id/members', () => {
       { kind: 'agent', agent_id: bob.agentId },
     );
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * #task:2021 P4-4: the agent's member-add door takes ONE absolute address.
+ *
+ * The human door carries its conversation in the PATH, so it has nothing to
+ * decide. The agent door's path carries its CREDENTIAL — which conversation it
+ * is authenticated in — and the destination now comes from `target`. These are
+ * the differentials that would still pass if the route quietly fell back to the
+ * credential's conversation, or if it accepted a `/thread:` suffix and dropped
+ * it, or if it resolved with a write intent and left a pair behind a refusal.
+ *
+ * HOW FAR the address may reach is the credential's own axis (ruled 2026-08-15,
+ * §7.1): `member_add` from a ConversationSlot acts only in its own stream, so the
+ * cross-stream cases below carry a real AgentSlot bearer. The confinement itself,
+ * per door and per slot kind, is `delivery-reach-slot-scope.test.ts`.
+ */
+describe('internal member add — the address is the destination', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('adds to the conversation the ADDRESS names, not the one the credential is scoped to', async () => {
+    t = buildTestApp();
+    const seed = await makeAgent(t, 'seed');
+    const alice = insertAgentScopedAgent(t, seed.agentId, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'addressed-add', [
+      alice,
+      bob.agentId,
+    ]);
+    const credentialChannel = await createChannel(t, reg.workspaceId, 'where-i-run', [
+      alice,
+    ]);
+    const destination = await createChannel(t, reg.workspaceId, 'where-it-lands', [
+      alice,
+    ]);
+
+    const res = await http(t, agentSlotAuth(t, alice)).post(
+      internalPaths.agentAddConversationMember(credentialChannel, alice),
+      { handle: '@bob', target: `#conv:${destination}` },
+    );
+    expect(res.status).toBe(200);
+    const agentsOf = async (id: string): Promise<string[]> => {
+      const members = (await (await http(t!).get(membersPath(id))).json()) as any;
+      return members.members
+        .filter((m: any) => m.kind === 'agent')
+        .map((m: any) => m.agent_id);
+    };
+    expect(await agentsOf(destination)).toContain(bob.agentId);
+    // The conversation the credential names is untouched — it was never a
+    // destination, only the place the token is valid.
+    expect(await agentsOf(credentialChannel)).not.toContain(bob.agentId);
+  });
+
+  it('answers a conversation it does not participate in exactly like one that does not exist, and writes nothing', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const carol = await makeAgent(t, 'carol');
+    const reg = await createRegularWorkspace(t, 'unknown-equals-unauthorized', [
+      alice.agentId,
+      bob.agentId,
+      carol.agentId,
+    ]);
+    const mine = await createChannel(t, reg.workspaceId, 'mine', [alice.agentId]);
+    const theirs = await createChannel(t, reg.workspaceId, 'theirs', [bob.agentId]);
+
+    const post = (address: string) =>
+      http(t!).post(internalPaths.agentAddConversationMember(mine, alice.agentId), {
+        handle: '@carol',
+        target: address,
+      });
+    const unauthorized = await post(`#conv:${theirs}`);
+    const unknown = await post('#conv:AAAAAAAAAAAAAAAA');
+
+    expect(unauthorized.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    // Byte-identical, not merely same-coded: a differing message is the oracle.
+    expect(await unauthorized.text()).toBe(await unknown.text());
+
+    const members = (await (await http(t).get(membersPath(theirs))).json()) as any;
+    expect(
+      members.members.filter((m: any) => m.kind === 'agent').map((m: any) => m.agent_id),
+    ).not.toContain(carol.agentId);
+  });
+
+  it('refuses a /thread: suffix instead of silently adding to the parent conversation', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const reg = await createRegularWorkspace(t, 'suffix-refused', [
+      alice.agentId,
+      bob.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'room', [alice.agentId]);
+    const root = (await (
+      await http(t).post(`/api/channels/${channelId}/messages`, { content: 'root' })
+    ).json()) as any;
+
+    const res = await http(t).post(
+      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+      { handle: '@bob', target: `#conv:${channelId}/thread:${root.message.id}` },
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()) as any).toMatchObject({
+      code: 'thread_suffix_not_supported',
+    });
+    // Refused, not degraded to the parent: a reply cluster has no member set,
+    // and adding to its conversation is a different act than the one asked for.
+    const members = (await (await http(t).get(membersPath(channelId))).json()) as any;
+    expect(
+      members.members.filter((m: any) => m.kind === 'agent').map((m: any) => m.agent_id),
+    ).not.toContain(bob.agentId);
+  });
+
+  it('refuses a pair it can address, and does not OPEN one it cannot', async () => {
+    t = buildTestApp();
+    const seed = await makeAgent(t, 'seed');
+    const alice = insertAgentScopedAgent(t, seed.agentId, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const carol = await makeAgent(t, 'carol');
+    const reg = await createRegularWorkspace(t, 'pair-not-addressable-add', [
+      alice,
+      bob.agentId,
+      carol.agentId,
+    ]);
+    const channelId = await createChannel(t, reg.workspaceId, 'room', [alice]);
+    const conversations = new ConversationRepo(t.ctx.db);
+    conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: alice },
+      { kind: 'agent', id: bob.agentId },
+      Date.now(),
+    );
+    const auth = agentSlotAuth(t, alice);
+
+    // An existing pair RESOLVES — alice is an endpoint — and is then refused by
+    // the use case: its two endpoints are its membership.
+    const existing = await http(t, auth).post(
+      internalPaths.agentAddConversationMember(channelId, alice),
+      { handle: '@carol', target: 'dm:@bob' },
+    );
+    expect(existing.status).toBe(422);
+    expect((await existing.json()) as any).toMatchObject({
+      code: 'conversation_member_add_unsupported',
+    });
+
+    // `dm:@handle` is the resolver's one ALLOCATING arm, so this door asks with a
+    // read intent: a pair that does not exist is unresolved, and stays unborn.
+    // Were it a write intent, the reward for a refused request would be a new
+    // empty DM.
+    const missing = await http(t, auth).post(
+      internalPaths.agentAddConversationMember(channelId, alice),
+      { handle: '@bob', target: 'dm:@carol' },
+    );
+    expect(missing.status).toBe(404);
+    expect(
+      conversations.findDirectPair(
+        { kind: 'agent', id: alice },
+        { kind: 'agent', id: carol.agentId },
+      ),
+    ).toBeNull();
   });
 });
 

@@ -1,6 +1,7 @@
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
+import type { CanonicalWorkspaceName } from '@silverhand/shared';
 
 /**
  * Name-uniqueness predicates — the SINGLE source shared by the create paths
@@ -10,7 +11,7 @@ import type { WorkspaceRepo } from '../repos/workspace-repo.js';
  *
  * These mirror the DB-enforced uniqueness exactly:
  *  - agents: `agents.name` UNIQUE + the agents/users cross-namespace triggers
- *  - workspaces: partial unique index `workspaces_regular_name_unique`
+ *  - workspaces: partial unique index `idx_workspaces_name_key`
  */
 
 /** Participant handles live in ONE global @-handle namespace shared by agents
@@ -30,12 +31,12 @@ export function isParticipantHandleAvailable(
   return !deps.agents.getByName(name) && !deps.users.getByName(name);
 }
 
-/** Workspace names are unique among REGULAR workspaces (DB: partial unique
- *  index `workspaces_regular_name_unique`; DM / agent_home excluded).
+/** Workspace names are unique by canonical folded key among REGULAR workspaces
+ *  (DB: partial unique index `idx_workspaces_name_key`; agent_home excluded).
  *  `WorkspaceRepo.getByName` already scopes to `workspace_kind = 'regular'`. */
 export function isWorkspaceNameAvailable(
   deps: { workspaces: WorkspaceRepo },
-  name: string,
+  name: string | CanonicalWorkspaceName,
 ): boolean {
   return !deps.workspaces.getByName(name);
 }

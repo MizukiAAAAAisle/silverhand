@@ -36,7 +36,12 @@ export type WorkspaceScopeResolution =
 
 /**
  * Resolve the workspace a workspace-scoped agent query lands in: the explicit
- * argument when given, else the calling conversation's placement.
+ * argument when given, else the SOURCE conversation's placement.
+ *
+ * The source is the calling conversation for the reads that default to "here",
+ * and the ADDRESSED conversation for a door whose operand is named
+ * (`channel create --target`, #task:2021 P4-4) — same partial function either
+ * way, which is why it takes a row rather than reading the credential itself.
  *
  * `explicit` wins even when the source conversation has no workspace — that is
  * precisely how an inbox session asks a workspace question. Authorization of a
@@ -68,7 +73,7 @@ export function resolveAgentQueryWorkspaceId(
           error:
             `this conversation has no workspace${placement}, `
             + (argumentName === null
-              ? 'and this act is workspace-scoped: run it from a workspace-placed conversation'
+              ? 'and this act is workspace-scoped: name a workspace-placed conversation'
               : `so a workspace-scoped query must name one: pass ${argumentName}`),
           code: 'workspace_scope_required',
         },

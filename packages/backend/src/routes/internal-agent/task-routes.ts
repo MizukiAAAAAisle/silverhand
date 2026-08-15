@@ -22,6 +22,7 @@ import {
   UpdateTaskStatusInputSchema,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { resolveDeliveryTargetForRoute } from './delivery-target.js';
 import { internalAgentRoutePaths } from './paths.js';
 import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 
@@ -194,65 +195,67 @@ export function registerTaskRoutes(
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    if (parsed.data.target !== undefined && parsed.data.reply_to_message_id !== undefined) {
-      return c.json(
-        {
-          error: 'target and reply_to_message_id are mutually exclusive',
-          code: 'target_conflict',
-        },
-        400,
-      );
-    }
     const principal = getAgentPrincipal(c);
-    // Destination conversation: an explicit `--conversation-id` lands the
-    // task(s) in ANOTHER conversation (the cross-conversation case — discuss in
-    // A, file the work in B); omitted = the agent's current conversation (legacy
-    // default).
-    const destination = parsed.data.conversation_id ?? principal.conversationId;
-    // Cross-conversation create (explicit destination ≠ the calling conversation) is
-    // a DISPATCH: the task is filed UNCLAIMED so a member of the DESTINATION
-    // conversation picks it up. `--claim` self-assigns to the CALLER, which defeats
-    // that intent and would let A pin work it cannot execute onto B. Reject the
-    // combination BEFORE any destination lookup or authorization — so it writes
-    // no task/event AND never probes whether the destination exists (no side
-    // channel). Returned as the typed 200 op-error envelope (like
-    // source_conflict) so the CLI classifies it by `code` and owns the sole
-    // human-readable reason string. Same-channel create+claim is untouched
-    // (destination === principal.conversationId).
+    // The DESTINATION is whatever the required address resolves to — one
+    // coordinate, one resolver, no ambient "here" (#task:2021 P4-4). Filing a
+    // task is a single-stream write, so it goes through the SAME resolution as a
+    // message send: grammar, then participation, then the inbox refusal, then the
+    // thread suffix as a cluster root. Two things fall out of that and are worth
+    // naming, because this door used to own both: an unknown destination and one
+    // the agent may not use are now indistinguishable BY CONSTRUCTION rather than
+    // by this route remembering to collapse them into `forbidden`, and a
+    // mid-cluster reply id is refused instead of being widened to its root.
+    const resolved = resolveDeliveryTargetForRoute(c, deps, {
+      address: parsed.data.target,
+      operation: 'task_create',
+      intent: 'write',
+      now: Date.now(),
+    });
+    if (!resolved.ok) return resolved.response;
+    const destination = resolved.target.stream.conversationId;
+    // Cross-conversation create (the address named a stream other than the one
+    // this session is anchored in) is a DISPATCH: the task is filed UNCLAIMED so a
+    // member of the DESTINATION picks it up. `--claim` self-assigns to the CALLER,
+    // which defeats that intent and would let A pin work it cannot execute onto B.
+    // Refused before any task/event is written, as the typed 200 op-error envelope
+    // (like source_conflict) so the CLI classifies it by `code` and owns the sole
+    // human-readable reason string. Same-stream create+claim is untouched.
+    //
+    // It is now decided AFTER resolution, because "another conversation" is a fact
+    // about the resolved stream and no longer a flag this route can read off the
+    // request. That costs nothing in disclosure — being a participant is already
+    // observable to a participant, which is the only case that gets this far — and
+    // one artifact worth naming rather than defending against: `--claim` with a
+    // `dm:@handle` that has no pair yet opens the pair (main-line write intent)
+    // and then lands here. An empty pair between two principals who may DM is not
+    // a leak, and bending the intent to avoid it would make the SAME address
+    // answer differently depending on an unrelated flag.
     if (parsed.data.claim === true && destination !== principal.conversationId) {
       return c.json({ error: 'cross_conversation_claim' });
     }
-    // Create-specific NARROW authorization against the DESTINATION. We cannot
-    // reuse `canPostToConversation` / `canViewConversation` here: their agent
-    // branches are origin-bound (they require `principal.conversationId ===
-    // conversation.id` AND derive the workspace from the ORIGIN conversation),
-    // so they would 403 every cross-conversation create. Instead authorize B
-    // directly with the origin-free primitives — workspace access + destination
-    // membership — which reproduces the same membership floor a
-    // same-conversation create requires WITHOUT relaxing the ~90-call-site
-    // global post/view predicates. Unknown destination and non-member
-    // destination collapse to ONE 403 shape: never probe existence.
-    // The destination must HAVE a board (P0-f §4.4): a workspace conversation
-    // files onto its WorkspaceBoard, a DirectPair onto its own board, and the
-    // agent inbox has none — boardless joins the same single 403 as
-    // unknown/non-member destination (the caller must not tell those apart).
-    // Authorization per placement:
-    //  - workspace: workspace access ∧ destination roster membership, then the
-    //    destination workspace's create_tasks (and write_tasks for --claim);
-    //  - direct_pair: PARTICIPATION (endpoint-ness, the placement-aware port)
-    //    is the whole authority — a pair has no workspace, no roster and no
-    //    capability rows (P0-b owner-self precedent).
-    const destConv = conversations.get(destination);
-    const destBoard = destConv ? ctx.taskService.boardOfConversation(destination) : null;
-    const destWorkspaceId = destBoard?.workspaceId ?? null;
-    const authorized =
-      !!destConv &&
-      !!destBoard &&
-      (destWorkspaceId !== null
-        ? canAgentAccessWorkspace(ctx, principal.agentId, destWorkspaceId) &&
-          conversations.getAgent(destination, principal.agentId) != null
-        : conversations.isAgentParticipant(destination, principal.agentId));
-    if (!destConv || !destBoard || !authorized) {
+    // What the resolver has NOT answered: the workspace axis. Participation and
+    // existence are its verdict (and a boardless destination — an agent inbox —
+    // is already refused as `inbox_not_writable`), so what is left here is which
+    // axis authorizes and judges capabilities:
+    //  - workspace placement: the destination workspace must be accessible to the
+    //    agent, and its create_tasks (plus write_tasks for --claim) decide;
+    //  - direct_pair: PARTICIPATION is the whole authority — a pair has no
+    //    workspace, no roster and no capability rows (P0-b owner-self precedent).
+    // `canPostToConversation` / `canViewConversation` are still unusable here:
+    // their agent branches are origin-bound (they require `principal
+    // .conversationId === conversation.id` AND derive the workspace from the
+    // ORIGIN), so they would refuse every cross-conversation create.
+    const destWorkspaceId =
+      resolved.target.placementKind === 'workspace'
+        ? (ctx.taskService.boardOfConversation(destination)?.workspaceId ?? null)
+        : null;
+    if (
+      resolved.target.placementKind === 'workspace' &&
+      (destWorkspaceId === null ||
+        !canAgentAccessWorkspace(ctx, principal.agentId, destWorkspaceId))
+    ) {
+      // Same shape as an address that resolves to nothing: a workspace the agent
+      // cannot reach must not be distinguishable from one that is not there.
       return c.json({ error: 'forbidden' }, 403);
     }
     // Capabilities are judged on the DESTINATION's workspace — a cross-workspace
@@ -281,8 +284,7 @@ export function registerTaskRoutes(
           : {}),
       })),
       claim: parsed.data.claim,
-      target: parsed.data.target,
-      legacyReplyToMessageId: parsed.data.reply_to_message_id,
+      threadRootId: resolved.target.stream.threadRootId,
     });
     // Business failures (source_conflict, source_*_not_found/mismatch, …) AND
     // success both return HTTP 200 with the typed envelope — mirroring

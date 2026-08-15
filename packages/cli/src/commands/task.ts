@@ -1,8 +1,14 @@
 /**
  * `silverhand task` — list, create, claim, unclaim, status, edit, detail.
  */
-import type { MessageSendTarget, TaskStatus } from '@silverhand/shared';
-import { TASK_CONTENT_MAX_LEN, TaskBodySchema } from '@silverhand/shared';
+import type { TaskStatus } from '@silverhand/shared';
+import {
+  CONVERSATION_ADDRESS_PREFIX,
+  NAMED_STREAM_ADDRESS_PREFIX,
+  TASK_CONTENT_MAX_LEN,
+  THREAD_ADDRESS_SEPARATOR,
+  TaskBodySchema,
+} from '@silverhand/shared';
 import { CliError } from '../errors.js';
 import {
   flagBool,
@@ -14,6 +20,7 @@ import {
 } from '../parse.js';
 import { decodeStdinUtf8, readAllStdin } from '../stdin.js';
 import type { RemovedFlagSpec } from '../strict-flags.js';
+import { requireAddressBeforeSideEffects } from '../target-flag.js';
 import type { Command } from './index.js';
 
 /**
@@ -409,9 +416,12 @@ on your session's runtime scope:
                         across boards. There is no ambient workspace.
 
 --workspace-id / --conversation-id only NARROW the population — they
-never widen it past what you can read. Because a union can span boards,
-interpret each row by its own coordinates: the global \`id\` is the
-task's canonical identity, \`board\` + \`task_number\` locate it on its
+never widen it past what you can read. They are FILTERS, not a
+destination: both take a bare id (\`--conversation-id Uz9ma2MQQqJ1savH\`),
+never an address like \`#conv:<id>\` or \`dm:@handle\`. This command reads;
+it posts nothing, so it has nowhere to be sent. Because a union can span
+boards, interpret each row by its own coordinates: the global \`id\` is
+the task's canonical identity, \`board\` + \`task_number\` locate it on its
 numbering namespace, and \`conversation\` is where it lives — do NOT
 assume rows belong to the current workspace.
 
@@ -495,44 +505,49 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
 
 const createCommand: Command = {
   verb: 'create',
-  summary: 'Create one task (optionally self-claim).',
-  help: `silverhand task create --title <title> [--body]
+  summary: 'Create one task on one addressed stream.',
+  help: `silverhand task create --target <address> --title <title> [--body]
                          [--source-message-id <id>]
                          [--claim]
-                         [--target channel|thread:<message_id>]
-                         [--conversation-id <id>]
 
-Create ONE task in the current conversation. --title is required. --body is a
-value-less switch: when present, the Markdown body is read from STDIN (pipe or
-heredoc) — it never takes an inline argument. Omit --body and the task stores an
-empty description (the title is NOT duplicated into the body). To create several
-tasks, call this once per task.
+Create ONE task, filed against the stream --target names. --target and --title are
+both required. --body is a value-less switch: when present, the Markdown body is
+read from STDIN (pipe or heredoc) — it never takes an inline argument. Omit --body
+and the task stores an empty description (the title is NOT duplicated into the
+body). To create several tasks, call this once per task.
 
-  silverhand task create --title "Fix login" --body <<'SILVERHAND_EOF'
+  silverhand task create --target '#conv:<conversation_id>' \\
+    --title "Fix login" --body <<'SILVERHAND_EOF'
   ## Context
   Multi-line Markdown with $vars and \`backticks\` is safe under a heredoc.
   SILVERHAND_EOF
 
---conversation-id <id> (optional) files the task in ANOTHER conversation
-instead of the current one — the cross-conversation case: you finish a
-discussion in conversation A and conclude the work belongs in conversation B, so
-you create the task in B and carry the context in --title / --body (no messages
-are copied, and A gets no activity). Omit it and the task lands in the current
-conversation (the default). You must be a member of the destination; a
-destination you cannot access — unknown OR not-a-member — fails the same way
-(code=forbidden), without revealing whether it exists. Cross-workspace
-destinations are judged by the DESTINATION workspace's capabilities. When
---source-message-id is also given, the source MUST live in the destination too
-(see below). A cross-conversation create is a DISPATCH: it files the task
-UNCLAIMED so a member of the destination conversation picks it up, so it CANNOT
-be combined with --claim (that would
-self-assign it to you); the combination fails with \`cross_conversation_claim\`
-(exit 1) and writes nothing.
+--target <address> (required) is the ONE stream the task belongs to — the same
+address grammar every single-stream command takes:
+
+  #conv:<conversation_id>
+  ${NAMED_STREAM_ADDRESS_PREFIX}<workspace>/<title>
+  dm:@<handle>
+
+optionally followed by /thread:<root_message_id>. Copy the \`target=\` token from
+the message you are answering, or spell the id form. There is no default: the
+conversation this CLI is authenticated in is where your credential lives, not a
+destination.
+
+The address decides EVERYTHING placement-related. Its conversation owns the task:
+the row, its number, its board, the \`task_create\` event and every authorization
+(membership, closed/archived, capability, source). Naming a conversation other
+than the one you are working in IS the cross-conversation case — you finish a
+discussion in A and conclude the work belongs in B, so you address B and carry
+the context in --title / --body (no messages are copied, and A gets no activity).
+A /thread: suffix attributes the task to that reply cluster instead of the main
+line; the id must be the cluster's ROOT (a reply inside it is refused, not widened
+to it). An address you cannot use — unknown, or a stream you are not in — fails
+the same way (code=not_found, target_unresolved), without revealing which.
 
 --source-message-id <id> links the task to the message that prompted it
-(permanent 1:1 provenance). The source message MUST live in the same
-conversation as the task — i.e. the destination (--conversation-id when
-supplied, otherwise this conversation). A message can back at most ONE task
+(permanent 1:1 provenance). The source message MUST live in the same conversation
+as the task — i.e. the one --target names. A message can back at most ONE task
 ever — for its whole lifetime, regardless of that task's status. A second
 create from the same source fails with \`source_conflict\`
 (exit 1); the error's \`details.existing_task\` points at the task that already
@@ -542,15 +557,16 @@ owns it, so hand off to it (or reopen it) rather than re-creating.
 + assigned to you) instead of leaving it unassigned todo. Requires the
 write_tasks capability in addition to create_tasks. \`task claim\` only claims
 tasks that already exist; this is the one-step create-and-claim. It applies to
-the current conversation only — it cannot be combined with a cross-conversation
---conversation-id (see above).
-
---target thread:<message_id> (optional) attributes the created task to that
-message's thread (reply cluster) instead of the main line. Omit --target, or
-pass --target channel, and the task lands on the main line. The id may be a
-thread root or any reply in it; the task is anchored to the cluster's root.
+the stream you are working in only — a cross-conversation create is a DISPATCH
+that files the task UNCLAIMED so a member of the destination picks it up, so the
+combination fails with \`cross_conversation_claim\` (exit 1) and writes no task.
 
 Pre-flight failures (exit 1):
+  --target not supplied → target_required (with \`correct_target\` when you were
+                          woken in one stream)
+  --target not an address → target_malformed (the retired \`channel\` and
+                          \`thread:<message_id>\` spellings named a stream only
+                          relative to the current conversation)
   --title not supplied  → missing_required_flag (use the minimal call
                           shown above)
   --message was supplied → flag_removed (use --title, pipe body via --body)
@@ -559,16 +575,22 @@ Pre-flight failures (exit 1):
                            an empty pipe is refused, never a silent empty body)
 
 Create failures (exit 1, structured stderr — NOT printed as success):
+  target_unresolved            → code=not_found (unknown stream, or one you are
+                                 not in — the two are indistinguishable)
+  thread_not_in_target         → code=not_found (/thread: named no reply cluster
+                                 root of that conversation)
+  inbox_not_writable           → code=validation_error (your own inbox is a read
+                                 face; address the stream you were mentioned in)
   source_conflict              → code=conflict, details.existing_task
   cross_conversation_claim     → code=conflict (--claim with a cross-conversation
-                                 --conversation-id; omit --claim)
+                                 --target; omit --claim)
   source_message_not_found     → code=not_found
   source_not_accessible        → code=forbidden
   source_conversation_mismatch → code=validation_error (source is in a
                                  different conversation than the task)
 
 stdout (success only): CreateTasksResult JSON.`,
-  flags: ['title', 'body', 'source-message-id', 'target', 'reply-to', 'conversation-id'] as const,
+  flags: ['title', 'body', 'source-message-id', 'target'] as const,
   booleanFlags: ['claim'] as const,
   // Agents reach for --message because half of the CLIs in their
   // training data treat it as the canonical "body" flag (gh, git,
@@ -584,8 +606,36 @@ stdout (success only): CreateTasksResult JSON.`,
         'silverhand task create takes --title (required); the body is read from ' +
         "stdin via the value-less --body switch: `silverhand task create --title \"...\" --body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`.",
     },
+    // Both retired flags named half a coordinate each: `--conversation-id` the
+    // conversation with no way to say the thread, `--reply-to` a message with no
+    // way to say the conversation (and it widened a mid-cluster id to its root).
+    // One address says both, so neither is a rename — the hint has to teach the
+    // grammar, not map a flag to a flag (#task:2021 P4-4).
+    'conversation-id': {
+      replacement: 'target',
+      hint:
+        'the destination conversation is now part of --target: pass ' +
+        "`--target '#conv:<conversation_id>'` (or the workspace/title or dm:@handle " +
+        'form). A task belongs to exactly the stream its address names.',
+    },
+    'reply-to': {
+      replacement: 'target',
+      hint:
+        'a reply cluster is now a suffix on the address: pass ' +
+        "`--target '#conv:<conversation_id>/thread:<root_message_id>'`. The id must " +
+        'be the cluster ROOT — a reply inside it is refused rather than widened.',
+    },
   },
-  async run({ client, args }) {
+  async run({ env, client, args }) {
+    // Address first, and grammar-checked, because everything after this drains
+    // stdin: a target that could never land must not cost the caller its piped
+    // body (the same ordering `message send` uses, for the same reason).
+    const target = requireAddressBeforeSideEffects(flagString(args, 'target'), env, {
+      command: 'silverhand task create',
+      because:
+        'a task belongs to ONE stream, and the conversation this CLI is ' +
+        'authenticated in is where your credential lives, not a default board.',
+    });
     const title = flagString(args, 'title');
     if (title === undefined) {
       // Daily reports group failures by `error_subkind + details.command +
@@ -597,24 +647,19 @@ stdout (success only): CreateTasksResult JSON.`,
         subkind: 'missing_required_flag',
         message:
           'silverhand task create requires --title. ' +
-          'Minimal call: `silverhand task create --title "..."`. ' +
+          'Minimal call: `silverhand task create --target \'#conv:<conversation_id>\' ' +
+          '--title "..."`. ' +
           'Add a Markdown body by piping stdin through the value-less --body ' +
           "switch: `--body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`. " +
           'To create a task from an existing message and start it in one ' +
-          'call, use `silverhand task create --title "..." ' +
-          '--source-message-id <id> --claim`.',
+          'call, add `--source-message-id <id> --claim`.',
         retriable: false,
         details: { command: 'task create', flag: 'title' },
       });
     }
     const body = await resolveBodySwitch(args, 'create');
     const sourceMessageId = flagString(args, 'source-message-id');
-    const target = parseTaskCreateTarget(
-      flagString(args, 'target'),
-      flagString(args, 'reply-to'),
-    );
     const claim = flagBool(args, 'claim');
-    const conversationId = flagString(args, 'conversation-id');
     const result = await client.createTasks({
       tasks: [
         {
@@ -624,8 +669,10 @@ stdout (success only): CreateTasksResult JSON.`,
         },
       ],
       ...(claim ? { claim: true } : {}),
-      ...(target ? { target } : {}),
-      ...(conversationId ? { conversation_id: conversationId } : {}),
+      // Total, not conditional: the stream is the request's primary coordinate,
+      // so it is always on the wire — there is nothing for the backend to
+      // default to.
+      target,
     });
     // The route returns 200 with a typed envelope even for business failures
     // (so `source_conflict` keeps its `existing_task`). `create` is all-or-
@@ -666,7 +713,6 @@ function createFailureToCliError(result: { error: string; existing_task?: unknow
         details: { error: result.error },
       });
     case 'source_message_not_found':
-    case 'reply_target_not_found':
     case 'conversation_not_found':
     case 'agent_not_found':
       return new CliError({
@@ -713,49 +759,6 @@ function createFailureToCliError(result: { error: string; existing_task?: unknow
         details: { error: result.error },
       });
   }
-}
-
-function parseTaskCreateTarget(
-  rawTarget: string | undefined,
-  rawReplyTo: string | undefined,
-): MessageSendTarget | undefined {
-  if (rawTarget !== undefined && rawReplyTo !== undefined) {
-    throw new CliError({
-      code: 'validation_error',
-      subkind: 'mutually_exclusive',
-      message:
-        '--reply-to and --target are mutually exclusive: use ' +
-        '`--target thread:<message_id>` for threaded task creation.',
-      retriable: false,
-      details: { flags: ['reply-to', 'target'] },
-    });
-  }
-  if (rawReplyTo !== undefined) {
-    return { kind: 'thread', message_id: rawReplyTo };
-  }
-  if (rawTarget === undefined || rawTarget === 'channel' || rawTarget === 'self') {
-    return rawTarget === undefined ? undefined : { kind: 'channel' };
-  }
-  if (rawTarget.startsWith('thread:')) {
-    const messageId = rawTarget.slice('thread:'.length);
-    if (!messageId) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'enum_invalid',
-        message: '--target thread:<message_id> requires a message id after thread:',
-        retriable: false,
-        details: { flag: 'target', value: rawTarget },
-      });
-    }
-    return { kind: 'thread', message_id: messageId };
-  }
-  throw new CliError({
-    code: 'validation_error',
-    subkind: 'enum_invalid',
-    message: '--target must be channel or thread:<message_id>',
-    retriable: false,
-    details: { flag: 'target', value: rawTarget },
-  });
 }
 
 /** Resolve the optional `--workspace-id` / `--workspace <name>` pair
@@ -1106,6 +1109,15 @@ const detailCommand: Command = {
 Read a single task's full definition: title, complete content,
 last-editor attribution, the provenance \`source_message_id\`,
 and a viewer-resolved \`nav\` target for "view in conversation".
+
+To DISCUSS a task, post where its conversational footprint already is:
+\`nav.kind\` \`source\`/\`created_event\` carries \`nav.ref\`, and the address
+is \`${CONVERSATION_ADDRESS_PREFIX}<nav.ref.channel_id>\` plus
+\`${THREAD_ADDRESS_SEPARATOR}<nav.ref.thread_root_id>\` when that field is
+non-null. Use \`thread_root_id\`, never \`message_id\`: a cluster is addressed
+by its ROOT, so a mid-cluster anchor is refused rather than widened.
+\`nav.kind = unavailable\` has no honest anchor — post to your own
+conversation and cite the task in chat text instead.
 
 Two selector forms (exactly one):
   <task_number>   The task's per-workspace number (the \`task_number\` field

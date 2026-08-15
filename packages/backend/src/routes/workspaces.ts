@@ -24,6 +24,7 @@ import {
   CreateConversationChannelInputSchema,
   CreateWorkspaceInputSchema,
   WorkspaceNameSchema,
+  canonicalizeStoredWorkspaceName,
   UpdateWorkspaceInputSchema,
   inlineCode,
   systemSubtype,
@@ -41,6 +42,10 @@ import type { MembershipPersistence } from '../application/membership-ports.js';
 import { getUserPrincipal } from '../auth/principal.js';
 import { canGovernWorkspace, canViewWorkspace } from '../permissions.js';
 import { timedRouteSpan } from '../observability/route-span.js';
+import {
+  logWorkspaceAddressConflict,
+  logWorkspaceAddressAssignment,
+} from '../observability/workspace-address-log.js';
 import { createWorkspace } from '../application/create-workspace.js';
 import { deleteWorkspace } from '../application/delete-workspace.js';
 import { isWorkspaceNameAvailable } from '../application/name-availability.js';
@@ -136,6 +141,10 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
           201,
         );
       case 'nameTaken':
+        logWorkspaceAddressConflict(ctx.logger, {
+          workspaceId: null,
+          key: parsed.data.name.key,
+        });
         return c.json({ error: 'workspace name already exists' }, 409);
       case 'agentNotOwned':
         // #task:1681 — same rule and same code as the member-add doors.
@@ -188,16 +197,26 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     // a workspace's members may legitimately live on other computers, so
     // host divergence is a normal state, not corruption. Metadata writes
     // touch no host filesystem, so no placement condition remains here.
-    if (parsed.data.name && parsed.data.name !== workspace.name) {
+    if (parsed.data.name && parsed.data.name.name !== workspace.name) {
       const collision = workspaces.getByName(parsed.data.name);
       if (collision && collision.id !== workspace.id) {
+        logWorkspaceAddressConflict(ctx.logger, {
+          workspaceId: workspace.id,
+          key: parsed.data.name.key,
+        });
         return c.json({ error: 'workspace name already exists' }, 409);
       }
     }
     const updated = workspaces.updateMutableMetadata(workspace.id, parsed.data);
     if (!updated) return c.json({ error: 'workspace update failed' }, 500);
 
-    if (parsed.data.name && parsed.data.name !== workspace.name) {
+    if (parsed.data.name && parsed.data.name.name !== workspace.name) {
+      logWorkspaceAddressAssignment(ctx.logger, {
+        workspaceId: workspace.id,
+        action: 'rename',
+        oldKey: canonicalizeStoredWorkspaceName(workspace.name).key,
+        newKey: parsed.data.name.key,
+      });
       for (const channel of conversations.listAllChannelsForWorkspace(workspace.id)) {
         if (channel.closed_at !== null) continue;
         const announce = messages.insertForConversation({
@@ -211,12 +230,12 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
           // `new_name` metadata below is what the renderer draws.
           content:
             `This workspace was renamed from ${inlineCode(workspace.name)} to ` +
-            `${inlineCode(parsed.data.name)}. ` +
+            `${inlineCode(parsed.data.name.name)}. ` +
             `Update any references in your MEMORY.md when you next edit it.`,
           metadata: {
             subtype: systemSubtype('rename'),
             old_name: workspace.name,
-            new_name: parsed.data.name,
+            new_name: parsed.data.name.name,
             scope: 'workspace',
           },
         });

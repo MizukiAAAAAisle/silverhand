@@ -23,6 +23,17 @@ import { CliError } from './errors.js';
 
 export interface CliEnv {
   conversationId: string;
+  /**
+   * Which principal shape produced {@link conversationId}, kept because the two
+   * are not interchangeable once a destination has to be named. A
+   * ConversationSlot's ambient conversation is a stream the agent actually
+   * inhabits, so it is the one address a refusal may hand back as the
+   * correction; an AgentSlot's route arrives from `--route-conversation-id`,
+   * which is a transport anchor only (its retirement is #task:2030) and may be
+   * a conversation nobody can post to at all — suggesting it as a destination
+   * would teach a send that is refused downstream.
+   */
+  slot: 'conversation' | 'agent';
   agentId: string;
   serverUrl: string;
   authToken: string;
@@ -69,6 +80,7 @@ export function loadEnv(
   }
   return {
     conversationId: conversationId!,
+    slot: ambientConversationId ? 'conversation' : 'agent',
     agentId: agentId!,
     serverUrl: serverUrl!,
     authToken: authToken!,

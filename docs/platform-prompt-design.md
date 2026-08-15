@@ -34,6 +34,15 @@ The voice is terse by contract: one-or-two-sentence default, no filler
 acknowledgments, no idle narration, no echoing tool calls. Keep every edit in
 that register.
 
+**Register (ruled by @shiki, 2026-08-15): manual, not conversation.** A rule
+states facts, conditions, the action, and the error code it fails with. It does
+not persuade, does not suggest what to try instead, and does not re-explain a
+rule that already has a home. Prefer a scannable table or short bullets over
+prose; a paragraph that reads like advice is over budget by construction. The
+same register applies to CLI `--help`, which is a command manual — and where a
+rule is also machine-enforced, the help text is derived from that authority
+rather than written beside it (see §3, the reach boundary).
+
 ## 2. The canonical section skeleton
 
 Sections render in this fixed order. The ordering is the design: **identity
@@ -53,8 +62,9 @@ on them being present.
 2. **Operating Contract** — the hard invariants. Everything else serves them:
    reply only through the CLI (and ONLY the documented `silverhand` command
    families for communication and Silverhand management); read each message's
-   meta header; claim work, not messages; system messages need no chat reply by
-   default but still require an action-judgment; you stay alive and never poll.
+   meta header; the reach boundary of this session's credential; claim work, not
+   messages; system messages need no chat reply by default but still require an
+   action-judgment; you stay alive and never poll.
 3. **Turn Workflow** — the per-wake loop: orient from the injected tail → ack if
    needed → claim/continue → do all the work → report + checkpoint.
 4. **Your Profile** — concept anchor: profile = the executing subject's own
@@ -158,6 +168,25 @@ be a deliberate, called-out decision — never a side effect of rewording.
 - **Reference grammar summary** — the prompt keeps the short `@<handle>`,
   `#conv:<id>`, and `#task:<n>` distinction because malformed sigils silently
   render inert. Detailed examples belong in `silverhand message --help`.
+- **The reach boundary, per credential** — the Operating Contract carries one
+  bullet naming which addressed commands act only in the conversation this
+  session is anchored to, which reach any conversation the agent participates
+  in, and the `slot_out_of_scope` refusal a confined door answers with
+  elsewhere (#task:2021 P4-4). It is load-bearing for the same reason the
+  meta-header bullet is: reach is the one refusal an agent cannot derive from the
+  address grammar — the token is well-formed and the stream is one it
+  participates in, and the door still refuses. An agent that has not been told
+  either reads the 403 as a bug or never tries the cross-stream doors that ARE
+  open to it. Two properties are decided, not stylistic:
+  1. **Derived, never transcribed.** The paragraph is rendered from
+     `DELIVERY_REACH` in `packages/shared/src/delivery-reach.ts`, the same datum
+     the backend enforces and the CLI's errors adopt. A hand-written copy would
+     be a fourth reader of a product ruling, kept true only by a drift gate.
+  2. **Both lists always render, and only the confined branch names the code.**
+     Enumerating just the confined doors is true only until a door is added, and
+     teaching a confinement to a credential that has none makes the agent decline
+     work it may do — a mistake no error would ever correct. Guarded per scope by
+     `packages/shared/tests/platform-prompt-reach.test.ts`.
 - **Acceptance Summary in the task body** — a non-trivial task moving to
   `in_review` carries ONE canonical Acceptance Summary (scope, key decisions,
   actual behavior changes, verification, residual risks/human decisions),
@@ -315,7 +344,12 @@ and injects metadata only — never note bodies.
   removed detail has a reachable `--help` or error-hint home. The bound is an
   internal tripwire, not a protocol limit — raising it is a per-turn context
   cost decision for the product owner, and each raise records what it bought
-  (18KB → 19KB, #task:1825: the collaboration paradigms below). **The assertion
+  (18KB → 19KB, #task:1825: the collaboration paradigms below). An
+  implementation ticket that needs room pays for it by de-duplication, not by
+  moving the bound: #task:2021 P4-4 added the reach boundary (below) and stayed
+  under 19KB by collapsing the claim rules the Operating Contract already
+  stated, the Active Context handoff stated in three sections, and the
+  workspace-index preamble that repeated the L2 bullet. **The assertion
   measures the shipping shape.** Production's `activeProfilePromptDir`
   (`packages/host/src/daemon/prompt-context.ts`) always resolves to `.`, so the
   budget case renders with `.`; the legacy `./.silverhand/agents/<id>` coordinate

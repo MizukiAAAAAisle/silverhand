@@ -238,10 +238,10 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind,
+        (id, name, name_key, description, workspace_kind,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
-    ).run('ws-other-host', 'other-ws', now, now);
+        VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+    ).run('ws-other-host', 'other-ws', 'other-ws', now, now);
     db.prepare(
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
         VALUES (?, ?, ?)`,
@@ -307,10 +307,10 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind,
+        (id, name, name_key, description, workspace_kind,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', NULL, ?, ?, ?)`,
-    ).run('ws-legacy-arch', 'legacy-arch', now, now, now);
+        VALUES (?, ?, ?, NULL, 'regular', NULL, ?, ?, ?)`,
+    ).run('ws-legacy-arch', 'legacy-arch', 'legacy-arch', now, now, now);
     db.prepare(
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
         VALUES (?, ?, ?)`,
@@ -343,10 +343,10 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind,
+        (id, name, name_key, description, workspace_kind,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
-    ).run('ws-stranger', 'stranger', now, now);
+        VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+    ).run('ws-stranger', 'stranger', 'stranger', now, now);
 
     const res = await http(t).get(
       listWorkspacesPath(alice.dmChannelId, alice.agentId),

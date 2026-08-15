@@ -507,6 +507,18 @@ export function canPostToConversation(
  * earlier, and deliberately: it answers `conversation_member_add_unsupported`
  * (this operation does not exist here) where this gate can only say `forbidden`
  * (you may not). Same rule, two different truths to tell.
+ *
+ * The floor is asked of the DESTINATION, so for an agent principal it is the
+ * roster edge and NOT `canViewConversation` (#task:2021 P4-4). That predicate's
+ * agent arm additionally requires `principal.conversationId === conversationId`,
+ * which is a fact about the CREDENTIAL's frame — the conversation its token was
+ * minted for — and since the destination now arrives as an address, asking it
+ * here would refuse every add aimed at another channel this agent is genuinely a
+ * member of. The in-lock authority (`readActorAuthority`) has always asked the
+ * roster question and nothing else, so this converges the pre-lock gate with the
+ * one that actually decides rather than widening either. `roster_policy = 'open'`
+ * above already implies workspace placement, so on this arm the roster edge IS
+ * participation. The human arm is unchanged: a person has no frame to conflate.
  */
 export function canAddConversationMember(
   ctx: BackendContext,
@@ -516,6 +528,9 @@ export function canAddConversationMember(
   const conversation = ctx.authorizationReads.conversation(conversationId);
   if (!conversation) return false;
   if (conversation.roster_policy !== 'open') return false;
+  if (principal.kind === 'agent') {
+    return ctx.authorizationReads.isConversationAgent(conversationId, principal.agentId);
+  }
   return canViewConversation(ctx, principal, conversationId);
 }
 

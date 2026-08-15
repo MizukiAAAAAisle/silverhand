@@ -30,6 +30,7 @@
  * subject now HAS a production constructor, so a native INSERT here would be
  * testing a row this feature no longer needs anyone to hand-write.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import type { ConversationEndpointIdentity } from '@silverhand/shared';
@@ -342,7 +343,7 @@ describe('DirectPair aggregate: participation authority', () => {
       // still be a participant, and an inbox — which has no roster row at all —
       // must still resolve through `inbox_agent_id`.
       const workspaces = new WorkspaceRepo(f.t.ctx.db);
-      const ws = workspaces.insert({ name: 'dp-room-ws', description: null });
+      const ws = workspaces.insert({ name: fixedWorkspaceName('dp-room-ws'), description: null });
       const channel = f.conversations.insertChannel({
         workspaceId: ws.id,
         title: fixedConversationTitle('room'),
@@ -439,7 +440,7 @@ describe('DirectPair aggregate: member-add capability', () => {
       // is the only reason it must refuse. Reading the generated `kind` instead
       // would happen to agree here and disagree on nothing observable, so the
       // point is that this row is covered by the SAME predicate as the DM.
-      const ws = workspaces.insert({ name: 'dp-cap-ws', description: null });
+      const ws = workspaces.insert({ name: fixedWorkspaceName('dp-cap-ws'), description: null });
       workspaces.addUserMember(ws.id, admin, 'admin');
       const legacyDm = f.conversations.insertDmChannel({
         workspaceId: ws.id,
@@ -478,7 +479,7 @@ describe('DirectPair aggregate: member-add capability', () => {
     const f = setup();
     try {
       const workspaces = new WorkspaceRepo(f.t.ctx.db);
-      const ws = workspaces.insert({ name: 'dp-cap-open-ws', description: null });
+      const ws = workspaces.insert({ name: fixedWorkspaceName('dp-cap-open-ws'), description: null });
       workspaces.addUserMember(ws.id, f.t.viewerUserId, 'admin');
       const channel = f.conversations.insertChannel({
         workspaceId: ws.id,

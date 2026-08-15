@@ -12,8 +12,7 @@
 // registry / data-plane resolution), publishUnreadUpdated (unread). They stay
 // in routes.ts. Dependency direction is one-way: routes.ts → read-model.
 //
-// Public entrypoints (called by routes.ts): resolveAgentReadHistoryTarget,
-// buildReadHistoryDto, listAgentVisibleChannels, buildAgentSearchMessagesDto.
+// Public entrypoints (called by routes.ts): buildReadHistoryDto, listAgentVisibleChannels, buildAgentSearchMessagesDto.
 // Everything else (refs, LIKE escaping, snippet, history SQL helpers) is
 // module-private.
 // #task:1983 W2 — the handle is bound at ASSEMBLY time
@@ -49,7 +48,6 @@ import type {
   MessageRow,
   ReactionAggregateDto,
   ReadHistoryMessage,
-  ReadHistoryTarget,
   ReadHistoryTargetRef,
 } from '@silverhand/shared';
 
@@ -66,133 +64,6 @@ type AgentSearchMessageRow = HistoryMessageRow & {
   conversation_kind: ConversationDto['kind'];
   channel_id: string;
 };
-
-type ReadHistoryTargetResult =
-  | { ok: true; conversation: ConversationDto; threadRootId: string | null }
-  | {
-      ok: false;
-      status: 400 | 403 | 404;
-      code: string;
-      message: string;
-    };
-
-/** Minimal cluster-root lookup for the `{ thread_root_id }` read
- *  form. Returns just the routing fields (no DTO assembly) for a
- *  message id, or `null` when no such message exists. */
-function lookupClusterRootMessage(
-  db: Db,
-  messageId: string,
-): { id: string; conversation_id: string; thread_root_id: string | null } | null {
-  const row = db
-    .prepare<[string], { id: string; conversation_id: string; thread_root_id: string | null }>(
-      `SELECT id, conversation_id, thread_root_id FROM messages WHERE id = ?`,
-    )
-    .get(messageId);
-  return row ?? null;
-}
-
-export function resolveAgentReadHistoryTarget(
-  db: Db,
-  conversations: ConversationRepo,
-  sourceConversation: ConversationDto,
-  agentId: string,
-  target: ReadHistoryTarget | undefined,
-): ReadHistoryTargetResult {
-  const requested = target ?? 'self';
-  let resolved: ConversationDto | null;
-  // Non-null only for the `{ thread_root_id }` reply-cluster form;
-  // carries the canonical cluster root id downstream so the DTO
-  // builder can scope the listing to root + its replies.
-  let threadRootId: string | null = null;
-  if (requested === 'self') {
-    resolved = sourceConversation;
-  } else if ('thread_root_id' in requested) {
-    // Reply-cluster read: the value is a *message id*. The cluster
-    // lives inside the root message's channel; normalize a reply to
-    // its canonical root (symmetry with send-side resolveThreadRoot)
-    // so `thread:<reply_id>` reads the whole cluster, not nothing.
-    const rootMsg = lookupClusterRootMessage(db, requested.thread_root_id);
-    if (!rootMsg) {
-      return {
-        ok: false,
-        status: 404,
-        code: 'thread_root_not_found',
-        message: 'thread root message not found',
-      };
-    }
-    const conversation = conversations.get(rootMsg.conversation_id);
-    if (!conversation) {
-      return {
-        ok: false,
-        status: 404,
-        code: 'conversation_not_found',
-        message: 'conversation not found',
-      };
-    }
-    // Reply clusters are a channel concept. An old isolated-thread
-    // conversation does not host clusters — read it via
-    // `{ conversation_id }` instead.
-    if (conversation.kind !== 'channel' && conversation.kind !== 'dm_channel') {
-      return {
-        ok: false,
-        status: 400,
-        code: 'thread_root_not_in_channel',
-        message: 'thread root message is not in a channel',
-      };
-    }
-    resolved = conversation;
-    threadRootId = rootMsg.thread_root_id ?? rootMsg.id;
-  } else {
-    // Cross-conversation read by id. The agent must be in
-    // `conversation_agents` for the target — workspace-level
-    // membership alone is not enough; channel/thread membership is
-    // the bottom guard. The check below covers it uniformly.
-    const conversation = conversations.get(requested.conversation_id);
-    if (!conversation) {
-      return {
-        ok: false,
-        status: 404,
-        code: 'conversation_not_found',
-        message: 'conversation not found',
-      };
-    }
-    if (
-      conversation.kind !== 'channel' &&
-      conversation.kind !== 'dm_channel'
-    ) {
-      return {
-        ok: false,
-        status: 400,
-        code: 'unsupported_conversation_kind',
-        message: 'target conversation kind is not readable',
-      };
-    }
-    resolved = conversation;
-  }
-
-  // PARTICIPATION, not the roster table: `agent_inbox` has exactly one
-  // participant and the placement IS that membership (§4.2), so an agent reading
-  // its own inbox — the `self` target once it runs there, or by id from another
-  // session — must pass this gate with no `conversation_agents` row to show. The
-  // ONE definition of participation lives in `conversation-placement-sql.ts`;
-  // this is its boolean form.
-  //
-  // Deliberately NOT also requiring the caller's session to BE in the target
-  // (which `canViewConversation` does for interaction): cross-conversation READ
-  // is an established agent affordance — a session in channel A may read channel
-  // B it belongs to — and the inbox is the same agent's own line, so gating it on
-  // session identity would make the CC copies unreadable exactly where they are
-  // needed.
-  if (!conversations.isAgentParticipant(resolved.id, agentId)) {
-    return {
-      ok: false,
-      status: 403,
-      code: 'not_target_conversation_member',
-      message: 'agent is not a member of target conversation',
-    };
-  }
-  return { ok: true, conversation: resolved, threadRootId };
-}
 
 function targetRef(
   conversation: ConversationDto,
@@ -862,9 +733,6 @@ export type AgentReadModel = ReturnType<typeof createAgentReadModel>;
 
 export function createAgentReadModel(db: Db) {
   return {
-    resolveHistoryTarget: (
-      ...rest: Tail<Parameters<typeof resolveAgentReadHistoryTarget>>
-    ) => resolveAgentReadHistoryTarget(db, ...rest),
     buildReadHistoryDto: (
       ...rest: Tail<Parameters<typeof buildReadHistoryDto>>
     ) => buildReadHistoryDto(db, ...rest),

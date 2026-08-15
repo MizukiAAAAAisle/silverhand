@@ -725,10 +725,10 @@ describe('database migrations', () => {
             ('agent_alice', 'alice', 'claude', NULL, 'host_local', NULL, 1, 1,
              'Alice', NULL, NULL, 'u-creator');
           INSERT INTO workspaces
-            (id, name, description, workspace_kind,
+            (id, name, name_key, description, workspace_kind,
              owner_agent_id, archived_at, pinned_at, created_at, updated_at)
           VALUES
-            ('ws_main', 'Main', NULL, 'regular',
+            ('ws_main', 'Main', 'main', NULL, 'regular',
              NULL, NULL, NULL, 1, 1);
           INSERT INTO conversations
             (id, workspace_id, placement_kind, roster_policy, title, title_key,
@@ -867,9 +867,9 @@ describe('database migrations', () => {
         ).run(now);
         db.prepare(
           `INSERT INTO workspaces
-             (id, name, description, workspace_kind,
+             (id, name, name_key, description, workspace_kind,
               owner_agent_id, created_at, updated_at)
-           VALUES ('ws1', 'w', NULL, 'regular', NULL, ?, ?)`,
+           VALUES ('ws1', 'w', 'w', NULL, 'regular', NULL, ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
@@ -1027,9 +1027,9 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO workspaces
-             (id, name, description, workspace_kind,
+             (id, name, name_key, description, workspace_kind,
               owner_agent_id, archived_at, pinned_at, created_at, updated_at)
-           VALUES ('ws1', 'main', NULL, 'regular', NULL, NULL, NULL, ?, ?)`,
+           VALUES ('ws1', 'main', 'main', NULL, 'regular', NULL, NULL, NULL, ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations

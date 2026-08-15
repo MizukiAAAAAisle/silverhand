@@ -278,11 +278,11 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     t.ctx.db
       .prepare(
         `INSERT INTO workspaces
-          (id, name, description, workspace_kind,
+          (id, name, name_key, description, workspace_kind,
            owner_agent_id, archived_at, created_at, updated_at)
-          VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+          VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
       )
-      .run('ws-foreign-del', 'foreign-del', now, now);
+      .run('ws-foreign-del', 'foreign-del', 'foreign-del', now, now);
     // relocation-v1 §7 task 4 — after the provisioning collapse the membership
     // is a PURE DB write (no establishment-time provision or seed). At delete
     // time the purge removes the agent's terminal managed footprint (agent home
@@ -336,11 +336,11 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     t.ctx.db
       .prepare(
         `INSERT INTO workspaces
-          (id, name, description, workspace_kind,
+          (id, name, name_key, description, workspace_kind,
            owner_agent_id, archived_at, created_at, updated_at)
-          VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+          VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
       )
-      .run('ws-foreign-del2', 'foreign-del2', now, now);
+      .run('ws-foreign-del2', 'foreign-del2', 'foreign-del2', now, now);
     t.ctx.db
       .prepare(
         `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)

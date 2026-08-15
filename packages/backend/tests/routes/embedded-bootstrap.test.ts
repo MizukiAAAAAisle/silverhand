@@ -210,9 +210,9 @@ function freshUserApp(): TestApp {
   app.ctx.db
     .prepare<[number, number]>(
       `INSERT INTO workspaces
-       (id, name, description, workspace_kind,
+       (id, name, name_key, description, workspace_kind,
         owner_agent_id, archived_at, created_at, updated_at)
-       VALUES ('pre-user-bootstrap', 'pre-user-bootstrap', NULL, 'regular',
+       VALUES ('pre-user-bootstrap', 'pre-user-bootstrap', 'pre-user-bootstrap', NULL, 'regular',
                NULL, NULL, ?, ?)`,
     )
     .run(now, now);

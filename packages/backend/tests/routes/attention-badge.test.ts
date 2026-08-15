@@ -3,6 +3,7 @@ import { AttentionBadgeRepo } from '../../src/repos/attention-badge-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { stream } from '../utils/destination.js';
 
 // #task:1870 B — the TIERED BADGE projection.
 //
@@ -129,6 +130,7 @@ async function sendAsAgent(
   const result = await t.ctx.conversationMessageService.sendMessage({
     conversationId: channelId,
     actor: { kind: 'agent', agentId, conversationId: channelId },
+    destination: stream(channelId),
     content,
   });
   return result.committed.message.id;
@@ -147,8 +149,8 @@ async function sendAsThreadReply(
   const result = await t.ctx.conversationMessageService.sendMessage({
     conversationId: channelId,
     actor: { kind: 'agent', agentId, conversationId: channelId },
+    destination: stream(channelId, rootMessageId),
     content,
-    target: { kind: 'thread', message_id: rootMessageId },
   });
   return result.committed.message.id;
 }

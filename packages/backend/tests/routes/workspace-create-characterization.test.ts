@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -119,7 +119,9 @@ describe('POST /api/workspaces — graded-permission characterization (#task:976
 
   it('onboarding deliver failure is NOT best-effort: 500, DB residue persists, and start is not reached', async () => {
     t = buildTestApp();
+    const addressWarn = vi.spyOn(t.ctx.logger, 'warn');
     const aliceId = await makeLocalAgent(t, 'alice');
+    addressWarn.mockClear();
     t.fake.deliverError = new Error('deliver boom');
 
     const res = await http(t).post('/api/workspaces', {
@@ -147,6 +149,18 @@ describe('POST /api/workspaces — graded-permission characterization (#task:976
       .prepare('SELECT COUNT(*) AS n FROM conversations WHERE workspace_id = ?')
       .get(ws!.id) as { n: number };
     expect(convCount.n).toBe(1);
+
+    // The workspace INSERT is the authoritative address allocation. Its
+    // observation precedes the later failing onboarding fan-out, so the
+    // persisted row is never seen as an unexplained conflict on retry.
+    const assignmentLogs = addressWarn.mock.calls
+      .map(call => call[0] as Record<string, unknown>)
+      .filter(fields => fields.workspace_address_event === 'assignment');
+    expect(assignmentLogs).toHaveLength(1);
+    expect(assignmentLogs[0]).toMatchObject({
+      workspace_id: ws!.id,
+      action: 'create',
+    });
 
     // The fan-out was truncated at the throw: `start` was never reached.
     expect(t.fake.starts).toEqual([]);

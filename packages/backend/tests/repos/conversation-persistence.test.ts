@@ -17,6 +17,7 @@
  *    type-check while still shipping `email` / `avatar_storage_key` /
  *    `last_seen_at` into the application (R4).
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -54,7 +55,7 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
       rmSync(dir, { recursive: true, force: true });
     });
     const workspace = new WorkspaceRepo(writer).insert({
-      name: 'uow-contract',
+      name: fixedWorkspaceName('uow-contract'),
       description: null,
     });
     const channel = new ConversationRepo(writer).insertChannel({
@@ -139,7 +140,7 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
     cleanups.push(() => db.close());
     const conversations = new ConversationRepo(db);
     const workspace = new WorkspaceRepo(db).insert({
-      name: 'keyed-axis',
+      name: fixedWorkspaceName('keyed-axis'),
       description: null,
     });
     const a = conversations.insertChannel({ workspaceId: workspace.id, title: fixedConversationTitle('A') });
@@ -288,8 +289,8 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
     cleanups.push(() => db.close());
     const workspaces = new WorkspaceRepo(db);
     const conversations = new ConversationRepo(db);
-    const mine = workspaces.insert({ name: 'coordinated-ws', description: null });
-    const other = workspaces.insert({ name: 'another-ws', description: null });
+    const mine = workspaces.insert({ name: fixedWorkspaceName('coordinated-ws'), description: null });
+    const other = workspaces.insert({ name: fixedWorkspaceName('another-ws'), description: null });
     const foreignChannel = conversations.insertChannel({
       workspaceId: other.id,
       title: fixedConversationTitle('theirs'),
@@ -539,7 +540,7 @@ describe('SqliteConversationPersistence: both channel axes share ONE lock mechan
       rmSync(dir, { recursive: true, force: true });
     });
     const workspace = new WorkspaceRepo(writer).insert({
-      name: 'ws-axis-contract',
+      name: fixedWorkspaceName('ws-axis-contract'),
       description: null,
     });
     const persistence = createSqliteConversationPersistence(writer);
@@ -586,7 +587,7 @@ describe('SqliteConversationPersistence: one address, one winner (#task:2016)', 
       contender.close();
       rmSync(dir, { recursive: true, force: true });
     });
-    const workspace = new WorkspaceRepo(writer).insert({ name: slug, description: null });
+    const workspace = new WorkspaceRepo(writer).insert({ name: fixedWorkspaceName(slug), description: null });
     return { writer, contender, workspaceId: workspace.id };
   }
 

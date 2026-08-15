@@ -21,6 +21,13 @@
 //      placement-blind on purpose, so this is the resolver's rule to carry;
 //   4. a thread suffix must name a ROOT message of the resolved conversation.
 //
+// A HEAD IS ONE OF THREE THINGS, and rule 1 does not care which: a conversation
+// id, a readable `<workspace>/<title>` pair, or a `dm:@handle` shorthand. The
+// readable pair composes TWO authorities — the regular workspace namespace
+// (#task:2027) and a workspace's title keys (#task:2016) — and this module is
+// where they are composed, because it is the only place that also owns what
+// happens when either one says no.
+//
 // TWO PROPERTIES ARE WORTH MORE THAN THE RULES THEMSELVES:
 //
 // UNKNOWN AND UNAUTHORIZED ARE ONE OUTCOME. A conversation that does not exist
@@ -42,7 +49,10 @@
 // makes a DM reachable without a prior invitation — while every read surface
 // (history, search, file, schedule) resolves with a FIND. A read that created its
 // own subject would turn a typo into a permanent empty conversation, and would
-// make "no such stream" unobservable: the second attempt would succeed.
+// make "no such stream" unobservable: the second attempt would succeed. A write
+// whose caller may not reach the destination anyway also finds rather than
+// allocates ({@link DeliveryAllocation}), so no refusal of any kind leaves a
+// conversation behind it.
 //
 // WHAT THIS MODULE DELIBERATELY DOES NOT DECIDE. Whether the stream accepts a
 // message right now — archived, closed, a `direct_pair` whose other endpoint is
@@ -60,9 +70,11 @@
 import {
   parseDeliveryTargetInput,
   requireAddressableId,
+  type CanonicalWorkspaceName,
   type ConversationEndpointIdentity,
   type ConversationPlacementKind,
   type DeliveryTarget,
+  type DeliveryTargetRefusalCode as PublishedDeliveryTargetRefusalCode,
 } from '@silverhand/shared';
 
 /**
@@ -86,11 +98,19 @@ export interface DeliveryTargetConversation {
  *
  * `getOrCreateDirectPair` is the only side-effecting member, and it is the only
  * one a read intent never reaches — a property this module keeps by CONSTRUCTION
- * (there is exactly one call site, guarded by `intent === 'write'`) rather than
- * by discipline at each surface.
+ * (there is exactly one call site, guarded by `intent === 'write'` and by the
+ * caller's {@link DeliveryAllocation}) rather than by discipline at each surface.
  */
 export interface DeliveryTargetConversationsPort {
   getIdentity(conversationId: string): DeliveryTargetConversation | null;
+  /** The second segment of a readable address: the conversation of `workspaceId`
+   *  whose stored title key is `titleKey`, or `null`. The FOLD is the stored
+   *  key's, so the caller passes a key it derived with the one canonicalizer and
+   *  never a title it hopes matches (#task:2016). */
+  findWorkspaceTitle(
+    workspaceId: string,
+    titleKey: string,
+  ): DeliveryTargetConversation | null;
   /** PARTICIPATION, per placement — the one authority, not the roster table. */
   isAgentParticipant(conversationId: string, agentId: string): boolean;
   findDirectPair(
@@ -102,6 +122,32 @@ export interface DeliveryTargetConversationsPort {
     y: ConversationEndpointIdentity,
     now: number,
   ): { conversation: DeliveryTargetConversation; created: boolean };
+}
+
+/**
+ * The address ROOT: a regular workspace's display name (#task:2027).
+ *
+ * Three outcomes rather than a nullable id, because `ambiguous` is not "no
+ * match": `idx_workspaces_name_key` is UNIQUE over `workspace_kind = 'regular'`,
+ * so a second holder of one key is corruption, and an operator wants to know
+ * which of the two happened even though the ACTOR must not (both collapse into
+ * `target_unresolved`).
+ *
+ * The port takes the CANONICAL name, not the raw segment: the segment was already
+ * parsed by the grammar, and a port that re-parsed it could disagree with the
+ * token that was actually accepted.
+ */
+export type DeliveryTargetRootResolution =
+  | { kind: 'found'; workspaceId: string }
+  | { kind: 'unresolved' }
+  | { kind: 'ambiguous' };
+
+export interface DeliveryTargetWorkspacesPort {
+  /** Current REGULAR namespace only, archived included, and never `agent_home` —
+   *  which is why a name-shaped address can never reach an agent's private
+   *  workspace, and why `agent_home` is a RENDERING fallback rather than a
+   *  resolution outcome. */
+  resolveRegularRoot(name: CanonicalWorkspaceName): DeliveryTargetRootResolution;
 }
 
 /** The one message fact a target needs: is this id a ROOT of that conversation's
@@ -125,6 +171,7 @@ export interface DeliveryTargetPrincipalsPort {
 
 export interface DeliveryTargetPorts {
   conversations: DeliveryTargetConversationsPort;
+  workspaces: DeliveryTargetWorkspacesPort;
   messages: DeliveryTargetMessagesPort;
   agents: DeliveryTargetPrincipalsPort;
   users: DeliveryTargetPrincipalsPort;
@@ -154,6 +201,24 @@ export interface DeliveryTargetPrincipal {
  *  NEVER ALLOCATE" in the module docblock. */
 export type DeliveryIntent = 'read' | 'write';
 
+/**
+ * May this resolution ALLOCATE — the second axis of the one side-effecting arm.
+ *
+ * Separate from {@link DeliveryIntent} rather than a third intent value, because
+ * `intent` is an OPERATOR WIRE FIELD ({@link DeliveryTargetRefusalReport}, and the
+ * dogfood log built on it): widening it for an unrelated reason would silently
+ * reshape a vocabulary an operator reads. Also because the two are genuinely
+ * independent facts — "this is a write" is about the effect, "you may not open a
+ * new pair while doing it" is about the caller's reach — and a write with
+ * allocation forbidden must still be refused an inbox destination (rule 3), which a
+ * caller downgrading to `intent: 'read'` would silently lose.
+ *
+ * Required, not optional-defaulting-to-permitted: the whole value is that every
+ * call site states its answer, and a default would put the side effect back one
+ * forgotten argument away.
+ */
+export type DeliveryAllocation = 'permitted' | 'forbidden';
+
 export type DeliveryTargetRefusalCode =
   /** Not an address at all. Says nothing about what exists, so it stays
    *  distinct: telling the actor their string is malformed is the only way they
@@ -170,6 +235,22 @@ export type DeliveryTargetRefusalCode =
   | 'self_pair_not_addressable';
 
 /**
+ * This module's refusal codes ARE the published vocabulary, checked structurally.
+ *
+ * The union above is spelled out rather than aliased so each code keeps the
+ * comment explaining the rule it enforces, and this pair of assignments pins it to
+ * {@link DELIVERY_TARGET_REFUSAL_CODES} in both directions — adding a code here
+ * without publishing it (the CLI would show a bare HTTP status instead of the
+ * fact) or publishing one nothing raises both fail to compile.
+ */
+const _refusalCodesArePublished: DeliveryTargetRefusalCode =
+  '' as PublishedDeliveryTargetRefusalCode;
+const _publishedRefusalCodesAreRaised: PublishedDeliveryTargetRefusalCode =
+  '' as DeliveryTargetRefusalCode;
+void _refusalCodesArePublished;
+void _publishedRefusalCodesAreRaised;
+
+/**
  * The branch that actually fired — FOR OPERATORS, and unreachable from the answer.
  *
  * It leaves through {@link DeliveryTargetObserverPort} rather than riding on the
@@ -181,6 +262,9 @@ export type DeliveryTargetRefusalCode =
 export type DeliveryTargetOperatorReason =
   | 'grammar'
   | 'conversation_not_found'
+  | 'workspace_not_found'
+  | 'workspace_ambiguous'
+  | 'title_not_found'
   | 'not_participant'
   | 'unknown_handle'
   | 'direct_pair_not_found'
@@ -251,6 +335,9 @@ export interface DeliveryTargetRequest {
   address: string;
   principal: DeliveryTargetPrincipal;
   intent: DeliveryIntent;
+  /** Whether the one allocating arm may run for THIS caller — the door's reach,
+   *  decided by `delivery-reach.ts` and passed in, never inferred here. */
+  allocation: DeliveryAllocation;
   /** Creation timestamp for the one write that can allocate. */
   now: number;
 }
@@ -319,6 +406,31 @@ export function resolveDeliveryTarget(
     const found = ports.conversations.getIdentity(input.stream.conversationId);
     if (found === null) return refuse('target_unresolved', 'conversation_not_found');
     conversation = found;
+  } else if (input.kind === 'named_stream') {
+    // TWO segments, TWO authorities, and both failures collapse into the same
+    // answer: a workspace name nobody holds, a title nobody holds inside it, and a
+    // conversation this principal may not touch (rule 2, below) are one outcome to
+    // the actor. Otherwise the readable form would be a NAME oracle — worse than
+    // the id one, because names are guessable and an id is not.
+    //
+    // Lifecycle is deliberately absent here, exactly as it is for the id arm: an
+    // ARCHIVED workspace still resolves, because "which stream is this" must keep
+    // answering for a conversation an agent is quoting. Whether it accepts a
+    // message now is the write gate's question (see the module docblock), and
+    // because the answer only reaches a PARTICIPANT it is not an oracle either.
+    const root = ports.workspaces.resolveRegularRoot(input.workspace);
+    if (root.kind !== 'found') {
+      return refuse(
+        'target_unresolved',
+        root.kind === 'ambiguous' ? 'workspace_ambiguous' : 'workspace_not_found',
+      );
+    }
+    const found = ports.conversations.findWorkspaceTitle(
+      root.workspaceId,
+      input.title.key,
+    );
+    if (found === null) return refuse('target_unresolved', 'title_not_found');
+    conversation = found;
   } else {
     const them = resolveHandleEndpoint(ports, input.handle);
     if (them === null) return refuse('target_unresolved', 'unknown_handle');
@@ -329,11 +441,19 @@ export function resolveDeliveryTarget(
       return refuse('self_pair_not_addressable', 'self_pair');
     }
     const me: ConversationEndpointIdentity = { kind: 'agent', id: request.principal.id };
-    // Allocation happens only for a MAIN-LINE write. A thread suffix names a
-    // reply cluster, which a brand-new pair cannot have, so creating the pair
-    // first would leave a conversation behind a refusal — the resolver's one
-    // side effect must not outlive a rejected resolution.
-    if (request.intent === 'write' && threadRootId === null) {
+    // Allocation happens only for a MAIN-LINE write whose caller may allocate.
+    // A thread suffix names a reply cluster, which a brand-new pair cannot have,
+    // so creating the pair first would leave a conversation behind a refusal — the
+    // resolver's one side effect must not outlive a rejected resolution. The same
+    // property is what `allocation: 'forbidden'` buys for a caller whose REACH will
+    // refuse this destination a step later (`delivery-reach.ts`): the pair it would
+    // have opened could never have been that caller's own stream, so nothing that
+    // would have been permitted becomes unresolved.
+    if (
+      request.intent === 'write'
+      && request.allocation === 'permitted'
+      && threadRootId === null
+    ) {
       const opened = ports.conversations.getOrCreateDirectPair(me, them, request.now);
       conversation = opened.conversation;
       created = opened.created;

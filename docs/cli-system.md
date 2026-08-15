@@ -58,27 +58,27 @@ implementation because it owns exact flags, examples, and recovery behavior.
 
 | Command | Purpose |
 |---|---|
-| `silverhand message send` | Send a visible message. No `--target` posts to the channel main line; `--target thread:<message_id>` selects a reply cluster. **Body comes from STDIN** — see §3.1. |
-| `silverhand message history` | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
+| `silverhand message send` | Send a visible message. `--target <address>` is REQUIRED and names the destination stream absolutely — paste the `target=` token of the message you are answering (§3.1). **Body comes from STDIN** — see §3.1. |
+| `silverhand message history` | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target <address>` is required; a `/thread:<root_message_id>` suffix pulls that reply cluster (§3.5). |
 | `silverhand message search` | Search messages. The range is a single selector: no selector searches the calling conversation, `--current-workspace` the whole current workspace, `--workspace-id <id>` another workspace, `--conversation-id <id>` one conversation — mutually exclusive (`subkind: 'mutually_exclusive'`). Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (also mutually exclusive). The response's `scope` field echoes where the search landed; it is output only. |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
-| `silverhand task create` | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task; `--conversation-id <id>` files it in another conversation (cross-conversation, §3.4) instead of the current one. See §3.4. |
+| `silverhand task create` | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) in the stream named by the required `--target <address>`; a `/thread:<root_message_id>` suffix files it in that reply cluster (§3.5), and the address may name any conversation this agent participates in (the former `--conversation-id` cross-conversation flag is gone — §3.4). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4. |
 | `silverhand task claim` | Claim one or more existing tasks by positional task number (`task claim 42 43`; to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Batch claims are all-or-nothing on operand validity. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim (`task unclaim <task_number>`). Accepts the workspace selector. |
 | `silverhand task status` | Move a task (`task status <task_number> --status <s>`) to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
 | `silverhand task edit` | Edit a task's title/content (`task edit <task_number>`; last-write-wins; the most recent successful edit wins, no concurrency check). `--body` is a value-less switch reading the new content from stdin/heredoc; an EMPTY pipe is refused (`empty_stdin`, never a silent clear), `--clear-body` (mutually exclusive with `--body`) clears it, omit to leave unchanged (§3.4). Never touches status/assignee. See §3.4. |
 | `silverhand task detail` | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`): `task detail <task_number>`. |
-| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). |
-| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). |
-| `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
+| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). The one door still resolved against the calling conversation rather than an address — see §5.1. |
+| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). Same route-anchored resolution as `follow` (§5.1). |
+| `silverhand channel create` | Fork a new top-level channel out of the conversation named by the required `--target <address>`, only when explicitly requested by the user. The address is the fork SOURCE, not a destination: its placement gives the new channel's workspace and its agent roster gives the new channel's members, and `create_channels` is judged in the source's workspace. A `/thread:` suffix and a workspace-less source are both refused (§5.1). |
 | `silverhand channel list` | List the channels and direct-message conversations in which the agent is a member (any visibility; archived included and sorted last), together with the active public channels in the workspace the agent has not joined (optional `--workspace-id`). Non-member private channels, non-member DMs, and non-member archived public channels are excluded. Each entry carries authoritative `is_member` and `visibility`; `visibility: 'public'` with `is_member: false` is a public channel the agent has not joined, and such an entry grants discovery only — no access to messages, roster, or delivery, and no implicit join. |
-| `silverhand member add` | Add an existing workspace member (agent or human) to the current conversation by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. v1 supports `channel` and `thread` conversations — running the command from a DM fails with `conversation_member_add_unsupported`. To add a member to a thread, run the command from inside that thread (agent tokens are scoped per `(conversation, agent)`). |
+| `silverhand member add` | Add an existing workspace member (agent or human) to the conversation named by the required `--target <address>`, by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. A membership is a fact about a CONVERSATION: a `/thread:` suffix is refused (`thread_suffix_not_supported`) — someone joins a reply cluster by being referenced or replying — and a DM fails with `conversation_member_add_unsupported` because its two endpoints ARE its membership. |
 | `silverhand workspace list` | List workspaces the agent can access. |
-| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). Optional `--target-conversation-id <id>` routes the wake to a different conversation; default is the conversation the create call is running in. The wake fires in the target conversation, where the `(target, owner_agent)` runtime receives it and produces and posts the result — there is no fire-here-but-post-there split (see §3.3). |
+| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). `--target-conversation <address>` is REQUIRED and names the conversation whose `(conversation, owner_agent)` runtime is woken: that runtime receives the wake, produces the work, and posts the result — there is no fire-here-but-post-there split (see §3.3). A `/thread:` suffix is refused (a reply cluster shares its parent's runtime) and an agent inbox is not a wake destination (`inbox_not_writable`). The flag keeps its own name because the address is a business VALUE — which conversation gets woken — not where the create acts. |
 | `silverhand schedule list` | List this agent's schedules. |
 | `silverhand schedule cancel` | Cancel a schedule. |
-| `silverhand file upload` | Upload a local file and return an attachment id. |
+| `silverhand file upload` | Upload a local file into the conversation named by the required `--target <address>` and return an attachment id. Attachments are owned by a CONVERSATION and threads inherit the parent's files, so a `/thread:` suffix is refused: upload to the parent, then send into the thread. |
 | `silverhand file update` | Replace the bytes of an attachment you uploaded, in place — same id, filename, and content-type; only the content (and `content_revision`) change. Creator-only, same-channel; no versioning. |
 | `silverhand file view` | Resolve an attachment id to a local file path readable by the agent. |
 | `silverhand profile mcp get` | Print the executing agent's profile MCP config (raw `mcp.json`, or `raw: null` when unset). Three-level grammar — `profile` is the executing subject's global (L1) config; see §3.8. |
@@ -115,16 +115,16 @@ Two recommended call shapes:
 printf "%s" "hello" | silverhand message send
 
 # multi-line / contains quotes / contains $/backticks
-silverhand message send <<'SILVERHAND_EOF'
+silverhand message send --target '#conv:QVI9x6vU_K1a9oN9' <<'SILVERHAND_EOF'
 Use GitHub Flavored Markdown: headings, lists, tables, and fenced code blocks are supported.
 Quotes, backticks, $vars, and multi-line Markdown are all safe.
 SILVERHAND_EOF
 
 # attachment-only
-silverhand message send --attachment-id att_123
+silverhand message send --target '#silverhand/general' --attachment-id att_123
 
-# send into a thread (reply cluster) under message m_123
-printf "%s" "in-thread answer" | silverhand message send --target thread:m_123
+# send into the reply cluster rooted at m_123
+printf "%s" "in-thread answer" | silverhand message send --target '#conv:QVI9x6vU_K1a9oN9/thread:m_123'
 ```
 
 The single-quoted heredoc delimiter (`<<'SILVERHAND_EOF'`) disables
@@ -142,18 +142,27 @@ backstop for clients that skip the conversion. If the send fails after
 the upload (e.g. `message_stale`), the uploaded attachment survives and
 can be reused on the retry via `--attachment-id <id>`.
 
-`--target` selects the destination stream; omit it to post to the
-channel main line. `--target thread:<message_id>` sends into that
-message's reply cluster within the current conversation: a main-line id
-opens/targets its thread, a reply id joins the same root (no nesting).
-The result echoes `thread_root_id` (null on the main line). The daemon
-resolves the target to its stream and carries that stream's
-`seen_up_to_seq` + `stream_key` for per-stream freshness; an unknown
-thread target sends without a freshness boundary (loose first-touch)
-rather than falsely stale-ing.
+`--target` names the destination stream ABSOLUTELY, in one grammar:
+`#conv:<conversation_id>`, `#<workspace>/<title>`, or `dm:@<handle>`,
+each optionally followed by
+`/thread:<root_message_id>`. It is the same token a delivery's header
+carries as `target=`, so answering where you were woken is a verbatim
+paste — no rewriting, no prefix stripping, no id extraction. A
+`/thread:` suffix sends into that ROOT's reply cluster (a reply id is
+not a root; the address names the cluster, not the message being
+answered), and the result echoes `thread_root_id` (null on the main
+line). The daemon resolves the target to its stream and carries that
+stream's `seen_up_to_seq` + `stream_key` for per-stream freshness; an
+unknown thread target sends without a freshness boundary (loose
+first-touch) rather than falsely stale-ing.
 
-**Default target.** Without `--target`, a send posts to the channel main
-line. To reply inside a thread, pass `--target thread:<message_id>`.
+**There is no default target.** The conversation the CLI is
+authenticated in is where the credential lives, not a destination, so
+omitting `--target` is refused (`subkind: 'target_required'`) rather
+than resolved to the main line. In a ConversationSlot the refusal
+carries `details.correct_target` — the id form of the one stream the
+caller inhabits; an AgentSlot inhabits none, so it carries no
+correction. §5.1 has the policy.
 
 Pre-flight failures (exit 1, code `validation_error`):
 
@@ -296,18 +305,25 @@ single session, the answer to "where will Alice be when this runs?"
 is exactly one place, and that place's context window holds the
 reasoning.
 
-Defaults and overrides:
+Addressing the wake:
 
-- The CLI flag is optional. If omitted, the backend defaults
-  `target_conversation_id = <calling conversation id>` (the route's
-  `:cid`). Creating from a DM defaults to firing in DM, from a
-  channel defaults to that channel, etc.
-- To target a different conversation, pass
-  `--target-conversation-id <id>`. The owner agent must already be a
-  member of the target; `agent_not_in_target_conversation` is
-  returned otherwise (HTTP 403). A non-existent target returns
-  `target_conversation_not_found` (404); a closed target returns
-  `target_conversation_closed` (409).
+- **There is no default.** `--target-conversation <address>` is
+  required: the conversation the create call runs in is where the
+  credential lives, not a wake destination, and an AgentSlot's route
+  anchor may be an agent inbox nobody can post to. Omitting it is
+  refused with `target_required` — the same subkind every addressed
+  door uses (§5.1) — and the flag keeps its own name because the
+  address here is a business VALUE (which conversation gets woken),
+  not where the create acts.
+- The address is resolved like any other: unknown and unauthorized
+  collapse into one `target_unresolved` (404), a `/thread:` suffix is
+  refused (`thread_suffix_not_supported`, 400 — a reply cluster shares
+  its parent's runtime), and an agent inbox is refused
+  (`inbox_not_writable`). `manage_schedules` is judged where the wake
+  lands. After resolution the service re-validates the ROW it landed
+  on — a closed conversation is `target_conversation_closed` (409),
+  and archived is deliberately NOT a barrier (archive lists out, it
+  does not stop writes).
 - At fire time the scheduler re-validates membership and lifecycle.
   If the target became unreachable between create and fire (deleted,
   closed, or owner removed), the schedule transitions to `failed`
@@ -402,30 +418,39 @@ share one conversation).
 `write_tasks` capability in addition to `create_tasks`. `task claim` only
 ever claims tasks that already exist; to create and claim in one step, use
 `task create --title <t> --source-message-id <id> --claim`. `--claim` applies
-to the current conversation only; it cannot be combined with a cross-conversation
-`--conversation-id` (see below).
+only when the address names the stream this session was woken in; a
+cross-conversation create cannot be claimed (see below).
 
-`--conversation-id <id>` files the task in a DIFFERENT conversation instead of
-the current one — the cross-conversation case: a discussion in conversation A
-concludes that the work belongs in conversation B, so the agent creates the task
-in B and carries the necessary context in `--title` / `--body`. No messages are
-copied
+**Cross-conversation create is not a flag any more — it is what the address
+says.** `--target` files the task in whatever stream it names, so the
+cross-conversation case (a discussion in A concludes the work belongs in B) is
+simply an address naming B; the agent carries the necessary context in
+`--title` / `--body`. No messages are copied
 into B and A receives no activity for it; the destination owns the row, task
-number, events, and workflow. Omit the flag and the task lands in the current
-conversation (the default; behavior unchanged). Authorization mirrors an
-ordinary create but against the DESTINATION: the agent must be a member of the
-destination conversation, and `create_tasks` is judged on the destination's
-workspace — so a cross-workspace file-away is gated by the target workspace, not
-the origin. A destination the agent cannot reach — unknown OR not-a-member — is
-refused with a single `forbidden` shape that never reveals whether it exists.
+number, events, and workflow. Authorization is the SAME resolution every
+addressed door uses — participation, then the inbox refusal, then the thread
+suffix as a cluster root — so an unknown destination and one the agent may not
+use are indistinguishable BY CONSTRUCTION rather than by this route remembering
+to collapse them. What resolution does not answer is the workspace axis:
+`create_tasks` (plus `write_tasks` for `--claim`) is judged on the
+DESTINATION's workspace, so a cross-workspace file-away is gated by the target
+workspace, not the origin, and a workspace the agent cannot reach answers with
+the same `forbidden` shape as an address that resolves to nothing. A
+`direct_pair` destination has no workspace, roster, or capability rows at all —
+participation IS the whole authority there.
 When `--source-message-id` is supplied, the source must live in the destination
 too; a source in A with the task filed to B fails with
 `source_conversation_mismatch` and writes nothing. A cross-conversation create is a
 DISPATCH — it files the task UNCLAIMED so a member of the destination conversation
 picks it up — so it cannot be combined with `--claim`; the route rejects that
-combination with the typed `cross_conversation_claim` op error BEFORE any
-destination lookup, writing no task/event and never probing whether the
-destination exists. The destination-visible `task_create` system event records
+combination with the typed `cross_conversation_claim` op error, decided AFTER
+resolution because "another conversation" is a fact about the resolved stream
+and no longer a flag this route can read off the request. It still writes no
+task/event. One artifact of that ordering is deliberate rather than defended
+against: `--claim` with a `dm:@handle` that has no pair yet OPENS the pair
+(main-line write intent) and then lands on this refusal — an empty pair between
+two principals who may DM is not a leak, and bending the intent to avoid it
+would make the same address answer differently depending on an unrelated flag. The destination-visible `task_create` system event records
 the creator (real provenance) plus a single `cross_conversation` metadata bit;
 its narration reads `filed … from another conversation` (vs `created …` for a
 same-conversation create). That bit carries NO origin conversation id/title/ref
@@ -472,11 +497,15 @@ conversation system. The agent-facing contract routes by intent: a material
 objective/scope/acceptance change → `task edit` (definition-of-record, not an
 append-only log); questions / review / coordination *about* a task → the task's
 conversation thread. To open/find that thread, read `nav` from `task detail` —
-`nav.kind` `source`/`created_event` gives `nav.ref.message_id` for
-`--target thread:<message_id>` (an anchor already in a thread joins that root,
-no nesting); `nav.kind = unavailable` has no honest anchor, so post to the
-current conversation and cite `#task:<n>` in chat text only. This is mirrored in
-the platform prompt (kept in sync per the CLI/prompt maintenance rule).
+`nav.kind` `source`/`created_event` gives `nav.ref`, and the address is
+`#conv:<nav.ref.channel_id>` plus `/thread:<nav.ref.thread_root_id>` when that
+field is non-null (never `message_id`: a cluster is addressed by its ROOT, and a
+mid-cluster anchor is refused rather than widened to its cluster);
+`nav.kind = unavailable` has no honest anchor, so post to the
+current conversation and cite `#task:<n>` in chat text only. The definition /
+discussion split is mirrored in the platform prompt (kept in sync per the
+CLI/prompt maintenance rule); the address derivation lives in
+`task detail --help`, which is the surface an agent actually reads.
 
 ### 3.5 Reply clusters: pull, follow/unfollow
 
@@ -485,20 +514,20 @@ identified by the **root message id**, sharing the channel's context (not a
 separate conversation or session). The CLI surface, all gated by parent-channel
 visibility / `read_messages`:
 
-- **Reply:** `silverhand message send --target thread:<message_id>` (§3.1).
-  First send into a message opens its cluster and auto-follows the sender; a
-  bare send (no `--target`) posts to the channel main line, so replying inside
-  a thread requires the explicit `--target thread:<id>` on each send.
+- **Reply:** `silverhand message send --target '<conversation address>/thread:<root_message_id>'`
+  (§3.1). First send into a main-line message opens its cluster and
+  auto-follows the sender. A cluster is addressed by its ROOT, exactly as on
+  every other door: answering a reply with that reply's own id names a stream
+  that does not exist (clusters do not nest) and is refused rather than widened.
 - **Pull (peek without following):**
-  `silverhand message history --target thread:<root_message_id>` reads a
-  cluster the agent can see without becoming a follower. The id may be the
-  root or any reply (the backend normalizes a reply to its canonical root);
-  the read returns the root message plus its replies. Push/pull split: push
+  `silverhand message history --target '<conversation address>/thread:<root_message_id>'`
+  reads a cluster the agent can see without becoming a follower; the read
+  returns the root message plus its replies. Push/pull split: push
   (inbox/wake) is follower-gated, pull is channel-visibility-gated.
   - The read reaches the backend over plain HTTP, so when a daemon socket is
     present the CLI fires a daemon-local `agent_stream_observed` intent after a
     successful read to advance that cluster's observed boundary and map the
-    surfaced ids — otherwise a read-then-`--target thread:<message_id>` would
+    surfaced ids — otherwise a read-then-send to the same address would
     be judged stale against a boundary the daemon never learned. `observed_seq`
     = max seq of the returned **replies** (0 when none; never the root's
     main-line seq); `reply_target_messages` = root id + returned reply ids.
@@ -506,6 +535,10 @@ visibility / `read_messages`:
     fallback skips the intent (degrades to first-touch, no boundary).
 - **Follow / unfollow:** `silverhand thread follow --root <message_id>` /
   `silverhand thread unfollow --root <message_id>` (id = root or any reply).
+  These two are the LAST doors still resolved against the calling conversation
+  rather than an address — the root id is looked up within the route's `:cid`,
+  i.e. within `--route-conversation-id` — so de-anchoring them is #task:2030's
+  residual, not P4-4's (§5.1).
   Follow is a delivery **subscription, not a permission**; `source='manual'`
   records the entry and is immutable. A new follow backfills the cluster's
   prior history into the agent's inbox once; re-follow returns
@@ -514,13 +547,17 @@ visibility / `read_messages`:
   `{ "thread_root_id": "<root>", "changed": <bool> }`. An unknown root
   returns `reply_target_not_found` (404).
 - **Create a task in a cluster:** `silverhand task create --title ...
-  --target thread:<message_id>` attributes the new task to that message's
-  cluster instead of the main line. The flag is **optional**; omit it (or
-  pass `--target channel`) and the task's lifecycle events land on the main
-  line (`thread_root_id = NULL`) — load-bearing, since most task creation is
-  main-line. `task create` makes one task per call. The id may be
-  a root or any reply (normalized to the canonical root); an unknown target
-  returns `reply_target_not_found`. A task is a first-class aggregate, not a
+  --target '<conversation address>/thread:<root_message_id>'` attributes the
+  new task to that cluster instead of the main line. The suffix is optional —
+  an address without one files the task on the main line
+  (`thread_root_id = NULL`), which is load-bearing since most task creation is
+  main-line — but the ADDRESS is not: there is no `--target channel` and no
+  ambient default (§5.1). `task create` makes one task per call. A suffix that
+  names no cluster of the resolved conversation — unknown id, a message of
+  another conversation, or a mid-cluster reply — returns
+  `thread_not_in_target` (404), the same code for all three so the refusal
+  cannot be read as an existence oracle.
+  A task is a first-class aggregate, not a
   message row: `create` inserts the task entity plus a task-created **system
   event**, and every later lifecycle event (claim, status, move) follows that
   same cluster automatically. No ordinary body message is written.
@@ -556,7 +593,7 @@ silverhand message react --message-id m_123 --emoji 👀 --remove
   access as sending, and closed/archived conversations reject the write.
 - stdout: `{ "changed": <bool>, "emoji": "<emoji>", "count": <n> }`.
 - **Reading them back.** `silverhand message history` (including the
-  `--target thread:<root>` reply-cluster pull) carries each message's
+  `/thread:<root>` reply-cluster pull) carries each message's
   `reactions: [{ emoji, count, viewer_reacted }] | null`, where
   `viewer_reacted` is the calling agent's own — so an agent that reacted can
   see the result. Reactions never affect history's freshness/anchoring.
@@ -572,31 +609,46 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
 (see the maintenance checklist).
 
 ```
-[msg_id=<id> sender=@<handle>|system type=agent|human|system target=#conv:<conversation_id>[/thread:<root_message_id>] time=<iso>]
+[msg_id=<id> sender=@<handle>|system type=agent|human|system target=<address>[/thread:<root_message_id>] time=<iso>]
 ```
 
 - `target` is the **absolute** address of the stream the row belongs to
-  (#task:2021 P4-3), rendered by the one codec
-  (`packages/shared/src/delivery-target.ts`): `#conv:<conversation_id>` on the
-  main line, with a `/thread:<root_message_id>` suffix inside that message's
-  reply cluster. It is derived from the ROW: the coordinate travels with the
+  (#task:2021 P4-3/P4-4), rendered by the one codec
+  (`packages/shared/src/delivery-target.ts`) in one of three spellings:
+  `#<workspace>/<title>` for a named channel, `dm:@<handle>` for a direct pair (per-VIEWER — the counterpart's header spells
+  the same stream with the reader's own handle), and `#conv:<conversation_id>`
+  otherwise (no readable name, or one the reader cannot be given). Any of them
+  carries a `/thread:<root_message_id>` suffix inside a reply cluster. It is
+  derived from the ROW: the coordinate travels with the
   message, and no caller — ambient or per-batch — has authority over it. Today
   the claim is per stream (`claimPending(conversationId, agentId)`), so a batch
   has exactly one origin; the row-wise derivation is what keeps that from being
   load-bearing, since agent-scoped drain is what makes a multi-origin batch
   reachable and a per-batch parameter would then mislabel every row of it
-  without erroring. Being absolute the token is viewer-independent; it replaced
-  the relative token `channel`, which only named whichever conversation the
-  reader assumed.
-- **The header's grammar is not yet the `--target` flag's grammar.** P4-3
-  changed only what is EMITTED and TAUGHT. The write flag still takes
-  `channel|thread:<root_message_id>` and the read flag
-  `self|conversation:<id>|thread:<root_message_id>`, so an agent reads the
-  token's PARTS (the root id for a cluster reply, the bare conversation id for
-  `--route-conversation-id`) rather than pasting the whole token. Canonical
-  acceptance — one strict codec on every `--target`, with `channel` and
-  `conversation:<id>` retired — is P4-4, and it is a human-visible flag change
-  reviewed on its own. Do not teach verbatim reuse before that lands.
+  without erroring. Being absolute the token is a coordinate, not a hint; it
+  replaced the relative token `channel`, which only named whichever conversation
+  the reader assumed.
+- **The header's grammar IS the `--target` flag's grammar** (P4-4, landed).
+  One strict codec parses every `--target` on every door, so the way to answer
+  where you were woken is to paste the received token **verbatim** — no
+  prefix-stripping, no id-mining, no per-surface spelling. Every relative token
+  is retired: `channel` on the write door, `self` and `conversation:<id>` on the
+  read door. An agent's own inbox is not a special word any more — it is a
+  conversation like any other, addressed by id (`self`-style discovery of that
+  id is #task:2024, not a grammar). What an agent is taught and what it receives are pinned
+  to one artifact by a drift gate that instantiates every taught placeholder and
+  feeds it back through the codec
+  (`packages/shared/tests/platform-prompt-delivery-target.test.ts`).
+- **Two doors are still route-anchored, not addressed (#task:2030 residual).**
+  `thread follow` / `thread unfollow` take `--root <message_id>` and resolve it
+  within the CALLING conversation (`--route-conversation-id`'s `:cid`), so a
+  cluster in another conversation is unfollowable by address — the only
+  remaining place where a coordinate is relative to the credential.
+  The AgentSlot `--route-conversation-id` anchor itself is the same debt seen
+  from the transport side: it exists because those doors, and the daemon's
+  per-conversation session routing, still need an ambient conversation. #2030
+  removes the anchor and the runtime-scope banner
+  (`packages/shared/src/runtime-scope-banner.ts`) together.
 - **Task notice suffix.** When the delivered row is a task **system
   event** (task created, claimed, status-changed, or **edited**), the header
   gains a trailing ` task=#<number> status=<status>` **inside the brackets**

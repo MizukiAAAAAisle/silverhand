@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -18,7 +19,7 @@ function bootstrap() {
   const { db, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
   const workspace = workspaces.insert({
-    name: 'att-ws',
+    name: fixedWorkspaceName('att-ws'),
     description: null,
   });
   const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId, 'local');

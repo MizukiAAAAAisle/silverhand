@@ -235,25 +235,35 @@ const FrameIdSchema = z.string().min(1);
 // undirected framing — with no error on either side.
 // Bumps alongside HOST_PROTOCOL_VERSION (11→12). No shim.
 //
-// v12 (#task:2015): server commands carry the claimed runtime generation and
-// status-mutating daemon events echo it back. Without the field the backend
-// cannot bind projection/finalize to one custody token, so old outbound peers
-// are rejected at ready admission rather than bridged.
-// v13 (#task:2015 review): runtime_status rows and destructive stop/clear
-// commands are generation-bound. Older peers must fail at attach.
-// v14 (#task:2019): every runtime command/snapshot/event carries the same
-// discriminated RuntimeScope that owns session identity and custody.
-// v15 (#task:2019 review): delivery consumed/failed settlements are generation-
-// bound too. Without it, a delayed N ack can settle a durable inbox row that
-// the backend already reclaimed for N+1.
-// v16 (#task:2021 P4-3): the delivery header's `target` is an absolute
-// `#conv:<id>[/thread:<root>]` derived per row, and `channel` is retired.
-// Framing is unchanged; the incompatibility is the same one v11 had — the daemon
-// teaches the target form from its own bundled `@silverhand/shared` while the
-// backend emits it, so a mixed pair sends an agent's reply into whichever
-// conversation it assumed instead of the one the message arrived on, with no
-// error on either side. Bumps alongside HOST_PROTOCOL_VERSION (16→17). No shim.
-export const OUTBOUND_PROTOCOL_VERSION = 16;
+// v12 (agent-scoped sessions + one absolute address: #task:2015, #task:2019,
+// #task:2021) — ONE epoch for the whole unreleased cutover, mirroring
+// `HOST_PROTOCOL_VERSION` v13, which carries the full rationale. The number is an
+// equality sentinel on a PUBLISHED boundary: v11 is on published history and may
+// not be joined, everything after it in this tree is unreleased, and two peers
+// built from the same unreleased tree are never a mixed pair.
+//
+//   - GENERATION-BOUND CUSTODY (#task:2015): server commands carry the claimed
+//     runtime generation and status-mutating daemon events echo it back;
+//     `runtime_status` rows, destructive stop/clear, and delivery consumed/failed
+//     settlements are all generation-bound. Without it a delayed generation-N ack
+//     can settle a durable inbox row the backend already reclaimed for N+1.
+//   - RUNTIME SCOPE (#task:2019): every runtime command/snapshot/event carries the
+//     same discriminated `RuntimeScope` that owns session identity and custody.
+//   - ABSOLUTE DELIVERY TARGET (#task:2021 P4-3): the delivery header's `target`
+//     is `#conv:<id>[/thread:<root>]` derived per row; `channel` is retired.
+//   - THE SEND DOOR'S SHAPE (#task:2021 P4-4): the backend's agent send endpoint
+//     requires one absolute `target` address string (no `{kind:'channel'}`, no
+//     `reply_to_message_id`, no ambient "here") and answers with the
+//     `conversation_id` it resolved to.
+//
+// The last two carry no framing change, so the attach gate is the whole
+// enforcement: the daemon teaches the target form from its own bundled
+// `@silverhand/shared` while the backend emits it, and a mixed pair sends an
+// agent's reply into whichever conversation it assumed instead of the one the
+// message arrived on — with no error on either side. Bumps alongside
+// HOST_PROTOCOL_VERSION (12→13). No shim: accepting both shapes for a release
+// would keep alive the bare-send spelling whose removal is the point.
+export const OUTBOUND_PROTOCOL_VERSION = 12;
 
 // ── server → daemon command catalogue ──────────────────────────────
 

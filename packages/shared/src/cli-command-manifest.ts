@@ -44,8 +44,10 @@ export const SILVERHAND_COMMAND_DOMAINS = [
           'Chat references: <silverhand://agent/<name>> or ' +
           '<silverhand://human/<name>> addresses a participant (bare @<name> is ' +
           'display only); #<channel> or ' +
-          '#conv:<id> names a place; #task:<n> names a task. Use these sigils ' +
-          'only in message text, never as CLI argument values or inside code. ' +
+          '#conv:<id> names a place; #task:<n> names a task. These sigils belong ' +
+          'in message TEXT, not inside code. CLI arguments take raw values, with ' +
+          'one exception: an address flag (--target) takes a whole delivery ' +
+          'address verbatim, #conv: prefix and all. ' +
           'Wrap URLs next to non-ASCII punctuation in <...> or Markdown link syntax.',
         verbs: [
           'send',
@@ -100,7 +102,7 @@ export const SILVERHAND_COMMAND_DOMAINS = [
       {
         noun: 'member',
         summary:
-          'Add an existing workspace member to the current conversation (channel or thread).',
+          'Add an existing workspace member to an addressed conversation.',
         verbs: ['add'],
       },
     ],

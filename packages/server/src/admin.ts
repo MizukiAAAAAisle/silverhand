@@ -8,6 +8,7 @@ import {
   DatabaseMigrationError,
   resetAdminPassword,
   scanTitleAddresses,
+  scanWorkspaceAddresses,
   type CategorizedLoggers,
   type FileLogger,
 } from '@silverhand/backend';
@@ -74,17 +75,22 @@ export async function runAdminCommand(
       logControl: createLogLevelControl('info'),
     });
 
-    if (parsed.kind === 'scan-title-addresses') {
+    if (parsed.kind === 'scan-title-addresses' || parsed.kind === 'scan-workspace-addresses') {
       // #task:2016 — read-only, and the ONLY admin command that can run against
       // a database the server would refuse to open: its whole purpose is to be
       // usable BEFORE the migration it protects. A non-zero exit means "there is
       // something to fix", so a pre-upgrade script can gate on it; it is not an
       // error, which is why the report goes to stdout and nothing is written to
       // stderr.
-      const scan = scanTitleAddresses({
-        dbPath: resolveServerDataPaths(config.dataDir.value).database,
-        logger: loggers.cli,
-      });
+      const scan = parsed.kind === 'scan-title-addresses'
+        ? scanTitleAddresses({
+            dbPath: resolveServerDataPaths(config.dataDir.value).database,
+            logger: loggers.cli,
+          })
+        : scanWorkspaceAddresses({
+            dbPath: resolveServerDataPaths(config.dataDir.value).database,
+            logger: loggers.cli,
+          });
       stdout.write(`${scan.description}\n`);
       return scan.report.defects.length === 0 ? 0 : 1;
     }
@@ -133,6 +139,7 @@ export async function runAdminCommand(
 type ParsedAdminCommand =
   | { kind: 'help' }
   | { kind: 'scan-title-addresses' }
+  | { kind: 'scan-workspace-addresses' }
   | {
       kind: 'reset-password';
       email: string;
@@ -147,7 +154,7 @@ function parseAdminCommand(argv: string[]): ParsedAdminCommand {
   if (!subcommand) {
     throw new AdminCommandError('usage', adminUsage());
   }
-  if (subcommand === 'scan-title-addresses') {
+  if (subcommand === 'scan-title-addresses' || subcommand === 'scan-workspace-addresses') {
     // No flags: the command's answer is a property of the database, and every
     // knob an operator could turn (which rows, which defect classes) would be a
     // way to be told a cleaner story than the truth.
@@ -155,7 +162,7 @@ function parseAdminCommand(argv: string[]): ParsedAdminCommand {
     if (unexpected !== undefined) {
       throw new AdminCommandError('usage', `unknown argument: ${unexpected}`);
     }
-    return { kind: 'scan-title-addresses' };
+    return { kind: subcommand };
   }
   if (subcommand !== 'reset-password') {
     throw new AdminCommandError('usage', adminUsage());
@@ -411,12 +418,14 @@ function adminUsage(): string {
     'Usage:',
     '  silverhand-server admin reset-password --email <email> [--password-from-file <path>]',
     '  silverhand-server admin scan-title-addresses',
+    '  silverhand-server admin scan-workspace-addresses',
     '',
     'Notes:',
     '  --password is intentionally unsupported.',
     '  Without --password-from-file, the command reads a masked TTY prompt.',
     '  scan-title-addresses reads the database without migrating it, so it also',
     '    works before an upgrade; it exits 1 when it reports any defect.',
+    '  scan-workspace-addresses applies the same read-only rule to workspace roots.',
     '',
   ].join('\n');
 }

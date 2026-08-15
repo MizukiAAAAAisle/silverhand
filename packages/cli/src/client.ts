@@ -11,6 +11,7 @@ import {
   AUTH_TOKEN_HEADER,
   internalPaths,
   type AgentListChannelsDto,
+  type AgentCreateChannelInput,
   type AgentFollowThreadInput,
   type AgentFollowThreadOutput,
   type AgentListWorkspacesDto,
@@ -36,7 +37,6 @@ import {
   type ScheduleCreateOutput,
   type ScheduleListInput,
   type ScheduleListOutput,
-  type SendMessageTarget,
   type TaskDetailDto,
   type TaskEditResult,
   type TaskMutationResult,
@@ -92,7 +92,14 @@ export class BackendClient {
   // ── Messaging ────────────────────────────────────────────────────
   sendMessage(input: {
     content: string;
-    target?: SendMessageTarget;
+    /** The addressed stream, verbatim as the actor spelled it (#task:2021
+     *  P4-4). Required, and a raw string on purpose: the grammar has one
+     *  authority (`delivery-target.ts`) and the resolver is the one place that
+     *  turns an address into a stream, so this client re-spells nothing.
+     *
+     *  The route in the path below is unrelated to it — that is the credential's
+     *  conversation, which says who is sending, never where the words go. */
+    target: string;
     seen_up_to_seq?: number;
     stale_event_id?: string;
     stale_resolution_reason?: AgentSendStaleResolutionReason;
@@ -164,11 +171,7 @@ export class BackendClient {
     );
   }
 
-  createChannel(input: {
-    title: string;
-    context_summary: string;
-    initial_prompt: string;
-  }): Promise<{ channel_id: string }> {
+  createChannel(input: AgentCreateChannelInput): Promise<{ channel_id: string }> {
     return this.request(
       'POST',
       internalPaths.agentCreateChannel(this.env.conversationId, this.env.agentId),
@@ -190,6 +193,12 @@ export class BackendClient {
    */
   addConversationMember(input: {
     handle: string;
+    /** WHICH conversation gains the member (#task:2021 P4-4). The path below is
+     *  the credential's route and says who is asking, never where the roster
+     *  change lands. Forwarded verbatim — including a `/thread:` suffix, which
+     *  this door refuses server-side rather than the CLI deciding that a
+     *  membership is or is not a cluster-level thing. */
+    target: string;
   }): Promise<ConversationMembersResponse> {
     return this.request(
       'POST',
@@ -487,10 +496,16 @@ export class BackendClient {
   }
 
   // ── Attachments ──────────────────────────────────────────────────
-  /** Upload a file from disk. Backend derives channel ownership from
-   *  the calling conversation; the agent never specifies channel id. */
+  /** Upload a file from disk to the conversation `target` names.
+   *
+   *  The address travels as a form FIELD beside the bytes rather than in the
+   *  path: the path segments are the credential's `(cid, aid)` — where the
+   *  token was minted — and the destination is now a separate fact
+   *  (#task:2021 P4-4). The route reads the field before the bytes; Hono
+   *  caches the parsed form so nothing is read twice. */
   async uploadAttachment(input: {
     path: string;
+    target: string;
     filename?: string;
     contentType?: string | null;
   }): Promise<AttachmentDto> {
@@ -517,6 +532,10 @@ export class BackendClient {
       this.env.serverUrl +
       internalPaths.agentUploadAttachment(this.env.conversationId, this.env.agentId);
     const form = new FormData();
+    // The address first, verbatim: the CLI does not decompose or normalize it,
+    // so the ONE grammar authority on the server side answers a malformed
+    // token, and a header's `target=` string pastes straight through.
+    form.append('target', input.target);
     // Important: when the agent did NOT pass `--content-type`, leave the
     // Blob's type empty rather than forcing `application/octet-stream`.
     // The backend treats both empty and `application/octet-stream` as

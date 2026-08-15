@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -12,7 +13,7 @@ function bootstrap() {
   const conversations = new ConversationRepo(db);
   const runtimeSlots = new RuntimeSlotRepo(db);
   const workspace = new WorkspaceRepo(db).insert({
-    name: 'runtime-slot-authority',
+    name: fixedWorkspaceName('runtime-slot-authority'),
     description: null,
   });
   const conversation = conversations.insertChannel({

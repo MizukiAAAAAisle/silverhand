@@ -983,9 +983,16 @@ export function createConversationMessagingApp(
         actor: getUserPrincipal(c),
         content: parsed.data.content,
         attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
-        target: parsed.data.reply_to_message_id
-          ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
-          : undefined,
+        // A person's client posts where the person is LOOKING, so the human door
+        // can only express a placement inside this conversation — never a foreign
+        // stream (#task:2021 P4-4). `reply_to_message_id` may be any message in
+        // the cluster; the send transaction normalizes it to the cluster root.
+        destination: parsed.data.reply_to_message_id
+          ? {
+              kind: 'own_reply_cluster',
+              messageId: parsed.data.reply_to_message_id,
+            }
+          : { kind: 'own_main_line' },
       });
       // Echo the committed-message payload VERBATIM — the same
       // `MessageEventPayload` ({ message, projections? }) the post-commit WS

@@ -17,21 +17,19 @@ import { AttachmentSnapshotSchema } from './attachment.js';
 import type { MessageAuthorDto } from './message-author.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
 
-export const MessageSendTargetSchema = z.union([
-  z.object({ kind: z.literal('channel') }).strict(),
-  z.object({ kind: z.literal('thread'), message_id: z.string().min(1) }).strict(),
-]);
-export type MessageSendTarget = z.infer<typeof MessageSendTargetSchema>;
-
-export const LegacySendMessageTargetSchema = z.literal('self');
-export type LegacySendMessageTarget = z.infer<typeof LegacySendMessageTargetSchema>;
-
-export const SendMessageTargetSchema = z.union([
-  MessageSendTargetSchema,
-  LegacySendMessageTargetSchema,
-]);
-export type SendMessageTarget = z.infer<typeof SendMessageTargetSchema>;
-
+/**
+ * A message's placement INSIDE a conversation — the type that used to name where
+ * a write landed — is GONE (#task:2021 P4-4).
+ *
+ * It had no domain left. `{kind:'channel'} | {kind:'thread', message_id}` only
+ * ever meant something relative to a conversation the caller did not spell, so
+ * both of its arms are now one absolute address: the send door took a `target`
+ * string first, the read door second, and `task create` — the last holder, whose
+ * conversation came from a separate `conversation_id` and whose thread came from
+ * this type — third. A single `#conv:<id>[/thread:<root>]` says both, is
+ * validated by ONE resolver, and cannot disagree with itself the way two fields
+ * could.
+ */
 export const AgentStaleResolutionReasonSchema = z.enum([
   'unaffected',
   'revised',
@@ -53,18 +51,40 @@ export type AgentSendStaleResolutionReason = z.infer<
 
 export const AgentSendMessageInputSchema = z.object({
   content: z.string(),
-  /** Public send destination. `channel` is the current channel main line;
-   *  `thread` is keyed by any message id in the target cluster. */
-  target: SendMessageTargetSchema.optional(),
-  /** @deprecated Compatibility alias for pre-`target: {kind:'thread'}`
-   *  agent runtimes. New callers must use `target`. */
-  reply_to_message_id: z.string().min(1).optional(),
-  /** Daemon's assertion of which per-stream boundary `seen_up_to_seq`
-   *  was read against (`'main'` or `thread:<rootMessageId>`). The backend
-   *  independently resolves the stream from `target` and hard-rejects a
-   *  mismatch (§6.4). Observability + safety; absent on a
-   *  freshness-bypass / unknown-target send. */
-  stream_key: z.string().min(1).optional(),
+  /**
+   * WHERE this message goes — an absolute address, and the only destination
+   * coordinate on this door (#task:2021 P4-4).
+   *
+   * REQUIRED, with no ambient default: the sending conversation is where the
+   * agent's credential lives, not where its words go, and an omitted target used
+   * to mean "here" — the one spelling that becomes wrong the moment an agent
+   * serves more than one stream. The CLI refuses the send before it reaches this
+   * schema (`target_required`) so the correction can name the agent's own stream;
+   * a request that reaches the server without one is a client bug, not a default.
+   *
+   * A STRING, parsed by `parseDeliveryTargetInput` — the grammar has exactly one
+   * authority (`delivery-target.ts`) and this schema deliberately does not
+   * restate any part of it. So no length bound either: the request body is
+   * already bounded, and an address the grammar refuses is `target_malformed`,
+   * which is the same answer a bound would have produced with a worse reason.
+   */
+  target: z.string().min(1),
+  /**
+   * The daemon's assertion of WHICH STREAM `seen_up_to_seq` was read against, as
+   * the canonical id-form token (`#conv:<id>[/thread:<root>]`).
+   *
+   * The backend resolves the stream from `target` independently and hard-rejects
+   * a mismatch. That is not redundancy: a readable address is resolved by NAME,
+   * and a name may since have been rebound to a different conversation, so the
+   * boundary the daemon measured and the stream the address now denotes can
+   * genuinely differ. Without this field that send would CAS against the wrong
+   * stream's head and silently pass.
+   *
+   * Absent exactly when the sender cannot make the assertion — a freshness
+   * bypass, or a first touch of an address it has never seen resolved — which is
+   * also when `seen_up_to_seq` is absent (§6.4).
+   */
+  asserted_stream: z.string().min(1).optional(),
   /** Runtime-observed target conversation seq for outbound freshness CAS.
    *  The CLI must only forward the value stamped by the runtime delivery
    *  path; it must not read the current latest seq at send time. */
@@ -98,6 +118,13 @@ export type AgentResolveStaleMessageInput = z.infer<
 
 export const AgentSendMessageOutputSchema = z.object({
   message_id: z.string(),
+  /** WHERE the target resolved TO. Required, and the reason the send response is
+   *  the daemon's only source of this fact: a readable address names a stream
+   *  without identifying it, so an agent that sends by name would otherwise never
+   *  learn the coordinate its own freshness cursor is keyed by. The daemon caches
+   *  `address → this` and can then assert a stream on the next send to the same
+   *  token; before that first response it sends loose, on purpose. */
+  conversation_id: z.string(),
   /** Seq assigned by the target conversation allocator. The CLI uses this
    *  only to advance its local observed boundary after its own successful
    *  same-conversation send; it is not a room-current read. */
@@ -114,8 +141,10 @@ export const AgentSendMessageOutputSchema = z.object({
    *  watermark once real admission evidence covers this value. Without it, a
    *  CAS-skipping send in a quiet stream leaves the sender permanently stale
    *  on its own head: nothing ever delivers its own message back to it.
-   *  Absent when the CAS ran (the sender already covers the stream) and for a
-   *  cross-conversation send (the sender tracks no cursor there). */
+   *  Absent exactly when the CAS ran, i.e. when the sender already covered the
+   *  stream it wrote into — which is a fact about that stream, not about whether
+   *  it was the sender's own conversation (#task:2021 P4-4: a cursor is kept per
+   *  stream the agent has observed, wherever it lives). */
   stream_head_before: z.number().int().nonnegative().optional(),
   /** The references in the sent body that addressed NOBODY (#task:2021 P4-5-b)
    *  — see {@link UnresolvedReferencesSchema}, whose single declaration this
@@ -133,6 +162,26 @@ export const AgentCreateChannelInputSchema = z.object({
   title: ChannelTitleSchema,
   context_summary: z.string().min(1),
   initial_prompt: z.string().min(1),
+  /**
+   * WHICH conversation is being FORKED — required, no ambient default
+   * (#task:2021 P4-4).
+   *
+   * A channel is born into a workspace and starts with a roster, and this door's
+   * only source for both is the conversation named here: its placement gives the
+   * workspace, its agent members give the initial roster. So the address is not a
+   * destination — nothing is posted into it — but it IS the operand, the same way
+   * {@link AgentAddConversationMemberInputSchema}'s is, which is why it shares
+   * the name and the grammar: a `target=` token copied out of a delivery header
+   * works here too.
+   *
+   * A `/thread:<root>` suffix is refused (`thread_suffix_not_supported`): a reply
+   * cluster has neither a placement of its own nor a member set, so forking one
+   * would silently mean forking its parent — the ambient guess one level down.
+   * A placement with no workspace (a DM pair, an agent inbox) is refused with
+   * `workspace_scope_required`: there is no workspace for the new channel to be
+   * born into, and picking one would be that same guess.
+   */
+  target: z.string().min(1),
 });
 /** The REQUEST BODY an agent's CLI constructs — `z.input`, for the same reason as
  *  `CreateConversationChannelInput`: the title travels as the string the agent
@@ -141,10 +190,35 @@ export type AgentCreateChannelInput = z.input<
   typeof AgentCreateChannelInputSchema
 >;
 
+/**
+ * Agent-initiated conversation member add (#task:2021 P4-4).
+ *
+ * A door of its own rather than the human `AddConversationMemberByHandleInput`,
+ * because the two differ in exactly the thing P4 is about: a human's request
+ * carries the conversation in its PATH, while an agent's carries it here, as an
+ * address. Sharing {@link HandleSchema} is the part that must not fork — the
+ * candidate namespace is one namespace.
+ */
+export const AgentAddConversationMemberInputSchema = z.object({
+  handle: HandleSchema,
+  /**
+   * WHICH conversation gains the member — required, no ambient default.
+   *
+   * A membership is a fact about a CONVERSATION, so a `/thread:<root>` suffix is
+   * refused (`thread_suffix_not_supported`) rather than quietly dropped: a reply
+   * cluster has no member set, and the way someone joins one is being referenced
+   * or replying. One grammar all the same, so a `target=` token copied out of a
+   * delivery header works here too — as long as it names the main line.
+   */
+  target: z.string().min(1),
+});
+export type AgentAddConversationMemberInput = z.infer<
+  typeof AgentAddConversationMemberInputSchema
+>;
+
 /** Agent voluntary thread follow/unfollow (reply-cluster §5 B / §8). The
  *  thread is identified by a *message id* — the cluster root, or any reply
- *  in it (the server normalizes a reply to its canonical root). */
-export const AgentFollowThreadInputSchema = z.object({
+ *  in it (the server normalizes a reply to its canonical root). */export const AgentFollowThreadInputSchema = z.object({
   root_message_id: z.string().min(1),
 });
 export type AgentFollowThreadInput = z.infer<
@@ -187,29 +261,36 @@ const ReadHistoryOptionalLimitSchema = z.preprocess(
   z.coerce.number().int().positive().max(100).optional().default(50),
 );
 
-/** read_history target. Deliberately decoupled from
- *  `SendMessageTargetSchema` so adding read-only cross-conversation
- *  navigation here does NOT silently widen the surface that allows
- *  cross-conversation message posting. The `{ conversation_id }`
- *  form is membership-gated server-side via `conversation_agents`.
- *
- *  `{ thread_root_id }` is the reply-cluster read form (thread =
- *  reply cluster, `docs/thread-reply-cluster-v1.md`): the value is
- *  a *message id* (the cluster root, or any reply in it — the
- *  server normalizes a reply to its canonical root, symmetric with
- *  the send-side `resolveThreadRoot`). It reads the cluster inside
- *  the root message's channel: the root message (anchor) plus every
- *  reply whose `thread_root_id` equals the root. */
-export const ReadHistoryTargetSchema = z.union([
-  z.literal('self'),
-  z.object({ thread_root_id: z.string().min(1) }),
-  z.object({ conversation_id: z.string().min(1) }),
-]);
-export type ReadHistoryTarget = z.infer<typeof ReadHistoryTargetSchema>;
+/** read_history target — RETIRED by #task:2021 P4-4. The read door now takes the
+ *  same absolute address string as the send door and resolves it through the one
+ *  resolver, so the three relative arms (`'self'`, `{conversation_id}`,
+ *  `{thread_root_id}`) have no reader left. Deliberately not kept as an accepted
+ *  alias: the `{thread_root_id}` arm normalized a mid-cluster id to its root,
+ *  which is precisely the guess the address grammar refuses, so keeping it would
+ *  leave two answers to "which stream is this token". */
 
 export const AgentReadHistoryInputSchema = z
   .object({
-    target: ReadHistoryTargetSchema.optional(),
+    /**
+     * WHICH STREAM to read — the same absolute address the send door takes, and
+     * the only coordinate on this door (#task:2021 P4-4).
+     *
+     * REQUIRED. A read used to default to `'self'`, and to accept two spellings
+     * (`{conversation_id}`, `{thread_root_id}`) that named a stream only
+     * relative to the reading session. All three are gone: an agent that serves
+     * more than one stream has no "here", and a read whose subject is implied is
+     * the same ambient guess the send door just lost. A STRING for the same
+     * reason as `AgentSendMessageInputSchema.target` — one grammar authority
+     * (`delivery-target.ts`), nothing about it restated here.
+     *
+     * A read resolves with the SAME resolver at `intent: 'read'`, which is what
+     * makes the two doors agree about what an address denotes: reads never
+     * allocate (a `dm:@handle` typo cannot conjure an empty pair), and a thread
+     * suffix must name a cluster ROOT — a mid-cluster message id is refused
+     * rather than normalized, so `history` and `send` cannot disagree about
+     * which stream one token means.
+     */
+    target: z.string().min(1),
     before_seq: ReadHistoryOptionalSeqSchema,
     after_seq: ReadHistoryOptionalSeqSchema,
     around_message_id: z.string().min(1).optional(),
@@ -316,11 +397,12 @@ export const ReadHistoryTargetRefSchema = z.object({
   conversation_id: z.string(),
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
-  /** Set only for the reply-cluster read form (`{ thread_root_id }`):
-   *  the canonical cluster root message id. `null` for every other
-   *  target. Lets the caller tell the anchor root apart from its
-   *  replies (the root carries `id === thread_root_id`; replies do
-   *  not) without exposing per-message `thread_root_id`. */
+  /** Set only when the address named a reply cluster (a
+   *  `/thread:<root_message_id>` suffix): the canonical cluster root
+   *  message id. `null` for every other target. Lets the caller tell
+   *  the anchor root apart from its replies (the root carries
+   *  `id === thread_root_id`; replies do not) without exposing
+   *  per-message `thread_root_id`. */
   thread_root_id: z.string().nullable(),
   /** `null` for a target that is not workspace-placed (an agent inbox) — same
    *  rule as {@link MessageRefSchema}. */

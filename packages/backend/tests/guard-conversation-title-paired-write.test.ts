@@ -138,13 +138,17 @@ const IDENTIFIER = String.raw`(?:[A-Za-z_][\w$]*|"(?:[^"]|"")*"|\[[^\]]*\]|\x60[
  *  NOT NULL for a workspace row, so a rebuild cannot drop the key and stay
  *  green). What this gate is for is the write that keeps both columns legal and
  *  makes them DISAGREE. */
-const TABLE = String.raw`(?:conversations\b|"conversations"|\[conversations\]|\x60conversations\x60)`;
+const tablePattern = (table: string): string =>
+  String.raw`(?:${table}\b|"${table}"|\[${table}\]|\x60${table}\x60)`;
 /** `INSERT OR REPLACE` and friends. Optional, so a plain INSERT still matches. */
 const CONFLICT_CLAUSE = String.raw`(?:\s+or\s+(?:abort|fail|ignore|replace|rollback))?`;
 const SCHEMA_QUALIFIER = String.raw`(?:${IDENTIFIER}\s*\.\s*)?`;
-const INSERT_HEAD = String.raw`\b(?:insert${CONFLICT_CLAUSE}\s+into|replace\s+into)\s+${SCHEMA_QUALIFIER}${TABLE}`;
-const UPDATE_HEAD = String.raw`\bupdate${CONFLICT_CLAUSE}\s+${SCHEMA_QUALIFIER}${TABLE}`;
-const WRITE_HEAD_RE = new RegExp(`(?<insert>${INSERT_HEAD})|(?<update>${UPDATE_HEAD})`, 'gi');
+const writeHeadPattern = (table: string): RegExp => {
+  const target = tablePattern(table);
+  const insert = String.raw`\b(?:insert${CONFLICT_CLAUSE}\s+into|replace\s+into)\s+${SCHEMA_QUALIFIER}${target}`;
+  const update = String.raw`\bupdate${CONFLICT_CLAUSE}\s+${SCHEMA_QUALIFIER}${target}`;
+  return new RegExp(`(?<insert>${insert})|(?<update>${update})`, 'gi');
+};
 
 /** The assignments of an UPDATE, cut at the first clause that ends them so a
  *  predicate's `=` is not read as a written column. `FROM` is deliberately NOT a
@@ -390,13 +394,14 @@ function site(
   file: string,
   kind: WriteSite['kind'],
   columns: readonly string[],
+  guardedColumns: ReadonlySet<string>,
 ): WriteSite {
   return {
     file,
     kind,
     titleColumns: columns.filter(
       column =>
-        TITLE_COLUMNS.has(column) || column === UNLISTED_COLUMNS || column === DYNAMIC_COLUMNS,
+        guardedColumns.has(column) || column === UNLISTED_COLUMNS || column === DYNAMIC_COLUMNS,
     ),
     columnCount: columns.filter(
       column =>
@@ -408,9 +413,18 @@ function site(
 /** Every write against the live table in one source text. Exported shape is the
  *  gate's unit under test: `BYPASS_CORPUS` runs through this exact function. */
 export function scanWriteSites(file: string, source: string): WriteSite[] {
+  return scanGuardedWriteSites(file, source, 'conversations', TITLE_COLUMNS);
+}
+
+function scanGuardedWriteSites(
+  file: string,
+  source: string,
+  table: string,
+  guardedColumns: ReadonlySet<string>,
+): WriteSite[] {
   const text = sqlText(source);
   const sites: WriteSite[] = [];
-  for (const head of text.matchAll(WRITE_HEAD_RE)) {
+  for (const head of text.matchAll(writeHeadPattern(table))) {
     const headEnd = (head.index ?? 0) + head[0].length;
     // A statement ends at `;`. The literal's own delimiters are gone by now, so
     // a backtick here is an identifier quote and must NOT end anything.
@@ -425,7 +439,7 @@ export function scanWriteSites(file: string, source: string): WriteSite[] {
     // statement (a `.run()` argument) is not part of the SQL above it.
     const markAt = statement.indexOf(DYNAMIC_MARK.trim());
     const refused = (which: WriteSite['kind']): void => {
-      sites.push(site(file, which, [DYNAMIC_COLUMNS]));
+      sites.push(site(file, which, [DYNAMIC_COLUMNS], guardedColumns));
     };
     if (kind === 'update') {
       const setClause = statement.match(SET_CLAUSE_RE);
@@ -438,7 +452,7 @@ export function scanWriteSites(file: string, source: string): WriteSite[] {
         continue;
       }
       const columns = setClause ? assignedColumns(setClause[1] ?? '') : [];
-      if (columns.length > 0) sites.push(site(file, 'update', columns));
+      if (columns.length > 0) sites.push(site(file, 'update', columns, guardedColumns));
       continue;
     }
     const listAt = statement.search(/\S/);
@@ -450,7 +464,7 @@ export function scanWriteSites(file: string, source: string): WriteSite[] {
         refused('insert');
         continue;
       }
-      sites.push(site(file, 'insert', [UNLISTED_COLUMNS]));
+      sites.push(site(file, 'insert', [UNLISTED_COLUMNS], guardedColumns));
       continue;
     }
     if (markAt >= 0 && markAt < list.end) {
@@ -465,6 +479,7 @@ export function scanWriteSites(file: string, source: string): WriteSite[] {
           .split(',')
           .map(normalizeIdentifier)
           .filter(column => column.length > 0),
+        guardedColumns,
       ),
     );
     // The upsert clause is read from the tail, and a mark ends what is readable
@@ -483,7 +498,7 @@ export function scanWriteSites(file: string, source: string): WriteSite[] {
       continue;
     }
     const columns = assignedColumns(setClause[1] ?? '');
-    if (columns.length > 0) sites.push(site(file, 'upsert', columns));
+    if (columns.length > 0) sites.push(site(file, 'upsert', columns, guardedColumns));
 
   }
   return sites;
@@ -731,5 +746,52 @@ describe('conversations.title / title_key have one production writer (#task:2016
       '// see above\nconst q = \x60UPDATE conversations SET title = ? WHERE id = ?\x60;',
     );
     expect(afterComment.map(target => target.titleColumns)).toEqual([['title']]);
+  });
+});
+
+describe('workspaces.name / name_key have one production writer (#task:2027)', () => {
+  const guarded = new Set(['name', 'name_key']);
+  const sites: WriteSite[] = [];
+  for (const root of SCANNED_ROOTS) {
+    for (const abs of walkSources(root)) {
+      sites.push(...scanGuardedWriteSites(
+        relative(REPO_ROOT, abs),
+        readFileSync(abs, 'utf8'),
+        'workspaces',
+        guarded,
+      ));
+    }
+  }
+
+  it('pins the two terminal births and the paired rename statements', () => {
+    const found = sites
+      .filter(target => target.titleColumns.length > 0)
+      .map(fingerprint)
+      .sort();
+    expect(found).toEqual([
+      'packages/backend/src/repos/workspace-repo.ts insert(9) [name+name_key]',
+      'packages/backend/src/repos/workspace-repo.ts insert(9) [name+name_key]',
+      'packages/backend/src/repos/workspace-repo.ts update(3) [name+name_key]',
+      'packages/backend/src/repos/workspace-repo.ts update(4) [name+name_key]',
+    ].sort());
+  });
+
+  it('inherits quoted/dynamic SQL refusal from the same scanner', () => {
+    const quoted = scanGuardedWriteSites(
+      'probe.ts',
+      'const q = `UPDATE [workspaces] SET \\`name\\` = ?, \\`name_key\\` = ? WHERE id = ?`;',
+      'workspaces',
+      guarded,
+    );
+    expect(shapes(quoted.filter(target => target.titleColumns.length > 0)))
+      .toEqual(['update(2) [name+name_key]']);
+    const dynamic = scanGuardedWriteSites(
+      'probe.ts',
+      "const column = 'name'; const q = 'UPDATE workspaces SET ' + column + ' = ?';",
+      'workspaces',
+      guarded,
+    );
+    expect(shapes(dynamic.filter(target => target.titleColumns.length > 0)))
+      .toEqual([`update(0) [${DYNAMIC_COLUMNS}]`]);
   });
 });

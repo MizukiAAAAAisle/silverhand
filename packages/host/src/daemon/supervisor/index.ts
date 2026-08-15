@@ -16,9 +16,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
   AgentSendMessageOutputSchema,
+  type AddressableId,
+  addressableId,
   buildSystemPromptFor,
   composeRuntimeDeliveryPresentation,
-  CONVERSATION_ADDRESS_PREFIX,
+  formatAgentRuntimeScopeBanner,
+  formatDeliveryTarget,
+  parseDeliveryTargetInput,
   type AgentActivitySnippetKind,
   type AgentRunState,
   decodeObservedSeq,
@@ -117,7 +121,6 @@ import { DaemonTypedError } from '../typed-error.js';
 import type {
   ActivitySnippetKind,
   DeferredEntry,
-  DefaultReplyTarget,
   InitTimeoutReason,
   PendingStaleEvent,
   PullReservation,
@@ -343,16 +346,10 @@ function runtimeActionText(
   text: string,
 ): string {
   if (scope.kind === 'conversation') return text;
-  // Same prefix constant the stdin header's codec uses (#task:2021 P4-3), so
-  // the two agent-facing spellings of a conversation address cannot drift. The
-  // full codec is deliberately NOT used: it takes branded, validated ids, and
-  // this id arrives over the wire, where the frame schema does not constrain id
-  // shape — a compose-time throw here would turn a peer's bad coordinate into a
-  // dead AgentSlot rather than a routed delivery.
-  return (
-    `[runtime_scope=agent target=${CONVERSATION_ADDRESS_PREFIX}${conversationId} `
-    + `workdir=${JSON.stringify(cwd)}]\n\n${text}`
-  );
+  // ONE authority for the banner grammar (#task:2021 P4-4): the same formatter
+  // renders what `platform-prompt.ts` TEACHES an AgentSlot to read, so the route
+  // id an agent extracts and the route id we frame cannot drift apart.
+  return `${formatAgentRuntimeScopeBanner(conversationId, cwd)}\n\n${text}`;
 }
 
 /** Delivery admission is the focus boundary for an AgentSlot. Keep the
@@ -561,32 +558,18 @@ function safeSeq(value: number | undefined): number | null {
 /** Stream key for the channel's main line. */
 const MAIN_STREAM_KEY = 'main';
 
-/** Upper bound on the per-handle reply-target memory. A reply target
- *  beyond this LRU window is treated as "unknown" (Case A loose) — the
- *  send omits seen+stream_key rather than guessing the wrong stream. */
-const REPLY_TARGET_STREAM_CACHE_CAP = 4096;
+/** Upper bound on the per-handle memory of seen cluster roots. A root beyond
+ *  this LRU window is treated as "unseen" (Case A loose) — the send omits its
+ *  freshness boundary rather than claiming an empty cluster it cannot vouch
+ *  for. */
+const SEEN_CLUSTER_ROOT_CACHE_CAP = 4096;
 
-type EffectiveMessageTarget =
-  | { kind: 'channel' }
-  | {
-      kind: 'thread';
-      messageId: string;
-      source?: 'current_default' | 'pending_default';
-    }
-  | { kind: 'ambiguous'; streamKeys: readonly string[] }
-  | { kind: 'legacy'; target: AgentMessageSendParams['target'] };
-
-const CHANNEL_DEFAULT_REPLY_TARGET: DefaultReplyTarget = { kind: 'channel' };
-
-/**
- * Gates the legacy per-turn default-reply-target inference. While `false`, a
- * bare `message send` (no `--target`/`--reply-to`) always resolves to the
- * channel main line and the inference below is retained but never consulted;
- * `--reply-to` resolution and per-stream freshness are independent of this
- * flag. Physically remove the gated legacy inference once dogfood comparison
- * confirms the main-line default.
- */
-const DEFAULT_REPLY_TARGET_INFERENCE_ENABLED = false;
+/** Upper bound on the per-handle name→conversation memo
+ *  ({@link RuntimeHandle.resolvedConversationByAddressHead}). An address head
+ *  evicted from this window costs one loose first touch the next time it is
+ *  addressed, never a wrong stream: the memo is only ever read to KEY freshness,
+ *  and its absence omits it. */
+const RESOLVED_ADDRESS_HEAD_CACHE_CAP = 1024;
 
 /**
  * Internal spawn input for {@link Supervisor.startUnlocked}. Stage 2c made the
@@ -608,65 +591,11 @@ type StartUnlockedParams = RuntimeStartParams & {
   };
 };
 
-function uniqueSortedStreamKeys(streamKeys: readonly string[]): string[] {
-  return [...new Set(streamKeys)].sort();
-}
-
-function streamKeyToThreadRootId(streamKey: string): string | null {
-  return streamKey.startsWith('thread:') ? streamKey.slice('thread:'.length) : null;
-}
-
-function defaultReplyTargetStreamKeys(target: DefaultReplyTarget): string[] {
-  switch (target.kind) {
-    case 'thread':
-      return [target.streamKey];
-    case 'ambiguous':
-      return [...target.streamKeys];
-    case 'channel':
-      return [];
-  }
-}
-
-function ambiguousDefaultTargetErrorBody(
-  streamKeys: readonly string[],
-): string {
-  const candidateTargets = [
-    ...uniqueSortedStreamKeys(streamKeys).flatMap(streamKey => {
-      const root = streamKeyToThreadRootId(streamKey);
-      return root ? [`thread:${root}`] : [];
-    }),
-    'channel',
-  ];
-  return JSON.stringify({
-    error: {
-      code: 'validation_error',
-      message:
-        'bare message send has an ambiguous default target; rerun with an explicit --target',
-      details: {
-        subkind: 'ambiguous_default_target',
-        candidate_targets: candidateTargets,
-        hint:
-          'Use --target thread:<id> for one listed thread, or --target channel for the main line.',
-      },
-    },
-  });
-}
-
 /** The stream a message LIVES in — what its arrival/our own send
  *  advances as the observed boundary. `thread_root_id === null` ⇒ main
  *  line; otherwise the reply cluster rooted at that message. */
 function streamKeyForMessage(threadRootId: string | null | undefined): string {
   return threadRootId ? `thread:${threadRootId}` : MAIN_STREAM_KEY;
-}
-
-/** The stream a reply TO `messageId` is destined for: the cluster it
- *  anchors (reply to a main-line message) or already belongs to (reply
- *  to an existing reply, joining the same root — no nesting). */
-function replyTargetStreamKey(
-  messageId: string,
-  threadRootId: string | null | undefined,
-): string {
-  return `thread:${threadRootId ?? messageId}`;
 }
 
 function parsedStartsTurn(parsed: ParsedEvent): boolean {
@@ -691,7 +620,10 @@ function parseObjectJson(text: string): Record<string, unknown> | null {
 
 function extractStaleConflict(
   bodyText: string,
-): Omit<PendingStaleEvent, 'conversationId'> | null {
+): (Omit<PendingStaleEvent, 'conversationId'> & {
+  /** The target conversation the 409 named, or `null` when it named none. */
+  conversationId: string | null;
+}) | null {
   const parsed = parseObjectJson(bodyText);
   const error = parsed?.['error'];
   if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
@@ -720,7 +652,17 @@ function extractStaleConflict(
     typeof streamKeyRaw === 'string' && streamKeyRaw.length > 0
       ? streamKeyRaw
       : null;
-  return { id, currentSeq, streamKey };
+  // The TARGET conversation the CAS was scoped to (#task:2021 P4-4). Since a
+  // send addresses a stream that need not be the sender's own, the daemon cannot
+  // derive this from the intent — and for a name-shaped address it does not even
+  // know it yet. Absence is `null`, and the caller degrades to the source
+  // coordinate, which makes coverage claims fail closed rather than false.
+  const conversationIdRaw = d['conversation_id'];
+  const conversationId =
+    typeof conversationIdRaw === 'string' && conversationIdRaw.length > 0
+      ? conversationIdRaw
+      : null;
+  return { id, currentSeq, streamKey, conversationId };
 }
 
 // ── agent_stale_receive (#task:1614) ────────────────────────────────
@@ -1074,12 +1016,6 @@ export class Supervisor implements SupervisorContract {
         );
       }
     }
-    // Legacy comparator upkeep: dormant while the inference gate is off, since
-    // pendingDefaultReplyTarget is only ever populated under the gate.
-    if (handle.pendingDefaultReplyTarget !== undefined) {
-      handle.defaultReplyTarget = handle.pendingDefaultReplyTarget;
-      handle.pendingDefaultReplyTarget = undefined;
-    }
   }
 
   private streamStorageKey(
@@ -1092,150 +1028,99 @@ export class Supervisor implements SupervisorContract {
       : streamKey;
   }
 
-  /** Record where a future `--reply-to <messageId>` should land, keeping
-   *  the per-handle memory bounded (insertion-order LRU). */
-  private rememberReplyTargetStream(
+  /** Record that this session has seen the message a cluster is rooted at,
+   *  keeping the per-handle memory bounded (insertion-order LRU). Read only to
+   *  decide whether an addressed cluster is one this session can vouch for (see
+   *  {@link RuntimeHandle.seenClusterRootIds}). */
+  private rememberSeenClusterRoot(
     handle: RuntimeHandle,
-    messageId: string,
-    streamKey: string,
+    rootMessageId: string,
   ): void {
-    const map = handle.replyTargetStreamByMessageId;
-    map.delete(messageId);
-    map.set(messageId, streamKey);
-    while (map.size > REPLY_TARGET_STREAM_CACHE_CAP) {
+    const roots = handle.seenClusterRootIds;
+    roots.delete(rootMessageId);
+    roots.add(rootMessageId);
+    while (roots.size > SEEN_CLUSTER_ROOT_CACHE_CAP) {
+      const oldest = roots.values().next().value;
+      if (oldest === undefined) break;
+      roots.delete(oldest);
+    }
+  }
+
+  /** Remember what a name-shaped address head resolved to, keeping the memo
+   *  bounded (insertion-order LRU, same shape as the reply-target memory). */
+  private rememberResolvedAddressHead(
+    handle: RuntimeHandle,
+    memoKey: string,
+    conversationId: string,
+  ): void {
+    const map = handle.resolvedConversationByAddressHead;
+    map.delete(memoKey);
+    map.set(memoKey, conversationId);
+    while (map.size > RESOLVED_ADDRESS_HEAD_CACHE_CAP) {
       const oldest = map.keys().next().value;
       if (oldest === undefined) break;
       map.delete(oldest);
     }
   }
 
-  /** Gated legacy comparator ONLY (see DEFAULT_REPLY_TARGET_INFERENCE_ENABLED).
-   *  Infers a per-turn bare-send default from a wake batch: no thread turn →
-   *  main, one thread → that thread, multiple threads → ambiguous. The active
-   *  path never calls this — bare sends resolve to main; the paired helpers
-   *  ({@link mergePendingDefaultReplyTarget}, `ambiguousDefaultTargetErrorBody`)
-   *  are likewise gate-only. Remove the cluster with the gated inference. */
-  private inferDefaultReplyTarget(
-    deliveries: readonly RuntimeDelivery[] | undefined,
-  ): DefaultReplyTarget | undefined {
-    if (!deliveries || deliveries.length === 0) return undefined;
-    const latestByThreadStream = new Map<string, RuntimeDelivery>();
-    let sawTurnDelivery = false;
-    for (const delivery of deliveries) {
-      if (delivery.delivery_kind !== 'turn') continue;
-      sawTurnDelivery = true;
-      if (!delivery.thread_root_id) continue;
-      const deliveryStream = streamKeyForMessage(delivery.thread_root_id);
-      const current = latestByThreadStream.get(deliveryStream);
-      if (!current || delivery.seq >= current.seq) {
-        latestByThreadStream.set(deliveryStream, delivery);
-      }
-    }
-    if (!sawTurnDelivery) return undefined;
-    if (latestByThreadStream.size === 0) return CHANNEL_DEFAULT_REPLY_TARGET;
-    if (latestByThreadStream.size > 1) {
-      return {
-        kind: 'ambiguous',
-        streamKeys: [...latestByThreadStream.keys()].sort(),
-      };
-    }
-    const first = latestByThreadStream.entries().next().value;
-    if (!first) return undefined;
-    const [streamKey, latest] = first;
-    return { kind: 'thread', messageId: latest.message_id, streamKey };
-  }
-
-  private mergePendingDefaultReplyTarget(
+  /**
+   * What this daemon can say about a send address WITHOUT performing a lookup it
+   * has no authority for (#task:2021 P4-4).
+   *
+   * The return value is deliberately weak: a conversation id when the address is
+   * absolute or already learned, `null` otherwise — and `null` is never an error,
+   * it is "key no freshness boundary for this send". The grammar verdict is not
+   * duplicated here either; an unparsable address returns the same `null` and
+   * travels on to the resolver, which owns `target_malformed`.
+   *
+   * `memoKey` identifies the address HEAD by the parsed value's own fields rather
+   * than by re-cutting the raw token, so this function contains no spelling rules:
+   * a workspace+title pair and a `dm:@handle` each key one entry, independent of
+   * the `/thread:` suffix, which needs no resolving because it is already an id.
+   */
+  private resolveSendTargetStream(
     handle: RuntimeHandle,
-    inferred: DefaultReplyTarget | undefined,
-  ): void {
-    if (inferred === undefined) return;
-    const pending = handle.pendingDefaultReplyTarget;
-    if (pending === undefined) {
-      handle.pendingDefaultReplyTarget = inferred;
-      return;
+    rawTarget: string,
+  ): {
+    conversationId: AddressableId | null;
+    threadRootId: AddressableId | null;
+    memoKey: string | null;
+  } {
+    const input = parseDeliveryTargetInput(rawTarget);
+    if (input === null) {
+      return { conversationId: null, threadRootId: null, memoKey: null };
     }
-    if (pending.kind === 'ambiguous' || inferred.kind === 'ambiguous') {
-      const streamKeys = [
-        ...defaultReplyTargetStreamKeys(pending),
-        ...defaultReplyTargetStreamKeys(inferred),
-      ];
-      handle.pendingDefaultReplyTarget =
-        streamKeys.length === 0
-          ? { kind: 'ambiguous', streamKeys: [] }
-          : { kind: 'ambiguous', streamKeys: uniqueSortedStreamKeys(streamKeys) };
-      return;
-    }
-    if (pending.kind === 'channel') {
-      handle.pendingDefaultReplyTarget = inferred;
-      return;
-    }
-    if (inferred.kind === 'channel') {
-      handle.pendingDefaultReplyTarget = pending;
-      return;
-    }
-    handle.pendingDefaultReplyTarget =
-      pending.streamKey === inferred.streamKey
-        ? inferred
-        : {
-            kind: 'ambiguous',
-            streamKeys: uniqueSortedStreamKeys([pending.streamKey, inferred.streamKey]),
-          };
-  }
-
-  private effectiveMessageTarget(
-    handle: RuntimeHandle,
-    params: AgentMessageSendParams,
-  ): EffectiveMessageTarget {
-    if (params.reply_to_message_id !== undefined) {
-      return { kind: 'thread', messageId: params.reply_to_message_id };
-    }
-    const target = params.target;
-    if (target && typeof target === 'object' && 'kind' in target) {
-      return target.kind === 'thread'
-        ? { kind: 'thread', messageId: target.message_id }
-        : { kind: 'channel' };
-    }
-    if (target !== undefined) return { kind: 'legacy', target };
-    // Bare send (no --target/--reply-to) resolves to the channel main line.
-    // The legacy per-turn inference below is consulted only when gated on.
-    if (!DEFAULT_REPLY_TARGET_INFERENCE_ENABLED) {
-      return { kind: 'channel' };
-    }
-    if (handle.pendingDefaultReplyTarget) {
-      if (handle.pendingDefaultReplyTarget.kind === 'ambiguous') {
-        return {
-          kind: 'ambiguous',
-          streamKeys: handle.pendingDefaultReplyTarget.streamKeys,
-        };
-      }
-      if (handle.pendingDefaultReplyTarget.kind === 'channel') {
-        return { kind: 'channel' };
-      }
+    if (input.kind === 'stream') {
       return {
-        kind: 'thread',
-        messageId: handle.pendingDefaultReplyTarget.messageId,
-        source: 'pending_default',
+        conversationId: input.stream.conversationId,
+        threadRootId: input.stream.threadRootId,
+        memoKey: null,
       };
     }
-    if (handle.defaultReplyTarget.kind === 'ambiguous') {
-      return { kind: 'ambiguous', streamKeys: handle.defaultReplyTarget.streamKeys };
-    }
-    if (handle.defaultReplyTarget.kind === 'thread') {
-      return {
-        kind: 'thread',
-        messageId: handle.defaultReplyTarget.messageId,
-        source: 'current_default',
-      };
-    }
-    return { kind: 'channel' };
+    const memoKey =
+      input.kind === 'named_stream'
+        // NUL-joined for the same reason `streamStorageKey` is: a name may
+        // contain spaces, so any printable separator would let one pair collide
+        // with another ("a b"+"c" vs "a"+"b c").
+        ? `named:${input.workspace}\u0000${input.title}`
+        : `dm:${input.handle}`;
+    const remembered = handle.resolvedConversationByAddressHead.get(memoKey);
+    return {
+      // Re-branded rather than trusted: the memo holds whatever the backend
+      // answered, and a value the grammar would not accept must not become a
+      // freshness key (it would also be unformattable as `asserted_stream`).
+      conversationId:
+        remembered === undefined ? null : addressableId(remembered),
+      threadRootId: input.threadRootId,
+      memoKey,
+    };
   }
 
   /**
    * Admit a delivered batch into the per-stream observed boundary
    * (reply-cluster §6.4). With structured `deliveries[]` each row
-   * advances (or queues) the stream it lives in and teaches the handle
-   * where a reply to that message would go. Without metadata (legacy
+   * advances (or queues) the stream it lives in and records the cluster it
+   * anchors. Without metadata (legacy
    * backend) we fall back to the scalar high-water on the main stream.
    * `admitNow=false` queues instead of advancing, for a mid-turn batch
    * that becomes precedent only at the next turn boundary.
@@ -1247,24 +1132,16 @@ export class Supervisor implements SupervisorContract {
     admitNow: boolean,
     source: string,
   ): void {
-    // Legacy default-reply-target inference: maintained only while gated on.
-    // Freshness admission and the reply-target cache below are unconditional.
-    if (DEFAULT_REPLY_TARGET_INFERENCE_ENABLED) {
-      const inferredDefault = this.inferDefaultReplyTarget(deliveries);
-      if (admitNow) {
-        handle.defaultReplyTarget = inferredDefault ?? CHANNEL_DEFAULT_REPLY_TARGET;
-        handle.pendingDefaultReplyTarget = undefined;
-      } else {
-        this.mergePendingDefaultReplyTarget(handle, inferredDefault);
-      }
-    }
     if (deliveries && deliveries.length > 0) {
       for (const delivery of deliveries) {
-        this.rememberReplyTargetStream(
-          handle,
-          delivery.message_id,
-          replyTargetStreamKey(delivery.message_id, delivery.thread_root_id),
-        );
+        // A main-line message is the root of the (so far empty) cluster that
+        // could hang off it, and every reply into that cluster would reach this
+        // session too — so seeing it is what licenses `seen=0` there later. A
+        // delivered REPLY teaches nothing of the kind: it names its root
+        // without showing us the root, let alone the rest of the cluster.
+        if (delivery.thread_root_id == null) {
+          this.rememberSeenClusterRoot(handle, delivery.message_id);
+        }
         const streamKey = streamKeyForMessage(delivery.thread_root_id);
         if (admitNow) {
           this.advanceObservedStream(handle, streamKey, delivery.seq, source);
@@ -1394,118 +1271,98 @@ export class Supervisor implements SupervisorContract {
     }
     const pendingStale =
       handle.pendingStaleEvents.get(params.conversation_id) ?? null;
-    // Resolve which per-stream observed boundary this send is anchored to
-    // (reply-cluster §6.4):
-    //  - explicit target        → explicit stream (`channel` or
-    //    `thread:<messageId>`; legacy target shapes remain adapter-only).
-    //  - no explicit target     → the channel main line. A bare send never
-    //    inherits a thread; the per-turn thread/ambiguous fallback below is
-    //    reachable only while the legacy inference gate is on.
-    //  - reply target we saw    → that cluster's stream (known).
-    //  - reply target we did NOT see → unknown (Case A loose, Q1=A): omit
-    //    seen+stream_key so the backend skips freshness for this first-touch
-    //    send instead of falsely stale-ing it.
-    const effectiveTarget = this.effectiveMessageTarget(handle, params);
-    // Legacy-gate-only: the active bare-send path resolves to main and never
-    // yields an ambiguous default.
-    if (effectiveTarget.kind === 'ambiguous') {
-      return {
-        ok: false,
-        status: 422,
-        body_text: ambiguousDefaultTargetErrorBody(effectiveTarget.streamKeys),
-      };
-    }
-    const threadTargetMessageId =
-      effectiveTarget.kind === 'thread' ? effectiveTarget.messageId : undefined;
-    const cachedTargetStreamKey = threadTargetMessageId
-      ? handle.replyTargetStreamByMessageId.get(threadTargetMessageId)
-      : undefined;
-    // A canonical root resolves to `thread:<root>` without an LRU entry once
-    // that stream has actually been observed. Only member→root is
-    // non-derivable and needs replyTargetStreamByMessageId. This keeps a long
-    // session from turning an observed root back into Case A merely because
-    // its cache entry was evicted; a truly unseen target still has neither a
-    // cache entry nor an observed stream and remains loose first-touch.
-    const observedCanonicalRootStreamKey = threadTargetMessageId
-      ? replyTargetStreamKey(threadTargetMessageId, null)
-      : undefined;
-    const observedCanonicalRootStorageKey =
-      observedCanonicalRootStreamKey === undefined
+    // WHICH per-stream observed boundary this send is anchored to
+    // (reply-cluster §6.4) — decided entirely by the ADDRESS since #task:2021
+    // P4-4. The daemon resolves only what it can know without a lookup:
+    //
+    //  - the id form           → the stream, exactly, with no resolution at all;
+    //  - a name / `dm:@handle` → the conversation this session already learned
+    //    that head resolves to (memo, fed by earlier send responses);
+    //  - anything else         → nothing. An address this daemon cannot parse is
+    //    not refused here: the resolver owns that verdict, so the send travels on
+    //    and comes back as `target_malformed` rather than as two opinions.
+    //
+    // Whether the resolved stream is one the agent has SEEN is a separate
+    // question, answered below — knowing which stream an address denotes says
+    // nothing about having read it.
+    const target = this.resolveSendTargetStream(handle, params.target);
+    const targetStreamKey = streamKeyForMessage(target.threadRootId);
+    const targetStorageKey =
+      target.conversationId === null
         ? undefined
-        : this.streamStorageKey(
-            handle,
-            params.conversation_id,
-            observedCanonicalRootStreamKey,
-          );
-    const observedRootTargetStreamKey =
-      observedCanonicalRootStreamKey !== undefined
-      && observedCanonicalRootStorageKey !== undefined
-      && handle.observedSeqByStream.has(observedCanonicalRootStorageKey)
-        ? observedCanonicalRootStreamKey
-        : undefined;
-    const targetStreamKey = threadTargetMessageId
-      ? cachedTargetStreamKey ?? observedRootTargetStreamKey
-      : MAIN_STREAM_KEY;
-    const targetKnown = targetStreamKey !== undefined;
-    const targetStorageKey = targetStreamKey === undefined
-      ? undefined
-      : this.streamStorageKey(handle, params.conversation_id, targetStreamKey);
-    const targetObserved =
-      targetStorageKey !== undefined
-      && handle.observedSeqByStream.has(targetStorageKey);
-    // Thread targets become "known" through a root/message mapping even when
-    // the agent observed an empty cluster, so `seen=0` is load-bearing there.
-    // Main has no such mapping step: absence means the agent has never seen
-    // the main stream in this daemon session. Treat that as first-touch and
-    // omit per-stream freshness instead of manufacturing `seen=0`, which
-    // would stale against seq 1..N.
+        : this.streamStorageKey(handle, target.conversationId, targetStreamKey);
+    const targetObservedSeq =
+      targetStorageKey === undefined
+        ? undefined
+        : handle.observedSeqByStream.get(targetStorageKey);
+    // An addressed cluster whose ROOT this session was delivered: its emptiness
+    // is a fact we observed, not a guess, so `seen=0` is load-bearing there and
+    // the CAS can still catch a concurrent first reply into it. (The map's own
+    // docblock states why an entry `R → thread:R` proves exactly that.)
+    const addressedClusterSeenEmpty =
+      target.threadRootId !== null
+      && handle.seenClusterRootIds.has(target.threadRootId);
+    // A boundary is owed only when the daemon can NAME the stream AND has seen
+    // it. Everything else is a first touch that sends no boundary: a
+    // manufactured `seen=0` would stale the agent against seqs 1..N of a stream
+    // it never read, and the backend then merges our own seq through
+    // `stream_head_before` (below) so the skip costs no future send.
     const useFreshnessBoundary =
-      targetKnown && (targetStreamKey !== MAIN_STREAM_KEY || targetObserved);
-    // The present/absent DECISION is already made above (`.has` → targetObserved
-    // → useFreshnessBoundary). The `?? 0` below is therefore NOT absence-
-    // flattening — it is the role-defined seen=0 for a KNOWN-but-empty thread
-    // cluster, reached only once useFreshnessBoundary holds. `seenUpToSeq` is a
-    // plain wire CAS int (not an ObservedSeq brand): it crosses to the backend's
-    // per-stream freshness check.
-    const seenUpToSeq: number | undefined =
-      useFreshnessBoundary
-      && effectiveTarget.kind === 'thread'
-      && effectiveTarget.source === 'pending_default'
-        ? Math.max(
-            handle.observedSeqByStream.get(targetStorageKey!) ?? 0,
-            handle.pendingAdmissionSeqByStream.get(targetStorageKey!) ?? 0,
-          )
-        : useFreshnessBoundary
-          ? (handle.observedSeqByStream.get(targetStorageKey!) ?? 0)
-          : undefined;
-    if (threadTargetMessageId && !targetKnown) {
+      targetStorageKey !== undefined
+      && (targetObservedSeq !== undefined || addressedClusterSeenEmpty);
+    // The present/absent DECISION is made above; the `?? 0` here is the
+    // role-defined seen=0 of a known-but-empty cluster, not absence-flattening.
+    // `seenUpToSeq` is a plain wire CAS int (not an ObservedSeq brand): it
+    // crosses to the backend's per-stream freshness check.
+    const seenUpToSeq: number | undefined = useFreshnessBoundary
+      ? (targetObservedSeq ?? 0)
+      : undefined;
+    // WHICH stream that boundary was measured against, spelled the one way that
+    // is total and comparable: the id form. The backend re-resolves the address
+    // independently and refuses a mismatch — the guard for a name rebound since
+    // the memo learned it. Only formattable because `resolveSendTargetStream`
+    // returns BRANDED ids; an id that could not be branded left
+    // `conversationId` null and took the first-touch path instead.
+    const assertedStream =
+      useFreshnessBoundary && target.conversationId !== null
+        ? formatDeliveryTarget({
+            conversationId: target.conversationId,
+            threadRootId: target.threadRootId,
+          })
+        : undefined;
+    if (!useFreshnessBoundary && !params.freshness_bypass) {
       this.logger.info(
         {
           kind: 'process',
-          action: 'missing_reply_target_message',
+          action: 'send_without_freshness_boundary',
           conversationId: handle.conversationId,
           agent_id: handle.agentId,
-          target_message_id: threadTargetMessageId,
+          // The address itself, not hashed: unlike the backend's refusal log
+          // this daemon is the agent's own process and the token is one its own
+          // runtime just wrote.
+          target: params.target,
+          resolved_conversation_id: target.conversationId,
         },
-        'reply target unknown to daemon — sending without per-stream freshness (Case A)',
+        'send target stream not yet observed by this daemon session — sending without per-stream freshness (Case A loose)',
       );
     }
-    const targetBody =
-      effectiveTarget.kind === 'thread'
-        ? { kind: 'thread', message_id: effectiveTarget.messageId }
-        : effectiveTarget.kind === 'channel'
-          ? { kind: 'channel' }
-          : effectiveTarget.target;
     const body: Record<string, unknown> = {
       content: params.content,
-      ...(targetBody ? { target: targetBody } : {}),
       ...(params.attachment_ids ? { attachment_ids: params.attachment_ids } : {}),
+      // Forwarded VERBATIM: the address the agent spelled is the request, and a
+      // daemon that re-formatted it would be a second grammar between the two
+      // authorities (the CLI's `--target` and the backend's resolver).
+      target: params.target,
       ...(params.freshness_bypass
         ? { freshness_bypass: true }
         : useFreshnessBoundary
           ? {
               seen_up_to_seq: seenUpToSeq,
-              stream_key: targetStreamKey,
+              // Paired with the boundary and never sent alone: the backend
+              // rejects the send if this is not the stream the address resolves
+              // to NOW, which is the only thing standing between a rebound name
+              // and a CAS against a stranger's head.
+              asserted_stream: assertedStream,
             }
           : {}),
       ...(pendingStale
@@ -1536,9 +1393,18 @@ export class Supervisor implements SupervisorContract {
         // normal delivery face (steer = this turn, next-turn-batch = next
         // boundary); admission evidence advances the cursor, and only then
         // does a retry pass the CAS.
+        // Keyed by the SOURCE conversation (the coordinate every agent intent
+        // arrives with, so `stale-receive` / `stale-resolve` can find it), while
+        // the event's own `conversationId` names the TARGET whose cursor the
+        // signal describes — since P4-4 those are not the same conversation. The
+        // target comes from the 409 itself, which is the only party that knows
+        // what a NAME resolved to; without it coverage checks fall back to the
+        // source and therefore fail CLOSED rather than claim a false `batch_covered`.
         handle.pendingStaleEvents.set(params.conversation_id, {
-          ...stale,
-          conversationId: params.conversation_id,
+          id: stale.id,
+          currentSeq: stale.currentSeq,
+          streamKey: stale.streamKey,
+          conversationId: stale.conversationId ?? params.conversation_id,
         });
       } else if (pendingStale) {
         handle.pendingStaleEvents.delete(params.conversation_id);
@@ -1551,32 +1417,31 @@ export class Supervisor implements SupervisorContract {
     if (typeof messageId !== 'string' || messageId.length === 0) {
       throw new Error('backend send-message response missing message_id');
     }
-    // Learn the reply-target stream of both the message we replied to and
-    // our own new message from the backend-resolved root, so a subsequent
-    // `--reply-to` of either resolves to the right stream.
+    // WHERE the words actually landed, per the resolver — the one authority for
+    // what a name denoted at insert time, and required (P4-4): a send whose
+    // stream we cannot name would leave every cursor below keyed off a guess.
+    const landedConversationId = json['conversation_id'];
+    if (typeof landedConversationId !== 'string' || landedConversationId.length === 0) {
+      throw new Error('backend send-message response missing conversation_id');
+    }
     const resolvedRoot =
       typeof json['thread_root_id'] === 'string' ? json['thread_root_id'] : null;
-    // The stream this send actually landed in, per the backend's own root
-    // resolution. For a loose first touch this is the ONLY place it exists:
-    // `targetStreamKey` is undefined precisely because we could not resolve
-    // the target before sending. Undefined for a main-line send, where
-    // `targetStreamKey` is already MAIN_STREAM_KEY.
-    const resolvedThreadStreamKey =
-      threadTargetMessageId !== undefined
-        ? resolvedRoot
-          ? `thread:${resolvedRoot}`
-          : replyTargetStreamKey(threadTargetMessageId, null)
-        : undefined;
-    if (
-      threadTargetMessageId !== undefined
-      && resolvedThreadStreamKey !== undefined
-    ) {
-      this.rememberReplyTargetStream(
-        handle,
-        threadTargetMessageId,
-        resolvedThreadStreamKey,
-      );
-      this.rememberReplyTargetStream(handle, messageId, resolvedThreadStreamKey);
+    const landedStreamKey = streamKeyForMessage(resolvedRoot);
+    // Teach the memo what this NAME resolves to, from the only party with the
+    // authority to say so. Written on EVERY send, not just the first: a rename
+    // that rebound the head is corrected by the next send's answer rather than
+    // by an expiry policy this process could not evaluate.
+    if (target.memoKey !== null) {
+      this.rememberResolvedAddressHead(handle, target.memoKey, landedConversationId);
+    }
+    // A main-line message of our own anchors a cluster nobody has replied to
+    // yet, and any reply to it will reach us as a delivery — so record it as a
+    // cluster root this session has seen. The ROOT we replied INTO is
+    // deliberately NOT recorded: our own send just put a message there, so
+    // claiming "seen empty" for it would stale the agent against itself
+    // (#task:1854).
+    if (resolvedRoot === null) {
+      this.rememberSeenClusterRoot(handle, messageId);
     }
     // Observed-advance asymmetry (Cindy ruling): a send the backend gated with
     // the per-stream CAS proves — by that CAS passing — there is no unseen gap
@@ -1604,9 +1469,15 @@ export class Supervisor implements SupervisorContract {
     // branches, which is exactly the self-stale hole — a first touch of a
     // quiet cluster succeeded and then locked itself out of that cluster
     // forever. It is the SAME shape as a bypass (no CAS ran), so it merges
-    // through the same queue. A response without `stream_head_before` (older
-    // backend, or a send whose seq belongs to a stream we keep no cursor for)
-    // queues nothing and keeps the pre-fix hold.
+    // through the same queue. Since P4-4 `stream_head_before` is owed on EVERY
+    // skipping send (the `cross_target_send` exception is gone) and the landed
+    // stream is always nameable from the response, so the merge no longer has a
+    // silent hole where a skipped CAS queued nothing.
+    //
+    // Both arms key off the LANDED stream, not the addressed one: for a CAS'd
+    // send they are provably the same coordinate (`asserted_stream` matched, or
+    // the send was refused), and for a skipped one the response is the only place
+    // the coordinate exists at all.
     if (
       !params.freshness_bypass &&
       useFreshnessBoundary &&
@@ -1614,23 +1485,21 @@ export class Supervisor implements SupervisorContract {
     ) {
       this.advanceObservedStream(
         handle,
-        targetStreamKey,
+        landedStreamKey,
         messageSeq,
         'message_send_commit',
-        params.conversation_id,
+        landedConversationId,
       );
     } else if (typeof messageSeq === 'number') {
-      const mergeStreamKey = targetStreamKey ?? resolvedThreadStreamKey;
       const headBefore = json['stream_head_before'];
       if (
-        mergeStreamKey !== undefined &&
         typeof headBefore === 'number' &&
         Number.isSafeInteger(headBefore)
       ) {
         const mergeStorageKey = this.streamStorageKey(
           handle,
-          params.conversation_id,
-          mergeStreamKey,
+          landedConversationId,
+          landedStreamKey,
         );
         const entries =
           handle.pendingSkippedCasMergeByStream.get(mergeStorageKey) ?? [];
@@ -1682,6 +1551,7 @@ export class Supervisor implements SupervisorContract {
       ok: true,
       message_id: messageId,
       ...(typeof messageSeq === 'number' ? { message_seq: messageSeq } : {}),
+      conversation_id: landedConversationId,
       thread_root_id: resolvedRoot,
       ...(unresolvedReferences.success && unresolvedReferences.data
         ? { unresolved_references: unresolvedReferences.data }
@@ -1727,13 +1597,16 @@ export class Supervisor implements SupervisorContract {
   }
 
   /** Reply-cluster pull-observe (§6.4 B-light). The CLI fires this after a
-   *  successful `message history --target thread:<root>` so the daemon —
-   *  which never sees the HTTP pull — records that the agent observed the
-   *  cluster: advance the `thread:<root>` observed boundary to the max
-   *  REPLY seq (the caller already excluded the root's main-line seq) and
-   *  map the surfaced ids (root + replies) to this stream so a later
-   *  `--reply-to` of any of them resolves a known stream. Daemon-local
-   *  only — no backend call, never marks a turn. */
+   *  successful `message history --target <address>/thread:<root>` so the
+   *  daemon — which never sees the HTTP pull — records that the agent observed
+   *  the cluster: advance that stream's observed boundary to the max REPLY seq
+   *  (the caller already excluded the root's main-line seq) and remember the
+   *  root as a cluster this session has seen. Daemon-local only — no backend
+   *  call, never marks a turn.
+   *
+   *  The handle is chosen by the SESSION's conversation and the boundary is
+   *  stored under the OBSERVED stream's conversation; see the intent schema for
+   *  why those must not be the same field. */
   async agentStreamObserved(
     params: AgentStreamObservedParams,
   ): Promise<AgentStreamObservedResult> {
@@ -1747,11 +1620,12 @@ export class Supervisor implements SupervisorContract {
       streamKey,
       params.observed_seq,
       'pull_history_observed',
-      params.conversation_id,
+      params.stream_conversation_id,
     );
-    for (const messageId of params.reply_target_messages) {
-      this.rememberReplyTargetStream(handle, messageId, streamKey);
-    }
+    // The pull showed us the cluster itself, which is stronger evidence than a
+    // main-line sighting of its root: if it came back with no replies, `seen=0`
+    // for it is something this session read.
+    this.rememberSeenClusterRoot(handle, params.thread_root_id);
     return { ok: true };
   }
 
@@ -2564,9 +2438,8 @@ export class Supervisor implements SupervisorContract {
       observedSeqByStream: new Map(),
       pendingAdmissionSeqByStream: new Map(),
       pendingSkippedCasMergeByStream: new Map(),
-      replyTargetStreamByMessageId: new Map(),
-      defaultReplyTarget: CHANNEL_DEFAULT_REPLY_TARGET,
-      pendingDefaultReplyTarget: undefined,
+      seenClusterRootIds: new Set(),
+      resolvedConversationByAddressHead: new Map(),
       inputTurnActive: driver.oneShot && !!params.startup_delivery,
       nextTurnReserved: false,
       nextTurnReservedAt: null,
@@ -5038,8 +4911,6 @@ export class Supervisor implements SupervisorContract {
     handle.nextTurnReservedAt = null;
     handle.reservationStallWarned = false;
     this.clearReservationStallTimer(handle);
-    handle.defaultReplyTarget = CHANNEL_DEFAULT_REPLY_TARGET;
-    handle.pendingDefaultReplyTarget = undefined;
   }
 
   /**

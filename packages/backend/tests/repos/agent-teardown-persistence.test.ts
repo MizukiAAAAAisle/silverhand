@@ -32,6 +32,7 @@
  * not do. The `foreign_keys = OFF` falsifier below proves the instrument works:
  * with enforcement off, the same delete leaves every one of those rows behind.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import type { Database as Db } from 'better-sqlite3';
 import { AGENT_CAPABILITIES, fixedConversationTitle } from '@silverhand/shared';
@@ -80,7 +81,7 @@ function bootstrap() {
 
   // The shared regular workspace: rooted on no computer, owned by no agent, and
   // therefore outside what an agent delete may reach.
-  const workspace = workspaces.insert({ name: 'Shared', description: null });
+  const workspace = workspaces.insert({ name: fixedWorkspaceName('Shared'), description: null });
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
     title: fixedConversationTitle('general'),

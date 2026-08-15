@@ -143,11 +143,14 @@ describe('P3 membership sub-app mount — auth-boundary inheritance', () => {
     const channelId = await createChannel(t, reg.workspaceId, 'room', [alice]);
 
     // Default helper translates the public bearer to a valid (channelId, alice)
-    // token. Success + bob present proves the principal's conversationId resolved
-    // to channelId across the mount.
+    // token. Since #task:2021 P4-4 the DESTINATION is the address, not the path,
+    // so what success proves about the mount is narrower and still the point:
+    // `getAgentPrincipal` resolved :cid/:aid across it (otherwise the token check
+    // 401s), and the actor it produced is the one the resolver then judged
+    // participation for.
     const res = await http(t).post(
       internalPaths.agentAddConversationMember(channelId, alice),
-      { handle: '@bob' },
+      { handle: '@bob', target: `#conv:${channelId}` },
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as any;
@@ -166,7 +169,7 @@ describe('P3 membership sub-app mount — auth-boundary inheritance', () => {
     new AgentCapabilityRepo(t.ctx.db).replaceSet(reg.workspaceId, alice, ['read_messages']);
     const res = await http(t).post(
       internalPaths.agentAddConversationMember(channelId, alice),
-      { handle: '@bob' },
+      { handle: '@bob', target: `#conv:${channelId}` },
     );
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({

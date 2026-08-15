@@ -78,6 +78,7 @@ describe('Internal routes — agent schedules', () => {
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const before = Date.now();
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Tomorrow check',
       message: 'check tomorrow',
       spec: { kind: 'once', delay_seconds: 60 },
@@ -100,6 +101,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'heartbeat',
       spec: { kind: 'interval', every_seconds: 60 },
@@ -116,6 +118,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'morning standup',
       spec: { kind: 'cron', expression: '0 9 * * *', timezone: 'Asia/Shanghai' },
@@ -137,16 +140,19 @@ describe('Internal routes — agent schedules', () => {
     const { conversationId, aliceId, bobId } = await setupTwoAgentChannel(t);
     // alice creates two; bob creates one. list under alice must see only hers.
     await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'a1',
       spec: { kind: 'once', delay_seconds: 60 },
     });
     await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'a2',
       spec: { kind: 'once', delay_seconds: 90 },
     });
     await http(t).post(createPath(conversationId, bobId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'b1',
       spec: { kind: 'once', delay_seconds: 120 },
@@ -162,6 +168,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const created = await (await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'one',
       spec: { kind: 'once', delay_seconds: 60 },
@@ -171,6 +178,7 @@ describe('Internal routes — agent schedules', () => {
       schedule_id: created.schedule.id,
     });
     await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'two',
       spec: { kind: 'once', delay_seconds: 90 },
@@ -191,6 +199,7 @@ describe('Internal routes — agent schedules', () => {
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const created = await (
       await http(t).post(createPath(conversationId, aliceId), {
+        target_conversation: `#conv:${conversationId}`,
         title: 'Test schedule',
         message: 'cancel-me',
         spec: { kind: 'once', delay_seconds: 60 },
@@ -213,6 +222,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: '',
       spec: { kind: 'once', delay_seconds: 60 },
@@ -226,6 +236,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once' },
@@ -246,6 +257,7 @@ describe('Internal routes — agent schedules', () => {
       const body: Record<string, unknown> = {
         title: 'Test schedule',
         message: 'x',
+        target_conversation: `#conv:${conversationId}`,
         spec: { kind: 'once', delay_seconds: 600 },
       };
       if (field === 'max_occurrences') body.max_occurrences = 3;
@@ -261,6 +273,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'cron', expression: '@daily', timezone: 'Asia/Shanghai' },
@@ -274,6 +287,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'cron', expression: '0 0 9 * * *', timezone: 'Asia/Shanghai' },
@@ -287,6 +301,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'cron', expression: '0 9 * * *', timezone: 'Mars/Olympus' },
@@ -300,6 +315,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once', delay_seconds: SCHEDULE_MIN_DELAY_SECONDS - 1 },
@@ -312,6 +328,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once', delay_seconds: SCHEDULE_MAX_DELAY_SECONDS + 60 },
@@ -324,6 +341,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'interval', every_seconds: 60 },
@@ -339,6 +357,7 @@ describe('Internal routes — agent schedules', () => {
     // Burn the per-agent active cap with cheap one-shots.
     for (let i = 0; i < SCHEDULE_MAX_ACTIVE_PER_AGENT; i++) {
       const r = await http(t).post(createPath(conversationId, aliceId), {
+        target_conversation: `#conv:${conversationId}`,
         title: 'Test schedule',
         message: `slot ${i}`,
         spec: { kind: 'once', delay_seconds: 60 + i },
@@ -346,6 +365,7 @@ describe('Internal routes — agent schedules', () => {
       expect(r.status).toBe(200);
     }
     const overflow = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'overflow',
       spec: { kind: 'once', delay_seconds: 60 },
@@ -369,6 +389,7 @@ describe('Internal routes — agent schedules', () => {
     const { conversationId, aliceId, bobId } = await setupTwoAgentChannel(t);
     const created = await (
       await http(t).post(createPath(conversationId, aliceId), {
+        target_conversation: `#conv:${conversationId}`,
         title: 'Test schedule',
         message: 'alice-only',
         spec: { kind: 'once', delay_seconds: 60 },
@@ -386,6 +407,7 @@ describe('Internal routes — agent schedules', () => {
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const created = await (
       await http(t).post(createPath(conversationId, aliceId), {
+        target_conversation: `#conv:${conversationId}`,
         title: 'Test schedule',
         message: 'twice',
         spec: { kind: 'once', delay_seconds: 60 },
@@ -428,6 +450,7 @@ describe('Internal routes — agent schedules', () => {
       )
       .run(aliceId);
     const res = await http(t).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once', delay_seconds: 60 },
@@ -442,6 +465,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId } = await setupTwoAgentChannel(t);
     const res = await http(t).post(createPath(conversationId, 'no-such-agent'), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once', delay_seconds: 60 },
@@ -461,6 +485,7 @@ describe('Internal routes — agent schedules', () => {
     const carolId = stranger.agent.id as string;
     expect(carolId).not.toBe(aliceId);
     const res = await http(t).post(createPath(conversationId, carolId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once', delay_seconds: 60 },
@@ -472,6 +497,7 @@ describe('Internal routes — agent schedules', () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
     const res = await http(t.app).post(createPath(conversationId, aliceId), {
+      target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once', delay_seconds: 60 },

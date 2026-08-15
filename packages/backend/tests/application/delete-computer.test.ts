@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -94,7 +95,7 @@ async function setup(t: TestApp): Promise<Fixture> {
 
   const workspaces = new WorkspaceRepo(t.ctx.db);
   const workspace = workspaces.insert({
-    name: 'Cascade Workspace',
+    name: fixedWorkspaceName('Cascade Workspace'),
     description: null,
   });
   const agent = new AgentRepo(t.ctx.db).create(

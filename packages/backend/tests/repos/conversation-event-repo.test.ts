@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { fixedConversationTitle } from '@silverhand/shared';
@@ -19,7 +20,7 @@ function bootstrap() {
     'local',
   );
   const workspace = workspaces.insert({
-    name: 'activity',
+    name: fixedWorkspaceName('activity'),
     description: null,
   });
   const channel = conversations.insertChannel({

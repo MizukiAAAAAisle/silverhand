@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   composeRuntimeDeliveryPresentation,
+  fixedConversationTitle,
+  fixedWorkspaceName,
   parseDeliveryTarget,
+  parseDeliveryTargetInput,
+  type AddressFallbackReason,
+  type StreamNaming,
 } from '@silverhand/shared';
 import {
   formatInboxBatch,
   formatInboxBatchPresentation,
   formatStdinMessageHeader,
+  type DeliveryStreamAddressing,
   type MessageLite,
 } from '../../src/runtime/stdin-format.js';
 import { createReferenceMemo } from '../../src/runtime/reference-memo.js';
@@ -27,6 +33,32 @@ const ROOT = 'NbBXIEpDUnSWW48x';
 // derivation for the addressing set. A fresh memo per call keeps these cases
 // independent of each other.
 const REFERENCES = () => createReferenceMemo().referencesOf;
+
+/**
+ * A naming source under the test's control, plus the fallbacks it was told about
+ * (#task:2021 P4-4).
+ *
+ * The default is `id_only`, the arm that renders `#conv:<id>` and counts NOTHING:
+ * every case in this file that is about the header's OTHER fields must not have to
+ * care how the stream is named, and `id_only` is the one arm whose token is a
+ * function of the row alone.
+ *
+ * `fallbacks` is an array rather than a count because WHICH reason was recorded is
+ * the whole point of the record — a renderer that reported every degradation as one
+ * reason would make the dogfood question unanswerable.
+ */
+function addressing(
+  naming: StreamNaming = { kind: 'id_only' },
+): DeliveryStreamAddressing & { fallbacks: AddressFallbackReason[] } {
+  const fallbacks: AddressFallbackReason[] = [];
+  return {
+    namingOf: () => naming,
+    recordFallback: reason => {
+      fallbacks.push(reason);
+    },
+    fallbacks,
+  };
+}
 
 describe('runtime delivery presentation single authority', () => {
   const cases: Array<{ name: string; messages: MessageLite[] }> = [
@@ -108,6 +140,7 @@ describe('runtime delivery presentation single authority', () => {
         'Cindy',
         TOOL,
         REFERENCES(),
+        addressing(),
       ] as const;
       const historical = formatInboxBatch(...args);
       const structured = formatInboxBatchPresentation(...args);
@@ -136,6 +169,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
 
     expect(header).toMatch(
@@ -162,6 +196,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
 
     expect(header).toMatch(
@@ -195,6 +230,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
 
     expect(header).toMatch(
@@ -222,6 +258,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
 
     expect(header).not.toContain('task=');
@@ -249,6 +286,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
 
     expect(header).toContain('task=#7 status=in_progress');
@@ -272,6 +310,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
     expect(header).toMatch(
       new RegExp(
@@ -297,6 +336,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
     const system = formatStdinMessageHeader(
       systemMessage({}),
@@ -304,6 +344,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
     expect(human).not.toContain('computer=');
     expect(system).not.toContain('computer=');
@@ -325,6 +366,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
     expect(header).not.toContain('computer=');
     expect(header).not.toContain('unknown');
@@ -332,18 +374,17 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
 });
 
 /**
- * #task:2021 P4-3 — the header's `target` is an ABSOLUTE address.
+ * #task:2021 — the header's `target` is an ABSOLUTE address, and since P4-4 it is
+ * one the reader may paste back.
  *
- * The three properties that make it one: it is derived per ROW (the formatter
- * has no authority over a row's coordinate, per-call or ambient), it parses back
- * through the codec to the stream it names (so the emitted token is a coordinate
- * and not just a label), and the relative token `channel` is gone everywhere — a
- * header that still emitted it would be naming whichever stream the reader
- * assumed, which is the whole failure this slice removes.
- *
- * What the token is NOT, yet: a destination you can paste into `--target`.
- * Canonical acceptance across the CLI is P4-4; until then an agent reads the
- * token's parts.
+ * The properties that make it one: it is derived per ROW (the formatter has no
+ * authority over a row's coordinate, per-call or ambient), it parses back through
+ * the codec to the stream it names (so the emitted token is a coordinate and not
+ * just a label), the relative token `channel` is gone everywhere — a header that
+ * still emitted it would be naming whichever stream the reader assumed — and every
+ * form the renderer can choose is accepted by the SAME grammar the write surfaces
+ * take (`parseDeliveryTargetInput`), which is what makes "paste it into `--target`"
+ * true rather than aspirational.
  */
 describe('the header target is absolute', () => {
   it('addresses each row by its own stream, even in one batch', () => {
@@ -393,6 +434,7 @@ describe('the header target is absolute', () => {
       'Cindy',
       TOOL,
       REFERENCES(),
+      addressing(),
     );
 
     expect(presentations[0]!.body).toContain(`target=#conv:${CONV} `);
@@ -418,6 +460,7 @@ describe('the header target is absolute', () => {
         agentComputer,
         userName,
         undefined,
+        addressing(),
       );
       const token = /target=(\S+)/.exec(header)![1]!;
       expect(parseDeliveryTarget(token)).toEqual({
@@ -443,6 +486,7 @@ describe('the header target is absolute', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
     expect(header.split(/\s+/).filter(f => f.startsWith('target='))).toEqual([
       `target=#conv:${CONV}/thread:${ROOT}`,
@@ -456,6 +500,7 @@ describe('the header target is absolute', () => {
       agentComputer,
       userName,
       undefined,
+      addressing(),
     );
     expect(header).not.toContain('channel');
   });
@@ -471,6 +516,7 @@ describe('the header target is absolute', () => {
         agentComputer,
         userName,
         undefined,
+        addressing(),
       ),
     ).toThrow(/messages\.conversation_id is not spellable/);
     expect(() =>
@@ -480,8 +526,122 @@ describe('the header target is absolute', () => {
         agentComputer,
         userName,
         undefined,
+        addressing(),
       ),
     ).toThrow(/messages\.thread_root_id is not spellable/);
+  });
+});
+
+/**
+ * #task:2021 P4-4 — which FORM the target takes, and what a fall back costs.
+ *
+ * The renderer's four arms live in the codec and the policy that chooses between
+ * them lives in `application/stream-naming.ts`; what belongs HERE is the contract
+ * between them and the header: whatever the naming says, the emitted token is
+ * accepted by the write surfaces' grammar, and every degradation to the id form is
+ * reported exactly once so the count is neither silent nor doubled.
+ */
+describe('the header target renders the naming it is given', () => {
+  const WORKSPACE = fixedWorkspaceName('silverhand');
+  const TITLE = fixedConversationTitle('UI/UX 优化');
+
+  const forms: Array<{
+    name: string;
+    naming: StreamNaming;
+    token: string;
+    fallback: AddressFallbackReason | null;
+  }> = [
+    {
+      name: 'a named workspace stream spells both names, percent-escaped',
+      naming: { kind: 'named', workspace: WORKSPACE, title: TITLE },
+      // Only what the header's own lexing needs is escaped: `/` becomes `%2F`, so
+      // the segment count stays the grammar, and a space becomes `%20`, so the
+      // token stays one whitespace-free field. Non-ASCII is left RAW — the token
+      // is read by a person as often as by a parser, and `%E4%BC%98%E5%8C%96`
+      // would make a Chinese channel name unrecognizable to its own members.
+      token: '#silverhand/UI%2FUX%20优化',
+      fallback: null,
+    },
+    {
+      name: 'a DirectPair spells the OTHER participant, for this reader only',
+      naming: { kind: 'direct_pair', otherHandle: 'shiki' },
+      token: 'dm:@shiki',
+      fallback: null,
+    },
+    {
+      name: 'an agent inbox spells its id and is NOT counted as a fallback',
+      naming: { kind: 'id_only' },
+      token: `#conv:${CONV}`,
+      fallback: null,
+    },
+    {
+      name: 'an agent-home placement degrades and is counted',
+      naming: { kind: 'unnameable', reason: 'agent_home' },
+      token: `#conv:${CONV}`,
+      fallback: 'agent_home',
+    },
+    {
+      name: 'a name the current domain would refuse degrades and is counted',
+      naming: { kind: 'unnameable', reason: 'unrenderable' },
+      token: `#conv:${CONV}`,
+      fallback: 'unrenderable',
+    },
+  ];
+
+  for (const form of forms) {
+    it(form.name, () => {
+      const source = addressing(form.naming);
+      const header = formatStdinMessageHeader(
+        systemMessage({}),
+        agentName,
+        agentComputer,
+        userName,
+        undefined,
+        source,
+      );
+      expect(header).toContain(`target=${form.token} `);
+      expect(source.fallbacks).toEqual(
+        form.fallback === null ? [] : [form.fallback],
+      );
+    });
+
+    it(`${form.name} — and the token is accepted by the write grammar`, () => {
+      const header = formatStdinMessageHeader(
+        systemMessage({ thread_root_id: ROOT }),
+        agentName,
+        agentComputer,
+        userName,
+        undefined,
+        addressing(form.naming),
+      );
+      // The whole token, thread suffix included: an agent pastes what it read, so
+      // "the head parses" is not the property that matters.
+      const token = /target=(\S+)/.exec(header)![1]!;
+      expect(parseDeliveryTargetInput(token)).not.toBeNull();
+      expect(token.endsWith(`/thread:${ROOT}`)).toBe(true);
+    });
+  }
+
+  it('counts one fallback per framed ROW, not per batch', () => {
+    const source = addressing({ kind: 'unnameable', reason: 'unrenderable' });
+    formatInboxBatchPresentation(
+      [
+        { message: { ...systemMessage({ id: 'm-1' }), metadata: null } },
+        { message: { ...systemMessage({ id: 'm-2' }), metadata: null } },
+      ],
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+      'Cindy',
+      TOOL,
+      REFERENCES(),
+      source,
+    );
+    // Two headers were emitted with the id form, so the window owes two — the
+    // aggregate is the fanout's to hold, and a formatter that deduplicated here
+    // would understate exactly the traffic the count exists to size.
+    expect(source.fallbacks).toEqual(['unrenderable', 'unrenderable']);
   });
 });
 

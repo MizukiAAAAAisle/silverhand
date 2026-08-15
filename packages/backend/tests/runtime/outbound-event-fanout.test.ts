@@ -1,5 +1,6 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { fixedConversationTitle } from '@silverhand/shared';
+import { CONVERSATION_TITLE_MAX_CODE_POINTS, fixedConversationTitle } from '@silverhand/shared';
 import {
   EventFrameSchema,
   KNOWN_CAPABILITIES_V1,
@@ -1147,7 +1148,7 @@ describe('OutboundRuntimeEventFanout', () => {
     const fix = makeFixture({ runtime: 'codex', sessionScope: 'agent' });
     try {
       const workspace = new WorkspaceRepo(fix.db).insert({
-        name: 'second-agent-slot-workspace',
+        name: fixedWorkspaceName('second-agent-slot-workspace'),
         description: null,
       });
       const second = fix.conversations.insertChannel({
@@ -1319,6 +1320,89 @@ describe('OutboundRuntimeEventFanout', () => {
       );
       // ...and the verdicts came from ONE parse of that body.
       expect(vi.mocked(extractMessageReferences).mock.calls).toEqual([[content]]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('spells a header target from the stream names, and windows the fallbacks', async () => {
+    const warnings: Array<Record<string, unknown>> = [];
+    const fix = makeFixture({
+      sessionScope: 'agent',
+      logger: {
+        ...SILENT_LOGGER,
+        warn: (obj: Record<string, unknown>) => warnings.push(obj),
+      },
+    });
+    const windows = (): Array<Record<string, unknown>> =>
+      warnings.filter(w => w.workspace_address_event === 'fallback_window');
+    try {
+      // A nameable stream renders its two names — the end-to-end wiring of
+      // `ConversationRepo.addressFacts` → `streamNamingOf` → the header codec.
+      enqueueMessage(fix, 'nameable');
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+      expect(
+        fix.transport.deliverCalls().at(-1)!.params.text as string,
+      ).toContain('target=#fanout-ws/fanout');
+      // ...and counts nothing, so the window stays silent.
+      expect(windows()).toHaveLength(0);
+
+      // A LEGAL title that no token can carry: 128 astral code points is 512 bytes
+      // before the envelope, and the domain admits it on purpose (#task:2016), so
+      // this is the designed escape rather than a validation hole.
+      const unspellable = fix.conversations.insertChannel({
+        workspaceId: fix.workspaceId,
+        title: fixedConversationTitle(
+          '\u{1F680}'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS),
+        ),
+      });
+      fix.conversations.addAgent(unspellable.id, fix.agentId);
+      for (const content of ['first row', 'second row']) {
+        const msg = fix.messages.insertForConversation({
+          conversationId: unspellable.id,
+          fromKind: 'user',
+          content,
+        });
+        fix.inbox.ensureDelivery(unspellable.id, fix.agentId, msg.id);
+      }
+      await expect(
+        fix.fanout.deliverPending(unspellable.id, fix.agentId),
+      ).resolves.toBe(true);
+
+      const batch = fix.transport.deliverCalls().at(-1)!.params.text as string;
+      // Both rows of the batch carry the permanent form, which the agent can paste
+      // into `--target` unchanged.
+      expect(batch.match(/target=#conv:/g)).toHaveLength(2);
+      expect(batch).toContain(`target=#conv:${unspellable.id}`);
+      // ONE line for the pass, carrying BOTH rows: the count is per message and the
+      // log is per window, which is the whole reason the window exists.
+      expect(windows()).toHaveLength(1);
+      expect(windows()[0]).toMatchObject({
+        total: 2,
+        counts: { token_budget: 2, agent_home: 0, unrenderable: 0 },
+      });
+
+      // A later pass inside the interval is COUNTED and stays silent...
+      const third = fix.messages.insertForConversation({
+        conversationId: unspellable.id,
+        fromKind: 'user',
+        content: 'third row',
+      });
+      fix.inbox.ensureDelivery(unspellable.id, fix.agentId, third.id);
+      await expect(
+        fix.fanout.deliverPending(unspellable.id, fix.agentId),
+      ).resolves.toBe(true);
+      expect(windows()).toHaveLength(1);
+
+      // ...and is still accounted for when the process ends inside that interval.
+      await fix.fanout.close();
+      expect(windows()).toHaveLength(2);
+      expect(windows()[1]).toMatchObject({
+        total: 1,
+        counts: { token_budget: 1 },
+      });
     } finally {
       fix.cleanup();
     }
@@ -2362,7 +2446,7 @@ describe('OutboundRuntimeEventFanout', () => {
     try {
       const workspaces = new WorkspaceRepo(fix.db);
       const peer = workspaces.insert({
-        name: 'peer-ws',
+        name: fixedWorkspaceName('peer-ws'),
         description: null,
       });
       fix.db
@@ -3932,7 +4016,7 @@ function makeFixture(
   const { db, viewerUserId, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
   const workspace = workspaces.insert({
-    name: 'fanout-ws',
+    name: fixedWorkspaceName('fanout-ws'),
     description: null,
   });
   const conversations = new ConversationRepo(db);

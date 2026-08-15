@@ -16,6 +16,7 @@ import type {
   AgentRunState,
   AgentRunTerminalReason,
   RuntimeKind,
+  StreamNaming,
 } from '@silverhand/shared';
 import { isBaselineReasoningEffort } from '@silverhand/shared';
 import {
@@ -106,8 +107,11 @@ import type { HostRuntimeActivityView } from './host-status-read-model.js';
 import {
   formatInboxBatchPresentation,
   sendMessageToolName,
+  type DeliveryStreamAddressing,
 } from './stdin-format.js';
 import { createReferenceMemo } from './reference-memo.js';
+import { streamNamingOf } from '../application/stream-naming.js';
+import { WorkspaceAddressFallbackWindow } from '../observability/workspace-address-log.js';
 import {
   buildRuntimeActionTarget,
   buildRuntimeStartOptions,
@@ -259,6 +263,11 @@ interface PendingDeliveryBatch {
 // Do not feed it into path joins or daemon-local filesystem code.
 const OUTBOUND_SOCKET_SENTINEL = 'outbound-ws';
 
+/** How rarely the address-fallback window may speak. Fifteen minutes: the counts
+ *  answer a dogfood question about naming coverage, so a coarse cadence is the
+ *  point — one line an operator can read, not a trace. */
+const ADDRESS_FALLBACK_FLUSH_INTERVAL_MS = 15 * 60 * 1000;
+
 export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly states = new Map<string, HostFanoutState>();
   private readonly staleEventConnectionsWarned = new Set<string>();
@@ -289,6 +298,24 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    * changes. See `reference-memo.ts` for the bound and that invariant.
    */
   private readonly references = createReferenceMemo();
+  /**
+   * #task:2021 P4-4 — how often a header had to fall back from a readable stream
+   * address to `#conv:<id>`, and why.
+   *
+   * OWNED HERE because this is the only place the header is framed, and counted
+   * rather than logged because the fallback is per MESSAGE: `title-address-log.ts`
+   * names this the one unbounded member of that family and mandates a window. The
+   * window is flushed at most once per {@link ADDRESS_FALLBACK_FLUSH_INTERVAL_MS}
+   * (checked after a framing pass, never per row) and unconditionally in
+   * {@link close}, so a quiet install still reports before the process ends.
+   */
+  private readonly addressFallbacks = new WorkspaceAddressFallbackWindow();
+  /** Zero rather than the construction time, so the FIRST framing pass that
+   *  counted anything speaks at once and only then opens the interval. Deliberate:
+   *  the question the counts answer is "is this happening at all", and the moment
+   *  someone is watching is right after a deploy — a coarse cadence must not turn
+   *  into a coarse first REPORT. */
+  private lastAddressFallbackFlushAt = 0;
 
   constructor(private readonly opts: OutboundRuntimeEventFanoutOptions) {
     this.inbox = opts.persistence.inbox;
@@ -1699,6 +1726,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
 
   async close(): Promise<void> {
     this.states.clear();
+    // The window's last word: a process that ends inside its interval must still
+    // account for what it counted.
+    this.addressFallbacks.flush(this.opts.logger);
     if (this.ownsActivityLog) await this.activityLog?.close();
   }
 
@@ -2375,6 +2405,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
     const driver = getDriver(agent.runtime);
+    const addressing = this.streamAddressing(agentId);
     const format = (rows: readonly RuntimeClaimedInboxDelivery[]) =>
       formatInboxBatchPresentation(
         [...rows],
@@ -2385,8 +2416,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         agent.name,
         sendMessageToolName(),
         message => this.references.referencesOf(message),
+        addressing,
       );
     const formatted = format(claimed);
+    this.maybeFlushAddressFallbacks();
     return {
       deliveryIds: claimed.map(row => row.inboxId),
       deliveredUpToSeq: Math.max(...claimed.map(row => row.message.seq)),
@@ -2412,6 +2445,69 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     const viewerId = this.conversations.singleViewerUserId(conversationId);
     if (!viewerId) return undefined;
     return this.users.nameOf(viewerId) ?? undefined;
+  }
+
+  /**
+   * The naming source for ONE framing pass, for ONE reading agent (#task:2021
+   * P4-4).
+   *
+   * Per pass rather than per instance, unlike {@link references}: a workspace name
+   * and a channel title are MUTABLE, so a naming cached beyond this batch would
+   * keep spelling a renamed stream by an address that no longer resolves — or,
+   * after the old name is taken by someone else, by one that resolves to the wrong
+   * conversation. The cache is keyed by conversation because today's claim is per
+   * stream (so it holds one entry) and agent-scoped drain will make it hold
+   * several; either way it collapses the two reads per stream, not per row.
+   *
+   * Per AGENT because `dm:@handle` is first-person: the same DM row spells
+   * differently for each of its two participants, which is exactly why that arm
+   * exists only in this header.
+   */
+  private streamAddressing(agentId: string): DeliveryStreamAddressing {
+    const namings = new Map<string, StreamNaming>();
+    return {
+      namingOf: message => {
+        const cached = namings.get(message.conversation_id);
+        if (cached) return cached;
+        const naming = this.streamNaming(message.conversation_id, agentId);
+        namings.set(message.conversation_id, naming);
+        return naming;
+      },
+      // Silent by contract — the window decides when anything is said.
+      recordFallback: reason => this.addressFallbacks.record(reason),
+    };
+  }
+
+  private streamNaming(conversationId: string, agentId: string): StreamNaming {
+    const facts = this.conversations.addressFacts(conversationId);
+    // A queued delivery whose conversation row is gone: not counted as a naming
+    // fallback, because nothing about NAMES failed and no cleanup would help.
+    // The id form still addresses the row a reader may quote.
+    if (facts === null) return { kind: 'id_only' };
+    return streamNamingOf(
+      facts,
+      { agentId },
+      {
+        rootOf: workspaceId => this.workspaces.addressRoot(workspaceId),
+        handleOf: endpoint =>
+          endpoint.kind === 'agent'
+            ? this.agents.get(endpoint.id)?.name ?? null
+            : this.users.nameOf(endpoint.id),
+      },
+    );
+  }
+
+  private maybeFlushAddressFallbacks(): void {
+    const now = Date.now();
+    if (now - this.lastAddressFallbackFlushAt < ADDRESS_FALLBACK_FLUSH_INTERVAL_MS) {
+      return;
+    }
+    // Armed by a line that was WRITTEN, not by the attempt: a pass with nothing to
+    // report must leave the window open, or the first real fallback after startup
+    // would wait out a full interval before anyone heard about it.
+    if (this.addressFallbacks.flush(this.opts.logger)) {
+      this.lastAddressFallbackFlushAt = now;
+    }
   }
 
   private hostIdForAgent(agentId: string): string {

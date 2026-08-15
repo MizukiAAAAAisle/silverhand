@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { stream } from '../utils/destination.js';
 
 // #task:1227 ②c — the Activity list (`listActivity` read-model + GET /api/activity).
 // Drives real message sends (so mention_self / unread come from the production
@@ -43,6 +44,7 @@ async function sendAsAgent(
   const result = await t.ctx.conversationMessageService.sendMessage({
     conversationId: channelId,
     actor: { kind: 'agent', agentId, conversationId: channelId },
+    destination: stream(channelId),
     content,
   });
   return result.committed.message.id;
@@ -59,8 +61,8 @@ async function sendThreadReply(
   const result = await t.ctx.conversationMessageService.sendMessage({
     conversationId: channelId,
     actor: { kind: 'agent', agentId, conversationId: channelId },
+    destination: stream(channelId, rootMsgId),
     content,
-    target: { kind: 'thread', message_id: rootMsgId },
   });
   return result.committed.message.id;
 }

@@ -27,7 +27,7 @@ import {
   AddWorkspaceMemberInputSchema,
   UpdateWorkspaceHumanMemberRoleInputSchema,
   AddConversationMemberInputSchema,
-  AddConversationMemberByHandleInputSchema,
+  AgentAddConversationMemberInputSchema,
   type AgentCapability,
   type ConversationMembersReadResponse,
   type WorkspaceHumanMemberDto,
@@ -49,6 +49,7 @@ import { AgentRepo } from '../repos/agent-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
+import type { MessageRepo } from '../repos/message-repo.js';
 import { MembershipService } from '../services/membership-service.js';
 import { addWorkspaceAgentMember } from '../application/add-workspace-agent-member.js';
 import { addWorkspaceHumanMember } from '../application/add-workspace-human-member.js';
@@ -78,6 +79,8 @@ import { type PostCommitEffect, runPostCommitEffects } from '../application/post
 import { publishViewerWorkspacesChanged } from '../application/viewer-workspaces.js';
 import { conversationMemberResultResponse } from './responses.js';
 import { internalAgentRoutePaths } from './internal-agent/paths.js';
+import { resolveConversationTargetForRoute } from './internal-agent/delivery-target.js';
+import type { ConversationCapabilityScope } from './internal-agent/capability-scope.js';
 
 /**
  * Every membership sub-app now reaches persistence through the membership ports
@@ -898,21 +901,32 @@ export function createConversationMembershipApp(
 
 /**
  * Capability-guard port. The internal agent-add gates on
- * `manage_conversation_members`, but the capability primitive `requireAgentCapability`
- * is a cross-cutting concern owned by the capability context, not membership.
- * Membership depends on it as an injected port so this file does not import the
- * provider directly.
+ * `manage_conversation_members`, but the capability primitive
+ * `requireAgentConversationCapability` is a cross-cutting concern owned by the
+ * capability context, not membership. Membership depends on it as an injected
+ * port so this file does not import the provider directly.
+ *
+ * PLACEMENT-scoped, not workspace-scoped (#task:2021 P4-4): the destination is
+ * whatever the address resolved to, and a `direct_pair` or an `agent_inbox` has
+ * no `workspace_id` at all. Passing that null into the workspace-grant verifier
+ * would answer `capability_denied` for a conversation whose real answer is "this
+ * operation does not exist here" — a denial standing in for a domain refusal.
  */
-export type RequireAgentCapability = (
+export type RequireAgentConversationCapability = (
   c: Context,
   ctx: BackendContext,
   principal: Principal,
   capability: AgentCapability,
-  workspaceId: string | null | undefined,
+  conversation: ConversationCapabilityScope | null | undefined,
 ) => Response | null;
 
 export interface InternalMembershipRouteDeps extends MembershipRouteDeps {
-  requireAgentCapability: RequireAgentCapability;
+  requireAgentConversationCapability: RequireAgentConversationCapability;
+  /** Needed by ONE thing: resolving the `--target` address of the add
+   *  (#task:2021 P4-4). The resolver reads messages for the thread arm of the
+   *  grammar, which this door refuses — but the port is the resolver's shape, not
+   *  this door's, and narrowing it here would fork the ports. */
+  messages: MessageRepo;
 }
 
 /**
@@ -934,19 +948,42 @@ export function createInternalMembershipApp(
     workspaces,
     conversations,
     membership,
-    requireAgentCapability,
+    requireAgentConversationCapability,
   } = deps;
 
   app.post(internalAgentRoutePaths.members, async c => {
     const body = await c.req.json().catch(() => ({}));
-    const parsed = AddConversationMemberByHandleInputSchema.safeParse(body);
+    const parsed = AgentAddConversationMemberInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const principal = getAgentPrincipal(c);
+    // The DESTINATION comes from the address, not from the credential's path
+    // (#task:2021 P4-4). Resolved with a READ intent on purpose: this door never
+    // delivers anything, and the one allocating arm (`dm:@handle`) would open a
+    // pair only to have the use case refuse it as
+    // `conversation_member_add_unsupported` — a conversation left behind a
+    // refusal. So an address naming a pair that does not exist is simply
+    // unresolved here.
+    const resolved = resolveConversationTargetForRoute(c, deps, {
+      address: parsed.data.target,
+      operation: 'member_add',
+      intent: 'read',
+      now: Date.now(),
+    });
+    if (!resolved.ok) return resolved.response;
+    const conversationId = resolved.target.stream.conversationId;
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'manage_conversation_members',
-        conversations.get(principal.conversationId)?.workspace_id);
+      // Capability is judged on the DESTINATION, for the same reason the send and
+      // task doors judge it there: holding `manage_conversation_members` in the
+      // workspace an agent happens to be RUNNING in does not authorize a roster
+      // change in another one. Placement-scoped, so a pair or an inbox reaches the
+      // use case and is refused as `conversation_member_add_unsupported` — the
+      // truth about a fixed roster — instead of being denied a capability that was
+      // never the reason it cannot be done.
+      const denied = requireAgentConversationCapability(c, ctx, principal,
+        'manage_conversation_members',
+        conversations.getIdentity(conversationId));
       if (denied) return denied;
     }
     const result = await addConversationMember({
@@ -958,9 +995,9 @@ export function createInternalMembershipApp(
       membershipPersistence: deps.membershipPersistence,
       membership,
     }, {
-      conversationId: principal.conversationId,
+      conversationId,
       principal,
-      member: parsed.data,
+      member: { handle: parsed.data.handle },
     });
     return conversationMemberResultResponse(c, result);
   });

@@ -296,9 +296,9 @@ export class TaskService {
 
   async createTasks(input: CreateTasksInput): Promise<CreateTasksResult> {
     // NOTE: `input.conversationId` is the DESTINATION conversation, which the
-    // route resolves from an explicit `--conversation-id` (cross-conversation) or
-    // defaults to the agent's current conversation. It deliberately does NOT
-    // have to equal `actor.conversationId` — so we do NOT call
+    // agent route resolves from the required `target` address (#task:2021 P4-4)
+    // and the human route takes from its explicit selector. It deliberately does
+    // NOT have to equal `actor.conversationId` — so we do NOT call
     // `assertActorConversationMatch` here (unlike the message services). The
     // membership floor below (agent :getAgent / human :userCanAccessConversation,
     // both against the destination) is the authorization boundary; the route has
@@ -338,15 +338,17 @@ export class TaskService {
         return { error: 'not_conversation_member' };
       }
     }
-    let threadRootId: string | null = null;
-    const targetMessageId = this.taskThreadTargetMessageId(input);
-    if (targetMessageId) {
-      const target = this.read.fetchMessageRef(targetMessageId);
-      if (!target || target.conversation_id !== input.conversationId) {
-        return { error: 'reply_target_not_found' };
-      }
-      threadRootId = target.thread_root_id ?? target.id;
-    }
+    // Where the notices land inside the destination. The agent door resolved it
+    // out of the same address as `conversationId` (a cluster ROOT of THAT
+    // conversation, never a mid-cluster reply widened to one); the human door
+    // files on the main line. Re-fetching the message to re-decide that would be a
+    // second opinion on a question this aggregate does not own — and the two would
+    // then be able to disagree. What the DB still guarantees underneath is
+    // existence alone (`messages.thread_root_id` is a self-FK, so an id that names
+    // no message aborts the write); belonging-to-this-conversation and
+    // being-a-root are the resolver's, and it is the only caller that can supply a
+    // non-null value here (#task:2021 P4-4).
+    const threadRootId: string | null = input.threadRootId ?? null;
 
     // The BOARD is placement-derived (P0-f §4.4): a workspace conversation
     // files onto its WorkspaceBoard, a DirectPair onto its own board, and the
@@ -380,9 +382,9 @@ export class TaskService {
     const creatorKind = input.actor.kind;
     const creatorAgentId = input.actor.kind === 'agent' ? input.actor.agentId : null;
     const creatorUserId = input.actor.kind === 'user' ? input.actor.userId : null;
-    // Cross-conversation create: an agent filed this task from a DIFFERENT
-    // conversation than the destination it lands in (explicit
-    // `--conversation-id`). This drives the single-source `cross_conversation`
+    // Cross-conversation create: an agent filed this task against a DIFFERENT
+    // stream than the one its session is anchored in (its `target` named another
+    // conversation). This drives the single-source `cross_conversation`
     // metadata bit AND the agent-facing narration below; it carries no origin
     // id/title (privacy invariant). A cross-conversation create can never be
     // claimed (the route rejects `--claim` + cross with `cross_conversation_claim`),
@@ -539,11 +541,6 @@ export class TaskService {
       return { error: 'source_conflict', existing_task: existing };
     }
     return null;
-  }
-
-  private taskThreadTargetMessageId(input: CreateTasksInput): string | undefined {
-    return input.legacyReplyToMessageId
-      ?? (input.target?.kind === 'thread' ? input.target.message_id : undefined);
   }
 
   // ── Claim ───────────────────────────────────────────────────────

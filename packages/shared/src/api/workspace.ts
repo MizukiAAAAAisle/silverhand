@@ -97,13 +97,13 @@ export const CreateWorkspaceInputSchema = z.object({
    *  separately; including them here is harmless (`INSERT OR IGNORE`). */
   member_user_ids: z.array(z.string()).default([]),
 });
-export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
+export type CreateWorkspaceInput = z.input<typeof CreateWorkspaceInputSchema>;
 
 export const UpdateWorkspaceInputSchema = z.object({
   name: WorkspaceNameSchema.optional(),
   description: z.string().nullable().optional(),
 }).refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
-export type UpdateWorkspaceInput = z.infer<typeof UpdateWorkspaceInputSchema>;
+export type UpdateWorkspaceInput = z.input<typeof UpdateWorkspaceInputSchema>;
 
 /** Body for `PATCH /api/workspaces/:id/archive`. Toggle-shaped instead of
  *  separate archive / unarchive endpoints — the UI flips a flag, the

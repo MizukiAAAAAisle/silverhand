@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
   fixedConversationTitle,
@@ -87,7 +88,7 @@ function bootstrap(
   });
 
   const workspace = workspaces.insert({
-    name: 'eng',
+    name: fixedWorkspaceName('eng'),
     description: null,
   });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
@@ -199,7 +200,13 @@ describe('TaskService.createTasks', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'thread task' }],
-        target: { kind: 'thread', message_id: reply.id },
+        // A ROOT, because that is the only thing this input can now be: the door
+        // resolves `/thread:<root>` against the addressed conversation and refuses
+        // a mid-cluster reply id instead of widening it, so the widening the
+        // service used to do has no caller left (#task:2021 P4-4). `reply` stays
+        // in the fixture as the cluster's second message — the assertions below
+        // are about a task filed into a cluster that already has replies.
+        threadRootId: root.id,
       });
 
       expect('tasks' in result).toBe(true);
@@ -228,45 +235,14 @@ describe('TaskService.createTasks', () => {
     }
   });
 
-  it('createTasks with a missing or cross-conversation thread target fails without inserting', async () => {
-    const t = bootstrap();
-    try {
-      const other = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        title: fixedConversationTitle('other'),
-      });
-      t.conversations.addAgent(other.id, t.alice.id);
-      const otherMsg = t.messages.insertForConversation({
-        conversationId: other.id,
-        fromKind: 'agent',
-        fromAgentId: t.alice.id,
-        content: 'other channel message',
-      });
-
-      const missing = await t.service.createTasks({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
-        tasks: [{ title: 'missing target' }],
-        target: { kind: 'thread', message_id: 'missing-message' },
-      });
-      expect(missing).toEqual({ error: 'reply_target_not_found' });
-
-      const cross = await t.service.createTasks({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
-        tasks: [{ title: 'cross target' }],
-        target: { kind: 'thread', message_id: otherMsg.id },
-      });
-      expect(cross).toEqual({ error: 'reply_target_not_found' });
-
-      const count = t.db
-        .prepare<[], { count: number }>(`SELECT COUNT(*) AS count FROM tasks`)
-        .get();
-      expect(count?.count).toBe(0);
-    } finally {
-      t.cleanup();
-    }
-  });
+  // There is deliberately no test here for a thread root that does not exist, or
+  // that belongs to another conversation. `threadRootId` is no longer a message id
+  // this aggregate looks up and second-guesses: the ONE resolver decides, at the
+  // door, that a `/thread:<root>` suffix names a root of the addressed
+  // conversation, and refuses `thread_not_in_target` before any service call
+  // happens (#task:2021 P4-4). The coverage moved with the authority — see
+  // `tests/routes/tasks.test.ts` ("a thread suffix that is not a root of the
+  // addressed conversation").
 
   it('agent not in conversation → not_conversation_member, no insert', async () => {
     const t = bootstrap();
@@ -1124,7 +1100,7 @@ describe('TaskService.list / getTaskDetail', () => {
     const t = bootstrap();
     try {
       const ws2 = t.workspaces.insert({
-        name: 'ws2',
+        name: fixedWorkspaceName('ws2'),
         description: null,
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
@@ -1212,7 +1188,7 @@ describe('TaskService.list / getTaskDetail', () => {
     const t = bootstrap();
     try {
       const ws2 = t.workspaces.insert({
-        name: 'ws2',
+        name: fixedWorkspaceName('ws2'),
         description: null,
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
@@ -1242,7 +1218,7 @@ describe('TaskService.list / getTaskDetail', () => {
     const t = bootstrap();
     try {
       const ws2 = t.workspaces.insert({
-        name: 'ws2',
+        name: fixedWorkspaceName('ws2'),
         description: null,
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
@@ -1303,7 +1279,7 @@ describe('TaskService.list / getTaskDetail', () => {
     const t = bootstrap();
     try {
       const ws2 = t.workspaces.insert({
-        name: 'ws2',
+        name: fixedWorkspaceName('ws2'),
         description: null,
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
@@ -1331,7 +1307,7 @@ describe('TaskService.list / getTaskDetail', () => {
     const t = bootstrap();
     try {
       const ws2 = t.workspaces.insert({
-        name: 'ws2',
+        name: fixedWorkspaceName('ws2'),
         description: null,
       });
       t.workspaces.insertMembership(ws2.id, t.alice.id);
@@ -1817,7 +1793,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         tasks: [{ title: 'task inside thread' }],
-        target: { kind: 'thread', message_id: root.id },
+        threadRootId: root.id,
       });
       const id = taskId(created);
 
@@ -1968,7 +1944,7 @@ function bootstrapTwoWorkspaces() {
   const t = bootstrap();
   // Second regular workspace, alice is NOT a member by default.
   const ws2 = t.workspaces.insert({
-    name: 'platform',
+    name: fixedWorkspaceName('platform'),
     description: null,
   });
   const ws2Channel = t.conversations.insertChannel({
@@ -2672,7 +2648,7 @@ describe('TaskService.editTask', () => {
     try {
       // Second workspace where alice is a full member with her own channel.
       const otherWs = t.workspaces.insert({
-        name: 'other',
+        name: fixedWorkspaceName('other'),
         description: null,
       });
       t.workspaces.insertMembership(otherWs.id, t.alice.id);

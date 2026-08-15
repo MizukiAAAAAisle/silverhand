@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   encodeUserPrincipalHeader,
@@ -1330,7 +1331,7 @@ describe('PUT /api/agents/:id/runtime', () => {
     ).json() as any;
     const agentId: string = created.agent.id;
     const workspace = new WorkspaceRepo(t.ctx.db).insert({
-      name: 'agent-slot-switch-target',
+      name: fixedWorkspaceName('agent-slot-switch-target'),
       description: null,
     });
     const conversations = new ConversationRepo(t.ctx.db);
@@ -1423,7 +1424,7 @@ describe('PUT /api/agents/:id/runtime', () => {
       ).json() as any;
       const agentId: string = created.agent.id;
       const workspace = new WorkspaceRepo(t.ctx.db).insert({
-        name: `dormant-switch-ws-${focusKind ?? 'none'}`,
+        name: fixedWorkspaceName(`dormant-switch-ws-${focusKind ?? 'none'}`),
         description: null,
       });
       const conversations = new ConversationRepo(t.ctx.db);

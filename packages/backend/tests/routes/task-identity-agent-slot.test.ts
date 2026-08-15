@@ -56,7 +56,7 @@ async function createTask(
   const r = (await (
     await h.post(
       `/internal/conversations/${conversationId}/agents/${agentId}/tasks/create`,
-      { tasks: [{ title }] },
+      { target: `#conv:${conversationId}`, tasks: [{ title }] },
       headers ? { headers } : undefined,
     )
   ).json()) as any;

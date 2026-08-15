@@ -203,10 +203,12 @@ export function createRuntimeFanoutDbDeps(deps: {
       listAgents: conversationId => conversations.listAgents(conversationId),
       singleViewerUserId: conversationId =>
         singleConversationViewerUserId(conversations, conversationId),
+      addressFacts: conversationId => conversations.addressFacts(conversationId),
     },
     workspaces: {
       get: workspaceId => workspaces.get(workspaceId),
       listForAgent: agentId => workspaces.listForAgent(agentId),
+      addressRoot: workspaceId => workspaces.addressRoot(workspaceId),
     },
     users: {
       nameOf: userId => users.get(userId)?.name ?? null,

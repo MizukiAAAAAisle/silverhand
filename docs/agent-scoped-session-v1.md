@@ -430,6 +430,51 @@ RuntimePrincipal =
 | `AgentSlot` | **live membership**（每请求查） |
 | `ConversationSlot` | live membership **且** `target == slot.conversation_id`（隔离与今天等价） |
 
+**这张表里的 `target` 是路由坐标，不是投递目的地** —— 上一版写它时一次请求只有一根坐标（route `:cid`
+「是本次请求的 raw target identity」，见下面的路由代数）。P4 把**来源**与**目的地**拆成两根：route `:cid` =
+这次请求从哪来（provenance），body 里的 address = 去哪（destination，权威 `DeliveryTarget`）。
+⇒ 表里那条 `ConversationSlot` 规则由 verifier 对 **route `:cid`** 执行（`auth/runtime-principal-verifier.ts`
+的 `target_unauthorized`），destination 的判据是 `agentParticipates`（`repos/conversation-placement-sql.ts`，
+两支 principal 同一处）。
+
+**「隔离与今天等价」在拆分后必须按事实读，不能按字面读，而事实是逐门不同的**（`origin/main` 逐门核过，
+@Cindy 的 C 提案迫使我把它量清楚；ConversationSlot 凭据 → destination ≠ 凭据那条 conversation）：
+
+| 门 | `origin/main` | 闸门 | P4（**已裁定 C″**） |
+|---|---|---|---|
+| `read-history` / `search` | **已发布跨流**（含跨 workspace） | 目标会话 membership | 两支都保留跨流（改为按址） |
+| `channels list` / `workspaces list` | **已发布跨 workspace 读**（`?workspace_id=`） | `canAgentAccessWorkspace` ＋ `read_messages` | 同 |
+| `tasks/create` | **已发布跨流**（`conversation_id: B`） | 目标 workspace membership | 两支都保留跨流（改为按址） |
+| `schedule create` 的 wake destination | **已发布跨流**（`target_conversation_id: B`） | 目标会话 membership ＋ 目标 workspace `manage_schedules` | 两支都保留跨流（改为按址） |
+| `message send` | 钉死 `principal.conversationId` | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+| `file upload` | 钉死 `principal.conversationId` | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+| `member add` | 钉死 `principal.conversationId` | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+| `channel create`（**fork source ＋ 随它派生的 workspace / roster**） | 钉死 `principal.conversationId`：input 只有 title / context / initial_prompt | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+
+⇒ 把表里的规则无差别套到 destination 上会**回收上半已发货能力**（读三项 ＋ task filing ＋ schedule wake）；
+而把 P4 的按址 reach 无差别给 ConversationSlot 则是**下半四门的新增写能力**（从未获批）。两头都不是「现状」。
+（**订正**：我先前把 `conversation-routes.ts` 里 `agentListChannels` 的 `workspace_id` selector 误读成
+`channel create` 有目标 workspace 字段 —— @Cindy 逐行核出。main 的 create 没有任何跨 workspace / 跨会话入口。）
+
+**裁定（@shiki，2026-08-15，`#conv:QVI9x6vU_K1a9oN9` seq 1090 回「C」；边界口径见同频道 seq 1089/1091 = C″）。**
+conversation-scoped runtime 的 reach = 上表右列，逐门不同：**已发布的
+三项跨流保留，P4 新暴露的四门对 ConversationSlot 限自身 stream**；AgentSlot 七门一律按 participation。
+即：既不回收上半已发货能力，也不新增下半四门的跨流写。**曾并列的 A（两支同判据，代价 = 下半四门新增能力）与
+B（按字面回收上半）已被否决，不是开放项**；本节此前的「未裁定，留给 @shiki」口径作废，下游不得再据它把 A / B
+当可选。
+
+落地形态（裁定的一部分，缺一条就会退化成「一半 A 一半 B」的半状态）：
+
+- reach 不进 resolver —— resolver 只答「哪条流 ＋ 这个 **agent** 能不能用」；
+- 判定表**一处全枚举** `(operation, slot kind) → 目的地域 ∈ {own_stream, agent_participation}`，类型层穷尽
+  （新增门必须补行）：`packages/shared/src/delivery-reach.ts` 的 `DELIVERY_REACH`；
+- 在**解析之后、任何副作用之前**判（`dm:@handle` 的 pair 创建必须在其后，由同表的 `allocation` 关掉）：
+  `packages/backend/src/application/delivery-reach.ts`，唯一调用点在 `resolveDeliveryTargetForRoute`；
+- refusal 用**独立 code** `slot_out_of_scope`（此处 participation 已被证明 ⇒ 不构成 existence oracle）；
+- 教学面全部**派生自同一张表、不抄写**：prompt 按 scope 渲（`platform-prompt.ts`）、CLI `--help` 与错误同源
+  （`packages/cli/src/reach-help.ts`）；门禁 = `delivery-reach-slot-scope.test.ts` / `platform-prompt-reach.test.ts` /
+  `help-reach-boundary.test.ts`。
+
 这不是两套 auth 权威，而是一个类型的两支：签发端由 slot 行决定签哪一支，verifier 先解构再套对应 policy。
 **世代校验必须显式**：`AgentTokenStore` 是 per-process in-memory Map，只有显式 `revoke` / `revokeFor`，
 **没有 generation 概念**（`auth/agent-token-store.ts`）。⇒ verifier 每请求把 token 的 generation 与
@@ -448,19 +493,26 @@ principal 类型（不是两条 auth 权威）。
 
 | 面 | 目标寻址 | 额外 frame |
 |---|---|---|
-| `message send` / `history` / `search` / `react` | `--target`（channel / `thread:<root>` / `dm:@handle`） | —— |
-| `task *` | **全局 `tasks.id`**（§4.5）；`create` 用 `--target`，board 由它派生（§7.2.1） | provenance = source message |
-| `file upload/update/view` | conversation（attachment 本就 conversation-owned） | —— |
-| `schedule create/list/cancel` | 目标 conversation | 触发时唤醒该 target |
-| `thread follow/unfollow`、`member add`、`channel create` | 目标 conversation / workspace | —— |
+| `message send` / `history` | `--target`（一条绝对地址：`#<ws>/<title>` / `#conv:<id>` / `dm:@handle`，可带 `/thread:<root>`） | —— |
+| `message search` | **不按址**：`--workspace-id` / `--conversation-id` 是**范围 selector**（可省 ⇒ 该 agent 有权的全部），不是投递地址 | 见 §7.2.2 |
+| `message react` | **不按址**：目标是 `--message-id` 这个对象，会话由它派生 | —— |
+| `task *` | **全局 `tasks.id`**（§4.5）；`create` 用 `--target`，board 由它派生（§7.2.1）；`list` 只有范围 selector（§7.2.2） | provenance = source message |
+| `file upload` | `--target`（同 `message send` 的地址语汇） | —— |
+| `file update/view` | **不按址**：目标是 `--attachment-id` 这个对象，conversation 由它派生（attachment 本就 conversation-owned） | —— |
+| `schedule create/list/cancel` | 目标 conversation（`create` 用 `--target-conversation <address>`，无默认） | 触发时唤醒该 target |
+| `thread follow/unfollow`、`member add`、`channel create` | 目标 conversation / workspace（`member add` / `channel create` 已按地址；**`thread follow/unfollow` 仍只有 `--root`、在调用方 conversation 内解析 ⇒ #task:2030 残留**） | —— |
 | 任何写文件的工具动作 | —— | **绝对 workdir**（cwd = agent root，相对路径会静默写错） |
 
 #### 7.2.1 task 的坐标：target ≠ board，且 origin 不是服务端能推出来的
 
 「在 `dm:@shiki` 里被要求为频道 A 建 task」这句话里有两个必须分开的坐标，**只有一根是命令参数**：
 
-1. **task target** = `#silverhand/A`（或 `#silverhand/A/thread:<root>`）—— **agent 显式传 `--target`**。
+1. **task target** = `#silverhand/A`（或再带 `/thread:<root>`）—— **agent 显式传 `--target`**。
    它决定 `tasks.conversation_id`、task 事件的投递位置、讨论上下文与 ACL（§4.4）。
+   （落地拼写注记：本节初稿写的 `#<workspace>/<title>` 简写**就是发货形态**，与 chat reference 同一个 `#` 语汇；
+   另加 `#conv:<id>` 与 `dm:@handle` 两式，权威在 `packages/shared/src/delivery-target.ts`。
+   P4-4 曾一度改用 `silverhand://conversation/…` URI，那是**未经裁定的实现擅改**，已按 @Cindy B2 恢复 —— 该 scheme
+   是 #task:2000 的 **principal 寻址**语汇，投递目的地是另一根轴。）
 2. **board** = 由 target conversation 的 placement **派生**（`workspace` 支 → 该 WorkspaceBoard；
    `direct_pair` → DirectPairBoard；`agent_inbox` → 无 board、由 trigger 拒，§4.4）。
    **不提供 `--board`**：两根参数会互相矛盾，而 placement 已是唯一权威。
@@ -494,10 +546,12 @@ ambient board 可依，局部 `#task:<n>` 只在「当前 board 已由 `--target
 
 | 面 | 今天的作用域 | agent-scoped 目标 |
 |---|---|---|
-| `task list` | help 原文「the default is **the actor's current workspace**」（`commands/task.ts:312…`），由 token 路径的 conversation → workspace 推出 | **默认 = 该 agent 有权的全部 board 并集**；`--workspace-id` / `--conversation-id` / `--target` 只做**收窄** |
-| `message history` / `search` | 路径 conversation（`client.ts:198/224`） | **`--target` 必填**（读一条流必须指名，没有"当前流"） |
+| `task list` | help 原文「the default is **the actor's current workspace**」（`commands/task.ts:312…`），由 token 路径的 conversation → workspace 推出 | **默认 = 该 agent 有权的全部 board 并集**；收窄只靠范围 selector `--workspace-id` / `--conversation-id` / `--status` / `--assignee` / `--mine`（**发货形态没有 `--target`**：集合读面没有投递目的地这根轴） |
+| `message history` | 路径 conversation（`client.ts:198`） | **`--target` 必填**（读一条流必须指名，没有"当前流"）；窗口用 `--before-seq` / `--after-seq` / `--around` |
+| `message search` | 路径 conversation（`client.ts:224`） | **不按址**：`--workspace-id` / `--conversation-id` 是可省的范围 selector，省略 ⇒ 该 agent 有权的全部范围 |
 | `channel list` / `workspace list` | 路径 conversation 推 actor 范围（`client.ts:206/213`） | 语义不变（本就是"我能看到什么"），但范围改由 **live membership 并集**派生 |
-| `file view` / `upload` | 路径 conversation | attachment 本就 conversation-owned ⇒ **显式 conversation** |
+| `file view` / `update` | 路径 conversation | **不按址**：`--attachment-id` 即目标，conversation 由 attachment 对象派生（attachment 本就 conversation-owned） |
+| `file upload` | 路径 conversation | 写面 ⇒ **`--target` 必填**（同 `message send`） |
 | `schedule list` | 同上 | 默认全部我拥有的 schedule + 每行带 target |
 
 两条规则（**读写不对称是刻意的**）：

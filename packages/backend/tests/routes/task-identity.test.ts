@@ -66,6 +66,7 @@ async function createTask(
   const h = http(t);
   const r = (await (
     await h.post(`/internal/conversations/${conversationId}/agents/${agentId}/tasks/create`, {
+      target: `#conv:${conversationId}`,
       tasks: [{ title }],
     })
   ).json()) as any;

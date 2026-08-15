@@ -48,6 +48,7 @@ function fakeSearchClient(): {
 
 const env: CliEnv = {
   conversationId: 'conv',
+  slot: 'conversation',
   agentId: 'agent',
   serverUrl: 'http://localhost',
   authToken: 'tok',

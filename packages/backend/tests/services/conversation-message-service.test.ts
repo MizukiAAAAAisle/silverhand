@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -28,6 +29,7 @@ import { extractMessageReferences } from '@silverhand/shared/reference-markdown'
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
+import { stream } from '../utils/destination.js';
 
 // v71 (#task:2014): the mention CC is no longer a post-commit port call but a
 // WRITE INSIDE the send transaction, so the seam this file mocks moved from the
@@ -164,7 +166,7 @@ function bootstrap() {
     logger,
   });
   const workspace = workspaces.insert({
-    name: 'eng',
+    name: fixedWorkspaceName('eng'),
     description: null,
   });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
@@ -232,6 +234,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         // The plain `@handle` alias addresses nobody (#task:2000), so this
         // stays an undirected user message: both agents are woken.
         content: 'hello @alice',
@@ -295,6 +298,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'hello team',
       });
       unsubLocal();
@@ -342,6 +346,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'can you check this, <silverhand://human/local-test>?',
       });
       unsubViewer();
@@ -397,8 +402,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'in the thread: <silverhand://human/local-test> can you take this?',
-        target: { kind: 'thread', message_id: root.id },
       });
       unsubViewer();
 
@@ -436,6 +441,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'note to <silverhand://human/local-test>',
       });
 
@@ -464,6 +470,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'please respond',
       });
       await waitFor(() =>
@@ -515,6 +522,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'first',
       });
       await waitFor(
@@ -527,6 +535,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'second',
       });
       await waitFor(
@@ -554,6 +563,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'wake up',
       });
       await waitFor(() =>
@@ -586,6 +596,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'closed',
         }),
       ).rejects.toMatchObject({ code: 'conversation_closed' });
@@ -601,6 +612,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: 'missing-conversation',
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: 'missing-conversation' },
+          destination: stream('missing-conversation'),
           content: 'missing',
         }),
       ).rejects.toBeInstanceOf(ConversationError);
@@ -620,6 +632,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+          destination: stream(other.id),
           content: 'mismatch',
         }),
       ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
@@ -652,6 +665,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'file',
           attachmentRefs: [{ id: foreign.id }],
         }),
@@ -689,6 +703,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'file',
         attachmentRefs: [{ id: attachment.id, label: 'Image #1' }],
       });
@@ -711,6 +726,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'still starting',
       });
       expect(t.fake.starts).toEqual([]);
@@ -719,7 +735,12 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('rejects user targets before resolving target existence', async () => {
+  it('refuses a human send that addresses another stream, before reading the target', async () => {
+    // The human door can only express a placement inside the person's own
+    // conversation (#task:2021 P4-4), so a `stream` destination from a user is a
+    // client defect. Refused on the POLICY, before the store is asked: answering
+    // it at all — even with a 404 — would make the send path a target-existence
+    // oracle for someone who was never shown the target.
     const t = bootstrap();
     try {
       const spy = vi.spyOn(t.conversations, 'get');
@@ -727,8 +748,8 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: stream('elsewhere0000000'),
           content: 'up',
-          target: 'self',
         }),
       ).rejects.toBeInstanceOf(PolicyError);
       expect(spy).not.toHaveBeenCalled();
@@ -743,6 +764,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'agent reply',
       });
 
@@ -782,6 +804,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
           content: 'stale draft',
           seenUpToSeq: observed.seq,
         }),
@@ -820,6 +843,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'no seen seq',
       });
 
@@ -852,6 +876,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'send anyway',
         seenUpToSeq: observed.seq,
         staleEventId: 'evt-force',
@@ -880,7 +905,13 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('routes a reply into the thread stream rooted at the target message', async () => {
+  it('places a reply in the cluster its destination names, per door', async () => {
+    // The two doors differ here ON PURPOSE (#task:2021 P4-4). An AGENT's
+    // destination is an already-resolved stream whose root the resolver validated,
+    // so the service uses it verbatim — a mid-cluster id never arrives, it is
+    // refused upstream as `thread_root_not_a_root`. A PERSON clicks reply on
+    // whatever message is in front of them, so the human door accepts any member
+    // of the cluster and the send transaction normalizes it to the root.
     const t = bootstrap();
     try {
       const root = t.messages.insertForConversation({
@@ -891,16 +922,20 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'threaded answer',
-        target: { kind: 'thread', message_id: root.id },
       });
       expect(result.committed.message.thread_root_id).toBe(root.id);
-      // a reply to that reply joins the SAME root (no nested threads)
+      // The human door, handed that REPLY's id, joins the same root — no nested
+      // threads, and no second definition of what a cluster is.
       const nested = await t.service.sendMessage({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'user', userId: 'local' },
+        destination: {
+          kind: 'own_reply_cluster',
+          messageId: result.committed.message.id,
+        },
         content: 'follow-up',
-        target: { kind: 'thread', message_id: result.committed.message.id },
       });
       expect(nested.committed.message.thread_root_id).toBe(root.id);
     } finally {
@@ -908,7 +943,12 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('accepts a matching asserted stream_key and rejects a mismatched one', async () => {
+  it('accepts a matching asserted stream and rejects one measured elsewhere', async () => {
+    // The assertion is NOT redundant with the destination (#task:2021 P4-4): a
+    // readable address resolves by NAME, and a name can have been rebound since
+    // the sender last saw it resolve — so the stream it measured `seenUpToSeq`
+    // against and the stream it is now writing into genuinely differ, and the CAS
+    // would compare a seq against the wrong head and PASS.
     const t = bootstrap();
     try {
       const root = t.messages.insertForConversation({
@@ -916,52 +956,84 @@ describe('ConversationMessageService.sendMessage', () => {
         fromKind: 'user',
         content: 'root question',
       });
-      // Matching assertion (daemon resolved thread:<root> for a reply to root)
-      // passes through.
+      // Matching assertion (the daemon measured the reply cluster it is writing
+      // into) passes through.
       const ok = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'threaded answer',
-        target: { kind: 'thread', message_id: root.id },
-        assertedStreamKey: `thread:${root.id}`,
+        assertedStream: `#conv:${t.channel.id}/thread:${root.id}`,
         seenUpToSeq: 0,
       });
       expect(ok.committed.message.thread_root_id).toBe(root.id);
-      // A main-line send asserting 'main' also passes.
+      // A main-line send asserting the main line also passes.
       const mainOk = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'main line',
-        assertedStreamKey: 'main',
+        assertedStream: `#conv:${t.channel.id}`,
         seenUpToSeq: root.seq,
       });
       expect(mainOk.committed.message.thread_root_id).toBeNull();
-      // A mismatched assertion (daemon thinks main, backend resolves a thread)
-      // hard-rejects.
+      // Wrong STREAM inside the right conversation: the daemon measured the main
+      // line and is writing into a cluster.
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id, root.id),
           content: 'wrong stream',
-          target: { kind: 'thread', message_id: root.id },
-          assertedStreamKey: 'main',
+          assertedStream: `#conv:${t.channel.id}`,
           seenUpToSeq: 0,
         }),
-      ).rejects.toMatchObject({ code: 'stream_key_mismatch' });
+      ).rejects.toMatchObject({ code: 'asserted_stream_mismatch' });
+      // Wrong CONVERSATION: the case the retired `stream_key` spelling could not
+      // even express, and the one a rebound name produces.
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
+          content: 'measured elsewhere',
+          assertedStream: '#conv:elsewhere0000000',
+          seenUpToSeq: 0,
+        }),
+      ).rejects.toMatchObject({ code: 'asserted_stream_mismatch' });
+      // Not a stream token at all: fails CLOSED rather than being ignored, so a
+      // sender cannot skip the cross-check by asserting nonsense.
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
+          content: 'garbage assertion',
+          assertedStream: 'main',
+          seenUpToSeq: 0,
+        }),
+      ).rejects.toMatchObject({ code: 'asserted_stream_mismatch' });
     } finally {
       t.cleanup();
     }
   });
 
-  it('rejects a reply whose target is not in the conversation', async () => {
+  // The check lives on the HUMAN door only (#task:2021 P4-4). `own_reply_cluster`
+  // is a message a person clicked reply on, so the service is the first party to
+  // look it up; a `stream` destination arrives from `resolveDeliveryTarget` with
+  // its root already validated, and re-reading it here would be a second
+  // authority over what an address denotes. The resolver's own refusals — root
+  // of another conversation, root of nothing, mid-cluster id — are asserted in
+  // `tests/delivery-target-resolution.test.ts`.
+  it('rejects a reply whose target message is not in the conversation', async () => {
     const t = bootstrap();
     try {
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_reply_cluster', messageId: 'does-not-exist' },
           content: 'orphan reply',
-          target: { kind: 'thread', message_id: 'does-not-exist' },
         }),
       ).rejects.toMatchObject({ code: 'reply_target_not_found' });
     } finally {
@@ -983,13 +1055,14 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'thread reply',
-        target: { kind: 'thread', message_id: root.id },
         seenUpToSeq: 0,
       });
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'main-line answer',
         seenUpToSeq: root.seq,
       });
@@ -1012,8 +1085,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const firstReply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'first thread reply',
-        target: { kind: 'thread', message_id: root.id },
         seenUpToSeq: 0,
       });
       // a concurrent main-line message advances the conversation-global seq
@@ -1035,8 +1108,8 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id, root.id),
           content: 'stale thread draft',
-          target: { kind: 'thread', message_id: root.id },
           seenUpToSeq: firstReply.committed.message.seq,
         }),
       ).rejects.toMatchObject({
@@ -1076,8 +1149,8 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'informed retry',
-        target: { kind: 'thread', message_id: root.id },
         seenUpToSeq: secondReply.seq,
       });
       expect(
@@ -1100,8 +1173,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const firstReply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'prior reply',
-        target: { kind: 'thread', message_id: root.id },
         seenUpToSeq: 0,
       });
       t.messages.insertForConversation({
@@ -1128,8 +1201,8 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id, root.id),
           content: 'stale draft',
-          target: { kind: 'thread', message_id: root.id },
           seenUpToSeq: firstReply.committed.message.seq,
         }),
       ).rejects.toThrowError('disk full');
@@ -1157,6 +1230,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const forced = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'forced',
         seenUpToSeq: observed.seq,
         freshnessBypass: true,
@@ -1170,6 +1244,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const normal = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'normal',
         seenUpToSeq: forced.committed.message.seq,
       });
@@ -1208,8 +1283,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const forced = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'forced thread reply',
-        target: { kind: 'thread', message_id: root.id },
         seenUpToSeq: root.seq,
         freshnessBypass: true,
       });
@@ -1257,8 +1332,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const firstTouch = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'first touch of an unseen cluster',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       expect(firstTouch.committed.message.thread_root_id).toBe(root.id);
@@ -1269,6 +1344,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const mainFirstTouch = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'first thing I ever say',
       });
       expect(mainFirstTouch.streamHeadBeforeSend).toBe(mainGap.seq);
@@ -1277,6 +1353,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const fromUser = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'human line',
       });
       expect(fromUser.streamHeadBeforeSend).toBeUndefined();
@@ -1294,8 +1371,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const firstReply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, quietRoot.id),
         content: 'first reply in an empty cluster',
-        target: { kind: 'thread', message_id: quietRoot.id },
       });
       expect(firstReply.committed.message.thread_root_id).toBe(quietRoot.id);
       expect(firstReply.streamHeadBeforeSend).toBe(0);
@@ -1311,6 +1388,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'revised reply',
         staleEventId: 'evt-revised',
         staleResolutionReason: 'revised',
@@ -1338,6 +1416,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'retry without reason',
         staleEventId: 'evt-unattributed',
       });
@@ -1391,6 +1470,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: 'missing-agent', conversationId: t.channel.id },
+          destination: stream(t.channel.id),
           content: 'x',
         }),
       ).rejects.toMatchObject({ code: 'agent_not_found' });
@@ -1404,6 +1484,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
           content: 'x',
         }),
       ).rejects.toBeInstanceOf(ActorError);
@@ -1425,6 +1506,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'still returns',
       });
       unsub();
@@ -1445,6 +1527,7 @@ describe('ConversationMessageService.sendMessage', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
           content: 'deliver fail',
         }),
       ).resolves.toMatchObject({ committed: { message: { content: 'deliver fail' } } });
@@ -1490,8 +1573,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_reply_cluster', messageId: root.id },
         content: 'human reply',
-        target: { kind: 'thread', message_id: root.id },
       });
       expect(reply.committed.message.thread_root_id).toBe(root.id);
 
@@ -1509,8 +1592,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const second = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_reply_cluster', messageId: root.id },
         content: 'plain follow-up',
-        target: { kind: 'thread', message_id: root.id },
       });
       await waitFor(() =>
         t.fake.delivered.some(
@@ -1569,8 +1652,8 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'alice reply',
-        target: { kind: 'thread', message_id: root.id },
       });
       // bob leaves the channel; his follower row lingers but is not authoritative.
       t.conversations.removeAgent(t.channel.id, t.bob.id);
@@ -1581,8 +1664,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const second = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'second reply',
-        target: { kind: 'thread', message_id: root.id },
       });
       // give any post-commit delivery a chance to run, then assert bob got none.
       await new Promise(resolve => setTimeout(resolve, 30));
@@ -1622,18 +1705,22 @@ describe('ConversationMessageService.sendMessage', () => {
       const reply1 = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'reply one',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       // bob mentions @carol in a thread reply: carol is followed (mention) and
       // backfilled with prior thread history (root + reply1) inside the tx,
       // THEN the current reply is delivered to her as a turn.
+      //
+      // Addressed at the CLUSTER ROOT, like every other reply since #task:2021
+      // P4-4 — a `stream` destination's `threadRootId` is written as given, so
+      // naming `reply1` here would be asking the schema for a nested thread.
       const mentionReply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: '<silverhand://agent/carol> please look',
-        target: { kind: 'thread', message_id: reply1.committed.message.id },
       });
 
       // follower with source 'mention'.
@@ -1695,8 +1782,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_reply_cluster', messageId: root.id },
         content,
-        target: { kind: 'thread', message_id: root.id },
       });
 
       // ONE derivation, at the send boundary, off the caller's bytes (the
@@ -1749,8 +1836,8 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'alice reply',
-        target: { kind: 'thread', message_id: root.id },
       });
       const before = t.conversationInboxes
         .listPending(t.channel.id, t.alice.id)
@@ -1761,8 +1848,8 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: '<silverhand://agent/alice> ping',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       const aliceFollow = t.threadFollowers
@@ -1806,8 +1893,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const reply1 = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'reply one',
-        target: { kind: 'thread', message_id: root.id },
       });
       // carol's own in-thread message, inserted directly (bypassing the
       // service) so it does NOT register a follow — carol stays a non-follower
@@ -1822,8 +1909,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const reply3 = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'reply three',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       // Now pull carol in mid-thread via mention. Backfill must include
@@ -1832,8 +1919,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const mention = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: '<silverhand://agent/carol> catch up',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       const inbox = t.conversationInboxes
@@ -1884,8 +1971,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const mention = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: '<silverhand://agent/carol> catch up on everything',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       const inbox = t.conversationInboxes
@@ -1935,6 +2022,7 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'addresses <silverhand://agent/alice> and would notify <silverhand://human/local-test>',
         }),
       ).rejects.toThrowError('insert exploded');
@@ -1974,6 +2062,7 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'please look, <silverhand://human/local-test>',
       });
       unsubViewer();
@@ -2022,8 +2111,8 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_reply_cluster', messageId: root.id },
         content: 'human reply',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       await waitFor(() =>
@@ -2079,8 +2168,8 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_reply_cluster', messageId: root.id },
         content: 'reply',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       expect(touched).toContain('conversations.get');
@@ -2191,6 +2280,7 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'file',
           // A pdf labelled as an image is the mismatch case; the foreign
           // attachment is refused before the label is even considered.
@@ -2258,6 +2348,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
       const result = await t.service.sendMessage({
         conversationId: dm,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+        destination: stream(dm),
         content: 'hi',
       });
       unsubViewer();
@@ -2312,6 +2403,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
         t.service.sendMessage({
           conversationId: dm,
           actor: { kind: 'agent', agentId: stranger.id, conversationId: dm },
+          destination: stream(dm),
           content: 'let me in',
         }),
       ).rejects.toMatchObject({
@@ -2335,6 +2427,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
         t.service.sendMessage({
           conversationId: dm,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          destination: stream(dm),
           content: 'anyone there',
         }),
       ).rejects.toMatchObject({
@@ -2370,6 +2463,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
         t.service.sendMessage({
           conversationId: dm,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          destination: stream(dm),
           content: 'removed in the gap',
         }),
       ).rejects.toMatchObject({
@@ -2399,6 +2493,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
         t.service.sendMessage({
           conversationId: dm,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: dm },
+          destination: stream(dm),
           content: 'peer died in the gap',
         }),
       ).rejects.toMatchObject({
@@ -2413,6 +2508,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
       const sent = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'channels are unaffected',
       });
       expect(sent.targetConversationId).toBe(t.channel.id);
@@ -2433,6 +2529,7 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
           content: 'x',
         }),
       ).rejects.toMatchObject({
@@ -2479,6 +2576,7 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'removed while I was typing',
         }),
       ).rejects.toMatchObject({
@@ -2505,6 +2603,7 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'ex-member',
         }),
       ).rejects.toMatchObject({
@@ -2529,6 +2628,7 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
       const result = await t.service.sendMessage({
         conversationId: dm,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: 'hi alice',
       });
 
@@ -2561,6 +2661,7 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
         t.service.sendMessage({
           conversationId: dm,
           actor: { kind: 'user', userId: 'teammate' },
+          destination: { kind: 'own_main_line' },
           content: 'let me in',
         }),
       ).rejects.toMatchObject({
@@ -2589,6 +2690,7 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'removed in the gap',
         }),
       ).rejects.toMatchObject({
@@ -2615,6 +2717,7 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
         t.service.sendMessage({
           conversationId: inbox.id,
           actor: { kind: 'user', userId: 'local' },
+          destination: { kind: 'own_main_line' },
           content: 'writing into your inbox',
         }),
       ).rejects.toMatchObject({
@@ -2695,8 +2798,8 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: '<silverhand://agent/carol> look at this',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       // HALF ONE — the foreign principal gets NOTHING: no follower row (so no
@@ -2740,8 +2843,8 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_reply_cluster', messageId: root.id },
         content: '<silverhand://agent/alice> look at this',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       expect(
@@ -2774,8 +2877,8 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'first reply',
-        target: { kind: 'thread', message_id: root.id },
       });
       await waitFor(() => t.fake.delivered.some(d => d.agentId === t.bob.id));
 
@@ -2788,8 +2891,8 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
       const after = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'second reply',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       // Nothing more was delivered at all: bob was the only other follower, and a
@@ -2816,11 +2919,13 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
       const plain = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: 'no addresses here',
       });
       const referencing = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: '<silverhand://agent/carol> and <silverhand://agent/bob> both',
       });
       await waitFor(() =>
@@ -2885,6 +2990,7 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
       const sent = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: '<silverhand://agent/carol> please look',
       });
 
@@ -2926,6 +3032,7 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
       const sent = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content:
           '<silverhand://agent/nosuchagent> <silverhand://human/local-test> '
           + '<silverhand://agent/carol>',
@@ -2972,6 +3079,7 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
       const landed = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: '<silverhand://agent/bob> <silverhand://human/local-test> hi',
       });
       // The total-not-optional half of the contract: "nothing unresolved" is an
@@ -2982,6 +3090,7 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
       const missed = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content: '<silverhand://human/outsider-test> hi',
       });
       expect(missed.unresolvedReferences).toEqual([
@@ -3019,6 +3128,7 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
         conversationId: t.channel.id,
         // A user actor: `POLICIES.user.ccMentions` is the only arm that CCs.
         actor: { kind: 'user', userId: 'local' },
+        destination: { kind: 'own_main_line' },
         content: '<silverhand://agent/carol> please look',
       });
 
@@ -3041,6 +3151,7 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
       const sent = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id),
         content,
       });
       await waitFor(() =>
@@ -3267,8 +3378,8 @@ describe('the follower funnels — follower ⊆ live participant (P4-5)', () => 
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        destination: stream(t.channel.id, root.id),
         content: 'reply to a deleted author',
-        target: { kind: 'thread', message_id: root.id },
       });
 
       expect(t.messages.getById(reply.committed.message.id)?.id).toBe(

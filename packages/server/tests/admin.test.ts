@@ -280,6 +280,14 @@ describe('silverhand-server admin scan-title-addresses', () => {
     ).join('\n');
     expect(logBody).toContain('"admin_op":"scan-title-addresses"');
     expect(logBody).toContain('"defects":0');
+
+    const workspaceOut = new MemorySink();
+    const workspaceCode = await runAdminCommand(['scan-workspace-addresses'], env, {
+      stdout: workspaceOut,
+      stderr: new MemorySink(),
+    });
+    expect(workspaceCode).toBe(0);
+    expect(workspaceOut.text).toContain('workspace addresses clean:');
   });
 
   it('takes no arguments, and the usage text advertises it', async () => {
@@ -309,6 +317,7 @@ describe('silverhand-server admin scan-title-addresses', () => {
     });
     expect(helpCode).toBe(0);
     expect(help.text).toContain('admin scan-title-addresses');
+    expect(help.text).toContain('admin scan-workspace-addresses');
     expect(help.text).toContain('without migrating it');
   });
 });

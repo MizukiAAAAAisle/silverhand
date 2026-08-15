@@ -159,10 +159,10 @@ describe('Standalone G2 — runtime_start dispatch + session_init projection', (
 
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind,
+        (id, name, name_key, description, workspace_kind,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
-    ).run(workspaceId, 'g2-b2-workspace', now, now);
+        VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+    ).run(workspaceId, 'g2-b2-workspace', 'g2-b2-workspace', now, now);
     db.prepare(
       `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
         VALUES (?, ?, ?)`,

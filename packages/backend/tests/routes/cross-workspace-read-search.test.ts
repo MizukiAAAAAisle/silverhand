@@ -66,7 +66,11 @@ function searchMessagesPath(conversationId: string, agentId: string): string {
   return `/internal/conversations/${conversationId}/agents/${agentId}/search-messages`;
 }
 
-describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () => {
+/** Well-formed (16 base64url chars) and names no row — the grammar must pass so
+ *  the refusal comes from the LOOKUP, not from the shape. */
+const MISSING_ID = 'zzzzMISSINGzzz01';
+
+describe('PR-B: cross-workspace read_history by address', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
@@ -88,7 +92,7 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     // Source = alice's own DM (agent_home workspace); target = the
     // regular workspace channel.
     const res = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
-      target: { conversation_id: otherChannel },
+      target: `#conv:${otherChannel}`,
       around_message_id: hit.id,
       include_content: true,
     });
@@ -101,7 +105,11 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     expect(hitMsg.content).toBe('hello cross-workspace world');
   });
 
-  it('returns 403 when the agent is not a member of the target conversation', async () => {
+  // Behavior change (#task:2021 P4-4): this was a 403
+  // `not_target_conversation_member`, distinct from the 404 an unknown id got —
+  // which made the pair an existence oracle over every conversation id in the
+  // installation. Both are now the same 404, asserted byte-identical below.
+  it('refuses a conversation the agent is not a member of, indistinguishably from an unknown id', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
@@ -115,16 +123,26 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
       content: 'bob-only content',
     });
 
-    const res = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
-      target: { conversation_id: bobOnly },
+    const forbidden = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
+      target: `#conv:${bobOnly}`,
       around_message_id: hit.id,
     });
-    expect(res.status).toBe(403);
-    const body = await res.json() as any;
-    expect(body.code).toBe('not_target_conversation_member');
+    const unknown = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
+      target: `#conv:${MISSING_ID}`,
+      around_message_id: hit.id,
+    });
+    expect(forbidden.status).toBe(404);
+    expect(unknown.status).toBe(forbidden.status);
+    // Bodies compared as BYTES: a field order difference or an extra key would be
+    // enough to tell the two apart, and comparing parsed objects would not see it.
+    expect(await forbidden.text()).toEqual(await unknown.text());
+    expect(await (await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
+      target: `#conv:${bobOnly}`,
+      around_message_id: hit.id,
+    })).json()).toEqual({ error: expect.any(String), code: 'target_unresolved' });
   });
 
-  it('returns 404 when conversation_id does not exist', async () => {
+  it('refuses an id that names no conversation', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -137,15 +155,25 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
     });
 
     const res = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
-      target: { conversation_id: 'does-not-exist' },
+      target: `#conv:${MISSING_ID}`,
       around_message_id: anchor.id,
     });
     expect(res.status).toBe(404);
-    const body = await res.json() as any;
-    expect(body.code).toBe('conversation_not_found');
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: 'target_unresolved',
+    });
+    // A string that is not an address at all is a DIFFERENT outcome, and stays
+    // distinct on purpose: no lookup happened, so it reveals nothing.
+    const malformed = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
+      target: 'does-not-exist',
+      around_message_id: anchor.id,
+    });
+    expect(malformed.status).toBe(400);
+    expect(((await malformed.json()) as any).code).toBe('target_malformed');
   });
 
-  it('rejects {conversation_id} pointing at the workspace itself or other unsupported kinds', async () => {
+  it('treats a workspace id in the conversation slot as an id that names no stream', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -156,11 +184,19 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
       fromKind: 'user',
       content: 'anchor',
     });
+    // A workspace id is well-formed as an id (same 16-char domain) and names no
+    // conversation — so it is not a special "unsupported kind", it is the unknown
+    // case, and must be indistinguishable from it.
     const res = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
-      target: { conversation_id: reg.workspaceId },
+      target: `#conv:${reg.workspaceId}`,
+      around_message_id: anchor.id,
+    });
+    const unknown = await http(t).post(readHistoryPath(alice.dmChannelId, alice.agentId), {
+      target: `#conv:${MISSING_ID}`,
       around_message_id: anchor.id,
     });
     expect(res.status).toBe(404);
+    expect(await res.text()).toEqual(await unknown.text());
   });
 });
 

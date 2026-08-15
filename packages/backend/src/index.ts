@@ -14,6 +14,10 @@ import {
   ConversationTitleAddressDefectError,
   scanConversationTitleAddresses,
 } from './read-model/conversation-title-audit.js';
+import {
+  WorkspaceNameAddressDefectError,
+  scanWorkspaceNameAddresses,
+} from './read-model/workspace-name-audit.js';
 import { createInternalRouter } from './routes/internal-agent.js';
 import type { AppEnv } from './auth/principal.js';
 import {
@@ -327,6 +331,20 @@ export async function startBackend(
     );
     db.close();
     throw new ConversationTitleAddressDefectError(titleAudit);
+  }
+  const workspaceAudit = scanWorkspaceNameAddresses(db);
+  if (workspaceAudit.defects.length > 0) {
+    logger.error(
+      {
+        scanned: workspaceAudit.regularScanned,
+        defects: workspaceAudit.defects.length,
+        kinds: [...new Set(workspaceAudit.defects.map(defect => defect.kind))],
+        remediation: 'silverhand-server admin scan-workspace-addresses',
+      },
+      'workspace address integrity audit failed',
+    );
+    db.close();
+    throw new WorkspaceNameAddressDefectError(workspaceAudit);
   }
   const blobStorage = createLocalBlobFileStorage({
     rootDir: opts.blobsRootDir,
@@ -995,10 +1013,12 @@ export {
   AdminResetPasswordError,
   resetAdminPassword,
   scanTitleAddresses,
+  scanWorkspaceAddresses,
   type AdminResetPasswordErrorCode,
   type AdminResetPasswordOptions,
   type AdminScanTitleAddressesOptions,
   type AdminScanTitleAddressesResult,
+  type AdminScanWorkspaceAddressesResult,
 } from './admin.js';
 
 export {

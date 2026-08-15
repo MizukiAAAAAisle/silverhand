@@ -34,6 +34,7 @@
  * throwing ports on purpose — "no lookup happened" is not observable any other
  * way.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import {
   fixedConversationTitle,
@@ -42,11 +43,13 @@ import {
 } from '@silverhand/shared';
 import {
   resolveDeliveryTarget,
+  type DeliveryAllocation,
   type DeliveryIntent,
   type DeliveryTargetPorts,
   type DeliveryTargetRefusalReport,
   type DeliveryTargetResolution,
 } from '../src/application/delivery-target-resolution.js';
+import { deliveryTargetWorkspacesPort } from '../src/application/workspace-address-resolution.js';
 import { AgentRepo } from '../src/repos/agent-repo.js';
 import { ConversationRepo } from '../src/repos/conversation-repo.js';
 import { HostRepo } from '../src/repos/host-repo.js';
@@ -104,7 +107,8 @@ function setup(): Fixture {
   const viewerRow = users.get(t.viewerUserId);
   if (!viewerRow) throw new Error('fixture viewer is missing');
 
-  const ws = new WorkspaceRepo(t.ctx.db).insert({ name: 'dt-ws', description: null });
+  const workspaces = new WorkspaceRepo(t.ctx.db);
+  const ws = workspaces.insert({ name: fixedWorkspaceName('dt-ws'), description: null });
   const room = conversations.insertChannel({
     workspaceId: ws.id,
     title: fixedConversationTitle('room'),
@@ -126,6 +130,7 @@ function setup(): Fixture {
     t,
     ports: {
       conversations,
+      workspaces: deliveryTargetWorkspacesPort({ workspaces, logger: t.ctx.logger }),
       messages,
       agents,
       users,
@@ -154,11 +159,13 @@ function resolveAs(
   address: string,
   intent: DeliveryIntent,
   agentId?: string,
+  allocation: DeliveryAllocation = 'permitted',
 ): DeliveryTargetResolution {
   return resolveDeliveryTarget(f.ports, {
     address,
     principal: { kind: 'agent', id: agentId ?? f.alice.id },
     intent,
+    allocation,
     now: NOW,
   });
 }
@@ -229,10 +236,12 @@ describe('the grammar decides first, before any lookup', () => {
     const throwing: DeliveryTargetPorts = {
       conversations: {
         getIdentity: forbidden('getIdentity'),
+        findWorkspaceTitle: forbidden('findWorkspaceTitle'),
         isAgentParticipant: forbidden('isAgentParticipant'),
         findDirectPair: forbidden('findDirectPair'),
         getOrCreateDirectPair: forbidden('getOrCreateDirectPair'),
       },
+      workspaces: { resolveRegularRoot: forbidden('resolveRegularRoot') },
       messages: { getInConversation: forbidden('getInConversation') },
       agents: { getByName: forbidden('agents.getByName') },
       users: { getByName: forbidden('users.getByName') },
@@ -249,12 +258,16 @@ describe('the grammar decides first, before any lookup', () => {
       '#conv:c1', // a fixture-shaped id is not a product id
       'dm:shiki', // the handle sigil is part of the grammar
       `#conv:${MISSING_ID} `,
+      '#dt-ws', // a root with no channel names nothing
+      '#dt-ws/room/extra',
+      '#dt-ws/%2Groom', // not a canonical escape
     ]) {
       for (const intent of ['read', 'write'] as const) {
         const result = resolveDeliveryTarget(throwing, {
           address,
           principal: { kind: 'agent', id: 'dt-agent' },
           intent,
+          allocation: 'permitted',
           now: NOW,
         });
         expect(result.ok, `${address} @ ${intent}`).toBe(false);
@@ -404,6 +417,185 @@ describe('unknown and unauthorized are one outcome', () => {
   });
 });
 
+describe('a readable head resolves through two authorities', () => {
+  const named = (workspace: string, title: string, thread?: string) =>
+    `#${workspace}/${title}${thread === undefined ? '' : `/thread:${thread}`}`;
+
+  it('names the same stream the id form names', () => {
+    const f = setup();
+    try {
+      const rootId = root(f, f.room);
+      for (const intent of ['read', 'write'] as const) {
+        expect(expectResolved(resolveAs(f, named('dt-ws', 'room'), intent))).toEqual(
+          expectResolved(resolveAs(f, `#conv:${f.room}`, intent)),
+        );
+        expect(
+          expectResolved(resolveAs(f, named('dt-ws', 'room', rootId), intent)),
+        ).toEqual(expectResolved(resolveAs(f, `#conv:${f.room}/thread:${rootId}`, intent)));
+      }
+      // The RESOLVED value is the id form for both spellings: a readable address is
+      // an input coordinate, and what the header renders and a stored field keeps
+      // is the stream. Nothing downstream can tell which spelling was typed, so a
+      // rename cannot invalidate anything that was already resolved.
+      expect(expectResolved(resolveAs(f, named('dt-ws', 'room'), 'read')).stream).toEqual({
+        conversationId: f.room,
+        threadRootId: null,
+      });
+    } finally {
+      f.t.cleanup();
+    }
+  });
+
+  it('folds case in the LOOKUP, and refuses a non-canonical spelling outright', () => {
+    const f = setup();
+    try {
+      // Both segments are compared on the stored folded key, so the case a person
+      // typed does not have to match the case a channel was created with — the
+      // uniqueness constraint is case-insensitive, so at most one row can answer.
+      for (const address of [
+        named('DT-WS', 'ROOM'),
+        named('dt-Ws', 'Room'),
+        named('dt-ws', 'room'),
+      ]) {
+        expect(expectResolved(resolveAs(f, address, 'read')).stream, address).toEqual({
+          conversationId: f.room,
+          threadRootId: null,
+        });
+      }
+      // Tolerance stops at the fold. A NORMALIZATION difference is `target_malformed`
+      // from the grammar, not a repaired lookup: one title, one spelling.
+      for (const address of [named('dt-ws', '%20room'), named('dt-ws', 'ro%6Fm')]) {
+        expect(expectRefusal(f, resolveAs(f, address, 'read')), address).toEqual({
+          code: 'target_malformed',
+          operatorReason: 'grammar',
+        });
+      }
+    } finally {
+      f.t.cleanup();
+    }
+  });
+
+  it('gives the actor one answer for an unknown root, an unknown title and someone else’s channel', () => {
+    const f = setup();
+    try {
+      // The readable form matters MORE here than the id form: an id is 16 random
+      // characters and cannot be guessed, while a workspace name and a channel
+      // title can be. If any of these three were distinguishable, a non-member
+      // could enumerate the installation's channels by name.
+      const answers = new Map<string, string[]>();
+      const branches: Array<[string, string]> = [
+        [named('nope-ws', 'room'), 'workspace_not_found'],
+        [named('dt-ws', 'nope-room'), 'title_not_found'],
+        [named('dt-ws', 'secret'), 'not_participant'],
+      ];
+      for (const [address, operatorReason] of branches) {
+        const result = resolveAs(f, address, 'read');
+        const refusal = expectRefusal(f, result);
+        expect(refusal, address).toEqual({ code: 'target_unresolved', operatorReason });
+        const seen = answers.get(refusal.code) ?? [];
+        seen.push(JSON.stringify(result));
+        answers.set(refusal.code, seen);
+      }
+      expect([...answers.keys()]).toEqual(['target_unresolved']);
+      expect(new Set(answers.get('target_unresolved')).size).toBe(1);
+      // …and byte-identical to the id form's, so the two spellings do not even
+      // disclose WHICH ONE was used to probe.
+      const byId = resolveAs(f, `#conv:${MISSING_ID}`, 'read');
+      expectRefusal(f, byId);
+      expect(JSON.stringify(byId)).toBe(answers.get('target_unresolved')![0]);
+    } finally {
+      f.t.cleanup();
+    }
+  });
+
+  it('cannot name a conversation in an agent-home workspace', () => {
+    const f = setup();
+    try {
+      // The root namespace is REGULAR-only, so an agent's private workspace has no
+      // address root at all — which is why `agent_home` is a RENDERING fallback and
+      // never a resolution outcome. Named by the home workspace's DISPLAY name,
+      // which is the agent's handle: the refusal must come from the namespace, not
+      // from the name being unspellable.
+      const workspaces = new WorkspaceRepo(f.t.ctx.db);
+      const home =
+        workspaces.getAgentHomeByOwner(f.alice.id) ??
+        workspaces.insertAgentHome({ agent: { id: f.alice.id, name: f.alice.handle } });
+      const inside = f.conversations.insertChannel({
+        workspaceId: home.id,
+        title: fixedConversationTitle('notes'),
+        visibility: 'private',
+      }).id;
+      f.conversations.addAgent(inside, f.alice.id);
+      // The id form still resolves it — alice participates, so this is not a
+      // permission difference: the NAME simply does not address it.
+      expect(expectResolved(resolveAs(f, `#conv:${inside}`, 'write')).stream).toEqual({
+        conversationId: inside,
+        threadRootId: null,
+      });
+      expect(expectRefusal(f, resolveAs(f, named(f.alice.handle, 'notes'), 'write'))).toEqual({
+        code: 'target_unresolved',
+        operatorReason: 'workspace_not_found',
+      });
+    } finally {
+      f.t.cleanup();
+    }
+  });
+
+  it('keeps resolving when the workspace is archived', () => {
+    const f = setup();
+    try {
+      // Resolution answers "which stream is this"; whether it accepts a message now
+      // is the write gate's question. An address that stopped resolving on archive
+      // would mean an agent could no longer even name the conversation it is
+      // quoting — and because the answer only reaches a PARTICIPANT (rule 2), it is
+      // not an existence oracle either.
+      const workspaces = new WorkspaceRepo(f.t.ctx.db);
+      const ws = workspaces.getByName(fixedWorkspaceName('dt-ws'));
+      if (!ws) throw new Error('fixture workspace is missing');
+      expect(workspaces.setArchived(ws.id, true)).not.toBeNull();
+      expect(expectResolved(resolveAs(f, named('dt-ws', 'room'), 'read')).stream).toEqual({
+        conversationId: f.room,
+        threadRootId: null,
+      });
+      // The collapse still holds for a non-participant, so archiving does not turn
+      // the name into a probe with a different answer.
+      expect(expectRefusal(f, resolveAs(f, named('dt-ws', 'secret'), 'read'))).toEqual({
+        code: 'target_unresolved',
+        operatorReason: 'not_participant',
+      });
+    } finally {
+      f.t.cleanup();
+    }
+  });
+
+  it('follows a rename, and stops answering at the old name', () => {
+    const f = setup();
+    try {
+      // A name-shaped address is a COORDINATE, not an allocation (@shiki's accepted
+      // cost): the moment a title moves, the new name resolves and the old one is
+      // free — indistinguishable from a name nobody ever held. Nothing may be built
+      // on the old name continuing to point anywhere.
+      f.conversations.updateTitle(f.room, fixedConversationTitle('lounge'));
+      expect(expectResolved(resolveAs(f, named('dt-ws', 'lounge'), 'read')).stream).toEqual({
+        conversationId: f.room,
+        threadRootId: null,
+      });
+      expect(expectRefusal(f, resolveAs(f, named('dt-ws', 'room'), 'read'))).toEqual({
+        code: 'target_unresolved',
+        operatorReason: 'title_not_found',
+      });
+      // The id form is unaffected, which is why it is what the header renders and
+      // what durable fields keep.
+      expect(expectResolved(resolveAs(f, `#conv:${f.room}`, 'read')).stream).toEqual({
+        conversationId: f.room,
+        threadRootId: null,
+      });
+    } finally {
+      f.t.cleanup();
+    }
+  });
+});
+
 describe('a write may open a direct pair; a read never allocates', () => {
   it('opens the pair once, for either principal kind, and says so exactly once', () => {
     const f = setup();
@@ -454,6 +646,38 @@ describe('a write may open a direct pair; a read never allocates', () => {
         expectRefusal(f, resolveAs(f, `dm:@${f.stranger.handle}/thread:${MISSING_ID}`, 'write')),
       ).toEqual({ code: 'target_unresolved', operatorReason: 'direct_pair_not_found' });
       expect(conversationCount(f)).toBe(before);
+    } finally {
+      f.t.cleanup();
+    }
+  });
+
+  it('a write whose caller may not allocate FINDS, and still refuses an inbox', () => {
+    const f = setup();
+    try {
+      const before = conversationCount(f);
+      // `allocation: 'forbidden'` is the confined doors' setting (#task:2021 P4-4):
+      // their reach refusal comes one step later, so the pair they would have opened
+      // must not exist by then. A pair that does not exist is simply unresolved…
+      expect(
+        expectRefusal(f, resolveAs(f, `dm:@${f.stranger.handle}`, 'write', undefined, 'forbidden')),
+      ).toEqual({ code: 'target_unresolved', operatorReason: 'direct_pair_not_found' });
+      expect(conversationCount(f)).toBe(before);
+      // …and one that does resolves exactly as it would have, so forbidding
+      // allocation changes no outcome that was going to be permitted.
+      const opened = expectResolved(resolveAs(f, `dm:@${f.bob.handle}`, 'write'));
+      expect(opened.created).toBe(true);
+      const found = expectResolved(
+        resolveAs(f, `dm:@${f.bob.handle}`, 'write', undefined, 'forbidden'),
+      );
+      expect(found).toEqual({ ...opened, created: false });
+      // It is NOT a downgrade to `intent: 'read'`: the write's own rules still
+      // apply, which is why it is a second axis and not a third intent.
+      expect(
+        expectRefusal(
+          f,
+          resolveAs(f, `#conv:${f.aliceInbox}`, 'write', undefined, 'forbidden'),
+        ),
+      ).toEqual({ code: 'inbox_not_writable', operatorReason: 'inbox_write' });
     } finally {
       f.t.cleanup();
     }

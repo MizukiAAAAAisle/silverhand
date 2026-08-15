@@ -23,6 +23,7 @@
  * is a non-locking read, a concurrent add/remove commits, and only then does the
  * cascade's transaction open.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -112,7 +113,7 @@ function fixture(cleanups: Array<() => void>): Fixture {
   const messages = new MessageRepo(db);
 
   const agent = agents.create({ name: 'cascade-agent', runtime: 'claude' }, localHost.id, OWNER_USER);
-  const workspace = workspaces.insert({ name: 'cascade-ws', description: null });
+  const workspace = workspaces.insert({ name: fixedWorkspaceName('cascade-ws'), description: null });
   workspaces.insertMembership(workspace.id, agent.id);
   workspaces.addUserMember(workspace.id, OWNER_USER, 'owner');
   workspaces.setOwnerUserId(workspace.id, OWNER_USER);
@@ -352,7 +353,7 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
     const t = fixture(cleanups);
     const mine = t.channel('mine');
     t.conversations.addAgent(mine, t.agentId);
-    const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
+    const foreignWs = t.workspaces.insert({ name: fixedWorkspaceName('foreign-ws'), description: null });
     t.workspaces.insertMembership(foreignWs.id, t.agentId);
     const foreign = t.conversations.insertChannel({
       workspaceId: foreignWs.id,
@@ -396,7 +397,7 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
 
   it('the human-only faces carry the same workspace binding', () => {
     const t = fixture(cleanups);
-    const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
+    const foreignWs = t.workspaces.insert({ name: fixedWorkspaceName('foreign-ws'), description: null });
     const foreign = t.conversations.insertChannel({
       workspaceId: foreignWs.id,
       title: fixedConversationTitle('theirs'),
@@ -504,7 +505,7 @@ describe('SqliteMembershipPersistence UnitOfWork isolation', () => {
   it('the roster face carries the SAME workspace binding, and the whole transaction rolls back', () => {
     const t = fixture(cleanups);
     const mine = t.channel('mine');
-    const foreignWs = t.workspaces.insert({ name: 'foreign-ws', description: null });
+    const foreignWs = t.workspaces.insert({ name: fixedWorkspaceName('foreign-ws'), description: null });
     const foreign = t.conversations.insertChannel({
       workspaceId: foreignWs.id,
       title: fixedConversationTitle('theirs'),

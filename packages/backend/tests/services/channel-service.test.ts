@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
   fixedConversationTitle,
@@ -153,7 +154,7 @@ function bootstrap(opts?: { aliceSessionScope?: 'conversation' | 'agent' }) {
     logger,
   });
   const workspace = workspaces.insert({
-    name: 'eng',
+    name: fixedWorkspaceName('eng'),
     description: null,
   });
   const alice = agents.create(
@@ -302,7 +303,7 @@ describe('ChannelService.createChannel', () => {
         workspaceId: t.workspace.id,
         title: fixedConversationTitle('release'),
         memberAgentIds: [t.alice.id, t.bob.id],
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+        actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
         seed: {
           systemMessageBody: 'context',
           initialPrompt: 'initial',
@@ -346,13 +347,13 @@ describe('ChannelService.createChannel', () => {
           workspaceId: t.workspace.id,
           title: fixedConversationTitle('x'),
           memberAgentIds: [],
-          actor: { kind: 'agent', agentId: 'missing-agent', conversationId: t.source.id },
+          actor: { kind: 'agent', agentId: 'missing-agent', forkSourceConversationId: t.source.id },
           seed: { systemMessageBody: 'ctx', initialPrompt: 'go', autoStartMembers: 'none' },
         }),
       ).rejects.toMatchObject({ code: 'agent_not_found' });
 
       const otherWorkspace = t.workspaces.insert({
-        name: 'other',
+        name: fixedWorkspaceName('other'),
         description: null,
       });
       await expect(
@@ -360,7 +361,7 @@ describe('ChannelService.createChannel', () => {
           workspaceId: otherWorkspace.id,
           title: fixedConversationTitle('x'),
           memberAgentIds: [],
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+          actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
           seed: { systemMessageBody: 'ctx', initialPrompt: 'go', autoStartMembers: 'none' },
         }),
       ).rejects.toMatchObject({ code: 'agent_workspace_mismatch' });
@@ -371,7 +372,7 @@ describe('ChannelService.createChannel', () => {
           workspaceId: t.workspace.id,
           title: fixedConversationTitle('x'),
           memberAgentIds: [t.bob.id],
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+          actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
           seed: { systemMessageBody: 'ctx', initialPrompt: 'go', autoStartMembers: 'none' },
         }),
       ).rejects.toBeInstanceOf(ActorError);
@@ -388,7 +389,7 @@ describe('ChannelService.createChannel', () => {
         workspaceId: t.workspace.id,
         title: fixedConversationTitle('ok'),
         memberAgentIds: [t.alice.id],
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+        actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
         seed: { systemMessageBody: 'ctx', initialPrompt: 'go', autoStartMembers: 'none' },
       });
       expect(ok.channel.title).toBe('ok');
@@ -528,7 +529,7 @@ describe('ChannelService.createChannel', () => {
           workspaceId: t.workspace.id,
           title: fixedConversationTitle('agent-public'),
           memberAgentIds: [t.alice.id],
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+          actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
           visibility: 'public',
         }),
       ).rejects.toMatchObject({ name: 'ActorError', code: 'agent_cannot_create_public' });
@@ -563,7 +564,7 @@ describe('ChannelService.createChannel', () => {
         workspaceId: t.workspace.id,
         title: fixedConversationTitle('spawned'),
         memberAgentIds: [t.alice.id],
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+        actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
       });
 
       const userMembers = t.conversations
@@ -943,7 +944,7 @@ describe('ChannelService persistence boundary (#task:1981)', () => {
           workspaceId: t.workspace.id,
           title: fixedConversationTitle('doomed'),
           memberAgentIds: [t.alice.id, t.bob.id],
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+          actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
           seed: {
             systemMessageBody: 'context',
             initialPrompt: 'initial',
@@ -999,7 +1000,7 @@ describe('ChannelService persistence boundary (#task:1981)', () => {
         workspaceId: t.workspace.id,
         title: fixedConversationTitle('traced'),
         memberAgentIds: [t.alice.id],
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+        actor: { kind: 'agent', agentId: t.alice.id, forkSourceConversationId: t.source.id },
         seed: {
           systemMessageBody: 'context',
           initialPrompt: 'initial',
@@ -1194,7 +1195,7 @@ describe('ChannelService.createChannel — in-lock write eligibility (#task:1987
           actor: {
             kind: 'agent',
             agentId: t.alice.id,
-            conversationId: t.source.id,
+            forkSourceConversationId: t.source.id,
           },
           seed: {
             systemMessageBody: 'ctx',
@@ -1522,7 +1523,7 @@ describe('ChannelService — the title IS the address (#task:2016)', () => {
   it('the same title is legal in two workspaces and means a different channel in each', async () => {
     const t = bootstrap();
     try {
-      const other = t.workspaces.insert({ name: 'ops', description: null });
+      const other = t.workspaces.insert({ name: fixedWorkspaceName('ops'), description: null });
       const a = await t.service.createChannel({
         workspaceId: t.workspace.id,
         title: fixedConversationTitle('General'),

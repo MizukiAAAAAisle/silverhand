@@ -3,8 +3,14 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { canPostToConversation, canViewConversation } from '../../src/permissions.js';
 import type { AgentPrincipal } from '../../src/auth/principal.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import { configureDatabaseObservation } from '../../src/observability/observed-statement.js';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
+
+/** A well-formed conversation address that names nothing: 16 chars of the id
+ *  domain, so it reaches the RESOLVER (a shorter fixture-shaped id would be
+ *  refused earlier as `target_malformed`, which is a different outcome). */
+const MISSING_ID = 'zzzzMISSINGzzz01';
 
 interface SetupResult {
   workspaceId: string;
@@ -62,7 +68,7 @@ describe('Tasks (PR-T1)', () => {
     const r1 = await (
       await h.post(
         `/internal/conversations/${conversationId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'fix login' }, { title: 'add logout' }] },
+        { target: `#conv:${conversationId}`, tasks: [{ title: 'fix login' }, { title: 'add logout' }] },
       )
     ).json() as any;
     expect(r1.tasks).toHaveLength(2);
@@ -274,7 +280,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'shared work' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'shared work' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -321,7 +327,7 @@ describe('Tasks (PR-T1)', () => {
     // actor's current workspace and succeeds.
     await h.post(
       `/internal/conversations/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'in session 1' }] },
+      { target: `#conv:${s1.sessionId}`, tasks: [{ title: 'in session 1' }] },
     );
     const crossClaim = await (
       await h.post(
@@ -350,7 +356,7 @@ describe('Tasks (PR-T1)', () => {
 
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'ship' }] },
+      { target: `#conv:${sessionId}`, tasks: [{ title: 'ship' }] },
     );
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
@@ -395,7 +401,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'review me' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'review me' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -426,7 +432,7 @@ describe('Tasks (PR-T1)', () => {
 
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'x' }] },
+      { target: `#conv:${sessionId}`, tasks: [{ title: 'x' }] },
     );
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
@@ -462,7 +468,7 @@ describe('Tasks (PR-T1)', () => {
 
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'task board task' }] },
+      { target: `#conv:${sessionId}`, tasks: [{ title: 'task board task' }] },
     );
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
@@ -490,7 +496,7 @@ describe('Tasks (PR-T1)', () => {
 
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'shared work' }] },
+      { target: `#conv:${sessionId}`, tasks: [{ title: 'shared work' }] },
     );
     // Both alice and bob should receive the system message via inbox.
     const recipients = new Set(t.fake.delivered.map(d => d.agentId));
@@ -506,7 +512,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'plain' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'plain' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -535,7 +541,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'review me' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'review me' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -566,7 +572,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'finished' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'finished' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -603,7 +609,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'unclaim me' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'unclaim me' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -640,7 +646,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'shortcut' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'shortcut' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -661,7 +667,7 @@ describe('Tasks (PR-T1)', () => {
     const created = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'file later' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'file later' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
@@ -710,6 +716,7 @@ describe('Tasks (PR-T1)', () => {
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
       {
+        target: `#conv:${sessionId}`,
         tasks: [
           { title: 't1' },
           { title: 't2' },
@@ -844,7 +851,11 @@ describe('Task create/edit/detail routes', () => {
     const created = await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'derived', source_message_id: src.message.id }], claim: true },
+        {
+          target: `#conv:${sessionId}`,
+          tasks: [{ title: 'derived', source_message_id: src.message.id }],
+          claim: true,
+        },
       )
     ).json() as any;
     const taskNumber = created.tasks[0].task_number;
@@ -867,11 +878,16 @@ describe('Task create/edit/detail routes', () => {
       await h.post(`/api/channels/${sessionId}/messages`, { content: 'prompt' })
     ).json() as any;
     const createPath = `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`;
+    const target = `#conv:${sessionId}`;
     const first = await (
-      await h.post(createPath, { tasks: [{ title: 'first', source_message_id: src.message.id }] })
+      await h.post(createPath, {
+        target,
+        tasks: [{ title: 'first', source_message_id: src.message.id }],
+      })
     ).json() as any;
 
     const res = await h.post(createPath, {
+      target,
       tasks: [{ title: 'second', source_message_id: src.message.id }],
     });
     // The create route returns HTTP 200 with the typed envelope (mirroring
@@ -885,14 +901,15 @@ describe('Task create/edit/detail routes', () => {
 
   // ── #task:1738 — agent cross-channel task create ──────────────────
   // An agent discussing in conversation A can file the task in another
-  // conversation B via explicit `conversation_id`, carrying context in the
-  // title/body (no messages copied, no reverse activity in A). Authorization is
-  // judged against the DESTINATION through a create-specific NARROW check
-  // (workspace access + destination membership), never the origin-bound global
-  // post/view predicates. Omitting the field keeps the legacy current-channel
-  // default.
+  // conversation B by ADDRESSING B — since #task:2021 P4-4 there is no separate
+  // destination field, so "cross-channel create" is not a mode: it is simply a
+  // `target` that names a stream other than the one this session is anchored in.
+  // Authorization is judged against the DESTINATION — the resolver answers
+  // existence and participation, and the route adds the workspace axis (workspace
+  // access + capability) — never the origin-bound global post/view predicates.
+  // There is no legacy current-channel default left to omit the field into.
 
-  it('agent create --conversation-id files the task in another channel of the same workspace; origin gets no activity', async () => {
+  it('agent create addressing another channel of the same workspace files it there; origin gets no activity', async () => {
     t = buildTestApp();
     const { sessionId: convA, channelId, agentIds, workspaceId } = await setup(t);
     const h = http(t);
@@ -910,7 +927,7 @@ describe('Task create/edit/detail routes', () => {
 
     const res = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { conversation_id: convB, tasks: [{ title: 'file me in B' }] },
+      { target: `#conv:${convB}`, tasks: [{ title: 'file me in B' }] },
     );
     expect(res.status).toBe(200);
     const created = (await res.json()) as any;
@@ -930,7 +947,7 @@ describe('Task create/edit/detail routes', () => {
     expect(countByKind(convA, 'system') - sysABefore).toBe(0);
   });
 
-  it('agent create --conversation-id into a DIFFERENT workspace succeeds; capability is judged by the destination workspace', async () => {
+  it('agent create addressing a DIFFERENT workspace succeeds; capability is judged by the destination workspace', async () => {
     t = buildTestApp();
     const { sessionId: convA, agentIds } = await setup(t);
     const h = http(t);
@@ -945,7 +962,7 @@ describe('Task create/edit/detail routes', () => {
 
     const res = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { conversation_id: convB, tasks: [{ title: 'cross-ws' }] },
+      { target: `#conv:${convB}`, tasks: [{ title: 'cross-ws' }] },
     );
     expect(res.status).toBe(200);
     const created = (await res.json()) as any;
@@ -967,7 +984,7 @@ describe('Task create/edit/detail routes', () => {
     });
   });
 
-  it('agent create --conversation-id judges capability on the DESTINATION workspace: create_tasks held only in the ORIGIN does not authorize a create in B', async () => {
+  it('agent create judges capability on the DESTINATION workspace: create_tasks held only in the ORIGIN does not authorize a create in B', async () => {
     t = buildTestApp();
     const { sessionId: convA, agentIds } = await setup(t);
     const h = http(t);
@@ -989,7 +1006,7 @@ describe('Task create/edit/detail routes', () => {
 
     const res = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { conversation_id: convB, tasks: [{ title: 'blocked-by-B-caps' }] },
+      { target: `#conv:${convB}`, tasks: [{ title: 'blocked-by-B-caps' }] },
     );
     // Typed capability denial keyed to the missing bucket — never string-stuffed.
     expect(res.status).toBe(403);
@@ -1024,7 +1041,7 @@ describe('Task create/edit/detail routes', () => {
 
     const res = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { claim: true, tasks: [{ title: 'claim-blocked' }] },
+      { target: `#conv:${convA}`, claim: true, tasks: [{ title: 'claim-blocked' }] },
     );
     expect(res.status).toBe(403);
     expect((await res.json()) as any).toMatchObject({
@@ -1040,7 +1057,7 @@ describe('Task create/edit/detail routes', () => {
     expect(listed.tasks.some((x: any) => x.title === 'claim-blocked')).toBe(false);
   });
 
-  it('agent create --conversation-id --claim is refused as cross_conversation_claim BEFORE any lookup: zero write, no destination probe', async () => {
+  it('agent create addressing another conversation with --claim is refused as cross_conversation_claim: zero write', async () => {
     t = buildTestApp();
     const { sessionId: convA, channelId, agentIds } = await setup(t);
     const h = http(t);
@@ -1060,7 +1077,7 @@ describe('Task create/edit/detail routes', () => {
     // with the typed op error and writes nothing.
     const res = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { conversation_id: convB, claim: true, tasks: [{ title: 'cross-claim' }] },
+      { target: `#conv:${convB}`, claim: true, tasks: [{ title: 'cross-claim' }] },
     );
     expect(res.status).toBe(200);
     expect((await res.json()) as any).toEqual({ error: 'cross_conversation_claim' });
@@ -1071,15 +1088,23 @@ describe('Task create/edit/detail routes', () => {
     ).json()) as any;
     expect(listedB.tasks.some((x: any) => x.title === 'cross-claim')).toBe(false);
 
-    // Decided BEFORE any destination lookup: an UNKNOWN destination + --claim
-    // returns the SAME op error (not `forbidden`), proving there is no existence
-    // probe — the conflict cannot become a side channel.
+    // A destination that does not resolve is answered by the RESOLVER, before the
+    // claim conflict is even a question (#task:2021 P4-4 moved the conflict check
+    // after resolution, because "another conversation" is a fact about the
+    // RESOLVED stream). The old ordering existed to keep the conflict from
+    // becoming an existence probe; that property is now structural instead —
+    // unknown and unauthorized are byte-identical refusals — so the probe has
+    // nothing to report either way. Proven below rather than assumed.
     const resUnknown = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { conversation_id: 'conversation-does-not-exist', claim: true, tasks: [{ title: 'x' }] },
+      { target: `#conv:${MISSING_ID}`, claim: true, tasks: [{ title: 'x' }] },
     );
-    expect(resUnknown.status).toBe(200);
-    expect((await resUnknown.json()) as any).toEqual({ error: 'cross_conversation_claim' });
+    expect(resUnknown.status).toBe(404);
+    expect((await resUnknown.json()) as any).toEqual({
+      error: expect.any(String),
+      code: 'target_unresolved',
+    });
+    expect(countByKind(convA, 'system') - sysABefore).toBe(0);
   });
 
   it('cross-channel create emits a `filed … from another conversation` narration + cross_conversation metadata bit; same-channel emits `created …` without it', async () => {
@@ -1123,7 +1148,7 @@ describe('Task create/edit/detail routes', () => {
     // just a channel — the contract is a conversation.
     await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { conversation_id: convB, tasks: [{ title: 'ship it' }] },
+      { target: `#conv:${convB}`, tasks: [{ title: 'ship it' }] },
     );
     const crossMsg = latestSystem(convB);
     expect(crossMsg.content).toMatch(
@@ -1143,7 +1168,7 @@ describe('Task create/edit/detail routes', () => {
     // Same-channel create (in A): classic `created` narration, no cross bit.
     await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'local task' }] },
+      { target: `#conv:${convA}`, tasks: [{ title: 'local task' }] },
     );
     const sameMsg = latestSystem(convA);
     expect(sameMsg.content).toMatch(/ created task #\d+ "local task"$/);
@@ -1159,20 +1184,19 @@ describe('Task create/edit/detail routes', () => {
     expect(removedKeys).toEqual([]);
   });
 
-  it('agent create --conversation-id is fail-closed: unknown id, non-channel-member, and non-workspace-member all return the SAME forbidden with zero write', async () => {
+  it('agent create is fail-closed on the address: unknown id, non-participant channel, and non-workspace conversation all return the SAME refusal with zero write', async () => {
     t = buildTestApp();
     const { sessionId: convA, channelId, agentIds } = await setup(t);
     const h = http(t);
     const createFromA = `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`;
 
-    // (1) Unknown destination id.
+    // (1) An id no conversation has.
     const unknown = await h.post(createFromA, {
-      conversation_id: 'conversation-does-not-exist',
+      target: `#conv:${MISSING_ID}`,
       tasks: [{ title: 'nope' }],
     });
 
-    // (2) Real channel in alice's OWN workspace that alice is NOT a member of —
-    //     exercises the destination-membership (getAgent) layer.
+    // (2) Real channel in alice's OWN workspace that alice is NOT a participant of.
     const chC = (await (
       await h.post(`/api/workspaces/${channelId}/channels`, {
         title: 'channel-c',
@@ -1182,31 +1206,100 @@ describe('Task create/edit/detail routes', () => {
     const convC = chC.channel.id;
     const sysCBefore = countByKind(convC, 'system');
     const nonChannelMember = await h.post(createFromA, {
-      conversation_id: convC,
+      target: `#conv:${convC}`,
       tasks: [{ title: 'nope' }],
     });
 
-    // (3) Real conversation in a workspace alice is NOT a member of — exercises
-    //     the workspace-access (canAgentAccessWorkspace) layer.
+    // (3) Real conversation in a workspace alice has no access to at all.
     const ws2 = (await (
       await h.post('/api/workspaces', { name: 'eng2', member_agent_ids: [agentIds.bob] })
     ).json()) as any;
     const nonWsMember = await h.post(createFromA, {
-      conversation_id: ws2.onboarding_channel_id,
+      target: `#conv:${ws2.onboarding_channel_id}`,
       tasks: [{ title: 'nope' }],
     });
 
-    // All three collapse to ONE shape — a caller cannot distinguish "unknown"
-    // from "exists but you cannot reach it".
+    // All three collapse to ONE answer, and since #task:2021 P4-4 that collapse is
+    // STRUCTURAL rather than three matching branches: participation is the ONE
+    // authority the resolver consults, so "unknown" and "exists but not yours"
+    // stop being separable questions before the route sees them. Bodies compared
+    // as BYTES — an extra key or a different field order would be enough to tell
+    // the three apart, and comparing parsed objects would not see it.
+    const bodies: string[] = [];
     for (const r of [unknown, nonChannelMember, nonWsMember]) {
-      expect(r.status).toBe(403);
-      expect((await r.json()) as any).toEqual({ error: 'forbidden' });
+      expect(r.status).toBe(404);
+      bodies.push(await r.text());
     }
-    // Zero write in the real-but-forbidden destination.
+    expect(new Set(bodies).size).toBe(1);
+    expect(JSON.parse(bodies[0]!)).toEqual({
+      error: expect.any(String),
+      code: 'target_unresolved',
+    });
+    // Zero write in the real-but-unreachable destination.
     expect(countByKind(convC, 'system') - sysCBefore).toBe(0);
   });
 
-  it('agent create --conversation-id with a source in the ORIGIN and the task in the DESTINATION → source_conversation_mismatch with zero write', async () => {
+  it('a /thread: suffix files the task in that cluster; a mid-cluster reply id is refused, not widened', async () => {
+    t = buildTestApp();
+    const { sessionId: conv, agentIds } = await setup(t);
+    const h = http(t);
+    const messages = new MessageRepo(t.ctx.db);
+    const root = messages.insertForConversation({
+      conversationId: conv,
+      fromKind: 'agent',
+      fromAgentId: agentIds.alice!,
+      content: 'cluster root',
+    });
+    const reply = messages.insertForConversation({
+      conversationId: conv,
+      fromKind: 'agent',
+      fromAgentId: agentIds.alice!,
+      content: 'a reply inside the cluster',
+      threadRootId: root.id,
+    });
+    const listTasks = async (): Promise<any[]> =>
+      (
+        (await (
+          await h.get(`/internal/conversations/${conv}/agents/${agentIds.alice}/tasks`)
+        ).json()) as any
+      ).tasks;
+
+    // The ROOT: the suffix survives resolution and reaches the aggregate as the
+    // task's cluster.
+    const ok = await h.post(
+      `/internal/conversations/${conv}/agents/${agentIds.alice}/tasks/create`,
+      { target: `#conv:${conv}/thread:${root.id}`, tasks: [{ title: 'in the cluster' }] },
+    );
+    expect(ok.status).toBe(200);
+    expect((await listTasks()).find(x => x.title === 'in the cluster').thread_root_id).toBe(
+      root.id,
+    );
+
+    const sysBefore = countByKind(conv, 'system');
+
+    // A REPLY inside the same cluster is refused rather than widened to its root.
+    // This is the load-bearing half: widening would let two different addresses
+    // name the same stream, and the id an agent copied out of a reply's header
+    // would silently mean something it does not say. It is the RESOLVER's answer
+    // (`thread_not_in_target`) — the task aggregate no longer looks messages up,
+    // so there is no second opinion left to disagree with it.
+    for (const rootish of [reply.id, MISSING_ID]) {
+      const res = await h.post(
+        `/internal/conversations/${conv}/agents/${agentIds.alice}/tasks/create`,
+        { target: `#conv:${conv}/thread:${rootish}`, tasks: [{ title: 'must not be born' }] },
+      );
+      expect(res.status, rootish).toBe(404);
+      expect((await res.json()) as any).toEqual({
+        error: expect.any(String),
+        code: 'thread_not_in_target',
+      });
+    }
+    // Zero write: no task row reachable on the board, and no `task_create` event.
+    expect((await listTasks()).some(x => x.title === 'must not be born')).toBe(false);
+    expect(countByKind(conv, 'system') - sysBefore).toBe(0);
+  });
+
+  it('agent create with a source in the ORIGIN and the task addressed to the DESTINATION → source_conversation_mismatch with zero write', async () => {
     t = buildTestApp();
     const { sessionId: convA, channelId, agentIds } = await setup(t);
     const h = http(t);
@@ -1226,7 +1319,7 @@ describe('Task create/edit/detail routes', () => {
     const res = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
       {
-        conversation_id: convB,
+        target: `#conv:${convB}`,
         tasks: [{ title: 'derived', source_message_id: src.message.id }],
       },
     );
@@ -1258,7 +1351,7 @@ describe('Task create/edit/detail routes', () => {
 
     // Cross-channel: exactly one audit line, source = A, owner = B.
     const crossSpy = vi.spyOn(t.ctx.logger, 'warn');
-    await h.post(createFromA, { conversation_id: convB, tasks: [{ title: 'x-audit' }] });
+    await h.post(createFromA, { target: `#conv:${convB}`, tasks: [{ title: 'x-audit' }] });
     const crossCalls = crossSpy.mock.calls.filter(isCreateAudit);
     crossSpy.mockRestore();
     expect(crossCalls).toHaveLength(1);
@@ -1270,7 +1363,7 @@ describe('Task create/edit/detail routes', () => {
 
     // Same-conversation default: no cross-op audit (sourceConv === ownerConv).
     const sameSpy = vi.spyOn(t.ctx.logger, 'warn');
-    await h.post(createFromA, { tasks: [{ title: 'same-audit' }] });
+    await h.post(createFromA, { target: `#conv:${convA}`, tasks: [{ title: 'same-audit' }] });
     const sameCalls = sameSpy.mock.calls.filter(isCreateAudit);
     sameSpy.mockRestore();
     expect(sameCalls).toHaveLength(0);
@@ -1291,7 +1384,7 @@ describe('Task create/edit/detail routes', () => {
     // Cross-channel create succeeds (narrow, create-specific authorization)…
     const res = await h.post(
       `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
-      { conversation_id: convB, tasks: [{ title: 'ok' }] },
+      { target: `#conv:${convB}`, tasks: [{ title: 'ok' }] },
     );
     expect(res.status).toBe(200);
 
@@ -1316,7 +1409,7 @@ describe('Task create/edit/detail routes', () => {
     const created = await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-        { tasks: [{ title: 'orig', body: 'orig body' }] },
+        { target: `#conv:${sessionId}`, tasks: [{ title: 'orig', body: 'orig body' }] },
       )
     ).json() as any;
     const taskId = created.tasks[0].id;
@@ -1352,7 +1445,7 @@ describe('Task create/edit/detail routes', () => {
       const created = (await (
         await http(app).post(
           `/internal/conversations/${conversationId}/agents/${agentIds[member]}/tasks/create`,
-          { tasks: [{ title }] },
+          { target: `#conv:${conversationId}`, tasks: [{ title }] },
         )
       ).json()) as any;
       return {

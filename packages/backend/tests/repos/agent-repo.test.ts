@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { fixedConversationTitle } from '@silverhand/shared';
@@ -212,7 +213,7 @@ describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)',
       'local',
     );
     const workspace = workspaces.insert({
-      name: 'eng',
+      name: fixedWorkspaceName('eng'),
       description: null,
     });
     workspaces.insertMembership(workspace.id, agent.id);

@@ -21,6 +21,7 @@
  *    a half state, which is what proves the assertion is load-bearing rather
  *    than vacuously true of this fixture.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
@@ -65,7 +66,7 @@ function makeFixture() {
   const messages = new MessageRepo(db);
 
   const workspace = new WorkspaceRepo(db).insert({
-    name: 'fanout-adapter',
+    name: fixedWorkspaceName('fanout-adapter'),
     description: null,
   });
   const channel = conversations.insertChannel({

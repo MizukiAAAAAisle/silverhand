@@ -1,6 +1,8 @@
 // Agent conversation-topology facet: create-channel, follow/unfollow-thread,
 // list-workspaces, list-channels. Read-side discovery plus the create-channel
-// write, all scoped to the calling agent's visibility / membership.
+// write; the reads are scoped to the calling agent's visibility / membership,
+// while create-channel takes its source conversation as an ADDRESS (#task:2021
+// P4-4).
 import type { Hono } from 'hono';
 import { performance } from 'node:perf_hooks';
 import {
@@ -10,7 +12,6 @@ import {
 import type { BackendContext } from '../../context.js';
 import {
   canAgentAccessWorkspace,
-  canPostToConversation,
   canViewConversation,
 } from '../../permissions.js';
 
@@ -39,6 +40,7 @@ import {
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 import { requireAgentConversationCapability } from './capability-scope.js';
+import { resolveConversationTargetForRoute } from './delivery-target.js';
 import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
 import { internalAgentRoutePaths } from './paths.js';
 
@@ -181,18 +183,52 @@ export function registerConversationRoutes(
     }
 
     const principal = getAgentPrincipal(c);
-    const current = conversations.get(principal.conversationId);
-    if (!current) return c.json({ error: 'conversation not found' }, 404);
-    if (!canPostToConversation(ctx, principal, current.id)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
+    // The FORK SOURCE comes from the address, not from the credential's path
+    // (#task:2021 P4-4). This door is a single-stream SOURCE operation: it reads
+    // one conversation's placement (the workspace the channel is born into) and
+    // its agent roster (the members it starts with). Before P4-4 both came from
+    // `principal.conversationId`, which under an agent-scoped session is a
+    // transport anchor and not a place the actor chose — and once
+    // `--route-conversation-id` is retired (#task:2030) it would have had no
+    // source for either.
+    //
+    // READ intent: nothing is posted into the source, so the one allocating arm
+    // (`dm:@handle`) must not open a pair — a pair has no workspace and would be
+    // refused as `workspace_scope_required` immediately after, leaving a
+    // conversation behind a refusal. Same reason `member add` reads.
+    const resolved = resolveConversationTargetForRoute(c, deps, {
+      address: parsed.data.target,
+      operation: 'channel_fork_source',
+      intent: 'read',
+      now: Date.now(),
+    });
+    if (!resolved.ok) return resolved.response;
+    const source = conversations.get(resolved.target.stream.conversationId);
+    if (!source) return c.json({ error: 'conversation not found' }, 404);
+    // No second participation gate on the source, and deliberately. Resolution's
+    // participation predicate IS the floor here: its workspace arm is the
+    // `conversation_agents` roster edge, so a channel this agent merely DISCOVERED
+    // (a public one it never joined) never reaches this line — it collapses into
+    // the same 404 as an id nobody holds. The only non-roster arms it admits are
+    // the agent's own inbox and a direct pair, and both are refused two lines
+    // below for having no workspace to be born into.
+    //
+    // What must NOT be asked is `canPostToConversation`: its agent arm goes
+    // through `canViewConversation`, which additionally requires
+    // `principal.conversationId === conversationId` — a fact about the
+    // CREDENTIAL's frame, not about authority (see `canAddConversationMember`,
+    // which converged on the roster edge for the same reason). Asking it would
+    // refuse every address except the anchor's own conversation, i.e. re-impose
+    // the ambient default through the back door and make the AgentSlot
+    // counter-example impossible.
+    //
     // A channel is BORN INTO a workspace, and this route's only source for that
-    // workspace is the calling conversation's own placement — so from an
-    // `agent_inbox` session the act has no destination (v71, #task:2014). This
-    // is the bounded-context declaration, made explicitly and answered as
+    // workspace is the ADDRESSED conversation's own placement — so a pair or an
+    // `agent_inbox` names no destination for the act (v71, #task:2014). This is
+    // the bounded-context declaration, made explicitly and answered as
     // `workspace_scope_required`, rather than a workspace lookup that used to
     // fail as "workspace not found" on a coordinate the row never had.
-    const scope = resolveAgentQueryWorkspaceId(c, current, null, null);
+    const scope = resolveAgentQueryWorkspaceId(c, source, null, null);
     if (!scope.ok) return scope.response;
     {
       const denied = requireAgentCapability(c, ctx, principal, 'create_channels',
@@ -200,7 +236,7 @@ export function registerConversationRoutes(
       if (denied) return denied;
     }
     const memberAgentIds = conversations
-      .listAgents(current.id)
+      .listAgents(source.id)
       .map(member => member.agent_id);
 
     try {
@@ -208,10 +244,19 @@ export function registerConversationRoutes(
         workspaceId: scope.workspaceId,
         title: parsed.data.title,
         memberAgentIds,
-        actor: principal,
+        // The actor carries the RESOLVED source, not the principal: the service's
+        // fork-source reads (roster, human members, seed provenance, the
+        // same-workspace invariant) must all land on the conversation the actor
+        // named. `ChannelForkActor` exists so the credential's frame is not even
+        // in scope there.
+        actor: {
+          kind: 'agent',
+          agentId: principal.agentId,
+          forkSourceConversationId: source.id,
+        },
         seed: {
           systemMessageBody:
-            `Channel created from '${current.title}'. Reason: ${parsed.data.context_summary}`,
+            `Channel created from '${source.title}'. Reason: ${parsed.data.context_summary}`,
           initialPrompt: parsed.data.initial_prompt,
           autoStartMembers: 'all',
         },

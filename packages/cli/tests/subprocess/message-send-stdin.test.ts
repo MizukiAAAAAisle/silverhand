@@ -9,7 +9,10 @@
  *     attachment is present,
  *   - bytes piped on stdin reach the backend byte-equal — no UTF-8
  *     normalization, no BOM strip, no CRLF→LF, no trim,
- *   - `--target` and repeated `--attachment-id` still flow through.
+ *   - `--target` is REQUIRED and carries an absolute address, verbatim,
+ *     with the retired `channel` / `thread:<message_id>` spellings and
+ *     `--reply-to` all refused before stdin is touched,
+ *   - repeated `--attachment-id` still flows through.
  *
  * Why a real subprocess: the failure modes here are quintessentially
  * cross-process (TTY detection, raw byte passthrough through a
@@ -105,14 +108,14 @@ describe('runtime route target vs command-local conversation selector', { timeou
     const create = await runMessage({
       noun: 'task',
       verb: 'create',
-      argv: ['--title', 'file in B', '--conversation-id', 'conv-B'],
+      argv: ['--title', 'file in B', '--target', '#conv:Conversation0002'],
     });
     expect(create.code, create.stderr).toBe(0);
     expect(captured[0]!.path).toBe(
       '/internal/agents/agent-1/conversations/conv-1/tasks/create',
     );
     expect(JSON.parse(captured[0]!.bodyBytes.toString('utf8'))).toMatchObject({
-      conversation_id: 'conv-B',
+      target: '#conv:Conversation0002',
     });
 
     captured.length = 0;
@@ -196,6 +199,26 @@ interface RunResult {
   killedByWatchdog?: boolean;
 }
 
+/**
+ * The stream every test that is not ABOUT the address sends to.
+ *
+ * A real 16-char id, and deliberately not the route conversation
+ * (`SILVERHAND_CONVERSATION_ID`): since #task:2021 P4-4 the address decides the
+ * destination and the route only carries the credential, so a fixture that reused
+ * one id for both could not tell the two apart. Short ids like `conv-1` are not
+ * addresses at all and never become one — the grammar is the product's, not the
+ * fixtures'.
+ */
+const MAIN_TARGET = '#conv:Conversation0001';
+const THREAD_TARGET = `${MAIN_TARGET}/thread:ClusterRoot00001`;
+
+/** The requests that were actual sends. A refused pre-flight still fires a
+ *  best-effort `cli-trace` POST at the same capture server, so "nothing was
+ *  sent" is a claim about this route, not about the socket. */
+function sendRequests(): CapturedRequest[] {
+  return captured.filter(r => r.path.endsWith('/send-message'));
+}
+
 function runSend(opts: {
   argv?: string[];
   stdin?: Buffer | string | null;
@@ -205,11 +228,21 @@ function runSend(opts: {
   /** Leave stdin OPEN and non-TTY (never delivers EOF) — mimics an
    *  inherited pipe. Arms a watchdog so a hang fails cleanly. */
   keepStdinOpen?: boolean;
+  /** Send with NO `--target`, for the tests that are about the flag itself.
+   *  Everything else gets {@link MAIN_TARGET} prepended, because `--target` is
+   *  required and a test about stdin bytes should not have to restate that. */
+  omitTarget?: boolean;
 }): Promise<RunResult> {
+  const { omitTarget, argv, ...rest } = opts;
+  const hasTarget = (argv ?? []).includes('--target');
   return runMessage({
     noun: 'message',
     verb: 'send',
-    ...opts,
+    ...rest,
+    argv:
+      omitTarget || hasTarget
+        ? (argv ?? [])
+        : ['--target', MAIN_TARGET, ...(argv ?? [])],
   });
 }
 
@@ -292,7 +325,13 @@ function runMessage(opts: {
 }
 
 function parseStderrJson(stderr: string): {
-  error: { code: string; subkind?: string; message: string; retriable: boolean };
+  error: {
+    code: string;
+    subkind?: string;
+    message: string;
+    retriable: boolean;
+    details?: Record<string, unknown>;
+  };
 } {
   // The CLI prints exactly one JSON line on stderr. When the wrapper
   // is BSD `script`, the same byte stream is interleaved with control
@@ -483,6 +522,13 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       expect(upload.path).toBe('/internal/agents/agent-1/conversations/conv-1/attachments');
       // Multipart body carries the original bytes verbatim.
       expect(upload.bodyBytes.includes(bytes)).toBe(true);
+      // ...and the DESTINATION, as a form field beside them: the spooled body is
+      // an attachment, and an attachment is owned by ONE conversation, so the
+      // upload is addressed rather than left to the credential's conversation
+      // (#task:2021 P4-4).
+      expect(upload.bodyBytes.toString('utf8')).toContain(
+        `name="target"\r\n\r\n${MAIN_TARGET}`,
+      );
       const send = captured[1]!;
       const reqBody = JSON.parse(send.bodyBytes.toString('utf8')) as {
         content: string;
@@ -492,14 +538,43 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       expect(Buffer.byteLength(reqBody.content, 'utf8')).toBeLessThanOrEqual(64 * 1024);
       expect(reqBody.content).toContain('message-body-x.txt');
     }, 30_000);
+
+    it('spools into the CONVERSATION when the message is going to a thread', async () => {
+      // The message lands in the reply cluster; the attachment is owned by the
+      // conversation the cluster is in — threads inherit their parent's files, and
+      // the upload door refuses a `/thread:` suffix rather than dropping one. So
+      // the two requests carry DIFFERENT addresses on purpose, both derived from
+      // the one the actor spelled (#task:2021 P4-4).
+      captured.length = 0;
+      const bytes = Buffer.from('x'.repeat(70 * 1024), 'utf8');
+      nextSendResponse = {
+        status: 200,
+        body: {
+          id: 'att-thread',
+          filename: 'message-body-t.txt',
+          size: bytes.byteLength,
+          content_type: 'text/plain; charset=utf-8',
+        },
+      };
+      const r = await runSend({ argv: ['--target', THREAD_TARGET], stdin: bytes });
+      expect(r.code, r.stderr).toBe(0);
+      expect(captured.length).toBe(2);
+      const form = captured[0]!.bodyBytes.toString('utf8');
+      expect(form).toContain(`name="target"\r\n\r\n${MAIN_TARGET}\r\n`);
+      expect(form).not.toContain(THREAD_TARGET);
+      // The send itself is untouched: the head is derived for the upload only.
+      expect(
+        (JSON.parse(captured[1]!.bodyBytes.toString('utf8')) as { target?: unknown }).target,
+      ).toBe(THREAD_TARGET);
+    }, 30_000);
   });
 
-  it('forwards --target and repeated --attachment-id in the request body', async () => {
+  it('forwards --target verbatim and repeated --attachment-id in the request body', async () => {
     captured.length = 0;
     const r = await runSend({
       argv: [
         '--target',
-        'thread:m-1',
+        THREAD_TARGET,
         '--attachment-id',
         'att-1',
         '--attachment-id',
@@ -514,11 +589,13 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       attachment_ids?: string[];
     };
     expect(reqBody.content).toBe('hi');
-    expect(reqBody.target).toEqual({ kind: 'thread', message_id: 'm-1' });
+    // The exact token the actor spelled: a STRING, not a parsed shape. The CLI
+    // re-spells nothing, so the resolver sees what was typed (#task:2021 P4-4).
+    expect(reqBody.target).toBe(THREAD_TARGET);
     expect(reqBody.attachment_ids).toEqual(['att-1', 'att-2']);
   });
 
-  it('uses the explicit conversation as the AgentSlot route when no ambient target exists', async () => {
+  it('uses the explicit conversation as the AgentSlot route while the address alone decides the destination', async () => {
     captured.length = 0;
     const r = await runSend({
       argv: ['--route-conversation-id', 'conv-explicit'],
@@ -532,35 +609,91 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     );
     const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
       content: string;
+      target?: unknown;
     };
     expect(reqBody.content).toBe('cross-target message');
+    // Two different coordinates on purpose: the route in the path is the
+    // credential's conversation, the body's target is where the words go.
+    expect(reqBody.target).toBe(MAIN_TARGET);
   });
 
-  it('maps --target channel to the current channel main-line target', async () => {
+  it('refuses a send with no --target as target_required, and names the caller own stream as the correction', async () => {
+    captured.length = 0;
+    const r = await runSend({ omitTarget: true, stdin: 'where does this go?' });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.subkind).toBe('target_required');
+    expect(body.error.details).toMatchObject({ correct_target: '#conv:conv-1' });
+    // Nothing was SENT: there was no stream to send to. (A pre-flight failure
+    // still posts one best-effort `cli-trace` record, which is why this asserts
+    // on the send route rather than on total silence.)
+    expect(sendRequests()).toHaveLength(0);
+  });
+
+  it('still requires --target in an AgentSlot, but offers no correction there', async () => {
     captured.length = 0;
     const r = await runSend({
-      argv: ['--target', 'channel'],
-      stdin: 'main-line answer',
+      omitTarget: true,
+      argv: ['--route-conversation-id', 'agent-inbox'],
+      env: { SILVERHAND_CONVERSATION_ID: '' },
+      stdin: 'where does this go?',
     });
-    expect(r.code, r.stderr).toBe(0);
-    const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
-      content: string;
-      target?: unknown;
-      reply_to_message_id?: string;
-    };
-    expect(reqBody.content).toBe('main-line answer');
-    expect(reqBody.target).toEqual({ kind: 'channel' });
-    expect(reqBody.reply_to_message_id).toBeUndefined();
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('target_required');
+    // The route is a transport anchor — here an inbox nothing can be posted to.
+    // Handing it back as `correct_target` would teach a send that gets refused
+    // downstream, so a caller that inhabits no stream gets the flag and no
+    // suggestion (#task:2021 P4-4: one correction, and only the singleton has it).
+    expect(body.error.details?.correct_target).toBeUndefined();
+    expect(body.error.details).toMatchObject({ flag: 'target' });
+    expect(sendRequests()).toHaveLength(0);
   });
 
-  it('maps --target thread:<message_id> to the public thread target and echoes thread_root_id', async () => {
+  it('refuses the retired `channel` and `thread:<id>` spellings as target_malformed', async () => {
+    for (const retired of ['channel', 'thread:m-root', 'self']) {
+      captured.length = 0;
+      const r = await runSend({
+        argv: ['--target', retired],
+        stdin: 'main-line answer',
+      });
+      expect(r.code, `--target ${retired} should not be accepted`).toBe(1);
+      const body = parseStderrJson(r.stderr);
+      expect(body.error.code).toBe('validation_error');
+      expect(body.error.subkind).toBe('target_malformed');
+      expect(sendRequests()).toHaveLength(0);
+    }
+  });
+
+  it('accepts the readable and direct-pair address forms without touching them', async () => {
+    for (const address of [
+      '#silverhand/UI%2FUX%20优化',
+      'dm:@shiki',
+      `dm:@shiki/thread:ClusterRoot00001`,
+    ]) {
+      captured.length = 0;
+      const r = await runSend({ argv: ['--target', address], stdin: 'hi' });
+      expect(r.code, r.stderr).toBe(0);
+      const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
+        target?: unknown;
+      };
+      expect(reqBody.target).toBe(address);
+    }
+  });
+
+  it('sends into a reply cluster addressed by its ROOT and echoes thread_root_id', async () => {
     captured.length = 0;
     nextSendResponse = {
       status: 200,
-      body: { message_id: 'm-reply', message_seq: 12, thread_root_id: 'm-root' },
+      body: {
+        message_id: 'm-reply',
+        message_seq: 12,
+        thread_root_id: 'ClusterRoot00001',
+      },
     };
     const r = await runSend({
-      argv: ['--target', 'thread:m-root'],
+      argv: ['--target', THREAD_TARGET],
       stdin: 'threaded answer',
     });
     expect(r.code, r.stderr).toBe(0);
@@ -570,10 +703,12 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       target?: unknown;
     };
     expect(reqBody.content).toBe('threaded answer');
-    expect(reqBody.target).toEqual({ kind: 'thread', message_id: 'm-root' });
+    expect(reqBody.target).toBe(THREAD_TARGET);
+    // The retired coordinate is gone from the body entirely, not merely unset
+    // by this call: a reply is addressed by the stream it lands in.
     expect(reqBody.reply_to_message_id).toBeUndefined();
     const out = JSON.parse(r.stdout) as { thread_root_id?: string | null };
-    expect(out.thread_root_id).toBe('m-root');
+    expect(out.thread_root_id).toBe('ClusterRoot00001');
   });
 
   it('prints the sender-only unresolved references on stdout, and only when the backend reported some (#task:2021 P4-5-b)', async () => {
@@ -617,30 +752,33 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     );
   });
 
-  it('keeps --reply-to as a hidden compatibility alias for the public thread target', async () => {
+  it('reports --reply-to as flag_removed and points at the cluster ROOT address', async () => {
     captured.length = 0;
     const r = await runSend({
-      argv: ['--reply-to', 'm-root'],
+      argv: ['--reply-to', 'ClusterRoot00001'],
       stdin: 'threaded answer',
     });
-    expect(r.code, r.stderr).toBe(0);
-    const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
-      reply_to_message_id?: string;
-      target?: unknown;
-    };
-    expect(reqBody.target).toEqual({ kind: 'thread', message_id: 'm-root' });
-    expect(reqBody.reply_to_message_id).toBeUndefined();
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('flag_removed');
+    // The migration line has to name the replacement, not just the removal:
+    // the whole change is that a reply is addressed by its stream.
+    expect(body.error.message).toContain('/thread:');
+    expect(sendRequests()).toHaveLength(0);
   });
 
-  it('rejects --reply-to together with --target as mutually_exclusive', async () => {
+  it('reports --reply-to as removed even when --target is also present', async () => {
+    // No mutual-exclusion arm any more: there is one destination coordinate, so
+    // the retired flag is removed unconditionally rather than negotiated
+    // against the surviving one.
     const r = await runSend({
-      argv: ['--reply-to', 'm-root', '--target', 'thread:m-other'],
+      argv: ['--reply-to', 'ClusterRoot00001', '--target', THREAD_TARGET],
       stdin: 'oops',
     });
     expect(r.code).toBe(1);
     const body = parseStderrJson(r.stderr);
     expect(body.error.code).toBe('validation_error');
-    expect(body.error.subkind).toBe('mutually_exclusive');
+    expect(body.error.subkind).toBe('flag_removed');
   });
 
   it('does not derive freshness from the legacy delivered-seq sidecar in direct fallback', async () => {
@@ -781,24 +919,34 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     expect(body.error.message).toContain('unaffected or revised');
   }, 20_000);
 
-  // The mutual-exclusion check (parseSendDestination) is another throwing
-  // flag path ahead of the stdin read. Lock it against an open pipe too,
-  // so a future refactor can't quietly move only one validation back and
-  // reintroduce the hang for the other.
-  it('fails fast on mutually-exclusive --reply-to/--target even with an open, never-closing stdin pipe', async () => {
-    const r = await runSend({
-      argv: ['--reply-to', 'm-root', '--target', 'thread:m-other'],
+  // The target gate (`requireSendTarget`) is another throwing flag path ahead
+  // of the stdin read, and the one an agent will hit most often during the
+  // cutover. Lock BOTH refusals against an open pipe: a validation moved
+  // behind the read would turn the most common mistake into a hang, and a
+  // body over the size cap would be uploaded as an attachment for a send that
+  // could never land.
+  it('fails fast on a missing or malformed --target even with an open, never-closing stdin pipe', async () => {
+    const missing = await runSend({ omitTarget: true, keepStdinOpen: true });
+    expect(
+      missing.killedByWatchdog,
+      'CLI blocked on stdin before validating a missing --target',
+    ).toBe(false);
+    expect(missing.code).toBe(1);
+    expect(parseStderrJson(missing.stderr).error.subkind).toBe('target_required');
+
+    const malformed = await runSend({
+      argv: ['--target', 'thread:m-root'],
       keepStdinOpen: true,
     });
     expect(
-      r.killedByWatchdog,
-      'CLI blocked on stdin before validating --reply-to/--target',
+      malformed.killedByWatchdog,
+      'CLI blocked on stdin before validating a malformed --target',
     ).toBe(false);
-    expect(r.code).toBe(1);
-    const body = parseStderrJson(r.stderr);
-    expect(body.error.code).toBe('validation_error');
-    expect(body.error.subkind).toBe('mutually_exclusive');
-  }, 20_000);
+    expect(malformed.code).toBe(1);
+    expect(parseStderrJson(malformed.stderr).error.subkind).toBe(
+      'target_malformed',
+    );
+  }, 30_000);
 
   // The third throwing path is the manual --anyway × --stale-resolution
   // conflict guard that runs after both flags parse. Both values are

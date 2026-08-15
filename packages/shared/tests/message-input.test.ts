@@ -5,11 +5,19 @@ import {
   SendMessageInputSchema,
 } from '../src/api/index.js';
 
+/** The agent door takes an absolute address and takes it as REQUIRED since
+ *  #task:2021 P4-4, so every agent case here carries one. The human door does
+ *  not: a person composes inside the conversation they are looking at. */
+const AGENT_TARGET = '#conv:Conversation0001';
+
 describe('message send input schemas', () => {
   it('accepts text-only messages', () => {
     expect(SendMessageInputSchema.safeParse({ content: 'hello' }).success).toBe(true);
     expect(
-      AgentSendMessageInputSchema.safeParse({ content: 'hello' }).success,
+      AgentSendMessageInputSchema.safeParse({
+        content: 'hello',
+        target: AGENT_TARGET,
+      }).success,
     ).toBe(true);
   });
 
@@ -23,6 +31,7 @@ describe('message send input schemas', () => {
     expect(
       AgentSendMessageInputSchema.safeParse({
         content: '',
+        target: AGENT_TARGET,
         attachment_ids: ['att-1'],
       }).success,
     ).toBe(true);
@@ -58,6 +67,7 @@ describe('message send input schemas', () => {
     expect(
       AgentSendMessageInputSchema.safeParse({
         content: 'x',
+        target: AGENT_TARGET,
         attachment_ids: [{ id: 'att-1', label: 'arbitrary' }],
       }).success,
     ).toBe(false);
@@ -77,7 +87,10 @@ describe('message send input schemas', () => {
 
   it('rejects empty messages without text or attachments', () => {
     const user = SendMessageInputSchema.safeParse({ content: '' });
-    const agent = AgentSendMessageInputSchema.safeParse({ content: '   ' });
+    const agent = AgentSendMessageInputSchema.safeParse({
+      content: '   ',
+      target: AGENT_TARGET,
+    });
     expect(user.success).toBe(false);
     expect(agent.success).toBe(false);
     if (!user.success) {
@@ -90,6 +103,16 @@ describe('message send input schemas', () => {
         'message must include text or at least one attachment',
       );
     }
+  });
+
+  it('refuses an agent send with no target — there is no ambient destination', () => {
+    const noTarget = AgentSendMessageInputSchema.safeParse({ content: 'hello' });
+    expect(noTarget.success).toBe(false);
+    // The human door is unaffected: it is scoped by the conversation the person
+    // is composing in, not by an address.
+    expect(SendMessageInputSchema.safeParse({ content: 'hello' }).success).toBe(
+      true,
+    );
   });
 
   it('accepts reply-cluster count sidecars on message windows', () => {

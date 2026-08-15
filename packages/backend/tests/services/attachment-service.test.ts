@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,7 +22,7 @@ function bootstrap() {
   const tmp = makeTempSilverhandDir();
   const workspaces = new WorkspaceRepo(db);
   const workspace = workspaces.insert({
-    name: 'att-ws',
+    name: fixedWorkspaceName('att-ws'),
     description: null,
   });
   const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
@@ -196,7 +197,7 @@ describe('AttachmentService.locateForAgent', () => {
       });
       const conversations = new ConversationRepo(db);
       const otherWorkspace = new WorkspaceRepo(db).insert({
-        name: 'other',
+        name: fixedWorkspaceName('other'),
         description: null,
       });
       const otherChannel = conversations.insertChannel({
@@ -515,7 +516,7 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
         createdById: agent.id,
       });
       const otherWorkspace = new WorkspaceRepo(db).insert({
-        name: 'other',
+        name: fixedWorkspaceName('other'),
         description: null,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({
@@ -825,7 +826,7 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
 
       // Create another channel and upload an attachment scoped to it.
       const otherWorkspace = new WorkspaceRepo(db).insert({
-        name: 'other',
+        name: fixedWorkspaceName('other'),
         description: null,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({

@@ -13,7 +13,7 @@
  *    NULL` is load-bearing — without it the backfill would silently reassign an
  *    owned workspace, and every other assertion here would still pass.
  */
-import { fixedConversationTitle } from '@silverhand/shared';
+import { fixedConversationTitle, fixedWorkspaceName } from '@silverhand/shared';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -149,7 +149,7 @@ describe('SqliteUserPersistence registration scope', () => {
     const workspaces = new WorkspaceRepo(db);
     const conversations = new ConversationRepo(db);
     const workspaceIds = ['alpha', 'beta'].map(
-      name => workspaces.insert({ name, description: null }).id,
+      name => workspaces.insert({ name: fixedWorkspaceName(name), description: null }).id,
     );
     const conversationIds = workspaceIds.map(
       workspaceId =>

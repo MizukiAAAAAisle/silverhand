@@ -14,6 +14,7 @@ describe('loadEnv', () => {
     const env = loadEnv({ ...happyEnv });
     expect(env).toEqual({
       conversationId: 'c-1',
+      slot: 'conversation',
       agentId: 'a-1',
       serverUrl: 'http://127.0.0.1:8080',
       authToken: 'tok-abc',
@@ -24,6 +25,9 @@ describe('loadEnv', () => {
     const { SILVERHAND_CONVERSATION_ID: _ambient, ...agentSlotEnv } = happyEnv;
     expect(loadEnv(agentSlotEnv, 'c-explicit')).toEqual({
       conversationId: 'c-explicit',
+      // Route, not residence: the slot kind stays readable downstream so a
+      // refusal never offers a transport anchor as a destination.
+      slot: 'agent',
       agentId: 'a-1',
       serverUrl: 'http://127.0.0.1:8080',
       authToken: 'tok-abc',
@@ -33,6 +37,7 @@ describe('loadEnv', () => {
   it('keeps ConversationSlot ambient route when a command has its own conversation selector', () => {
     expect(loadEnv({ ...happyEnv }, 'c-other')).toMatchObject({
       conversationId: 'c-1',
+      slot: 'conversation',
     });
   });
 

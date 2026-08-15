@@ -1,3 +1,4 @@
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { DEFAULT_CHANNEL_ATTENTION_MODE, fixedConversationTitle } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
@@ -235,8 +236,8 @@ function buildFixture(): Fixture {
   const doomed = agents.create({ name: 'doomed', runtime: 'codex' }, localHostId, 'local');
   const dmAgent = agents.create({ name: 'dm-agent', runtime: 'claude' }, localHostId, 'local');
 
-  const wsA = workspaces.insert({ name: 'ws-a', description: null }).id;
-  const wsMuted = workspaces.insert({ name: 'ws-muted', description: null }).id;
+  const wsA = workspaces.insert({ name: fixedWorkspaceName('ws-a'), description: null }).id;
+  const wsMuted = workspaces.insert({ name: fixedWorkspaceName('ws-muted'), description: null }).id;
   const wsHome = workspaces.insertAgentHome({ agent: dmAgent }).id;
 
   const channel = (workspaceId: string, title: string): string =>

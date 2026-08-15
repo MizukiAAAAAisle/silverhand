@@ -38,6 +38,7 @@
  * the follower query ever starts scanning, the correlated form has been used to
  * enumerate again.
  */
+import { fixedWorkspaceName } from '@silverhand/shared';
 import { fixedConversationTitle } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
@@ -90,7 +91,7 @@ function buildMatrix(): Matrix {
   const messages = new MessageRepo(db);
   const threadFollowers = new ThreadFollowerRepo(db);
 
-  const eng = workspaces.insert({ name: 'eng', description: null });
+  const eng = workspaces.insert({ name: fixedWorkspaceName('eng'), description: null });
   workspaces.addUserMember(eng.id, viewerUserId, 'owner');
 
   const mk = (name: string) =>

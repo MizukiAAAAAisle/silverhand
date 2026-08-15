@@ -73,7 +73,6 @@ import {
   RUNTIME_DELIVERY_INSTRUCTION_SIGNALS,
   RuntimeCatalogResponseSchema,
   RuntimeKindSchema,
-  SendMessageTargetSchema,
   WorkspaceKindSchema,
 } from '@silverhand/shared';
 
@@ -223,48 +222,66 @@ import {
 // upgraded by its own install step. So v11 counts as released here and this
 // change may not join it.
 //
-// v13 (#task:2015): runtime start/deliver and every status-mutating runtime
-// event carry the backend-claimed custody generation. A pre-v13 daemon cannot
-// prove that an event belongs to the live slot generation, so exact hello
-// admission rejects it before any runtime is started. The outbound epoch bumps
-// 11→12 for the same generation field.
-//
 // Disjoint from the desktop API epoch (`desktop-server-api-epoch.ts`), which
 // does not bump here: that gate guards `/api/*` (renderer ↔ server) and exempts
 // `/internal/*`, so it never classifies a daemon — and this constant never
 // classifies a renderer. Two boundaries, two admission facts.
 
-// v14 (#task:2015 review): every runtime snapshot and destructive runtime
-// command carries the generation it describes. This closes cross-generation
-// races and therefore has no compatibility shim.
+// v13 (agent-scoped sessions + one absolute address: #task:2015, #task:2019,
+// #task:2021) — ONE epoch for the whole unreleased cutover, deliberately.
 //
-// v15 (#task:2019): runtime identity is an explicit discriminated scope on
-// start/deliver/status/events/stop/clear. A pre-v15 peer can only address a
-// nullable conversation tuple and would alias agent-scoped custody, so there is
-// deliberately no mixed-epoch bridge.
+// This number is an EQUALITY SENTINEL on a PUBLISHED compatibility boundary. Its
+// entire job is to make a mixed pair fail loud at hello, and two peers built from
+// the same unreleased tree are never a mixed pair. Incrementing once per ticket or
+// per review round would spend six numbers on one boundary and leave this ledger
+// claiming five field generations that never existed — future readers would then
+// have to date-check each one to know which are real.
 //
-// v16 (#task:2019 review): delivery consumed/failed settlements also echo the
-// generation whose daemon custody performed the write. Inbox rows can be
-// rolled back and reclaimed by a successor generation, so delivery id alone is
-// not a sufficient settlement token.
+// Generation check (the precondition every entry above answers): v12 is on
+// published history (`origin/main`, and it is the epoch the packaged daemon is
+// being reinstalled at for #task:2000's startup verification), so this change may
+// NOT join it. Everything below it in this tree is unreleased and therefore moves
+// together as v13. The next epoch answers the same question, and its clock starts
+// the moment v13 is in the field.
 //
-// v17 (#task:2021 P4-3): the delivery header's `target` becomes an ABSOLUTE
-// address — `#conv:<conversation_id>[/thread:<root_id>]`, derived per ROW —
-// and the relative token `channel` is retired. Byte-identical framing again
-// (the shape of v12, and for the same reason): the daemon composes the platform
-// prompt itself, so ITS generation decides which target form every agent it
-// spawns is TAUGHT, while the backend decides which form is EMITTED. A mixed
-// pair is silently wrong in both directions — an old daemon teaches
-// `target=channel|thread:<id>` to agents that receive `#conv:<id>`, and a new
-// daemon teaches "read the absolute token's parts" to agents whose backend still
-// emits the ambient one. An agent-scoped runtime is woken for N conversations,
-// so what breaks is not a parse but the DESTINATION: the agent replies into
-// whichever conversation it assumed, i.e. it answers the right message in the
-// wrong stream, with no error on either side. Exact hello matching refuses the
-// pair before any agent is spawned. `OUTBOUND_PROTOCOL_VERSION` bumps alongside
-// (15→16). No shim — a prompt is composed fresh at every spawn and a header is
-// rendered fresh at every delivery, so admission is the whole migration.
-export const HOST_PROTOCOL_VERSION = 17;
+// What changes across the boundary. Each item would be its own bump if it shipped
+// alone, and each is fail-loud-at-hello for the same structural reason: no shim is
+// possible, because a platform prompt is composed fresh at every spawn, a delivery
+// header is rendered fresh at every delivery, and command params are validated
+// strictly on both sides.
+//
+//   - CUSTODY IS GENERATIONAL (#task:2015). runtime start/deliver, every
+//     status-mutating runtime event, every runtime snapshot, every destructive
+//     runtime command, and delivery consumed/failed settlements all carry the
+//     backend-claimed custody generation. A pre-v13 peer cannot prove an event
+//     belongs to the live slot, and a delivery id alone is not a settlement token
+//     once a successor generation can reclaim a rolled-back inbox row.
+//   - RUNTIME IDENTITY IS AN EXPLICIT DISCRIMINATED SCOPE (#task:2019) on
+//     start/deliver/status/events/stop/clear. A pre-v13 peer can only address a
+//     nullable conversation tuple, which ALIASES agent-scoped custody.
+//   - THE DELIVERY HEADER'S `target` IS AN ABSOLUTE ADDRESS (#task:2021 P4-3),
+//     derived per ROW, and the relative token `channel` is retired.
+//   - THE SEND DOOR TAKES THAT SAME ADDRESS (#task:2021 P4-4). The
+//     `agent_message_send` params lose `target: {kind:'channel'|'thread'}` and
+//     `reply_to_message_id` and carry one required `target` STRING; the result
+//     carries the `conversation_id` the address resolved TO. The gated per-turn
+//     default-reply-target cluster is deleted with it — there is no inference left
+//     to fall back on, and a send that cannot name its stream is refused by the
+//     CLI before it reaches the daemon.
+//
+// The last two are why this boundary cannot be lax, because their mixed-pair
+// failure is not a parse error. The daemon composes the platform prompt itself, so
+// ITS generation decides which target form every agent it spawns is TAUGHT while
+// the backend decides which form is EMITTED — and an agent-scoped runtime is woken
+// for N conversations. An old daemon teaches `target=channel|thread:<id>` to agents
+// receiving `#conv:<id>`; a new one teaches "read the absolute token's parts" to
+// agents whose backend still emits the ambient token. Either way the agent answers
+// the right message in the WRONG STREAM, with no error on either side. Exact hello
+// matching refuses the pair before any agent is spawned.
+//
+// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (11→12) and for the same reason: the
+// backend's send door changed shape in the same cutover.
+export const HOST_PROTOCOL_VERSION = 13;
 
 // ── capability tokens ────────────────────────────────────────────────
 //
@@ -568,10 +585,22 @@ export const AgentMessageSendParamsSchema = z
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     content: z.string(),
-    target: SendMessageTargetSchema.optional(),
-    /** @deprecated Compatibility alias for old CLI/prompt builds. New
-     *  callers use `target: {kind:'thread', message_id}`. */
-    reply_to_message_id: z.string().min(1).optional(),
+    /**
+     * WHERE the message goes — one absolute address, required, forwarded to the
+     * backend verbatim (#task:2021 P4-4).
+     *
+     * A STRING, not a shape: the grammar has exactly one authority
+     * (`delivery-target.ts`), and the daemon parses it only to decide which
+     * per-stream freshness boundary this send is anchored to. An address this
+     * daemon cannot parse is NOT refused here — it travels on and the backend's
+     * resolver gives the one verdict (`target_malformed`), so the two never
+     * disagree about what a legal address is.
+     *
+     * `conversation_id` above stays the SOURCE: it is the credential coordinate
+     * (whose token, whose handle, whose runtime), and P4-4 is the ticket that
+     * stopped it from doubling as the destination.
+     */
+    target: z.string().min(1),
     attachment_ids: z.array(z.string().min(1)).optional(),
     stale_resolution_reason: AgentSendStaleResolutionReasonSchema.optional(),
     freshness_bypass: z.boolean().optional(),
@@ -587,6 +616,19 @@ export const AgentMessageSendResultSchema = z.union([
       ok: z.literal(true),
       message_id: z.string().min(1),
       message_seq: z.number().int().nonnegative().optional(),
+      /**
+       * The conversation the address RESOLVED to, forwarded from the backend
+       * send response (#task:2021 P4-4).
+       *
+       * Total, not conditional on the address having been readable: "which
+       * stream did my words land in" has one answer for every send, and it is
+       * the answer a caller can cache — a `dm:@handle` or a title is spelled
+       * once and every follow-up in that stream carries the id form. The daemon
+       * needs it for the same reason: its freshness cursors are keyed by
+       * conversation, and only the backend knows which conversation a NAME
+       * denoted at insert time.
+       */
+      conversation_id: z.string().min(1),
       /** Reply-cluster root the sent message belongs to (§6.4): null on
        *  the main line, else the cluster's root message id. Surfaced from
        *  the backend send response so a caller (CLI) can report which
@@ -654,27 +696,40 @@ export type AgentStaleResolveResult = z.infer<
 // loose), losing freshness protection on the read-then-reply path (THE
 // main thread workflow). After a successful thread pull the CLI fires
 // this daemon-local intent so the daemon advances the cluster's observed
-// boundary and records the surfaced message ids as known reply targets.
+// boundary for the stream that was read.
 // Purely daemon-local state: no backend call, no HTTP-error arm.
 //
 // Contract (Cindy 2026-06-11, msg UbcoVgS3ZQ4TivZ6):
 //  - `observed_seq` is the max seq among REPLIES the pull returned
 //    (`thread_root_id === root`); 0 when the cluster has no replies. The
 //    root's own seq lives on the main line and MUST NOT be passed here.
-//  - `reply_target_messages` is the root id PLUS the returned reply ids;
-//    each maps to `thread:<root>` so a later `--reply-to` of any of them
-//    resolves a known stream (root → seen=0 when there are no replies).
-//    `.min(1)`: the root id is ALWAYS present (the caller prepends it from
-//    the read DTO's target ref), so an empty array is a caller bug — fail
-//    loud rather than record an observed boundary with no stream mapping
-//    (Cindy 2026-06-11 non-blocking note, folded with the CLI producer).
+//  - the surfaced ids are NOT reported. Until #task:2021 P4-4 the intent
+//    also carried `reply_target_messages` (the root plus every returned
+//    reply id), because a reply was addressed by the message it answered and
+//    any of those ids could be the next `--reply-to`. An address's
+//    `/thread:<root>` is a ROOT id now, so the only id this intent still
+//    teaches is `thread_root_id` — the one it already carries. Reporting the
+//    replies would keep alive exactly the mapping (mid-cluster id → cluster)
+//    that P4-4 deleted, in the one process that must not hold a second
+//    opinion about what an address denotes.
+//  - TWO CONVERSATIONS, TWO SUBJECTS (#task:2021 P4-4). `conversation_id` is
+//    the SESSION coordinate every intent carries: which runtime handle is
+//    speaking (for an AgentSlot that is its route anchor, which may be a stream
+//    nobody posts to). `stream_conversation_id` is where the OBSERVED cluster
+//    lives — the resolved `target.conversation_id` of the pull. They coincide
+//    only when a ConversationSlot read its own stream. An AgentSlot handle
+//    serves N conversations, so its observed boundaries are keyed by
+//    conversation; storing this one under the session anchor instead would file
+//    it where no send looks (`agent_message_send` keys by the ADDRESS's
+//    conversation), silently degrading every cross-stream read-then-reply to a
+//    loose first touch.
 export const AgentStreamObservedParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
+    stream_conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     thread_root_id: z.string().min(1),
     observed_seq: z.number().int().nonnegative(),
-    reply_target_messages: z.array(z.string().min(1)).min(1),
   })
   .strict();
 export type AgentStreamObservedParams = z.infer<

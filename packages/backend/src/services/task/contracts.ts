@@ -8,7 +8,6 @@ import {
   type AgentCapability,
   type ClaimErrorCode,
   type ClaimResultEntry,
-  type MessageSendTarget,
   type TaskMutationErrorCode,
   type TaskMutationResult,
   type TaskStatus,
@@ -39,12 +38,16 @@ export interface CreateTasksInput {
   /** Agent-only: atomically self-claim the created task(s). Ignored for a
    *  user actor. */
   claim?: boolean;
-  /** Optional public destination. Omitted / channel keeps task creation on
-   *  the main line; thread places the task's lifecycle events under that
-   *  message's reply cluster. */
-  target?: MessageSendTarget;
-  /** @deprecated Compatibility alias for old CLI/runtime callers. */
-  legacyReplyToMessageId?: string;
+  /** Where the task's lifecycle notices land INSIDE `conversationId`: a reply
+   *  cluster's ROOT, or null/omitted for the main line.
+   *
+   *  Already validated when it gets here (#task:2021 P4-4) — the agent door
+   *  resolves it out of the one address together with `conversationId`, so a root
+   *  that belongs to another conversation, or a mid-cluster reply id, was refused
+   *  as `thread_not_in_target` before this service ran. The human door files on
+   *  the main line and passes nothing. Hence no lookup here: this aggregate does
+   *  not own the question, and asking it twice is how two answers appear. */
+  threadRootId?: string | null;
 }
 
 export type ClaimTaskInput =

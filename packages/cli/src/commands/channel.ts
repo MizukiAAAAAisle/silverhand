@@ -3,31 +3,71 @@
  */
 import { CliError } from '../errors.js';
 import { flagString } from '../parse.js';
+import { requireTargetFlag } from '../target-flag.js';
+import { reachHelpErrorRow } from '../reach-help.js';
 import type { Command } from './index.js';
 
 const createCommand: Command = {
   verb: 'create',
-  summary: 'Create a new top-level channel in the current workspace.',
-  help: `silverhand channel create --title <title> --context-summary <text>
-                           --initial-prompt <text>
+  summary: 'Create a new top-level channel, forked from one you name.',
+  help: `silverhand channel create --target <address> --title <title>
+                           --context-summary <text> --initial-prompt <text>
 
 ONLY use this when the user has explicitly requested a new top-level
 channel. Reply clusters stay in the current channel via
-\`silverhand message send --target thread:<message_id>\`; use a channel only
-when the user asks for isolation.
+\`silverhand message send --target '#conv:<conversation_id>/thread:<root_message_id>'\`;
+use a channel only when the user asks for isolation.
 
-After creation, you should announce the new channel id in the current
-channel via \`silverhand message send\` so the user knows a fork happened.
+This door does not post into the addressed conversation — it FORKS it.
+\`--target\` names the SOURCE: its placement gives the workspace the new
+channel is born into, and its agent members give the roster the channel
+starts with. There is no flag for either one separately, which is exactly
+why the source must be named: the conversation this CLI is authenticated
+in is where your credential lives, not the fork you meant.
+
+A fork source is a whole CONVERSATION, so a \`/thread:<root_message_id>\`
+suffix is refused (\`thread_suffix_not_supported\`) rather than silently
+ignored — a reply cluster has neither its own workspace nor its own
+roster. A source with no workspace placement (a DM pair, your agent
+inbox) is refused with \`workspace_scope_required\` rather than guessing
+a workspace.
+
+After creation, announce the new channel id in the conversation the user
+asked from via \`silverhand message send\` so they know a fork happened.
 
 Flags:
+  --target             Required. The conversation to fork, e.g.
+                       \`#conv:<conversation_id>\` or \`#<workspace>/<title>\`.
+                       Copy the \`target=\` token from the message asking
+                       for the channel. You must be able to post in it;
+                       one you cannot see is refused exactly like one
+                       that does not exist.
   --title              Required. Short title for the new channel.
   --context-summary    Required. Why this channel exists; states the user
                        intent it serves. Stored for audit and recovery.
   --initial-prompt     Required. First message posted into the new channel.
 
-stdout: { "channel_id": "<id>" }`,
-  flags: ['title', 'context-summary', 'initial-prompt'] as const,
-  async run({ client, args }) {
+stdout: { "channel_id": "<id>" }
+
+Errors:
+  target_required (validation)         --target was omitted
+  target_malformed (400)               --target is not an address
+  target_unresolved (404)              --target names no conversation you
+                                       participate in — the same answer an
+                                       id nobody holds gets
+  thread_suffix_not_supported (400)    --target named a reply cluster
+${reachHelpErrorRow('channel_fork_source', 39)}  workspace_scope_required (400)       the source has no workspace, so it
+                                       names no place for the channel to
+                                       be born into`,
+  flags: ['target', 'title', 'context-summary', 'initial-prompt'] as const,
+  async run({ env, client, args }) {
+    const target = requireTargetFlag(flagString(args, 'target'), env, {
+      command: 'silverhand channel create',
+      because:
+        'a fork takes its workspace and its roster from ONE named source ' +
+        'conversation, and the conversation this CLI is authenticated in is ' +
+        'where your credential lives, not the source you meant.',
+    });
     const title = flagString(args, 'title');
     const contextSummary = flagString(args, 'context-summary');
     const initialPrompt = flagString(args, 'initial-prompt');
@@ -40,6 +80,7 @@ stdout: { "channel_id": "<id>" }`,
       });
     }
     return client.createChannel({
+      target,
       title,
       context_summary: contextSummary,
       initial_prompt: initialPrompt,
