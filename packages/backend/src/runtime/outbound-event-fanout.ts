@@ -432,14 +432,29 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       return;
     }
     const state = this.stateForHost(hostId);
+    const readyDaemonKey = event.kind === 'ready'
+      ? makeDaemonInstanceKey(event.daemon_pid, event.started_at)
+      : null;
+    // Embedded attach deliberately re-announces `ready` after the control-plane
+    // binding becomes real. That second frame is on the SAME local socket and
+    // names the SAME daemon generation. Re-opening the hydrate gate here would
+    // strand it forever: RuntimeEventHandler correctly dedupes the same daemon
+    // key and therefore has no second hydrate whose completion could close the
+    // gate. Keep the already-proven connection authority, but still run the
+    // outer ready callbacks below (they are the reason for the re-announcement).
+    const duplicateHydratedReady =
+      readyDaemonKey !== null &&
+      state.currentConnectionId === connectionId &&
+      state.currentDaemonKey === readyDaemonKey &&
+      state.hydratedDaemonKey === readyDaemonKey &&
+      state.hydratedConnectionId === connectionId;
     state.currentConnectionId = connectionId;
     if (event.kind === 'ready') {
-      state.hydratedConnectionId = null;
-      state.hydrateInProgress = true;
-      state.currentDaemonKey = makeDaemonInstanceKey(
-        event.daemon_pid,
-        event.started_at,
-      );
+      if (!duplicateHydratedReady) {
+        state.hydratedConnectionId = null;
+        state.hydrateInProgress = true;
+      }
+      state.currentDaemonKey = readyDaemonKey;
       // #task:1613 — observation log for the layout-v2 migration-unit
       // deletion gate. The daemon advertises its migration outcome as a
       // `layout_migration.v2.*` capability token; log it once per daemon
@@ -526,6 +541,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           );
         }
       }
+      // Dispatch every accepted frame. RuntimeEventHandler owns daemon-
+      // generation idempotence and treats this same-generation ready as a
+      // no-op; the fanout's only special responsibility is not revoking the
+      // already-proven connection hydrate above.
       state.handler.dispatch(outboundEventToEventFrame(event));
     } finally {
       state.dispatchConnectionId = null;

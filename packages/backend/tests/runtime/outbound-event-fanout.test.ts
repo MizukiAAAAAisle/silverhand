@@ -603,6 +603,51 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('keeps a hydrated embedded connection authoritative when attach re-announces the same ready', async () => {
+    const readyCallbacks: string[] = [];
+    const fix = makeFixture({
+      runtime: 'codex',
+      onHostReady: hostId => readyCallbacks.push(hostId),
+    });
+    try {
+      fix.transport.snapshot = { runtimes: [] };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon === true,
+      );
+      const hydrateCalls = fix.transport.calls.filter(
+        call => call.kind === 'runtime_status',
+      ).length;
+
+      // Embedded boot sends this second, identical ready after
+      // host_outbound_attach establishes the control-plane binding. It must
+      // still run the ready callbacks, but it is not a new connection or a new
+      // daemon generation and therefore must not reopen the hydrate gate.
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+
+      expect(
+        fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon,
+      ).toBe(true);
+      expect(
+        fix.transport.calls.filter(call => call.kind === 'runtime_status'),
+      ).toHaveLength(hydrateCalls);
+      expect(readyCallbacks).toEqual([fix.hostId, fix.hostId]);
+
+      const message = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'delivery after attach ready re-announcement',
+      });
+      fix.transport.setNextDeliverDisposition('spawning');
+      await expect(
+        fix.fanout.deliverMessage(fix.channelId, fix.agentId, message.id),
+      ).resolves.toBeUndefined();
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('marks DB-active runtimes missing from a daemon hydrate snapshot as crashed', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
