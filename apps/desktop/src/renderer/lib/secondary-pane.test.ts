@@ -19,7 +19,8 @@ function makeRefResult(
 
 const localChannelRef: ConversationRef = {
   id: 'c-other',
-  kind: 'channel',
+  placement_kind: 'workspace',
+  roster_policy: 'open',
   title: 'planning',
   workspace_id: 'w-1',
   workspace_kind: 'regular',
@@ -29,7 +30,8 @@ const localChannelRef: ConversationRef = {
 
 const foreignChannelRef: ConversationRef = {
   id: 'c-foreign',
-  kind: 'channel',
+  placement_kind: 'workspace',
+  roster_policy: 'open',
   title: 'team-y planning',
   workspace_id: 'w-2',
   workspace_kind: 'regular',
@@ -39,7 +41,8 @@ const foreignChannelRef: ConversationRef = {
 
 const foreignDmRef: ConversationRef = {
   id: 'dm-foreign',
-  kind: 'dm_channel',
+  placement_kind: 'direct_pair',
+  roster_policy: 'fixed',
   title: 'dm-bob',
   workspace_id: 'w-bob-home',
   workspace_kind: 'dm',
@@ -62,7 +65,8 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
       source: 'side',
       status: 'resolved',
       id: 'c-other',
-      kind: 'channel',
+      placementKind: 'workspace',
+      rosterPolicy: 'open',
       title: 'planning',
       workspaceId: 'w-1',
       workspaceKind: 'regular',
@@ -95,7 +99,8 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     expect(out).toMatchObject({
       source: 'side',
       status: 'resolved',
-      kind: 'dm_channel',
+      placementKind: 'direct_pair',
+      rosterPolicy: 'fixed',
       workspaceKind: 'dm',
     });
   });
@@ -143,12 +148,13 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
   });
 });
 
-const primary = { id: 'c-primary' as const, kind: 'channel' as const };
+const primary = { id: 'c-primary' as const, rosterPolicy: 'open' as const };
 const sideChannelDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
   id: 'c-other',
-  kind: 'channel',
+  placementKind: 'workspace',
+  rosterPolicy: 'open',
   title: 'planning',
   workspaceId: 'w-1',
   workspaceKind: 'regular',
@@ -161,7 +167,8 @@ const sideSecondDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
   id: 't-of-primary',
-  kind: 'channel',
+  placementKind: 'workspace',
+  rosterPolicy: 'open',
   title: 'investigations',
   workspaceId: 'w-1',
   workspaceKind: 'regular',
@@ -172,7 +179,8 @@ const foreignSideDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
   id: 'c-foreign',
-  kind: 'channel',
+  placementKind: 'workspace',
+  rosterPolicy: 'open',
   title: 'team-y planning',
   workspaceId: 'w-2',
   workspaceKind: 'regular',
@@ -213,7 +221,7 @@ describe('selectVisibleConversations — read-cursor visibility matrix', () => {
     });
     expect(out).toEqual({
       primary,
-      secondary: { id: 'c-other', kind: 'channel' },
+      secondary: { id: 'c-other', rosterPolicy: 'open' },
     });
   });
 
@@ -225,7 +233,7 @@ describe('selectVisibleConversations — read-cursor visibility matrix', () => {
     });
     expect(out).toEqual({
       primary: null,
-      secondary: { id: 't-of-primary', kind: 'channel' },
+      secondary: { id: 't-of-primary', rosterPolicy: 'open' },
     });
   });
 
@@ -286,7 +294,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
       secondary: null,
       fullscreen: false,
     });
-    expect(out).toEqual({ id: 'c-primary', kind: 'channel', workspaceId: 'w-1' });
+    expect(out).toEqual({ id: 'c-primary', rosterPolicy: 'open', workspaceId: 'w-1' });
   });
 
   it('resolved secondary wins over primary (preserves legacy openThreadId ?? selectedChannelId)', () => {
@@ -298,7 +306,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
     });
     expect(out).toEqual({
       id: 't-of-primary',
-      kind: 'channel',
+      rosterPolicy: 'open',
       workspaceId: 'w-1',
     });
   });
@@ -315,7 +323,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
     });
     expect(out).toEqual({
       id: 'c-foreign',
-      kind: 'channel',
+      rosterPolicy: 'open',
       workspaceId: 'w-2',
     });
   });
@@ -341,7 +349,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
         secondary: ph,
         fullscreen: false,
       });
-      expect(out).toEqual({ id: 'c-primary', kind: 'channel', workspaceId: 'w-1' });
+      expect(out).toEqual({ id: 'c-primary', rosterPolicy: 'open', workspaceId: 'w-1' });
     }
   });
 
@@ -367,7 +375,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
       fullscreen: false,
     });
     expect(out?.id).toBe('c-other');
-    expect(out?.kind).toBe('channel');
+    expect(out?.rosterPolicy).toBe('open');
   });
 });
 
@@ -430,7 +438,8 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       source: 'side',
       status: 'resolved',
       id: 'c-foreign',
-      kind: 'channel',
+      placementKind: 'workspace',
+      rosterPolicy: 'open',
       title: 'team-y planning',
       workspaceId: 'w-2',
       workspaceKind: 'regular',
@@ -447,7 +456,8 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     expect(out.conversationDescriptor).toEqual({
       id: 'c-foreign',
       title: 'team-y planning',
-      kind: 'channel',
+      placement_kind: 'workspace',
+      roster_policy: 'open',
       closed_at: null,
       archived_at: null,
       // The whole point: ChannelView's workspace_id is the FOREIGN
@@ -472,7 +482,8 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       source: 'side',
       status: 'resolved',
       id: 'dm-bob',
-      kind: 'dm_channel',
+      placementKind: 'direct_pair',
+      rosterPolicy: 'fixed',
       title: 'dm-bob',
       workspaceId: 'w-bob-home',
       workspaceKind: 'dm',
@@ -485,7 +496,7 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor?.workspace_id).toBe('w-bob-home');
-    expect(out.conversationDescriptor?.kind).toBe('dm_channel');
+    expect(out.conversationDescriptor?.roster_policy).toBe('fixed');
     expect(out.channelKind).toBe('dm');
     expect(out.archiveWorkspaceId).toBe('w-bob-home');
   });
@@ -497,7 +508,8 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       source: 'side',
       status: 'resolved',
       id: 'c-other',
-      kind: 'channel',
+      placementKind: 'workspace',
+      rosterPolicy: 'open',
       title: 'planning',
       workspaceId: 'w-1',
       workspaceKind: 'regular',

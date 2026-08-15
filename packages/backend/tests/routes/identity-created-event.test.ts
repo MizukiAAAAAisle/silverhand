@@ -176,15 +176,15 @@ describe('identity-creation app-scope broadcast (#task:1707)', () => {
     // dependent-row insert inside the L3a tx (same seam as
     // `agent-create-structural-invariants` Invariant 3), so createAgent
     // returns `materializeFailed` and 500 — not `created`.
-    // The `placement_kind` clause is load-bearing: `kind` is a GENERATED column
-    // and an `agent_inbox` also reads as `dm_channel`, so without it this
+    // The `placement_kind` clause is load-bearing: an `agent_inbox` also uses
+    // a fixed roster, so without it this
     // trigger would abort the L1 aggregate reserve instead and the route would
     // answer 409 `agent_name_taken` — a different contract than the one here.
     t = buildTestApp();
     t.ctx.db.exec(
       `CREATE TRIGGER idem1707_fail_dm_insert
          BEFORE INSERT ON conversations
-         WHEN NEW.kind = 'dm_channel' AND NEW.placement_kind = 'workspace'
+         WHEN NEW.roster_policy = 'fixed' AND NEW.placement_kind = 'workspace'
        BEGIN
          SELECT RAISE(ABORT, 'idem1707: forced dependent-row failure');
        END`,

@@ -173,7 +173,8 @@ function searchDto(channelId: string, workspaceId = WS): SearchDto {
         conversation: {
           id: channelId,
           title: 'channel',
-          kind: 'channel',
+          placement_kind: 'workspace',
+          roster_policy: 'open',
           channel_id: channelId,
           closed_at: null,
           created_at: 1,
@@ -221,7 +222,7 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       thread_root_id: null,
       message_id: `m-${id}`,
       notification_id: null,
-      conversation_kind: 'channel' as const,
+      conversation_roster_policy: 'open' as const,
       title: `#${id}`,
       thread_root_preview: null,
       preview: null,
@@ -987,7 +988,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       id: string,
       is_member: boolean | undefined,
       visibility: 'public' | 'private' = 'private',
-    ): ChannelMembershipRow => ({ id, kind: 'channel', is_member, visibility });
+    ): ChannelMembershipRow => ({ id, is_member, visibility });
 
     it('a member row that survives is not a loss', () => {
       expect(
@@ -1078,7 +1079,6 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
   describe('convergence, not `status` (#task:1689 blocker 1)', () => {
     const member = (id: string): ChannelMembershipRow => ({
       id,
-      kind: 'channel',
       is_member: true,
       visibility: 'private',
     });
@@ -1087,8 +1087,8 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
      *  (an older/unresolved carrier) must be inert rather than a loss. */
     const archivedRow = (id: string, withMemberFlag: boolean): ChannelMembershipRow =>
       withMemberFlag
-        ? { id, kind: 'channel', is_member: true, visibility: 'private' }
-        : { id, kind: 'channel', visibility: 'private' };
+        ? { id, is_member: true, visibility: 'private' }
+        : { id, visibility: 'private' };
 
     it('only both-lists-settled-and-not-awaiting-refetch counts as converged', () => {
       const base = {
@@ -1251,7 +1251,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       seedForeignWorkspace(qc);
       // Authoritative re-read of B's two tables: LOST is gone, KEPT remains.
       const active: ChannelMembershipRow[] = [
-        { id: KEPT, kind: 'channel', is_member: true, visibility: 'private' },
+        { id: KEPT, is_member: true, visibility: 'private' },
       ];
       const losses = resolveChannelMembershipLosses({
         observed: heldChannelIdsInWorkspace(qc, OTHER_WS),
@@ -1346,7 +1346,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         seedChannelKeyedOnly(qc);
         const losses = resolveChannelMembershipLosses({
           observed: heldChannelIdsInWorkspace(qc, OTHER_WS),
-          active: [{ id: KEPT, kind: 'channel', is_member: true, visibility: 'private' }],
+          active: [{ id: KEPT, is_member: true, visibility: 'private' }],
           archived: [],
         });
         expect(losses).toEqual([{ channelId: LOST, mode: 'visibility-loss' }]);

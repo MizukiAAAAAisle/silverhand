@@ -38,18 +38,18 @@ export class SqliteHostCredentialsRepo implements HostCredentialsPort {
     const row = prepareObserved<[string], CredentialWithHostStatus>(
       this.db,
       'host_credentials.lookup_verification',
-      `SELECT c.id,
-              c.host_id,
-              c.token_hash,
-              c.kind,
-              c.expires_at,
-              c.consumed_at,
-              c.revoked_at,
+      `SELECT cred.id,
+              cred.host_id,
+              cred.token_hash,
+              cred.kind,
+              cred.expires_at,
+              cred.consumed_at,
+              cred.revoked_at,
               h.user_id AS host_user_id,
               h.revoked_at AS host_revoked_at
-         FROM host_credentials c
-         JOIN hosts h ON h.id = c.host_id
-        WHERE c.token_hash = ?`,
+         FROM host_credentials cred
+         JOIN hosts h ON h.id = cred.host_id
+        WHERE cred.token_hash = ?`,
     ).get(tokenHash);
     return row ?? null;
   }
@@ -59,13 +59,13 @@ export class SqliteHostCredentialsRepo implements HostCredentialsPort {
       this.db,
       'host_credentials.has_active_long_lived',
       `SELECT COUNT(*) AS c
-         FROM host_credentials c
-         JOIN hosts h ON h.id = c.host_id
-        WHERE c.host_id = ?
-          AND c.kind = 'long_lived'
-          AND c.consumed_at IS NULL
-          AND c.revoked_at IS NULL
-          AND (c.expires_at IS NULL OR c.expires_at > ?)
+         FROM host_credentials cred
+         JOIN hosts h ON h.id = cred.host_id
+        WHERE cred.host_id = ?
+          AND cred.kind = 'long_lived'
+          AND cred.consumed_at IS NULL
+          AND cred.revoked_at IS NULL
+          AND (cred.expires_at IS NULL OR cred.expires_at > ?)
           AND h.revoked_at IS NULL
           AND h.user_id IS NOT NULL`,
     ).get(hostId, now);

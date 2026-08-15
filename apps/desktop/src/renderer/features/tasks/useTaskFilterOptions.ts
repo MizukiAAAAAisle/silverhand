@@ -48,7 +48,7 @@ export interface TaskFilterOptions {
 interface MappableChannel {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel';
+  roster_policy: 'open' | 'fixed';
   archived_at: number | null;
 }
 
@@ -77,7 +77,7 @@ export function workspaceChannelCandidates(
     id: conv.id,
     workspaceId: workspace.id,
     title: conv.title,
-    kind: conv.kind,
+    roster_policy: conv.roster_policy,
     archived_at: conv.archived_at,
     fromDmWorkspace: isDm,
     sublabel,

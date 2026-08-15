@@ -24,7 +24,7 @@ function makeNotification(overrides: Partial<NotificationDto>): NotificationDto 
 function makeChannelRef(overrides: Partial<ConversationRef> = {}): ConversationRef {
   return {
     id: 'conv_a',
-    kind: 'channel',
+    placement_kind: 'workspace', roster_policy: 'open',
     title: 'general',
     workspace_id: 'ws_a',
     workspace_kind: 'regular',
@@ -115,7 +115,7 @@ describe('resolveNotificationJumpTarget', () => {
       mockQc({
         dm_mentions: makeChannelRef({
           id: 'dm_mentions',
-          kind: 'dm_channel',
+          placement_kind: 'workspace', roster_policy: 'fixed',
           workspace_id: 'ws_dm_agent',
         }),
       }),

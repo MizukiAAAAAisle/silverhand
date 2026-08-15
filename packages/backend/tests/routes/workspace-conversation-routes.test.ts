@@ -43,7 +43,8 @@ describe('workspace/conversation routes', () => {
     expect(channels.channels[0]).toMatchObject({
       id: workspaceBody.onboarding_channel_id,
       workspace_id: workspaceBody.workspace.id,
-      kind: 'channel',
+      placement_kind: 'workspace',
+      roster_policy: 'open',
     });
 
     const dms = await (
@@ -51,7 +52,8 @@ describe('workspace/conversation routes', () => {
     ).json() as any;
     expect(dms.channels).toHaveLength(1);
     expect(dms.channels[0]).toMatchObject({
-      kind: 'dm_channel',
+      placement_kind: 'workspace',
+      roster_policy: 'fixed',
       workspace_id: home.id,
     });
 
@@ -62,7 +64,8 @@ describe('workspace/conversation routes', () => {
       })
     ).json() as any;
     expect(secondary.channel).toMatchObject({
-      kind: 'dm_channel',
+      placement_kind: 'workspace',
+      roster_policy: 'fixed',
       workspace_id: home.id,
       title: 'Mentions',
     });

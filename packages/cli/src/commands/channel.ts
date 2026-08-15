@@ -95,16 +95,16 @@ const listCommand: Command = {
   help: `silverhand channel list [--workspace-id <id>]
 
 Lists two sets of conversations in one result: the channels and
-direct-message conversations in which the agent is a member (\`kind\`:
-'channel' | 'dm_channel', any visibility, archived conversations included and
-sorted last), and the active public channels in the workspace that the agent
-has not joined. Non-member private channels, non-member direct messages, and
-non-member archived public channels are excluded.
+fixed-roster conversations in which the agent is a member (any visibility,
+archived conversations included and sorted last), and the active public
+open-roster channels in the workspace that the agent has not joined. Non-member
+private channels, non-member fixed-roster conversations, and non-member archived
+public channels are excluded.
 
 Each entry carries \`is_member\` and \`visibility\`. An entry with
 \`visibility: 'public'\` and \`is_member: false\` is a public channel the agent
 has not joined. Membership must be read from \`is_member\`, not inferred from
-\`kind\` or position. Listing a non-member public channel grants discovery
+\`roster_policy\` or position. Listing a non-member public channel grants discovery
 only; it conveys no access to messages, roster, or delivery, and does not join
 the channel. Defaults to the current workspace.
 

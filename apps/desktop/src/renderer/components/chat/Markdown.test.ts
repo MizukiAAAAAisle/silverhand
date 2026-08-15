@@ -425,7 +425,7 @@ describe('SystemMessage channel refs', () => {
       quoted_created_at: Date.now() - 2 * 60_000,
     });
     const refs = new Map<string, ConversationReference>([
-      ['conv-parent', { id: 'conv-parent', kind: 'channel', title: 'version3' }],
+      ['conv-parent', { id: 'conv-parent', roster_policy: 'open', title: 'version3' }],
     ]);
     const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="quoted"');
@@ -451,7 +451,7 @@ describe('SystemMessage channel refs', () => {
     const refs = new Map<string, ConversationReference>([
       [
         'conv-parent',
-        { id: 'conv-parent', kind: 'channel', title: 'feature/cli design' },
+        { id: 'conv-parent', roster_policy: 'open', title: 'feature/cli design' },
       ],
     ]);
     const html = renderSystem(msg, new Map(), refs);
@@ -476,7 +476,7 @@ describe('SystemMessage channel refs', () => {
       'Continue the system-message redesign discussion in a focused channel.',
     );
     const refs = new Map<string, ConversationReference>([
-      ['conv-source', { id: 'conv-source', kind: 'channel', title: 'version3' }],
+      ['conv-source', { id: 'conv-source', roster_policy: 'open', title: 'version3' }],
     ]);
     const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="spawned"');
@@ -1362,7 +1362,7 @@ describe('Markdown conversation refs', () => {
         {
           id,
           title: 'version3',
-          kind: 'channel',
+          roster_policy: 'open',
         },
       ],
     ]);
@@ -1424,7 +1424,7 @@ describe('Markdown conversation refs', () => {
     qc.setQueryData(['conversation-ref', id], {
       ref: {
         id,
-        kind: 'channel',
+        roster_policy: 'open',
         title: 'foreign-channel',
         workspace_id: 'ws-foreign',
         workspace_kind: 'regular',

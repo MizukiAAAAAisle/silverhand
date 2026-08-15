@@ -61,7 +61,8 @@ import {
   AgentSendStaleResolutionReasonSchema,
   AgentWorkspaceFileReadSchema,
   AgentWorkspaceTreeSchema,
-  ConversationKindSchema,
+  ConversationPlacementKindSchema,
+  ConversationRosterPolicySchema,
   HostProxyConfigSchema as SharedHostProxyConfigSchema,
   HostKindSchema,
   McpProbeResultSchema,
@@ -1012,7 +1013,8 @@ const RuntimeStartDriverOptionsSchema = z
 const RuntimeStartSessionSchema = z
   .object({
     conversation_id: z.string().min(1),
-    kind: ConversationKindSchema,
+    placement_kind: ConversationPlacementKindSchema,
+    roster_policy: ConversationRosterPolicySchema,
     title: z.string(),
     spawned_by_agent_id: z.string().min(1).nullable(),
     members: z.array(MemberDtoSchema),

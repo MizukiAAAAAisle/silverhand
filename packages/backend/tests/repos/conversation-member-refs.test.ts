@@ -359,10 +359,9 @@ describe('#task:1987 membership cascade read shape — query plan', () => {
     const conversation = plan.find(line => line.startsWith('SEARCH c '));
     expect(conversation).toMatch(/USING (COVERING )?(INDEX \S+|INTEGER PRIMARY KEY) \(/);
     expect(conversation).toMatch(/\b(workspace_id=\?|id=\?|rowid=\?)/);
-    // The one temp b-tree is the ORDER BY over the rows those seeks produced. A
-    // second one would mean something upstream is materializing more than them.
-    expect(plan.join('\n').match(/USE TEMP B-TREE/g)).toEqual(['USE TEMP B-TREE']);
-    expect(plan).toContain('USE TEMP B-TREE FOR ORDER BY');
+    // v79's workspace index carries updated_at in the contracted direction, so
+    // the production query no longer needs a temporary ORDER BY b-tree.
+    expect(plan.join('\n')).not.toContain('USE TEMP B-TREE');
   };
 
   it('reaches both tables by a constrained index seek, in either direction', () => {
@@ -400,4 +399,3 @@ describe('#task:1987 membership cascade read shape — query plan', () => {
     for (const index of used) expect(declared).toContain(index);
   });
 });
-

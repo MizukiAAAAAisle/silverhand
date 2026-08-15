@@ -48,7 +48,7 @@ export function useSecondaryPaneModel(params: {
     if (!selectedChannelId) return null;
     const hit = channels.find(c => c.id === selectedChannelId);
     if (!hit) return null;
-    return { id: hit.id, kind: hit.kind };
+    return { id: hit.id, rosterPolicy: hit.roster_policy };
   }, [channels, selectedChannelId]);
   // PR-2: cross-workspace `?side=<id>` resolution. The ref hook is the single
   // source of truth for the right pane's identity & workspace — same-workspace

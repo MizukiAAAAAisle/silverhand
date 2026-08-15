@@ -10,7 +10,8 @@ import {
 import {
   ConversationAgentStatusSchema,
   ConversationEventKindSchema,
-  ConversationKindSchema,
+  ConversationPlacementKindSchema,
+  ConversationRosterPolicySchema,
   ConversationStatusSchema,
   ConversationVisibilitySchema,
   RuntimeKindSchema,
@@ -34,7 +35,8 @@ export const ConversationDtoSchema = z.object({
   // (`participantsOf(agent_inbox)` = the owner agent only, so the permission
   // check denies first) — the null arm is reached by agent/internal surfaces.
   workspace_id: z.string().nullable(),
-  kind: ConversationKindSchema,
+  placement_kind: ConversationPlacementKindSchema,
+  roster_policy: ConversationRosterPolicySchema,
   title: z.string(),
   status: ConversationStatusSchema,
   spawned_by_agent_id: z.string().nullable(),
@@ -52,12 +54,13 @@ export const ConversationDtoSchema = z.object({
 export type ConversationDto = z.infer<typeof ConversationDtoSchema>;
 
 export const ChannelConversationDtoSchema = ConversationDtoSchema.extend({
-  kind: z.literal('channel'),
+  placement_kind: z.literal('workspace'),
+  roster_policy: z.literal('open'),
 });
 export type ChannelConversationDto = z.infer<typeof ChannelConversationDtoSchema>;
 
 export const DmChannelDtoSchema = ConversationDtoSchema.extend({
-  kind: z.literal('dm_channel'),
+  roster_policy: z.literal('fixed'),
 });
 export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
 
@@ -156,7 +159,8 @@ export type ConversationRefWorkspaceKind = z.infer<
 
 export const ConversationRefSchema = z.object({
   id: z.string(),
-  kind: ConversationKindSchema,
+  placement_kind: ConversationPlacementKindSchema,
+  roster_policy: ConversationRosterPolicySchema,
   title: z.string(),
   workspace_id: z.string(),
   workspace_kind: ConversationRefWorkspaceKindSchema,
@@ -450,7 +454,7 @@ export type ChannelDetailResponse = z.infer<typeof ChannelDetailResponseSchema>;
  *  single-field gate read — it does NOT remove the consumer-migration
  *  requirement. The archived list carries no such warning: its set did not
  *  change, only the carrier was added. */
-export const WorkspaceChannelListItemSchema = z.discriminatedUnion('kind', [
+export const WorkspaceChannelListItemSchema = z.discriminatedUnion('roster_policy', [
   ChannelConversationDtoSchema.extend({ is_member: z.boolean() }),
   DmChannelDtoSchema.extend({ is_member: z.boolean() }),
 ]);

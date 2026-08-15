@@ -80,8 +80,8 @@ function favRow(
   workspaceId = 'w-1',
 ): FavoriteRowDto {
   return {
-    kind: 'channel',
-    favorite_key: `channel:${conversationId}`,
+    roster_policy: 'open',
+    favorite_key: `conversation:${conversationId}`,
     entity_id: conversationId,
     workspace_id: workspaceId,
     title: conversationId,

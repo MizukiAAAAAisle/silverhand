@@ -1348,8 +1348,8 @@ export function useClearAgentSession(
  * #task:957). The backend route `DELETE /api/conversations/:id/members/
  * agents/:agentId` (Cindy) stops the agent's runtime here, drops the
  * membership row, and emits a "member removed" system narration. The
- * path is conversation-kind agnostic — it works for both channels and
- * threads, so no `routeKind` branch is needed.
+ * path is placement-agnostic; the backend applies the roster-policy gate, so no
+ * renderer-side conversation classifier is needed.
  *
  * Permission (agent owner OR workspace owner/admin) is enforced
  * server-side; the popover hides the control otherwise via

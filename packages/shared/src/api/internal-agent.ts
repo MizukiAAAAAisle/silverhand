@@ -3,7 +3,8 @@
 import { z } from 'zod';
 import { HandleSchema } from '../handle.js';
 import {
-  ConversationKindSchema,
+  ConversationPlacementKindSchema,
+  ConversationRosterPolicySchema,
   ConversationVisibilitySchema,
   WorkspaceKindSchema,
 } from '../db/schema.js';
@@ -321,7 +322,8 @@ export const MessageRefSchema = z.object({
    *  workspace) would make a CC copy look like it lived on someone's board. */
   workspace_id: z.string().nullable(),
   conversation_id: z.string(),
-  conversation_kind: ConversationKindSchema,
+  conversation_placement_kind: ConversationPlacementKindSchema,
+  conversation_roster_policy: ConversationRosterPolicySchema,
   channel_id: z.string(),
   seq: z.number(),
   created_at: z.number(),
@@ -396,7 +398,8 @@ export function senderRefFromAuthor(
 
 export const ReadHistoryTargetRefSchema = z.object({
   conversation_id: z.string(),
-  conversation_kind: ConversationKindSchema,
+  conversation_placement_kind: ConversationPlacementKindSchema,
+  conversation_roster_policy: ConversationRosterPolicySchema,
   channel_id: z.string(),
   /** Set only when the address named a reply cluster (a
    *  `/thread:<root_message_id>` suffix): the canonical cluster root
@@ -497,14 +500,14 @@ export type AgentPeerProfileQuery = z.infer<typeof AgentPeerProfileQuerySchema>;
 export const AgentListedChannelSchema = z.object({
   id: z.string(),
   title: z.string(),
-  kind: z.enum(['channel', 'dm_channel']),
+  roster_policy: ConversationRosterPolicySchema,
   /** Channel visibility. Authoritative on every row; a caller must not infer
-   *  it from `kind` or list position. A `dm_channel` is always `private`. */
+   *  it from roster policy or list position. Fixed-roster rows are private. */
   visibility: ConversationVisibilitySchema,
   archived: z.boolean(),
   /** Whether the listed agent is a member of the conversation. Authoritative:
    *  computed from the membership relation, never inferred from `visibility`,
-   *  `kind`, or list position. `visibility: 'public'` with `is_member: false`
+   *  roster policy, or list position. `visibility: 'public'` with `is_member: false`
    *  is the public-but-not-joined discovery state. Discovery grants no read,
    *  write, roster, or delivery; joining remains a separate action. */
   is_member: z.boolean(),

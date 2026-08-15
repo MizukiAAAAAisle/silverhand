@@ -1500,14 +1500,11 @@ describe('ChannelService — the title IS the address (#task:2016)', () => {
     }
   });
 
-  it('refuses an inbox with not_addressable — reachable because `kind` is GENERATED', async () => {
+  it('refuses an inbox with not_addressable', async () => {
     const t = bootstrap();
     try {
       const inbox = t.conversations.insertAgentInbox(t.alice.id, Date.now());
-      // The inbox reports `kind='dm_channel'` (derived from `roster_policy`), so it
-      // reaches this door by id like any DM. It has no workspace placement, hence
-      // no address at all — a 400, not a constraint-level 500.
-      expect(inbox.kind).toBe('dm_channel');
+      expect(inbox.roster_policy).toBe('fixed');
 
       await expect(
         t.service.renameChannel({

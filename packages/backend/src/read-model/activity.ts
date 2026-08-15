@@ -194,7 +194,7 @@ interface DirectedNotificationRow extends SenderColumns {
   id: string;
   kind: 'mention_self' | 'agent_start_failed';
   conversation_id: string | null;
-  conversation_kind: 'channel' | 'dm_channel' | null;
+  conversation_roster_policy: 'open' | 'fixed' | null;
   message_id: string | null;
   thread_root_id: string | null;
   root_content: string | null;
@@ -209,7 +209,7 @@ interface PositionalStreamRow extends SenderColumns {
   conversation_id: string;
   root: string | null;
   root_content: string | null;
-  conversation_kind: 'channel' | 'dm_channel';
+  conversation_roster_policy: 'open' | 'fixed';
   conversation_title: string;
   workspace_id: string;
   first_unread_message_id: string;
@@ -276,7 +276,7 @@ const assembleDirectedNotifications: ActivitySource = ac => {
           n.id                AS id,
           n.kind              AS kind,
           n.conversation_id   AS conversation_id,
-          c.kind              AS conversation_kind,
+          c.roster_policy     AS conversation_roster_policy,
           n.message_id        AS message_id,
           m.thread_root_id    AS thread_root_id,
           root.content        AS root_content,
@@ -334,7 +334,7 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         salience: 'directed',
         workspace_id: n.workspace_id ?? '',
         conversation_id: n.conversation_id,
-        conversation_kind: n.conversation_kind ?? 'channel',
+        conversation_roster_policy: n.conversation_roster_policy ?? 'open',
         thread_root_id: n.thread_root_id,
         message_id: n.message_id,
         notification_id: n.id,
@@ -364,7 +364,7 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         salience: 'directed',
         workspace_id: n.workspace_id ?? '',
         conversation_id: n.conversation_id ?? '',
-        conversation_kind: n.conversation_kind ?? 'channel',
+        conversation_roster_policy: n.conversation_roster_policy ?? 'open',
         thread_root_id: null,
         message_id: null,
         notification_id: n.id,
@@ -443,18 +443,17 @@ export const POSITIONAL_STREAMS_SQL = `
         ON cr.user_id = @viewer
        AND cr.conversation_id = c.id
        AND cr.thread_root_id IS sh.thread_root_id
-     WHERE c.kind IN ('channel', 'dm_channel')
-       AND ${LIVE_CONVERSATION_PREDICATE}
+     WHERE ${LIVE_CONVERSATION_PREDICATE}
        AND (@ws IS NULL OR c.workspace_id = @ws)
        AND (
          -- DM mainline: directed-grade, always enters (§5.1).
-         (sh.thread_root_id IS NULL AND c.kind = 'dm_channel')
+         (sh.thread_root_id IS NULL AND c.roster_policy = 'fixed')
          -- Channel mainline: enters when the EFFECTIVE tier is 'all' — the
          -- channel's own tier with the viewer's workspace mute folded in
          -- (#task:1870). The workspace scope is a SUPPRESSOR above the tier, so
          -- muting a workspace removes its ambient items without touching any
          -- channel's stored choice; un-muting restores them exactly.
-         OR (sh.thread_root_id IS NULL AND c.kind = 'channel'
+         OR (sh.thread_root_id IS NULL AND c.roster_policy = 'open'
              AND ${channelAmbientEntersPredicate('c.id', 'c.workspace_id')})
          -- Thread ambient: aggregate-floor (#task:1268). Requires BOTH the
          -- delivery precondition (viewer follows the cluster) AND the parent
@@ -499,7 +498,7 @@ export const POSITIONAL_STREAMS_SQL = `
     ps.conversation_id  AS conversation_id,
     ps.root             AS root,
     root.content        AS root_content,
-    c.kind              AS conversation_kind,
+    c.roster_policy     AS conversation_roster_policy,
     c.title             AS conversation_title,
     c.workspace_id      AS workspace_id,
     m.id                AS first_unread_message_id,
@@ -547,14 +546,14 @@ const assemblePositionalStreams: ActivitySource = ac => {
   for (const s of positionalRows) {
     // DM unread is positional by mechanism but directed-grade by salience.
     const salience: ActivitySalience =
-      s.conversation_kind === 'dm_channel' ? 'directed' : 'ambient';
+      s.conversation_roster_policy === 'fixed' ? 'directed' : 'ambient';
     items.push({
       id: `unread:${s.conversation_id}::${s.root ?? ''}`,
       kind: 'unread',
       salience,
       workspace_id: s.workspace_id,
       conversation_id: s.conversation_id,
-      conversation_kind: s.conversation_kind,
+      conversation_roster_policy: s.conversation_roster_policy,
       thread_root_id: s.root,
       message_id: s.first_unread_message_id,
       notification_id: null,

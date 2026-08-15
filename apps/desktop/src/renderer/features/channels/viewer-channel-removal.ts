@@ -377,7 +377,7 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
   favorites: {
     verdicts: ['exempt'],
     reason:
-      'FavoriteKind is workspace|dm — no favorite row is channel-attributed, so a channel loss has nothing to settle here',
+      'favorites are conversation rows keyed by parent workspace — channel loss does not settle that parent-scoped projection here',
   },
   host: { verdicts: ['exempt'], reason: 'computer-scoped host record; no conversation axis' },
   'host-proxy-config': {

@@ -7,7 +7,7 @@ import {
 
 export interface ConversationReference {
   id: string;
-  kind: 'channel' | 'dm_channel';
+  roster_policy: 'open' | 'fixed';
   title: string;
 }
 
@@ -58,7 +58,7 @@ export function ConversationRef({
     (hookResult.status === 'resolved' && hookResult.ref
       ? {
           id: hookResult.ref.id,
-          kind: hookResult.ref.kind,
+          roster_policy: hookResult.ref.roster_policy,
           title: hookResult.ref.title,
         }
       : null);
@@ -78,9 +78,9 @@ export function ConversationRef({
     ? conversationDisplayName(resolved)
     : `#conv:${shortConversationId(id)}`;
   const tooltip = resolved
-    ? `${kindLabel(resolved.kind)} · ${conversationDisplayName(resolved)}`
+    ? `${rosterLabel(resolved.roster_policy)} · ${conversationDisplayName(resolved)}`
     : `Open conversation #conv:${id}`;
-  const icon = conversationIcon(resolved?.kind);
+  const icon = conversationIcon(resolved?.roster_policy);
   // Unresolved fallback (`#conv:<short>`) is pure ASCII → mono so the id
   // segment reads as the structured atom it is. Resolved labels surface
   // the human-readable title which may contain CJK, so they stay sans —
@@ -170,7 +170,7 @@ function ConversationPopoverBody({
     <div className="space-y-2">
       <div className="flex items-baseline gap-2">
         <span className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
-          {kindLabel(conversation.kind)}
+          {rosterLabel(conversation.roster_policy)}
         </span>
       </div>
       <p className="line-clamp-2 break-words text-xs font-medium text-text-primary">
@@ -234,13 +234,13 @@ function conversationDisplayName(conversation: ConversationReference): string {
   return conversation.title;
 }
 
-function kindLabel(kind: ConversationReference['kind']): string {
-  if (kind === 'dm_channel') return 'DM';
+function rosterLabel(policy: ConversationReference['roster_policy']): string {
+  if (policy === 'fixed') return 'DM';
   return 'Channel';
 }
 
-function conversationIcon(kind: ConversationReference['kind'] | undefined): JSX.Element {
-  if (kind === 'dm_channel') {
+function conversationIcon(policy: ConversationReference['roster_policy'] | undefined): JSX.Element {
+  if (policy === 'fixed') {
     return <AtSign className="size-3 shrink-0 self-center" />;
   }
   return <Hash className="size-3 shrink-0 self-center" />;

@@ -335,9 +335,11 @@ export function registerParityPhases(getRig: () => ParityRig): void {
       .get(ok.agent_home_workspace_id) as { owner_agent_id: string } | undefined;
     expect(homeRow?.owner_agent_id).toBe(ok.agent.id);
     const dmRow = rig.backend.context.db
-      .prepare(`SELECT kind FROM conversations WHERE id = ?`)
-      .get(ok.dm_channel_id) as { kind: string } | undefined;
-    expect(dmRow?.kind).toBe('dm_channel');
+      .prepare(`SELECT placement_kind, roster_policy FROM conversations WHERE id = ?`)
+      .get(ok.dm_channel_id) as
+      | { placement_kind: string; roster_policy: string }
+      | undefined;
+    expect(dmRow).toEqual({ placement_kind: 'workspace', roster_policy: 'fixed' });
 
     // Idempotent echo over the SAME key+body must NOT re-dispatch — 200.
     const echo = await postCreateAgent(rig.baseUrl, rig.bearer, body, key);

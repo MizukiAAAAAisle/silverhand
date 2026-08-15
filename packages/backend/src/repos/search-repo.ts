@@ -1,7 +1,8 @@
 import type { Database as Db } from 'better-sqlite3';
 import type {
   MessageRow,
-  ConversationKind,
+  ConversationPlacementKind,
+  ConversationRosterPolicy,
   SearchConversationRef,
   SearchQueryInput,
   SearchResultDto,
@@ -24,7 +25,8 @@ type SearchWorkspaceKind = 'regular' | 'dm';
 interface ConversationSearchRow {
   conversation_id: string;
   conversation_title: string;
-  conversation_kind: ConversationKind;
+  conversation_placement_kind: ConversationPlacementKind;
+  conversation_roster_policy: ConversationRosterPolicy;
   channel_id: string;
   closed_at: number | null;
   conversation_created_at: number;
@@ -45,7 +47,8 @@ interface WorkspaceSearchRow {
 
 type MessageSearchRow = MessageRow & {
   conversation_title: string;
-  conversation_kind: ConversationKind;
+  conversation_placement_kind: ConversationPlacementKind;
+  conversation_roster_policy: ConversationRosterPolicy;
   channel_id: string;
   closed_at: number | null;
   conversation_created_at: number;
@@ -70,7 +73,8 @@ function workspaceRef(row: {
 function conversationRef(row: {
   conversation_id: string;
   conversation_title: string;
-  conversation_kind: ConversationKind;
+  conversation_placement_kind: ConversationPlacementKind;
+  conversation_roster_policy: ConversationRosterPolicy;
   channel_id: string;
   closed_at: number | null;
   conversation_created_at: number;
@@ -78,7 +82,8 @@ function conversationRef(row: {
   return {
     id: row.conversation_id,
     title: row.conversation_title,
-    kind: row.conversation_kind,
+    placement_kind: row.conversation_placement_kind,
+    roster_policy: row.conversation_roster_policy,
     channel_id: row.channel_id,
     closed_at: row.closed_at,
     created_at: row.conversation_created_at,
@@ -224,7 +229,8 @@ export class SearchRepo {
         `SELECT
             conv.id AS conversation_id,
             conv.title AS conversation_title,
-            conv.kind AS conversation_kind,
+            conv.placement_kind AS conversation_placement_kind,
+            conv.roster_policy AS conversation_roster_policy,
             conv.id AS channel_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,
@@ -323,7 +329,8 @@ export class SearchRepo {
         `SELECT
             m.*,
             conv.title AS conversation_title,
-            conv.kind AS conversation_kind,
+            conv.placement_kind AS conversation_placement_kind,
+            conv.roster_policy AS conversation_roster_policy,
             conv.id AS channel_id,
             conv.closed_at AS closed_at,
             conv.created_at AS conversation_created_at,

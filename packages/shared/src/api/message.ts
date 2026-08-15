@@ -2,7 +2,8 @@
 // Bounded context: message. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import {
-  ConversationKindSchema,
+  ConversationPlacementKindSchema,
+  ConversationRosterPolicySchema,
   FromKindSchema,
 } from '../db/schema.js';
 import {
@@ -526,7 +527,8 @@ export type SearchWorkspaceRef = z.infer<typeof SearchWorkspaceRefSchema>;
 export const SearchConversationRefSchema = z.object({
   id: z.string(),
   title: z.string(),
-  kind: ConversationKindSchema,
+  placement_kind: ConversationPlacementKindSchema,
+  roster_policy: ConversationRosterPolicySchema,
   channel_id: z.string(),
   closed_at: z.number().nullable(),
   created_at: z.number(),

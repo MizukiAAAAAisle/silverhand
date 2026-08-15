@@ -3211,6 +3211,110 @@ export const migrations: Migration[] = [
         ON workspaces(workspace_kind, pinned_at) WHERE pinned_at IS NOT NULL;
     `,
   },
+  {
+    version: 79,
+    name: 'retire_conversation_kind_bridge',
+    // #task:2023/#task:2032 — placement_kind × roster_policy are now the only
+    // conversation taxonomy. `kind` was a v69–v78 GENERATED compatibility
+    // bridge and has no remaining runtime or wire reader, so remove it rather
+    // than preserving its two-value projection under another name.
+    //
+    // The only persisted value that embedded the old labels was the Favorites
+    // ordering key. Rewrite exactly that namespace to `conversation:<id>`.
+    // The precondition is deliberately before every DDL/DML statement and
+    // rejects any two rows that would collapse onto one primary key; production
+    // cannot create that state because roster_policy is immutable, but a loud
+    // proof here is cheaper than silent rank loss in a forged/legacy database.
+    precondition: (db) => {
+      const handle = db as {
+        prepare: (sql: string) => {
+          all: () => Array<{
+            user_id: string;
+            canonical_key: string;
+            source_keys: string;
+          }>;
+        };
+      };
+      const collisions = handle.prepare(
+        `SELECT user_id, canonical_key,
+                GROUP_CONCAT(entity_id, ',') AS source_keys
+           FROM (
+             SELECT user_id, entity_id,
+                    CASE
+                      WHEN SUBSTR(entity_id, 1, 8) = 'channel:'
+                        THEN 'conversation:' || SUBSTR(entity_id, 9)
+                      WHEN SUBSTR(entity_id, 1, 11) = 'dm_channel:'
+                        THEN 'conversation:' || SUBSTR(entity_id, 12)
+                      ELSE entity_id
+                    END AS canonical_key
+               FROM user_sort_entry
+              WHERE list_key = 'favorites'
+              ORDER BY user_id, entity_id
+           )
+          GROUP BY user_id, canonical_key
+         HAVING COUNT(*) > 1
+          ORDER BY user_id, canonical_key`,
+      ).all();
+      if (collisions.length > 0) {
+        const sample = collisions
+          .map(row => `${row.user_id}:${row.canonical_key}<-[${row.source_keys}]`)
+          .join('; ');
+        throw new Error(
+          `migration v79 (#task:2032): favorite keys would collapse during `
+            + `conversation-kind retirement (${collisions.length} collision(s)): ${sample}`,
+        );
+      }
+    },
+    up: `
+      UPDATE user_sort_entry
+         SET entity_id = CASE
+           WHEN SUBSTR(entity_id, 1, 8) = 'channel:'
+             THEN 'conversation:' || SUBSTR(entity_id, 9)
+           ELSE 'conversation:' || SUBSTR(entity_id, 12)
+         END
+       WHERE list_key = 'favorites'
+         AND (
+           SUBSTR(entity_id, 1, 8) = 'channel:'
+           OR SUBSTR(entity_id, 1, 11) = 'dm_channel:'
+         );
+
+      DROP TRIGGER channel_attention_prefs_channel_only_insert;
+      DROP TRIGGER channel_attention_prefs_channel_only_update;
+      DROP INDEX idx_conversations_workspace;
+
+      ALTER TABLE conversations DROP COLUMN kind;
+
+      -- The active workspace/member reads constrain workspace_id and order by
+      -- updated_at. Keep that access path without the retired classifier in the
+      -- middle; the v79 plan falsifier EXPLAINs the exported production SQL.
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, updated_at DESC);
+
+      -- Preserve the old fail-closed behavior: a missing conversation and every
+      -- fixed-roster placement both map to the empty sentinel and are rejected.
+      CREATE TRIGGER channel_attention_prefs_channel_only_insert
+        BEFORE INSERT ON channel_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT roster_policy FROM conversations WHERE id = NEW.conversation_id), ''
+            ) != 'open'
+            THEN RAISE(ABORT, 'channel_attention_preferences.conversation_id must reference a regular channel')
+          END;
+        END;
+
+      CREATE TRIGGER channel_attention_prefs_channel_only_update
+        BEFORE UPDATE OF conversation_id ON channel_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT roster_policy FROM conversations WHERE id = NEW.conversation_id), ''
+            ) != 'open'
+            THEN RAISE(ABORT, 'channel_attention_preferences.conversation_id must reference a regular channel')
+          END;
+        END;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

@@ -83,7 +83,7 @@ const WORKSPACE_SELECT = `
         FROM conversations c
         LEFT JOIN agents owner ON owner.id = w.owner_agent_id
        WHERE c.workspace_id = w.id
-         AND c.kind = 'dm_channel'
+         AND c.roster_policy = 'fixed'
        ORDER BY CASE
                   WHEN c.title = 'Onboarding' THEN 0
                   WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
@@ -99,7 +99,7 @@ const WORKSPACE_SELECT = `
             FROM conversations c
             LEFT JOIN agents owner ON owner.id = w.owner_agent_id
            WHERE c.workspace_id = w.id
-             AND c.kind = 'dm_channel'
+             AND c.roster_policy = 'fixed'
            ORDER BY CASE
                       WHEN c.title = 'Onboarding' THEN 0
                       WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
@@ -235,7 +235,7 @@ export class WorkspaceRepo {
                    FROM conversations c
                    LEFT JOIN agents owner ON owner.id = w.owner_agent_id
                   WHERE c.workspace_id = w.id
-                    AND c.kind = 'dm_channel'
+                    AND c.roster_policy = 'fixed'
                   ORDER BY CASE
                              WHEN c.title = 'Onboarding' THEN 0
                              WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
@@ -251,7 +251,7 @@ export class WorkspaceRepo {
                        FROM conversations c
                        LEFT JOIN agents owner ON owner.id = w.owner_agent_id
                       WHERE c.workspace_id = w.id
-                        AND c.kind = 'dm_channel'
+                        AND c.roster_policy = 'fixed'
                       ORDER BY CASE
                                  WHEN c.title = 'Onboarding' THEN 0
                                  WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1

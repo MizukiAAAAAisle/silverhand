@@ -1041,7 +1041,7 @@ function RegisteredAppShell({
     for (const item of channels) {
       m.set(item.id, {
         id: item.id,
-        kind: item.kind,
+        roster_policy: item.roster_policy,
         title: item.title,
       });
     }
@@ -1065,7 +1065,7 @@ function RegisteredAppShell({
     lastSelectedMessageReadKey.current = readKey;
     markMessageChannelRead.mutate(visiblePrimary.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visiblePrimary?.id, visiblePrimary?.kind]);
+  }, [visiblePrimary?.id]);
   useEffect(() => {
     if (!visibleSecondary) {
       lastThreadMessageReadKey.current = null;
@@ -1076,7 +1076,7 @@ function RegisteredAppShell({
     lastThreadMessageReadKey.current = readKey;
     markMessageChannelRead.mutate(visibleSecondary.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleSecondary?.id, visibleSecondary?.kind]);
+  }, [visibleSecondary?.id]);
 
   // NOTE: conversation FOCUS no longer drains notification badges. Focus is a
   // passive surface (the user is merely looking at a channel, not acting on a
@@ -1443,7 +1443,8 @@ function RegisteredAppShell({
         ? {
             id: s.id,
             title: s.title,
-            kind: s.kind,
+            placement_kind: s.placement_kind,
+            roster_policy: s.roster_policy,
             closed_at: s.closed_at,
             archived_at: s.archived_at,
             workspace_id: s.workspace_id,
@@ -1566,7 +1567,7 @@ function RegisteredAppShell({
     async (channelId: string) => {
       const res = await leaveChannel.mutateAsync(channelId);
       const isPrivate =
-        res.channel.kind === 'channel' && res.channel.visibility === 'private';
+        res.channel.roster_policy === 'open' && res.channel.visibility === 'private';
       if (!isPrivate) return;
       // Same ladder a third-party removal uses (`departPrimaryPane`): next/prev
       // neighbor, else clear to the workspace empty state. It no-ops when the
@@ -1729,8 +1730,7 @@ function RegisteredAppShell({
       // dm-side / `?side` *secondary* primaries don't (they aren't the
       // channel-scoped index), so they keep it undefined.
       onToggleThreadsList={
-        deferredParentDescriptor?.kind === 'channel' ||
-        deferredParentDescriptor?.kind === 'dm_channel'
+        deferredParentDescriptor != null
           ? nav.toggleThreadsList
           : undefined
       }
@@ -1740,8 +1740,7 @@ function RegisteredAppShell({
       // attachments index; thread / dm-side / `?side` secondary primaries
       // don't.
       onToggleFilesList={
-        deferredParentDescriptor?.kind === 'channel' ||
-        deferredParentDescriptor?.kind === 'dm_channel'
+        deferredParentDescriptor != null
           ? nav.toggleFilesList
           : undefined
       }

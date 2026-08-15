@@ -1371,9 +1371,8 @@ export function selectMentionCandidates(
  * Filter the workspace's conversation list down to top-level channels
  * the user can actually mention.
  *
- * - `kind === 'channel'` only: DM channels have no meaningful `#name`
- *   and thread mentions aren't addressable by name (see CLI docs —
- *   threads only accept `#conv:<id>`).
+ * - `roster_policy === 'open'` only: fixed-roster conversations are not channel
+ *   mentions, and reply clusters are addressed through their root coordinate.
  * - Skip archived AND closed channels: both resolve to inert / dim
  *   refs on the receiving end (see ChannelRef's `closed_at`-driven
  *   `dim` class), so offering them in the picker would invite dead
@@ -1386,7 +1385,7 @@ export function filterChannels(
   const q = query.toLowerCase();
   const onlyLive = channels.filter(
     (c): c is ChannelConversationDto =>
-      c.kind === 'channel' && c.archived_at === null && c.closed_at === null,
+      c.roster_policy === 'open' && c.archived_at === null && c.closed_at === null,
   );
   const matched = q
     ? onlyLive.filter(c => c.title.toLowerCase().includes(q))

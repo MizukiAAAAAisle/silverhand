@@ -83,7 +83,8 @@ export function buildRuntimeStartOptions(
     workspace_memory_index: indexedWorkspaces.map(runtimeWorkspaceRef),
     session: {
       conversation_id: input.conversation.id,
-      kind: input.conversation.kind,
+      placement_kind: input.conversation.placement_kind,
+      roster_policy: input.conversation.roster_policy,
       title: input.conversation.title,
       spawned_by_agent_id: input.conversation.spawned_by_agent_id,
       members: input.members,

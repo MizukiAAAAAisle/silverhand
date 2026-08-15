@@ -12,6 +12,7 @@
 // Everything else Attention surfaces (positional unread / directed mentions /
 // tasks) is a projection, never an Attention-owned copy.
 import { z } from 'zod';
+import { ConversationRosterPolicySchema } from '../db/schema.js';
 import { MessageAuthorDtoSchema } from './message-author.js';
 
 /**
@@ -309,13 +310,13 @@ export const ActivityItemDtoSchema = z.object({
    *  stream cursor). This is the source_ref-out for directed notification-backed
    *  claims — the renderer marks read BY this id, never by parsing `id`. */
   notification_id: z.string().nullable(),
-  /** The kind of the anchoring conversation (channel vs DM). `thread`-ness is NOT
-   *  a conversation kind here — a thread item carries the PARENT channel/DM kind
-   *  and signals its thread-ness via `thread_root_id != null`. Drives the row-1
-   *  "where" label (Channel / DM). */
-  conversation_kind: z.enum(['channel', 'dm_channel']),
-  /** Row-1 location title: ALWAYS the conversation (channel/DM) title — never a
-   *  message excerpt. Stable across kinds so the renderer's "where" line has one
+  /** The roster policy of the anchoring conversation. Thread-ness is a stream
+   *  coordinate, not a conversation classification: a thread item carries the
+   *  parent conversation's policy and sets `thread_root_id != null`. Drives the
+   *  row-1 "where" label (Channel / DM). */
+  conversation_roster_policy: ConversationRosterPolicySchema,
+  /** Row-1 location title: ALWAYS the conversation title — never a message
+   *  excerpt. Stable across placements so the renderer's "where" line has one
    *  meaning. */
   title: z.string(),
   /** For a thread item (`thread_root_id != null`): a one-line excerpt of the

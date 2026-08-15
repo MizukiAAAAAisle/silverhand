@@ -106,7 +106,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
           // agent-centric bundle coordinate for regular workspaces, the agent L1
           // home for DMs. Never a server-supplied path.
           workspacePath: options.workspace.path,
-          channelKind: options.session.kind === 'dm_channel' ? 'dm' : 'regular',
+          channelKind: options.session.roster_policy === 'fixed' ? 'dm' : 'regular',
           sessionTitle: options.session.title,
           members: options.session.members,
         },

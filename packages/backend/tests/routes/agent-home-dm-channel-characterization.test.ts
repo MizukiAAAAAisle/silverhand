@@ -113,7 +113,7 @@ describe('POST /api/workspaces/:id/channels — agent_home DM branch characteriz
     // Omitted / explicit `private` pass through — only `public` is rejected.
     expect(res.status).toBe(201);
     const channel = ((await res.json()) as any).channel;
-    expect(channel.kind).toBe('dm_channel');
+    expect(channel).toMatchObject({ placement_kind: 'workspace', roster_policy: 'fixed' });
     expect(channel.visibility).toBe('private');
   });
 

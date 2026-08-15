@@ -132,12 +132,7 @@ export function collectWorkspaceTeardownPlan(
   const conversationIds = workspaceConversations.map(conversation => conversation.id);
   // Top-level channels only — `attachments.channel_id` never points at a thread
   // (threads upload via their parent).
-  const sweepChannelIds = workspaceConversations
-    .filter(
-      conversation =>
-        conversation.kind === 'channel' || conversation.kind === 'dm_channel',
-    )
-    .map(conversation => conversation.id);
+  const sweepChannelIds = workspaceConversations.map(conversation => conversation.id);
   const runtimeStops = conversationIds.flatMap(conversationId =>
     conversations.listAgents(conversationId).flatMap(ca => {
       const agent = deps.agents.get(ca.agent_id);

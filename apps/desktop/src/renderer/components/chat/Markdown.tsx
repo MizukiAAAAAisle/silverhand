@@ -647,13 +647,13 @@ function StaticConversationRef({
   const label = conversation
     ? conversationDisplayName(conversation)
     : `#conv:${shortConversationId(id)}`;
-  const icon = conversationIcon(conversation?.kind);
+  const icon = conversationIcon(conversation?.roster_policy);
   return (
     <span
       className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
       aria-label={
         conversation
-          ? `${kindLabel(conversation.kind)} · ${label}`
+          ? `${rosterLabel(conversation.roster_policy)} · ${label}`
           : `Conversation #conv:${id}`
       }
       data-conversation-ref={id}
@@ -670,15 +670,15 @@ function conversationDisplayName(conversation: ConversationReference): string {
   return conversation.title;
 }
 
-function kindLabel(kind: ConversationReference['kind']): string {
-  if (kind === 'dm_channel') return 'DM';
+function rosterLabel(policy: ConversationReference['roster_policy']): string {
+  if (policy === 'fixed') return 'DM';
   return 'Channel';
 }
 
 function conversationIcon(
-  kind: ConversationReference['kind'] | undefined,
+  policy: ConversationReference['roster_policy'] | undefined,
 ): JSX.Element {
-  if (kind === 'dm_channel') {
+  if (policy === 'fixed') {
     return <AtSign className="size-3 shrink-0 self-center" />;
   }
   return <Hash className="size-3 shrink-0 self-center" />;

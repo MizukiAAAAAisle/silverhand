@@ -10,7 +10,7 @@ be served to a renderer that has not classified its consumers by `is_member`.
 
 ## 1. Model
 
-A regular channel (`conversations.kind = 'channel'`) has a stored, identity-level
+A regular workspace conversation with `roster_policy = 'open'` has a stored, identity-level
 `visibility ∈ {'private', 'public'}` (`ConversationDtoSchema.visibility`).
 
 - `private` (default) — **conversation-membership gated for both actors**. Only
@@ -28,10 +28,9 @@ Invariants:
 
 - `visibility` is **NOT NULL**; existing rows were backfilled explicit `private`
   (no "missing ⇒ private" compatibility branch).
-- Only a regular `channel` can be `public`. `dm_channel` (and any legacy thread)
-  is always `private`, enforced by a DB CHECK in migration **v58**
-  (`visibility = 'private' OR kind = 'channel'`; single cross-column CHECK, no
-  triggers).
+- Only an open-roster conversation can be `public`. Fixed-roster conversations
+  are always `private`, enforced by the current DB CHECK
+  (`visibility = 'private' OR roster_policy = 'open'`).
 - `visibility` is **channel identity**, not a per-viewer fact. The per-viewer
   membership bit (`is_member`) is never stored on the identity DTO; it is
   route-computed on read/discovery responses (see §4).
@@ -86,14 +85,14 @@ byte-level access gate.
 ### 2.3 `canJoinPublicChannel` — self-join admission
 
 `isPublicChannelBranch(...)` used **alone** (no membership short-circuit), so a
-member of a non-public target (private / `dm_channel` / archived) is **not**
+member of a non-public target (private / fixed roster / archived) is **not**
 admitted to `/join` — even an existing member. The use case runs this admission
 **before** the already-member idempotency check.
 
 ### 2.4 Shared branch `isPublicChannelBranch` (private helper)
 
 The public admission both public predicates share:
-`principal.kind === 'user'` ∧ `kind === 'channel'` ∧ `visibility === 'public'`
+`principal.kind === 'user'` ∧ `roster_policy === 'open'` ∧ `visibility === 'public'`
 ∧ `archived_at === null` ∧ `canViewWorkspace(...)`. Deliberately
 membership-agnostic. Agents have **no** public read / join / interaction path:
 this branch is user-only, and the agent-facing discovery list (§4.3) passes
@@ -191,16 +190,16 @@ analogue of the viewer discovery union, gated by workspace access AND the
 `read_messages` capability — a missing capability denies the whole list, so
 discovery is never capability-free. It is one explicit union per workspace:
 
-- **member arm** — channels and DMs the agent has joined
-  (`conversation_agents`), any visibility, `channel` + `dm_channel`, archived
+- **member arm** — conversations the agent participates in
+  (`conversation_agents`), any visibility or roster policy, archived
   included and sorted last; `is_member: true`.
 - **discovery arm** — active **public** regular channels the agent has **not**
-  joined (`kind = 'channel'` ∧ `visibility = 'public'` ∧ `archived_at IS NULL`);
+  joined (`roster_policy = 'open'` ∧ `visibility = 'public'` ∧ `archived_at IS NULL`);
   `is_member: false`.
 
 Excluded: non-member private channels, non-member DMs, and non-member archived
-public channels. DMs are never discoverable — the discovery arm is
-`kind = 'channel'` and a `dm_channel` is always `private` (§1). The predicate
+public channels. Fixed-roster conversations are never discoverable — the discovery arm is
+open-roster only, while fixed-roster rows are always `private` (§1). The predicate
 mirrors `listActiveChannelsForViewer` (§4): the discovery arm is the same
 active/public/non-member set, swapping `conversation_users` for
 `conversation_agents`, while the member arm keeps the agent's DM and archived
@@ -208,7 +207,7 @@ rows.
 
 Each `AgentListedChannel` carries authoritative `visibility` and `is_member`.
 `is_member` is computed independently from the membership relation
-(`EXISTS conversation_agents`), never inferred from which arm matched, `kind`,
+(`EXISTS conversation_agents`), never inferred from which arm matched, roster policy,
 `visibility`, or list position — a joined public channel is `is_member: true`.
 `visibility: 'public'` with `is_member: false` is the public-but-not-joined
 discovery state.

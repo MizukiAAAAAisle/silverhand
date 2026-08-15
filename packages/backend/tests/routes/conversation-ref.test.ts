@@ -87,7 +87,8 @@ describe('GET /api/conversations/:id/ref', () => {
     const { ref } = await res.json() as any;
     expect(ref).toMatchObject({
       id: channelId,
-      kind: 'channel',
+      placement_kind: 'workspace',
+      roster_policy: 'open',
       title: 'planning',
       workspace_id: reg.workspaceId,
       workspace_kind: 'regular',
@@ -96,7 +97,7 @@ describe('GET /api/conversations/:id/ref', () => {
     });
   });
 
-  it("projects an agent's dm_channel ref with workspace_kind='dm' (not agent_home)", async () => {
+  it("projects an agent's fixed-roster ref with workspace_kind='dm' (not agent_home)", async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
 
@@ -105,7 +106,8 @@ describe('GET /api/conversations/:id/ref', () => {
     const { ref } = await res.json() as any;
     expect(ref).toMatchObject({
       id: alice.dmChannelId,
-      kind: 'dm_channel',
+      placement_kind: 'workspace',
+      roster_policy: 'fixed',
       workspace_id: alice.agentHomeWorkspaceId,
       // The hard contract: external callers never see 'agent_home'.
       workspace_kind: 'dm',
@@ -240,7 +242,8 @@ describe('GET /api/conversations/:id/ref — public-aware read gate boundary', (
     // no unread state, no roster.
     expect(ref).toMatchObject({
       id: publicId,
-      kind: 'channel',
+      placement_kind: 'workspace',
+      roster_policy: 'open',
       title: 'public-room',
       workspace_id: workspaceId,
       workspace_kind: 'regular',
@@ -302,7 +305,7 @@ describe('GET /api/conversations/:id/ref — public-aware read gate boundary', (
     // AND its dm_channel, so strip `teammate` from the conversation while
     // KEEPING the workspace row: this is precisely "a workspace member who is
     // not a participant". The 403 is owed jointly to the public branch's
-    // `kind === 'channel'` and `visibility === 'public'` legs — a dm_channel
+    // open-roster and `visibility === 'public'` legs — a fixed-roster row
     // is structurally excluded from both.
     pinNonChannelMember(t, alice.dmChannelId, alice.agentHomeWorkspaceId, 'teammate');
 

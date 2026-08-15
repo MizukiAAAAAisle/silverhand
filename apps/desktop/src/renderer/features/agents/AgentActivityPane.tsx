@@ -24,13 +24,6 @@ interface RosterGroups {
 /**
  * Partition the runtime roster into the two groups the Activity rail shows.
  *
- * Allowlist `conversation_kind IN ('channel','dm_channel')` (mirrors the
- * `agent-read.ts` visible-channel predicate) — a reply-cluster thread
- * shares its parent channel's agent session, so its activity already
- * lands under the parent channel id (backend #task:1186). Using an
- * allowlist (not a denylist) keeps us safe against any unexpected /
- * future conversation kind that surfaces here.
- *
  *  - `active` → not closed AND status `active` | `starting`
  *  - `recent` → everything else that survived the allowlist (idle / crashed
  *               / closed)
@@ -41,10 +34,7 @@ export function partitionRoster(
   rows: ReadonlyArray<AgentRuntimeParticipation>,
   seats: ReadonlyArray<AgentRuntimeSeatDto>,
 ): RosterGroups {
-  const channels = rows.filter(
-    r =>
-      r.conversation_kind === 'channel' || r.conversation_kind === 'dm_channel',
-  );
+  const channels = rows;
   const active: AgentRuntimeParticipation[] = [];
   const recent: AgentRuntimeParticipation[] = [];
   for (const r of channels) {
@@ -211,7 +201,7 @@ function RosterItem({
   live: boolean;
 }): JSX.Element {
   const isDm =
-    row.conversation_kind === 'dm_channel' || row.workspace_kind === 'agent_home';
+    row.conversation_roster_policy === 'fixed' || row.workspace_kind === 'agent_home';
   return (
     <li className="group/row relative">
       <button

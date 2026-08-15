@@ -48,7 +48,7 @@ function dmOf(t: TestApp, agentId: string): { wsId: string; dmChannelId: string 
   expect(ws).toBeTruthy();
   const dm = t.ctx.db
     .prepare<[string], { id: string }>(
-      `SELECT id FROM conversations WHERE workspace_id = ? AND kind = 'dm_channel'`,
+      `SELECT id FROM conversations WHERE workspace_id = ? AND roster_policy = 'fixed'`,
     )
     .get(ws!.id);
   expect(dm).toBeTruthy();
@@ -92,8 +92,8 @@ describe('GET /api/favorites', () => {
     const ch = items.find(i => i.entity_id === chId);
 
     expect(ch).toMatchObject({
-      kind: 'channel',
-      favorite_key: `channel:${chId}`,
+      roster_policy: 'open',
+      favorite_key: `conversation:${chId}`,
       entity_id: chId,
       // The PARENT workspace — no longer the entity itself (#task:1888).
       workspace_id: wsId,
@@ -134,7 +134,7 @@ describe('GET /api/favorites', () => {
     expect(items.map(i => i.entity_id)).toEqual([c2, c1]);
   });
 
-  it('projects a starred dm_channel with the bound agent as PARENT (kind="dm_channel")', async () => {
+  it('projects a starred fixed-roster conversation with the bound agent as PARENT', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'rover');
     const { wsId: dmWsId, dmChannelId } = dmOf(t, agentId);
@@ -144,8 +144,8 @@ describe('GET /api/favorites', () => {
     const items = await favorites(t);
     const dm = items.find(i => i.entity_id === dmChannelId);
     expect(dm).toMatchObject({
-      kind: 'dm_channel',
-      favorite_key: `dm_channel:${dmChannelId}`,
+      roster_policy: 'fixed',
+      favorite_key: `conversation:${dmChannelId}`,
       entity_id: dmChannelId,
       workspace_id: dmWsId,
       // Agent-home parent → identity comes from the bound agent.
@@ -158,9 +158,9 @@ describe('GET /api/favorites', () => {
   // projection must carry the conversation's STORED visibility rather than leave the
   // renderer to join the parent's channel list — that list no longer holds the row
   // (#task:1888 moves it) and the parent may be collapsed and fetching nothing.
-  // Per-kind massaging stays OUT of the wire: dm_channel ships its raw stored value
-  // and the renderer gates the Lock on `kind === 'channel'` (#task:1954).
-  it('projects each row visibility: stored value verbatim, both kinds (#task:1954)', async () => {
+  // Per-roster-policy massaging stays OUT of the wire: fixed-roster rows ship
+  // their raw stored value and the renderer gates the Lock on `roster_policy`.
+  it('projects each row visibility: stored value verbatim, both roster policies (#task:1954)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
@@ -223,7 +223,7 @@ describe('GET /api/favorites', () => {
     expect(r.status).toBe(200);
     const items = ((await r.json()) as any).items as any[];
     expect(items.map(i => i.entity_id)).toEqual([pubUnjoined]);
-    expect(items[0]).toMatchObject({ kind: 'channel', workspace_id: wsId, parent_title: 'eng' });
+    expect(items[0]).toMatchObject({ roster_policy: 'open', workspace_id: wsId, parent_title: 'eng' });
   });
 
   it('hides an archived channel and a channel under an archived workspace (storage row preserved)', async () => {
@@ -327,7 +327,7 @@ describe('GET /api/favorites', () => {
 // ── Favorites ordering (#task:1252 C) ──────────────────────────────────────
 // Favorites is a first-class sortable list (list_key='favorites'): a flat single
 // group, list-wide recent/manual + manual drag, reusing the `sort` context. The
-// read-model synthesizes `viewer_sort` keyed by `<kind>:<entity_id>` favorite
+// read-model synthesizes `viewer_sort` keyed by `conversation:<entity_id>` favorite
 // keys; recent reads the entity's HOME `last_accessed_at` (recently-OPENED), not
 // `starred_at`. Membership stays single-source in each home list's `starred_at`.
 
@@ -353,7 +353,7 @@ describe('Favorites ordering (list_key=favorites)', () => {
     t = null;
   });
 
-  it('emits viewer_sort keyed by kind-qualified favorite_key with the sort triple', async () => {
+  it('emits viewer_sort keyed by conversation-qualified favorite_key with the sort triple', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
@@ -369,11 +369,11 @@ describe('Favorites ordering (list_key=favorites)', () => {
     const { items, viewer_sort } = await favoritesFull(t);
     expect(viewer_sort.list_key).toBe('favorites');
 
-    // Rows carry the favorite_key (kind-qualified) + created_at.
+    // Rows carry the conversation-qualified favorite_key + created_at.
     const chRow = items.find(i => i.entity_id === chId);
     const dmRow = items.find(i => i.entity_id === dmChannelId);
-    expect(chRow.favorite_key).toBe(`channel:${chId}`);
-    expect(dmRow.favorite_key).toBe(`dm_channel:${dmChannelId}`);
+    expect(chRow.favorite_key).toBe(`conversation:${chId}`);
+    expect(dmRow.favorite_key).toBe(`conversation:${dmChannelId}`);
     expect(typeof chRow.created_at).toBe('number');
 
     // Entries are keyed by favorite_key and carry rank + HOME last_accessed_at +
@@ -381,12 +381,12 @@ describe('Favorites ordering (list_key=favorites)', () => {
     const byKey = Object.fromEntries(
       viewer_sort.entries.map((e: any) => [e.entity_id, e]),
     );
-    expect(byKey[`channel:${chId}`]).toMatchObject({
+    expect(byKey[`conversation:${chId}`]).toMatchObject({
       rank: null,
       last_accessed_at: 7000,
       starred_at: 1000,
     });
-    expect(byKey[`dm_channel:${dmChannelId}`]).toMatchObject({
+    expect(byKey[`conversation:${dmChannelId}`]).toMatchObject({
       rank: null,
       last_accessed_at: 8000,
       starred_at: 2000,
@@ -402,8 +402,8 @@ describe('Favorites ordering (list_key=favorites)', () => {
     await http(t).post(`/api/channels/${chId}/star`);
     await http(t).post(`/api/channels/${dmChannelId}/star`);
 
-    const chKey = `channel:${chId}`;
-    const dmKey = `dm_channel:${dmChannelId}`;
+    const chKey = `conversation:${chId}`;
+    const dmKey = `conversation:${dmChannelId}`;
     const r = await http(t).put('/api/sort/order', {
       list_key: 'favorites',
       group: 'favorites',
@@ -418,14 +418,14 @@ describe('Favorites ordering (list_key=favorites)', () => {
     expect(byKey[chKey].rank).toBe(1);
   });
 
-  it('rejects a reorder id that is not a kind-qualified favorite_key', async () => {
+  it('rejects a reorder id that is not a conversation-qualified favorite_key', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const chId = await makeChannel(t, wsId, 'general', agentId);
     await http(t).post(`/api/channels/${chId}/star`);
 
-    // Bare entity_id (not `channel:<id>`) is not a member of the favorites group.
+    // Bare entity_id (not `conversation:<id>`) is not a member of the favorites group.
     const r = await http(t).put('/api/sort/order', {
       list_key: 'favorites',
       group: 'favorites',
@@ -454,7 +454,7 @@ describe('Favorites ordering (list_key=favorites)', () => {
     const r = await http(t).put('/api/sort/order', {
       list_key: 'favorites',
       group: 'favorites',
-      ordered_ids: [`dm_channel:${dmChannelId}`, `channel:${chId}`],
+      ordered_ids: [`conversation:${dmChannelId}`, `conversation:${chId}`],
     });
     expect(r.status).toBe(200);
 
@@ -475,8 +475,8 @@ describe('Favorites ordering (list_key=favorites)', () => {
     const { dmChannelId } = dmOf(t, agentId);
     await http(t).post(`/api/channels/${chId}/star`);
     await http(t).post(`/api/channels/${dmChannelId}/star`);
-    const chKey = `channel:${chId}`;
-    const dmKey = `dm_channel:${dmChannelId}`;
+    const chKey = `conversation:${chId}`;
+    const dmKey = `conversation:${dmChannelId}`;
 
     // Manually arrange favorites → both get a rank under list_key='favorites'.
     expect(
@@ -552,7 +552,7 @@ describe('Favorites ordering (list_key=favorites)', () => {
 
     const r = await http(t).post('/api/sort/touch', {
       list_key: 'favorites',
-      entity_id: `channel:${chId}`,
+      entity_id: `conversation:${chId}`,
     });
     expect(r.status).toBe(400);
     // No dead last_accessed_at row written under list_key='favorites' — recent

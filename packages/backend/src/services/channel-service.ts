@@ -751,9 +751,9 @@ export class ChannelService {
    * keeps the address, so it writes, announces, and does not conflict with itself.
    *
    * Refusals:
-   *  - unknown / non-channel-like id → `not_found`;
-   *  - a target with no workspace to hold an address (an agent inbox, reachable
-   *    because `kind` is GENERATED) → `not_addressable`;
+   *  - unknown id → `not_found`;
+   *  - a target with no workspace to hold an address (an agent inbox) →
+   *    `not_addressable`;
    *  - another channel in this workspace already showing that title → 409
    *    `conversation_title_taken`, never auto-suffixed.
    *
@@ -897,7 +897,11 @@ export class ChannelService {
     actor: ChannelActor;
   }): Promise<{ channel: ChannelConversationDto }> {
     const existing = this.channels.get(input.channelId);
-    if (!existing || existing.kind !== 'channel') {
+    if (
+      !existing
+      || existing.placement_kind !== 'workspace'
+      || existing.roster_policy !== 'open'
+    ) {
       throw new ChannelError('not_found', 'channel not found');
     }
     if (input.visibility === 'public' && input.actor.kind !== 'user') {
@@ -909,7 +913,11 @@ export class ChannelService {
     // Same-value no-op: nothing changed, so emit nothing.
     if (existing.visibility === input.visibility) {
       const channel = this.channels.getChannelLike(input.channelId);
-      if (!channel || channel.kind !== 'channel') {
+      if (
+        !channel
+        || channel.placement_kind !== 'workspace'
+        || channel.roster_policy !== 'open'
+      ) {
         throw new ChannelError('not_found', 'channel not found');
       }
       return { channel };
@@ -942,7 +950,7 @@ export class ChannelService {
    *  The two CREATE callers pass the workspace they were asked to create in; the
    *  three MUTATION callers derive it from the mutated row with
    *  `requireWorkspacePlacement`. That assertion cannot fire today — each of
-   *  them refuses anything but `kind === 'channel'`, i.e. an open roster, which
+   *  them refuses anything but an open roster, which
    *  only the workspace arm has — and it is written anyway because the
    *  alternative (`?? ''` / `!`) would turn a future placement with an open
    *  roster into a frame addressed to a scope nobody subscribes to. */

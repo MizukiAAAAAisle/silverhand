@@ -1881,7 +1881,8 @@ function runtimeStartOptions(): unknown {
     ],
     session: {
       conversation_id: 'c1',
-      kind: 'channel',
+      placement_kind: 'workspace',
+      roster_policy: 'open',
       title: 'workspace',
       spawned_by_agent_id: null,
       members: [

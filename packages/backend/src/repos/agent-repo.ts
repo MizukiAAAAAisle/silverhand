@@ -5,7 +5,8 @@ import {
   type AgentDto,
   type AgentRow,
   type AgentRuntimeParticipation,
-  type ConversationKind,
+  type ConversationPlacementKind,
+  type ConversationRosterPolicy,
   type CreateAgentInput,
   type RuntimeKind,
   type SwitchAgentRuntimeInput,
@@ -670,7 +671,8 @@ export class AgentRepo {
       workspace_id: string | null;
       workspace_name: string | null;
       workspace_kind: WorkspaceKind | null;
-      conversation_kind: ConversationKind;
+      conversation_placement_kind: ConversationPlacementKind;
+      conversation_roster_policy: ConversationRosterPolicy;
       channel_id: string;
       channel_title: string;
       closed_at: number | null;
@@ -695,7 +697,8 @@ export class AgentRepo {
            c.workspace_id     AS workspace_id,
            w.name             AS workspace_name,
            w.workspace_kind   AS workspace_kind,
-           c.kind             AS conversation_kind,
+           c.placement_kind   AS conversation_placement_kind,
+           c.roster_policy    AS conversation_roster_policy,
            c.id               AS channel_id,
            c.title            AS channel_title,
            c.closed_at        AS closed_at

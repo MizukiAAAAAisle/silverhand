@@ -227,7 +227,7 @@ export function createConversationReadApp(
         'conversation.messages.window',
         {
           conversationId: channel.id,
-          kind: channel.kind,
+          rosterPolicy: channel.roster_policy,
           limit,
           beforeSeq,
           afterSeq,
@@ -409,7 +409,8 @@ export function createConversationReadApp(
 
     const ref = {
       id: conversation.id,
-      kind: conversation.kind,
+      placement_kind: conversation.placement_kind,
+      roster_policy: conversation.roster_policy,
       title: conversation.title,
       workspace_id: conversation.workspace_id,
       // External projection: agents see `agent_home` internally; users
@@ -575,7 +576,7 @@ export function createConversationMessagingApp(
       const page = timedRouteSpan(
         ctx,
         'conversation.threads.list',
-        { conversationId: channel.id, kind: channel.kind, limit, filter },
+        { conversationId: channel.id, rosterPolicy: channel.roster_policy, limit, filter },
         () => messages.listChannelThreads(channel.id, viewerUserId, { limit, cursor, filter }),
         result => ({
           threadCount: result.threads.length,
@@ -612,7 +613,7 @@ export function createConversationMessagingApp(
     const unread = timedRouteSpan(
       ctx,
       'conversation.stream_unread',
-      { conversationId: channel.id, kind: channel.kind },
+      { conversationId: channel.id, rosterPolicy: channel.roster_policy },
       () => conversationReads.streamUnreadForConversation(channel.id, viewerUserId),
       result => ({
         mainlineUnread: result.mainline.unread_count,
@@ -634,7 +635,7 @@ export function createConversationMessagingApp(
     const channelAgents = timedRouteSpan(
       ctx,
       'conversation.agents.list',
-      { conversationId: channel.id, kind: channel.kind },
+      { conversationId: channel.id, rosterPolicy: channel.roster_policy },
       () => conversations.listAgents(channel.id),
       result => ({ agentCount: result.length }),
     );
@@ -741,7 +742,7 @@ export function createConversationMessagingApp(
     const states = timedRouteSpan(
       ctx,
       'conversation.agent_run_states.snapshot',
-      { conversationId: channel.id, kind: channel.kind },
+      { conversationId: channel.id, rosterPolicy: channel.roster_policy },
       () => ctx.runtimeHost.getAgentRunStates(channel.id),
       result => ({ stateCount: result.length }),
     );

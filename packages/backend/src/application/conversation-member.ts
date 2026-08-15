@@ -3,7 +3,7 @@ import {
   type ChannelDetailResponse,
   type ChannelLeaveBlockedReason,
   type ChannelLikeDto,
-  type ConversationKind,
+  type ConversationRosterPolicy,
   type ConversationVisibility,
   type MemberRemovabilityDto,
   type MessageDto,
@@ -241,7 +241,7 @@ export async function addConversationMember(
 ): Promise<AddConversationMemberResult> {
   const conversation = deps.conversations.get(input.conversationId);
   if (!conversation) return { ok: false, error: { code: 'conversation_not_found' } };
-  if (conversation.kind !== 'channel') {
+  if (conversation.roster_policy !== 'open') {
     return { ok: false, error: { code: 'conversation_member_add_unsupported' } };
   }
   if (conversation.closed_at !== null) {
@@ -253,7 +253,7 @@ export async function addConversationMember(
   // lock as its coordination anchor. A placement with no workspace has no such
   // anchor, so this asserts the arm once here instead of coercing a null into
   // ten workspace lookups (agent-scoped-session-v1 §4.1). Unreachable today —
-  // the `kind === 'channel'` guard above already implies workspace placement
+  // the open-roster guard above already implies workspace placement
   // (only `roster_policy='open'` derives `channel`, and the DB's arc CHECK ties
   // every non-workspace placement to `fixed`) — which is exactly why it must be
   // an assertion and not a branch: there is no correct fallback to write.
@@ -270,7 +270,7 @@ export async function addConversationMember(
   // no agent of yours gets you a roster write on a channel you are not in, so
   // own-agent-add can never be used to gain or spread channel access
   // (#task:1683). The roster half is already implied here by the
-  // `kind === 'channel'` refusal above — kept as a conjunct in the GATE because
+  // open-roster refusal above — kept as a conjunct in the GATE because
   // the gate is exported and the next call site will not inherit this use
   // case's guard (@Cindy M1). Agent/system: the agent route's
   // `manage_conversation_members` capability gate already ran before the
@@ -716,7 +716,7 @@ export interface ChannelMemberExitFactSource {
   /** The channel row, or `null` when the conversation no longer exists — read by
    *  the in-lock source as "there is no edge to end". */
   channel(): {
-    kind: ConversationKind;
+    roster_policy: ConversationRosterPolicy;
     visibility: ConversationVisibility;
     archived_at: number | null;
   } | null;
@@ -785,7 +785,7 @@ export function evaluateChannelMemberExit(
   source: ChannelMemberExitFactSource,
 ): { can_leave: boolean; reason: ChannelLeaveBlockedReason | null } {
   const channel = source.channel();
-  if (channel === null || channel.kind !== 'channel') {
+  if (channel === null || channel.roster_policy !== 'open') {
     return { can_leave: false, reason: 'not_member' };
   }
   if (!source.isMember()) {
@@ -816,7 +816,7 @@ export function evaluateChannelMemberExitEligibility(
   userId: string,
   conversation: {
     id: string;
-    kind: ConversationKind;
+    roster_policy: ConversationRosterPolicy;
     workspace_id: string | null;
     visibility: ConversationVisibility;
     archived_at: number | null;
@@ -898,7 +898,7 @@ export async function leaveChannel(
   input: { conversationId: string; principal: UserPrincipal },
 ): Promise<LeaveChannelResult> {
   const conversation = deps.conversations.get(input.conversationId);
-  if (!conversation || conversation.kind !== 'channel') {
+  if (!conversation || conversation.roster_policy !== 'open') {
     return { ok: false, error: { code: 'channel_not_found' } };
   }
   // Workspace-scoped by definition — same reasoning as addConversationMember.
@@ -1008,7 +1008,7 @@ export function buildChannelDetailResponse(
     can_leave: leave.can_leave,
     leave_blocked_reason: leave.reason,
     can_update_visibility:
-      channel.kind === 'channel'
+      channel.roster_policy === 'open'
       // Fail-closed on a placement with no workspace: there is no workspace
       // role to govern with, so nobody may update visibility. An advisory
       // capability carrier must never default to `true` (§12.1#5).
@@ -1091,7 +1091,7 @@ export async function removeConversationMember(
 ): Promise<RemoveConversationMemberResult> {
   const conversation = deps.conversations.get(input.conversationId);
   if (!conversation) return { ok: false, error: { code: 'conversation_not_found' } };
-  if (conversation.kind !== 'channel') {
+  if (conversation.roster_policy !== 'open') {
     return { ok: false, error: { code: 'unsupported' } };
   }
   if (conversation.closed_at !== null) {
@@ -1324,7 +1324,7 @@ export function evaluateChannelHumanMemberRemoval(
   principal: Principal,
   conversation: {
     id: string;
-    kind: ConversationKind;
+    roster_policy: ConversationRosterPolicy;
     workspace_id: string | null;
     visibility: ConversationVisibility;
     archived_at: number | null;
@@ -1338,7 +1338,7 @@ export function evaluateChannelHumanMemberRemoval(
   if (!canViewConversation(deps.ctx, principal, conversation.id)) {
     return { outcome: 'refused', code: 'forbidden' };
   }
-  if (conversation.kind !== 'channel') {
+  if (conversation.roster_policy !== 'open') {
     return { outcome: 'refused', code: 'unsupported' };
   }
   if (conversation.closed_at !== null) {
@@ -1350,7 +1350,7 @@ export function evaluateChannelHumanMemberRemoval(
   // An AUTHORIZATION predicate, so a placement with no workspace refuses rather
   // than asserts: every gate below asks a workspace-ROLE question, and "no
   // workspace" means there is no role row to grant authority — never a reason to
-  // fall through to allowed (§12.1#5). The `kind === 'channel'` gate above
+  // fall through to allowed (§12.1#5). The open-roster gate above
   // already implies workspace placement today; this states the rule without
   // depending on that.
   const workspaceId = conversation.workspace_id;
@@ -1541,7 +1541,7 @@ export function buildConversationMemberRemovability(
   principal: Principal,
   conversation: {
     id: string;
-    kind: ConversationKind;
+    roster_policy: ConversationRosterPolicy;
     workspace_id: string | null;
     visibility: ConversationVisibility;
     archived_at: number | null;
@@ -1555,13 +1555,13 @@ export function buildConversationMemberRemovability(
           kind: 'agent' as const,
           id: member.agent_id,
           can_remove:
-            conversation.kind === 'channel'
+            conversation.roster_policy === 'open'
             && conversation.closed_at === null
             // The arm below asks a workspace-ROLE question, so a placement with
             // no workspace answers `false` here for the same reason
             // {@link evaluateChannelHumanMemberRemoval} refuses it: there is no
             // role row that could grant the authority. Written explicitly rather
-            // than leaned on `kind === 'channel'` — that only implies the
+            // than leaned on the open-roster test — that only implies the
             // workspace arm because `kind` is GENERATED from `roster_policy`, and
             // a generated-column implication is too indirect to be the thing a
             // governance answer rests on.

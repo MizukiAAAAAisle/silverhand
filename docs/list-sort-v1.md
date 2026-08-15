@@ -404,8 +404,8 @@ scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
 ## Favorites — the global STARRED list, exclusive of home (#task:1252 / #task:1888)
 
 > **SCOPE (定稿, shiki 2026-08-07, #task:1888; narrowed by #task:1899).** The global
-> Favorites/STARRED list collects **CONVERSATIONS only** — `kind ∈ {channel,
-> dm_channel}`, projected from the per-workspace conversation lists
+> Favorites/STARRED list collects **CONVERSATIONS only** — both open- and
+> fixed-roster rows projected from the per-workspace conversation lists
 > (`list_key='channels:<ws_id>'`). A **workspace / DM container is outside this
 > bounded context**, and since #task:1899 it cannot be starred at all, so the
 > question of hoisting one in here no longer arises. Rationale: the single-column
@@ -414,7 +414,7 @@ scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
 > with their children. There is no `workspace` / `dm` kind, field, or branch in the
 > Favorites read-model. (This supersedes the 2026-07-01 workspace/DM-only scope,
 > which the single-column sidebar inverted.) Note "Mentions" is not a kind: a
-> Mentions inbox is a `dm_channel` in the agent's own home workspace.
+> Mentions inbox is a fixed-roster conversation in the agent's own home workspace.
 
 The sidebar's `STARRED` section is the viewer's **global Favorites**: a flat
 list of the conversations the viewer has starred. It is **exclusive** — a
@@ -449,13 +449,13 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   - This **reverses** the v1 "Favorites owns no storage" stance: storing per-viewer
     *ordering* (rank + the list-wide mode) is the explicit cost of C. It still stores
     no *membership* — `starred_at` in the home list remains the sole star truth.
-- **`favorite_key = <kind>:<entity_id>`** (`channel:`/`dm_channel:`) is the
+- **`favorite_key = conversation:<entity_id>`** is the
   list's stable sort identity: the renderer row/drag key, the reorder `ordered_ids`
   element, AND the `entity_id` under `user_sort_entry.list_key='favorites'` and the
-  matching `viewer_sort.entries[].entity_id`. Kind-qualified — never a bare id — so
-  the key stays self-describing and cannot collide with another kind's id space.
-  Pre-#1888 rows keyed `workspace:`/`dm:` are unreachable orphans (no member can
-  project them), deliberately neither migrated nor deleted.
+  matching `viewer_sort.entries[].entity_id`. Namespace-qualified — never a bare
+  id — so the key stays self-describing. Migration v79 rewrites the former
+  `channel:` / `dm_channel:` keys atomically and fails loud if both legacy keys
+  would collapse onto the same conversation key.
 - `viewer_sort` (`list_key='favorites'`) carries the list-wide mode (`modes['']`)
   and one entry per `favorite_key` with the sort fields the renderer's
   `sortEntryLookup` reads: `rank` (from `favorites`) + `last_accessed_at` (from the
@@ -492,10 +492,10 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   an endpoint — every row unstars through `DELETE /api/channels/:entity_id/star`,
   which derives the storage `list_key` server-side, so the renderer never builds one:
   - `channel` — a starred regular channel; its parent is a regular workspace.
-  - `dm_channel` — a starred conversation in an agent's home workspace (the DM
+  - fixed roster — a starred conversation in an agent's home workspace (the DM
     stream, its Onboarding thread, its Mentions inbox); `parent_title` resolves
     from the parent's bound `owner_agent_id`.
-  - There is **no `workspace` / `dm` kind** — a container has no star at all
+  - A container has no star at all
     (#task:1899), so it can never produce a global-Favorites row.
 - **Membership contract** (read-model enforces; written here, not hidden in SQL):
   a row appears **iff the viewer can still reach the conversation AND neither it nor
@@ -504,10 +504,10 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   parent's archive state), so Favorites membership is the viewer's star-toggleable
   conversation set minus the archived. Concretely: viewer ∈ `workspace_users`(parent)
   ∧ `workspaces.archived_at IS NULL` ∧ `conversations.archived_at IS NULL` ∧
-  (viewer ∈ `conversation_users` ∨ (`kind='channel'` ∧ `visibility='public'`)) — the
+  (viewer ∈ `conversation_users` ∨ (`roster_policy='open'` ∧ `visibility='public'`)) — the
   union of the two arms `listActiveChannelsForViewer` (joined ∪ browseable public)
   and the membership-filtered DM query are built from. The public arm is
-  kind-qualified so the DM side cannot be widened by a stray `visibility` value.
+  roster-qualified so the fixed-roster side cannot be widened by a stray `visibility` value.
   Reducing this to a bare `conversation_users` join would silently drop a starred
   browseable public channel. An
   inaccessible/archived favorite is **hidden, not deleted**: the

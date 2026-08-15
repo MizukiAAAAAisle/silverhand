@@ -110,8 +110,8 @@ export interface ConversationAddressFacts {
  * Identity + PLACEMENT: what a conversation is and WHERE it lives
  * (agent-scoped-session-v1 §4.1), with no UI read model attached.
  *
- * A separate projection from `ConversationDto` because placement is deliberately
- * not on the wire (see `stripInternalColumns`), and from `ConversationRef`
+ * A separate projection from `ConversationDto` because it carries endpoint
+ * coordinates that do not belong on the wire, and from `ConversationRef`
  * because that one asserts a workspace coordinate a row may legitimately lack.
  * This is what a consumer needs when the ANSWER DEPENDS ON THE ARM — the ACL's
  * participant rule above all: `workspace_id === null` says only "not
@@ -119,13 +119,10 @@ export interface ConversationAddressFacts {
  */
 export interface ConversationIdentity {
   id: string;
-  kind: ConversationRow['kind'];
   visibility: ConversationVisibility;
   archived_at: number | null;
   placement_kind: ConversationPlacementKind;
-  /** Whether the participant set can be CHANGED at all, which is a different
-   *  question from who is in it — and the one `kind` cannot answer, being a
-   *  generated projection of this column plus history. Carried on identity
+  /** Whether the participant set can be CHANGED at all. Carried on identity
    *  because the ACL asks it (`canAddConversationMember`, #task:2020) before it
    *  asks anything about the caller. */
   roster_policy: ConversationRosterPolicy;
@@ -214,24 +211,13 @@ export const LIVE_PARTICIPANT_AGENT_IDS_SQL = `SELECT a.id AS agent_id
 // title and the client folds nothing; shipping the key would invite a comparison
 // that only the one canonicalizer may make.
 //
-// `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1),
-// `inbox_agent_id` (v71), the six `endpoint_*` columns (v73) and the derived
-// `pair_key` (v74) are stripped for
-// a different reason: they are the new AUTHORITATIVE axes, but the wire contract
-// for this release still speaks only the derived `kind` (plus the now-nullable
-// `workspace_id`). Exposing them here would ship an unversioned DTO change from a
-// migration-only ticket (#task:2012 / #task:2017); the placement-aware wire shape
-// lands with the placements themselves — for `direct_pair`, with the DirectPair
-// board / DM read surfaces (#task:2022), which is also where deciding how a
-// tombstoned endpoint RENDERS belongs. A spread does
-// NOT get excess-property-checked, so — exactly like `pinned_at` — only the
-// explicit strip prevents a silent runtime leak.
-// Consumers that legitimately need placement ask `getIdentity` for it.
+// `placement_kind` / `roster_policy` stay on the DTO: P6 removes the derived
+// classifier from storage and wire, so consumers must read the authoritative
+// axis that answers their question. Endpoint coordinates and `pair_key` remain
+// internal because they expose aggregate identity rather than presentation.
 function stripInternalColumns(row: ConversationRow): Omit<
   ConversationRow,
   | 'pinned_at'
-  | 'placement_kind'
-  | 'roster_policy'
   | 'inbox_agent_id'
   | 'endpoint_a_kind'
   | 'endpoint_a_id'
@@ -244,8 +230,6 @@ function stripInternalColumns(row: ConversationRow): Omit<
 > {
   const {
     pinned_at: _pinnedAt,
-    placement_kind: _placementKind,
-    roster_policy: _rosterPolicy,
     inbox_agent_id: _inboxAgentId,
     endpoint_a_kind: _endpointAKind,
     endpoint_a_id: _endpointAId,
@@ -269,7 +253,6 @@ function stripInternalColumns(row: ConversationRow): Omit<
 function rowToIdentity(row: ConversationRow): ConversationIdentity {
   return {
     id: row.id,
-    kind: row.kind,
     visibility: row.visibility,
     archived_at: row.archived_at,
     placement_kind: row.placement_kind,
@@ -289,7 +272,7 @@ function rowToIdentity(row: ConversationRow): ConversationIdentity {
 /** The column list every {@link rowToIdentity} feeder selects, spelled once. Not
  *  `SELECT *`: identity reads are placement decisions, and `*` would make the
  *  projection depend on whichever columns the table happens to have. */
-const IDENTITY_COLUMNS = `id, kind, visibility, archived_at,
+const IDENTITY_COLUMNS = `id, visibility, archived_at,
        placement_kind, roster_policy, workspace_id, inbox_agent_id,
        endpoint_a_kind, endpoint_a_id,
        endpoint_b_kind, endpoint_b_id,
@@ -335,22 +318,22 @@ const ADDRESS_FACTS_COLUMNS = `id, placement_kind, workspace_id, inbox_agent_id,
 function assertChannelLike(
   row: ConversationRow,
 ): ChannelConversationDto | DmChannelDto {
-  if (row.kind === 'dm_channel') return rowToDmChannel(row);
+  if (row.roster_policy === 'fixed') return rowToDmChannel(row);
   return rowToChannel(row);
 }
 
 function rowToChannel(row: ConversationRow): ChannelConversationDto {
-  if (row.kind !== 'channel') {
+  if (row.placement_kind !== 'workspace' || row.roster_policy !== 'open') {
     throw new Error('conversation is not a channel');
   }
-  return { ...stripInternalColumns(row), kind: 'channel' };
+  return { ...stripInternalColumns(row), placement_kind: 'workspace', roster_policy: 'open' };
 }
 
 function rowToDmChannel(row: ConversationRow): DmChannelDto {
-  if (row.kind !== 'dm_channel') {
-    throw new Error('conversation is not a dm_channel');
+  if (row.roster_policy !== 'fixed') {
+    throw new Error('conversation does not have a fixed roster');
   }
-  return { ...stripInternalColumns(row), kind: 'dm_channel' };
+  return { ...stripInternalColumns(row), roster_policy: 'fixed' };
 }
 
 export class ConversationRepo {
@@ -537,7 +520,7 @@ export class ConversationRepo {
       .prepare<[string], ConversationRow>(
         `SELECT *
            FROM conversations
-          WHERE id = ? AND kind = 'channel'`,
+          WHERE id = ? AND placement_kind = 'workspace' AND roster_policy = 'open'`,
       )
       .get(id);
     return row ? rowToChannel(row) : null;
@@ -548,7 +531,7 @@ export class ConversationRepo {
       .prepare<[string], ConversationRow>(
         `SELECT *
            FROM conversations
-          WHERE id = ? AND kind = 'dm_channel'`,
+          WHERE id = ? AND roster_policy = 'fixed'`,
       )
       .get(id);
     return row ? rowToDmChannel(row) : null;
@@ -559,7 +542,7 @@ export class ConversationRepo {
       .prepare<[string], ConversationRow>(
         `SELECT *
            FROM conversations
-          WHERE id = ? AND kind IN ('channel', 'dm_channel')`,
+          WHERE id = ?`,
       )
       .get(id);
     return row ? assertChannelLike(row) : null;
@@ -576,7 +559,8 @@ export class ConversationRepo {
       .prepare<[string], ConversationRow>(
         `SELECT *
            FROM conversations
-          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
+          WHERE workspace_id = ? AND placement_kind = 'workspace'
+            AND roster_policy = 'open' AND archived_at IS NULL
           ORDER BY created_at ASC`,
       )
       .all(workspaceId);
@@ -584,7 +568,7 @@ export class ConversationRepo {
   }
 
   /** Active (non-archived) regular channels for a workspace, as a per-viewer
-   *  DISCOVERY UNION (`WorkspaceChannelListItem`, `kind='channel'`). Each item
+   *  DISCOVERY UNION (`WorkspaceChannelListItem`, open roster). Each item
    *  carries a route-computed `is_member` — the viewer-scoped bit the
    *  channel-detail envelope exposes; identity DTOs stay pure.
    *
@@ -611,7 +595,8 @@ export class ConversationRepo {
                    WHERE cu.conversation_id = conversations.id AND cu.user_id = ?
                 ) AS is_member
            FROM conversations
-          WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NULL
+          WHERE workspace_id = ? AND placement_kind = 'workspace'
+            AND roster_policy = 'open' AND archived_at IS NULL
             AND (
               visibility = 'public'
               OR EXISTS (
@@ -629,7 +614,7 @@ export class ConversationRepo {
   }
 
   /** Archived regular channels for a workspace, as per-viewer list items
-   *  (`WorkspaceChannelListItem`, `kind='channel'`) — the archived twin of
+   *  (`WorkspaceChannelListItem`, open roster) — the archived twin of
    *  {@link listActiveChannelsForViewer}, so BOTH tables a user's sidebar reads
    *  carry the same authoritative `is_member` and a consumer never has to
    *  remember that "this one happens to be membership-filtered" (#task:1691).
@@ -661,7 +646,8 @@ export class ConversationRepo {
                        AND cu.user_id = ?
                   ) AS is_member
              FROM conversations
-            WHERE workspace_id = ? AND kind = 'channel'
+            WHERE workspace_id = ? AND placement_kind = 'workspace'
+              AND roster_policy = 'open'
               AND archived_at IS NOT NULL
          )
          WHERE is_member
@@ -674,7 +660,7 @@ export class ConversationRepo {
     });
   }
 
-  /** All `kind='channel'` conversations for a workspace regardless of
+  /** All open-roster conversations for a workspace regardless of
    *  archive state. Used when callers need to fan out (e.g. workspace
    *  rename announce) and shouldn't silently skip archived channels. */
   listAllChannelsForWorkspace(workspaceId: string): ChannelConversationDto[] {
@@ -682,7 +668,8 @@ export class ConversationRepo {
       .prepare<[string], ConversationRow>(
         `SELECT *
            FROM conversations
-          WHERE workspace_id = ? AND kind = 'channel'
+          WHERE workspace_id = ? AND placement_kind = 'workspace'
+            AND roster_policy = 'open'
           ORDER BY created_at ASC`,
       )
       .all(workspaceId);
@@ -704,7 +691,6 @@ export class ConversationRepo {
   } = {}): ArchivedAggregateRow[] {
     const where: string[] = [
       WORKSPACE_PLACED,
-      `c.kind IN ('channel', 'dm_channel')`,
       `c.archived_at IS NOT NULL`,
     ];
     const args: Array<string | number> = [];
@@ -765,7 +751,7 @@ export class ConversationRepo {
    *  `WORKSPACE_PLACED` is load-bearing here, and in the OPPOSITE direction from
    *  the other placement predicates in this file: `kind` is GENERATED from
    *  `roster_policy`, so an agent inbox (necessarily `fixed`) reports
-   *  `kind='dm_channel'` too. Without the predicate this face would silently
+   *  fixed-roster rows too. Without the predicate this face would silently
    *  GAIN one row per agent — an unfiltered `kind` scan is the one shape where a
    *  new placement leaks IN rather than dropping out. */
   listDmChannels(): DmChannelDto[] {
@@ -774,7 +760,7 @@ export class ConversationRepo {
         `SELECT c.*
            FROM conversations c
           WHERE ${WORKSPACE_PLACED}
-            AND c.kind = 'dm_channel'
+            AND c.roster_policy = 'fixed'
           ORDER BY c.created_at ASC`,
       )
       .all();
@@ -794,7 +780,7 @@ export class ConversationRepo {
            JOIN workspaces w ON w.id = c.workspace_id
            LEFT JOIN agents owner ON owner.id = w.owner_agent_id
           WHERE c.workspace_id = ?
-            AND c.kind = 'dm_channel'
+            AND c.roster_policy = 'fixed'
           ORDER BY CASE
                      WHEN c.title = 'Onboarding' THEN 0
                      WHEN owner.id IS NOT NULL AND c.title = 'dm-' || owner.name THEN 1
@@ -815,7 +801,7 @@ export class ConversationRepo {
   // Onboarding-first ordering; archived sorts most-recently-archived first
   // (mirrors `listArchivedChannelsForViewer`).
   /** Active (non-archived) DM channels for a workspace, as per-viewer list
-   *  items (`WorkspaceChannelListItem`, `kind='dm_channel'`). The DM list is
+   *  items (`WorkspaceChannelListItem`, fixed roster). The DM list is
    *  STRICTLY membership-filtered by `viewerUserId`, so every returned item is
    *  one the viewer belongs to → `is_member: true` unconditionally. This keeps
    *  the workspace-channels endpoint's contract uniform: every active item a
@@ -899,7 +885,7 @@ export class ConversationRepo {
            JOIN workspaces w ON w.id = c.workspace_id
            LEFT JOIN agents owner ON owner.id = w.owner_agent_id
           WHERE c.workspace_id = ?
-            AND c.kind = 'dm_channel'
+            AND c.roster_policy = 'fixed'
             ${userJoin}
             ${archivedClause}
           ORDER BY ${orderBy}`,
@@ -923,7 +909,7 @@ export class ConversationRepo {
         `SELECT c.*
            FROM conversations c
            JOIN conversation_agents ca ON ca.conversation_id = c.id
-          WHERE c.kind = 'dm_channel'
+          WHERE c.roster_policy = 'fixed'
             AND ca.agent_id = ?
           ORDER BY c.created_at ASC
           LIMIT 1`,
@@ -938,7 +924,7 @@ export class ConversationRepo {
         `SELECT c.*
            FROM conversations c
            JOIN conversation_agents ca ON ca.conversation_id = c.id
-          WHERE c.kind = 'dm_channel'
+          WHERE c.roster_policy = 'fixed'
             AND ca.agent_id = ?
           ORDER BY c.created_at ASC`,
       )
@@ -1068,7 +1054,7 @@ export class ConversationRepo {
       .prepare(
         `UPDATE conversations
          SET archived_at = ?, updated_at = ?
-         WHERE id = ? AND kind IN ('channel', 'dm_channel')`,
+         WHERE id = ?`,
       )
       .run(archived ? now : null, now, id);
     if (result.changes === 0) return null;
@@ -1184,7 +1170,7 @@ export class ConversationRepo {
       .prepare(
         `UPDATE conversations
          SET title = ?, title_key = ?, updated_at = ?
-         WHERE id = ? AND kind IN ('channel', 'dm_channel')`,
+         WHERE id = ?`,
       )
       .run(title.title, title.key, now, id);
     if (result.changes === 0) return null;
@@ -1196,10 +1182,11 @@ export class ConversationRepo {
     };
   }
 
-  /** Set a channel's visibility (`private | public`). Gated to `kind='channel'`
-   *  in the WHERE clause — a `dm_channel` / thread id matches nothing and
-   *  returns null (the DB CHECK also forbids non-channel `public`), which the
-   *  service turns into a typed `not_found`. */
+  /** Set a channel's visibility (`private | public`). Gated to the
+   *  workspace/open-roster arm in the WHERE clause, so fixed-roster and thread
+   *  ids match nothing and return null. The service turns that into a typed
+   *  `not_found`; the DB placement arc also forbids those rows from becoming
+   *  public. */
   setVisibility(
     id: string,
     visibility: ConversationVisibility,
@@ -1209,7 +1196,7 @@ export class ConversationRepo {
       .prepare(
         `UPDATE conversations
          SET visibility = ?, updated_at = ?
-         WHERE id = ? AND kind = 'channel'`,
+         WHERE id = ? AND placement_kind = 'workspace' AND roster_policy = 'open'`,
       )
       .run(visibility, now, id);
     if (result.changes === 0) return null;

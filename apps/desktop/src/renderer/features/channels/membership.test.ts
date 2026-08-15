@@ -18,32 +18,32 @@ import {
 
 describe('deriveChannelMembership', () => {
   it('authoritative is_member=true on the carrier → member', () => {
-    expect(deriveChannelMembership({ kind: 'channel', is_member: true })).toBe('member');
+    expect(deriveChannelMembership({ is_member: true })).toBe('member');
   });
 
   it('authoritative is_member=false → nonmember', () => {
-    expect(deriveChannelMembership({ kind: 'channel', is_member: false })).toBe('nonmember');
+    expect(deriveChannelMembership({ is_member: false })).toBe('nonmember');
   });
 
   it('missing field → unknown (no kind/list inference, fail-closed)', () => {
-    expect(deriveChannelMembership({ kind: 'channel' })).toBe('unknown');
+    expect(deriveChannelMembership({})).toBe('unknown');
   });
 
   it('does NOT infer member from dm_channel kind — a DM without the field is unknown', () => {
     // The `dm_channel ⇒ member` shortcut was removed: DM items must carry the
     // authoritative field like any other carrier. Absent → unknown.
-    expect(deriveChannelMembership({ kind: 'dm_channel' })).toBe('unknown');
-    expect(deriveChannelMembership({ kind: 'dm_channel', is_member: true })).toBe('member');
+    expect(deriveChannelMembership({})).toBe('unknown');
+    expect(deriveChannelMembership({ is_member: true })).toBe('member');
   });
 
   it('falls back to resolved detail is_member only when the carrier lacks the field', () => {
     // Carrier field wins over the resolved fallback.
-    expect(deriveChannelMembership({ kind: 'channel', is_member: false }, true)).toBe(
+    expect(deriveChannelMembership({ is_member: false }, true)).toBe(
       'nonmember',
     );
     // Carrier lacks it → use the detail-resolved value.
-    expect(deriveChannelMembership({ kind: 'channel' }, true)).toBe('member');
-    expect(deriveChannelMembership({ kind: 'channel' }, false)).toBe('nonmember');
+    expect(deriveChannelMembership({}, true)).toBe('member');
+    expect(deriveChannelMembership({}, false)).toBe('nonmember');
   });
 
   it('null/undefined carrier → unknown', () => {
@@ -92,21 +92,21 @@ describe('channelGateFor', () => {
 
 describe('isMemberChannel (member-scoped inclusion)', () => {
   it('admits ONLY authoritative is_member=true', () => {
-    expect(isMemberChannel({ kind: 'channel', is_member: true })).toBe(true);
+    expect(isMemberChannel({ is_member: true })).toBe(true);
   });
 
   it('excludes nonmember AND unknown (no fail-open on a missing field)', () => {
-    expect(isMemberChannel({ kind: 'channel', is_member: false })).toBe(false);
-    expect(isMemberChannel({ kind: 'channel' })).toBe(false);
-    expect(isMemberChannel({ kind: 'dm_channel' })).toBe(false);
+    expect(isMemberChannel({ is_member: false })).toBe(false);
+    expect(isMemberChannel({})).toBe(false);
+    expect(isMemberChannel({})).toBe(false);
   });
 
   it('filters a union list down to authoritative members only', () => {
     const union = [
-      { id: 'a', kind: 'channel' as const, is_member: true },
-      { id: 'b', kind: 'channel' as const, is_member: false }, // unjoined public
-      { id: 'c', kind: 'channel' as const }, // unknown / older payload
-      { id: 'd', kind: 'dm_channel' as const, is_member: true },
+      { id: 'a', is_member: true },
+      { id: 'b', is_member: false }, // unjoined public
+      { id: 'c' }, // unknown / older payload
+      { id: 'd', is_member: true },
     ];
     expect(union.filter(isMemberChannel).map(c => c.id)).toEqual(['a', 'd']);
   });

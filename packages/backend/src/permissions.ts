@@ -393,7 +393,7 @@ function actorOf(principal: UserPrincipal | AgentPrincipal): ConversationActor {
  *        - `principal.kind === 'user'` — agents have NO public path; their
  *          read/delivery stays strictly `conversation_agents`-gated via
  *          `canViewConversation` above.
- *        - `kind === 'channel'` — `dm_channel` / legacy thread never gain
+ *        - `roster_policy === 'open'` — fixed-roster conversations never gain
  *          public semantics (also enforced at the DB CHECK, migration v58).
  *        - `visibility === 'public'`.
  *        - `archived_at == null` — an archived public channel is not
@@ -428,7 +428,10 @@ function isPublicChannelBranch(
   conversation: AuthorizationConversationFacts,
 ): boolean {
   if (principal.kind !== 'user') return false;
-  if (conversation.kind !== 'channel') return false;
+  if (
+    conversation.placement_kind !== 'workspace'
+    || conversation.roster_policy !== 'open'
+  ) return false;
   if (conversation.visibility !== 'public') return false;
   if (conversation.archived_at !== null) return false;
   // The public branch is a widening of WORKSPACE membership ("any member of the

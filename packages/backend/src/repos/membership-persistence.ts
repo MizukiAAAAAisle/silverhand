@@ -237,7 +237,7 @@ export function createSqliteMembershipPersistence(db: Db): MembershipPersistence
         return {
           channel: conversation
             ? {
-                kind: conversation.kind,
+                roster_policy: conversation.roster_policy,
                 visibility: conversation.visibility,
                 archived_at: conversation.archived_at,
               }

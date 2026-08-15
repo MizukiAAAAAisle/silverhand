@@ -264,9 +264,9 @@ export function ThreadPanel({
     return {
       title: c.title,
       kind:
-        c.kind === 'dm_channel'
+        c.roster_policy === 'fixed'
           ? ('dm' as const)
-          : c.kind === 'channel'
+          : c.roster_policy === 'open'
             ? ('channel' as const)
             : null,
     };

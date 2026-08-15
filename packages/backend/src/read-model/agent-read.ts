@@ -61,7 +61,8 @@ type HistoryMessageRow = MessageRow & LinkedTaskProjectionRow;
 
 type AgentSearchMessageRow = HistoryMessageRow & {
   workspace_id: string;
-  conversation_kind: ConversationDto['kind'];
+  conversation_placement_kind: ConversationDto['placement_kind'];
+  conversation_roster_policy: ConversationDto['roster_policy'];
   channel_id: string;
 };
 
@@ -71,7 +72,8 @@ function targetRef(
 ): ReadHistoryTargetRef {
   return {
     conversation_id: conversation.id,
-    conversation_kind: conversation.kind,
+    conversation_placement_kind: conversation.placement_kind,
+    conversation_roster_policy: conversation.roster_policy,
     channel_id: conversation.id,
     thread_root_id: threadRootId,
     workspace_id: conversation.workspace_id,
@@ -84,7 +86,8 @@ function messageRef(row: MessageRow, target: ReadHistoryTargetRef): MessageRef {
     id: row.id,
     workspace_id: target.workspace_id,
     conversation_id: target.conversation_id,
-    conversation_kind: target.conversation_kind,
+    conversation_placement_kind: target.conversation_placement_kind,
+    conversation_roster_policy: target.conversation_roster_policy,
     channel_id: target.channel_id,
     seq: row.seq,
     created_at: row.created_at,
@@ -500,14 +503,14 @@ export function listAgentVisibleChannels(
         WHERE c.workspace_id = ?
           AND (
             (
-              c.kind IN ('channel', 'dm_channel')
-              AND EXISTS (
+              EXISTS (
                 SELECT 1 FROM conversation_agents ca2
                  WHERE ca2.conversation_id = c.id AND ca2.agent_id = ?
               )
             )
             OR (
-              c.kind = 'channel'
+              c.placement_kind = 'workspace'
+              AND c.roster_policy = 'open'
               AND c.visibility = 'public'
               AND c.archived_at IS NULL
             )
@@ -522,7 +525,7 @@ export function listAgentVisibleChannels(
       (row): AgentListedChannel => ({
         id: row.id,
         title: row.title,
-        kind: row.kind === 'dm_channel' ? 'dm_channel' : 'channel',
+        roster_policy: row.roster_policy,
         visibility: row.visibility,
         archived: row.archived_at !== null,
         is_member: row.is_member === 1,
@@ -537,7 +540,8 @@ function searchMessageRef(row: AgentSearchMessageRow): MessageRef {
     id: row.id,
     workspace_id: row.workspace_id,
     conversation_id: row.conversation_id,
-    conversation_kind: row.conversation_kind,
+    conversation_placement_kind: row.conversation_placement_kind,
+    conversation_roster_policy: row.conversation_roster_policy,
     channel_id: row.channel_id,
     seq: row.seq,
     created_at: row.created_at,
@@ -693,7 +697,8 @@ export function buildAgentSearchMessagesDto(
           m.*,
           ${LINKED_TASK_SELECT},
           conv.workspace_id AS workspace_id,
-          conv.kind AS conversation_kind,
+          conv.placement_kind AS conversation_placement_kind,
+          conv.roster_policy AS conversation_roster_policy,
           conv.id AS channel_id
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id

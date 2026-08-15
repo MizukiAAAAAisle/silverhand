@@ -275,7 +275,7 @@ export class ScheduleService {
     if (!home || !home.dm_channel_id) {
       throw new ScheduleError(
         'agent_home_not_found',
-        `agent ${ownerAgentId} has no agent_home dm_channel`,
+        `agent ${ownerAgentId} has no agent_home DM channel`,
       );
     }
 

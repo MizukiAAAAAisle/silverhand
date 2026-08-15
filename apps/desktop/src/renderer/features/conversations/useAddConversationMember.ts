@@ -7,8 +7,7 @@ import {
 import { api } from '@/lib/api';
 
 /**
- * Add a member (agent or human) to a channel- or thread-kind
- * conversation.
+ * Add a member (agent or human) to an open-roster conversation.
  *
  * Backed by `POST /api/conversations/:cid/members`. Accepts the
  * tagged-union id form (`{kind:'agent', agent_id}` |
@@ -31,7 +30,7 @@ import { api } from '@/lib/api';
  *     row is written — 403 `agent_not_owned` for someone else's agent,
  *     `workspace_membership_required` 422 for a caller with no
  *     provisioning authority at all (an agent principal).
- *   - Conversation must be `kind === 'channel'` and not
+ *   - Conversation must use an open roster and not
  *     closed (`conversation_member_add_unsupported` 422 /
  *     `conversation_closed` 409). The trigger button hides on DM
  *     channels + closed conversations, so these are also defense-in-

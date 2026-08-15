@@ -142,7 +142,7 @@ describe('DirectPair aggregate: get-or-create', () => {
         // of a pair key are the aggregate's shape, not a property of who is in it.
         expect(conversation).toMatchObject({
           placement_kind: 'direct_pair',
-          kind: 'dm_channel',
+          roster_policy: 'fixed',
           visibility: 'private',
           workspace_id: null,
           inbox_agent_id: null,

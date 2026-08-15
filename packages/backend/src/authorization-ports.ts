@@ -72,17 +72,14 @@ export type AuthorizationWorkspaceFacts = Pick<
  * in here" but "can that set be CHANGED at all". `fixed` means the participants
  * are a property of the conversation (a DM's two endpoints, an inbox's owner, a
  * legacy agent-home DM channel's pair), so no principal — no admin, no owner —
- * can add one. It is read as the roster axis rather than through the generated
- * `kind`, which projects the same fact but is a legacy single-axis label (§4.1).
+ * can add one.
  */
 export type AuthorizationConversationFacts = Pick<
   ConversationDto,
-  'id' | 'workspace_id' | 'kind' | 'visibility' | 'archived_at'
+  'id' | 'workspace_id' | 'placement_kind' | 'roster_policy' | 'visibility' | 'archived_at'
 > &
   Pick<
     ConversationRow,
-    | 'placement_kind'
-    | 'roster_policy'
     | 'inbox_agent_id'
     | 'endpoint_a_kind'
     | 'endpoint_a_id'

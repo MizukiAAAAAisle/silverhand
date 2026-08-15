@@ -103,14 +103,14 @@ export function channelAmbientEntersPredicate(
  * construction rather than by two matching hand-written clauses.
  */
 export function loudPositionalPredicate(
-  conversationKindExpr: string,
+  rosterPolicyExpr: string,
   conversationIdExpr: string,
   workspaceIdExpr: string,
 ): string {
   return `(
-    ${conversationKindExpr} = 'dm_channel'
+    ${rosterPolicyExpr} = 'fixed'
     OR (
-      ${conversationKindExpr} = 'channel'
+      ${rosterPolicyExpr} = 'open'
       AND ${channelAmbientEntersPredicate(conversationIdExpr, workspaceIdExpr)}
     )
   )`;

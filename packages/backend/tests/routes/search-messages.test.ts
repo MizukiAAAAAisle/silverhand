@@ -112,7 +112,7 @@ describe('agent list_channels / search_messages routes', () => {
     expect(ids).not.toContain(bobOnly);
     expect(body.channels.find((c: any) => c.id === aliceOnly)).toMatchObject({
       title: 'alice-only',
-      kind: 'channel',
+      roster_policy: 'open',
       archived: true,
     });
   });
@@ -163,7 +163,7 @@ describe('agent list_channels / search_messages routes', () => {
     });
 
     // excluded — an unjoined DM (dm_channel is always private; the discovery
-    // arm is kind='channel' only, so a DM never enters via discovery, and alice
+    // arm is open-roster only, so a fixed-roster row never enters via discovery, and alice
     // is not a member so the member arm skips it too).
     const unjoinedDm = new ConversationRepo(t.ctx.db).insertDmChannel({
       workspaceId,

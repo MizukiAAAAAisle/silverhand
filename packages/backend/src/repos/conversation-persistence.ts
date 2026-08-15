@@ -155,9 +155,10 @@ export function createSqliteConversationPersistence(
      *
      * Throws for a conversation that has no workspace placement (an agent
      * inbox). That is a BACKSTOP, not the error path: the service refuses such a
-     * target with a typed `not_addressable` before opening the transaction —
-     * reachable because `kind` is GENERATED, so an inbox answers channel-like
-     * reads. Reading it pre-lock is sound only because `conversations
+     * target with a typed `not_addressable` before opening the transaction.
+     * `getChannelLike` intentionally spans every top-level placement, so an
+     * inbox can reach this identity read before failing the address-space
+     * requirement. Reading it pre-lock is sound only because `conversations
      * .workspace_id` is immutable, the same assumption the UnitOfWork's own
      * key→workspace resolution rests on (see the port doc's step 1).
      */

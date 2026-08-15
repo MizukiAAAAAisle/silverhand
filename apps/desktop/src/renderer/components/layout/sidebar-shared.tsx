@@ -713,7 +713,7 @@ interface ConversationRowLayoutProps
  * sortable `<li>`).
  *
  * Scope is the CONVERSATION rung, which is why it is named for the entity and not
- * for the tree: both consumers render `kind ∈ {channel, dm_channel}` and nothing
+ * for the tree: both consumers render open- or fixed-roster conversations and nothing
  * else. **The workspace / DM container row deliberately stays out** — it is a
  * different rung (`h-7`, `sidebar-row-gutter` instead of the state-painted
  * `sidebar-row-border`, its own ink) and it needs siblings BESIDE the name button

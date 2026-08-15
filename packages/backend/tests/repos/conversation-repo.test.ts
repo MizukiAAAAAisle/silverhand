@@ -57,7 +57,8 @@ describe('ConversationRepo canonical schema', () => {
       expect(t.conversations.getChannel(channel.id)).toMatchObject({
         id: channel.id,
         workspace_id: workspace.id,
-        kind: 'channel',
+        placement_kind: 'workspace',
+        roster_policy: 'open',
         title: 'Planning',
       });
       expect(t.conversations.listAgents(channel.id).map(a => a.agent_id)).toEqual([
@@ -115,7 +116,8 @@ describe('ConversationRepo canonical schema', () => {
       expect(t.conversations.getDmChannel(dm.id)).toMatchObject({
         id: dm.id,
         workspace_id: home.id,
-        kind: 'dm_channel',
+        placement_kind: 'workspace',
+        roster_policy: 'fixed',
       });
     } finally {
       t.cleanup();

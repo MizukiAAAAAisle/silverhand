@@ -132,7 +132,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     }
     if (listKey === 'favorites') {
       // The global Favorites list — a single flat group keyed by favorite_key
-      // (`<kind>:<entity_id>`). Membership is exactly the read-model's projected
+      // (`conversation:<entity_id>`). Membership is exactly the read-model's projected
       // set (starred ∧ viewer-visible ∧ non-archived), so reorder validation and
       // the GET response can never diverge. Always the viewer's own state — no
       // 404/403 (the route gate is canViewOwnedState). This list IS the starred
@@ -367,10 +367,10 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // conversation lives in STARRED and restores when it comes back. What an
     // UNSTAR must drop is the FAVORITES rank — unstar is a voluntary removal
     // from that list, so a later re-star re-enters fresh instead of jumping to a
-    // stale favorites slot. The key mirrors the favorites read-model: the
-    // CONVERSATION's own kind (#task:1888).
+    // stale favorites slot. The key mirrors the favorites read-model and is
+    // qualified by the entity family, not by a derived conversation classifier.
     if (!starred) {
-      sort.clearFavoriteRank(principal.userId, favoriteKey(channel.kind, id));
+      sort.clearFavoriteRank(principal.userId, favoriteKey(id));
     }
     return c.json({
       viewer_sort: sort.getState(principal.userId, listKey, resolved.groups.keys()),

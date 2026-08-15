@@ -42,7 +42,8 @@ export type SecondaryDescriptor =
       source: 'side';
       status: 'resolved';
       id: string;
-      kind: 'channel' | 'dm_channel';
+      placementKind: 'workspace' | 'direct_pair' | 'agent_inbox';
+      rosterPolicy: 'open' | 'fixed';
       title: string;
       workspaceId: string;
       workspaceKind: 'regular' | 'dm';
@@ -102,7 +103,8 @@ export function selectSecondaryDescriptor(
       source: 'side',
       status: 'resolved',
       id: ref.id,
-      kind: ref.kind,
+      placementKind: ref.placement_kind,
+      rosterPolicy: ref.roster_policy,
       title: ref.title,
       workspaceId: ref.workspace_id,
       workspaceKind: ref.workspace_kind,
@@ -120,7 +122,8 @@ export function selectSecondaryDescriptor(
 export interface SecondaryConversationDescriptor {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel';
+  placement_kind: 'workspace' | 'direct_pair' | 'agent_inbox';
+  roster_policy: 'open' | 'fixed';
   closed_at: number | null;
   archived_at: number | null;
   workspace_id: string;
@@ -184,7 +187,8 @@ export function selectSecondaryViewInputs(
       conversationDescriptor: {
         id: secondary.id,
         title: secondary.title,
-        kind: secondary.kind,
+        placement_kind: secondary.placementKind,
+        roster_policy: secondary.rosterPolicy,
         closed_at: secondary.closedAt,
         archived_at: secondary.archivedAt,
         workspace_id: secondary.workspaceId,
@@ -206,7 +210,7 @@ export function selectSecondaryViewInputs(
 /** Conversation pointer used by the read-cursor / focus selectors. */
 export interface ConversationPointer {
   id: string;
-  kind: 'channel' | 'dm_channel';
+  rosterPolicy: 'open' | 'fixed';
 }
 
 export interface VisibleConversations {
@@ -254,7 +258,7 @@ export function selectVisibleConversations(
   }
   const secondaryPointer: ConversationPointer = {
     id: secondary.id,
-    kind: secondary.kind,
+    rosterPolicy: secondary.rosterPolicy,
   };
   if (fullscreen) {
     return { primary: null, secondary: secondaryPointer };
@@ -264,7 +268,7 @@ export function selectVisibleConversations(
 
 export interface FocusedConversation {
   id: string;
-  kind: 'channel' | 'dm_channel';
+  rosterPolicy: 'open' | 'fixed';
   /** Workspace id for the focused conversation. PR-2: pulled from
    *  the resolved secondary's `workspaceId` (cross-workspace capable)
    *  or from the caller's `primaryWorkspaceId` for the primary case. */
@@ -300,7 +304,7 @@ export function selectFocusedConversation(
   if (secondary && secondary.status === 'resolved') {
     return {
       id: secondary.id,
-      kind: secondary.kind,
+      rosterPolicy: secondary.rosterPolicy,
       workspaceId: secondary.workspaceId,
     };
   }
@@ -312,7 +316,7 @@ export function selectFocusedConversation(
   if (primary) {
     return {
       id: primary.id,
-      kind: primary.kind,
+      rosterPolicy: primary.rosterPolicy,
       workspaceId: primaryWorkspaceId,
     };
   }

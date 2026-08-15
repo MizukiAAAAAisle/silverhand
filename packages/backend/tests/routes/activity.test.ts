@@ -577,7 +577,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
 
   // ── source-first layout fields (shiki dogfood: row-1 where / row-2/3 content) ──
 
-  it('a channel mention carries conversation_kind and a null thread_root_preview (mainline)', async () => {
+  it('an open-roster mention carries conversation_roster_policy and a null thread_root_preview (mainline)', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
@@ -585,7 +585,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
 
     const mention = (await getActivity(t)).find(i => i.kind === 'mention');
     expect(mention).toBeTruthy();
-    expect(mention.conversation_kind).toBe('channel');
+    expect(mention.conversation_roster_policy).toBe('open');
     expect(mention.thread_root_preview).toBeNull(); // mainline → no root row
   });
 
@@ -620,7 +620,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     );
     expect(thread).toHaveLength(1);
     expect(thread[0]).toMatchObject({
-      conversation_kind: 'channel',
+      conversation_roster_policy: 'open',
       thread_root_id: rootMsg,
       message_id: replyMsg, // anchored at the first unread reply
     });

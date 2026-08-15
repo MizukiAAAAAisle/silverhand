@@ -78,17 +78,6 @@ export const WorkspaceKindSchema = z.enum(['regular', 'agent_home']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 
 /**
- * The legacy single-axis conversation classifier. Since migration v69 this is a
- * DERIVED value: the DB computes it from {@link ConversationRosterPolicy} via a
- * GENERATED ALWAYS ... VIRTUAL column, and writing it fails at parse time. It
- * stays as a read-only projection for the existing read points and the wire
- * contract; new logic must branch on placement/roster, never on `kind`
- * (agent-scoped-session-v1 §4.1).
- */
-export const ConversationKindSchema = z.enum(['channel', 'dm_channel']);
-export type ConversationKind = z.infer<typeof ConversationKindSchema>;
-
-/**
  * WHERE a conversation lives, and therefore how its participant set is derived
  * (agent-scoped-session-v1 §3/§4.1). Exhaustive and mutually exclusive:
  * `workspace` keeps explicit membership rows; `direct_pair` and `agent_inbox`
@@ -108,8 +97,7 @@ export type ConversationPlacementKind = z.infer<
 /**
  * WHETHER a conversation's roster can change: `open` (members may be added or
  * removed) | `fixed` (the participant set is determined at creation and
- * immutable). Independent of placement, and the sole input to the derived
- * {@link ConversationKind}.
+ * immutable). Independent of placement.
  */
 export const ConversationRosterPolicySchema = z.enum(['open', 'fixed']);
 export type ConversationRosterPolicy = z.infer<
@@ -516,11 +504,8 @@ export interface ConversationRow {
   pair_key: string | null;
   /** Authoritative placement axis (v69+). */
   placement_kind: ConversationPlacementKind;
-  /** Authoritative roster axis (v69+); `kind` is derived from it. */
+  /** Authoritative roster axis (v69+). */
   roster_policy: ConversationRosterPolicy;
-  /** DERIVED by the DB from `roster_policy` (GENERATED VIRTUAL, v69+) —
-   *  present in `SELECT *` and readable, but never writable. */
-  kind: ConversationKind;
   title: string;
   /** The TITLE AS AN ADDRESS (v72+, #task:2016): `NFC(foldCase(NFC(trim(title))))`,
    *  unique per workspace among workspace placements, and NOT NULL exactly when

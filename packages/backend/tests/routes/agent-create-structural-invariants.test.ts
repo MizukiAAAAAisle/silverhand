@@ -413,15 +413,15 @@ describe('D4.d structural invariants', () => {
       // Install the trigger BEFORE the POST. ABORT inside a tx
       // rolls the whole tx back.
       //
-      // `placement_kind = 'workspace'` is load-bearing (v71): `kind` is a
-      // GENERATED column and an `agent_inbox` also reads as `dm_channel`, so a
-      // predicate on `kind` alone would abort the L1 AGGREGATE reserve instead —
+      // `placement_kind = 'workspace'` is load-bearing: an `agent_inbox` also
+      // uses a fixed roster, so a predicate on roster policy alone would abort
+      // the L1 AGGREGATE reserve instead —
       // a different phase, a different failure (409 `agent_name_taken`), and the
       // L3a arm this test exists for would never run.
       t.ctx.db.exec(
         `CREATE TRIGGER d4d_inv3_fail_dm_insert
            BEFORE INSERT ON conversations
-           WHEN NEW.kind = 'dm_channel' AND NEW.placement_kind = 'workspace'
+           WHEN NEW.roster_policy = 'fixed' AND NEW.placement_kind = 'workspace'
          BEGIN
            SELECT RAISE(ABORT, 'd4d-inv3: forced dependent-row failure');
          END`,
@@ -495,7 +495,7 @@ describe('D4.d structural invariants', () => {
           .prepare<[string], { c: number }>(
             `SELECT COUNT(*) AS c FROM conversations c
                JOIN conversation_agents ca ON ca.conversation_id = c.id
-              WHERE c.kind = 'dm_channel' AND ca.agent_id = ?`,
+              WHERE c.roster_policy = 'fixed' AND ca.agent_id = ?`,
           )
           .get(agent.id)!.c,
         conversation_agents: t.ctx.db
@@ -743,7 +743,7 @@ describe('D4.d structural invariants', () => {
         .prepare<[string], { id: string }>(
           `SELECT c.id FROM conversations c
              JOIN conversation_agents ca ON ca.conversation_id = c.id
-            WHERE c.kind = 'dm_channel' AND ca.agent_id = ?`,
+            WHERE c.roster_policy = 'fixed' AND ca.agent_id = ?`,
         )
         .get(body.agent.id);
       expect(dm?.id).toBeTruthy();

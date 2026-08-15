@@ -4,7 +4,6 @@ import type {
   AgentRuntimeSeatDto,
   ConversationActivityEvent,
   ConversationAgentStatus,
-  ConversationKind,
 } from '@silverhand/shared';
 import { partitionRoster } from './AgentActivityPane';
 import { mergeActivityById } from './AgentActivityTimeline';
@@ -18,7 +17,8 @@ function conv(
     workspace_id: 'w-1',
     workspace_name: 'silverhand',
     workspace_kind: 'regular',
-    conversation_kind: 'channel' as ConversationKind,
+    conversation_placement_kind: 'workspace',
+    conversation_roster_policy: 'open',
     channel_id: 'c-1',
     channel_title: 'general',
     closed_at: null,
@@ -57,21 +57,19 @@ function ev(
 }
 
 describe('partitionRoster', () => {
-  it('drops out-of-allowlist kinds (defensive against unexpected conversation kinds)', () => {
+  it('keeps every authoritative placement arm', () => {
     const rows = [
-      conv({ conversation_id: 'ch', conversation_kind: 'channel' }),
-      conv({ conversation_id: 'dm', conversation_kind: 'dm_channel' }),
-      // A kind outside the {channel,dm_channel} allowlist should never
-      // reach here, but the allowlist (not a denylist) must still drop it.
+      conv({ conversation_id: 'ch', conversation_roster_policy: 'open' }),
+      conv({ conversation_id: 'dm', conversation_roster_policy: 'fixed' }),
       conv({
-        conversation_id: 'x',
-        conversation_kind: 'thread' as unknown as ConversationKind,
+        conversation_id: 'inbox',
+        conversation_placement_kind: 'agent_inbox',
+        conversation_roster_policy: 'fixed',
       }),
     ];
     const { active, recent } = partitionRoster(rows, []);
     const ids = [...active, ...recent].map(r => r.conversation_id);
-    expect(ids).toEqual(['ch', 'dm']);
-    expect(ids).not.toContain('x');
+    expect(ids).toEqual(['ch', 'dm', 'inbox']);
   });
 
   it('splits active (running, not closed) from recent', () => {

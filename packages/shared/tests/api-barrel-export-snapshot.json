@@ -132,7 +132,7 @@
   "DmChannelDtoSchema",
   "ENTITY_NAME_MAX_LENGTH",
   "EditTaskInputSchema",
-  "FavoriteKindSchema",
+  "FavoriteRosterPolicySchema",
   "FavoriteRowDtoSchema",
   "HOST_AGENT_LIVENESS_CHANGED_EVENT",
   "HOST_CONNECTION_CHANGED_EVENT",

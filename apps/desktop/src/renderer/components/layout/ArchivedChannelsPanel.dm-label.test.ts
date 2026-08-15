@@ -36,7 +36,7 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
 
   it('regular `channel` row shows the raw workspace name unchanged', () => {
     const item = {
-      channel: { ...baseChannel, kind: 'channel' },
+      channel: { ...baseChannel, placement_kind: 'workspace', roster_policy: 'open' },
       workspace: { id: 'w1', name: 'Engineering', archived_at: null },
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowWorkspaceLabel(item)).toBe('Engineering');
@@ -44,7 +44,7 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
 
   it('`dm_channel` row renders `@<agentName>` from the bare aggregate name', () => {
     const item = {
-      channel: { ...baseChannel, kind: 'dm_channel' },
+      channel: { ...baseChannel, placement_kind: 'workspace', roster_policy: 'fixed' },
       workspace: { id: 'w2', name: 'Norman', archived_at: null },
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowWorkspaceLabel(item)).toBe('@Norman');
@@ -62,7 +62,7 @@ describe('archivedRowOpenTarget — opens in the channel\'s OWN workspace', () =
 
   it('regular channel → its workspace id + channel id', () => {
     const item = {
-      channel: { ...baseChannel, kind: 'channel' },
+      channel: { ...baseChannel, placement_kind: 'workspace', roster_policy: 'open' },
       workspace: { id: 'w1', name: 'Engineering', archived_at: null },
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowOpenTarget(item)).toEqual({
@@ -77,7 +77,7 @@ describe('archivedRowOpenTarget — opens in the channel\'s OWN workspace', () =
     // destination loads its archived channel-like list and the dm_channel
     // resolves — instead of staying in whatever workspace was selected.
     const item = {
-      channel: { ...baseChannel, id: 'dm-c', kind: 'dm_channel' },
+      channel: { ...baseChannel, id: 'dm-c', placement_kind: 'workspace', roster_policy: 'fixed' },
       workspace: { id: 'agent-home-ws', name: 'Norman', archived_at: null },
     } as unknown as ArchivedChannelListItemDto;
     expect(archivedRowOpenTarget(item)).toEqual({

@@ -1149,7 +1149,7 @@ export function useLeaveChannel(workspaceId: string | null) {
       api<ChannelDetailResponse>(apiPaths.channelLeave(channelId), { method: 'POST' }),
     onSuccess: (res, channelId) => {
       const visibility =
-        res.channel.kind === 'channel' ? res.channel.visibility : 'public';
+        res.channel.roster_policy === 'open' ? res.channel.visibility : 'public';
       if (visibility === 'private') {
         // Private leave = "back to before you joined": the channel is invisible
         // to a non-member and must NOT stay resolvable in any read-path cache

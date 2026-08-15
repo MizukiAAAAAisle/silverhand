@@ -18,7 +18,7 @@
  * Authority rule (locked): membership is read ONLY from
  * the `is_member` boolean the carrier itself provides (a discovery-union list
  * item, or a channel-detail response). It is NEVER inferred from anything
- * outside the field — not the channel's `kind`, not its presence in a list —
+ * outside the field — not its placement/roster axes, not its presence in a list —
  * because any such second predicate re-introduces a fail-open path the moment a
  * payload lacks the field. The discovery union also mixes joined and unjoined
  * public channels in one list, so list position proves nothing. A carrier that
@@ -32,7 +32,6 @@ export type MembershipState = 'member' | 'nonmember' | 'unknown';
 /** The minimal carrier shape the derivation reads. Both the discovery-union
  *  list item and the channel-detail `channel` satisfy it. */
 export interface MembershipCarrier {
-  kind: 'channel' | 'dm_channel';
   /** Route-computed, per-viewer. Absent on an older/unaware payload or a
    *  carrier that never carries it (then membership is `unknown`). */
   is_member?: boolean;
@@ -44,7 +43,7 @@ export interface MembershipCarrier {
  *
  * `resolvedIsMember` is the fallback authoritative signal from a detail fetch,
  * consulted only when the carrier itself lacks `is_member` (the deep-link /
- * unknown path). The carrier's own field always wins. No `kind` / list-position
+ * unknown path). The carrier's own field always wins. No placement / list-position
  * inference — a missing field is `unknown`, full stop.
  */
 export function deriveChannelMembership(

@@ -51,10 +51,9 @@ export interface ChannelIconProps {
    * (or omitted) wears the canonical `#` `Hash`. The sticker/utility hook
    * behaviour is unchanged either way — a private channel is still a channel
    * identity, so it keeps the same theme treatment, only the glyph differs.
-   * Omitted defaults to `Hash`, so every existing call-site (and every
-   * non-`channel` kind, e.g. a `dm_channel` row) renders exactly as before —
-   * the Lock is opt-in, keyed on a real `visibility === 'private'` regular
-   * channel by the caller.
+   * Omitted defaults to `Hash`, so every existing call-site (including
+   * fixed-roster rows) renders exactly as before. The Lock is opt-in, keyed on
+   * a real `visibility === 'private'` regular channel by the caller.
    */
   visibility?: ConversationVisibility;
   /** Extra classes (colour / context). Layout (`shrink-0`) and size are owned

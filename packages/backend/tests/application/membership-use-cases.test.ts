@@ -364,7 +364,7 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     ).json()) as any;
     const dmChannel = t.ctx.db
       .prepare<[], { id: string }>(
-        `SELECT id FROM conversations WHERE kind = 'dm_channel' LIMIT 1`,
+        `SELECT id FROM conversations WHERE roster_policy = 'fixed' LIMIT 1`,
       )
       .get();
     expect(dm).toBeTruthy();

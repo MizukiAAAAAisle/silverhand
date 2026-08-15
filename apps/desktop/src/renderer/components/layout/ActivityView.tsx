@@ -116,7 +116,7 @@ function ChannelGlyph({ item }: { item: ActivityItemDto }): JSX.Element {
   if (item.kind === 'agent_failed') {
     return <AlertTriangle className="size-3.5 shrink-0 text-error" />;
   }
-  if (item.conversation_kind === 'dm_channel') {
+  if (item.conversation_roster_policy === 'fixed') {
     return <MessageCircle className="size-3.5 shrink-0 text-text-muted" />;
   }
   return <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />;

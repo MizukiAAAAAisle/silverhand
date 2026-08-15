@@ -34,8 +34,8 @@ import type {
 /** Conversation reads the service performs OUTSIDE any transaction. */
 export interface ChannelReadPort {
   get(conversationId: string): ConversationDto | null;
-  /** Narrow a conversation id to the channel-like kinds (`channel |
-   *  dm_channel`); null for a thread id or a missing row. */
+  /** Read a top-level conversation with its placement and roster axes; null
+   *  only when the row is missing. */
   getChannelLike(
     conversationId: string,
   ): ChannelConversationDto | DmChannelDto | null;
@@ -44,10 +44,11 @@ export interface ChannelReadPort {
   listAgents(conversationId: string): ConversationAgentDto[];
 }
 
-/** Single-statement channel writes. Each is one UPDATE gated on `kind`, so it
- *  is atomic by itself and returns `null` when nothing matched — the service
- *  turns that into a `ChannelError`. Putting these on the UnitOfWork would be
- *  transaction theatre (R3). */
+/** Single-statement channel writes. Each is one UPDATE gated on the relevant
+ *  placement, roster, and lifecycle predicates, so it is atomic by itself and
+ *  returns `null` when nothing matched — the service turns that into a
+ *  `ChannelError`. Putting these on the UnitOfWork would be transaction theatre
+ *  (R3). */
 export interface ChannelDirectWritePort {
   setArchived(
     conversationId: string,

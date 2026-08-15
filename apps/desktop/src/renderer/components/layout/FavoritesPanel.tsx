@@ -48,7 +48,8 @@ const FAVORITES_GROUP = 'favorites';
  * a first-class SORTABLE list (#task:1254).
  *
  * SCOPE (#task:1888, shiki-approved #task:1887): STARRED holds CONVERSATIONS only —
- * `channel` and `dm_channel`. Containers (workspace / DM home) have no star at all
+ * both open- and fixed-roster conversations. Containers (workspace / DM home)
+ * have no star at all
  * (#task:1900), so the list cannot receive one: what belongs permanently in reach is
  * the handful of rooms you actually work in, not a second rail of containers.
  *
@@ -110,15 +111,15 @@ export function FavoritesGroup(props: {
   const unstar = useUnstarFavorite();
   const setSortMode = useSetSortMode();
 
-  // Tier authority for the rows that HAVE a tier. Only `kind === 'channel'` parents
+  // Tier authority for the rows that HAVE a tier. Only open-roster parents
   // are fanned out: the modes population joins `conversation_users` AND
-  // `c.kind='channel'`, so a `dm_channel`'s parent (an agent home) would answer with
+  // `c.roster_policy='open'`, so a fixed-roster row's parent (an agent home) would answer with
   // an empty batch every time — zero information, and one request per DM. A DM
   // channel's verdict is `'all'` by backend rule, resolved on the row below.
   const channelParentIds = useMemo(
     () =>
       Array.from(
-        new Set(items.filter(i => i.kind === 'channel').map(i => i.workspace_id)),
+        new Set(items.filter(i => i.roster_policy === 'open').map(i => i.workspace_id)),
       ).sort(),
     [items],
   );
@@ -259,7 +260,7 @@ function FavoriteRow({
   // subsumes the parent list's `isMember` gate — the batch joins `conversation_users`,
   // so a browse-only public row has no tier and therefore no badge.
   const effectiveMode: ChannelAttentionMode | undefined =
-    item.kind === 'channel' ? attention?.effective_mode : 'all';
+    item.roster_policy === 'open' ? attention?.effective_mode : 'all';
   const badge = channelRowBadge({
     effectiveMode,
     positionalUnread: item.unread_count ?? 0,
@@ -287,7 +288,7 @@ function FavoriteRow({
   // (@Cindy MUST FIX, #task:1889; the parent list's `ChannelRow` gates on `isMember`
   // for the same reason). While the batch is loading or failed the entry is simply
   // absent rather than optimistically offered.
-  const showAttentionMenu = item.kind === 'channel' && attention !== undefined;
+  const showAttentionMenu = item.roster_policy === 'open' && attention !== undefined;
 
   const row = (
     <ConversationRowLayout
@@ -310,7 +311,7 @@ function FavoriteRow({
         // identity. Kind-gated exactly as the parent list does it: a
         // `dm_channel` is stored `private` but is not a private channel, so it
         // keeps the canonical `#`.
-        visibility={item.kind === 'channel' ? item.visibility : undefined}
+        visibility={item.roster_policy === 'open' ? item.visibility : undefined}
         className="text-text-muted"
       />
       <span className="min-w-0 truncate">{item.title}</span>

@@ -105,7 +105,7 @@ export interface ChannelFilterCandidate {
    *  for the workspace→channel cascade (#task:1387). */
   workspaceId: string;
   title: string;
-  kind: 'channel' | 'dm_channel';
+  roster_policy: 'open' | 'fixed';
   archived_at: number | null;
   /** True when the owning workspace is a DM workspace — drives the data-source
    *  group even though the conversation kind is plain 'channel'. */
@@ -133,7 +133,7 @@ export function buildChannelFilterOptions(
   for (const c of candidates) {
     if (c.archived_at !== null) continue;
     if (byId.has(c.id)) continue;
-    const isDm = c.fromDmWorkspace || c.kind === 'dm_channel';
+    const isDm = c.fromDmWorkspace || c.roster_policy === 'fixed';
     byId.set(c.id, {
       id: c.id,
       workspaceId: c.workspaceId,

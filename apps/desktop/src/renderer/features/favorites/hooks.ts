@@ -1,7 +1,7 @@
 // Favorites bounded context — renderer read/write hooks (#task:1253, re-scoped
 // to CONVERSATIONS by #task:1888). Mirrors `@silverhand/shared` `api/favorites.ts`:
 // the sidebar's STARRED section as a GLOBAL, viewer-scoped FLAT list of the
-// viewer's starred conversations — `kind` ∈ {'channel','dm_channel'}, the
+// viewer's starred conversations — open- or fixed-roster, the
 // `user_sort_entry.starred_at` set under `list_key='channels:<ws_id>'`. A
 // WORKSPACE / DM container cannot be here because containers have no star at all
 // (#task:1900) — star is a conversation-only action, and its one meaning is
@@ -88,11 +88,11 @@ export function patchFavoritesUnread(
  *  `workspace_id` is its PARENT, so one lost workspace can drop SEVERAL rows.
  *  Consume the event's workspace_id, no refetch: filter out the matching `items`
  *  AND drop their orphan `viewer_sort.entries` (an entry's `entity_id` IS the row's
- *  `favorite_key` = `<kind>:<entity_id>`). Leaving the sort entry behind would let
+ *  `favorite_key` = `conversation:<entity_id>`). Leaving the sort entry behind would let
  *  the removed id survive in cache — the whole-cache removal invariant it violates
  *  is why #task:1412 fixed it (Cindy). That guard used to also match a
  *  `workspace:<wsId>` composite and a legacy BARE `<wsId>` entry; since #task:1888
- *  every key here is `channel:`/`dm_channel:`-prefixed and a conversation id never
+ *  every key here is `conversation:`-prefixed and a conversation id never
  *  contains its parent's, so those two branches have no reachable input and the
  *  invariant now holds through the row filter alone. Local-only: on re-visibility a
  *  refetch restores authoritative order. PRESENT-ONLY / idempotent, mirroring

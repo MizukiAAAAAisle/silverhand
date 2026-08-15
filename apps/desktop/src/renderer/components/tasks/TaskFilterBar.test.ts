@@ -19,7 +19,7 @@ function candidate(
   return {
     workspaceId: 'ws-default',
     title: `title-${over.id}`,
-    kind: 'channel',
+    roster_policy: 'open',
     archived_at: null,
     ...over,
   };
@@ -69,14 +69,14 @@ describe('buildChannelFilterOptions', () => {
 
   it('puts a dm_channel in the dm group', () => {
     const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', kind: 'dm_channel' }),
+      candidate({ id: 'c1', roster_policy: 'fixed' }),
     ]);
     expect(out[0]?.group).toBe('dm');
   });
 
   it('puts a plain channel inside a dm workspace in the dm group', () => {
     const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', kind: 'channel', fromDmWorkspace: true }),
+      candidate({ id: 'c1', roster_policy: 'open', fromDmWorkspace: true }),
     ]);
     expect(out[0]?.group).toBe('dm');
   });
@@ -97,10 +97,10 @@ describe('buildChannelFilterOptions', () => {
 });
 
 describe('workspaceChannelCandidates — channel picker label/subtitle rule', () => {
-  const ch = (id: string, title: string, over: Partial<{ kind: 'channel' | 'dm_channel'; archived_at: number | null }> = {}) => ({
+  const ch = (id: string, title: string, over: Partial<{ roster_policy: 'open' | 'fixed'; archived_at: number | null }> = {}) => ({
     id,
     title,
-    kind: over.kind ?? ('channel' as const),
+    roster_policy: over.roster_policy ?? ('open' as const),
     archived_at: over.archived_at ?? null,
   });
 
@@ -123,8 +123,8 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
     // both rendered as the same `@Alice` label. Now the channel title is the
     // label, `@agent` the subtitle — so the rows are distinguishable.
     const out = workspaceChannelCandidates({ id: 'ws-alice', name: 'dm-Alice', kind: 'dm' }, [
-      ch('c1', 'Mentions', { kind: 'dm_channel' }),
-      ch('c2', 'Onboarding', { kind: 'dm_channel' }),
+      ch('c1', 'Mentions', { roster_policy: 'fixed' }),
+      ch('c2', 'Onboarding', { roster_policy: 'fixed' }),
     ]);
     expect(out.map(c => c.title)).toEqual(['Mentions', 'Onboarding']);
     expect(out.every(c => c.sublabel === '@Alice')).toBe(true);
@@ -137,7 +137,7 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
 
   it('a single-channel DM still carries the `@agent` subtitle', () => {
     const out = workspaceChannelCandidates({ id: 'ws-judy', name: 'dm-Judy', kind: 'dm' }, [
-      ch('c1', 'Onboarding', { kind: 'dm_channel' }),
+      ch('c1', 'Onboarding', { roster_policy: 'fixed' }),
     ]);
     expect(out[0]).toMatchObject({ title: 'Onboarding', sublabel: '@Judy' });
   });

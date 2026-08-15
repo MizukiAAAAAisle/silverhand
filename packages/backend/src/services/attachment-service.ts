@@ -4,7 +4,6 @@ import type {
   AttachmentLocateDto,
   AttachmentRefInput,
   AttachmentRow,
-  ConversationKind,
 } from '@silverhand/shared';
 import {
   isGenericMimeHint,
@@ -512,13 +511,8 @@ export class AttachmentService {
 
   private resolveChannelId(conversationId: string): string | null {
     const conv = this.conversations.get(conversationId);
-    if (!conv) return null;
-    return isChannelLikeKind(conv.kind) ? conv.id : null;
+    return conv?.id ?? null;
   }
-}
-
-function isChannelLikeKind(kind: ConversationKind): boolean {
-  return kind === 'channel' || kind === 'dm_channel';
 }
 
 function serveHeadersOf(row: AttachmentRow): BlobFileServeHeaders {

@@ -58,7 +58,8 @@ function channel(overrides: Partial<ChannelConversationDto> = {}): ChannelConver
   return {
     id: 'qdQwBXDqcq_GE63-',
     workspace_id: 'w-1',
-    kind: 'channel',
+    placement_kind: 'workspace',
+    roster_policy: 'open',
     title: 'general',
     status: 'open',
     spawned_by_agent_id: null,

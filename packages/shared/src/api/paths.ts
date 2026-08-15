@@ -224,20 +224,20 @@ export const apiPaths = {
   conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
 
-  /** Identity + routing metadata for ANY conversation by id (channel /
-   *  dm_channel). Backs cross-workspace secondary-pane
+  /** Identity + routing metadata for ANY top-level conversation by id. Backs
+   *  cross-workspace secondary-pane
    *  resolution and the `#conv:<id>` sigil renderer. Returns
    *  `ConversationRefResponse`; does NOT include messages or per-user
    *  unread state. Permission: `canReadConversation` — the same
    *  public-aware read gate as channel detail + message history, i.e. a
    *  conversation member OR a workspace member browsing an ACTIVE PUBLIC
    *  channel. Workspace membership alone is NOT enough: a private channel
-   *  / archived public channel / non-participant `dm_channel` in the
+   *  / archived public channel / non-participant fixed-roster conversation in the
    *  viewer's own workspace all stay 403. */
   conversationRef: (id: string) => `/api/conversations/${id}/ref`,
-  /** Per-channel reply-cluster ("Threads") discovery list (#task:1074).
-   *  Takes a conversation id but only resolves channel / dm_channel; a
-   *  legacy `kind='thread'` conversation is not channel-like → 404. */
+  /** Per-conversation reply-cluster ("Threads") discovery list (#task:1074).
+   *  Takes a top-level conversation id; thread clusters are message-derived and
+   *  never have their own conversation row. */
   conversationThreads: (id: string) => `/api/conversations/${id}/threads`,
   /** Per-conversation per-viewer stream-unread read-model (#task:1226). The
    *  SINGLE client source of truth for thread / mainline "N new" + first-unread:

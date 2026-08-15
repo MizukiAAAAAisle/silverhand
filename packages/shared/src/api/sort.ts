@@ -46,8 +46,9 @@ export type SortGroup = z.infer<typeof SortGroupSchema>;
  *   'workspaces'        — the workspace rail (one per viewer)
  *   'channels:<ws_id>'  — one workspace's conversation list
  *   'favorites'         — the global Favorites list's ordering state (#task:1252 C):
- *                         rank + the list-wide mode only, keyed by `<kind>:<entity_id>`
- *                         favorite keys. Membership stays single-source in each
+ *                         rank + the list-wide mode only, keyed by
+ *                         `conversation:<entity_id>` favorite keys. Membership
+ *                         stays single-source in each
  *                         entity's HOME list (`starred_at`); `favorites` never
  *                         stores what is starred, only how the list is arranged.
  *                         Since #task:1888 its members are CONVERSATIONS, so the

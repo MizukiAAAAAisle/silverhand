@@ -5,7 +5,7 @@ import { mapConversationByIdResult } from './useConversationById';
 
 const baseRef: ConversationRef = {
   id: 'conv-1',
-  kind: 'channel',
+  placement_kind: 'workspace', roster_policy: 'open',
   title: 'planning',
   workspace_id: 'ws-a',
   workspace_kind: 'regular',

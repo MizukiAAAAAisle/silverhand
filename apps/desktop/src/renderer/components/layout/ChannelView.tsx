@@ -65,7 +65,8 @@ type WorkspaceUiKind = 'regular' | 'dm';
 interface ChannelDescriptor {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel';
+  placement_kind: 'workspace' | 'direct_pair' | 'agent_inbox';
+  roster_policy: 'open' | 'fixed';
   closed_at: number | null;
   archived_at: number | null;
   workspace_id: string;
@@ -227,11 +228,11 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
  * the surface intentional.
  */
 function canAddMember(
-  conv: { kind: 'channel' | 'dm_channel' },
+  conv: { roster_policy: 'open' | 'fixed' },
   closed: boolean,
 ): boolean {
   if (closed) return false;
-  return conv.kind === 'channel';
+  return conv.roster_policy === 'open';
 }
 
 // Split out so the React-Query hooks below only mount once a channel
@@ -364,24 +365,20 @@ function ActiveChannelView({
   const closed = conversation.closed_at !== null;
   const isArchived = conversation.archived_at !== null;
   // Rename / archive are channel-like organization behaviors (#task:1145):
-  // they apply to any top-level channel-like conversation — `channel` in a
-  // regular workspace AND `dm_channel` in an agent_home/DM. `conversation.kind`
-  // is the precise discriminant (channel ⟺ regular workspace, dm_channel ⟺ DM
-  // home), so we no longer gate on the workspace `channelKind` beyond "a
-  // workspace is selected". The parent decides the actual permission by whether
-  // it passes the handler at all; rename additionally requires "not closed" (a
-  // closed channel is read-only).
-  const isTopLevelChannelLike =
-    channelKind !== null &&
-    (conversation.kind === 'channel' || conversation.kind === 'dm_channel');
+  // they apply to every top-level conversation, whether it is an open-roster
+  // workspace channel or a fixed-roster DM. The parent decides the actual
+  // permission by whether it passes the handler at all; rename additionally
+  // requires "not closed" (a closed channel is read-only).
+  const isTopLevelChannelLike = channelKind !== null;
   const canToggleArchive =
     isTopLevelChannelLike && !!onArchiveChannel && gate.allowMutations;
   const canRenameChannel =
     isTopLevelChannelLike && !closed && !!onRenameChannel && gate.allowMutations;
-  // Visibility toggle + self-leave are REGULAR-channel only (a `dm_channel` has
-  // neither a private/public axis nor a leave path — the backend guards
-  // `kind === 'channel'`).
-  const isRegularChannel = conversation.kind === 'channel';
+  // Visibility toggle + self-leave are workspace/open-roster only. A
+  // fixed-roster conversation has neither a visibility choice nor a leave path.
+  const isRegularChannel =
+    conversation.placement_kind === 'workspace'
+    && conversation.roster_policy === 'open';
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   // The visibility/leave capability carriers (`can_update_visibility`,
@@ -398,7 +395,7 @@ function ActiveChannelView({
   );
   const detailChannel = channelDetail?.channel;
   const channelVisibility =
-    detailChannel && detailChannel.kind === 'channel'
+    detailChannel && detailChannel.roster_policy === 'open'
       ? detailChannel.visibility
       : undefined;
   const canUpdateVisibility = channelDetail?.can_update_visibility ?? false;

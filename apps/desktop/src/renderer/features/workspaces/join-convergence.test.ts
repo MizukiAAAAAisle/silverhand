@@ -19,7 +19,7 @@ import { applyChannelJoinToList, type ChannelListItem } from './hooks';
 import type { ChannelListPayload } from './hooks';
 
 function item(id: string, is_member?: boolean): ChannelListItem {
-  return { id, kind: 'channel', is_member } as unknown as ChannelListItem;
+  return { id, placement_kind: 'workspace', roster_policy: 'open', is_member } as unknown as ChannelListItem;
 }
 
 function payload(items: ChannelListItem[]): ChannelListPayload {

@@ -37,7 +37,7 @@ export function useMessage(messageId: string | null) {
  * Discard every single-message cache belonging to a channel the viewer lost
  * (#task:1689). `MessageDto.conversation_id` is ALWAYS the parent channel-like
  * conversation — a thread is identified by `thread_root_id`, not by a separate
- * conversation (`ConversationKind` is `channel | dm_channel` since the v43
+ * conversation (threads are message clusters, not conversation rows, since the v43
  * reply-cluster model) — so this cache IS channel-attributable, and the read it
  * caches would be refused after the loss. Removed rather than patched: a
  * single-object read has no filtered shape to patch to.

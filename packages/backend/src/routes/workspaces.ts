@@ -470,10 +470,10 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     }
     if (workspace.workspace_kind === 'agent_home') {
       // `public` is a regular-channel-only concept: the DB CHECK ties it to
-      // `kind='channel'`, but the agent_home path mints a `dm_channel` via
-      // createAgentHomeDmChannel (which takes no visibility). Reject an
-      // explicit `public` here rather than silently minting a private
-      // dm_channel — an illegal kind×visibility must fail closed, not
+      // open-roster conversation, but the agent_home path mints a fixed-roster
+      // row via createAgentHomeDmChannel (which takes no visibility). Reject an
+      // explicit `public` here rather than silently minting a private row — an
+      // illegal roster-policy×visibility combination must fail closed, not
       // downgrade. Omitted / explicit `private` pass through unchanged.
       if (parsed.data.visibility === 'public') {
         return c.json(

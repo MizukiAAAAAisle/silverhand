@@ -36,7 +36,7 @@
  */
 import type {
   ChannelAttentionMode,
-  ConversationKind,
+  ConversationRosterPolicy,
   ConversationVisibility,
   MessageDto,
   WorkspaceMemberDto,
@@ -224,7 +224,7 @@ export interface HumanMembershipTxPort extends WorkspaceMembershipTxPortBase {
  *  to an exit decision. */
 export interface MembershipChannelExitFacts {
   channel: {
-    kind: ConversationKind;
+    roster_policy: ConversationRosterPolicy;
     visibility: ConversationVisibility;
     archived_at: number | null;
   } | null;

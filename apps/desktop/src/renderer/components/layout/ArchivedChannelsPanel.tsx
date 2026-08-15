@@ -374,7 +374,7 @@ function EmptyState({ text }: { text: string }): JSX.Element {
 export function archivedRowWorkspaceLabel(
   item: ArchivedChannelListItemDto,
 ): string {
-  return item.channel.kind === 'dm_channel'
+  return item.channel.roster_policy === 'fixed'
     ? dmWorkspaceLabel(item.workspace.name)
     : item.workspace.name;
 }

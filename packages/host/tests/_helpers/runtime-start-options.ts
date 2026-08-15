@@ -96,7 +96,8 @@ export function testStartOptions(
     ],
     session: {
       conversation_id: conversationId,
-      kind: 'channel',
+      placement_kind: 'workspace',
+      roster_policy: 'open',
       title: 'test-session',
       spawned_by_agent_id: null,
       members: [

@@ -266,9 +266,11 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
     expect(homeRow).toBeTruthy();
     expect(homeRow!.owner_agent_id).toBe(happyJson.agent.id);
     const dmRow = harness.backend.context.db
-      .prepare(`SELECT id, kind FROM conversations WHERE id = ?`)
-      .get(happyJson.dm_channel_id) as { id: string; kind: string } | undefined;
-    expect(dmRow?.kind).toBe('dm_channel');
+      .prepare(`SELECT id, placement_kind, roster_policy FROM conversations WHERE id = ?`)
+      .get(happyJson.dm_channel_id) as
+      | { id: string; placement_kind: string; roster_policy: string }
+      | undefined;
+    expect(dmRow).toMatchObject({ placement_kind: 'workspace', roster_policy: 'fixed' });
 
     // ────────────────────────────────────────────────────────────
     // PHASE 2 — Typed-failure injection + same-row ?retry=true.

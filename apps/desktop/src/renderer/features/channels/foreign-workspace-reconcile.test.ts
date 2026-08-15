@@ -23,7 +23,6 @@ const WS = 'ws-b';
 
 const member = (id: string): ChannelMembershipRow => ({
   id,
-  kind: 'channel',
   is_member: true,
   visibility: 'private',
 });

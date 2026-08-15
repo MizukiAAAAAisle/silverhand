@@ -95,10 +95,10 @@ export type WorkspaceUiKind = 'regular' | 'dm';
 interface ChannelNode {
   id: string;
   title: string;
-  kind: 'channel' | 'dm_channel';
+  roster_policy: 'open' | 'fixed';
   /** Identity-level visibility. `'private'` regular channels render a Lock
    *  glyph; `'public'` render the canonical `#`. Only meaningful for
-   *  `kind === 'channel'` — a `dm_channel` is not a private *channel* and never
+   *  `roster_policy === 'open'` — a fixed-roster conversation is not a private *channel* and never
    *  shows the lock (see the render site). */
   visibility: ConversationVisibility;
   closed_at: number | null;
@@ -237,7 +237,7 @@ export function WorkspaceChannels({
     return items.map(s => ({
       id: s.id,
       title: s.title,
-      kind: s.kind,
+      roster_policy: s.roster_policy,
       visibility: s.visibility,
       is_member: s.is_member,
       closed_at: s.closed_at,
@@ -436,7 +436,7 @@ function channelNodeBadge(
 ): RowBadge | null {
   if (channel.is_member !== true) return null;
   const effectiveMode: ChannelAttentionMode | undefined =
-    channel.kind === 'channel' ? attention?.effective_mode : 'all';
+    channel.roster_policy === 'open' ? attention?.effective_mode : 'all';
   return channelRowBadge({
     effectiveMode,
     positionalUnread: unreadCount,
@@ -487,11 +487,10 @@ function ChannelRow({
   // AND `dm_channel` in an agent_home/DM — and only excludes threads.
   // Non-members can't organize a channel they haven't joined (the backend 403s),
   // so it is member-gated.
-  const showArchiveMenu =
-    isMember && (channel.kind === 'channel' || channel.kind === 'dm_channel');
+  const showArchiveMenu = isMember;
   // Per-viewer attention preference — a member-scoped write, regular channels
   // only. Hidden for a browse-only public row.
-  const showAttentionMenu = isMember && channel.kind === 'channel';
+  const showAttentionMenu = isMember && channel.roster_policy === 'open';
   // Star + attention + archive form the management group; the separator below
   // fences them off from "Copy name" whenever any member action is present.
   const hasManagementMenu = showArchiveMenu || showAttentionMenu;
@@ -537,7 +536,7 @@ function ChannelRow({
         // Lock is opt-in for a private *regular* channel only. A `dm_channel`
         // is not a private channel, so it keeps the canonical `#` — pass the
         // visibility only when the row is a real channel.
-        visibility={channel.kind === 'channel' ? channel.visibility : undefined}
+        visibility={channel.roster_policy === 'open' ? channel.visibility : undefined}
         className={isClosed ? 'text-text-muted/50' : 'text-text-muted'}
       />
       <span

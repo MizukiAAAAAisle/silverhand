@@ -9,14 +9,14 @@
 // the list is first-class sortable. So: membership = projection, ordering =
 // stored. See docs/list-sort-v1.md.
 //
-// SCOPE — CONSUMER CONTRACT. This endpoint emits CONVERSATIONS only: `kind` ∈
-// {'channel','dm_channel'}, i.e. the viewer's stars from a conversation list
+// SCOPE — CONSUMER CONTRACT. This endpoint emits CONVERSATIONS only: the
+// viewer's stars from a conversation list
 // (`list_key='channels:<ws_id>'`). A WORKSPACE / DM container is NOT a
 // global-Favorites member, and since #task:1899 is not starrable at all. Mixing
 // granularities would put parents in a short list whose row count then grows with
 // their children; the single-column sidebar therefore stars leaves only. Note
-// there is no separate "Mentions" kind: a Mentions inbox is a `dm_channel` in the
-// agent's own home workspace, so it is covered by `kind='dm_channel'`.
+// there is no separate "Mentions" classifier: a Mentions inbox in the agent's
+// home workspace is covered by the fixed-roster arm.
 //
 // Each row is id-keyed (`entity_id`); its display identity is server-resolved
 // (Activity `preview_sender` precedent) so the renderer does ZERO local
@@ -33,39 +33,34 @@
 // endpoints; those still return the FULL visible set (other consumers need it),
 // and the sidebar derives the parent-side exclusion.
 import { z } from 'zod';
-import { ConversationKindSchema, ConversationVisibilitySchema } from '../db/schema.js';
+import { ConversationRosterPolicySchema, ConversationVisibilitySchema } from '../db/schema.js';
 import { ViewerSortStateDtoSchema } from './sort.js';
 
 /**
- * Which conversation a favorite is. This is the conversation's own kind — the
- * favorites list adds no kind of its own:
- *   - 'channel'     — a regular channel in a regular workspace.
- *   - 'dm_channel'  — a conversation in an agent's own home workspace (the DM
- *                     stream, its Onboarding thread, its Mentions inbox).
- * A WORKSPACE / DM container is never a global favorite — since #task:1899 it
- * cannot be starred at all — so there is no 'workspace' / 'dm' kind.
- * `kind` does NOT select the unstar endpoint: every row unstars through
+ * Which roster policy the favorite carries. The favorites list adds no
+ * classifier of its own. A workspace container is never a global favorite;
+ * since #task:1899 it cannot be starred at all. The roster policy does NOT
+ * select the unstar endpoint: every row unstars through
  * `DELETE /api/channels/:entity_id/star`, which derives the storage list_key
  * server-side, so the renderer never constructs one.
  */
-export const FavoriteKindSchema = ConversationKindSchema;
-export type FavoriteKind = z.infer<typeof FavoriteKindSchema>;
+export const FavoriteRosterPolicySchema = ConversationRosterPolicySchema;
+export type FavoriteRosterPolicy = z.infer<typeof FavoriteRosterPolicySchema>;
 
 /**
  * One favorite row, ready to render. FLAT (not a discriminated union) to match
- * the Activity item DTO and let the renderer map uniformly; per-`kind` field
+ * the Activity item DTO and let the renderer map uniformly; per-roster-policy field
  * population is contractual (documented per field below), not enforced by the
  * type. Stable identity is ALWAYS `entity_id` — never `title` (names are
  * disambiguated for display only, never used as identity).
  */
 export const FavoriteRowDtoSchema = z.object({
-  kind: FavoriteKindSchema,
-  /** The favorites list's stable sort identity: `<kind>:<entity_id>` (e.g.
-   *  `channel:c_…`, `dm_channel:c_…`). This is the renderer's row key / drag key
+  roster_policy: FavoriteRosterPolicySchema,
+  /** The favorites list's stable sort identity: `conversation:<entity_id>`.
+   *  This is the renderer's row key / drag key
    *  AND the `entity_id` under which the favorites ordering state lives
    *  (`user_sort_entry.list_key='favorites'`, and the matching
-   *  `viewer_sort.entries[].entity_id`). KIND-qualified — never a bare id — so the
-   *  key stays self-describing and cannot collide with another kind's id space. */
+   *  `viewer_sort.entries[].entity_id`). */
   favorite_key: z.string(),
   /** The starred conversation's id — `user_sort_entry.entity_id` in its HOME list
    *  (`channels:<workspace_id>`), the star/unstar path param, and the navigation
@@ -78,9 +73,9 @@ export const FavoriteRowDtoSchema = z.object({
   /** Primary label: the conversation's own title. Bare — no `#` sigil and no
    *  parent prefix; the renderer composes those from the fields below. */
   title: z.string(),
-  /** The PARENT's label, always populated: the workspace name for a 'channel'
+  /** The PARENT's label, always populated: the workspace name for an open-roster
    *  row; the bound agent's display name (falling back to its handle, then the
-   *  workspace name) for a 'dm_channel' row. The STARRED list is global and this
+   *  workspace name) for a fixed-roster row. The STARRED list is global and this
    *  product has duplicate channel names by design (several workspaces each with
    *  a `#general`), so this is the row's disambiguator. Its contractual weight is
    *  TOOLTIP DISAMBIGUATION (shiki, 2026-08-08 「接受同名」): two same-named rows
@@ -121,15 +116,15 @@ export const FavoriteRowDtoSchema = z.object({
   // not subscribe to that frame. `unread_count` above answers a DIFFERENT
   // question ("how many messages are unread") and stays.
   /** The conversation's STORED visibility (`conversations.visibility`) — the same
-   *  identity-level fact `ConversationDto` carries, populated for BOTH kinds
+   *  identity-level fact `ConversationDto` carries, populated for both roster policies
    *  because it is the row's own stored value, not a favorites-specific
    *  derivation. It exists so a STARRED row can draw the channel's glyph from the
    *  same axis its in-tree row does: a private channel wears a `Lock`, a public
    *  one the canonical `#` (#task:1954 — STARRED drew a constant `#` because this
-   *  projection had no visibility to hand `ChannelIcon`). The "which kinds get a
+   *  projection had no visibility to hand `ChannelIcon`). The "which rows get a
    *  Lock" rule is NOT encoded here: exactly as in `WorkspaceChannels`, the
-   *  renderer passes this to `ChannelIcon` only for `kind === 'channel'`, so a
-   *  `dm_channel` (stored `private` by its CHECK) keeps the `#`. One rule, one
+   *  renderer passes this to `ChannelIcon` only for an open-roster row, so a
+   *  fixed-roster conversation (stored `private` by its CHECK) keeps the `#`. One rule, one
    *  place — this field stays the raw stored fact.
    *  Deliberately NOT joined client-side off the parent's channel list: a starred
    *  conversation is MOVED out of that list and its parent may be collapsed and
@@ -169,9 +164,9 @@ export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
  * reachability arms, intersected with "not archived". Concretely: the viewer is a
  * `workspace_users` member of the parent, the conversation is live
  * (`archived_at IS NULL`), the workspace is not archived, and the viewer either
- * belongs to the conversation or it is a public CHANNEL (the same
+ * belongs to the conversation or it is a public open-roster conversation (the same
  * membership-∪-public-discovery set that workspace's own list serves; the public
- * arm never applies to a `dm_channel`). A starred
+ * arm never applies to a fixed-roster row). A starred
  * conversation that becomes inaccessible or archived is HIDDEN, not deleted: its
  * `user_sort_entry.starred_at` row persists, so the favorite reappears if it is
  * restored / re-shared. On UNSTAR the `favorites` ordering row is actively

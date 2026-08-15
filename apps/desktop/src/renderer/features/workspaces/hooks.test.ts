@@ -42,7 +42,8 @@ function channel(
   return {
     id,
     workspace_id: 'w1',
-    kind: 'channel',
+    placement_kind: 'workspace',
+    roster_policy: 'open',
     title: id,
     status: 'idle',
     spawned_by_agent_id: null,
@@ -191,25 +192,25 @@ describe('Favorites sort cache wiring (#task:1254)', () => {
   });
 
   it('applyOrderToViewerSort writes dense 0..n ranks and flips the list-wide scope to manual', () => {
-    // Favorites keys are `<channel|dm_channel>:<conversation_id>` only — a container
+    // Favorites keys are `conversation:<conversation_id>` only — a container
     // can never appear here (#task:1888 / #task:1900).
     const next = applyOrderToViewerSort(
       vs(
         [
-          { entity_id: 'channel:c1', rank: null, last_accessed_at: 5, starred_at: 1 },
-          { entity_id: 'dm_channel:c2', rank: null, last_accessed_at: 9, starred_at: 2 },
+          { entity_id: 'conversation:c1', rank: null, last_accessed_at: 5, starred_at: 1 },
+          { entity_id: 'conversation:c2', rank: null, last_accessed_at: 9, starred_at: 2 },
         ],
         { '': 'recent' },
       ),
       undefined, // list-wide scope (favorites has no per-group axis)
-      ['dm_channel:c2', 'channel:c1'],
+      ['conversation:c2', 'conversation:c1'],
     );
     expect(next.modes['']).toBe('manual');
     const byId = new Map(next.entries.map(e => [e.entity_id, e]));
-    expect(byId.get('dm_channel:c2')?.rank).toBe(0);
-    expect(byId.get('channel:c1')?.rank).toBe(1);
+    expect(byId.get('conversation:c2')?.rank).toBe(0);
+    expect(byId.get('conversation:c1')?.rank).toBe(1);
     // non-rank fields ride through untouched.
-    expect(byId.get('dm_channel:c2')?.last_accessed_at).toBe(9);
+    expect(byId.get('conversation:c2')?.last_accessed_at).toBe(9);
   });
 
   it('a favorites cache write lands on favoritesKey and never touches workspaces/channels caches', () => {
@@ -221,7 +222,7 @@ describe('Favorites sort cache wiring (#task:1254)', () => {
     client.setQueryData(favoritesKey, {
       items: [],
       viewer_sort: vs(
-        [{ entity_id: 'channel:c1', rank: 0, last_accessed_at: 5, starred_at: 1 }],
+        [{ entity_id: 'conversation:c1', rank: 0, last_accessed_at: 5, starred_at: 1 }],
         { '': 'recent' },
       ),
     });
@@ -241,12 +242,17 @@ describe('Favorites sort cache wiring (#task:1254)', () => {
     const prevOrderVs = orderAdapter.read(prevOrder)!;
     client.setQueryData(
       orderAdapter.key,
-      orderAdapter.write(prevOrder, applyOrderToViewerSort(prevOrderVs, undefined, ['channel:c1'])),
+      orderAdapter.write(
+        prevOrder,
+        applyOrderToViewerSort(prevOrderVs, undefined, ['conversation:c1']),
+      ),
     );
 
     const favAfter = client.getQueryData<{ viewer_sort: ViewerSortStateDto }>(favoritesKey)!;
     expect(favAfter.viewer_sort.modes['']).toBe('manual');
-    expect(favAfter.viewer_sort.entries.find(e => e.entity_id === 'channel:c1')?.rank).toBe(0);
+    expect(
+      favAfter.viewer_sort.entries.find(e => e.entity_id === 'conversation:c1')?.rank,
+    ).toBe(0);
 
     // Independent axis: the home caches are byte-identical (same object ref) —
     // favorites reorder/mode can't perturb a workspace/channel's home rank.
@@ -481,8 +487,8 @@ describe('removeWorkspaceFromMessageUnread (#task:1404)', () => {
 // drop SEVERAL rows. Row membership + their orphan sort entries only, no refetch.
 describe('removeWorkspaceFromFavorites (#task:1404, conversation rows since #task:1888)', () => {
   const favRow = (conversationId: string, workspaceId: string): FavoriteRowDto => ({
-    kind: 'channel',
-    favorite_key: `channel:${conversationId}`,
+    roster_policy: 'open',
+    favorite_key: `conversation:${conversationId}`,
     entity_id: conversationId,
     workspace_id: workspaceId, // the PARENT, not the row itself
     title: conversationId,
@@ -501,8 +507,8 @@ describe('removeWorkspaceFromFavorites (#task:1404, conversation rows since #tas
         list_key: 'favorites',
         modes: {},
         entries: [
-          { entity_id: 'channel:c-1', rank: 1, last_accessed_at: null, starred_at: 1 },
-          { entity_id: 'channel:c-3', rank: 2, last_accessed_at: null, starred_at: 1 },
+          { entity_id: 'conversation:c-1', rank: 1, last_accessed_at: null, starred_at: 1 },
+          { entity_id: 'conversation:c-3', rank: 2, last_accessed_at: null, starred_at: 1 },
         ],
       },
     });
@@ -512,7 +518,7 @@ describe('removeWorkspaceFromFavorites (#task:1404, conversation rows since #tas
     expect(next?.items.map(i => i.entity_id)).toEqual(['c-3']);
     // A sort entry keyed by a removed row's `favorite_key` would let the id survive
     // in cache — the whole-cache removal invariant #task:1412 closed.
-    expect(next?.viewer_sort.entries.map(e => e.entity_id)).toEqual(['channel:c-3']);
+    expect(next?.viewer_sort.entries.map(e => e.entity_id)).toEqual(['conversation:c-3']);
   });
 
   it('is idempotent: list not loaded / no matching row → no write', () => {
@@ -597,7 +603,7 @@ describe('removeWorkspaceFromActivity (#task:1409)', () => {
     thread_root_id: null,
     message_id: `m-${id}`,
     notification_id: null,
-    conversation_kind: 'channel',
+    conversation_roster_policy: 'open',
     title: `#${id}`,
     thread_root_preview: null,
     preview: null,

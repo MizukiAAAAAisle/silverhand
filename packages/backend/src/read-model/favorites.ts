@@ -8,9 +8,9 @@
 //
 // SCOPE: the global Favorites/STARRED list holds CONVERSATION rows only — it
 // projects the viewer's stars from the per-workspace conversation lists
-// (`list_key='channels:<ws_id>'`), i.e. `kind='channel'` and `kind='dm_channel'`
-// (the latter covers an agent home's DM stream, its Onboarding thread and its
-// Mentions inbox — "Mentions" is a dm_channel, not a kind of its own). A
+// (`list_key='channels:<ws_id>'`), across open- and fixed-roster conversations
+// (the latter covers an agent home's DM stream, its Onboarding stream and its
+// Mentions inbox). A
 // WORKSPACE / DM container is NOT a global-Favorites member, and since #task:1899
 // cannot be starred at all: containers are simply outside this bounded context.
 //
@@ -19,7 +19,7 @@
 // single-group, list-wide [recent|manual] toggle + manual drag, reusing the
 // `sort` context. This read-model SYNTHESIZES the `viewer_sort` the renderer
 // composes from:
-//   - keyed by `<kind>:<entity_id>` favorite keys;
+//   - keyed by `conversation:<entity_id>` favorite keys;
 //   - each entry carries rank (from the `favorites` list_key) + last_accessed_at
 //     (from the conversation's HOME list — recent = recently-OPENED, never
 //     "recently starred"; opening a conversation already stamps that list) +
@@ -39,13 +39,12 @@
 //     (`list_key = 'channels:' || c.workspace_id`) with `starred_at IS NOT NULL`;
 //   - viewer ∈ workspace_users(parent)  AND  parent.archived_at IS NULL;
 //   - conversation.archived_at IS NULL;
-//   - viewer ∈ conversation_users(conv)  OR  (kind='channel' AND public) — the
+//   - viewer ∈ conversation_users(conv)  OR  (roster_policy='open' AND public) — the
 //     UNION of the two arms the star endpoint's own set is built from:
 //     `listActiveChannelsForViewer` (joined ∪ browseable public) for a regular
 //     workspace and the strictly membership-filtered DM query for an agent home.
-//     The public arm is kind-qualified so the DM side cannot be widened by a
-//     stray `visibility` value — the equality holds structurally, without leaning
-//     on the dm_channel visibility CHECK.
+//     The public arm is roster-qualified so the fixed side cannot be widened by
+//     a stray `visibility` value; the equality holds structurally.
 // An inaccessible / archived favorite is HIDDEN, not deleted: its
 // `user_sort_entry.starred_at` row (and any `favorites` ordering row) persists,
 // so the favorite reappears with its arranged position if it is restored /
@@ -89,7 +88,7 @@ interface ConversationFavoriteRow {
   starred_at: number;
   last_accessed_at: number | null;
   created_at: number;
-  kind: 'channel' | 'dm_channel';
+  roster_policy: 'open' | 'fixed';
   title: string;
   visibility: 'private' | 'public';
   workspace_id: string;
@@ -99,10 +98,10 @@ interface ConversationFavoriteRow {
   agent_name: string | null;
 }
 
-/** The kind-qualified favorites sort key — the renderer row/drag key AND the
- *  `entity_id` under `user_sort_entry.list_key='favorites'`. */
-export function favoriteKey(kind: FavoriteRowDto['kind'], entityId: string): string {
-  return `${kind}:${entityId}`;
+/** The conversation-qualified favorites sort key — the renderer row/drag key
+ *  and the `entity_id` under `user_sort_entry.list_key='favorites'`. */
+export function favoriteKey(entityId: string): string {
+  return `conversation:${entityId}`;
 }
 
 /**
@@ -142,7 +141,7 @@ export function listFavorites(
          use.starred_at       AS starred_at,
          use.last_accessed_at AS last_accessed_at,
          c.created_at         AS created_at,
-         c.kind               AS kind,
+         c.roster_policy      AS roster_policy,
          c.title              AS title,
          -- Stored visibility: the STARRED row draws the same hash / Lock glyph its
          -- in-tree row does (#task:1954). Already read in the WHERE below for the
@@ -162,7 +161,6 @@ export function listFavorites(
        WHERE use.user_id = @viewer
          AND use.list_key = 'channels:' || c.workspace_id
          AND use.starred_at IS NOT NULL
-         AND c.kind IN ('channel', 'dm_channel')
          AND c.archived_at IS NULL
          AND w.archived_at IS NULL
          AND (
@@ -170,7 +168,9 @@ export function listFavorites(
              SELECT 1 FROM conversation_users cu
               WHERE cu.conversation_id = c.id AND cu.user_id = @viewer
            )
-           OR (c.kind = 'channel' AND c.visibility = 'public')
+           OR (c.placement_kind = 'workspace'
+               AND c.roster_policy = 'open'
+               AND c.visibility = 'public')
          )`,
     )
     .all({ viewer: viewerUserId });
@@ -228,7 +228,7 @@ export function listFavorites(
   };
 
   for (const r of conversationRows) {
-    const key = favoriteKey(r.kind, r.entity_id);
+    const key = favoriteKey(r.entity_id);
     // PARENT identity is TEXT only: the workspace name, or the bound agent's
     // display name / handle for an agent home. An image-based source cue
     // (parent avatar + runtime badge) shipped with #task:1888 and was removed
@@ -242,7 +242,7 @@ export function listFavorites(
         : r.agent_name ?? r.workspace_name
       : r.workspace_name;
     items.push({
-      kind: r.kind,
+      roster_policy: r.roster_policy,
       favorite_key: key,
       entity_id: r.entity_id,
       workspace_id: r.workspace_id,

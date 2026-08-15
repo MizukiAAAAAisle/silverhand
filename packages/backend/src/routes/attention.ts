@@ -181,9 +181,9 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
     // Both announced frames are keyed on (viewer, WORKSPACE), so the workspace
     // arm is asserted rather than coerced. It is guaranteed here by the
     // `getChannel` filter above: `kind` is GENERATED from `roster_policy`, so
-    // `kind='channel'` means an open roster, and the only open-roster placement
+    // An open roster is the only placement eligible for this preference
     // is `workspace` (an agent inbox is `roster_policy='fixed'` ⇒
-    // `kind='dm_channel'` ⇒ already 404 above). If a later placement ever
+    // (fixed roster ⇒ already 404 above). If a later placement ever
     // carries an open roster without a workspace, this fails loud instead of
     // publishing a badge frame no client can place.
     announcePrefWrite(viewerUserId, requireWorkspacePlacement(channel), channel.id);

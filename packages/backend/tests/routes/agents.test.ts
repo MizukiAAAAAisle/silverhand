@@ -52,7 +52,7 @@ describe('POST /api/agents', () => {
     expect(body.agent.host_id).toBe(ownedLocal?.id);
     expect(typeof body.dm_channel_id).toBe('string');
 
-    // auto-DM channel exists as a canonical dm_channel conversation.
+    // auto-DM channel exists as a workspace-placed, fixed-roster conversation.
     const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
     const home = workspaces.workspaces.find(
       (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === body.agent.id,
@@ -63,7 +63,7 @@ describe('POST /api/agents', () => {
       await http(t).get(`/api/workspaces/${home.id}/channels`)
     ).json() as any;
     const dm = channels.channels.find((c: any) => c.id === body.dm_channel_id);
-    expect(dm.kind).toBe('dm_channel');
+    expect(dm).toMatchObject({ placement_kind: 'workspace', roster_policy: 'fixed' });
     expect(dm.title).toBe('Onboarding');
 
     // provision should have spawned the onboarding session for the DM
@@ -1767,7 +1767,7 @@ describe('GET /api/agents/:id/runtime-state', () => {
     expect(Array.isArray(res.visible_participations)).toBe(true);
     expect(Array.isArray(res.seats)).toBe(true);
     const dm = res.participations.find(
-      (s: any) => s.conversation_kind === 'dm_channel',
+      (s: any) => s.conversation_roster_policy === 'fixed',
     );
     expect(dm.workspace_kind).toBe('agent_home');
     expect(dm.channel_title).toBe('Onboarding');
@@ -1837,7 +1837,7 @@ describe('POST /api/agents/:id/stop', () => {
         `SELECT conversation_id AS id
            FROM conversation_agents ca
            JOIN conversations c ON c.id = ca.conversation_id
-          WHERE ca.agent_id = ? AND c.kind = 'dm_channel'`,
+          WHERE ca.agent_id = ? AND c.roster_policy = 'fixed'`,
       )
       .all(created.agent.id) as { id: string }[];
     t.ctx.db
@@ -1962,7 +1962,7 @@ describe('DELETE /api/agents/:id (full flow)', () => {
         `SELECT conversation_id AS id
            FROM conversation_agents ca
            JOIN conversations c ON c.id = ca.conversation_id
-          WHERE ca.agent_id = ? AND c.kind = 'dm_channel'`,
+          WHERE ca.agent_id = ? AND c.roster_policy = 'fixed'`,
       )
       .all(created.agent.id) as { id: string }[];
     t.ctx.db

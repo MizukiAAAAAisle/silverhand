@@ -77,7 +77,7 @@ function positionalTermSql(wsFilter: WorkspaceFilter): string {
               ON cu.conversation_id = c.id AND cu.user_id = @viewer
             JOIN messages m
               ON m.conversation_id = c.id AND ${ROLLUP_UNREAD}
-           WHERE ${loudPositionalPredicate('c.kind', 'c.id', 'c.workspace_id')}
+           WHERE ${loudPositionalPredicate('c.roster_policy', 'c.id', 'c.workspace_id')}
              ${wsFilter}
            GROUP BY c.workspace_id`;
 }
@@ -111,7 +111,7 @@ function directedTermSql(wsFilter: WorkspaceFilter): string {
            WHERE n.user_id = @viewer
              AND ${EFFECTIVE_DIRECTED_MENTION_PREDICATE}
              AND ${liveConversationPredicate('c')}
-             AND NOT ${loudPositionalPredicate('c.kind', 'c.id', 'c.workspace_id')}
+             AND NOT ${loudPositionalPredicate('c.roster_policy', 'c.id', 'c.workspace_id')}
              ${wsFilter}
            GROUP BY c.workspace_id`;
 }
@@ -211,7 +211,8 @@ export class AttentionBadgeRepo {
        JOIN conversation_users cu
          ON cu.conversation_id = c.id AND cu.user_id = @viewer
       WHERE c.workspace_id = @workspace
-        AND c.kind = 'channel'
+        AND c.placement_kind = 'workspace'
+        AND c.roster_policy = 'open'
         AND ${liveConversationPredicate('c')}`,
     ).all({
       viewer: viewerUserId,

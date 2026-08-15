@@ -45,7 +45,7 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       thread_root_id: null,
       message_id: `m-${id}`,
       notification_id: null,
-      conversation_kind: 'channel' as const,
+      conversation_roster_policy: 'open' as const,
       title: `#${id}`,
       thread_root_preview: null,
       preview: null,
@@ -62,8 +62,8 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
     // PARENT — which is what makes the removed workspace present here, and what the
     // cleanup filters on (one lost workspace can drop SEVERAL rows).
     const row = (conversationId: string, workspaceId: string) => ({
-      kind: 'channel' as const,
-      favorite_key: `channel:${conversationId}`,
+      roster_policy: 'open' as const,
+      favorite_key: `conversation:${conversationId}`,
       entity_id: conversationId,
       workspace_id: workspaceId,
       title: `#${conversationId}`,
@@ -77,15 +77,15 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       // The real DTO carries sort entries whose `entity_id` is the row's
       // `favorite_key`. An empty `entries` here was the false-green Cindy flagged,
       // so seed the removed row's entry plus the survivor's. Note the entry key can
-      // no longer CONTAIN the parent id (`channel:<cid>`), so this arm of the
+      // no longer CONTAIN the parent id (`conversation:<cid>`), so this arm of the
       // whole-cache invariant went vacuous with #task:1888 — the orphan-entry drop
       // is asserted directly in `features/favorites` instead.
       viewer_sort: {
         list_key: 'favorites',
         modes: {},
         entries: [
-          { entity_id: 'channel:c-gone', rank: 1, last_accessed_at: 1, starred_at: 1 },
-          { entity_id: 'channel:c-keep', rank: 2, last_accessed_at: 1, starred_at: 1 },
+          { entity_id: 'conversation:c-gone', rank: 1, last_accessed_at: 1, starred_at: 1 },
+          { entity_id: 'conversation:c-keep', rank: 2, last_accessed_at: 1, starred_at: 1 },
         ],
       },
     });

@@ -105,7 +105,7 @@ Silverhand 的层次是 `workspace → channel`；reply（回复）是同一个 
 3. **workspace 是上层容器，不直接做附件权限边界**。workspace 删除会 cascade 删除其 channel，从而删除 attachment row；但单个 attachment 的可见性校验仍看 `channel_id`。
 4. **无去重**。重复上传同一文件会产生两个 attachment id。实现简单，审计语义清楚，物理删除也不需要 refcount。
 
-约束落地要点：`channel_id` 与 `source_conversation_id` 都必须指向 `kind IN ('channel', 'dm_channel')`——`AttachmentService.resolveChannelId()` 只接受 channel-like conversation（`isChannelLikeKind`），reply-cluster 上传因此直接解析成承载 cluster 的那个 top-level channel。SQLite 外键不能表达 kind 约束，需在 repo / service 层集中校验。（历史上可能残留 `kind='thread'` 的子会话 fossil 行，属只读遗留，新上传不再产生。）
+约束落地要点：`channel_id` 与 `source_conversation_id` 都必须指向真实 conversation row；reply-cluster 上传直接解析成承载 cluster 的 conversation。thread 只是 message cluster，不再有 thread conversation row，因此无需另一个 kind 判据。
 
 ---
 
@@ -163,7 +163,7 @@ chat-bridge 暴露 `upload_file(file_path)` / `view_file(id)` / `send_message(..
 
 关键约束：
 
-- agent **不能**传 `channel` / `channel_id`。chat-bridge 启动时已绑定当前 conversation id + kind，backend 据此确定 channel-like 边界，杜绝跨 channel 上传。
+- agent **不能**传 `channel` / `channel_id`。创建型命令使用 canonical `--target`，对象型命令从 attachment/message id 派生目标；backend 以稳定 conversation id、placement 与 reach policy 统一校验，CLI 不另持会话分类或 ambient channel 边界。
 - **绝不接受 `base64` 字段**——agent 必须先 upload 拿 id，再 send_message 带 id。这把上传和发消息解耦，方便重试、限流、鉴权各自演化。
 - backend 写入 message 前反查校验：attachment 必须属于目标 message 的 channel，sender 必须是当前 channel member。
 

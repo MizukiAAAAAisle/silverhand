@@ -257,7 +257,7 @@ describe('MessageScreenshotView — non-interactive contract', () => {
         'abcdefghijklmnop',
         {
           id: 'abcdefghijklmnop',
-          kind: 'channel',
+          roster_policy: 'open',
           title: 'infra',
         },
       ],

@@ -135,14 +135,15 @@ CREATE UNIQUE INDEX … (workspace_id,name) WHERE placement_kind='workspace';
 | 新的产品级 DM（`dm:@handle`） | `direct_pair` | `fixed` |
 | Mentions | `agent_inbox` | `fixed` |
 
-`kind` 因此**不删，但也不是一个被写的列** —— 它是 **SQLite GENERATED ALWAYS … VIRTUAL 列**，由
-`roster_policy` 单向派生。这一点是本节的承重修正（@Cindy 第四轮 finding 1：上一版把 `kind` 描述成「派生的
-只读兼容字段」，却把它从 schema block 里省掉了 ⇒ 读起来像**第二个可写权威**，靠代码纪律维持一致）：
+`kind` 在 v69–v78 期间是 **SQLite GENERATED ALWAYS … VIRTUAL 兼容桥**，由
+`roster_policy` 单向派生；它从来不是第二个可写权威。v79 在所有生产、wire 与测试读点改用
+`placement_kind × roster_policy` 后删除该桥，不保留 TypeScript mirror、alias 或 wrapper。
+过渡期由 DB 而非纪律证明单一权威：
 
 - **单一权威由 DB 证明，不靠纪律**：实测 sqlite **3.53.2**（`better-sqlite3` 运行时；CLI 3.54.0 同）——
   `UPDATE … SET kind=…` 与 `INSERT (…, kind)` 都在**解析期**报 `cannot UPDATE/INSERT into generated column`。
   ⇒ 不存在「回填后漂移」这条失效路径。
-- **118 处读点 / 29 个文件 / wire literal 全部零改动**：VIRTUAL 生成列出现在 `SELECT *` 里（实测），也可建索引
+- 过渡期旧读点可继续读取 VIRTUAL 生成列；v79 的静态闸要求终态读点为零，历史迁移 fixture 除外。
   （实测 `CREATE INDEX … (kind)` 通过 ⇒ 现有 `idx_conversations_workspace(workspace_id, kind, updated_at DESC)`
   可原样重建）⇒ P0-a 不需要为兼容读面改任何 repo。
 - **派生式只读 `roster_policy`**，不读 `placement_kind`：`direct_pair` / `agent_inbox` 都是 `fixed` ⇒ 对旧客户端
@@ -645,7 +646,7 @@ P0-d runtime slot 拆分（slot / CAS / observation / resume + scope 一致性 t
   └─ P1 RuntimePrincipal 判别联合 + /internal/agents/:aid/*（含世代比较与两种 target policy）
         └─ P2 session_scope + RuntimeScope 分派 + 三档 cwd + scope 化 pidfile + **L1-only prompt context**
 P0-g 全局 task identity 成为 canonical resolver + **collection 读面并集化**（§4.5 / §7.2.2）
-P6 终局清理：**只有一件** —— `DROP COLUMN kind`（前置：29 个文件 / 118 处读点清零 + wire epoch bump）
+P6 终局清理：v79 `DROP COLUMN kind`（生产 / wire / 当前行为测试读点清零；Host 13 / Outbound 12 不再 bump）
       （**没有「删 agent_home 支」这一臂**：`agent_home` 是永久共存的 placement 家族，§9.2）
 P5 端到端 slice ← 全部
 ```
@@ -694,9 +695,9 @@ P5 端到端 slice ← 全部
   **agent↔agent 与 human↔human 的私线都恰好解析到一个 board**（AgentBoard 的反例不复现）；
   **向 `agent_inbox` 建 task 被 DB 拒**；`UPDATE board_key` 被拒；**同一 board 上无权 viewer 看不到不属于
   自己的 task**（ACL 逐 task 由 `conversation_id` 判，不由 board）。
-- **P6** 只剩一件：删 `kind` 生成列前，29 个文件 / 118 处读点清零 + wire epoch 已 bump（`DROP COLUMN` 一步
-  完成，届时无 CHECK 引用它）。**不存在「删 agent_home 支」这一臂**（§9.2）⇒ 任何以「conversation-scoped
-  或 `agent_home` 将来消失」为前提的验收条目出现即不通过。
+- **P6** v79 一步删除 `kind` 生成列；生产 / wire / 当前行为测试读点为零，历史迁移 fixture 保留，favorites
+  排序键原子改为 `conversation:<id>`，Host 13 / Outbound 12 不再 bump。**不存在「删 agent_home 支」这一臂**
+  （§9.2）⇒ 任何以「conversation-scoped 或 `agent_home` 将来消失」为前提的验收条目出现即不通过。
 - **P5** A 中 agent-scoped 工作 → B steer → `dm:@shiki` 回复 → A 继续，且同一 conversation 内另有
   conversation-scoped agent 同时工作；`agent_status` 对有权 viewer 给绝对 target、对无权 viewer 给
   `focus='other'` + 队列深度；**agent-scoped agent（没有 `agent_home` 行）在 owner 的 Agent 管理读面里仍可见**

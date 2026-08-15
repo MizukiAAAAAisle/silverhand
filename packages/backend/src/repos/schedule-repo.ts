@@ -35,7 +35,7 @@ interface ScheduleRow {
   // Projected by every SELECT via LEFT JOIN; null when the target row
   // no longer exists (orphan) — formatted as 'Unavailable conversation'.
   target_title: string | null;
-  target_kind: 'channel' | 'dm_channel' | null;
+  target_roster_policy: 'open' | 'fixed' | null;
 }
 
 /**
@@ -45,7 +45,7 @@ interface ScheduleRow {
  * shape and the label is computed once.
  *
  * Permission note: this projection is intentionally label-only — title
- * and kind, no workspace path / member / parent ids beyond what the
+ * and roster policy, no workspace path / member / parent ids beyond what the
  * label needs. The schedule list endpoint already authorises by agent
  * ownership; per the "follow schedule permission" boundary, the label
  * is part of the schedule's own description (where it fires), not a
@@ -54,16 +54,16 @@ interface ScheduleRow {
 const SCHEDULE_SELECT_WITH_TARGET = `
   SELECT s.*,
          tc.title           AS target_title,
-         tc.kind            AS target_kind
+         tc.roster_policy   AS target_roster_policy
     FROM schedules s
     LEFT JOIN conversations tc ON tc.id = s.target_conversation_id
 `;
 
 function buildTargetLabel(row: ScheduleRow): string {
-  if (row.target_title === null || row.target_kind === null) {
+  if (row.target_title === null || row.target_roster_policy === null) {
     return 'Unavailable conversation';
   }
-  if (row.target_kind === 'dm_channel') {
+  if (row.target_roster_policy === 'fixed') {
     return `@${row.target_title}`;
   }
   return `#${row.target_title}`;

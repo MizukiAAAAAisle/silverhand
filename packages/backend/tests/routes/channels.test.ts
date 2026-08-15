@@ -61,7 +61,7 @@ describe('POST /api/workspaces', () => {
     expect(body.workspace.name).toBe('eng');
     expect(body.workspace.workspace_kind).toBe('regular');
     expect(typeof body.onboarding_channel_id).toBe('string');
-    expect(body.channel.kind).toBe('channel');
+    expect(body.channel).toMatchObject({ placement_kind: 'workspace', roster_policy: 'open' });
 
     // relocation-v1 §7-4 — create is severed from the daemon registry, so it is
     // a pure DB write: NO workspace directory is provisioned on disk (the daemon
@@ -849,7 +849,8 @@ describe('workspace channel routes', () => {
     ).json() as any;
     unsubscribe();
     expect(created.channel).toMatchObject({
-      kind: 'channel',
+      placement_kind: 'workspace',
+      roster_policy: 'open',
       workspace_id: workspace.workspace.id,
       title: 'planning',
     });
@@ -1562,8 +1563,8 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
     const body = await (
       await http(t).get(`/api/workspaces/${home.id}/channels/archived`)
     ).json() as any;
-    expect(body.channels.map((c: any) => [c.id, c.kind, c.is_member])).toEqual([
-      [dmChannelId, 'dm_channel', true],
+    expect(body.channels.map((c: any) => [c.id, c.roster_policy, c.is_member])).toEqual([
+      [dmChannelId, 'fixed', true],
     ]);
   });
 });
@@ -1728,13 +1729,16 @@ describe('GET /api/archived-channels (cross-workspace aggregate)', () => {
 
     // Default (no workspace filter): the global recovery index spans both
     // collections — regular channel AND DM — and the DM row carries its
-    // dm_channel kind plus its agent_home workspace context.
+    // fixed-roster axis plus its agent_home workspace context.
     const all = await (await http(t).get('/api/archived-channels')).json() as any;
     const allIds = all.channels.map((r: any) => r.channel.id);
     expect(allIds).toContain(rc.channel.id);
     expect(allIds).toContain(dm!.id);
     const dmRow = all.channels.find((r: any) => r.channel.id === dm!.id);
-    expect(dmRow.channel.kind).toBe('dm_channel');
+    expect(dmRow.channel).toMatchObject({
+      placement_kind: 'workspace',
+      roster_policy: 'fixed',
+    });
     expect(dmRow.workspace.id).toBe(homeId);
 
     // Filtering to the regular workspace excludes the DM.
@@ -2980,11 +2984,11 @@ describe('GET /api/workspaces/:id/channels — discovery union + per-item is_mem
     const body = (await (await http(t).get(`/api/workspaces/${home.id}/channels`)).json()) as any;
     expect(body.channels.length).toBeGreaterThan(0);
     for (const item of body.channels) {
-      // Every DM item is a dm_channel and carries an authoritative boolean —
+      // Every DM item is fixed-roster and carries an authoritative boolean —
       // the field is PRESENT (never undefined), so the gate never falls to
       // unknown/detail on a DM, and it is always true (DM list is strictly
       // membership-filtered).
-      expect(item.kind).toBe('dm_channel');
+      expect(item).toMatchObject({ placement_kind: 'workspace', roster_policy: 'fixed' });
       expect(item.is_member).toBe(true);
     }
   });

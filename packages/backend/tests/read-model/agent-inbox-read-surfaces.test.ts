@@ -140,12 +140,12 @@ describe('agent inbox — workspace-scoped read faces exclude it by decision', (
     expect(rows[0]!.workspace).toMatchObject({ id: t.eng.id, name: 'eng' });
   });
 
-  it('does not leak INTO the global DM list, which its generated `kind` would otherwise match', () => {
+  it('does not leak into the workspace fixed-roster list', () => {
     const t = bootstrap();
     // The one face where a new placement leaks in rather than dropping out:
-    // `kind` is GENERATED from `roster_policy`, and an inbox is necessarily
-    // `fixed`, so it reports `dm_channel` just like the control.
-    expect(t.conversations.get(t.inbox.id)!.kind).toBe('dm_channel');
+    // An inbox is necessarily fixed-roster, just like the workspace control;
+    // placement is therefore the load-bearing exclusion.
+    expect(t.conversations.get(t.inbox.id)!.roster_policy).toBe('fixed');
     expect(t.conversations.listDmChannels().map(c => c.id)).toEqual([t.dm.id]);
   });
 

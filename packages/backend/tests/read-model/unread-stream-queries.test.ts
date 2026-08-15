@@ -93,8 +93,7 @@ const LEGACY_POSITIONAL_STREAMS_SQL = `WITH viewer_unread AS (
      JOIN conversations c ON c.id = m.conversation_id
      JOIN conversation_users cu
        ON cu.conversation_id = c.id AND cu.user_id = @viewer
-    WHERE c.kind IN ('channel', 'dm_channel')
-      AND ${LIVE_CONVERSATION_PREDICATE}
+    WHERE ${LIVE_CONVERSATION_PREDICATE}
       AND (@ws IS NULL OR c.workspace_id = @ws)
       AND m.from_kind != 'system'
       AND NOT (m.from_kind = 'user'
@@ -112,7 +111,7 @@ const LEGACY_POSITIONAL_STREAMS_SQL = `WITH viewer_unread AS (
      vu.conversation_id              AS conversation_id,
      vu.root                         AS root,
      root.content                    AS root_content,
-     c.kind                          AS conversation_kind,
+     c.roster_policy                 AS conversation_roster_policy,
      c.title                         AS conversation_title,
      c.workspace_id                  AS workspace_id,
      vu.message_id                   AS first_unread_message_id,
@@ -142,8 +141,8 @@ const LEGACY_POSITIONAL_STREAMS_SQL = `WITH viewer_unread AS (
    LEFT JOIN agents sa ON sa.id = vu.from_agent_id
   WHERE vu.rn = 1
     AND (
-      (vu.root IS NULL AND c.kind = 'dm_channel')
-      OR (vu.root IS NULL AND c.kind = 'channel'
+      (vu.root IS NULL AND c.roster_policy = 'fixed')
+      OR (vu.root IS NULL AND c.roster_policy = 'open'
           AND ${channelAmbientEntersPredicate('vu.conversation_id', 'c.workspace_id')})
       OR (vu.root IS NOT NULL
           AND EXISTS (
