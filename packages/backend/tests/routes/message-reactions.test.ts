@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MessageRepo } from '../../src/repos/message-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { MessageReactionRepo } from '../../src/repos/message-reaction-repo.js';
+import {
+  buildTestApp,
+  conversationSlotAuth,
+  http,
+  type TestApp,
+} from '../utils/app.js';
+import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 
 /**
  * HTTP-surface tests for message reactions (docs/reactions-design.md §5.1):
@@ -140,8 +147,8 @@ describe('message reaction routes', () => {
     const channelId = await createChannel(t, ws, 'room', [alice]);
     const messageId = insertMessage(t, channelId);
 
-    const res = await http(t).post(
-      `/internal/conversations/${channelId}/agents/${alice}/react-message`,
+    const res = await http(t, conversationSlotAuth(t, channelId, alice)).post(
+      `/internal/agents/${alice}/react-message`,
       { message_id: messageId, emoji: '🎉' },
     );
     expect(res.status).toBe(200);
@@ -156,8 +163,8 @@ describe('message reaction routes', () => {
     expect(row).toEqual({ reactor_kind: 'agent', reactor_id: alice });
 
     // DELETE via the internal route takes it back.
-    const del = await http(t).del(
-      `/internal/conversations/${channelId}/agents/${alice}/react-message`,
+    const del = await http(t, conversationSlotAuth(t, channelId, alice)).del(
+      `/internal/agents/${alice}/react-message`,
       {
         body: JSON.stringify({ message_id: messageId, emoji: '🎉' }),
         headers: { 'content-type': 'application/json' },
@@ -165,6 +172,45 @@ describe('message reaction routes', () => {
     );
     expect(del.status).toBe(200);
     expect(await del.json()).toEqual({ changed: true, emoji: '🎉', count: 0 });
+  });
+
+  it('keeps object-addressed reaction writes inside a ConversationSlot while AgentSlot remains cross-stream', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const global = insertAgentScopedAgent(t, alice, 'global');
+    const ws = await createWorkspace(t, 'reaction-reach', [alice, global]);
+    const anchor = await createChannel(t, ws, 'anchor', [alice, global]);
+    const owner = await createChannel(t, ws, 'owner', [alice, global]);
+    const messageId = insertMessage(t, owner);
+    const path = `/internal/agents/${alice}/react-message`;
+    const reactions = new MessageReactionRepo(t.ctx.db);
+
+    const confinedAdd = await http(t, conversationSlotAuth(t, anchor, alice)).post(
+      path,
+      { message_id: messageId, emoji: '🎯' },
+    );
+    expect(confinedAdd.status).toBe(404);
+    expect(await confinedAdd.json()).toEqual({ error: 'message not found' });
+    expect(reactions.countForEmoji(messageId, '🎯')).toBe(0);
+
+    const globalPath = `/internal/agents/${global}/react-message`;
+    const globalAdd = await http(t, agentSlotAuth(t, global)).post(globalPath, {
+      message_id: messageId,
+      emoji: '🎯',
+    });
+    expect(globalAdd.status).toBe(200);
+    expect(reactions.countForEmoji(messageId, '🎯')).toBe(1);
+
+    const confinedRemove = await http(
+      t,
+      conversationSlotAuth(t, anchor, alice),
+    ).del(path, {
+      body: JSON.stringify({ message_id: messageId, emoji: '🎯' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(confinedRemove.status).toBe(404);
+    expect(await confinedRemove.json()).toEqual({ error: 'message not found' });
+    expect(reactions.countForEmoji(messageId, '🎯')).toBe(1);
   });
 
   it('the message-window read enriches rows with the viewer aggregates', async () => {

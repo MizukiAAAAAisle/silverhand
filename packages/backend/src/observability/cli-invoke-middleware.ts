@@ -2,10 +2,8 @@
  * Hono middleware that emits one structured log line per
  * `silverhand <noun> <verb>` CLI invocation.
  *
- * Mounted on both the canonical
- * `/internal/agents/:aid/conversations/:cid/*` family and its observable
- * legacy bridge. For every request:
- *   - on entry: capture `{conversationId, agentId, noun, verb, request_id, query_keys}`
+ * Mounted on the agent-global `/internal/agents/:aid/*` family. For every request:
+ *   - on entry: capture `{agentId, noun, verb, request_id, query_keys}`
  *   - on exit:  add `{http_status, duration_ms, status, error_code?,
  *               stale_resolution_reason?}`
  *               and write to `ctx.loggers.cli` with category `cli.invoke`
@@ -25,7 +23,6 @@ import type { Context, MiddlewareHandler } from 'hono';
 import type { BackendContext } from '../context.js';
 import { lookupCliRoute } from './cli-route-map.js';
 
-const LEGACY_INTERNAL_PREFIX = '/internal/conversations/';
 const CANONICAL_INTERNAL_PREFIX = '/internal/agents/';
 
 /** Suffix the cli-trace endpoint uses; excluded from invoke logging. */
@@ -50,7 +47,7 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
     const path = c.req.path;
     const suffix = extractAgentRouteSuffix(path);
     if (!suffix) {
-      // Not under the conversation/agent route family; nothing to do.
+      // Not under the agent-global route family; nothing to do.
       await next();
       return;
     }
@@ -86,13 +83,11 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
         errorCode = peeked?.code;
         errorIssues = peeked?.issues;
       }
-      const conversationId = c.req.param('cid') ?? null;
       const agentId = c.req.param('aid') ?? null;
       const staleResolutionReason = c.get('cliStaleResolutionReason');
       const payload = {
         category: 'cli.invoke',
         request_id: requestId,
-        conversationId,
         agentId,
         noun: route?.noun ?? null,
         verb: route?.verb ?? null,
@@ -140,17 +135,12 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
   };
 }
 
-/** Either internal-agent path family → handler suffix. */
+/** Agent-global internal path → handler suffix. */
 function extractAgentRouteSuffix(path: string): string | null {
-  if (path.startsWith(LEGACY_INTERNAL_PREFIX)) {
-    const parts = path.slice(LEGACY_INTERNAL_PREFIX.length).split('/');
-    if (parts.length < 4 || parts[1] !== 'agents') return null;
-    return parts.slice(3).join('/') || null;
-  }
   if (path.startsWith(CANONICAL_INTERNAL_PREFIX)) {
     const parts = path.slice(CANONICAL_INTERNAL_PREFIX.length).split('/');
-    if (parts.length < 4 || parts[1] !== 'conversations') return null;
-    return parts.slice(3).join('/') || null;
+    if (parts.length < 2 || !parts[0]) return null;
+    return parts.slice(1).join('/') || null;
   }
   return null;
 }

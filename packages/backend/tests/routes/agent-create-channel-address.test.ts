@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { internalPaths } from '@silverhand/shared';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 
 /**
@@ -13,9 +18,8 @@ import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
  * post anywhere either. What it does is READ one conversation twice — the
  * placement decides which workspace the new channel is born into, the agent
  * roster decides who it starts with — and until now both came from
- * `principal.conversationId`, i.e. from `--route-conversation-id`, i.e. from a
- * transport anchor pretending to be a place the actor chose. Delete the anchor
- * (#task:2030) and the door has no source for either.
+ * `principal.conversationId`: a runtime coordinate pretending to be a place the
+ * actor chose. The agent-global route now carries no source coordinate.
  *
  * So the differentials here are all of the form "the credential's conversation
  * must not be able to influence the outcome": a source in a DIFFERENT workspace
@@ -81,11 +85,10 @@ async function makeChannel(
  *  body field. `target: null` omits it entirely — the hand-rolled-client path,
  *  since the CLI refuses a missing `--target` locally.
  *
- *  `credential.conversationId` is the ROUTE ANCHOR, and which bearer signs it
- *  decides how far the address may reach (#task:2021 P4-4): `channel_fork_source`
- *  is confined to a ConversationSlot's own stream, so every cross-stream case here
- *  passes a real AgentSlot `auth`. Without it the harness mints a ConversationSlot
- *  token for the path. */
+ *  `credential.conversationId` is used only to mint a ConversationSlot bearer
+ *  when no explicit auth is supplied. The agent-global path carries no
+ *  conversation. `channel_fork_source` is confined to a ConversationSlot's own
+ *  stream, so every cross-stream case passes a real AgentSlot `auth`. */
 function fork(
   t: TestApp,
   credential: { conversationId: string; agentId: string },
@@ -93,8 +96,15 @@ function fork(
   title = 'forked',
   auth?: { authorization: string },
 ): Promise<Response> {
-  return http(t, auth).post(
-    internalPaths.agentCreateChannel(credential.conversationId, credential.agentId),
+  const requestAuth = auth ?? {
+    authorization: `Bearer ${issueTestConversationRuntimeToken(
+      t,
+      credential.conversationId,
+      credential.agentId,
+    )}`,
+  };
+  return http(t, requestAuth).post(
+    internalPaths.agentCreateChannel(credential.agentId),
     {
       title,
       context_summary: 'the user asked to split this out',
@@ -160,15 +170,9 @@ describe('internal create-channel — the address is the fork source', () => {
     expect(msgs.messages[0].content).toContain('the-source');
   });
 
-  it('never reads the route anchor: an agent INBOX anchor forks fine', async () => {
-    // The AgentSlot counter-example (#task:2030's precondition), now signed by the
-    // credential an agent-scoped session really holds. Such a session's
-    // `--route-conversation-id` may be the agent's own inbox — a placement with NO
-    // workspace, which the pre-P4-4 shape refused with `workspace_scope_required`
-    // because it read the anchor for the workspace. The addressed shape does not
-    // consult it at all, so the same request succeeds and lands in the SOURCE's
-    // workspace. When #2030 deletes the anchor this route loses nothing, which is
-    // the whole point of moving it now.
+  it('uses no ambient AgentSlot coordinate when choosing the fork source', async () => {
+    // The AgentSlot credential carries no conversation. Only the addressed
+    // source can determine the workspace and initial roster.
     t = buildTestApp();
     const seed = await makeAgent(t, 'seed');
     const alice = insertAgentScopedAgent(t, seed, 'alice');
@@ -178,7 +182,7 @@ describe('internal create-channel — the address is the fork source', () => {
 
     const res = await fork(
       t,
-      { conversationId: inbox!.id, agentId: alice },
+      { conversationId: ws.channelId, agentId: alice },
       `#conv:${ws.channelId}`,
       'forked from an inbox session',
       agentSlotAuth(t, alice),
@@ -276,7 +280,7 @@ describe('internal create-channel — the address is the fork source', () => {
 
     const listed = (await (
       await http(t).get(
-        internalPaths.agentListChannels(ws.channelId, alice),
+        `${internalPaths.agentListChannels(alice)}?workspace_id=${ws.workspaceId}`,
       )
     ).json()) as any;
     expect(

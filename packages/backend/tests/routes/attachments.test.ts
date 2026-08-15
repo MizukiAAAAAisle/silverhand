@@ -783,7 +783,7 @@ describe('Internal agent attachment routes', () => {
 
     const upload = await uploadFile(
       t,
-      `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+      `/internal/agents/${aliceId}/attachments`,
       'agent.png',
       'image/png',
       PNG_BYTES,
@@ -798,7 +798,7 @@ describe('Internal agent attachment routes', () => {
 
     const locate = await t.app.fetch(
       new Request(
-        `http://localhost/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}/locate`,
+        `http://localhost/internal/agents/${aliceId}/attachments/${dto.id}/locate`,
         { headers: internalAuthHeaders(t, channelId, aliceId) },
       ),
     );
@@ -819,7 +819,7 @@ describe('Internal agent attachment routes', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${a.channelId}/agents/${aliceA}/attachments`,
+        `/internal/agents/${aliceA}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -830,7 +830,7 @@ describe('Internal agent attachment routes', () => {
 
     const cross = await t.app.fetch(
       new Request(
-        `http://localhost/internal/conversations/${b.channelId}/agents/${aliceB}/attachments/${dto.id}/locate`,
+        `http://localhost/internal/agents/${aliceB}/attachments/${dto.id}/locate`,
         { headers: internalAuthHeaders(t, b.channelId, aliceB) },
       ),
     );
@@ -844,7 +844,7 @@ describe('Internal agent attachment routes', () => {
 
     const upload = await uploadFile(
       t,
-      `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+      `/internal/agents/${aliceId}/attachments`,
       'agent.png',
       'image/png',
       PNG_BYTES,
@@ -856,7 +856,7 @@ describe('Internal agent attachment routes', () => {
 
     const download = await t.app.fetch(
       new Request(
-        `http://localhost/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}/download`,
+        `http://localhost/internal/agents/${aliceId}/attachments/${dto.id}/download`,
         { headers: internalAuthHeaders(t, channelId, aliceId) },
       ),
     );
@@ -875,7 +875,7 @@ describe('Internal agent attachment routes', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${a.channelId}/agents/${aliceA}/attachments`,
+        `/internal/agents/${aliceA}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -886,7 +886,7 @@ describe('Internal agent attachment routes', () => {
 
     const cross = await t.app.fetch(
       new Request(
-        `http://localhost/internal/conversations/${b.channelId}/agents/${aliceB}/attachments/${dto.id}/download`,
+        `http://localhost/internal/agents/${aliceB}/attachments/${dto.id}/download`,
         { headers: internalAuthHeaders(t, b.channelId, aliceB) },
       ),
     );
@@ -900,7 +900,7 @@ describe('Internal agent attachment routes', () => {
     // bob is not a member of channel a
     const res = await uploadFile(
       t,
-      `/internal/conversations/${a.channelId}/agents/${b.agentIds.bob}/attachments`,
+      `/internal/agents/${b.agentIds.bob}/attachments`,
       'x.png',
       'image/png',
       PNG_BYTES,
@@ -917,7 +917,7 @@ describe('Internal agent attachment routes', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        `/internal/agents/${aliceId}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -927,7 +927,7 @@ describe('Internal agent attachment routes', () => {
     ).json() as any;
 
     const send = await http(t).post(
-      `/internal/conversations/${channelId}/agents/${aliceId}/send-message`,
+      `/internal/agents/${aliceId}/send-message`,
       { content: 'with file', attachment_ids: [dto.id], target: `#conv:${channelId}` },
       { headers: internalAuthHeaders(t, channelId, aliceId) },
     );
@@ -958,7 +958,7 @@ describe('Internal agent attachment routes', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        `/internal/agents/${aliceId}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -968,7 +968,7 @@ describe('Internal agent attachment routes', () => {
     ).json() as any;
 
     const send = await http(t).post(
-      `/internal/conversations/${channelId}/agents/${aliceId}/send-message`,
+      `/internal/agents/${aliceId}/send-message`,
       { content: '', attachment_ids: [dto.id], target: `#conv:${channelId}` },
       { headers: internalAuthHeaders(t, channelId, aliceId) },
     );
@@ -999,7 +999,7 @@ describe('Internal agent attachment routes', () => {
     const foreign = await (
       await uploadFile(
         t,
-        `/internal/conversations/${a.channelId}/agents/${aliceA}/attachments`,
+        `/internal/agents/${aliceA}/attachments`,
         'x.png',
         'image/png',
         PNG_BYTES,
@@ -1009,7 +1009,7 @@ describe('Internal agent attachment routes', () => {
     ).json() as any;
 
     const res = await http(t).post(
-      `/internal/conversations/${b.channelId}/agents/${aliceB}/send-message`,
+      `/internal/agents/${aliceB}/send-message`,
       { content: 'cross', attachment_ids: [foreign.id], target: `#conv:${b.channelId}` },
       { headers: internalAuthHeaders(t, b.channelId, aliceB) },
     );
@@ -1023,7 +1023,7 @@ describe('Internal agent attachment routes', () => {
     const a = await createWorkspaceChannel(t, ['alice']);
     const b = await createWorkspaceChannel(t, ['bob']);
     const res = await http(t).post(
-      `/internal/conversations/${a.channelId}/agents/${b.agentIds.bob}/send-message`,
+      `/internal/agents/${b.agentIds.bob}/send-message`,
       { content: 'forged', target: `#conv:${a.channelId}` },
       { headers: internalAuthHeaders(t, a.channelId, b.agentIds.bob!) },
     );
@@ -1179,7 +1179,7 @@ describe('Single attachment DELETE (orphan-only)', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        `/internal/agents/${aliceId}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -1358,7 +1358,7 @@ describe('Attachment content update (PATCH)', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        `/internal/agents/${aliceId}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -1397,7 +1397,7 @@ describe('Attachment content update (PATCH)', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        `/internal/agents/${aliceId}/attachments`,
         'agent.png',
         'image/png',
         PNG_BYTES,
@@ -1408,7 +1408,7 @@ describe('Attachment content update (PATCH)', () => {
 
     const patched = await patchFile(
       t,
-      `/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}`,
+      `/internal/agents/${aliceId}/attachments/${dto.id}`,
       'agent.png',
       'image/png',
       NEXT_PNG,
@@ -1422,7 +1422,7 @@ describe('Attachment content update (PATCH)', () => {
     // The agent-visible download now streams the new bytes.
     const download = await t.app.fetch(
       new Request(
-        `http://localhost/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}/download`,
+        `http://localhost/internal/agents/${aliceId}/attachments/${dto.id}/download`,
         { headers: internalAuthHeaders(t, channelId, aliceId) },
       ),
     );
@@ -1438,7 +1438,7 @@ describe('Attachment content update (PATCH)', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${a.channelId}/agents/${aliceA}/attachments`,
+        `/internal/agents/${aliceA}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -1449,7 +1449,7 @@ describe('Attachment content update (PATCH)', () => {
 
     const cross = await patchFile(
       t,
-      `/internal/conversations/${b.channelId}/agents/${aliceB}/attachments/${dto.id}`,
+      `/internal/agents/${aliceB}/attachments/${dto.id}`,
       'a.png',
       'image/png',
       NEXT_PNG,
@@ -1465,7 +1465,7 @@ describe('Attachment content update (PATCH)', () => {
     const dto = await (
       await uploadFile(
         t,
-        `/internal/conversations/${a.channelId}/agents/${a.agentIds.alice}/attachments`,
+        `/internal/agents/${a.agentIds.alice}/attachments`,
         'a.png',
         'image/png',
         PNG_BYTES,
@@ -1476,7 +1476,7 @@ describe('Attachment content update (PATCH)', () => {
 
     const res = await patchFile(
       t,
-      `/internal/conversations/${a.channelId}/agents/${b.agentIds.bob}/attachments/${dto.id}`,
+      `/internal/agents/${b.agentIds.bob}/attachments/${dto.id}`,
       'a.png',
       'image/png',
       NEXT_PNG,

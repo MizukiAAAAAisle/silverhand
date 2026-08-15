@@ -4,12 +4,13 @@
 // a CONVERSATION — threads inherit their parent's files — so the door is
 // conversation-granular and a `/thread:` suffix is refused rather than dropped.
 // The remaining three doors are OBJECT-addressed: their scope is derived from the
-// attachment id, so they take no target. Their scope is still the CALLING
-// conversation, which is a known asymmetry with the addressed read doors and is
-// left to the attachment-visibility follow-up rather than widened here.
+// attachment id, so they take no target and carry no ambient conversation
+// coordinate. Missing and invisible objects share the same not-found answer.
 import type { Hono } from 'hono';
 import {
+  agentPrincipalIn,
   getAgentPrincipal,
+  getRuntimePrincipal,
   type AppEnv,
 } from '../../auth/principal.js';
 import {
@@ -21,6 +22,7 @@ import type { InternalRouteDeps } from './deps.js';
 import { requireAgentConversationCapability } from './capability-scope.js';
 import { resolveConversationTargetForRoute } from './delivery-target.js';
 import { internalAgentRoutePaths } from './paths.js';
+import { mayWriteObjectInConversation } from '../../application/delivery-reach.js';
 
 export function registerFileRoutes(
   app: Hono<AppEnv>,
@@ -30,14 +32,6 @@ export function registerFileRoutes(
 
   app.post(internalAgentRoutePaths.attachments, async c => {
     const principal = getAgentPrincipal(c);
-    // TWO GATES, TWO SUBJECTS, as on send. This one is the CREDENTIAL: may this
-    // agent write at all from the conversation its token was minted for. It
-    // replaces the roster lookup this door used to do on `:cid` — which refused
-    // every rosterless placement (a DM, an inbox) outright — and it is the same
-    // predicate the send door asks of its own frame.
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     // The address rides in the multipart form beside the bytes, and is read
     // BEFORE them: `c.req.formData()` is cached by Hono, so `uploadAttachment`
     // below re-reads the same parsed form rather than draining the body twice.
@@ -58,8 +52,9 @@ export function registerFileRoutes(
     });
     if (!resolved.ok) return resolved.response;
     const destination = resolved.target.stream.conversationId;
+    const targetPrincipal = agentPrincipalIn(c, destination);
     {
-      const denied = requireAgentConversationCapability(c, ctx, principal,
+      const denied = requireAgentConversationCapability(c, ctx, targetPrincipal,
         'upload_attachments', conversations.getIdentity(destination));
       if (denied) return denied;
     }
@@ -80,28 +75,32 @@ export function registerFileRoutes(
   app.patch(
     internalAgentRoutePaths.attachment(':attachmentId'),
     async c => {
-      const cid = c.req.param('cid');
       const aid = c.req.param('aid');
       const attachmentId = c.req.param('attachmentId');
-      if (!cid || !aid || !attachmentId) {
+      if (!aid || !attachmentId) {
         return c.json(
-          { error: 'conversation id, agent id, and attachment id required' },
+          { error: 'agent id and attachment id required' },
           400,
         );
       }
-      const conversation = conversations.get(cid);
-      if (!conversation) return c.json({ error: 'conversation not found' }, 404);
       if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
-      if (!conversations.getAgent(cid, aid)) {
-        return c.json({ error: 'agent is not a member of this conversation' }, 403);
+      const ownerConversationId = ctx.attachmentService.conversationIdOf(attachmentId);
+      if (ownerConversationId === null) {
+        return c.json({ error: 'attachment not found' }, 404);
       }
-      const principal = getAgentPrincipal(c);
+      if (!mayWriteObjectInConversation(
+        getRuntimePrincipal(c),
+        ownerConversationId,
+      )) {
+        return c.json({ error: 'attachment not found' }, 404);
+      }
+      const principal = agentPrincipalIn(c, ownerConversationId);
       if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-        return c.json({ error: 'forbidden' }, 403);
+        return c.json({ error: 'attachment not found' }, 404);
       }
       {
         const denied = requireAgentConversationCapability(c, ctx, principal,
-          'upload_attachments', conversations.getIdentity(conversation.id));
+          'upload_attachments', conversations.getIdentity(ownerConversationId));
         if (denied) return denied;
       }
       return updateAttachment(
@@ -117,23 +116,22 @@ export function registerFileRoutes(
   app.get(
     internalAgentRoutePaths.attachmentLocate(':attachmentId'),
     async c => {
-      const cid = c.req.param('cid');
       const aid = c.req.param('aid');
       const attachmentId = c.req.param('attachmentId');
-      if (!cid || !aid || !attachmentId) {
+      if (!aid || !attachmentId) {
         return c.json(
-          { error: 'conversation id, agent id, and attachment id required' },
+          { error: 'agent id and attachment id required' },
           400,
         );
       }
-      if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
       if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
-      if (!conversations.getAgent(cid, aid)) {
-        return c.json({ error: 'agent is not a member of this conversation' }, 403);
+      const ownerConversationId = ctx.attachmentService.conversationIdOf(attachmentId);
+      if (ownerConversationId === null) {
+        return c.json({ error: 'attachment not found' }, 404);
       }
-      const principal = getAgentPrincipal(c);
+      const principal = agentPrincipalIn(c, ownerConversationId);
       if (!canViewConversation(ctx, principal, principal.conversationId)) {
-        return c.json({ error: 'forbidden' }, 403);
+        return c.json({ error: 'attachment not found' }, 404);
       }
       {
         const denied = requireAgentConversationCapability(c, ctx, principal,
@@ -162,23 +160,22 @@ export function registerFileRoutes(
   app.get(
     internalAgentRoutePaths.attachmentDownload(':attachmentId'),
     async c => {
-      const cid = c.req.param('cid');
       const aid = c.req.param('aid');
       const attachmentId = c.req.param('attachmentId');
-      if (!cid || !aid || !attachmentId) {
+      if (!aid || !attachmentId) {
         return c.json(
-          { error: 'conversation id, agent id, and attachment id required' },
+          { error: 'agent id and attachment id required' },
           400,
         );
       }
-      if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
       if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
-      if (!conversations.getAgent(cid, aid)) {
-        return c.json({ error: 'agent is not a member of this conversation' }, 403);
+      const ownerConversationId = ctx.attachmentService.conversationIdOf(attachmentId);
+      if (ownerConversationId === null) {
+        return c.json({ error: 'attachment not found' }, 404);
       }
-      const principal = getAgentPrincipal(c);
+      const principal = agentPrincipalIn(c, ownerConversationId);
       if (!canViewConversation(ctx, principal, principal.conversationId)) {
-        return c.json({ error: 'forbidden' }, 403);
+        return c.json({ error: 'attachment not found' }, 404);
       }
       {
         const denied = requireAgentConversationCapability(c, ctx, principal,

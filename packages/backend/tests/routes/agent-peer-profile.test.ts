@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildTestApp,
+  conversationSlotAuth,
   http,
   issueTestConversationRuntimeToken,
   type TestApp,
@@ -57,8 +58,8 @@ function peerProfile(
 ): Promise<Response> {
   const query = new URLSearchParams({ handle });
   if (workspaceId !== undefined) query.set('workspace_id', workspaceId);
-  return http(t).get(
-    `/internal/conversations/${channelId}/agents/${agentId}/peer-profile?${query.toString()}`,
+  return http(t, conversationSlotAuth(t, channelId, agentId)).get(
+    `/internal/agents/${agentId}/peer-profile?${query.toString()}`,
   );
 }
 
@@ -72,7 +73,7 @@ async function setDescription(
   form.set('description', description);
   const res = await t.app.fetch(
     new Request(
-      `http://localhost/internal/conversations/${channelId}/agents/${agentId}/profile`,
+      `http://localhost/internal/agents/${agentId}/profile`,
       {
         method: 'POST',
         headers: {
@@ -209,7 +210,7 @@ describe('agent peer profile read (internal route)', () => {
     const alice = await makeAgent(t, 'alice');
     const team = await makeWorkspace(t, 'team', [alice]);
     const res = await http(t).get(
-      `/internal/conversations/${team.channelId}/agents/${alice}/peer-profile`,
+      `/internal/agents/${alice}/peer-profile`,
     );
     expect(res.status).toBe(400);
   });
@@ -221,7 +222,7 @@ describe('agent peer profile read (internal route)', () => {
     const team = await makeWorkspace(t, 'team', [alice, bob]);
     const res = await t!.app.fetch(
       new Request(
-        `http://localhost/internal/conversations/${team.channelId}/agents/${alice}/peer-profile?handle=bob`,
+        `http://localhost/internal/agents/${alice}/peer-profile?handle=bob`,
         {
           method: 'GET',
           headers: {

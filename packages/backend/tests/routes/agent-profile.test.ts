@@ -55,7 +55,7 @@ describe('agent self-profile (internal routes)', () => {
 
   function getProfile(channelId: string, agentId: string, token: string) {
     return t!.app.fetch(
-      new Request(`http://localhost${internalPaths.agentProfileGet(channelId, agentId)}`, {
+      new Request(`http://localhost${internalPaths.agentProfileGet(agentId)}`, {
         method: 'GET',
         headers: { authorization: `Bearer ${token}` },
       }),
@@ -69,7 +69,7 @@ describe('agent self-profile (internal routes)', () => {
     form: FormData,
   ) {
     return t!.app.fetch(
-      new Request(`http://localhost${internalPaths.agentProfileUpdate(channelId, agentId)}`, {
+      new Request(`http://localhost${internalPaths.agentProfileUpdate(agentId)}`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}` },
         body: form,

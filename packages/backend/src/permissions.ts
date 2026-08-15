@@ -40,6 +40,7 @@ function principalConversationChannelId(
   principal: Principal,
 ): string | null {
   if (principal.kind !== 'agent') return null;
+  if (principal.conversationId === null) return null;
   const reads = ctx.authorizationReads;
   const conversation = reads.conversation(principal.conversationId);
   if (!conversation) return null;
@@ -103,6 +104,7 @@ export function canViewWorkspace(
   }
 
   const reads = ctx.authorizationReads;
+  if (principal.conversationId === null) return false;
   const conversation = reads.conversation(principal.conversationId);
   if (!conversation) return false;
   if (conversation.workspace_id !== workspaceId) return false;
@@ -547,7 +549,7 @@ export function canAddConversationMember(
  *      `agents.created_by_user_id` — the creator.
  *   2. `principal.kind === 'agent'` and `principal.agentId === agentId`
  *      — the agent acting as itself. Today only reachable on internal
- *      routes (`/internal/agents/:aid/conversations/:cid/*`); the
+ *      routes (`/internal/agents/:aid/*`); the
  *      public PATCH `/api/agents/:id` is gated to user principals by
  *      `installRequireRegisteredViewerMiddleware`. Locked in here so
  *      future internal self-edit endpoints (PR-2/3) stay consistent.

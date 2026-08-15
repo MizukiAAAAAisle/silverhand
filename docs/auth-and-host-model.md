@@ -384,15 +384,15 @@ other docs reference it, they do not restate it.
 | Route class | Principal kind | Source | Enforced by |
 |---|---|---|---|
 | public `/api/*` | `user` | session bearer (`user_token`) → `auth_sessions` subject | `bearer.ts` sets the principal; no request-declared header is trusted |
-| internal `/internal/conversations/:cid/agents/:aid/*` | `agent` | URL `(cid, aid)` + scoped bearer + `conversations.getAgent(cid, aid)` membership | `installInternalPrincipalMiddleware` (`auth/principal.ts`) |
+| internal `/internal/agents/:aid/*` | `agent` | URL `aid` + live runtime-slot bearer（scope / generation / daemon instance）；conversation 由显式地址或对象派生后单独授权 | `installInternalPrincipalMiddleware` + `RuntimePrincipalVerifier` |
 | backend-internal code | `system` | not HTTP-originated | never resolved from a request |
 
 - **Internal routes reject the principal header (400, not silent-ignore).**
   `X-Silverhand-Principal` on any `/internal/*` route returns
   `400 principal header is not allowed on internal routes`. Machine identity
-  has a single source — the URL binding — so a second identity input would only
+  has one combined source — URL agent id + live runtime bearer — so a second identity input would only
   create conflict: trusting the header would let any token-bearing process forge
-  an agent identity (the URL binding wasted); trusting the URL would leave the
+  an agent identity (the URL/bearer binding wasted); trusting the URL would leave the
   header a decorative footgun a caller believes is effective. A hard 400 makes a
   mis-set header fail loudly at the caller rather than resolve to the wrong
   identity. (The header is not a public principal source either: the public

@@ -45,12 +45,17 @@ export interface StrictFlagOptions {
  */
 export const GLOBAL_NOOP_FLAGS: ReadonlySet<string> = new Set([
   'json',
-  // AgentSlot runtimes have no ambient conversation. Every invocation supplies
-  // its canonical ROUTE coordinate explicitly; command-local
-  // `--conversation-id` remains a separate request range/destination axis.
-  // ConversationSlot callers omit this and retain the injected route.
-  'route-conversation-id',
 ]);
+
+/** Removed process-wide flags. Kept only as refusal entries so every command
+ * reports the same migration error instead of an edit-distance-dependent typo. */
+export const GLOBAL_REMOVED_FLAGS: Readonly<Record<string, RemovedFlagSpec>> = {
+  'route-conversation-id': {
+    replacement: 'none',
+    hint:
+      'the runtime bearer selects its session scope and the agent-global route needs no conversation anchor',
+  },
+};
 
 /** Throw `CliError` with code `validation_error` if any observed flag
  *  is incompatible with the command:
@@ -68,9 +73,10 @@ export function assertKnownFlags(
   opts: StrictFlagOptions,
 ): void {
   // (1) removed-flag check — actionable migration hint takes priority.
-  if (opts.removedFlags) {
+  const removedFlags = { ...GLOBAL_REMOVED_FLAGS, ...opts.removedFlags };
+  if (Object.keys(removedFlags).length > 0) {
     for (const flag of Object.keys(observed)) {
-      const spec = opts.removedFlags[flag];
+      const spec = removedFlags[flag];
       if (!spec) continue;
       throw new CliError({
         code: 'validation_error',
@@ -86,7 +92,7 @@ export function assertKnownFlags(
   const known = new Set<string>([
     ...(opts.flags ?? []),
     ...(opts.booleanFlags ?? []),
-    ...Object.keys(opts.removedFlags ?? {}),
+    ...Object.keys(removedFlags),
     ...GLOBAL_NOOP_FLAGS,
   ]);
   const unknown = Object.keys(observed).filter(k => !known.has(k));

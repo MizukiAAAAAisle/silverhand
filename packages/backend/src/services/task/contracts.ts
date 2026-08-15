@@ -25,7 +25,7 @@ export type { AgentActor, TaskActor, UserActor } from './ports.js';
 //
 // P0-g (#task:2018, agent-scoped-session-v1 §4.5): the agent lane's ref is a
 // discriminated union — the board-scoped local number (needs a board
-// coordinate: explicit workspace selector or the caller's ambient workspace)
+// coordinate: explicit workspace selector or a ConversationSlot's own board)
 // OR the global `tasks.id` (needs none; ACL gates before existence is
 // disclosed, so unknown and unauthorized ids are indistinguishable).
 export type AgentTaskRef = { taskNumber: number } | { taskId: string };
@@ -97,11 +97,10 @@ export type EditTaskInput =
       workspaceSelector?: WorkspaceSelector;
     };
 
-/** Optional `--workspace-id` / `--workspace <name>` selector wired
- *  through from the CLI. Empty / undefined means "use the actor's
- *  current conversation's workspace" (the legacy default). The
- *  service validates exclusivity (id XOR name) defensively, even
- *  though the wire schema also enforces it. */
+/** Optional `--workspace-id` / `--workspace <name>` selector wired through
+ *  from the CLI. Empty means the ConversationSlot's placement-derived board;
+ *  AgentSlot task-number operations must provide a selector. The service
+ *  validates exclusivity (id XOR name) defensively. */
 export interface WorkspaceSelector {
   workspaceId?: string;
   workspaceName?: string;
@@ -109,8 +108,8 @@ export interface WorkspaceSelector {
 
 export interface ListTasksFilters {
   actor: TaskActor;
-  /** user actor: optional filter; agent actor: ignored (service derives
-   *  physical workspace from actor.conversationId). */
+  /** User-only workspace filter. Agent reads use the pre-authorized `boardKeys`
+   *  projection below. */
   workspaceId?: string;
   /** INTERNAL (never wire): the service-computed board-key set for the agent
    *  arm (§7.2.2 / P0-f). One key = a single validated board (explicit

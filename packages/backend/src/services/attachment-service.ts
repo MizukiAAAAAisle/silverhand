@@ -122,6 +122,13 @@ export class AttachmentService {
     this.maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   }
 
+  /** Resolve an object-addressed attachment to the conversation that owns it.
+   *  Authorization remains at the route boundary; callers must fold a missing
+   *  row and a row they cannot access into the same response. */
+  conversationIdOf(attachmentId: string): string | null {
+    return this.attachments.getById(attachmentId)?.source_conversation_id ?? null;
+  }
+
   async upload(input: UploadInput): Promise<AttachmentDto> {
     if (input.buffer.length === 0) {
       throw new AttachmentRejection({ kind: 'invalid_buffer' });
@@ -340,8 +347,8 @@ export class AttachmentService {
   }
 
   /** Internal locate — agent asks "where can I read this attachment?".
-   *  Caller MUST verify the attachment's channel matches the agent's
-   *  current conversation channel before returning. */
+   *  Caller derives the attachment owner's conversation first, binds the
+   *  principal there, and passes that coordinate here. */
   async locateForAgent(
     attachmentId: string,
     callerConversationId: string,

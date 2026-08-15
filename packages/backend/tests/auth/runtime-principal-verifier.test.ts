@@ -10,7 +10,6 @@ import {
 import {
   RuntimePrincipalVerifier,
   type RuntimeCustodyReadPort,
-  type RuntimeTargetParticipantPort,
 } from '../../src/auth/runtime-principal-verifier.js';
 
 function fixture() {
@@ -23,22 +22,16 @@ function fixture() {
     generation: number;
     claimed_by_daemon_instance_id: string | null;
   }>();
-  const memberships = new Set<string>();
   const slots: RuntimeCustodyReadPort = {
     getConversation: (conversationId, agentId) =>
       conversationSlots.get(`${conversationId}|${agentId}`) ?? null,
     getAgent: agentId => agentSlots.get(agentId) ?? null,
   };
-  const participantPort: RuntimeTargetParticipantPort = {
-    isAgentParticipant: (conversationId, agentId) =>
-      memberships.has(`${conversationId}|${agentId}`),
-  };
   return {
     tokens,
     conversationSlots,
     agentSlots,
-    memberships,
-    verifier: new RuntimePrincipalVerifier(tokens, slots, participantPort),
+    verifier: new RuntimePrincipalVerifier(tokens, slots),
   };
 }
 
@@ -88,7 +81,7 @@ describe('RuntimePrincipalVerifier', () => {
     expect(facetAuthority).toEqual([]);
   });
 
-  it('ConversationSlot can target only its own conversation, even when the agent is a member elsewhere', () => {
+  it('authenticates a ConversationSlot without treating its custody coordinate as a destination', () => {
     const f = fixture();
     const principal = conversationRuntimePrincipal({
       conversationId: 'A',
@@ -100,23 +93,15 @@ describe('RuntimePrincipalVerifier', () => {
       generation: 7,
       claimed_by_daemon_instance_id: 'daemon-1',
     });
-    f.memberships.add('A|agent');
-    f.memberships.add('B|agent');
     const token = f.tokens.issue(principal);
 
     expect(f.verifier.verify({
       token,
       routeAgentId: 'agent',
-      targetConversationId: 'A',
     })).toMatchObject({ ok: true, principal });
-    expect(f.verifier.verify({
-      token,
-      routeAgentId: 'agent',
-      targetConversationId: 'B',
-    })).toEqual({ ok: false, reason: 'target_unauthorized' });
   });
 
-  it('AgentSlot resolves each request target through live membership without changing runtime custody', () => {
+  it('authenticates an AgentSlot without requiring an ambient conversation', () => {
     const f = fixture();
     const principal = agentRuntimePrincipal({
       agentId: 'agent',
@@ -127,27 +112,11 @@ describe('RuntimePrincipalVerifier', () => {
       generation: 3,
       claimed_by_daemon_instance_id: 'daemon-agent',
     });
-    f.memberships.add('A|agent');
-    f.memberships.add('B|agent');
     const token = f.tokens.issue(principal);
 
-    for (const targetConversationId of ['A', 'B']) {
-      expect(f.verifier.verify({
-        token,
-        routeAgentId: 'agent',
-        targetConversationId,
-      }).ok).toBe(true);
-    }
-    f.memberships.delete('A|agent');
     expect(f.verifier.verify({
       token,
       routeAgentId: 'agent',
-      targetConversationId: 'A',
-    })).toEqual({ ok: false, reason: 'target_unauthorized' });
-    expect(f.verifier.verify({
-      token,
-      routeAgentId: 'agent',
-      targetConversationId: 'B',
     }).ok).toBe(true);
     expect(f.agentSlots.get('agent')).toEqual({
       generation: 3,
@@ -168,12 +137,10 @@ describe('RuntimePrincipalVerifier', () => {
       claimed_by_daemon_instance_id: 'daemon-1' as string | null,
     };
     f.conversationSlots.set('A|agent', slot);
-    f.memberships.add('A|agent');
     const token = f.tokens.issue(principal);
     const verify = () => f.verifier.verify({
       token,
       routeAgentId: 'agent',
-      targetConversationId: 'A',
     });
 
     expect(verify().ok).toBe(true);
@@ -197,7 +164,6 @@ describe('RuntimePrincipalVerifier', () => {
       generation: 1,
       claimed_by_daemon_instance_id: 'daemon-1',
     });
-    f.memberships.add('A|agent');
     const token = f.tokens.issue(principal);
     const restarted = new RuntimePrincipalVerifier(
       new AgentTokenStore(),
@@ -205,12 +171,10 @@ describe('RuntimePrincipalVerifier', () => {
         getAgent: () => f.agentSlots.get('agent') ?? null,
         getConversation: () => null,
       },
-      { isAgentParticipant: () => true },
     );
     expect(restarted.verify({
       token,
       routeAgentId: 'agent',
-      targetConversationId: 'A',
     })).toEqual({ ok: false, reason: 'unknown' });
   });
 
@@ -225,11 +189,9 @@ describe('RuntimePrincipalVerifier', () => {
       generation: 1,
       claimed_by_daemon_instance_id: 'daemon-1',
     });
-    f.memberships.add('A|agent');
     expect(f.verifier.verify({
       token: f.tokens.issue(principal),
       routeAgentId: 'other-agent',
-      targetConversationId: 'A',
     })).toEqual({ ok: false, reason: 'agent_mismatch' });
   });
 });

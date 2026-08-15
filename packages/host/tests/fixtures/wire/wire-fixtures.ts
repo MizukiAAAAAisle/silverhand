@@ -629,12 +629,11 @@ const REQUESTS: WireFixture[] = [
       id: 'req-agent-message-send-1',
       intent: 'agent_message_send',
       params: {
-        conversation_id: 'conv_A',
+        runtime_scope: { kind: 'agent' },
         agent_id: 'agent_A',
         content: 'hello',
         // Required and absolute (#task:2021 P4-4): a reply is addressed by its
-        // cluster root, and the SOURCE `conversation_id` above is a credential
-        // coordinate that no longer doubles as the destination.
+        // cluster root. Runtime custody and message destination are independent.
         target: '#conv:AddressedStream1/thread:ClusterRoot0001',
         stale_resolution_reason: 'revised',
       },
@@ -649,8 +648,9 @@ const REQUESTS: WireFixture[] = [
       id: 'req-agent-stale-resolve-1',
       intent: 'agent_stale_resolve',
       params: {
-        conversation_id: 'conv_A',
+        runtime_scope: { kind: 'agent' },
         agent_id: 'agent_A',
+        stale_event_id: 'stale-event-A',
         resolution_reason: 'obsolete',
       },
     }),
@@ -659,12 +659,12 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_stream_observed',
     description:
-      'Agent runtime tells the daemon it observed a reply cluster via an HTTP pull (history --target <address>/thread:<root>); daemon advances that stream\'s observed boundary and records the root as a cluster this session has seen. `conversation_id` is the session handle, `stream_conversation_id` is where the observed cluster lives. Daemon-local, no backend call.',
+      'Agent runtime tells the daemon it observed a reply cluster via an HTTP pull (history --target <address>/thread:<root>); daemon advances that stream\'s observed boundary and records the root as a cluster this session has seen. `runtime_scope` is the session handle, `stream_conversation_id` is where the observed cluster lives. Daemon-local, no backend call.',
     frame: enc({
       id: 'req-agent-stream-observed-1',
       intent: 'agent_stream_observed',
       params: {
-        conversation_id: 'conv_A',
+        runtime_scope: { kind: 'agent' },
         stream_conversation_id: 'conv_B',
         agent_id: 'agent_A',
         thread_root_id: 'msg_root',
@@ -681,8 +681,9 @@ const REQUESTS: WireFixture[] = [
       id: 'req-agent-stale-receive-1',
       intent: 'agent_stale_receive',
       params: {
-        conversation_id: 'conv_A',
+        runtime_scope: { kind: 'agent' },
         agent_id: 'agent_A',
+        stale_event_id: 'stale-event-A',
         wait_ms: 20_000,
       },
     }),

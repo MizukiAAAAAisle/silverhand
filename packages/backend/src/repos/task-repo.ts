@@ -183,7 +183,10 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
       // display field. Keeping it here lets the shared DTO row stay minimal:
       // board_key never crosses into TaskJoinedRow just to be compared once.
       const gateKey =
-        authorizedBoardKey ?? this.boardOfConversation(actor.conversationId)?.boardKey;
+        authorizedBoardKey
+        ?? (actor.conversationId === null
+          ? undefined
+          : this.boardOfConversation(actor.conversationId)?.boardKey);
       if (gateKey === undefined) return null;
       gatedWhere += ' AND t.board_key = ?';
       queryArgs.push(gateKey);

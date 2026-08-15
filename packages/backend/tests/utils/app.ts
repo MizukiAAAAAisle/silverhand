@@ -59,7 +59,10 @@ import type {
   StopOptions,
 } from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
-import { conversationRuntimePrincipal } from '../../src/auth/runtime-principal.js';
+import {
+  agentRuntimePrincipal,
+  conversationRuntimePrincipal,
+} from '../../src/auth/runtime-principal.js';
 import type { RuntimePrincipalScope } from '../../src/auth/runtime-principal.js';
 import {
   DEFAULT_AUTH_SESSION_TTL_MS,
@@ -1385,18 +1388,19 @@ function patchInternalAuthHeader(
   path: string,
   headers: Record<string, string>,
 ): void {
-  const legacy = path.match(
-    /^\/internal\/conversations\/([^/?#]+)\/agents\/([^/?#]+)(?:[/?#]|$)/,
+  const global = path.match(
+    /^\/internal\/agents\/([^/?#]+)(?:[/?#]|$)/,
   );
-  const canonical = path.match(
-    /^\/internal\/agents\/([^/?#]+)\/conversations\/([^/?#]+)(?:[/?#]|$)/,
-  );
-  const match = legacy
-    ? { conversationId: legacy[1], agentId: legacy[2] }
-    : canonical
-      ? { conversationId: canonical[2], agentId: canonical[1] }
-      : null;
-  if (!match) return;
+  const globalAgentId = global?.[1];
+  if (!globalAgentId) return;
+  const testConversation = [...testConversationByAgentRoutePrefix.entries()]
+    .filter(([prefix]) =>
+      path === prefix
+      || path.startsWith(`${prefix}/`)
+      || path.startsWith(`${prefix}?`)
+      || path.startsWith(`${prefix}#`)
+    )
+    .sort(([a], [b]) => b.length - a.length)[0]?.[1];
   const current = headers.authorization ?? headers.Authorization;
   const publicBearer = `Bearer ${target.authToken}`;
   // Most route tests were written before internal tokens became scoped and
@@ -1404,11 +1408,72 @@ function patchInternalAuthHeader(
   // the default/public bearer to a valid per-agent token; explicit wrong
   // tokens remain wrong so auth tests still exercise rejection.
   if (current && current !== publicBearer) return;
-  headers.authorization = `Bearer ${issueTestConversationRuntimeToken(
-    target,
-    decodeURIComponent(match.conversationId!),
-    decodeURIComponent(match.agentId!),
-  )}`;
+  headers.authorization = `Bearer ${testConversation
+    ? issueTestConversationRuntimeToken(
+        target,
+        testConversation,
+        decodeURIComponent(globalAgentId),
+      )
+    : issueTestRuntimeTokenForAgent(target, decodeURIComponent(globalAgentId))}`;
+}
+
+/**
+ * Select a ConversationSlot bearer for a TEST request without putting that
+ * coordinate on the production wire. The registry is process-local test
+ * metadata keyed by the agent-global path prefix; {@link patchInternalAuthHeader}
+ * consumes it only while minting the bearer. This replaces the old harness's
+ * accidental ability to infer the credential slot from `/:cid/` in the retired
+ * route. Agent ids are unique per fixture, and callers register immediately
+ * before issuing the request, so parallel test files cannot share a key.
+ */
+const testConversationByAgentRoutePrefix = new Map<string, string>();
+
+export function conversationSlotTestPath(
+  path: string,
+  conversationId: string,
+): string {
+  testConversationByAgentRoutePrefix.set(path, conversationId);
+  return path;
+}
+
+/** Compatibility for route tests that predate the agent-global mount. It mints
+ * the agent's actual persisted runtime scope: the aggregate AgentSlot when one
+ * exists, otherwise the first ConversationSlot seat. Reach-sensitive tests
+ * always pass an explicit bearer and therefore never rely on this choice. */
+export function issueTestRuntimeTokenForAgent(
+  target: TestApp,
+  agentId: string,
+  daemonInstanceId = 'test-daemon',
+): string {
+  const seats = target.persistence.repos.runtimeSlots.listSeats(agentId);
+  const seat = seats.find(candidate => candidate.scope.kind === 'agent')
+    ?? seats.find(candidate =>
+      candidate.scope.kind === 'conversation'
+      && target.persistence.repos.conversations.getIdentity(candidate.scope.conversationId)
+        ?.placement_kind === 'workspace')
+    ?? seats[0];
+  if (!seat) return target.authToken;
+  if (seat.scope.kind === 'conversation') {
+    return issueTestConversationRuntimeToken(
+      target,
+      seat.scope.conversationId,
+      agentId,
+      daemonInstanceId,
+    );
+  }
+  let claimed = target.persistence.repos.runtimeSlots.getAgent(agentId);
+  if (claimed?.claimed_by_daemon_instance_id === null) {
+    claimed = target.persistence.repos.runtimeSlots.claimGeneration({
+      scope: { kind: 'agent', agentId },
+      daemonInstanceId,
+    });
+  }
+  if (!claimed) throw new Error(`agent runtime slot claim failed for ${agentId}`);
+  return target.ctx.agentTokens.issue(agentRuntimePrincipal({
+    agentId,
+    generation: claimed.generation,
+    daemonInstanceId: claimed.claimed_by_daemon_instance_id ?? daemonInstanceId,
+  }));
 }
 
 /** Test-only bearer mint. Production tokens are issued by the runtime-start saga. */
@@ -1436,6 +1501,25 @@ export function issueTestConversationRuntimeToken(
     generation,
     daemonInstanceId: claimedDaemon,
   }));
+}
+
+/** Explicit ConversationSlot bearer for global-route tests. Once the route no
+ * longer carries a conversation id, a test that means a particular slot must
+ * name it here instead of relying on the HTTP harness to guess a seat. */
+export function conversationSlotAuth(
+  target: TestApp,
+  conversationId: string,
+  agentId: string,
+  daemonInstanceId = 'test-daemon',
+): { authorization: string } {
+  return {
+    authorization: `Bearer ${issueTestConversationRuntimeToken(
+      target,
+      conversationId,
+      agentId,
+      daemonInstanceId,
+    )}`,
+  };
 }
 
 function ensurePublicSessionHeader(

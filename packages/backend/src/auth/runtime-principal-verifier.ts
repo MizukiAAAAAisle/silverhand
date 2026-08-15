@@ -6,14 +6,12 @@ export type RuntimePrincipalDenial =
   | 'unknown'
   | 'revoked'
   | 'agent_mismatch'
-  | 'custody_stale'
-  | 'target_unauthorized';
+  | 'custody_stale';
 
 export type RuntimePrincipalVerifyResult =
   | {
       ok: true;
       principal: RuntimePrincipal;
-      targetConversationId: string;
     }
   | { ok: false; reason: RuntimePrincipalDenial };
 
@@ -31,28 +29,22 @@ export interface RuntimeCustodyReadPort {
   } | null;
 }
 
-export interface RuntimeTargetParticipantPort {
-  isAgentParticipant(
-    conversationId: string,
-    agentId: string,
-  ): boolean;
-}
-
 /**
- * The single runtime bearer + live-custody + target-policy authority.
- * Unknown and unauthorized targets intentionally collapse to one denial.
+ * The single runtime bearer + live-custody authority.
+ *
+ * A runtime bearer authenticates the executing agent and the exact live slot;
+ * it does not carry a destination. Address resolution, participation, and the
+ * C″ per-operation reach policy run after this boundary.
  */
 export class RuntimePrincipalVerifier {
   constructor(
     private readonly tokens: AgentTokenStore,
     private readonly slots: RuntimeCustodyReadPort,
-    private readonly participants: RuntimeTargetParticipantPort,
   ) {}
 
   verify(input: {
     token: string | null | undefined;
     routeAgentId: string;
-    targetConversationId: string;
   }): RuntimePrincipalVerifyResult {
     const bearer = this.tokens.verify(input.token);
     if (!bearer.ok) return bearer;
@@ -76,25 +68,6 @@ export class RuntimePrincipalVerifier {
       return { ok: false, reason: 'custody_stale' };
     }
 
-    if (
-      principal.kind === 'conversation_slot'
-      && principal.conversationId !== input.targetConversationId
-    ) {
-      return { ok: false, reason: 'target_unauthorized' };
-    }
-    if (
-      !this.participants.isAgentParticipant(
-        input.targetConversationId,
-        principal.agentId,
-      )
-    ) {
-      return { ok: false, reason: 'target_unauthorized' };
-    }
-
-    return {
-      ok: true,
-      principal,
-      targetConversationId: input.targetConversationId,
-    };
+    return { ok: true, principal };
   }
 }

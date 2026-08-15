@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MessageRepo } from '../../src/repos/message-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 
 // Reply-cluster voluntary follow/unfollow (docs/thread-reply-cluster-v1.md
 // §5 B / §8; cut2 2-B2c). `source='manual'`; a new follow backfills the
@@ -38,9 +43,9 @@ async function createWorkspaceChannel(
 }
 
 const followPath = (cid: string, aid: string) =>
-  `/internal/conversations/${cid}/agents/${aid}/follow-thread`;
+  `/internal/agents/${aid}/follow-thread`;
 const unfollowPath = (cid: string, aid: string) =>
-  `/internal/conversations/${cid}/agents/${aid}/unfollow-thread`;
+  `/internal/agents/${aid}/unfollow-thread`;
 
 function followerSource(
   t: TestApp,
@@ -154,6 +159,45 @@ describe('POST /internal/.../follow-thread + unfollow-thread', () => {
     expect(followerSource(t, root.id, bobId)).toBe('manual');
   });
 
+  it('derives the addressed conversation from the root instead of the credential scope', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId: anchor, agentIds } = await createWorkspaceChannel(
+      t,
+      ['alice'],
+    );
+    const aliceId = agentIds.alice!;
+    const destination = (await (
+      await http(t).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'follow-destination',
+        member_agent_ids: [aliceId],
+      })
+    ).json()) as any;
+    const destinationId = destination.channel.id as string;
+    const root = new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: destinationId,
+      fromKind: 'agent',
+      fromAgentId: aliceId,
+      content: 'root in another conversation',
+    });
+
+    const response = await http(t).post(
+      followPath(destinationId, aliceId),
+      { root_message_id: root.id },
+      {
+        headers: {
+          authorization: `Bearer ${issueTestConversationRuntimeToken(t, anchor, aliceId)}`,
+        },
+      },
+    );
+
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(await response.json()).toEqual({
+      thread_root_id: root.id,
+      changed: true,
+    });
+    expect(followerSource(t, root.id, aliceId)).toBe('manual');
+  });
+
   it('unfollows idempotently and re-follow on a later reply preserves the original manual source', async () => {
     t = buildTestApp();
     const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'bob']);
@@ -200,5 +244,46 @@ describe('POST /internal/.../follow-thread + unfollow-thread', () => {
     });
     expect(u.status).toBe(404);
     expect(((await u.json()) as any).code).toBe('reply_target_not_found');
+  });
+
+  it('makes an invisible root indistinguishable from an unknown root', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId: aliceChannel, agentIds } =
+      await createWorkspaceChannel(t, ['alice', 'bob']);
+    const aliceId = agentIds.alice!;
+    const bobId = agentIds.bob!;
+    const bobOnly = (await (
+      await http(t).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'bob-only',
+        member_agent_ids: [bobId],
+      })
+    ).json()) as any;
+    const hiddenRoot = new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: bobOnly.channel.id,
+      fromKind: 'agent',
+      fromAgentId: bobId,
+      content: 'hidden root',
+    });
+    const headers = {
+      authorization: `Bearer ${issueTestConversationRuntimeToken(t, aliceChannel, aliceId)}`,
+    };
+
+    const [hidden, unknown] = await Promise.all([
+      http(t).post(
+        followPath(bobOnly.channel.id, aliceId),
+        { root_message_id: hiddenRoot.id },
+        { headers },
+      ),
+      http(t).post(
+        followPath(aliceChannel, aliceId),
+        { root_message_id: 'unknown-root' },
+        { headers },
+      ),
+    ]);
+
+    expect(hidden.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    expect(await hidden.text()).toBe(await unknown.text());
+    expect(followerSource(t, hiddenRoot.id, aliceId)).toBeNull();
   });
 });

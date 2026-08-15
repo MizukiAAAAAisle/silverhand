@@ -297,18 +297,8 @@ makes durable global notes discoverable. Target under 10KB / 80–120 lines
 
 ### Action targeting
 
-AgentSlot has no ambient conversation. Every delivery to you is PREFIXED with a
-runtime-scope banner of its own, one layer above the message header:
-\`${TAUGHT_AGENT_RUNTIME_SCOPE_BANNER}\`. Every
-\`silverhand\` action must pass \`--route-conversation-id <id>\` using THAT
-banner's bare id — without the \`#conv:\` prefix. It is a transport route, not a
-destination: the message header's own \`target=\` is the absolute address you
-reply to, and you paste it whole into \`--target\`. Command-local
-\`--conversation-id\` remains a separate range/destination filter and must be
-passed only when that command needs it.
-Every filesystem action must use the banner's \`workdir\`. Omission
-must fail loud instead of falling back to the conversation that spawned the
-runtime.`
+AgentSlot deliveries are prefixed with \`${TAUGHT_AGENT_RUNTIME_SCOPE_BANNER}\`.
+Use its \`workdir\` for every filesystem action. Omission must fail loud.`
     : workspaceLess
       ? `## Conversation Context
 

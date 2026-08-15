@@ -129,6 +129,16 @@ interface Credential {
   agentId: string;
 }
 
+function credentialAuth(t: TestApp, credential: Credential): { authorization: string } {
+  return {
+    authorization: `Bearer ${issueTestConversationRuntimeToken(
+      t,
+      credential.conversationId,
+      credential.agentId,
+    )}`,
+  };
+}
+
 /**
  * Every door that resolves an address, each shaped exactly as its client shapes
  * it, and each given a request that is valid in every respect EXCEPT the address.
@@ -142,15 +152,15 @@ const DOORS: ReadonlyArray<{
   {
     label: 'message send',
     call: (t, cred, target) =>
-      http(t).post(
-        internalPaths.agentSendConversationMessage(cred.conversationId, cred.agentId),
+      http(t, credentialAuth(t, cred)).post(
+        internalPaths.agentSendConversationMessage(cred.agentId),
         { content: 'hello', target },
       ),
   },
   {
     label: 'message history',
     call: (t, cred, target) =>
-      http(t).post(internalPaths.agentReadHistory(cred.conversationId, cred.agentId), {
+      http(t, credentialAuth(t, cred)).post(internalPaths.agentReadHistory(cred.agentId), {
         target,
         limit: 10,
       }),
@@ -158,15 +168,15 @@ const DOORS: ReadonlyArray<{
   {
     label: 'task create',
     call: (t, cred, target) =>
-      http(t).post(
-        internalPaths.agentCreateConversationTasks(cred.conversationId, cred.agentId),
+      http(t, credentialAuth(t, cred)).post(
+        internalPaths.agentCreateConversationTasks(cred.agentId),
         { tasks: [{ title: 'a task' }], target },
       ),
   },
   {
     label: 'schedule create',
     call: (t, cred, target) =>
-      http(t).post(internalPaths.agentScheduleCreate(cred.conversationId, cred.agentId), {
+      http(t, credentialAuth(t, cred)).post(internalPaths.agentScheduleCreate(cred.agentId), {
         title: 'wake',
         message: 'do the thing',
         spec: { kind: 'once', delay_seconds: 60 },
@@ -176,7 +186,7 @@ const DOORS: ReadonlyArray<{
   {
     label: 'channel create (fork source)',
     call: (t, cred, target) =>
-      http(t).post(internalPaths.agentCreateChannel(cred.conversationId, cred.agentId), {
+      http(t, credentialAuth(t, cred)).post(internalPaths.agentCreateChannel(cred.agentId), {
         title: 'forked',
         context_summary: 'split this out',
         initial_prompt: 'continue here',
@@ -186,8 +196,8 @@ const DOORS: ReadonlyArray<{
   {
     label: 'member add',
     call: (t, cred, target) =>
-      http(t).post(
-        internalPaths.agentAddConversationMember(cred.conversationId, cred.agentId),
+      http(t, credentialAuth(t, cred)).post(
+        internalPaths.agentAddConversationMember(cred.agentId),
         { handle: 'someone', target },
       ),
   },
@@ -201,7 +211,6 @@ const DOORS: ReadonlyArray<{
       return await t.app.fetch(
         new Request(
           `http://localhost${internalPaths.agentUploadAttachment(
-            cred.conversationId,
             cred.agentId,
           )}`,
           {

@@ -405,7 +405,11 @@ export function conversationMessageServiceErrorResponse(
               : 'main',
             seen_up_to_seq: err.seenUpToSeq,
             current_seq: err.currentSeq,
-            hint: 'send rejected; run `silverhand message stale-receive` to pull the pending messages now, or stop this send attempt until they arrive through normal delivery',
+            hint:
+              'send rejected; run ' +
+              `\`silverhand message stale-receive --stale-event-id ${err.staleEventId}\` ` +
+              'to pull this draft\'s pending messages now, or stop this send attempt ' +
+              'until they arrive through normal delivery',
           },
         },
       },

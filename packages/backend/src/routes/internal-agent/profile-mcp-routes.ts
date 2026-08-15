@@ -30,15 +30,13 @@ export function registerProfileMcpRoutes(
   app: Hono<AppEnv>,
   deps: InternalRouteDeps,
 ): void {
-  const { ctx, agents, conversations } = deps;
+  const { ctx, agents } = deps;
 
   app.get(internalAgentRoutePaths.profileMcp, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
     const agent = agents.get(aid);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     const principal = getAgentPrincipal(c);
@@ -65,12 +63,10 @@ export function registerProfileMcpRoutes(
   });
 
   app.post(internalAgentRoutePaths.profileMcp, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
     const agent = agents.get(aid);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     const principal = getAgentPrincipal(c);
@@ -113,12 +109,10 @@ export function registerProfileMcpRoutes(
   // connection's own success/failure rides in the `McpProbeResult` body; only
   // host-transport faults map to an HTTP error.
   app.post(internalAgentRoutePaths.profileMcpProbe, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
     const agent = agents.get(aid);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     const principal = getAgentPrincipal(c);

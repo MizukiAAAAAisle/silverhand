@@ -355,7 +355,6 @@
   "formatAttachmentLabel",
   "internalPaths",
   "isImageAttachment",
-  "legacyInternalPaths",
   "normalizeAttachmentRefs",
   "normalizeThreadPreviewExcerpt",
   "normalizeWorkspaceName",

@@ -1360,8 +1360,9 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       await waitForDeliveryConsumed(events, 202);
       await waitFor(() =>
         events.some(
-          event => event.event === 'runtime_output'
-            && event.chunk.includes('target=#conv:Conversation0002'),
+            event => event.event === 'runtime_output'
+            && event.chunk.includes('runtime_scope=agent')
+            && event.chunk.includes('/conversations/Conversation0002'),
         ),
       );
 
@@ -1429,8 +1430,9 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
         )
         .map(event => event.chunk)
         .join('');
-      expect(output).toContain('target=#conv:Conversation0001');
-      expect(output).toContain('target=#conv:Conversation0002');
+      expect(output).toContain('/conversations/Conversation0001');
+      expect(output).toContain('/conversations/Conversation0002');
+      expect(output).not.toContain('target=');
       expect(output).toContain(join(SUPERVISOR_AGENTS_ROOT, 'a1'));
       expect(lastDeliveredSeqPath).toBeDefined();
       const ledger = JSON.parse(readFileSync(lastDeliveredSeqPath!, 'utf8')) as {
@@ -3991,7 +3993,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await waitForDeliveryConsumed(events, 12);
 
       const stale = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: '1',
@@ -3999,7 +4001,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(stale).toMatchObject({ ok: false, status: 409 });
 
       const retry = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: '2',
@@ -4219,7 +4221,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       // (seen=10) and the backend CAS MUST stale it — this is the exact
       // event round 2 let through three times.
       const send1 = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1', content: '0-old-draft',
       });
@@ -4256,7 +4258,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       // The informed resend (revised draft under the recorded stale
       // event) carries seen=11 and passes CAS.
       const send2 = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1', content: '1',
         stale_resolution_reason: 'revised',
@@ -4315,7 +4317,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await waitForDeliveryConsumed(events, 11);
 
       const forced = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'forced past the gap',
@@ -4327,7 +4329,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       // forced message lands but the cursor HOLDS; the next normal send
       // still declares seen=11 while 12–14 are unadmitted.
       const next = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1', content: 'next normal send',
       });
@@ -4377,7 +4379,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       );
 
       const converged = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1', content: 'post-gap send',
       });
@@ -4444,7 +4446,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await waitForDeliveryConsumed(events, 12);
 
       const stale = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: '1',
@@ -4452,7 +4454,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(stale).toMatchObject({ ok: false, status: 409 });
 
       await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: '2',
@@ -4548,7 +4550,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await waitForDeliveryConsumed(events, 12);
 
       const stale = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: '1',
@@ -4556,7 +4558,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(stale).toMatchObject({ ok: false, status: 409 });
 
       const stale2 = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: '2',
@@ -4568,7 +4570,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(postedBodies[1]?.['stale_event_id']).toBe('stale-m');
 
       await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: '3',
@@ -4759,7 +4761,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       // ── Mid-turn agent send. seen_up_to_seq must be 10 (M1 only), not 11.
       // Before the #task:1471 fix this was 11 → the regression.
       const midTurnSend = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'draft reply generated on M1 context',
@@ -4798,7 +4800,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       // Guards against the sibling regression where the fix could over-
       // correct into "never admit" — must actually promote here.
       const nextTurnSend = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'reply generated on new turn context',
@@ -5010,7 +5012,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       // silently bypassed. Pre-fix, seen would be 11 and the send would
       // slip past CAS with 200 (the countgame1 turn-taking break).
       const midTurnSend = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'draft reply generated on M1 context after tool_output',
@@ -5048,7 +5050,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       driver.parseLine = () => [];
 
       const nextTurnSend = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'revised reply on refreshed context',
@@ -5284,7 +5286,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       // observed by the model must still stale. Backend returns 409
       // because seen=10 < BACKEND_CURRENT_SEQ=11.
       const raceSend = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'draft reply raced against turn_end',
@@ -5355,7 +5357,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await waitForDeliveryConsumed(events, 53);
 
       const result = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'a reply addressed at the main line',
@@ -5401,13 +5403,13 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.start(baseStartParams);
 
       const first = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'first main-line send without observed main',
       });
       const second = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'second main-line send still has not observed main',
@@ -5472,7 +5474,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.start(baseStartParams);
       const send = (content: string) =>
         supervisor.agentMessageSend({
-          conversation_id: 'Conversation0001',
+          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
           target: '#conv:Conversation0001',
           agent_id: 'a1',
           content,
@@ -5579,7 +5581,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
 
       await waitForDeliveryConsumed(events, 51);
       await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'addressed at the main line after a mixed batch',
@@ -5628,7 +5630,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
 
       await waitForDeliveryConsumed(events, 52);
       await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'addressed at the main line after an observe-only thread wake',
@@ -5711,7 +5713,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // main line still CASes against ITS member (80): a per-batch watermark
       // would claim the agent had seen two thread messages it never saw.
       const result = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'addressed at the main line after a three-stream batch',
@@ -5783,7 +5785,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // First reply into the root's cluster: nothing has ever been delivered
       // from it, and the daemon knows that because it received the root itself.
       const reply1 = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'first reply',
         target: '#conv:Conversation0001/thread:MessageRoot00001',
@@ -5801,7 +5803,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // the backend's canonicalisation). Observed[thread] advanced to 51 by our
       // own first reply, independent of observed[main]=50.
       const reply2 = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'second reply',
         target: '#conv:Conversation0001/thread:MessageRoot00001',
@@ -5816,7 +5818,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // A main-line send still sees the main boundary (50), untouched by
       // the thread sends.
       const mainSend = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'main line',
@@ -5912,7 +5914,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // cursor at 507. The first send addressed at it is therefore protected at
       // that head, not an unobserved loose send.
       const first = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'first agent reply',
         target: '#conv:Conversation0001/thread:MessageRoot00001',
@@ -5925,7 +5927,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // seq. The sender never receives its own fanout, so this is the only
       // path that prevents a permanent self-made stale gap.
       const second = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'second agent reply',
         target: '#conv:Conversation0001/thread:MessageRoot00001',
@@ -5963,7 +5965,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     try {
       await supervisor.start(baseStartParams);
       const result = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'reply to a message I never saw',
         target: '#conv:Conversation0001/thread:MessageGhost0001',
@@ -5986,7 +5988,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // rather than a guess). This response carries no `stream_head_before`, so
       // there is no merge prerequisite to converge through either.
       const followup = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'follow-up reply',
         target: '#conv:Conversation0001/thread:MessageGhost0001',
@@ -6074,7 +6076,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // First touch of a cluster this daemon has never observed: loose send,
       // no CAS, own seq 42 filed against the skipped head 41.
       const loose = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'first touch of an unseen cluster',
         target: '#conv:Conversation0001/thread:MessageGhost0001',
@@ -6139,7 +6141,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       ).toBe(false);
 
       const converged = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'second reply in the same cluster',
         target: '#conv:Conversation0001/thread:MessageGhost0001',
@@ -6207,7 +6209,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // self-init) has never observed `main`, so this is the main-line shape
       // of the same first touch: loose send, own seq 10 against head 9.
       const loose = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'first thing I ever say',
@@ -6240,7 +6242,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await waitForDeliveryConsumed(events, 9);
 
       const converged = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'second thing I say',
@@ -6330,7 +6332,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await waitForDeliveryConsumed(events, 5);
 
       const loose = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'first touch of an unseen cluster',
         target: '#conv:Conversation0001/thread:MessageGhost0001',
@@ -6373,7 +6375,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // boundary off pending state: neither 41 (pending is not observed) nor
       // 42 (no merge off a pending seq).
       const midTurn = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'mid-turn reply',
         target: '#conv:Conversation0001/thread:MessageGhost0001',
@@ -6417,7 +6419,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       );
 
       const converged = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'post-boundary reply',
         target: '#conv:Conversation0001/thread:MessageGhost0001',
@@ -6508,7 +6510,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         await waitForRuntimeReady(events);
 
         const first = await supervisor.agentMessageSend({
-          conversation_id: 'Conversation0001',
+          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
           agent_id: 'a1',
           content: 'first message in an empty stream',
           target: arm.target,
@@ -6521,7 +6523,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         // own message, so the watermark is our own seq — no swallow, and no
         // dependency on anyone else ever speaking in this stream.
         const second = await supervisor.agentMessageSend({
-          conversation_id: 'Conversation0001',
+          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
           agent_id: 'a1',
           content: 'second message in the same stream',
           target: arm.target,
@@ -6560,7 +6562,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // daemon never saw it) and the CLI fired this intent: replies up to
       // seq 60 were observed; root + reply ids surfaced.
       const observed = await supervisor.agentStreamObserved({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         stream_conversation_id: 'Conversation0001',
         agent_id: 'a1',
         thread_root_id: 'MessageRoot00001',
@@ -6570,7 +6572,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
 
       // Reply to the root → known cluster, seen = the pulled max.
       const reply = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'late reply after reading',
         target: '#conv:Conversation0001/thread:MessageRoot00001',
@@ -6588,7 +6590,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // here would be this process second-guessing the resolver, and the pulled
       // boundary (60) would be asserted for a stream nobody resolved.
       await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'addressed at a reply, not at the cluster root',
         target: '#conv:Conversation0001/thread:MessageReply0060',
@@ -6626,7 +6628,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // Pulled a cluster with only the root (no replies yet): observed_seq 0,
       // root id surfaced.
       const observed = await supervisor.agentStreamObserved({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         stream_conversation_id: 'Conversation0001',
         agent_id: 'a1',
         thread_root_id: 'MessageLone00001',
@@ -6638,7 +6640,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // seen 0 (no replies were observed) — exactly the freshness the backend
       // CAS expects for a thread's first reply.
       const reply = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         agent_id: 'a1',
         content: 'first reply to a freshly read root',
         target: '#conv:Conversation0001/thread:MessageLone00001',
@@ -6702,7 +6704,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // Pulling a thread cluster up to seq 80 must touch ONLY thread:mRoot —
       // never main (the pull saw one root, not the whole main prefix to 80).
       await supervisor.agentStreamObserved({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         stream_conversation_id: 'Conversation0001',
         agent_id: 'a1',
         thread_root_id: 'MessageRoot00001',
@@ -6710,7 +6712,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       });
 
       const mainSend = await supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
         target: '#conv:Conversation0001',
         agent_id: 'a1',
         content: 'main line send',
@@ -7570,7 +7572,6 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // hand-typed literal here would be a third spelling free to drift from both.
       expect(text).toContain(
         formatAgentRuntimeScopeBanner(
-          'Conversation0001',
           join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
         ),
       );
@@ -7661,15 +7662,16 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       expect(fromB.pid).toBe(fromInbox.pid);
       expect(h.supervisor.status({}).runtimes).toHaveLength(1);
       const visible = h.stub.written.map(decoded);
-      expect(visible[0]).toContain(
-        `target=#conv:Conversation0001 workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'))}`,
-      );
-      expect(visible[1]).toContain(
-        `target=#conv:Conversation0002 workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws2'))}`,
-      );
-      expect(visible[2]).toContain(
-        `target=#conv:Conversation0003 workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1', 'conversations', 'Conversation0003'))}`,
-      );
+      expect(visible[0]).toContain(formatAgentRuntimeScopeBanner(
+        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
+      ));
+      expect(visible[1]).toContain(formatAgentRuntimeScopeBanner(
+        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws2'),
+      ));
+      expect(visible[2]).toContain(formatAgentRuntimeScopeBanner(
+        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'conversations', 'Conversation0003'),
+      ));
+      for (const text of visible) expect(text).not.toContain('target=');
       for (const text of visible) {
         expect(text).not.toContain(
           `workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1'))}]`,
@@ -7696,9 +7698,12 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       ['Conversation0002', 'stale'],
     ]);
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      const conversationId = url.includes('/conversations/Conversation0002/') ? 'Conversation0002' : 'Conversation0001';
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const conversationId = typeof body['conversation_id'] === 'string'
+        ? body['conversation_id']
+        : /^#conv:([^/]+)/.exec(String(body['target']))?.[1]
+          ?? 'Conversation0001';
+      const url = String(input);
       const bodies = posted.get(conversationId) ?? [];
       bodies.push(body);
       posted.set(conversationId, bodies);
@@ -7739,15 +7744,20 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     }));
     const send = (conversationId: string, content: string) =>
       h.supervisor.agentMessageSend({
-        conversation_id: conversationId,
+        runtime_scope: { kind: 'agent' },
         target: `#conv:${conversationId}`,
         agent_id: 'a1',
         content,
       });
-    const receive = (conversationId: string) =>
+    const receive = (staleEventId: string, owner: string) =>
       h.supervisor.agentStaleReceive(
-        { conversation_id: conversationId, agent_id: 'a1', wait_ms: 0 },
-        { owner: `control:${conversationId}`, supportsResponseHandoff: true },
+        {
+          runtime_scope: { kind: 'agent' },
+          agent_id: 'a1',
+          stale_event_id: staleEventId,
+          wait_ms: 0,
+        },
+        { owner, supportsResponseHandoff: true },
       );
     try {
       expect((await h.deliver([1])).disposition).toBe('spawning');
@@ -7755,14 +7765,21 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
       expect(await send('Conversation0001', 'arm A')).toMatchObject({ ok: false, status: 409 });
       expect(await send('Conversation0002', 'arm B')).toMatchObject({ ok: false, status: 409 });
-      expect((await receive('Conversation0001')).outcome).toBe('timeout');
-      expect((await receive('Conversation0002')).outcome).toBe('timeout');
+      expect((await receive('stale-missing', 'control:missing')).outcome)
+        .toBe('no_pending_stale');
+      expect((await receive('stale-Conversation0002', 'control:B')).outcome)
+        .toBe('timeout');
 
       expect(await h.supervisor.agentStaleResolve({
-        conversation_id: 'Conversation0002',
+        runtime_scope: { kind: 'agent' },
         agent_id: 'a1',
+        stale_event_id: 'stale-Conversation0002',
         resolution_reason: 'obsolete',
       })).toEqual({ ok: true, resolved: true });
+      expect((await receive('stale-Conversation0002', 'control:B-resolved')).outcome)
+        .toBe('no_pending_stale');
+      expect((await receive('stale-Conversation0001', 'control:A-remains')).outcome)
+        .toBe('timeout');
       expect(await send('Conversation0001', 'A survives B resolve')).toMatchObject({
         ok: false,
         status: 409,
@@ -7791,11 +7808,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
   // Falsifier for the two-coordinate split (#task:2021 P4-4): an AgentSlot's
   // observed boundaries are keyed by conversation, and a send keys by the
   // ADDRESS's conversation — so a pull must be filed under the stream it read,
-  // not under the session's route anchor. While `agent_stream_observed` carried
+  // not merely under runtime custody. While `agent_stream_observed` carried
   // one `conversation_id` for both jobs, every cross-conversation
   // read-then-reply from an AgentSlot filed the boundary where no send would
   // look and silently degraded to a loose first touch.
-  it('AgentSlot files a pulled cluster under the stream it read, not the session route', async () => {
+  it('AgentSlot files a pulled cluster under the stream it read', async () => {
     const startOptions = testStartOptions({ agentId: 'a1', sessionScope: 'agent' });
     const h = makeDriven('direct', undefined, undefined, { startOptions });
     const postedBodies: Record<string, unknown>[] = [];
@@ -7814,10 +7831,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     try {
       expect((await h.deliver([1])).disposition).toBe('spawning');
       await waitForDeliveryConsumed(h.events, 1);
-      // The session is anchored at Conversation0001 (where it was woken); the
-      // cluster it pulled lives in a different conversation entirely.
+      // The aggregate runtime observes a cluster in Conversation0002.
       expect(await h.supervisor.agentStreamObserved({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'agent' },
         stream_conversation_id: 'Conversation0002',
         agent_id: 'a1',
         thread_root_id: 'MessageRoot00001',
@@ -7831,7 +7847,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // the globally unique message id, so it survives the mis-keying). So the
       // bug was not a missing assertion but a WRONG one: 0 instead of 60.
       expect(await h.supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'agent' },
         agent_id: 'a1',
         content: 'reply into the pulled cluster',
         target: '#conv:Conversation0002/thread:MessageRoot00001',
@@ -7843,14 +7859,14 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // A second cluster in a THIRD conversation: one handle holds both
       // boundaries, and each address finds its own.
       expect(await h.supervisor.agentStreamObserved({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'agent' },
         stream_conversation_id: 'Conversation0003',
         agent_id: 'a1',
         thread_root_id: 'MessageRoot00002',
         observed_seq: 12,
       })).toEqual({ ok: true });
       await h.supervisor.agentMessageSend({
-        conversation_id: 'Conversation0001',
+        runtime_scope: { kind: 'agent' },
         agent_id: 'a1',
         content: 'reply into the other pulled cluster',
         target: '#conv:Conversation0003/thread:MessageRoot00002',
@@ -9000,7 +9016,12 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
         supportsResponseHandoff: true,
       };
       const result = await supervisor.agentStaleReceive(
-        { conversation_id: 'Conversation0001', agent_id: 'a1', wait_ms: waitMs },
+        {
+          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
+          agent_id: 'a1',
+          stale_event_id: 'stale-1',
+          wait_ms: waitMs,
+        },
         ctx,
       );
       return { result, settle: ctx.responseHandoff };
@@ -9031,7 +9052,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     staleResolution?: 'unaffected' | 'revised',
   ) =>
     supervisor.agentMessageSend({
-      conversation_id: 'Conversation0001',
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
       target: '#conv:Conversation0001',
       agent_id: 'a1',
       content,
@@ -9523,7 +9544,12 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
       await expect(
         h.supervisor.agentStaleReceive(
-          { conversation_id: 'Conversation0001', agent_id: 'a1', wait_ms: 0 },
+          {
+            runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
+            agent_id: 'a1',
+            stale_event_id: 'stale-1',
+            wait_ms: 0,
+          },
           { owner: 'outbound:1' },
         ),
       ).rejects.toMatchObject({ code: 'handoff_unsupported' });

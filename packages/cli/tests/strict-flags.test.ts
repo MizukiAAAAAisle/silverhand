@@ -3,6 +3,7 @@ import {
   assertKnownFlags,
   closestFlag,
   GLOBAL_NOOP_FLAGS,
+  GLOBAL_REMOVED_FLAGS,
   levenshtein,
 } from '../src/strict-flags.js';
 import { CliError } from '../src/errors.js';
@@ -122,6 +123,22 @@ describe('strict flag validation', () => {
 });
 
 describe('removed-flag handling', () => {
+  it('retires the process-wide route flag on every command with one migration error', () => {
+    expect(GLOBAL_REMOVED_FLAGS['route-conversation-id']).toBeDefined();
+    expect(() =>
+      assertKnownFlags(
+        { 'route-conversation-id': 'Conversation0001' },
+        { noun: 'workspace', verb: 'list', flags: [] },
+      ),
+    ).toThrowError(expect.objectContaining({
+      subkind: 'flag_removed',
+      details: {
+        flag: 'route-conversation-id',
+        replacement: 'none',
+      },
+    }));
+  });
+
   it('throws flag_removed with replacement and hint when a removed flag is supplied', () => {
     let caught: unknown;
     try {

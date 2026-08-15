@@ -48,15 +48,13 @@ export interface TargetDoor {
  * than throwing here, where the actor's actual problem is the missing flag.
  *
  * There is exactly ONE kind of correction, and only a ConversationSlot has it: a
- * singleton stream the caller inhabits. An AgentSlot is woken in no stream — its
- * route came from `--route-conversation-id`, a transport anchor that may well be
- * an agent inbox no one can post to — so the refusal carries no `correct_target`
- * at all rather than inventing a destination out of the credential's path. The
- * flag is equally required either way; only the correction is conditional.
+ * singleton stream the caller inhabits. An AgentSlot is woken in no stream, so
+ * the refusal carries no `correct_target` rather than inventing a destination.
+ * The flag is equally required either way; only the correction is conditional.
  */
 export function requireTargetFlag(
   raw: string | undefined,
-  env: Pick<CliEnv, 'conversationId' | 'slot'>,
+  env: CliEnv,
   door: TargetDoor,
 ): string {
   if (raw !== undefined && raw.length > 0) return raw;
@@ -102,7 +100,7 @@ export function requireTargetFlag(
  */
 export function requireAddressBeforeSideEffects(
   raw: string | undefined,
-  env: Pick<CliEnv, 'conversationId' | 'slot'>,
+  env: CliEnv,
   door: TargetDoor,
 ): string {
   const target = requireTargetFlag(raw, env, door);

@@ -66,13 +66,12 @@ export type ChannelActor =
  * The agent arm of {@link CreateChannelInput.actor}: who forks, and WHAT.
  *
  * Deliberately NOT `AgentPrincipal`, and that is the whole point of the type. A
- * principal carries `conversationId` — the conversation its CREDENTIAL was minted
- * for — and this service used to read that field as the fork source: the workspace
+ * A ConversationSlot principal carries `conversationId`, and this service used
+ * to read that field as the fork source: the workspace
  * the channel is born into, the agent roster it inherits, the human members it
  * inherits, and the `source_conversation_id` stamped into the seed message all came
- * from the caller's transport anchor. Under an agent-scoped session that anchor is
- * not a place the actor chose (#task:2021 P4-4) and #task:2030 deletes it outright,
- * so the source now arrives as an ADDRESS the route resolves.
+ * from runtime custody. Under an AgentSlot there is no such coordinate, so the
+ * source arrives as an ADDRESS the route resolves.
  *
  * Handing the service a principal would leave the old field in reach, one
  * `input.actor.forkSourceConversationId` away from silently restoring the ambient default.

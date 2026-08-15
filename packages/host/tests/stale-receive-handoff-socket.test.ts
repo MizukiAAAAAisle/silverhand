@@ -93,7 +93,12 @@ const REQUEST =
   JSON.stringify({
     id: 'req-1',
     intent: 'agent_stale_receive',
-    params: { conversation_id: 'c1', agent_id: 'a1', wait_ms: 0 },
+    params: {
+      runtime_scope: { kind: 'agent' },
+      agent_id: 'a1',
+      stale_event_id: 'stale-1',
+      wait_ms: 0,
+    },
   }) + '\n';
 
 async function waitFor(cond: () => boolean, timeoutMs = 2_000): Promise<void> {

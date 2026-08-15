@@ -437,145 +437,115 @@ export const authPaths = {
   logout: '/auth/logout',
 } as const;
 
-/** Temporary path builders for the observable legacy bridge. New callers use
- * `internalPaths` below; this object exists only until bridge telemetry is zero. */
-export const legacyInternalPaths = {
+/** Canonical agent-global internal route family. Operation coordinates live in
+ *  the request body/query/object id; the URL carries only the executing agent. */
+export const internalPaths = {
   /** Agent posts a chat message; backend writes + distributes. */
-  agentSendConversationMessage: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/send-message`,
+  agentSendConversationMessage: (aid: string) =>
+    `/internal/agents/${aid}/send-message`,
   /** Agent reports that a stale send was intentionally abandoned. */
-  agentResolveStaleMessage: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/stale-message-resolution`,
+  agentResolveStaleMessage: (aid: string) =>
+    `/internal/agents/${aid}/stale-message-resolution`,
   /** Agent creates a new top-level channel in the same workspace. */
-  agentCreateChannel: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/create-channel`,
-  /** Agent reads anchored message history in its current/target conversation. */
-  agentReadHistory: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/read-history`,
+  agentCreateChannel: (aid: string) => `/internal/agents/${aid}/create-channel`,
+  /** Agent reads message history at an explicit absolute target. */
+  agentReadHistory: (aid: string) => `/internal/agents/${aid}/read-history`,
   /** Agent voluntarily follows a reply cluster (thread = root message id),
    *  `source='manual'`. Idempotent; a new follow backfills thread history. */
-  agentFollowThread: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/follow-thread`,
+  agentFollowThread: (aid: string) => `/internal/agents/${aid}/follow-thread`,
   /** Agent stops following a reply cluster; re-followed automatically on a
    *  later mention/reply (§5). */
-  agentUnfollowThread: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/unfollow-thread`,
+  agentUnfollowThread: (aid: string) => `/internal/agents/${aid}/unfollow-thread`,
   /** Agent lists workspaces it currently has member access to (regular
    *  workspaces via `workspace_members` ∪ its own `agent_home`). */
-  agentListWorkspaces: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/list-workspaces`,
+  agentListWorkspaces: (aid: string) => `/internal/agents/${aid}/list-workspaces`,
   /** Agent lists channels of a workspace it is currently a member of.
    *  Defaults to the source conversation's workspace when no
    *  `workspace_id` query param is supplied. */
-  agentListChannels: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/list-channels`,
+  agentListChannels: (aid: string) => `/internal/agents/${aid}/list-channels`,
   /** Agent searches messages visible from current/workspace/channel scope. */
-  agentSearchMessages: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/search-messages`,
+  agentSearchMessages: (aid: string) => `/internal/agents/${aid}/search-messages`,
   /** Agent adds an existing workspace member to its current channel. */
-  agentAddConversationMember: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/members`,
+  agentAddConversationMember: (aid: string) => `/internal/agents/${aid}/members`,
   /** Agent reacts to a message with an emoji (POST add / DELETE remove,
    *  `{message_id, emoji}` body). Requires the `send_messages` capability —
    *  reaction is a write (docs/reactions-design.md §1). */
-  agentReactMessage: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/react-message`,
+  agentReactMessage: (aid: string) => `/internal/agents/${aid}/react-message`,
 
   // Canonical task endpoints used by the Silverhand CLI.
-  agentListConversationTasks: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/tasks`,
-  agentCreateConversationTasks: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/tasks/create`,
-  agentClaimConversationTasks: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/tasks/claim`,
-  agentUnclaimConversationTask: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/tasks/unclaim`,
-  agentUpdateConversationTaskStatus: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/tasks/update-status`,
+  agentListConversationTasks: (aid: string) => `/internal/agents/${aid}/tasks`,
+  agentCreateConversationTasks: (aid: string) => `/internal/agents/${aid}/tasks/create`,
+  agentClaimConversationTasks: (aid: string) => `/internal/agents/${aid}/tasks/claim`,
+  agentUnclaimConversationTask: (aid: string) => `/internal/agents/${aid}/tasks/unclaim`,
+  agentUpdateConversationTaskStatus: (aid: string) =>
+    `/internal/agents/${aid}/tasks/update-status`,
   /** Agent edits a task's title/content (optimistic-concurrency CAS). */
-  agentEditConversationTask: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/tasks/edit`,
+  agentEditConversationTask: (aid: string) => `/internal/agents/${aid}/tasks/edit`,
   /** Agent reads one task's full detail (content + provenance + source_ref). */
-  agentGetConversationTaskDetail: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/tasks/detail`,
+  agentGetConversationTaskDetail: (aid: string) => `/internal/agents/${aid}/tasks/detail`,
 
-  // Agent-owned schedules (cron-like reminders). Per-agent surface — no
-  // channel/thread coupling — but the route is still hung off the
-  // calling conversation so the agent principal middleware (which
-  // resolves cid+aid → principal) can authenticate the request without
-  // a second auth path.
-  agentScheduleCreate: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/schedules`,
-  agentScheduleList: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/schedules/list`,
-  agentScheduleCancel: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/schedules/cancel`,
+  // Agent-owned schedules (cron-like reminders). Per-agent surface; the wake
+  // destination is an explicit business value on create, not HTTP routing.
+  agentScheduleCreate: (aid: string) => `/internal/agents/${aid}/schedules`,
+  agentScheduleList: (aid: string) => `/internal/agents/${aid}/schedules/list`,
+  agentScheduleCancel: (aid: string) => `/internal/agents/${aid}/schedules/cancel`,
 
-  /** Agent uploads a local file from its current channel/thread context.
-   *  Backend resolves channel ownership from `cid`. */
-  agentUploadAttachment: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/attachments`,
+  /** Agent uploads a local file to an explicit conversation target. */
+  agentUploadAttachment: (aid: string) => `/internal/agents/${aid}/attachments`,
   /** Agent replaces the bytes of an attachment it created, in place. Same id,
    *  same stable local path; filename/content_type stay locked. Creator-only,
-   *  same-channel — the natural home for iterating a mockup without churning
+   *  same-conversation — the natural home for iterating a mockup without churning
    *  the reviewer's local address every round. */
-  agentUpdateAttachment: (cid: string, aid: string, attachmentId: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}`,
+  agentUpdateAttachment: (aid: string, attachmentId: string) =>
+    `/internal/agents/${aid}/attachments/${attachmentId}`,
   /** Agent asks the backend where/how to read an attachment. Embedded can
    *  return a zero-copy local path; remote-safe callers may use the
    *  paired download route and cache bytes locally. */
-  agentLocateAttachment: (cid: string, aid: string, attachmentId: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}/locate`,
+  agentLocateAttachment: (aid: string, attachmentId: string) =>
+    `/internal/agents/${aid}/attachments/${attachmentId}/locate`,
   /** Agent downloads attachment bytes after locate has proved same-channel access. */
-  agentDownloadAttachment: (cid: string, aid: string, attachmentId: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}/download`,
+  agentDownloadAttachment: (aid: string, attachmentId: string) =>
+    `/internal/agents/${aid}/attachments/${attachmentId}/download`,
 
   /** Agent uploads its own avatar (multipart). Token middleware enforces
    *  `principal.agentId === aid`, so the route is structurally self-only.
    *  PR-2 mirrors the public `POST /api/agents/:id/avatar` write path
    *  for the agent-self branch of `canEditAgent`. */
-  agentUploadAvatar: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/avatar`,
+  agentUploadAvatar: (aid: string) => `/internal/agents/${aid}/avatar`,
   /** Agent clears its own avatar. Idempotent; returns the updated DTO.
    *  Token middleware enforces self-only as above. */
-  agentDeleteAvatar: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/avatar`,
+  agentDeleteAvatar: (aid: string) => `/internal/agents/${aid}/avatar`,
 
   /** Observability-only: CLI fire-and-forget upload of a pre-flight
    *  failure (parse / strict-flag / unknown-noun) that never reached
    *  any other internal route. Logged as `cli.preflight_failure` and
    *  excluded from the `cli.invoke` success-rate stats. Best-effort:
    *  CLI does not retry and does not surface failures from this call. */
-  agentCliTrace: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/cli-trace`,
+  agentCliTrace: (aid: string) => `/internal/agents/${aid}/cli-trace`,
 
   /** Agent reads its own profile MCP config (#task:1135). Returns
    *  `{ raw: string | null }` — null when the agent has no `mcp.json`.
    *  Token middleware enforces `principal.agentId === aid` (self-only).
    *  Backs `silverhand profile mcp get` and the agent-pane "Profile MCP"
    *  view (the pane calls the public mirror on `/api/agents/:id`). */
-  agentProfileMcpGet: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/profile/mcp`,
+  agentProfileMcpGet: (aid: string) => `/internal/agents/${aid}/profile/mcp`,
   /** Agent replaces its own profile MCP config (#task:1135). Body is the
    *  raw JSON text; the backend validates it (fail-loud `invalid_config`)
    *  before dispatching the atomic host write. Self-only as above.
    *  Backs `silverhand profile mcp set`. */
-  agentProfileMcpSet: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/profile/mcp`,
+  agentProfileMcpSet: (aid: string) => `/internal/agents/${aid}/profile/mcp`,
   /** Agent live-probes one of its own profile MCP servers (#task:1137). Body
    *  is `{ server_name, include_tools? }`; returns a `McpProbeResult`. The
    *  daemon opens a one-shot connection and closes it. Self-only via the
    *  internal principal middleware. Backs `silverhand profile mcp probe`. */
-  agentProfileMcpProbe: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/profile/mcp/probe`,
+  agentProfileMcpProbe: (aid: string) => `/internal/agents/${aid}/profile/mcp/probe`,
 
   /** Agent reads its own profile metadata (#task:1178). Returns an
    *  `AgentProfileDto` (display_name / description / avatar_url + identity).
    *  Token middleware enforces `principal.agentId === aid` (self-only).
    *  Backs `silverhand profile get`. The avatar bytes themselves are
    *  served by the existing `agentAvatar` route via `avatar_url`. */
-  agentProfileGet: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/profile`,
+  agentProfileGet: (aid: string) => `/internal/agents/${aid}/profile`,
   /** Agent updates its own profile (#task:1178) in ONE multipart request —
    *  `display_name` / `description` text fields plus an optional avatar
    *  action (`avatar_action=set` with a `file` part, or `avatar_action=
@@ -585,8 +555,7 @@ export const legacyInternalPaths = {
    *  Same URL as the GET above (method-distinguished). Self-only as above.
    *  Returns the updated `AgentProfileDto`. Backs `silverhand profile
    *  update`. */
-  agentProfileUpdate: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/profile`,
+  agentProfileUpdate: (aid: string) => `/internal/agents/${aid}/profile`,
 
   /** Agent reads ANOTHER agent's profile metadata (#task:1823), read-only.
    *  `aid` is still the EXECUTING agent (token-pinned); the target rides the
@@ -604,28 +573,6 @@ export const legacyInternalPaths = {
    *  handle that belongs to a human, and a target outside that workspace all
    *  answer an identical 404 — this endpoint must not become an existence
    *  oracle. Backs `silverhand profile get --handle <name>`. */
-  agentGetPeerProfile: (cid: string, aid: string) =>
-    `/internal/conversations/${cid}/agents/${aid}/peer-profile`,
+  agentGetPeerProfile: (aid: string) => `/internal/agents/${aid}/peer-profile`,
 
 } as const;
-
-function canonicalizeInternalAgentPath(path: string): string {
-  const match = path.match(
-    /^\/internal\/conversations\/([^/]+)\/agents\/([^/]+)(\/.*)?$/,
-  );
-  if (!match) throw new Error(`invalid legacy internal-agent path: ${path}`);
-  return `/internal/agents/${match[2]}/conversations/${match[1]}${match[3] ?? ''}`;
-}
-
-/** Canonical internal-agent route family. It is generated from the legacy
- * builders while the bridge exists so every operation has exactly one suffix
- * inventory and the two families cannot drift. */
-export const internalPaths = Object.fromEntries(
-  Object.entries(legacyInternalPaths).map(([name, build]) => {
-    const buildLegacyPath = build as (...args: string[]) => string;
-    return [
-      name,
-      (...args: string[]) => canonicalizeInternalAgentPath(buildLegacyPath(...args)),
-    ];
-  }),
-) as unknown as typeof legacyInternalPaths;

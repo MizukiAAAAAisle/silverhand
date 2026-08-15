@@ -217,10 +217,13 @@ describe('command catalogue', () => {
     }
   });
 
-  it('a stale event is not addressable: stale-resolve takes no --event-id', () => {
-    const cmd = findCommand('message', 'stale-resolve')!;
-    expect(cmd.flags).toEqual(['resolution']);
-    expect(cmd.removedFlags?.['event-id']).toBeDefined();
+  it('stale controls address the exact held draft object', () => {
+    const resolve = findCommand('message', 'stale-resolve')!;
+    const receive = findCommand('message', 'stale-receive')!;
+    expect(resolve.flags).toEqual(['stale-event-id', 'resolution']);
+    expect(receive.flags).toEqual(['stale-event-id', 'wait']);
+    expect(resolve.removedFlags?.['event-id']?.replacement)
+      .toBe('stale-event-id');
   });
 
   it('command help blocks do not leak transport/credential semantics to agents', () => {
@@ -744,7 +747,8 @@ describe('file view command', () => {
       process.env.SILVERHAND_DIR = silverhandDir;
       const result = await cmd!.run({
         env: {
-          conversationId: 'conv-remote',
+          slot: 'agent',
+          conversationId: null,
           agentId: 'agent',
           serverUrl: 'https://remote.example.test',
           authToken: 'token',
@@ -776,7 +780,7 @@ describe('file view command', () => {
       expect(result.storage).toBe('local');
       expect(result.local_path).toContain(silverhandDir);
       expect(result.local_path).toContain('attachments-cache');
-      expect(result.local_path).toContain('conv-remote');
+      expect(result.local_path).toContain('agent');
       expect(result.local_path).toContain('att-remote');
       expect(result.filename).toBe('shot.png');
       expect(result.content_type).toBe('image/png');
@@ -1031,10 +1035,9 @@ describe('channel create --target <address>', () => {
   // The hardest door of #task:2021 P4-4, and the one that could not be deferred:
   // `channel create` has no object id of its own and posts nowhere, so its
   // `--target` is the FORK SOURCE — the conversation whose placement and roster the
-  // new channel is made from. Until P4-4 both came from `--route-conversation-id`,
-  // i.e. from a transport anchor, which #task:2030 deletes.
+  // new channel is made from. Until P4-4 both came from the runtime route
+  // coordinate, which #task:2030 removes entirely.
   const CONV = 'convAAAAAAAAAA01';
-  const ANCHOR = 'ancCCCCCCCCCC03';
   const ROOT = 'rootBBBBBBBBBB02';
 
   const REQUIRED = {
@@ -1046,7 +1049,10 @@ describe('channel create --target <address>', () => {
   function run(
     flags: Record<string, string>,
     client: BackendClient,
-    env: { conversationId: string; slot: 'conversation' | 'agent' } = {
+    env: { conversationId: string; slot: 'conversation' } | {
+      conversationId: null;
+      slot: 'agent';
+    } = {
       conversationId: CONV,
       slot: 'conversation',
     },
@@ -1068,7 +1074,10 @@ describe('channel create --target <address>', () => {
 
   function capture(
     flags: Record<string, string>,
-    env?: { conversationId: string; slot: 'conversation' | 'agent' },
+    env?: { conversationId: string; slot: 'conversation' } | {
+      conversationId: null;
+      slot: 'agent';
+    },
   ) {
     let captured: unknown;
     let calls = 0;
@@ -1102,19 +1111,12 @@ describe('channel create --target <address>', () => {
     });
   });
 
-  it('AGENT SLOT: the route anchor never becomes the fork source', async () => {
-    // @Cindy's counter-example. Under an agent-scoped session the CLI is still
-    // authenticated through ONE conversation — `--route-conversation-id`, here the
-    // env's `conversationId` — and that anchor may be an inbox nobody can fork.
-    // Only the named source may reach the wire, so the request that goes out must
-    // mention the target and NOT the anchor. This is what makes #task:2030's
-    // deletion of the anchor a no-op for this door.
+  it('AGENT SLOT: the explicit target is the only fork-source coordinate', async () => {
     const { input } = await capture(
       { ...REQUIRED, target: `#conv:${CONV}` },
-      { conversationId: ANCHOR, slot: 'agent' },
+      { conversationId: null, slot: 'agent' },
     );
     expect(input.target).toBe(`#conv:${CONV}`);
-    expect(JSON.stringify(input)).not.toContain(ANCHOR);
   });
 
   it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
@@ -1138,17 +1140,16 @@ describe('channel create --target <address>', () => {
 
   it('AGENT SLOT: the same refusal, with no correction invented', async () => {
     // An AgentSlot inhabits no stream, so there is no "the one you are in" to
-    // suggest — and the anchor must not be offered as one, which is exactly the
-    // mistake the flag exists to prevent.
+    // suggest.
     await expect(
-      run(REQUIRED, refusing, { conversationId: ANCHOR, slot: 'agent' }),
+      run(REQUIRED, refusing, { conversationId: null, slot: 'agent' }),
     ).rejects.toMatchObject({
       code: 'validation_error',
       subkind: 'target_required',
       details: { flag: 'target' },
     });
     await expect(
-      run(REQUIRED, refusing, { conversationId: ANCHOR, slot: 'agent' }),
+      run(REQUIRED, refusing, { conversationId: null, slot: 'agent' }),
     ).rejects.not.toMatchObject({ details: { correct_target: expect.anything() } });
   });
 

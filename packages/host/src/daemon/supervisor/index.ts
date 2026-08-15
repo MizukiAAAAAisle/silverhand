@@ -52,6 +52,7 @@ import {
 import {
   encodeFrame,
   type AgentMessageSendParams,
+  type AgentRuntimeIntentScope,
   type AgentMessageSendResult,
   type AgentStaleReceiveParams,
   type AgentStaleReceiveResult,
@@ -342,14 +343,12 @@ function runtimeScopeKey(scope: RuntimeScope): string {
 function runtimeActionText(
   scope: RuntimeScope,
   cwd: string,
-  conversationId: string,
   text: string,
 ): string {
   if (scope.kind === 'conversation') return text;
-  // ONE authority for the banner grammar (#task:2021 P4-4): the same formatter
-  // renders what `platform-prompt.ts` TEACHES an AgentSlot to read, so the route
-  // id an agent extracts and the route id we frame cannot drift apart.
-  return `${formatAgentRuntimeScopeBanner(conversationId, cwd)}\n\n${text}`;
+  // ONE authority for the banner grammar: the same formatter renders what
+  // `platform-prompt.ts` teaches and what the daemon frames.
+  return `${formatAgentRuntimeScopeBanner(cwd)}\n\n${text}`;
 }
 
 /** Delivery admission is the focus boundary for an AgentSlot. Keep the
@@ -1208,17 +1207,20 @@ export class Supervisor implements SupervisorContract {
   }
 
   private getHandleForAgentIntent(
-    conversationId: string,
+    scope: AgentRuntimeIntentScope,
     agentId: string,
   ): RuntimeHandle {
-    const handle =
-      this.handles.get(key(conversationId, agentId))
-      ?? this.handles.get(
-        runtimeScopeKey({ kind: 'agent', agent_id: agentId }),
-      );
+    const runtimeScope: RuntimeScope = scope.kind === 'agent'
+      ? { kind: 'agent', agent_id: agentId }
+      : {
+          kind: 'conversation',
+          conversation_id: scope.conversation_id,
+          agent_id: agentId,
+        };
+    const handle = this.handles.get(runtimeScopeKey(runtimeScope));
     if (!handle || handle.phase === 'exited') {
       throw new Error(
-        `agent side-effect requested for non-running runtime ${conversationId}/${agentId}`,
+        `agent side-effect requested for non-running runtime ${runtimeScopeKey(runtimeScope)}`,
       );
     }
     return handle;
@@ -1250,7 +1252,7 @@ export class Supervisor implements SupervisorContract {
     params: AgentMessageSendParams,
   ): Promise<AgentMessageSendResult> {
     const handle = this.getHandleForAgentIntent(
-      params.conversation_id,
+      params.runtime_scope,
       params.agent_id,
     );
     // P1-2 v2 (#task:1614): settlement-before-send ordering barrier.
@@ -1269,8 +1271,6 @@ export class Supervisor implements SupervisorContract {
     while (handle.pullReservation !== null) {
       await handle.pullReservation.settled;
     }
-    const pendingStale =
-      handle.pendingStaleEvents.get(params.conversation_id) ?? null;
     // WHICH per-stream observed boundary this send is anchored to
     // (reply-cluster §6.4) — decided entirely by the ADDRESS since #task:2021
     // P4-4. The daemon resolves only what it can know without a lookup:
@@ -1291,6 +1291,10 @@ export class Supervisor implements SupervisorContract {
       target.conversationId === null
         ? undefined
         : this.streamStorageKey(handle, target.conversationId, targetStreamKey);
+    const pendingStaleKey = targetStorageKey;
+    const pendingStale = pendingStaleKey === undefined
+      ? null
+      : handle.pendingStaleEvents.get(pendingStaleKey) ?? null;
     const targetObservedSeq =
       targetStorageKey === undefined
         ? undefined
@@ -1379,7 +1383,6 @@ export class Supervisor implements SupervisorContract {
     const res = await this.backendPost(
       handle,
       internalPaths.agentSendConversationMessage(
-        params.conversation_id,
         params.agent_id,
       ),
       body,
@@ -1387,27 +1390,35 @@ export class Supervisor implements SupervisorContract {
     if (!res.ok) {
       const bodyText = await safeReadResponseText(res);
       const stale = res.status === 409 ? extractStaleConflict(bodyText) : null;
-      if (stale) {
+      if (stale?.conversationId) {
         // Signal-only contract: the 409 exposed NO bodies, so the observed
         // cursor does not move here. The unseen window arrives through the
         // normal delivery face (steer = this turn, next-turn-batch = next
         // boundary); admission evidence advances the cursor, and only then
         // does a retry pass the CAS.
-        // Keyed by the SOURCE conversation (the coordinate every agent intent
-        // arrives with, so `stale-receive` / `stale-resolve` can find it), while
-        // the event's own `conversationId` names the TARGET whose cursor the
-        // signal describes — since P4-4 those are not the same conversation. The
-        // target comes from the 409 itself, which is the only party that knows
-        // what a NAME resolved to; without it coverage checks fall back to the
-        // source and therefore fail CLOSED rather than claim a false `batch_covered`.
-        handle.pendingStaleEvents.set(params.conversation_id, {
+        // The 409 is also an authoritative name-resolution answer. Remember it
+        // before keying the event so a retry of a readable address finds the
+        // same stream instead of falling back to runtime custody.
+        if (target.memoKey !== null) {
+          this.rememberResolvedAddressHead(
+            handle,
+            target.memoKey,
+            stale.conversationId,
+          );
+        }
+        const staleStorageKey = this.streamStorageKey(
+          handle,
+          stale.conversationId,
+          stale.streamKey ?? targetStreamKey,
+        );
+        handle.pendingStaleEvents.set(staleStorageKey, {
           id: stale.id,
           currentSeq: stale.currentSeq,
           streamKey: stale.streamKey,
-          conversationId: stale.conversationId ?? params.conversation_id,
+          conversationId: stale.conversationId,
         });
-      } else if (pendingStale) {
-        handle.pendingStaleEvents.delete(params.conversation_id);
+      } else if (pendingStaleKey !== undefined && pendingStale) {
+        handle.pendingStaleEvents.delete(pendingStaleKey);
       }
       return { ok: false, status: res.status, body_text: bodyText };
     }
@@ -1513,7 +1524,9 @@ export class Supervisor implements SupervisorContract {
         this.drainSkippedCasMerges(handle, mergeStorageKey);
       }
     }
-    handle.pendingStaleEvents.delete(params.conversation_id);
+    if (pendingStaleKey !== undefined) {
+      handle.pendingStaleEvents.delete(pendingStaleKey);
+    }
     // Sender-only feedback, FORWARDED and never derived (#task:2021 P4-5-b):
     // the daemon holds no participation authority, so it validates the shape
     // against the backend's own output contract and hands the answer through
@@ -1537,7 +1550,7 @@ export class Supervisor implements SupervisorContract {
         {
           kind: 'process',
           action: 'send_unresolved_references_shape_mismatch',
-          conversationId: params.conversation_id,
+          conversationId: handle.conversationId,
           agent_id: params.agent_id,
           issues: unresolvedReferences.error.issues.map(issue => ({
             code: issue.code,
@@ -1563,22 +1576,24 @@ export class Supervisor implements SupervisorContract {
     params: AgentStaleResolveParams,
   ): Promise<AgentStaleResolveResult> {
     const handle = this.getHandleForAgentIntent(
-      params.conversation_id,
+      params.runtime_scope,
       params.agent_id,
     );
-    const pendingStale =
-      handle.pendingStaleEvents.get(params.conversation_id) ?? null;
-    const staleEventId = params.stale_event_id ?? pendingStale?.id;
-    if (!staleEventId) {
+    const pendingEntry = [...handle.pendingStaleEvents.entries()].find(
+      ([, event]) => event.id === params.stale_event_id,
+    );
+    if (!pendingEntry) {
       return { ok: true, resolved: false, reason: 'no_pending_stale_event' };
     }
+    const [staleStorageKey, pendingStale] = pendingEntry;
+    const staleEventId = pendingStale.id;
     const res = await this.backendPost(
       handle,
       internalPaths.agentResolveStaleMessage(
-        params.conversation_id,
         params.agent_id,
       ),
       {
+        conversation_id: pendingStale.conversationId,
         stale_event_id: staleEventId,
         resolution_reason: params.resolution_reason,
       },
@@ -1590,9 +1605,7 @@ export class Supervisor implements SupervisorContract {
         body_text: await safeReadResponseText(res),
       };
     }
-    if (!params.stale_event_id || pendingStale?.id === params.stale_event_id) {
-      handle.pendingStaleEvents.delete(params.conversation_id);
-    }
+    handle.pendingStaleEvents.delete(staleStorageKey);
     return { ok: true, resolved: true };
   }
 
@@ -1611,7 +1624,7 @@ export class Supervisor implements SupervisorContract {
     params: AgentStreamObservedParams,
   ): Promise<AgentStreamObservedResult> {
     const handle = this.getHandleForAgentIntent(
-      params.conversation_id,
+      params.runtime_scope,
       params.agent_id,
     );
     const streamKey = streamKeyForMessage(params.thread_root_id);
@@ -1653,14 +1666,16 @@ export class Supervisor implements SupervisorContract {
       );
     }
     const handle = this.getHandleForAgentIntent(
-      params.conversation_id,
+      params.runtime_scope,
       params.agent_id,
     );
-    const boundStale =
-      handle.pendingStaleEvents.get(params.conversation_id) ?? null;
-    if (!boundStale) {
+    const pendingEntry = [...handle.pendingStaleEvents.entries()].find(
+      ([, event]) => event.id === params.stale_event_id,
+    );
+    if (!pendingEntry) {
       return { ok: true, outcome: 'no_pending_stale' };
     }
+    const [staleStorageKey, boundStale] = pendingEntry;
     const staleEventId = boundStale.id;
     const waitMs = Math.min(
       params.wait_ms ?? STALE_RECEIVE_DEFAULT_WAIT_MS,
@@ -1696,7 +1711,7 @@ export class Supervisor implements SupervisorContract {
           this.evaluateStaleReceiveLocked(
             k,
             handle,
-            params.conversation_id,
+            staleStorageKey,
             staleEventId,
             waiterToken,
             pullCall,
@@ -1755,7 +1770,7 @@ export class Supervisor implements SupervisorContract {
   private evaluateStaleReceiveLocked(
     k: string,
     handle: RuntimeHandle,
-    conversationId: string,
+    staleStorageKey: string,
     staleEventId: string,
     waiterToken: number,
     pullCall: { cancelled: boolean },
@@ -1773,7 +1788,7 @@ export class Supervisor implements SupervisorContract {
         'runtime handle exited or was replaced while the pull was waiting',
       );
     }
-    const stale = live.pendingStaleEvents.get(conversationId);
+    const stale = live.pendingStaleEvents.get(staleStorageKey);
     if (!stale) {
       // Resolved while we waited (e.g. a parallel send succeeded).
       return { kind: 'result', result: { ok: true, outcome: 'no_pending_stale' } };
@@ -2249,7 +2264,6 @@ export class Supervisor implements SupervisorContract {
         ? runtimeActionText(
             startOptions.runtime_scope,
             params.startup_delivery.action_workdir,
-            params.startup_delivery.conversation_id,
             params.startup_delivery.text,
           )
         : '',
@@ -2418,7 +2432,6 @@ export class Supervisor implements SupervisorContract {
           text: runtimeActionText(
             params.options.runtime_scope,
             params.startup_delivery.action_workdir,
-            params.startup_delivery.conversation_id,
             params.startup_delivery.text,
           ),
         }
@@ -3359,7 +3372,6 @@ export class Supervisor implements SupervisorContract {
         text: runtimeActionText(
           handle.runtimeScope,
           actionWorkdir,
-          params.conversation_id,
           params.text,
         ),
       };
@@ -3664,7 +3676,6 @@ export class Supervisor implements SupervisorContract {
         text: runtimeActionText(
           handle.runtimeScope,
           actionWorkdir,
-          params.conversation_id,
           params.text,
         ),
         owners: new Map(deliveryIds.map(id => [id, owner])),
@@ -3692,7 +3703,6 @@ export class Supervisor implements SupervisorContract {
       text: runtimeActionText(
         handle.runtimeScope,
         actionWorkdir,
-        params.conversation_id,
         isWholeBatch
           ? params.text
           : composeRuntimeDeliveryPresentation(
@@ -3729,7 +3739,6 @@ export class Supervisor implements SupervisorContract {
       text: runtimeActionText(
         handle.runtimeScope,
         entry.actionWorkdir,
-        entry.conversationId,
         composeRuntimeDeliveryPresentation(
           this.requireDeliveryPresentations(deliveries),
           SEND_MESSAGE_TOOL,

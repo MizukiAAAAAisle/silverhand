@@ -163,7 +163,7 @@ stdout: AttachmentLocateDto JSON:
     }
     const downloaded = await client.downloadAttachment(attachmentId);
     const localPath = await writeAttachmentCache({
-      conversationId: env.conversationId,
+      agentId: env.agentId,
       attachmentId,
       filename: located.filename,
       buffer: downloaded.buffer,
@@ -205,14 +205,14 @@ function shouldTrustLocalPath(serverUrl: string): boolean {
 }
 
 async function writeAttachmentCache(input: {
-  conversationId: string;
+  agentId: string;
   attachmentId: string;
   filename: string;
   buffer: Buffer;
 }): Promise<string> {
   const dir = join(
     attachmentCacheRoot(),
-    safeSegment(input.conversationId),
+    safeSegment(input.agentId),
     safeSegment(input.attachmentId),
   );
   await mkdir(dir, { recursive: true });

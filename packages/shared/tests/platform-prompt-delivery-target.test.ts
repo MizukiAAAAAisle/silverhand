@@ -33,7 +33,6 @@ import {
 import { fixedConversationTitle } from '../src/conversation-title.js';
 import { fixedWorkspaceName } from '../src/workspace-name.js';
 import {
-  RUNTIME_SCOPE_BANNER_ROUTE_PLACEHOLDER,
   RUNTIME_SCOPE_BANNER_WORKDIR_PLACEHOLDER,
   TAUGHT_AGENT_RUNTIME_SCOPE_BANNER,
   formatAgentRuntimeScopeBanner,
@@ -200,36 +199,15 @@ describe('platform prompt teaches the absolute delivery target', () => {
     }
   });
 
-  it('AgentSlot takes the route id from the BANNER, never from the header', () => {
-    // AgentSlot has no ambient conversation, so `--route-conversation-id` is the
-    // only thing standing between a correct reply and a misrouted one — and there
-    // are TWO tokens spelled `target=` in a delivery to it. The banner carries the
-    // transport route; the header carries the absolute destination. Teaching the
-    // wrong one is not a typo, it is a misroute, so this pins the source.
+  it('AgentSlot learns the exact workdir-only banner the daemon emits', () => {
     const prompt = promptFor(SCOPES[1]!.sessionContext);
-    expect(prompt).toContain('--route-conversation-id <id>');
-    // The taught banner is the real formatter over placeholders, so substituting
-    // real values reproduces a real delivery's prefix byte for byte. Anything the
-    // supervisor changes about the banner fails here rather than in a delivery.
     expect(prompt).toContain(TAUGHT_AGENT_RUNTIME_SCOPE_BANNER);
     expect(
       TAUGHT_AGENT_RUNTIME_SCOPE_BANNER.replace(
-        RUNTIME_SCOPE_BANNER_ROUTE_PLACEHOLDER,
-        CONV,
-      ).replace(RUNTIME_SCOPE_BANNER_WORKDIR_PLACEHOLDER, '/tmp/ws'),
-    ).toBe(formatAgentRuntimeScopeBanner(CONV, '/tmp/ws'));
-    // And the taught extraction — strip `#conv:` from the BANNER's target — is the
-    // only one that works: the header's target may be a readable name or a
-    // per-viewer `dm:@handle`, which contains no id to mine at all. A prompt that
-    // pointed at the header would be right only for the id spelling.
-    const banner = formatAgentRuntimeScopeBanner(CONV, '/tmp/ws');
-    expect(
-      banner.slice(banner.indexOf(CONVERSATION_ADDRESS_PREFIX)).split(' ')[0],
-    ).toBe(`${CONVERSATION_ADDRESS_PREFIX}${CONV}`);
-    for (const form of FORMS) {
-      const header = formatStreamAddressToken(stream(), form.naming).token;
-      if (header.includes(CONV)) continue;
-      expect(header).not.toContain(CONVERSATION_ADDRESS_PREFIX);
-    }
+        RUNTIME_SCOPE_BANNER_WORKDIR_PLACEHOLDER,
+        '/tmp/ws',
+      ),
+    ).toBe(formatAgentRuntimeScopeBanner('/tmp/ws'));
+    expect(TAUGHT_AGENT_RUNTIME_SCOPE_BANNER).not.toContain('target=');
   });
 });

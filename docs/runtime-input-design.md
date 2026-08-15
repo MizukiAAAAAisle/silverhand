@@ -350,8 +350,10 @@ Claude 保持 tool-boundary 写入（steer 有真实收益，不降级为 turn-b
   steer runtime（codex/claude、Qoder `>= 1.1.17`）当前 turn 内到达；boundary
   runtime（Qoder `< 1.1.17`）turn_end 后一个合批到达。uninformed retry 按设计
   再次 409。
-- `--anyway`（force_send）仍是显式逃生口；`stale-resolve --resolution obsolete`
-  处理"读后不必再发"。
+- `--anyway`（force_send）仍是显式逃生口；
+  `stale-resolve --stale-event-id <id> --resolution obsolete` 处理"读后不必再发"。
+  id 取自该次 409 的 `details.stale_event_id`；AgentSlot 可同时持有多条，
+  不按“最近一条”猜。
 
 ### 5.2 Freshness universe ⊆ delivery universe（防 signal-only 死锁）
 

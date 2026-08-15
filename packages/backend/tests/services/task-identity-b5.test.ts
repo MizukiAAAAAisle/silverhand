@@ -75,7 +75,7 @@ function bootstrap() {
     events,
     logger,
     canUseCapability: (() => true) as unknown as TaskServiceOptions['canUseCapability'],
-    canPostToConversation: writeAuthority.canPostToConversation,
+    canPostToConversation: () => true,
   });
   const service = new TaskService(serviceOptions(trippedUow));
 
@@ -92,7 +92,7 @@ function bootstrap() {
     kind: 'agent',
     runtimeScope: 'agent',
     agentId: alice.id,
-    conversationId: channel.id,
+    conversationId: null,
   } as const;
 
   /** Delete the victim row (cascade stand-in, native — no product deletion
@@ -134,7 +134,17 @@ function bootstrap() {
     return created.tasks[0]!;
   }
 
-  return { db, tmp, service, persistence, actor, armSwap, mintVictim, cleanup: tmp.cleanup };
+  return {
+    db,
+    tmp,
+    service,
+    persistence,
+    actor,
+    workspaceId: workspace.id,
+    armSwap,
+    mintVictim,
+    cleanup: tmp.cleanup,
+  };
 }
 
 describe('B5 — the id arm never degrades into a number at the tx boundary (#task:2018)', () => {
@@ -164,6 +174,7 @@ describe('B5 — the id arm never degrades into a number at the tx boundary (#ta
       const r2 = await t.service.claimTask({
         actor: t.actor,
         by: { taskNumber: victim2.task_number },
+        workspaceSelector: { workspaceId: t.workspaceId },
       });
       expect(r2.success).toBe(true);
       expect(r2.id).toBe(swap2.replacement().id);

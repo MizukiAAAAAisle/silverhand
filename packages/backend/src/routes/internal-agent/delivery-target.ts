@@ -145,8 +145,8 @@ export type DeliveryTargetRouteDeps = Pick<
  * answer — the shared ruling table — instead of seven that drift silently.
  *
  * The reach verdict needs the runtime PRINCIPAL, not the agent id: the whole
- * boundary is a function of the slot KIND, and an AgentSlot's route anchor must
- * never be mistaken for a stream it owns. It comes from
+ * boundary is a function of the slot KIND; an AgentSlot has no ambient stream.
+ * It comes from
  * {@link getRuntimePrincipal}, which throws if the internal auth middleware did not
  * run — a missing principal is a wiring fault and must not degrade into a
  * reinterpretation of the request (same rule as `task-routes.ts`'s `taskActorFrom`).

@@ -185,7 +185,7 @@ an un-migrated renderer.
 ### 4.3 Agent-facing discovery union (`silverhand channel list`)
 
 The agent route
-`GET /internal/conversations/:id/agents/:agentId/list-channels`
+`GET /internal/agents/:agentId/list-channels`
 (`listAgentVisibleChannels`, `AgentListChannelsDto`) returns the agent-side
 analogue of the viewer discovery union, gated by workspace access AND the
 `read_messages` capability — a missing capability denies the whole list, so

@@ -123,7 +123,7 @@ PRAGMA restore (foreign_keys=ON, legacy_alter_table 恢复原值)
 > 以下曾是 PR-1~6 时期的已知漏洞，现已全部收口。它们在此保留为**约束**——新功能不得把任何一条重新打开。身份/资源归属模型见 `auth-and-host-model.md`，分级能力见 `graded-permissions-v1.md`；本节只引用不重述。
 
 - **公开 `/api/*` 必须经身份校验**：session bearer（`user_token`）→ `auth_sessions` subject 解析出 `user` principal；无 principal 的请求落到 registration gate（`403 registration_required`），不再"本机任意进程可调用"。
-- **身份不由请求方 header 声明**：内部路由（`/internal/conversations/:cid/agents/:aid/*`）对 `X-Silverhand-Principal` 硬性 **400 拒绝**，agent 身份只从 URL 绑定 + membership 推导；公开路由的 `user` 身份只由 bearer 中间件写入。旧的可伪造 `X-Silverhand-User-Id` 路径已关闭（见 `auth-and-host-model.md` §3.5）。
+- **身份不由请求方 header 声明**：内部路由（`/internal/agents/:aid/*`）对 `X-Silverhand-Principal` 硬性 **400 拒绝**，agent id 由 URL 绑定并必须与 live runtime-slot bearer 一致；目的地授权由显式地址/对象解析后的 participation + reach 判定。公开路由的 `user` 身份只由 bearer 中间件写入。旧的可伪造 `X-Silverhand-User-Id` 路径已关闭（见 `auth-and-host-model.md` §3.5）。
 - **私有资源 GET 必须在 route/permissions 层做 ACL**：`GET /api/attachments/:id` 走 `canViewAttachment`（channel-scoped，公开分支仅限被持久化消息引用的字节），不再裸奔。
 - **WS 订阅 scope 走真实 membership 校验**：`canViewWorkspace` / `canViewConversation` 现读 `workspace_users` / `conversation_users` 成员边，不再是 exists 占位。
 - **身份/成员表已落地**：`users` + `workspace_users`（含 `role`）+ `conversation_users` 均已存在（v25）；多人模式在此基础上加层，不改归属语义。

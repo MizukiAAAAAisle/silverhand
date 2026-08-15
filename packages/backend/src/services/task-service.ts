@@ -85,7 +85,12 @@ export interface TaskServiceOptions {
    * UoW and evaluated there against the task owner's conversation, so a peer
    * deleted after route/precheck but before the transaction still closes the
    * write. Never replace this with a task-local endpoint/tombstone predicate. */
-  canPostToConversation: TaskWriteAuthorityPort['canPostToConversation'];
+  canPostToConversation: (
+    actor:
+      | { kind: 'user'; userId: string }
+      | { kind: 'agent'; agentId: string; conversationId: string },
+    conversationId: string,
+  ) => boolean;
 }
 
 // Public contract surface re-exported so external importers keep resolving
@@ -154,13 +159,11 @@ type PendingWorkflowEvent = Omit<PendingTaskEvent, 'kind'> & { kind: TaskWorkflo
  *   back together (no half-success: a failed event insert leaves the task
  *   unchanged and emits no external effect). publish/deliver/cross-op audit
  *   are strictly post-commit via `TaskBroadcaster`.
- * - For agent claim/unclaim/status/edit/detail, the target workspace resolves
- *   from the optional `workspace_id` / `workspace_name` selector or defaults to
- *   the actor's current conversation's workspace; the agent must be a member.
+ * - For agent claim/unclaim/status/edit/detail, a task number resolves through
+ *   an explicit workspace selector or a ConversationSlot's placement-derived
+ *   board. AgentSlot has no ambient board and must provide the selector.
  * - `create` is the EXCEPTION: its target workspace is the one owning the
- *   DESTINATION conversation (`conversation_id`, default = the actor's current
- *   conversation — the cross-conversation case files work into another
- *   conversation). The
+ *   required absolute destination address. The
  *   route authorizes that destination directly (workspace access + destination
  *   membership) and gates `create_tasks` / `write_tasks` on ITS workspace, NOT
  *   the origin's. Do not re-add an origin-conversation gate here on that basis.
@@ -201,7 +204,7 @@ export class TaskService {
           // cross-conversation create lane. This does not copy the DirectPair
           // tombstone rule — `canPostToConversation` remains its sole owner.
           actor.kind === 'agent'
-            ? { ...actor, conversationId }
+            ? { kind: 'agent', agentId: actor.agentId, conversationId }
             : actor,
           conversationId,
         ),
@@ -297,9 +300,9 @@ export class TaskService {
   async createTasks(input: CreateTasksInput): Promise<CreateTasksResult> {
     // NOTE: `input.conversationId` is the DESTINATION conversation, which the
     // agent route resolves from the required `target` address (#task:2021 P4-4)
-    // and the human route takes from its explicit selector. It deliberately does
-    // NOT have to equal `actor.conversationId` — so we do NOT call
-    // `assertActorConversationMatch` here (unlike the message services). The
+    // and the human route takes from its explicit selector. C″ deliberately
+    // permits established cross-stream task create, so it need not equal a
+    // ConversationSlot actor's coordinate. The
     // membership floor below (agent :getAgent / human :userCanAccessConversation,
     // both against the destination) is the authorization boundary; the route has
     // already run a create-specific narrow check against the destination.
@@ -382,9 +385,9 @@ export class TaskService {
     const creatorKind = input.actor.kind;
     const creatorAgentId = input.actor.kind === 'agent' ? input.actor.agentId : null;
     const creatorUserId = input.actor.kind === 'user' ? input.actor.userId : null;
-    // Cross-conversation create: an agent filed this task against a DIFFERENT
-    // stream than the one its session is anchored in (its `target` named another
-    // conversation). This drives the single-source `cross_conversation`
+    // Cross-conversation create: a ConversationSlot filed against another
+    // stream, or an AgentSlot (which has no origin stream) filed by explicit
+    // target. This drives the single-source `cross_conversation`
     // metadata bit AND the agent-facing narration below; it carries no origin
     // id/title (privacy invariant). A cross-conversation create can never be
     // claimed (the route rejects `--claim` + cross with `cross_conversation_claim`),
@@ -486,13 +489,16 @@ export class TaskService {
     }
 
     // Cross-conversation create audit. When an agent creates task(s) in a
-    // DIFFERENT conversation than the one it is running in (explicit
-    // `--conversation-id`), leave one audit line per task recording origin
+    // DIFFERENT conversation than the one it is running in (explicit target),
+    // leave one audit line per task recording origin
     // (source = the agent's own conversation) → owner (the destination). Human
     // actors have no origin conversation, so no cross-op audit — mirroring
     // claim/unclaim/status. Same-conversation default creates emit nothing:
     // auditCrossOp early-returns when sourceConv.id === ownerConv.id.
-    if (input.actor.kind === 'agent') {
+    if (
+      input.actor.kind === 'agent'
+      && input.actor.runtimeScope === 'conversation'
+    ) {
       const sourceConv = this.conversations.get(input.actor.conversationId);
       if (sourceConv) {
         for (const c of created) {
@@ -579,8 +585,10 @@ export class TaskService {
         reason: 'agent can only claim tasks for itself',
       });
     }
-    const sourceConv = this.conversations.get(actor.conversationId);
-    if (!sourceConv) {
+    const sourceConv = actor.conversationId === null
+      ? null
+      : this.conversations.get(actor.conversationId);
+    if (actor.runtimeScope === 'conversation' && !sourceConv) {
       return failClaim({ code: 'conversation_not_found', reason: 'conversation not found' });
     }
     const actorErr = this.access.validateAgentActorForClaim(actor);
@@ -729,7 +737,7 @@ export class TaskService {
     if ('failure' in txOut) return txOut.failure;
 
     const ownerConv =
-      txOut.conversationId === sourceConv.id
+      sourceConv !== null && txOut.conversationId === sourceConv.id
         ? sourceConv
         : this.conversations.get(txOut.conversationId);
     if (!ownerConv) {
@@ -738,16 +746,18 @@ export class TaskService {
         reason: 'task owner conversation vanished after commit',
       });
     }
-    this.broadcaster.auditCrossOp({
-      op: 'claim',
-      actor,
-      sourceConv,
-      ownerConv,
-      taskNumber: txOut.args.taskNumber,
-      // The task's board coordinate, post-commit truth: derived from its owner
-      // conversation's placement (total over workspace AND pair boards).
-      taskBoardKey: this.read.boardOfConversation(ownerConv.id)?.boardKey ?? 'unknown',
-    });
+    if (sourceConv !== null) {
+      this.broadcaster.auditCrossOp({
+        op: 'claim',
+        actor,
+        sourceConv,
+        ownerConv,
+        taskNumber: txOut.args.taskNumber,
+        // The task's board coordinate, post-commit truth: derived from its owner
+        // conversation's placement (total over workspace AND pair boards).
+        taskBoardKey: this.read.boardOfConversation(ownerConv.id)?.boardKey ?? 'unknown',
+      });
+    }
     this.broadcaster.publish({ ...txOut.args, conversation: ownerConv }, txOut.sysMsg);
 
     return { success: true, task_number: txOut.args.taskNumber, id: txOut.args.taskId };
@@ -849,8 +859,10 @@ export class TaskService {
     if ('taskId' in by && actor.runtimeScope !== 'agent') {
       return { success: false, code: 'task_not_found', reason: 'task not found' };
     }
-    const sourceConv = this.conversations.get(actor.conversationId);
-    if (!sourceConv) {
+    const sourceConv = actor.conversationId === null
+      ? null
+      : this.conversations.get(actor.conversationId);
+    if (actor.runtimeScope === 'conversation' && !sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
     }
     const actorErr = this.access.validateAgentActorForMutation(actor);
@@ -939,22 +951,24 @@ export class TaskService {
     if ('failure' in txOut) return txOut.failure;
 
     const ownerConv =
-      txOut.conversationId === sourceConv.id
+      sourceConv !== null && txOut.conversationId === sourceConv.id
         ? sourceConv
         : this.conversations.get(txOut.conversationId);
     if (!ownerConv) {
       return { success: false, code: 'conversation_not_found', reason: 'task owner conversation vanished after commit' };
     }
-    this.broadcaster.auditCrossOp({
-      op: 'unclaim',
-      actor,
-      sourceConv,
-      ownerConv,
-      taskNumber: txOut.args.taskNumber,
-      // The task's board coordinate, post-commit truth: derived from its owner
-      // conversation's placement (total over workspace AND pair boards).
-      taskBoardKey: this.read.boardOfConversation(ownerConv.id)?.boardKey ?? 'unknown',
-    });
+    if (sourceConv !== null) {
+      this.broadcaster.auditCrossOp({
+        op: 'unclaim',
+        actor,
+        sourceConv,
+        ownerConv,
+        taskNumber: txOut.args.taskNumber,
+        // The task's board coordinate, post-commit truth: derived from its owner
+        // conversation's placement (total over workspace AND pair boards).
+        taskBoardKey: this.read.boardOfConversation(ownerConv.id)?.boardKey ?? 'unknown',
+      });
+    }
     this.broadcaster.publish({ ...txOut.args, conversation: ownerConv }, txOut.sysMsg);
 
     return { success: true };
@@ -1044,8 +1058,10 @@ export class TaskService {
     if ('taskId' in by && actor.runtimeScope !== 'agent') {
       return { success: false, code: 'task_not_found', reason: 'task not found' };
     }
-    const sourceConv = this.conversations.get(actor.conversationId);
-    if (!sourceConv) {
+    const sourceConv = actor.conversationId === null
+      ? null
+      : this.conversations.get(actor.conversationId);
+    if (actor.runtimeScope === 'conversation' && !sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
     }
     const actorErr = this.access.validateAgentActorForMutation(actor);
@@ -1158,23 +1174,25 @@ export class TaskService {
     if ('failure' in txOut) return txOut.failure;
 
     const ownerConv =
-      txOut.conversationId === sourceConv.id
+      sourceConv !== null && txOut.conversationId === sourceConv.id
         ? sourceConv
         : this.conversations.get(txOut.conversationId);
     if (!ownerConv) {
       return { success: false, code: 'conversation_not_found', reason: 'task owner conversation vanished after commit' };
     }
-    this.broadcaster.auditCrossOp({
-      op: 'status',
-      actor,
-      sourceConv,
-      ownerConv,
-      taskNumber: txOut.args.taskNumber,
-      // The task's board coordinate, post-commit truth: derived from its owner
-      // conversation's placement (total over workspace AND pair boards).
-      taskBoardKey: this.read.boardOfConversation(ownerConv.id)?.boardKey ?? 'unknown',
-      status,
-    });
+    if (sourceConv !== null) {
+      this.broadcaster.auditCrossOp({
+        op: 'status',
+        actor,
+        sourceConv,
+        ownerConv,
+        taskNumber: txOut.args.taskNumber,
+        // The task's board coordinate, post-commit truth: derived from its owner
+        // conversation's placement (total over workspace AND pair boards).
+        taskBoardKey: this.read.boardOfConversation(ownerConv.id)?.boardKey ?? 'unknown',
+        status,
+      });
+    }
     this.broadcaster.publish({ ...txOut.args, conversation: ownerConv }, txOut.sysMsg);
 
     return { success: true };
@@ -1270,14 +1288,19 @@ export class TaskService {
     if ('taskId' in by && actor.runtimeScope !== 'agent') {
       return { success: false, code: 'task_not_found', reason: 'task not found' };
     }
-    const sourceConv = this.conversations.get(actor.conversationId);
-    if (!sourceConv) {
+    const sourceConv = actor.conversationId === null
+      ? null
+      : this.conversations.get(actor.conversationId);
+    if (actor.runtimeScope === 'conversation' && !sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
     }
     if (!this.agents.get(actor.agentId)) {
       return { success: false, code: 'agent_not_found', reason: 'agent not found' };
     }
-    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
+    if (
+      actor.runtimeScope === 'conversation'
+      && !this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)
+    ) {
       return {
         success: false,
         code: 'not_conversation_member',
@@ -1543,8 +1566,10 @@ export class TaskService {
     actor: AgentActor,
     selector: WorkspaceSelector | undefined,
   ): { boardKey: string; workspaceId: string | null } | AgentDetailWorkspaceFailure {
-    const sourceConv = this.conversations.get(actor.conversationId);
-    if (!sourceConv) {
+    const sourceConv = actor.conversationId === null
+      ? null
+      : this.conversations.get(actor.conversationId);
+    if (actor.runtimeScope === 'conversation' && !sourceConv) {
       return { code: 'conversation_not_found', reason: 'conversation not found' };
     }
     const resolved = this.access.resolveAgentTaskBoard(

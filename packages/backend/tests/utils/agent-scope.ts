@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { agentRuntimePrincipal } from '../../src/auth/runtime-principal.js';
-import type { TestApp } from './app.js';
+import { conversationSlotTestPath, type TestApp } from './app.js';
 
 /** An agent row with `session_scope='agent'` — the product creation path for
  *  agent-scoped Agents is P2's runtime lane; route/service tests that need a
@@ -77,5 +77,9 @@ export function agentSlotAuth(
 
 /** Canonical (agent-rooted) route family — the P1 mount. */
 export function canonicalTasksPath(agentId: string, conversationId: string, suffix = ''): string {
-  return `/internal/agents/${agentId}/conversations/${conversationId}/tasks${suffix}`;
+  const base = conversationSlotTestPath(
+    `/internal/agents/${agentId}/tasks`,
+    conversationId,
+  );
+  return `${base}${suffix}`;
 }

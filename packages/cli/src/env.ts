@@ -1,15 +1,13 @@
 /**
  * Per-process environment context the CLI operates within. The Agent identity,
- * server and bearer come from immutable spawn env. The conversation coordinate
- * route target comes from the ConversationSlot env when present. Only an
- * AgentSlot (which deliberately has no ambient conversation env) may use the
- * command's explicit `--route-conversation-id` as its canonical route fallback.
- * Command-local conversation selectors remain request coordinates and never
- * retarget a ConversationSlot bearer.
+ * server and bearer come from immutable spawn env. A ConversationSlot also has
+ * one ambient conversation used only for the ruled C″ reach/correction policy;
+ * an AgentSlot deliberately has none. HTTP routing is agent-global for both.
  *
- * RuntimePrincipal is the integrity boundary: a ConversationSlot bearer admits
- * only its one conversation, while an AgentSlot bearer admits explicit live
- * participant targets under the same generation custody.
+ * RuntimePrincipal authenticates exact live custody. The backend then applies
+ * the ruled C″ per-operation reach policy: three established operations may
+ * cross streams from either slot, while four write/source operations confine a
+ * ConversationSlot to its own stream. AgentSlot reach follows participation.
  */
 import {
   SILVERHAND_AGENT_ID_ENV,
@@ -21,19 +19,7 @@ import {
 } from '@silverhand/shared';
 import { CliError } from './errors.js';
 
-export interface CliEnv {
-  conversationId: string;
-  /**
-   * Which principal shape produced {@link conversationId}, kept because the two
-   * are not interchangeable once a destination has to be named. A
-   * ConversationSlot's ambient conversation is a stream the agent actually
-   * inhabits, so it is the one address a refusal may hand back as the
-   * correction; an AgentSlot's route arrives from `--route-conversation-id`,
-   * which is a transport anchor only (its retirement is #task:2030) and may be
-   * a conversation nobody can post to at all — suggesting it as a destination
-   * would teach a send that is refused downstream.
-   */
-  slot: 'conversation' | 'agent';
+interface CliEnvBase {
   agentId: string;
   serverUrl: string;
   authToken: string;
@@ -41,23 +27,28 @@ export interface CliEnv {
   lastDeliveredSeqFile?: string;
 }
 
+export type CliEnv = CliEnvBase & (
+  | {
+      /** A ConversationSlot's ambient stream is its only correction target. */
+      slot: 'conversation';
+      conversationId: string;
+    }
+  | { slot: 'agent'; conversationId: null }
+);
+
 /** Resolves the four command inputs. Throws a `CliError` (validation_error,
  *  exit 1) listing every missing key when any is absent — agents see one
  *  actionable error on stderr instead of trial-and-error. */
 export function loadEnv(
   env: NodeJS.ProcessEnv = process.env,
-  agentSlotConversationFallback?: string,
 ): CliEnv {
   const missing: string[] = [];
   const ambientConversationId = env[SILVERHAND_CONVERSATION_ID_ENV]?.trim();
-  const explicitRouteConversationId = agentSlotConversationFallback?.trim();
-  const conversationId = ambientConversationId || explicitRouteConversationId;
   const agentId = env[SILVERHAND_AGENT_ID_ENV];
   const serverUrl = env[SILVERHAND_SERVER_URL_ENV];
   const authToken = env[SILVERHAND_AUTH_TOKEN_ENV];
   const daemonSocketPath = env[SILVERHAND_DAEMON_SOCKET_ENV];
   const lastDeliveredSeqFile = env[SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV];
-  if (!conversationId) missing.push(SILVERHAND_CONVERSATION_ID_ENV);
   if (!agentId) missing.push(SILVERHAND_AGENT_ID_ENV);
   if (!serverUrl) missing.push(SILVERHAND_SERVER_URL_ENV);
   if (!authToken) missing.push(SILVERHAND_AUTH_TOKEN_ENV);
@@ -78,9 +69,11 @@ export function loadEnv(
       retriable: false,
     });
   }
+  const runtimeIdentity = ambientConversationId
+    ? { conversationId: ambientConversationId, slot: 'conversation' as const }
+    : { conversationId: null, slot: 'agent' as const };
   return {
-    conversationId: conversationId!,
-    slot: ambientConversationId ? 'conversation' : 'agent',
+    ...runtimeIdentity,
     agentId: agentId!,
     serverUrl: serverUrl!,
     authToken: authToken!,

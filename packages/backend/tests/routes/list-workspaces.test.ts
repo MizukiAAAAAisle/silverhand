@@ -63,11 +63,11 @@ async function createChannel(
 }
 
 function listWorkspacesPath(conversationId: string, agentId: string): string {
-  return `/internal/conversations/${conversationId}/agents/${agentId}/list-workspaces`;
+  return `/internal/agents/${agentId}/list-workspaces`;
 }
 
 function listChannelsPath(conversationId: string, agentId: string): string {
-  return `/internal/conversations/${conversationId}/agents/${agentId}/list-channels`;
+  return `/internal/agents/${agentId}/list-channels`;
 }
 
 describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {

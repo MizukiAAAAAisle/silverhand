@@ -373,8 +373,8 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
 
   // ── Enforced: capability gated at request time per doc §3 ────────────
   agentReadHistory: { status: 'enforced', capability: 'read_messages', scope: 'target conversation\'s workspace' },
-  agentFollowThread: { status: 'enforced', capability: 'read_messages', scope: 'principal conversation\'s workspace' },
-  agentUnfollowThread: { status: 'enforced', capability: 'read_messages', scope: 'principal conversation\'s workspace' },
+  agentFollowThread: { status: 'enforced', capability: 'read_messages', scope: 'root message owner conversation\'s placement' },
+  agentUnfollowThread: { status: 'enforced', capability: 'read_messages', scope: 'root message owner conversation\'s placement' },
   agentListChannels: { status: 'enforced', capability: 'read_messages', scope: 'target workspace_id arg (default principal\'s)' },
   // Peer profile read (#task:1823) — the PEER axis of the profile noun. Unlike
   // the self routes above (identity axis, `none-justified`) this reads ANOTHER
@@ -383,12 +383,12 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   // same workspace; unknown / non-member / human handles are one 404.
   agentGetPeerProfile: { status: 'enforced', capability: 'read_messages', scope: 'target workspace_id arg (default principal\'s)' },
   agentSearchMessages: { status: 'enforced', capability: 'read_messages', scope: 'resolved target: channel.workspace_id | workspace_id arg | principal\'s' },
-  agentSendConversationMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
-  agentResolveStaleMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
-  agentReactMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
+  agentSendConversationMessage: { status: 'enforced', capability: 'send_messages', scope: 'addressed destination conversation\'s placement' },
+  agentResolveStaleMessage: { status: 'enforced', capability: 'send_messages', scope: 'held event conversation_id placement' },
+  agentReactMessage: { status: 'enforced', capability: 'send_messages', scope: 'message owner conversation\'s placement' },
   agentCreateChannel: { status: 'enforced', capability: 'create_channels', scope: 'addressed fork source\'s workspace (#task:2021 P4-4)' },
   agentListConversationTasks: { status: 'enforced', capability: 'read_tasks', scope: 'effective workspace (workspace_id arg supported)' },
-  agentCreateConversationTasks: { status: 'enforced', capability: 'create_tasks', scope: 'principal conversation\'s workspace; `--claim` (atomic self-assign) additionally requires write_tasks' },
+  agentCreateConversationTasks: { status: 'enforced', capability: 'create_tasks', scope: 'addressed destination board; `--claim` (atomic self-assign) additionally requires write_tasks' },
   // Task claim/unclaim/status gate INSIDE task-service: the target task's
   // workspace is resolved per-entry deep in the service (esp. claim by
   // message-id → the message's own workspace), so route-level resolution
@@ -403,9 +403,9 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   agentEditConversationTask: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
   agentGetConversationTaskDetail: { status: 'enforced', capability: 'read_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
   agentUploadAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'addressed destination conversation\'s placement (#task:2021 P4-4)' },
-  agentUpdateAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'principal conversation\'s workspace' },
-  agentLocateAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },
-  agentDownloadAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },
+  agentUpdateAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'attachment owner conversation\'s placement' },
+  agentLocateAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'attachment owner conversation\'s placement' },
+  agentDownloadAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'attachment owner conversation\'s placement' },
   agentAddConversationMember: { status: 'enforced', capability: 'manage_conversation_members', scope: 'target conversation\'s workspace' },
   // Schedule CANCEL gates inside schedule-service: the target workspace is the
   // stored schedule's target conversation's workspace, resolved per-call.

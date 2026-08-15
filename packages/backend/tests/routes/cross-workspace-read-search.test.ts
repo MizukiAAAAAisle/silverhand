@@ -59,11 +59,11 @@ async function createChannel(
 }
 
 function readHistoryPath(conversationId: string, agentId: string): string {
-  return `/internal/conversations/${conversationId}/agents/${agentId}/read-history`;
+  return `/internal/agents/${agentId}/read-history`;
 }
 
 function searchMessagesPath(conversationId: string, agentId: string): string {
-  return `/internal/conversations/${conversationId}/agents/${agentId}/search-messages`;
+  return `/internal/agents/${agentId}/search-messages`;
 }
 
 /** Well-formed (16 base64url chars) and names no row — the grammar must pass so

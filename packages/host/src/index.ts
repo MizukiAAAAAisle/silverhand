@@ -139,6 +139,7 @@ export {
   type AnyFrame,
   type ConversationLogDebugParams,
   type ConversationLogDebugResult,
+  type AgentRuntimeIntentScope,
   type AgentMessageSendParams,
   type AgentMessageSendResult,
   type AgentStaleReceiveParams,

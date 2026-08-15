@@ -109,6 +109,7 @@ export const AgentSendMessageInputSchema = z.object({
 export type AgentSendMessageInput = z.infer<typeof AgentSendMessageInputSchema>;
 
 export const AgentResolveStaleMessageInputSchema = z.object({
+  conversation_id: z.string().min(1),
   stale_event_id: z.string().min(1),
   resolution_reason: z.literal('obsolete'),
 });

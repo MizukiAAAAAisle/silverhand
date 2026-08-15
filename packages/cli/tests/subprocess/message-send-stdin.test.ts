@@ -86,8 +86,8 @@ beforeAll(async () => {
   serverUrl = `http://127.0.0.1:${addr.port}`;
 });
 
-describe('runtime route target vs command-local conversation selector', { timeout: 30_000 }, () => {
-  it('keeps ConversationSlot route A while task and search requests select B', async () => {
+describe('runtime scope vs command-local conversation selector', { timeout: 30_000 }, () => {
+  it('keeps ConversationSlot custody while task and search requests select B', async () => {
     captured.length = 0;
     nextSendResponse = { status: 200, body: { tasks: [] } };
     const list = await runMessage({
@@ -97,7 +97,7 @@ describe('runtime route target vs command-local conversation selector', { timeou
     });
     expect(list.code, list.stderr).toBe(0);
     expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/conversations/conv-1/tasks?conversation_id=conv-B',
+      '/internal/agents/agent-1/tasks?conversation_id=conv-B',
     );
 
     captured.length = 0;
@@ -112,7 +112,7 @@ describe('runtime route target vs command-local conversation selector', { timeou
     });
     expect(create.code, create.stderr).toBe(0);
     expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/conversations/conv-1/tasks/create',
+      '/internal/agents/agent-1/tasks/create',
     );
     expect(JSON.parse(captured[0]!.bodyBytes.toString('utf8'))).toMatchObject({
       target: '#conv:Conversation0002',
@@ -138,25 +138,24 @@ describe('runtime route target vs command-local conversation selector', { timeou
     });
     expect(search.code, search.stderr).toBe(0);
     expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/conversations/conv-1/search-messages',
+      '/internal/agents/agent-1/search-messages',
     );
     expect(JSON.parse(captured[0]!.bodyBytes.toString('utf8'))).toMatchObject({
       conversation_id: 'conv-B',
     });
   });
 
-  it('uses AgentSlot route target only as transport focus; list stays unfiltered until a command selector is supplied', async () => {
+  it('uses the agent-global route for AgentSlot; list stays unfiltered until a command selector is supplied', async () => {
     captured.length = 0;
     nextSendResponse = { status: 200, body: { tasks: [] } };
     const allBoards = await runMessage({
       noun: 'task',
       verb: 'list',
-      argv: ['--route-conversation-id', 'agent-inbox'],
       env: { SILVERHAND_CONVERSATION_ID: '' },
     });
     expect(allBoards.code, allBoards.stderr).toBe(0);
     expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/conversations/agent-inbox/tasks',
+      '/internal/agents/agent-1/tasks',
     );
 
     captured.length = 0;
@@ -164,17 +163,12 @@ describe('runtime route target vs command-local conversation selector', { timeou
     const narrowed = await runMessage({
       noun: 'task',
       verb: 'list',
-      argv: [
-        '--route-conversation-id',
-        'agent-inbox',
-        '--conversation-id',
-        'conv-B',
-      ],
+      argv: ['--conversation-id', 'conv-B'],
       env: { SILVERHAND_CONVERSATION_ID: '' },
     });
     expect(narrowed.code, narrowed.stderr).toBe(0);
     expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/conversations/agent-inbox/tasks?conversation_id=conv-B',
+      '/internal/agents/agent-1/tasks?conversation_id=conv-B',
     );
   });
 });
@@ -202,10 +196,9 @@ interface RunResult {
 /**
  * The stream every test that is not ABOUT the address sends to.
  *
- * A real 16-char id, and deliberately not the route conversation
- * (`SILVERHAND_CONVERSATION_ID`): since #task:2021 P4-4 the address decides the
- * destination and the route only carries the credential, so a fixture that reused
- * one id for both could not tell the two apart. Short ids like `conv-1` are not
+ * A real 16-char id, and deliberately not the ConversationSlot ambient
+ * conversation (`SILVERHAND_CONVERSATION_ID`): since #task:2021 P4-4 the
+ * address decides the destination. Short ids like `conv-1` are not
  * addresses at all and never become one — the grammar is the product's, not the
  * fixtures'.
  */
@@ -519,7 +512,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       expect(r.code, r.stderr).toBe(0);
       expect(captured.length).toBe(2);
       const upload = captured[0]!;
-      expect(upload.path).toBe('/internal/agents/agent-1/conversations/conv-1/attachments');
+      expect(upload.path).toBe('/internal/agents/agent-1/attachments');
       // Multipart body carries the original bytes verbatim.
       expect(upload.bodyBytes.includes(bytes)).toBe(true);
       // ...and the DESTINATION, as a form field beside them: the spooled body is
@@ -595,25 +588,22 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     expect(reqBody.attachment_ids).toEqual(['att-1', 'att-2']);
   });
 
-  it('uses the explicit conversation as the AgentSlot route while the address alone decides the destination', async () => {
+  it('uses the agent-global route while the address alone decides the destination', async () => {
     captured.length = 0;
     const r = await runSend({
-      argv: ['--route-conversation-id', 'conv-explicit'],
       stdin: 'cross-target message',
       env: { SILVERHAND_CONVERSATION_ID: '' },
     });
     expect(r.code, r.stderr).toBe(0);
     expect(captured).toHaveLength(1);
     expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/conversations/conv-explicit/send-message',
+      '/internal/agents/agent-1/send-message',
     );
     const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
       content: string;
       target?: unknown;
     };
     expect(reqBody.content).toBe('cross-target message');
-    // Two different coordinates on purpose: the route in the path is the
-    // credential's conversation, the body's target is where the words go.
     expect(reqBody.target).toBe(MAIN_TARGET);
   });
 
@@ -635,16 +625,13 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     captured.length = 0;
     const r = await runSend({
       omitTarget: true,
-      argv: ['--route-conversation-id', 'agent-inbox'],
       env: { SILVERHAND_CONVERSATION_ID: '' },
       stdin: 'where does this go?',
     });
     expect(r.code).toBe(1);
     const body = parseStderrJson(r.stderr);
     expect(body.error.subkind).toBe('target_required');
-    // The route is a transport anchor — here an inbox nothing can be posted to.
-    // Handing it back as `correct_target` would teach a send that gets refused
-    // downstream, so a caller that inhabits no stream gets the flag and no
+    // An AgentSlot has no singleton stream, so it gets the flag and no
     // suggestion (#task:2021 P4-4: one correction, and only the singleton has it).
     expect(body.error.details?.correct_target).toBeUndefined();
     expect(body.error.details).toMatchObject({ flag: 'target' });
@@ -866,16 +853,15 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
   });
 
   it('reports no_pending_stale_event in the direct (no-daemon) fallback', async () => {
-    // The pending stale event is daemon-held state and there is at most one
-    // per agent, so `stale-resolve` carries no id. Without a daemon there is
-    // nothing to resolve: the CLI degrades honestly instead of POSTing a
-    // resolution for an event it cannot name.
+    // The pending stale event is daemon-held state. Without a daemon there is
+    // nothing to resolve: even an exact object id degrades honestly instead of
+    // POSTing a resolution that bypasses daemon custody.
     captured.length = 0;
     nextSendResponse = { status: 200, body: { ok: true } };
     const resolved = await runMessage({
       noun: 'message',
       verb: 'stale-resolve',
-      argv: ['--resolution', 'obsolete'],
+      argv: ['--stale-event-id', 'evt-obsolete', '--resolution', 'obsolete'],
     });
     expect(resolved.code, resolved.stderr).toBe(0);
     expect(JSON.parse(resolved.stdout)).toEqual({
@@ -888,7 +874,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     ).toBe(false);
   });
 
-  it('rejects the removed --event-id with flag_removed', async () => {
+  it('rejects the retired --event-id spelling with its exact replacement', async () => {
     const r = await runMessage({
       noun: 'message',
       verb: 'stale-resolve',
@@ -897,6 +883,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     expect(r.code).toBe(1);
     const body = parseStderrJson(r.stderr);
     expect(body.error.subkind).toBe('flag_removed');
+    expect(body.error.details).toMatchObject({ replacement: 'stale-event-id' });
   });
 
   // Flag validation must precede the blocking stdin read. A bad

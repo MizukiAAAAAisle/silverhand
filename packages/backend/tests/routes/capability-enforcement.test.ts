@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotTestPath,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 
 /**
@@ -56,7 +61,10 @@ function caps(t: TestApp): AgentCapabilityRepo {
 }
 
 function internal(channelId: string, agentId: string, suffix: string): string {
-  return `/internal/conversations/${channelId}/agents/${agentId}/${suffix}`;
+  return conversationSlotTestPath(
+    `/internal/agents/${agentId}/${suffix}`,
+    channelId,
+  );
 }
 
 describe('capability enforcement — route-level gates', () => {

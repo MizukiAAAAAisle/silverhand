@@ -21,12 +21,10 @@ describe('loadEnv', () => {
     });
   });
 
-  it('uses an explicit conversation target when AgentSlot has no ambient conversation', () => {
+  it('creates an AgentSlot environment without inventing an ambient conversation', () => {
     const { SILVERHAND_CONVERSATION_ID: _ambient, ...agentSlotEnv } = happyEnv;
-    expect(loadEnv(agentSlotEnv, 'c-explicit')).toEqual({
-      conversationId: 'c-explicit',
-      // Route, not residence: the slot kind stays readable downstream so a
-      // refusal never offers a transport anchor as a destination.
+    expect(loadEnv(agentSlotEnv)).toEqual({
+      conversationId: null,
       slot: 'agent',
       agentId: 'a-1',
       serverUrl: 'http://127.0.0.1:8080',
@@ -34,8 +32,8 @@ describe('loadEnv', () => {
     });
   });
 
-  it('keeps ConversationSlot ambient route when a command has its own conversation selector', () => {
-    expect(loadEnv({ ...happyEnv }, 'c-other')).toMatchObject({
+  it('keeps the ConversationSlot ambient coordinate as runtime identity', () => {
+    expect(loadEnv({ ...happyEnv })).toMatchObject({
       conversationId: 'c-1',
       slot: 'conversation',
     });
@@ -52,7 +50,7 @@ describe('loadEnv', () => {
     const e = caught as CliError;
     expect(e.code).toBe('validation_error');
     expect(e.retriable).toBe(false);
-    expect(e.message).toContain('SILVERHAND_CONVERSATION_ID');
+    expect(e.message).not.toContain('SILVERHAND_CONVERSATION_ID');
     expect(e.message).toContain('SILVERHAND_AGENT_ID');
     expect(e.message).toContain('SILVERHAND_SERVER_URL');
     expect(e.message).toContain('SILVERHAND_AUTH_TOKEN');

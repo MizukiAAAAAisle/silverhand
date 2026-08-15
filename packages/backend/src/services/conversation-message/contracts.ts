@@ -29,13 +29,13 @@ import type {
 } from './ports.js';
 import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
 import type {
-  AgentPrincipal,
+  ScopedAgentPrincipal,
   UserPrincipal,
 } from '../../auth/principal.js';
 
 export type SendMessageActor =
   | UserPrincipal
-  | AgentPrincipal;
+  | ScopedAgentPrincipal;
 
 /**
  * WHERE a send goes, as the caller has ALREADY DECIDED IT (#task:2021 P4-4).
@@ -65,9 +65,8 @@ export type SendMessageDestination =
   | { kind: 'own_reply_cluster'; messageId: string };
 
 export interface SendMessageInput {
-  /** The conversation the ACTOR is acting from — where its credential lives, and
-   *  the run this send resolves. Not where the message goes: that is
-   *  {@link destination}, and the two are routinely different now. */
+  /** Stable conversation id resolved from the absolute destination address.
+   *  Runtime custody is carried separately; it is never inferred from this id. */
   conversationId: string;
   actor: SendMessageActor;
   content: string;
@@ -133,7 +132,7 @@ export interface SendMessageResult {
 
 export interface ResolveStaleMessageInput {
   conversationId: string;
-  actor: AgentPrincipal;
+  actor: ScopedAgentPrincipal;
   staleEventId: string;
   resolutionReason: 'obsolete';
 }

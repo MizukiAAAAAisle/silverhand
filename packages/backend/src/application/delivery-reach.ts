@@ -75,9 +75,8 @@ const REFUSED: DeliveryReachVerdict = {
  * Takes the RESOLVED conversation id rather than the address: reach is a question
  * about the stream that was denoted, and re-reading the token here would be a
  * second grammar opinion. Takes the {@link RuntimePrincipal} rather than an agent
- * id plus a conversation id, because the whole point is that a slot KIND decides —
- * two loose coordinates are how a caller ends up passing the route anchor of an
- * AgentSlot as though it were an owned stream.
+ * id plus a conversation id, because the slot KIND decides the policy and the
+ * resolved conversation decides its subject.
  */
 export function judgeDeliveryReach(input: {
   operation: AddressedOperation;
@@ -120,4 +119,23 @@ export function mayAllocateFor(
   return deliveryReachDomain(operation, principal.kind) === 'own_stream'
     ? 'forbidden'
     : 'permitted';
+}
+
+/**
+ * Preserve the shipped reach boundary for object-addressed WRITES.
+ *
+ * Reactions and attachment updates derive their stream from the object rather
+ * than a DeliveryTarget, so they are intentionally outside {@link AddressedOperation}.
+ * Before the agent-global route, a ConversationSlot could reach those writes
+ * only through its own conversation route. Removing that transport coordinate
+ * must not silently widen the credential: an AgentSlot may write any owner
+ * conversation it participates in, while a ConversationSlot remains confined
+ * to its own stream. Object-addressed reads do not call this predicate.
+ */
+export function mayWriteObjectInConversation(
+  principal: RuntimePrincipal,
+  ownerConversationId: string,
+): boolean {
+  return principal.kind === 'agent_slot'
+    || principal.conversationId === ownerConversationId;
 }

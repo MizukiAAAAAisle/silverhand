@@ -408,16 +408,15 @@ board 内 task 取号。
 
 ### 7.1 principal 是一个判别联合，不是一个扁平 tuple
 
-现状：全部 agent-facing API 挂 `/internal/conversations/:cid/agents/:aid/*`，token 按**路径**里的 `(cid,aid)`
-验（`internal-agent.ts:73`；签发 `outbound-event-fanout.ts:1183`），`SILVERHAND_CONVERSATION_ID` +
-`SILVERHAND_AUTH_TOKEN` **烘进磁盘 shim**（`spawn-prep.ts:46-63`）。一进程服务 N 会话时前提失效；
-「一进程持 N 个 per-conversation token」被否（shim 是一次性烘盘、N 随 join 动态变）。
+终态：全部 agent-facing API 只挂 `/internal/agents/:aid/*`。路径只绑定 agent identity；bearer 内的判别联合
+绑定 runtime slot、generation 与 daemon custody。`SILVERHAND_CONVERSATION_ID` 只注入 ConversationSlot，
+AgentSlot 没有 ambient conversation；领域目的地由显式地址或对象 identity 提供。
 
 **上一版把 principal 统一成 `(agent_id, generation)` 是错的**（@Cindy 第三轮 finding 2）：
 conversation-scoped 的同一 Agent 同时有 N 个 slot、各自的 `generation` 都可能等于 7 ⇒ 该 tuple **指不出哪个
 slot**，而且会让 A 会话的 runtime 凭 live membership 去操作 B 会话，**破坏旧模型现有的隔离**。
 
-目标是 **principal algebra**（一条路由、一个 verifier、**两种 target policy**）：
+目标是 **principal algebra**（一条路由、一个 verifier、两种 runtime scope）：
 
 ```
 RuntimePrincipal =
@@ -425,17 +424,14 @@ RuntimePrincipal =
   | ConversationSlot(conversation_id, agent_id, generation, daemon_instance_id) -- session_scope='conversation'
 ```
 
-| principal | target 判据 |
+| principal | verifier 判据 |
 |---|---|
-| `AgentSlot` | **live membership**（每请求查） |
-| `ConversationSlot` | live membership **且** `target == slot.conversation_id`（隔离与今天等价） |
+| `AgentSlot` | live AgentSlot 的 exact generation + daemon instance |
+| `ConversationSlot` | live `(conversation_id, agent_id)` slot 的 exact generation + daemon instance |
 
-**这张表里的 `target` 是路由坐标，不是投递目的地** —— 上一版写它时一次请求只有一根坐标（route `:cid`
-「是本次请求的 raw target identity」，见下面的路由代数）。P4 把**来源**与**目的地**拆成两根：route `:cid` =
-这次请求从哪来（provenance），body 里的 address = 去哪（destination，权威 `DeliveryTarget`）。
-⇒ 表里那条 `ConversationSlot` 规则由 verifier 对 **route `:cid`** 执行（`auth/runtime-principal-verifier.ts`
-的 `target_unauthorized`），destination 的判据是 `agentParticipates`（`repos/conversation-placement-sql.ts`，
-两支 principal 同一处）。
+verifier 不接 destination，也不做 membership：它只证明“这份 bearer 现在仍拥有哪一个 runtime”。目的地先由
+DeliveryTarget / object id 解析，再由 placement participation 与 C″ reach 表授权。把 conversation 塞回 URL
+会重新制造第三个坐标，已由 #task:2030 删除。
 
 **「隔离与今天等价」在拆分后必须按事实读，不能按字面读，而事实是逐门不同的**（`origin/main` 逐门核过，
 @Cindy 的 C 提案迫使我把它量清楚；ConversationSlot 凭据 → destination ≠ 凭据那条 conversation）：
@@ -480,10 +476,8 @@ B（按字面回收上半）已被否决，不是开放项**；本节此前的�
 **没有 generation 概念**（`auth/agent-token-store.ts`）。⇒ verifier 每请求把 token 的 generation 与
 **live slot generation** 比较，不等即 401；`revokeFor` 退化为加速路径而不是正确性来源。
 
-**路由代数**：终局是**一条** canonical family
-`/internal/agents/:aid/conversations/:cid/*`（`:cid` 是本次请求的 raw target identity）+ 上面这**一个**
-principal 类型（不是两条 auth 权威）。
-过渡期旧 `/internal/conversations/:cid/agents/:aid/*` 作**桥**，删除条件可观测（无 runtime 在用它）。
+**路由代数**：终局只有 `/internal/agents/:aid/*` + 上面这一个 principal 判别联合。没有 canonical/legacy
+双挂载，也没有 conversation anchor 兼容桥；旧两族 anchored route 均不注册。
 「被移出会话就杀 runtime」从此是 **runtime lifecycle policy（按 `session_scope` 取值）**，不是 auth 机制 ——
 两根轴分开，才能同时满足「conversation-scoped 行为不变」和「agent-scoped 只拒 target」。
 
@@ -500,7 +494,7 @@ principal 类型（不是两条 auth 权威）。
 | `file upload` | `--target`（同 `message send` 的地址语汇） | —— |
 | `file update/view` | **不按址**：目标是 `--attachment-id` 这个对象，conversation 由它派生（attachment 本就 conversation-owned） | —— |
 | `schedule create/list/cancel` | 目标 conversation（`create` 用 `--target-conversation <address>`，无默认） | 触发时唤醒该 target |
-| `thread follow/unfollow`、`member add`、`channel create` | 目标 conversation / workspace（`member add` / `channel create` 已按地址；**`thread follow/unfollow` 仍只有 `--root`、在调用方 conversation 内解析 ⇒ #task:2030 残留**） | —— |
+| `thread follow/unfollow`、`member add`、`channel create` | `follow/unfollow` 由 `--root` 对象派生 owner conversation；`member add` / `channel create` 用显式地址 | —— |
 | 任何写文件的工具动作 | —— | **绝对 workdir**（cwd = agent root，相对路径会静默写错） |
 
 #### 7.2.1 task 的坐标：target ≠ board，且 origin 不是服务端能推出来的
@@ -678,8 +672,8 @@ P5 端到端 slice ← 全部
   `outbound-event-fanout.ts:781`）；ACL 读面不再与 runtime 写同行；**换 daemon 后每 scope 仍只有一行 slot**；
   agent-scoped agent 插 conversation slot（及反向）被 DB 拒。
 - **P1** 移出某会话后该 target 被拒而 runtime 存活；**generation++ 后旧 token 立即 401**（不依赖显式 revoke）；
-  **`ConversationSlot` token 对 `target != slot.conversation_id` 一律拒**（即使 live membership 通过）——
-  旧模型隔离逐格不变；旧路由行为不变。
+  C″ 三开四闭逐门保持，AgentSlot 七门按 live participation；两族 anchored route 均为 404，agent-global route
+  不携带 conversation 坐标。
 - **P2** 跨多 workspace 工作后 vendor session 仍 resume 同一条；`UPDATE agents SET session_scope` 被 DB 拒；
   两套 pidfile 不互相 reconcile 掉；**agent-scoped 的 spawn prompt 不含任何 workspace L2 正文，
   也不含任何 L2 路径 / workspace memory index / `workspacePath`（`workspaceMemoryIndex` 为空集），

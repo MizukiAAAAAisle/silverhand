@@ -15,7 +15,12 @@
  *     reason on both success and failure; ordinary sends do not.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 import type { BackendLogger } from '../../src/context.js';
 
 interface CapturedLine {
@@ -43,6 +48,7 @@ function captureLogger(): { logger: BackendLogger; lines: CapturedLine[] } {
 async function setupAgent(t: TestApp): Promise<{
   conversationId: string;
   agentId: string;
+  auth: { authorization: string };
 }> {
   const h = http(t);
   const a = (await (
@@ -51,7 +57,18 @@ async function setupAgent(t: TestApp): Promise<{
   const ws = (await (
     await h.post('/api/workspaces', { name: 'eng', member_agent_ids: [a.agent.id] })
   ).json()) as any;
-  return { conversationId: ws.onboarding_channel_id, agentId: a.agent.id };
+  const conversationId = ws.onboarding_channel_id as string;
+  return {
+    conversationId,
+    agentId: a.agent.id,
+    auth: {
+      authorization: `Bearer ${issueTestConversationRuntimeToken(
+        t,
+        conversationId,
+        a.agent.id,
+      )}`,
+    },
+  };
 }
 
 describe('cli invoke middleware', () => {
@@ -70,11 +87,11 @@ describe('cli invoke middleware', () => {
   });
 
   it('emits one cli.invoke line per successful internal call', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     const res = await h.get(
-      `/internal/conversations/${conversationId}/agents/${agentId}/tasks?status=todo`,
+      `/internal/agents/${agentId}/tasks?status=todo`,
     );
     expect(res.status).toBe(200);
 
@@ -90,7 +107,7 @@ describe('cli invoke middleware', () => {
       http_status: 200,
       status: 'success',
     });
-    expect(line.payload.conversationId).toBe(conversationId);
+    expect(line.payload.conversationId).toBeUndefined();
     expect(line.payload.agentId).toBe(agentId);
     expect(line.payload.request_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(typeof line.payload.duration_ms).toBe('number');
@@ -102,11 +119,11 @@ describe('cli invoke middleware', () => {
   });
 
   it('records repeated query keys exactly once each', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     await h.get(
-      `/internal/conversations/${conversationId}/agents/${agentId}/tasks?status=todo&status=done&task_number=1`,
+      `/internal/agents/${agentId}/tasks?status=todo&status=done&task_number=1`,
     );
 
     const line = captured.lines.find(l => l.payload.category === 'cli.invoke');
@@ -124,11 +141,11 @@ describe('cli invoke middleware', () => {
   ] as const)(
     'records stale_resolution_reason=%s on a successful correlated resend',
     async (expectedReason, fields) => {
-      const { conversationId, agentId } = await setupAgent(t!);
-      const h = http(t!);
+      const { conversationId, agentId, auth } = await setupAgent(t!);
+      const h = http(t!, auth);
 
       const res = await h.post(
-        `/internal/conversations/${conversationId}/agents/${agentId}/send-message`,
+        `/internal/agents/${agentId}/send-message`,
         {
           content: 'resolved draft',
           target: `#conv:${conversationId}`,
@@ -149,10 +166,10 @@ describe('cli invoke middleware', () => {
   );
 
   it('records the stale resolution reason when a resend collides again', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
     const path =
-      `/internal/conversations/${conversationId}/agents/${agentId}/send-message`;
+      `/internal/agents/${agentId}/send-message`;
 
     expect((await h.post(path, {
       content: 'newer context',
@@ -178,9 +195,9 @@ describe('cli invoke middleware', () => {
   });
 
   it('records obsolete resolution and omits uncorrelated send reasons', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
-    const base = `/internal/conversations/${conversationId}/agents/${agentId}`;
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
+    const base = `/internal/agents/${agentId}`;
 
     expect((await h.post(`${base}/send-message`, {
       content: 'ordinary send',
@@ -190,6 +207,7 @@ describe('cli invoke middleware', () => {
       stale_resolution_reason: 'revised',
     })).status).toBe(200);
     expect((await h.post(`${base}/stale-message-resolution`, {
+      conversation_id: conversationId,
       stale_event_id: 'evt-obsolete',
       resolution_reason: 'obsolete',
     })).status).toBe(200);
@@ -205,11 +223,11 @@ describe('cli invoke middleware', () => {
   });
 
   it('does not classify input rejected before the freshness authority', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     const res = await h.post(
-      `/internal/conversations/${conversationId}/agents/${agentId}/send-message`,
+      `/internal/agents/${agentId}/send-message`,
       {
         content: 'invalid target draft',
         target: { kind: 'channel' },
@@ -226,15 +244,15 @@ describe('cli invoke middleware', () => {
   });
 
   it('marks 4xx responses as failure and surfaces backend error_code', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     // Malformed body → schema validation kicks 400 with
     // `{error: 'invalid input', issues: [...]}`. The middleware
     // peeks `error` (string) when no structured `error.code` is
     // present.
     const res = await h.post(
-      `/internal/conversations/${conversationId}/agents/${agentId}/tasks/update-status`,
+      `/internal/agents/${agentId}/tasks/update-status`,
       { task_number: 'not-a-number' },
     );
     expect(res.status).toBe(400);
@@ -253,14 +271,14 @@ describe('cli invoke middleware', () => {
     // `issues[]` array but the previous middleware threw it away, so
     // the report parser couldn't bucket. Now we must extract a
     // {path, code} per issue (NEVER values).
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     // Send a body that fails ScheduleCreateInputSchema in multiple
     // fields at once — validates that we capture all issues, not just
     // the first.
     const res = await h.post(
-      `/internal/conversations/${conversationId}/agents/${agentId}/schedules`,
+      `/internal/agents/${agentId}/schedules`,
       { kind: 'unknown_kind', message: '' },
     );
     expect(res.status).toBe(400);
@@ -289,13 +307,13 @@ describe('cli invoke middleware', () => {
   });
 
   it('still logs the call when auth rejects (401 case)', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
 
     // Skip the http() helper: it auto-issues a valid per-agent token
-    // for `internal/conversations/...` paths. We want to verify what
+    // for agent-global internal paths. We want to verify what
     // the in-process Hono stack does when the auth middleware rejects
     // an unauthenticated call.
-    const url = `http://localhost/internal/conversations/${conversationId}/agents/${agentId}/tasks`;
+    const url = `http://localhost/internal/agents/${agentId}/tasks`;
     const res = await t!.app.fetch(new Request(url, { method: 'GET' }));
     expect(res.status).toBe(401);
 
@@ -311,14 +329,14 @@ describe('cli invoke middleware', () => {
   });
 
   it('logs the route_suffix pattern, never the raw attachment id', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     // Bogus attachment id — route still runs, returns 4xx, but the
     // important assertion is that the id NEVER lands in the log.
     const fakeId = 'attach-deadbeef-1234';
     await h.get(
-      `/internal/conversations/${conversationId}/agents/${agentId}/attachments/${fakeId}/locate`,
+      `/internal/agents/${agentId}/attachments/${fakeId}/locate`,
     );
 
     const line = captured.lines.find(l => l.payload.category === 'cli.invoke');
@@ -347,11 +365,11 @@ describe('cli-trace endpoint', () => {
   });
 
   it('emits cli.preflight_failure and is excluded from cli.invoke', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     const res = await h.post(
-      `/internal/conversations/${conversationId}/agents/${agentId}/cli-trace`,
+      `/internal/agents/${agentId}/cli-trace`,
       {
         noun: 'task',
         verb: 'list',
@@ -408,10 +426,10 @@ describe('cli-trace endpoint', () => {
   ] as const)(
     'records error_subkind=%s in the cli.preflight_failure line',
     async subkind => {
-      const { conversationId, agentId } = await setupAgent(t!);
-      const h = http(t!);
+      const { conversationId, agentId, auth } = await setupAgent(t!);
+      const h = http(t!, auth);
       const res = await h.post(
-        `/internal/conversations/${conversationId}/agents/${agentId}/cli-trace`,
+        `/internal/agents/${agentId}/cli-trace`,
         {
           noun: 'task',
           verb: 'list',
@@ -431,11 +449,11 @@ describe('cli-trace endpoint', () => {
 
 
   it('rejects cli-trace bodies that fail schema (400, no log)', async () => {
-    const { conversationId, agentId } = await setupAgent(t!);
-    const h = http(t!);
+    const { conversationId, agentId, auth } = await setupAgent(t!);
+    const h = http(t!, auth);
 
     const res = await h.post(
-      `/internal/conversations/${conversationId}/agents/${agentId}/cli-trace`,
+      `/internal/agents/${agentId}/cli-trace`,
       // `noun` longer than the 64-char cap → reject.
       { noun: 'x'.repeat(200) },
     );

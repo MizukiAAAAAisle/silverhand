@@ -580,10 +580,27 @@ export const AgentBackendHttpErrorSchema = z
   .strict();
 export type AgentBackendHttpError = z.infer<typeof AgentBackendHttpErrorSchema>;
 
+/** Runtime handle identity for CLI→daemon intents. It names custody scope,
+ *  never an HTTP route or message destination. */
+export const AgentRuntimeIntentScopeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('agent') }).strict(),
+  z.object({
+    kind: z.literal('conversation'),
+    conversation_id: z.string().min(1),
+  }).strict(),
+]);
+export type AgentRuntimeIntentScope = z.infer<
+  typeof AgentRuntimeIntentScopeSchema
+>;
+
+const AgentRuntimeIntentIdentityFields = {
+  runtime_scope: AgentRuntimeIntentScopeSchema,
+  agent_id: z.string().min(1),
+} as const;
+
 export const AgentMessageSendParamsSchema = z
   .object({
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
+    ...AgentRuntimeIntentIdentityFields,
     content: z.string(),
     /**
      * WHERE the message goes — one absolute address, required, forwarded to the
@@ -596,9 +613,8 @@ export const AgentMessageSendParamsSchema = z
      * resolver gives the one verdict (`target_malformed`), so the two never
      * disagree about what a legal address is.
      *
-     * `conversation_id` above stays the SOURCE: it is the credential coordinate
-     * (whose token, whose handle, whose runtime), and P4-4 is the ticket that
-     * stopped it from doubling as the destination.
+     * `runtime_scope` above identifies the daemon handle; it is never a
+     * destination or a transport route coordinate.
      */
     target: z.string().min(1),
     attachment_ids: z.array(z.string().min(1)).optional(),
@@ -658,9 +674,10 @@ export type AgentMessageSendResult = z.infer<
 
 export const AgentStaleResolveParamsSchema = z
   .object({
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    stale_event_id: z.string().min(1).optional(),
+    ...AgentRuntimeIntentIdentityFields,
+    /** Object identity returned by the `message_stale` conflict. Required
+     *  because one AgentSlot can hold independent stale drafts in N streams. */
+    stale_event_id: z.string().min(1),
     resolution_reason: z.literal('obsolete'),
   })
   .strict();
@@ -712,10 +729,8 @@ export type AgentStaleResolveResult = z.infer<
 //    replies would keep alive exactly the mapping (mid-cluster id → cluster)
 //    that P4-4 deleted, in the one process that must not hold a second
 //    opinion about what an address denotes.
-//  - TWO CONVERSATIONS, TWO SUBJECTS (#task:2021 P4-4). `conversation_id` is
-//    the SESSION coordinate every intent carries: which runtime handle is
-//    speaking (for an AgentSlot that is its route anchor, which may be a stream
-//    nobody posts to). `stream_conversation_id` is where the OBSERVED cluster
+//  - TWO COORDINATES, TWO SUBJECTS (#task:2030). `runtime_scope` identifies the
+//    session handle. `stream_conversation_id` is where the OBSERVED cluster
 //    lives — the resolved `target.conversation_id` of the pull. They coincide
 //    only when a ConversationSlot read its own stream. An AgentSlot handle
 //    serves N conversations, so its observed boundaries are keyed by
@@ -725,9 +740,8 @@ export type AgentStaleResolveResult = z.infer<
 //    loose first touch.
 export const AgentStreamObservedParamsSchema = z
   .object({
-    conversation_id: z.string().min(1),
+    ...AgentRuntimeIntentIdentityFields,
     stream_conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
     thread_root_id: z.string().min(1),
     observed_seq: z.number().int().nonnegative(),
   })
@@ -758,7 +772,7 @@ export type AgentStreamObservedResult = z.infer<
 //                              reaches the stale head's stream/seq.
 //   - `batch_partial_armed`  — a prefix was taken but the stale head is
 //                              NOT covered; the stale event stays armed.
-//   - `no_pending_stale`     — typed no-op; nothing to receive for.
+//   - `no_pending_stale`     — typed no-op; the named event is not pending.
 //   - `already_admitted`     — the observed cursor already covers the
 //                              ORIGINAL stale head (proves only that; a
 //                              newer head may exist — the send CAS is
@@ -774,8 +788,10 @@ export type AgentStreamObservedResult = z.infer<
 //                              unchanged, and no cause is inferred.
 export const AgentStaleReceiveParamsSchema = z
   .object({
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
+    ...AgentRuntimeIntentIdentityFields,
+    /** Object identity returned by the `message_stale` conflict. It selects
+     *  one held draft without a route anchor or "most recent" fallback. */
+    stale_event_id: z.string().min(1),
     /** Bounded wait for a deferred batch to arrive. Waiting never holds
      *  the lifecycle lock and never takes custody. Clamped to
      *  [0, 120_000]; default 20_000. */

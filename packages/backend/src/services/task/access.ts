@@ -48,7 +48,10 @@ export class TaskAccessControl {
     // Placement-aware participation (the canonical port, NOT the roster-shaped
     // getAgent): identical for workspace placements, and the agent's own inbox
     // frame — which deliberately has no roster row — is a legal frame.
-    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
+    if (
+      actor.runtimeScope === 'conversation'
+      && !this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)
+    ) {
       return failClaim({
         code: 'not_conversation_member',
         reason: 'agent is not a member of this conversation',
@@ -63,7 +66,10 @@ export class TaskAccessControl {
     if (!this.agents.get(actor.agentId)) {
       return { success: false, code: 'agent_not_found', reason: 'agent not found' };
     }
-    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
+    if (
+      actor.runtimeScope === 'conversation'
+      && !this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)
+    ) {
       return {
         success: false,
         code: 'not_conversation_member',
@@ -96,7 +102,7 @@ export class TaskAccessControl {
    *  status) shapes without leaking shape knowledge here. */
   resolveAgentTaskBoard<F>(
     actor: AgentActor,
-    sourceConv: ConversationDto,
+    sourceConv: ConversationDto | null,
     selector: WorkspaceSelector | undefined,
     fail: (args: {
       code: 'unknown_workspace' | 'ambiguous_workspace' | 'workspace_membership_required';
@@ -159,6 +165,14 @@ export class TaskAccessControl {
       // with no board (§4.2: the agent inbox) is a typed failure rather than
       // an assertion, because this resolver's whole job is turning "no board
       // could be resolved" into an actionable answer for the agent.
+      if (sourceConv === null) {
+        return {
+          failure: fail({
+            code: 'unknown_workspace',
+            reason: 'agent-scoped task-number operations must name a workspace',
+          }),
+        };
+      }
       if (!isWorkspacePlaced(sourceConv)) {
         // Workspace-less frame: a DirectPair derives its own board (the wire
         // DTO strips pair_key, so the derivation goes through the task read

@@ -55,7 +55,7 @@ async function createTask(
   const h = http(t);
   const r = (await (
     await h.post(
-      `/internal/conversations/${conversationId}/agents/${agentId}/tasks/create`,
+      `/internal/agents/${agentId}/tasks/create`,
       { target: `#conv:${conversationId}`, tasks: [{ title }] },
       headers ? { headers } : undefined,
     )
@@ -137,7 +137,7 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     const task = await createTask(t, w1.channelId, twin, 'taken', auth);
     // seed claims it first (by number, conversation frame).
     const seedClaim = (await (
-      await h.post(`/internal/conversations/${w1.channelId}/agents/${seedAgent}/tasks/claim`, {
+      await h.post(canonicalTasksPath(seedAgent, w1.channelId, '/claim'), {
         task_numbers: [task.task_number],
       })
     ).json()) as any;
@@ -241,7 +241,7 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     // Conversation slot (seed agent, legacy auto-token): default list stays the
     // ambient workspace — w2's task never appears.
     const seedList = (await (
-      await h.get(`/internal/conversations/${w1.channelId}/agents/${seedAgent}/tasks`)
+      await h.get(canonicalTasksPath(seedAgent, w1.channelId))
     ).json()) as any;
     const seedIds = seedList.tasks.map((row: any) => row.id);
     expect(seedIds).toContain(local.id);
@@ -250,11 +250,11 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     // Conversation slot: cross-workspace detail --id folds; ALL by-id
     // mutations fold — even against a task it could reach by number.
     const seedDetail = await h.get(
-      `/internal/conversations/${w1.channelId}/agents/${seedAgent}/tasks/detail?task_id=${crossBoard.id}`,
+      canonicalTasksPath(seedAgent, w1.channelId, `/detail?task_id=${crossBoard.id}`),
     );
     expect(seedDetail.status).toBe(404);
     const seedClaim = (await (
-      await h.post(`/internal/conversations/${w1.channelId}/agents/${seedAgent}/tasks/claim`, {
+      await h.post(canonicalTasksPath(seedAgent, w1.channelId, '/claim'), {
         task_ids: [local.id],
       })
     ).json()) as any;
@@ -266,7 +266,7 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     });
     // …while by-number keeps working for it.
     const seedByNumber = (await (
-      await h.post(`/internal/conversations/${w1.channelId}/agents/${seedAgent}/tasks/claim`, {
+      await h.post(canonicalTasksPath(seedAgent, w1.channelId, '/claim'), {
         task_numbers: [local.task_number],
       })
     ).json()) as any;
@@ -282,7 +282,7 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     // And the conversation slot's semantics did not drift while the agent
     // slot operated: same fold, same list population.
     const seedListAfter = (await (
-      await h.get(`/internal/conversations/${w1.channelId}/agents/${seedAgent}/tasks`)
+      await h.get(canonicalTasksPath(seedAgent, w1.channelId))
     ).json()) as any;
     expect(seedListAfter.tasks.map((row: any) => row.id).sort()).toEqual(seedIds.sort());
   });

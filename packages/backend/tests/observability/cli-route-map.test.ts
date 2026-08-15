@@ -67,15 +67,10 @@ for (const g of COMMAND_GROUPS) {
   }
 }
 
-/** Strip the literal `:cid` / `:aid` placeholders + the
- *  `/internal/conversations/.../agents/.../` prefix to produce the
- *  suffix the middleware actually compares against. */
+/** Strip the literal `:aid` placeholder and agent-global prefix to produce the
+ * suffix the middleware actually compares against. */
 function suffixOf(path: string): string {
-  const m = path.match(
-    /^\/internal\/agents\/[^/]+\/conversations\/[^/]+\/(.+)$/,
-  ) ?? path.match(
-    /^\/internal\/conversations\/[^/]+\/agents\/[^/]+\/(.+)$/,
-  );
+  const m = path.match(/^\/internal\/agents\/[^/]+\/(.+)$/);
   return m ? m[1]! : '';
 }
 
@@ -170,14 +165,14 @@ describe('CLI invoke route map', () => {
     );
     const registered = buildRegistrationSet();
     for (const [name, fn] of builders) {
-      // Each helper is `(cid, aid, ...rest) => string`. Probe with
-      // placeholder ids; collapse `:attachmentId` to `*` for the
+      // Each helper is `(aid, ...rest) => string`. Probe with a
+      // placeholder id; collapse `:attachmentId` to `*` for the
       // attachment file-view routes since the middleware matches by
       // single segment.
       const probed =
         isAttachmentWildcardRoute(name)
-          ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
-          : (fn as (...a: string[]) => string)(':cid', ':aid');
+          ? (fn as (...a: string[]) => string)(':aid', 'ATT')
+          : (fn as (...a: string[]) => string)(':aid');
       const suffix = normalizeProbedSuffix(suffixOf(probed));
       const hit = CLI_INVOKE_ROUTES.find(route => route.suffix === suffix);
       expect(
@@ -206,8 +201,8 @@ describe('CLI invoke route map', () => {
     for (const [name, fn] of builders) {
       const probed =
         isAttachmentWildcardRoute(name)
-          ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
-          : (fn as (...a: string[]) => string)(':cid', ':aid');
+          ? (fn as (...a: string[]) => string)(':aid', 'ATT')
+          : (fn as (...a: string[]) => string)(':aid');
       const suffix = normalizeProbedSuffix(suffixOf(probed));
       suffixToName.set(suffix, name);
     }

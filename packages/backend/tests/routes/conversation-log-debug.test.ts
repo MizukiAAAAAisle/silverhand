@@ -85,7 +85,7 @@ describe('conversation log debug API', () => {
     t = buildTestApp();
     const { conversationId, agentId } = await setupConversation(t);
     const res = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentId}/log-debug`,
+      `/internal/agents/${agentId}/log-debug`,
       { enabled: true },
     );
     expect(res.status).toBe(404);

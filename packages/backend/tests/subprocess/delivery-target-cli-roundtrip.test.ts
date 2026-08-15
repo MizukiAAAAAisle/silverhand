@@ -113,10 +113,6 @@ interface Fixture {
   readonly messages: MessageRepo;
   readonly aliceId: string;
   readonly bobHandle: string;
-  /** The conversation the CLI's `--route-conversation-id` names — the transport
-   *  anchor, which is deliberately NOT the destination in three of the four
-   *  cells. */
-  readonly routeConversationId: string;
   readonly token: string;
   readonly cells: readonly Cell[];
 }
@@ -191,9 +187,8 @@ interface RunResult {
 }
 
 /**
- * One real CLI invocation. The credential's conversation
- * (`SILVERHAND_CONVERSATION_ID`) is the ROUTE and never the destination —
- * `--target` alone decides where this lands, which is the property under test.
+ * One real AgentSlot CLI invocation. The route is agent-global; `--target`
+ * alone decides where this lands, which is the property under test.
  */
 function runCli(argv: readonly string[], stdin?: string): Promise<RunResult> {
   return new Promise((resolvePromise, reject) => {
@@ -204,7 +199,7 @@ function runCli(argv: readonly string[], stdin?: string): Promise<RunResult> {
         SILVERHAND_SERVER_URL: baseUrl,
         SILVERHAND_AGENT_ID: fixture.aliceId,
         SILVERHAND_AUTH_TOKEN: fixture.token,
-        SILVERHAND_CONVERSATION_ID: fixture.routeConversationId,
+        SILVERHAND_CONVERSATION_ID: '',
         // No daemon: a send must not need one, and the read door's
         // `agent_stream_observed` intent is daemon-gated by design.
         SILVERHAND_DAEMON_SOCKET: '',
@@ -341,11 +336,6 @@ beforeAll(async () => {
     messages,
     aliceId: alice.id,
     bobHandle: bob.name,
-    // The ROUTE ANCHOR is the named channel, so three of the four destinations
-    // are not the anchor — the whole point of an absolute address. An AgentSlot
-    // bearer is not scoped to it at all; it only has to be a conversation alice
-    // participates in for the route to verify.
-    routeConversationId: named,
     token: agentSlotToken(t, alice.id),
     cells: [
       { label: 'named', conversationId: named, rootId: seedRoot(named), writable: true },

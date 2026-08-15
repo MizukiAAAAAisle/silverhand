@@ -51,7 +51,13 @@ export type TaskActor =
       kind: 'agent';
       agentId: string;
       conversationId: string;
-      runtimeScope: 'conversation' | 'agent';
+      runtimeScope: 'conversation';
+    }
+  | {
+      kind: 'agent';
+      agentId: string;
+      conversationId: null;
+      runtimeScope: 'agent';
     };
 export type UserActor = Extract<TaskActor, { kind: 'user' }>;
 export type AgentActor = Extract<TaskActor, { kind: 'agent' }>;

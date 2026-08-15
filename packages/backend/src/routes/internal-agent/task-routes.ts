@@ -39,7 +39,7 @@ export function registerTaskRoutes(
    *  reinterpretation as conversation scope. */
   const taskActorFrom = (
     c: Parameters<typeof getAgentPrincipal>[0],
-  ): { kind: 'agent'; agentId: string; conversationId: string; runtimeScope: 'conversation' | 'agent' } => {
+  ) => {
     const principal = getAgentPrincipal(c);
     const runtime = c.get('runtimePrincipal');
     if (!runtime) {
@@ -47,22 +47,26 @@ export function registerTaskRoutes(
         'runtimePrincipal missing after internal auth middleware — task routes cannot derive a scope',
       );
     }
-    return {
-      kind: 'agent',
-      agentId: principal.agentId,
-      conversationId: principal.conversationId,
-      runtimeScope: runtime.kind === 'agent_slot' ? 'agent' : 'conversation',
-    };
+    return runtime.kind === 'agent_slot'
+      ? {
+          kind: 'agent' as const,
+          agentId: principal.agentId,
+          conversationId: null,
+          runtimeScope: 'agent' as const,
+        }
+      : {
+          kind: 'agent' as const,
+          agentId: principal.agentId,
+          conversationId: runtime.conversationId,
+          runtimeScope: 'conversation' as const,
+        };
   };
 
   app.get(internalAgentRoutePaths.tasks, c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    const conversation = conversations.get(cid);
-    if (!conversation) return c.json({ error: 'conversation not found' }, 404);
     if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
     // status / task_number are repeatable; `?status=in_progress&status=in_review`
     // and `?task_number=190&task_number=191` are the canonical multi-value form.
@@ -81,10 +85,13 @@ export function registerTaskRoutes(
       return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
     }
     const principal = getAgentPrincipal(c);
-    if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const actor = taskActorFrom(c);
+    const conversation = actor.runtimeScope === 'conversation'
+      ? conversations.get(actor.conversationId)
+      : null;
+    if (actor.runtimeScope === 'conversation' && !conversation) {
+      return c.json({ error: 'conversation not found' }, 404);
+    }
 
     // Agent-slot default list = the UNION of every board the actor can read
     // (§7.2.2, #task:2018): no ambient board is resolved and no single-board
@@ -114,8 +121,9 @@ export function registerTaskRoutes(
     // the typed refusal in resolveAgentQueryWorkspaceId.
     if (
       parsed.data.workspace_id === undefined &&
-      conversation.workspace_id === null &&
-      ctx.taskService.boardOfConversation(cid) !== null
+      actor.runtimeScope === 'conversation' &&
+      conversation!.workspace_id === null &&
+      ctx.taskService.boardOfConversation(actor.conversationId) !== null
     ) {
       return c.json({
         tasks: ctx.taskService.list({
@@ -138,14 +146,18 @@ export function registerTaskRoutes(
     // A task Board belongs to a workspace and an `agent_inbox` has none (doc
     // §4.2), so from an inbox session the board question has no ambient answer:
     // name a workspace explicitly rather than read an empty board (v71).
-    const scope = resolveAgentQueryWorkspaceId(
-      c,
-      conversation,
-      parsed.data.workspace_id,
-    );
+    if (conversation === null && parsed.data.workspace_id === undefined) {
+      return c.json({
+        error: 'agent-scoped task board reads must name workspace_id when narrowing',
+        code: 'workspace_scope_required',
+      }, 400);
+    }
+    const scope = conversation === null
+      ? { ok: true as const, workspaceId: parsed.data.workspace_id! }
+      : resolveAgentQueryWorkspaceId(c, conversation, parsed.data.workspace_id);
     if (!scope.ok) return scope.response;
     const effectiveWorkspaceId = scope.workspaceId;
-    if (effectiveWorkspaceId !== conversation.workspace_id) {
+    if (effectiveWorkspaceId !== conversation?.workspace_id) {
       const targetWs = workspaces.get(effectiveWorkspaceId);
       if (!targetWs) {
         return c.json(
@@ -185,10 +197,9 @@ export function registerTaskRoutes(
   });
 
   app.post(internalAgentRoutePaths.taskCreate, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = CreateTasksInputSchema.safeParse(body);
@@ -230,7 +241,10 @@ export function registerTaskRoutes(
     // and then lands here. An empty pair between two principals who may DM is not
     // a leak, and bending the intent to avoid it would make the SAME address
     // answer differently depending on an unrelated flag.
-    if (parsed.data.claim === true && destination !== principal.conversationId) {
+    if (
+      parsed.data.claim === true
+      && (principal.conversationId === null || destination !== principal.conversationId)
+    ) {
       return c.json({ error: 'cross_conversation_claim' });
     }
     // What the resolver has NOT answered: the workspace axis. Participation and
@@ -297,19 +311,14 @@ export function registerTaskRoutes(
   });
 
   app.post(internalAgentRoutePaths.taskClaim, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = ClaimTasksInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    const actor = getAgentPrincipal(c);
-    if (!canPostToConversation(ctx, actor, actor.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
     }
     const taskActor = taskActorFrom(c);
     // Wire optional --workspace-id / --workspace selector.
@@ -335,19 +344,14 @@ export function registerTaskRoutes(
   });
 
   app.post(internalAgentRoutePaths.taskUnclaim, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = UnclaimTaskInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    const principal = getAgentPrincipal(c);
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
     }
     const workspaceSelector = {
       ...(parsed.data.workspace_id ? { workspaceId: parsed.data.workspace_id } : {}),
@@ -365,19 +369,14 @@ export function registerTaskRoutes(
   });
 
   app.post(internalAgentRoutePaths.taskUpdateStatus, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = UpdateTaskStatusInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    const principal = getAgentPrincipal(c);
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
     }
     const workspaceSelector = {
       ...(parsed.data.workspace_id ? { workspaceId: parsed.data.workspace_id } : {}),
@@ -396,19 +395,14 @@ export function registerTaskRoutes(
   });
 
   app.post(internalAgentRoutePaths.taskEdit, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = EditTaskInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
-    }
-    const principal = getAgentPrincipal(c);
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
     }
     // write_tasks is gated INSIDE the service on the RESOLVED task workspace
     // (the selector-resolved or current-conversation workspace), mirroring
@@ -435,10 +429,9 @@ export function registerTaskRoutes(
   });
 
   app.get(internalAgentRoutePaths.taskDetail, c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const taskNumberRaw = c.req.query('task_number');
     const taskIdRaw = c.req.query('task_id');
@@ -463,10 +456,6 @@ export function registerTaskRoutes(
           400,
         );
       }
-      const principal = getAgentPrincipal(c);
-      if (!canViewConversation(ctx, principal, principal.conversationId)) {
-        return c.json({ error: 'forbidden' }, 403);
-      }
       // NO route-level workspace resolution or capability gate here: for a
       // by-id read both axes are folded into the service's indistinguishable
       // gate (participation ∧ read_tasks ∧ ambient board), and every failure
@@ -481,9 +470,6 @@ export function registerTaskRoutes(
       return c.json({ error: 'task_number required', code: 'invalid_input' }, 400);
     }
     const principal = getAgentPrincipal(c);
-    if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     // The agent selects a task by its per-workspace number. Resolve + authorize
     // the target workspace (selector, default = current conversation's
     // workspace; agent must be a member — same cross-workspace model as `task

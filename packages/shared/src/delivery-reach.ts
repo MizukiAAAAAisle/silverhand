@@ -87,11 +87,9 @@ export type DeliveryReachDomain = 'own_stream' | 'agent_participation';
  *    STATEMENT that this door is open, made in the one place that also states where
  *    the others are closed.
  *  - `own_stream` — the destination must be the conversation the credential is
- *    scoped to. Only a ConversationSlot HAS one; an AgentSlot is woken in no stream
- *    (its route anchor is a transport coordinate that may even be an agent inbox),
- *    so an AgentSlot in an `own_stream` cell is refused rather than silently granted
- *    its anchor. No cell pairs them today, and the judge fails closed if one ever
- *    does.
+ *    scoped to. Only a ConversationSlot HAS one; an AgentSlot is woken in no
+ *    stream, so an AgentSlot in an `own_stream` cell is refused. No cell pairs
+ *    them today, and the judge fails closed if one ever does.
  */
 export const DELIVERY_REACH: {
   readonly [O in AddressedOperation]: {

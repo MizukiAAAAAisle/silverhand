@@ -836,12 +836,10 @@ describe('OutboundRuntimeEventFanout', () => {
       const verifier = new RuntimePrincipalVerifier(
         fix.agentTokens,
         slots,
-        fix.conversations,
       );
       expect(verifier.verify({
         token: params.spawn_options.env_policy.silverhand.auth_token,
         routeAgentId: fix.agentId,
-        targetConversationId: fix.channelId,
       })).toMatchObject({ ok: true });
     } finally {
       fix.cleanup();

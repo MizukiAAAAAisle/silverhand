@@ -3,6 +3,7 @@ import { internalPaths } from '@silverhand/shared';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import {
   buildTestApp,
+  conversationSlotAuth,
   http,
   issueTestConversationRuntimeToken,
   type TestApp,
@@ -20,12 +21,12 @@ import {
  *
  *   1. parent api bearer middleware still wraps the mounted public GET
  *      (invalid bearer rejected; valid accepted);
- *   2. parent internal param-scoped agent-token auth still wraps the mounted
+ *   2. parent internal agent-token auth still wraps the mounted
  *      internal add (garbage token → 401);
- *   3. a *foreign* but otherwise-valid agent token is rejected — proving the
- *      param-scoped middleware reads the path's :cid/:aid ACROSS the mount;
+ *   3. a ConversationSlot token remains valid on the global route, while the
+ *      shared reach table confines a cross-stream member add;
  *   4. a positive internal add succeeds and lands in the RIGHT conversation —
- *      proving `getAgentPrincipal`'s :cid/:aid survive the mount;
+ *      proving the semantic target survives the sub-app mount;
  *   5. the injected capability guard still denies through the mount.
  *
  * If the mount broke inheritance, 1-3/5 would pass through unchecked and 4 would
@@ -107,14 +108,14 @@ describe('P3 membership sub-app mount — auth-boundary inheritance', () => {
     const channelId = await createChannel(t, reg.workspaceId, 'room', [alice]);
 
     const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice),
+      internalPaths.agentAddConversationMember(alice),
       { handle: '@bob' },
       { headers: { Authorization: 'Bearer garbage-not-an-agent-token' } },
     );
     expect(res.status).toBe(401);
   });
 
-  it('rejects a FOREIGN valid agent token — proves :cid/:aid read across the mount', async () => {
+  it('accepts a valid ConversationSlot token, then applies cross-stream reach', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
@@ -122,34 +123,28 @@ describe('P3 membership sub-app mount — auth-boundary inheritance', () => {
     const channelA = await createChannel(t, reg.workspaceId, 'room-a', [alice]);
     const channelB = await createChannel(t, reg.workspaceId, 'room-b', [alice]);
 
-    // A token validly issued for (channelB, alice) must NOT authorize a request
-    // to (channelA, alice): the param-scoped middleware verifies the token
-    // against the path's :cid/:aid, which only works if those params resolve
-    // through the mount.
+    // The URL is agent-global, so the token is authentic. Member-add is one of
+    // C″'s own-stream doors, therefore the shared reach decision — not the
+    // auth middleware — rejects channel A from a channel B ConversationSlot.
     const foreignToken = issueTestConversationRuntimeToken(t, channelB, alice);
     const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelA, alice),
-      { handle: '@bob' },
+      internalPaths.agentAddConversationMember(alice),
+      { handle: '@bob', target: `#conv:${channelA}` },
       { headers: { Authorization: `Bearer ${foreignToken}` } },
     );
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'slot_out_of_scope' });
   });
 
-  it('positive internal add lands in the RIGHT conversation (getAgentPrincipal :cid/:aid intact)', async () => {
+  it('positive internal add lands in the explicitly addressed conversation', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
     const reg = await createWorkspace(t, 'mount-positive-add', [alice, bob]);
     const channelId = await createChannel(t, reg.workspaceId, 'room', [alice]);
 
-    // Default helper translates the public bearer to a valid (channelId, alice)
-    // token. Since #task:2021 P4-4 the DESTINATION is the address, not the path,
-    // so what success proves about the mount is narrower and still the point:
-    // `getAgentPrincipal` resolved :cid/:aid across it (otherwise the token check
-    // 401s), and the actor it produced is the one the resolver then judged
-    // participation for.
-    const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice),
+    const res = await http(t, conversationSlotAuth(t, channelId, alice)).post(
+      internalPaths.agentAddConversationMember(alice),
       { handle: '@bob', target: `#conv:${channelId}` },
     );
     expect(res.status).toBe(200);
@@ -167,8 +162,8 @@ describe('P3 membership sub-app mount — auth-boundary inheritance', () => {
     const channelId = await createChannel(t, reg.workspaceId, 'room', [alice]);
 
     new AgentCapabilityRepo(t.ctx.db).replaceSet(reg.workspaceId, alice, ['read_messages']);
-    const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice),
+    const res = await http(t, conversationSlotAuth(t, channelId, alice)).post(
+      internalPaths.agentAddConversationMember(alice),
       { handle: '@bob', target: `#conv:${channelId}` },
     );
     expect(res.status).toBe(403);

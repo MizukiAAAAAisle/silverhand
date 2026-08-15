@@ -3,7 +3,6 @@ import {
   AgentSendMessageOutputSchema,
   fixedConversationTitle,
   internalPaths,
-  legacyInternalPaths,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import {
@@ -12,6 +11,7 @@ import {
   issueTestConversationRuntimeToken,
   type TestApp,
 } from '../utils/app.js';
+import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 
 async function setupSession(
   t: TestApp,
@@ -60,7 +60,7 @@ describe('Internal route auth', () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
     const r = await http(t.app).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'hi', target: `#conv:${conversationId}` },
     );
     expect(r.status).toBe(401);
@@ -70,78 +70,54 @@ describe('Internal route auth', () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'hi', target: `#conv:${conversationId}` },
       { headers: authHeaders('wrong') },
     );
     expect(r.status).toBe(401);
   });
 
-  it('records a legacy-family attempt before an unknown bearer is rejected', async () => {
-    const info: unknown[] = [];
-    t = buildTestApp({
-      logger: {
-        info: obj => info.push(obj),
-        warn: () => {},
-        error: () => {},
-      },
-    });
+  it('does not mount the retired conversation-anchored route family', async () => {
+    t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const response = await http(t).post(
-      legacyInternalPaths.agentSendConversationMessage(
-        conversationId,
-        agentIds.alice!,
-      ),
-      { content: 'expired caller still counts' },
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      { content: 'retired route' },
       {
-        headers: {
-          ...authHeaders('unknown-after-backend-restart'),
-          'x-agent-hub-caller': 'old-runtime-test',
-        },
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.alice!,
+        )),
       },
     );
-    expect(response.status).toBe(401);
-    expect(info).toContainEqual(expect.objectContaining({
-      action: 'legacy_internal_agent_route',
-      caller: 'old-runtime-test',
-      routeFamily: 'legacy',
-      conversationId,
-      agentId: agentIds.alice,
-    }));
+    expect(response.status).toBe(404);
   });
 
-  it('accepts a token scoped to the URL conversation and agent', async () => {
+  it('accepts a live runtime token on the agent-global route', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
     const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'hi', target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r.status).toBe(200);
   });
 
-  it('canonical and legacy families share status, body, and handler side effects', async () => {
+  it('agent-global routes authenticate without an ambient conversation coordinate', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const agentId = agentIds.alice!;
     const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
     const headers = authHeaders(token);
 
-    const canonical = await http(t).get(
-      internalPaths.agentListConversationTasks(conversationId, agentId),
+    const response = await http(t).get(
+      internalPaths.agentListConversationTasks(agentId),
       { headers },
     );
-    const legacy = await http(t).get(
-      legacyInternalPaths.agentListConversationTasks(conversationId, agentId),
-      { headers },
-    );
-    expect(canonical.status).toBe(200);
-    expect(legacy.status).toBe(canonical.status);
-    expect(await legacy.json()).toEqual(await canonical.json());
-    expect(canonical.headers.get('Deprecation')).toBeNull();
-    expect(legacy.headers.get('Deprecation')).toBe('true');
+    expect(response.status).toBe(200);
   });
 
   it('canonical family requires an explicit target conversation coordinate', async () => {
@@ -167,13 +143,13 @@ describe('Internal route auth', () => {
       title: fixedConversationTitle('known but unauthorized'),
     });
     const request = (targetConversationId: string) => http(t!).post(
-      internalPaths.agentSendConversationMessage(targetConversationId, agentId),
-      { content: 'probe' },
+      internalPaths.agentSendConversationMessage(agentId),
+      { content: 'probe', target: `#conv:${targetConversationId}` },
       { headers: authHeaders(token) },
     );
     const known = await request(unauthorized.id);
-    const unknown = await request('no-such-conversation');
-    expect(known.status).toBe(401);
+    const unknown = await request('unknownConv00000');
+    expect(known.status).toBe(404);
     expect(unknown.status).toBe(known.status);
     expect(await unknown.json()).toEqual(await known.json());
   });
@@ -183,7 +159,7 @@ describe('Internal route auth', () => {
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const aliceToken = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.bob}/send-message`,
+      `/internal/agents/${agentIds.bob}/send-message`,
       { content: 'hi', target: `#conv:${conversationId}` },
       { headers: authHeaders(aliceToken) },
     );
@@ -196,7 +172,7 @@ describe('Internal route auth', () => {
       t = buildTestApp();
       const { conversationId, agentIds } = await setupSession(t);
       const r = await http(t).post(
-        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+        `/internal/agents/${agentIds.alice}/send-message`,
         { content: 'hi', target: `#conv:${conversationId}` },
         {
           headers: {
@@ -217,7 +193,7 @@ describe('Internal route auth', () => {
     const agentId = agentIds.alice!;
     const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
     const response = await http(t).post(
-      internalPaths.agentSendConversationMessage(conversationId, agentId),
+      internalPaths.agentSendConversationMessage(agentId),
       { content: 'forged' },
       {
         headers: {
@@ -245,9 +221,15 @@ describe('POST /internal/.../send-message', () => {
       viewerEvents.push({ kind: e.kind, payload: e.payload });
     });
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'hello team', target: `#conv:${conversationId}` },
-      { headers: authHeaders(t.authToken) },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.alice!,
+        )),
+      },
     );
     unsubViewer();
     expect(r.status).toBe(200);
@@ -285,9 +267,15 @@ describe('POST /internal/.../send-message', () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const send = (content: string) => http(t!).post(
-      internalPaths.agentSendConversationMessage(conversationId, agentIds.alice!),
+      internalPaths.agentSendConversationMessage(agentIds.alice!),
       { content, target: `#conv:${conversationId}` },
-      { headers: authHeaders(t!.authToken) },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t!,
+          conversationId,
+          agentIds.alice!,
+        )),
+      },
     );
 
     const landed = await send('<silverhand://agent/bob> ping');
@@ -315,21 +303,39 @@ describe('POST /internal/.../send-message', () => {
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
     const observed = await (
       await http(t).post(
-        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+        `/internal/agents/${agentIds.alice}/send-message`,
         { content: 'observed', target: `#conv:${conversationId}` },
-        { headers: authHeaders(t.authToken) },
+        {
+          headers: authHeaders(issueTestConversationRuntimeToken(
+            t,
+            conversationId,
+            agentIds.alice!,
+          )),
+        },
       )
     ).json() as any;
     await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.bob}/send-message`,
+      `/internal/agents/${agentIds.bob}/send-message`,
       { content: 'newer context', target: `#conv:${conversationId}` },
-      { headers: authHeaders(t.authToken) },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.bob!,
+        )),
+      },
     );
 
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'stale draft', seen_up_to_seq: observed.message_seq, target: `#conv:${conversationId}` },
-      { headers: authHeaders(t.authToken) },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.alice!,
+        )),
+      },
     );
 
     expect(r.status).toBe(409);
@@ -340,13 +346,93 @@ describe('POST /internal/.../send-message', () => {
     expect(body.error.details.current_seq).toBe(observed.message_seq + 1);
   });
 
+  it('rechecks participation before retrying a held stale draft and writes nothing after revocation', async () => {
+    t = buildTestApp();
+    const { conversationId, channelId: workspaceId, agentIds } =
+      await setupSession(t, ['seed', 'bob']);
+    const aliceId = insertAgentScopedAgent(t, agentIds.seed!, 'alice-global');
+    t.persistence.repos.workspaces.insertMembership(workspaceId, aliceId);
+    t.persistence.repos.conversations.addAgent(conversationId, aliceId);
+    t.persistence.repos.agentCapabilities.replaceSet(
+      workspaceId,
+      aliceId,
+      ['send_messages'],
+    );
+    const auth = agentSlotAuth(t, aliceId);
+    const target = `#conv:${conversationId}`;
+    const send = (body: Record<string, unknown>) => http(t!).post(
+      internalPaths.agentSendConversationMessage(aliceId),
+      body,
+      { headers: auth },
+    );
+
+    const observed = await (
+      await send({ content: 'observed', target })
+    ).json() as any;
+    await http(t).post(
+      internalPaths.agentSendConversationMessage(agentIds.bob!),
+      { content: 'newer context', target },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.bob!,
+        )),
+      },
+    );
+    const stale = await send({
+      content: 'held draft',
+      target,
+      seen_up_to_seq: observed.message_seq,
+    });
+    expect(stale.status).toBe(409);
+    const staleBody = await stale.json() as any;
+    const staleEventId = staleBody.error.details.stale_event_id as string;
+    const beforeRetry = t.persistence.repos.messages.listForConversation(
+      conversationId,
+      1_000,
+    ).length;
+
+    // A held event remembers freshness only. Revoking participation after the
+    // 409 must make the raw target go through the resolver again; the memoized
+    // conversation id is never a capability token or a direct-write path.
+    t.persistence.repos.conversations.removeAgent(conversationId, aliceId);
+    const retry = await send({
+      content: 'held draft, revised',
+      target,
+      stale_event_id: staleEventId,
+      stale_resolution_reason: 'revised',
+      asserted_stream: target,
+      seen_up_to_seq: observed.message_seq,
+    });
+
+    expect(retry.status).toBe(404);
+    expect(await retry.json()).toEqual({
+      error: 'target names no stream you can use',
+      code: 'target_unresolved',
+    });
+    expect(
+      t.persistence.repos.messages.listForConversation(conversationId, 1_000),
+    ).toHaveLength(beforeRetry);
+  });
+
   it('accepts obsolete stale-resolution telemetry without sending a message', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/stale-message-resolution`,
-      { stale_event_id: 'evt-obsolete', resolution_reason: 'obsolete' },
-      { headers: authHeaders(t.authToken) },
+      `/internal/agents/${agentIds.alice}/stale-message-resolution`,
+      {
+        conversation_id: conversationId,
+        stale_event_id: 'evt-obsolete',
+        resolution_reason: 'obsolete',
+      },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.alice!,
+        )),
+      },
     );
 
     expect(r.status).toBe(200);
@@ -377,7 +463,7 @@ describe('POST /internal/.../create-channel', () => {
     );
 
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-channel`,
+      `/internal/agents/${agentIds.alice}/create-channel`,
       {
         title: 'release signing',
         context_summary: 'user explicitly asked to split release signing out',
@@ -386,7 +472,13 @@ describe('POST /internal/.../create-channel', () => {
         channel_id: 'other-channel',
         members: [outsider.agent.id],
       },
-      { headers: authHeaders(t.authToken) },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.alice!,
+        )),
+      },
     );
     unsubscribe();
     expect(r.status).toBe(200);
@@ -451,13 +543,19 @@ describe('POST /internal/.../create-channel', () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice']);
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/create-channel`,
+      `/internal/agents/${agentIds.alice}/create-channel`,
       {
         title: 'missing prompt',
         context_summary: 'x',
         target: `#conv:${conversationId}`,
       },
-      { headers: authHeaders(t.authToken) },
+      {
+        headers: authHeaders(issueTestConversationRuntimeToken(
+          t,
+          conversationId,
+          agentIds.alice!,
+        )),
+      },
     );
     expect(r.status).toBe(400);
   });
@@ -466,7 +564,7 @@ describe('POST /internal/.../create-channel', () => {
     t = buildTestApp();
     const { conversationId } = await setupSession(t, ['alice']);
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/missing-agent/create-channel`,
+      `/internal/agents/missing-agent/create-channel`,
       {
         title: 'missing actor',
         context_summary: 'x',
@@ -491,7 +589,7 @@ describe('agent send-message — content byte cap', () => {
     const { conversationId, agentIds } = await setupSession(t);
     const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'a'.repeat(64 * 1024 + 1), target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
@@ -519,7 +617,7 @@ describe('agent send-message — pre-parse body bound', () => {
     // Content-Length header).
     const raw = JSON.stringify({ content: 'a'.repeat(2 * 1024 * 1024) });
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       undefined,
       {
         body: raw,
@@ -553,7 +651,7 @@ describe('agent send-message — pre-parse body bound', () => {
       },
     });
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       undefined,
       {
         body: stream,
@@ -591,7 +689,7 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
       );
     }
     const r = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'stale draft', seen_up_to_seq: seenUpToSeq, target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
@@ -614,7 +712,7 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
     // The 409 must not disarm the CAS: an uninformed retry with the same
     // boundary still conflicts — only real admission unlocks it.
     const r2 = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'stale draft 2', seen_up_to_seq: seenUpToSeq, target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
@@ -623,7 +721,7 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
     // With the true head as boundary (normal delivery would have carried
     // the agent here), the send goes through.
     const r3 = await http(t).post(
-      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      `/internal/agents/${agentIds.alice}/send-message`,
       { content: 'fresh send', seen_up_to_seq: details.current_seq, target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );

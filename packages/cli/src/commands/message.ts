@@ -279,7 +279,7 @@ nothing was reported, not that every reference landed.`,
     }
 
     const daemonInput = {
-      conversation_id: env.conversationId,
+      runtime_scope: runtimeIntentScope(env),
       agent_id: env.agentId,
       content,
       target,
@@ -311,30 +311,35 @@ nothing was reported, not that every reference landed.`,
 const staleResolveCommand: Command = {
   verb: 'stale-resolve',
   summary: 'Report that a stale draft no longer needs to be sent.',
-  help: `silverhand message stale-resolve --resolution obsolete
+  help: `silverhand message stale-resolve --stale-event-id <id> --resolution obsolete
 
-Reports an observability-only resolution for the most recent message_stale
-conflict without sending a message. This is for the "no need to send anymore"
-case after reading the newer messages from the conflict response.
-
-There is exactly one unresolved stale event per agent at a time, so this
-command always targets that one — nothing identifies it on the command line.
+Reports an observability-only resolution for one message_stale conflict
+without sending a message. Copy details.stale_event_id from that conflict.
+Use this when the newer messages make the draft unnecessary.
 
 Flags:
+  --stale-event-id <id>  Required. Exact stale draft object to resolve.
   --resolution obsolete  Required. Records that the stale draft is obsolete.
 
 stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale_event" }`,
-  flags: ['resolution'] as const,
+  flags: ['stale-event-id', 'resolution'] as const,
   removedFlags: {
     'event-id': {
-      replacement: 'none',
+      replacement: 'stale-event-id',
       hint:
-        'a stale event is no longer addressable: an agent has at most one ' +
-        'unresolved message_stale at a time, and this command resolves it — ' +
-        'pass only --resolution obsolete',
+        'copy details.stale_event_id from the message_stale response and pass ' +
+        '--stale-event-id <id>',
     },
   },
   async run({ env, args }) {
+    const staleEventId = flagString(args, 'stale-event-id');
+    if (!staleEventId) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--stale-event-id is required',
+        retriable: false,
+      });
+    }
     const resolution = flagString(args, 'resolution');
     if (resolution !== 'obsolete') {
       throw new CliError({
@@ -345,8 +350,9 @@ stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale
     }
     if (env.daemonSocketPath) {
       return await resolveStaleViaDaemon(env.daemonSocketPath, {
-        conversation_id: env.conversationId,
+        runtime_scope: runtimeIntentScope(env),
         agent_id: env.agentId,
+        stale_event_id: staleEventId,
         resolution_reason: 'obsolete',
       });
     }
@@ -361,7 +367,7 @@ stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale
 const staleReceiveCommand: Command = {
   verb: 'stale-receive',
   summary: 'After message_stale: pull the pending deferred delivery batch.',
-  help: `silverhand message stale-receive [--wait <seconds>]
+  help: `silverhand message stale-receive --stale-event-id <id> [--wait <seconds>]
 
 After a send failed with \`message_stale\`, pull the delivery batch the
 daemon is already holding for you (mid-turn deferred queue) as this
@@ -369,6 +375,9 @@ command's output, instead of waiting for it to arrive as your next
 turn's input. Message bodies are returned exactly once: a batch this
 command returns will NOT be delivered again at the next turn boundary,
 and vice versa.
+
+Copy details.stale_event_id from the conflict. AgentSlot can hold stale
+drafts for several streams; no "latest" event is inferred.
 
 The command only reads what the daemon already holds — it never fetches
 from server history. If nothing is held yet it waits (bounded) for the
@@ -380,7 +389,7 @@ Outcomes (stdout JSON, discriminated by "outcome"):
                            \`--stale-resolution unaffected|revised\`.
   batch_partial_armed      A batch was returned but the stale head is
                            NOT covered yet; the stale event stays armed.
-  no_pending_stale         No unresolved message_stale for this agent.
+  no_pending_stale         The named stale event is not pending.
   already_admitted         Your context already covers the original
                            stale head; re-send with
                            \`--stale-resolution unaffected|revised\`.
@@ -392,10 +401,19 @@ Outcomes (stdout JSON, discriminated by "outcome"):
                            Nothing changed; you may retry.
 
 Flags:
+  --stale-event-id <id>  Required. Exact stale draft object to receive for.
   --wait <seconds>   Max seconds to wait for a batch to arrive.
                      Default 20, max 120. 0 checks once without waiting.`,
-  flags: ['wait'] as const,
+  flags: ['stale-event-id', 'wait'] as const,
   async run({ env, args }) {
+    const staleEventId = flagString(args, 'stale-event-id');
+    if (!staleEventId) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--stale-event-id is required',
+        retriable: false,
+      });
+    }
     const waitSeconds = flagNumber(args, 'wait') ?? 20;
     if (
       !Number.isFinite(waitSeconds) ||
@@ -418,8 +436,9 @@ Flags:
     }
     const waitMs = Math.round(waitSeconds * 1000);
     return await staleReceiveViaDaemon(env.daemonSocketPath, {
-      conversation_id: env.conversationId,
+      runtime_scope: runtimeIntentScope(env),
       agent_id: env.agentId,
+      stale_event_id: staleEventId,
       wait_ms: waitMs,
     });
   },
@@ -583,13 +602,13 @@ stdout: full AgentReadHistoryDto JSON.`,
         .map(m => m.message_ref.seq);
       const observedSeq = replySeqs.length > 0 ? Math.max(...replySeqs) : 0;
       await observeStreamViaDaemon(env.daemonSocketPath, {
-        // Two coordinates, deliberately: which SESSION observed (the handle
-        // lookup — for an AgentSlot this is the route anchor) and WHERE the
-        // observed stream lives. An AgentSlot's boundaries are keyed by
+        // Two coordinates, deliberately: which runtime scope observed (the
+        // handle lookup) and WHERE the observed stream lives. AgentSlot
+        // boundaries are keyed by
         // conversation and a send keys by the address's conversation, so the
         // stream's own id has to come from the RESOLVED target, never from the
-        // conversation this CLI is authenticated in.
-        conversation_id: env.conversationId,
+        // runtime custody.
+        runtime_scope: runtimeIntentScope(env),
         stream_conversation_id: dto.target.conversation_id,
         agent_id: env.agentId,
         thread_root_id: root,
@@ -755,6 +774,14 @@ function emptySelectorError(flag: string, why: string): CliError {
     retriable: false,
     details: { selector: flag },
   });
+}
+
+function runtimeIntentScope(env: CliEnv):
+  | { kind: 'agent' }
+  | { kind: 'conversation'; conversation_id: string } {
+  return env.slot === 'agent'
+    ? { kind: 'agent' }
+    : { kind: 'conversation', conversation_id: env.conversationId };
 }
 
 function parseSearchPositionalQuery(positional: readonly string[]): string | undefined {

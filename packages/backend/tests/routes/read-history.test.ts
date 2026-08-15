@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { MessageReactionRepo } from '../../src/repos/message-reaction-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotAuth,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
@@ -34,7 +39,7 @@ async function createWorkspaceChannel(
 }
 
 function readHistoryPath(conversationId: string, agentId: string): string {
-  return `/internal/conversations/${conversationId}/agents/${agentId}/read-history`;
+  return `/internal/agents/${agentId}/read-history`;
 }
 
 describe('POST /internal/.../read-history', () => {
@@ -526,8 +531,8 @@ describe('POST /internal/.../read-history', () => {
 
     // The agent reacts via its own CLI route — the exact write path Cindy
     // flagged ("写得了但看不见"). A human also reacts with a different emoji.
-    const react = await http(t).post(
-      `/internal/conversations/${channelId}/agents/${aliceId}/react-message`,
+    const react = await http(t, conversationSlotAuth(t, channelId, aliceId)).post(
+      `/internal/agents/${aliceId}/react-message`,
       { message_id: reacted.id, emoji: '👀' },
     );
     expect(react.status).toBe(200);
@@ -573,8 +578,8 @@ describe('POST /internal/.../read-history', () => {
       threadRootId: root.id,
     });
 
-    const react = await http(t).post(
-      `/internal/conversations/${channelId}/agents/${aliceId}/react-message`,
+    const react = await http(t, conversationSlotAuth(t, channelId, aliceId)).post(
+      `/internal/agents/${aliceId}/react-message`,
       { message_id: reply.id, emoji: '👍' },
     );
     expect(react.status).toBe(200);

@@ -83,7 +83,7 @@ describe('Public bearer enforcement on /api/*', () => {
     t = buildTestApp();
     const res = await t.app.fetch(
       new Request(
-        'http://localhost/internal/conversations/does-not-exist/agents/x/send-message',
+        'http://localhost/internal/agents/x/send-message',
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },

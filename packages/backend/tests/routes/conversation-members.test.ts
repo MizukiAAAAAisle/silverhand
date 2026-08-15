@@ -3,7 +3,12 @@ import { AGENT_CAPABILITIES, conversationSideScope, internalPaths } from '@silve
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotAuth,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 
 /**
@@ -720,8 +725,8 @@ describe('POST /api/conversations/:id/members', () => {
       conversationEvents.push({ kind: e.kind, payload: e.payload });
     });
 
-    const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+    const res = await http(t, conversationSlotAuth(t, channelId, alice.agentId)).post(
+      internalPaths.agentAddConversationMember(alice.agentId),
       { handle: '@bob', target: `#conv:${channelId}` },
     );
     unsubscribeConversation();
@@ -764,8 +769,8 @@ describe('POST /api/conversations/:id/members', () => {
       .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
       .run(channelId, 'teammate');
 
-    const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+    const res = await http(t, conversationSlotAuth(t, channelId, alice.agentId)).post(
+      internalPaths.agentAddConversationMember(alice.agentId),
       { handle: '@teammate-test', target: `#conv:${channelId}` },
     );
 
@@ -794,8 +799,8 @@ describe('POST /api/conversations/:id/members', () => {
       alice.agentId,
     ]);
 
-    const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+    const res = await http(t, conversationSlotAuth(t, channelId, alice.agentId)).post(
+      internalPaths.agentAddConversationMember(alice.agentId),
       { handle: '@bob', target: `#conv:${channelId}` },
     );
 
@@ -826,7 +831,7 @@ describe('POST /api/conversations/:id/members', () => {
     ]);
 
     const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+      internalPaths.agentAddConversationMember(alice.agentId),
       { kind: 'agent', agent_id: bob.agentId },
     );
     expect(res.status).toBe(400);
@@ -872,7 +877,7 @@ describe('internal member add — the address is the destination', () => {
     ]);
 
     const res = await http(t, agentSlotAuth(t, alice)).post(
-      internalPaths.agentAddConversationMember(credentialChannel, alice),
+      internalPaths.agentAddConversationMember(alice),
       { handle: '@bob', target: `#conv:${destination}` },
     );
     expect(res.status).toBe(200);
@@ -902,7 +907,7 @@ describe('internal member add — the address is the destination', () => {
     const theirs = await createChannel(t, reg.workspaceId, 'theirs', [bob.agentId]);
 
     const post = (address: string) =>
-      http(t!).post(internalPaths.agentAddConversationMember(mine, alice.agentId), {
+      http(t!).post(internalPaths.agentAddConversationMember(alice.agentId), {
         handle: '@carol',
         target: address,
       });
@@ -933,8 +938,8 @@ describe('internal member add — the address is the destination', () => {
       await http(t).post(`/api/channels/${channelId}/messages`, { content: 'root' })
     ).json()) as any;
 
-    const res = await http(t).post(
-      internalPaths.agentAddConversationMember(channelId, alice.agentId),
+    const res = await http(t, conversationSlotAuth(t, channelId, alice.agentId)).post(
+      internalPaths.agentAddConversationMember(alice.agentId),
       { handle: '@bob', target: `#conv:${channelId}/thread:${root.message.id}` },
     );
     expect(res.status).toBe(400);
@@ -972,7 +977,7 @@ describe('internal member add — the address is the destination', () => {
     // An existing pair RESOLVES — alice is an endpoint — and is then refused by
     // the use case: its two endpoints are its membership.
     const existing = await http(t, auth).post(
-      internalPaths.agentAddConversationMember(channelId, alice),
+      internalPaths.agentAddConversationMember(alice),
       { handle: '@carol', target: 'dm:@bob' },
     );
     expect(existing.status).toBe(422);
@@ -985,7 +990,7 @@ describe('internal member add — the address is the destination', () => {
     // Were it a write intent, the reward for a refused request would be a new
     // empty DM.
     const missing = await http(t, auth).post(
-      internalPaths.agentAddConversationMember(channelId, alice),
+      internalPaths.agentAddConversationMember(alice),
       { handle: '@bob', target: 'dm:@carol' },
     );
     expect(missing.status).toBe(404);

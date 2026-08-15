@@ -581,7 +581,7 @@ type SearchMessagesResult =
 export function buildAgentSearchMessagesDto(
   db: Db,
   conversations: ConversationRepo,
-  sourceConversation: ConversationDto,
+  sourceConversation: ConversationDto | null,
   agentId: string,
   input: {
     q: string;
@@ -645,8 +645,8 @@ export function buildAgentSearchMessagesDto(
     // `workspace_scope_required` code the route's `resolveAgentQueryWorkspaceId`
     // uses, because it is the same answer to the same question — reached here
     // only for the `current_workspace` form the route lets through.
-    const resolvedWorkspaceId = input.workspace_id ?? sourceConversation.workspace_id;
-    if (resolvedWorkspaceId === null) {
+    const resolvedWorkspaceId = input.workspace_id ?? sourceConversation?.workspace_id;
+    if (resolvedWorkspaceId === null || resolvedWorkspaceId === undefined) {
       return {
         ok: false,
         status: 400,
@@ -660,6 +660,15 @@ export function buildAgentSearchMessagesDto(
     where.push(`conv.workspace_id = ?`);
     params.push(workspaceId);
   } else {
+    if (sourceConversation === null) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'search_scope_required',
+        message:
+          'agent-scoped message search must name conversation_id or workspace_id',
+      };
+    }
     scope = 'current';
     where.push(`conv.id = ?`);
     params.push(sourceConversation.id);

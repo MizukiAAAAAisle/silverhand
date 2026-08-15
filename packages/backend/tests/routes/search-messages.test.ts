@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { fixedConversationTitle } from '@silverhand/shared';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotTestPath,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = await (
@@ -66,11 +71,17 @@ async function createPublicChannel(
 }
 
 function listChannelsPath(conversationId: string, agentId: string): string {
-  return `/internal/conversations/${conversationId}/agents/${agentId}/list-channels`;
+  return conversationSlotTestPath(
+    `/internal/agents/${agentId}/list-channels`,
+    conversationId,
+  );
 }
 
 function searchMessagesPath(conversationId: string, agentId: string): string {
-  return `/internal/conversations/${conversationId}/agents/${agentId}/search-messages`;
+  return conversationSlotTestPath(
+    `/internal/agents/${agentId}/search-messages`,
+    conversationId,
+  );
 }
 
 describe('agent list_channels / search_messages routes', () => {

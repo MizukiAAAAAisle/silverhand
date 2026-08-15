@@ -19,8 +19,12 @@ export type UserPrincipal = { kind: 'user'; userId: string };
 export type AgentPrincipal = {
   kind: 'agent';
   agentId: string;
-  conversationId: string;
+  /** The conversation owned by a ConversationSlot credential. AgentSlot has
+   *  no ambient conversation; operation targets are derived by the addressed
+   *  or object identity at the route boundary. */
+  conversationId: string | null;
 };
+export type ScopedAgentPrincipal = AgentPrincipal & { conversationId: string };
 export type SystemPrincipal = { kind: 'system' };
 export type Principal = UserPrincipal | AgentPrincipal | SystemPrincipal;
 
@@ -91,8 +95,8 @@ export function installPublicPrincipalMiddleware(app: Hono<AppEnv>): void {
  * Install the registration gate. Runs AFTER `installPublicPrincipalMiddleware`
  * so the optional principal is in context. Behavior:
  *
- *   - Internal routes (agent principal) skip — agents have no identity
- *     state and run with their own (cid, aid) auth.
+ *   - Internal routes (agent principal) skip — agents have no public viewer
+ *     identity state and authenticate with an agent-global runtime bearer.
  *   - liveness/readiness probes, `/api/server/info`, and `/auth/*`
  *     skip — they are anonymous/public or own their auth response
  *     semantics.
@@ -182,22 +186,20 @@ export function installInternalPrincipalMiddleware(
   const authorize = async (
     c: AppContext,
     next: () => Promise<void>,
-    targetConversationId: string | undefined,
   ): Promise<Response | void> => {
     if (c.req.header(X_SILVERHAND_PRINCIPAL_HEADER)) {
       return c.json({ error: 'principal header is not allowed on internal routes' }, 400);
     }
 
     const aid = c.req.param('aid');
-    if (!targetConversationId || !aid) {
-      return c.json({ error: 'target conversation and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const header = c.req.header('authorization') ?? '';
     const token = header.replace(/^Bearer\s+/i, '').trim();
     const verified = verifier.verify({
       token,
       routeAgentId: aid,
-      targetConversationId,
     });
     if (!verified.ok) {
       return c.json({ error: 'unauthorized' }, 401);
@@ -207,23 +209,14 @@ export function installInternalPrincipalMiddleware(
     setPrincipal(c, {
       kind: 'agent',
       agentId: verified.principal.agentId,
-      conversationId: verified.targetConversationId,
+      conversationId: verified.principal.kind === 'conversation_slot'
+        ? verified.principal.conversationId
+        : null,
     });
     await next();
   };
 
-  app.use('/internal/conversations/:cid/agents/:aid/*', (c, next) =>
-    authorize(c, next, c.req.param('cid')),
-  );
-  app.use('/internal/agents/:aid/*', (c, next) => {
-    const match = c.req.path.match(
-      /^\/internal\/agents\/[^/]+\/conversations\/([^/]+)(?:\/|$)/,
-    );
-    const targetConversationId = match?.[1]
-      ? decodeURIComponent(match[1])
-      : undefined;
-    return authorize(c, next, targetConversationId);
-  });
+  app.use('/internal/agents/:aid/*', (c, next) => authorize(c, next));
 }
 
 export function setPrincipal(c: AppContext, principal: Principal): void {
@@ -266,6 +259,18 @@ export function getAgentPrincipal(c: AppContext): AgentPrincipal {
   return principal;
 }
 
+/** Bind the verified agent identity to an operation-derived conversation.
+ *  This is never a route default: callers must first resolve an explicit
+ *  address or an object owner, then use the bound principal for the existing
+ *  placement/capability predicates. */
+export function agentPrincipalIn(
+  c: AppContext,
+  conversationId: string,
+): ScopedAgentPrincipal {
+  const principal = getAgentPrincipal(c);
+  return { ...principal, conversationId };
+}
+
 export function getRuntimePrincipal(c: AppContext): RuntimePrincipal {
   const principal = c.get('runtimePrincipal');
   if (!principal) {
@@ -275,7 +280,7 @@ export function getRuntimePrincipal(c: AppContext): RuntimePrincipal {
 }
 
 export function assertActorConversationMatch(
-  actor: UserPrincipal | AgentPrincipal,
+  actor: UserPrincipal | ScopedAgentPrincipal,
   inputConversationId: string,
 ): void {
   if (actor.kind === 'agent' && actor.conversationId !== inputConversationId) {
@@ -294,10 +299,10 @@ function isPrincipal(value: unknown): value is Principal {
     return typeof (value as { userId?: unknown }).userId === 'string';
   }
   if (kind === 'agent') {
-    return (
-      typeof (value as { agentId?: unknown }).agentId === 'string' &&
-      typeof (value as { conversationId?: unknown }).conversationId === 'string'
-    );
+    const candidate = value as { agentId?: unknown; conversationId?: unknown };
+    return typeof candidate.agentId === 'string'
+      && (typeof candidate.conversationId === 'string'
+        || candidate.conversationId === null);
   }
   return false;
 }

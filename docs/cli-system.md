@@ -17,32 +17,33 @@ silverhand <noun> <verb> [flags...]
 The agent contract is intentionally small:
 
 - The command name is `silverhand`.
-- The backend injects `SILVERHAND_CONVERSATION_ID`,
-  `SILVERHAND_AGENT_ID`, `SILVERHAND_SERVER_URL`, and
-  `SILVERHAND_AUTH_TOKEN`.
+- The backend injects `SILVERHAND_AGENT_ID`, `SILVERHAND_SERVER_URL`, and
+  `SILVERHAND_AUTH_TOKEN`. It injects `SILVERHAND_CONVERSATION_ID` only for a
+  ConversationSlot; an AgentSlot deliberately has no ambient conversation.
 - The per-spawn `bin/` directory is prepended to `PATH`.
 
 Agents should not pass or override these environment variables manually. The
-auth token is bound server-side to the `(conversationId, agentId)` pair, so
-changing env vars in bash does not grant a different principal.
+auth token is bound server-side to one live runtime slot (scope, generation,
+daemon instance), so changing env vars in bash does not grant a different
+principal.
 
 ## 2. Process Boundary
 
-`ConversationManager` starts one runtime CLI process for each
-`(conversation, agent)` pair. Before spawn it:
+The supervisor starts one runtime process per `RuntimeScope`: either a
+`ConversationSlot(conversation, agent)` or an aggregate `AgentSlot(agent)`.
+Before spawn it:
 
 1. Issues a per-launch agent token.
-2. Writes per-spawn runtime files under
-   `<os.tmpdir()>/silverhand/<conversationId>/<agentId>/spawn-*`.
+2. Writes per-spawn runtime files under the runtime's isolated spawn directory.
 3. Writes `bin/silverhand`, a small shim that forwards to the host's CLI
    launcher.
 4. Prepends that `bin/` directory to `PATH`.
-5. Injects the four `SILVERHAND_*` environment variables.
+5. Injects the scope-appropriate `SILVERHAND_*` environment variables.
 
 The CLI never talks to SQLite directly. It calls backend HTTP under
-`/internal/conversations/:conversationId/agents/:agentId/...`; the backend
-enforces membership, principal binding, task ownership, lifecycle side effects,
-and event publishing.
+`/internal/agents/:agentId/...`; the backend enforces runtime custody,
+participation, per-operation reach, task ownership, lifecycle side effects, and
+event publishing. Conversation identity never appears in this route family.
 
 ## 3. Command Surface
 
@@ -60,7 +61,7 @@ implementation because it owns exact flags, examples, and recovery behavior.
 |---|---|
 | `silverhand message send` | Send a visible message. `--target <address>` is REQUIRED and names the destination stream absolutely — paste the `target=` token of the message you are answering (§3.1). **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target <address>` is required; a `/thread:<root_message_id>` suffix pulls that reply cluster (§3.5). |
-| `silverhand message search` | Search messages. The range is a single selector: no selector searches the calling conversation, `--current-workspace` the whole current workspace, `--workspace-id <id>` another workspace, `--conversation-id <id>` one conversation — mutually exclusive (`subkind: 'mutually_exclusive'`). Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (also mutually exclusive). The response's `scope` field echoes where the search landed; it is output only. |
+| `silverhand message search` | Search messages. The range is a single selector: a ConversationSlot may omit it to search its own conversation; an AgentSlot must pass `--workspace-id <id>` or `--conversation-id <id>`. `--current-workspace`, `--workspace-id`, and `--conversation-id` are mutually exclusive (`subkind: 'mutually_exclusive'`). Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (also mutually exclusive). The response's `scope` field echoes where the search landed; it is output only. |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) in the stream named by the required `--target <address>`; a `/thread:<root_message_id>` suffix files it in that reply cluster (§3.5), and the address may name any conversation this agent participates in (the former `--conversation-id` cross-conversation flag is gone — §3.4). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4. |
@@ -69,8 +70,8 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand task status` | Move a task (`task status <task_number> --status <s>`) to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
 | `silverhand task edit` | Edit a task's title/content (`task edit <task_number>`; last-write-wins; the most recent successful edit wins, no concurrency check). `--body` is a value-less switch reading the new content from stdin/heredoc; an EMPTY pipe is refused (`empty_stdin`, never a silent clear), `--clear-body` (mutually exclusive with `--body`) clears it, omit to leave unchanged (§3.4). Never touches status/assignee. See §3.4. |
 | `silverhand task detail` | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`): `task detail <task_number>`. |
-| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). The one door still resolved against the calling conversation rather than an address — see §5.1. |
-| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). Same route-anchored resolution as `follow` (§5.1). |
+| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. The root object derives its owner conversation; no redundant target is accepted. Subscription, not permission (§3.5). |
+| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). The root object derives its owner conversation. Idempotent; a later mention/reply re-follows (§3.5). |
 | `silverhand channel create` | Fork a new top-level channel out of the conversation named by the required `--target <address>`, only when explicitly requested by the user. The address is the fork SOURCE, not a destination: its placement gives the new channel's workspace and its agent roster gives the new channel's members, and `create_channels` is judged in the source's workspace. A `/thread:` suffix and a workspace-less source are both refused (§5.1). |
 | `silverhand channel list` | List the channels and direct-message conversations in which the agent is a member (any visibility; archived included and sorted last), together with the active public channels in the workspace the agent has not joined (optional `--workspace-id`). Non-member private channels, non-member DMs, and non-member archived public channels are excluded. Each entry carries authoritative `is_member` and `visibility`; `visibility: 'public'` with `is_member: false` is a public channel the agent has not joined, and such an entry grants discovery only — no access to messages, roster, or delivery, and no implicit join. |
 | `silverhand member add` | Add an existing workspace member (agent or human) to the conversation named by the required `--target <address>`, by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. A membership is a fact about a CONVERSATION: a `/thread:` suffix is refused (`thread_suffix_not_supported`) — someone joins a reply cluster by being referenced or replying — and a DM fails with `conversation_member_add_unsupported` because its two endpoints ARE its membership. |
@@ -202,7 +203,8 @@ Freshness conflict (exit 1, code `conflict`):
   goes through the freshness guard. If they changed the draft, send the
   revised text with `--stale-resolution revised`. If they made the draft
   unnecessary, do not send; instead run
-  `silverhand message stale-resolve --resolution obsolete`.
+  `silverhand message stale-resolve --stale-event-id <id> --resolution obsolete`,
+  copying `details.stale_event_id` from that conflict.
 - If a busy conversation repeatedly re-holds an unchanged but necessary
   message, pass `--anyway` to `silverhand message send`. This is an explicit
   escape hatch for that send only; use it sparingly, not as the default reaction
@@ -535,10 +537,9 @@ visibility / `read_messages`:
     fallback skips the intent (degrades to first-touch, no boundary).
 - **Follow / unfollow:** `silverhand thread follow --root <message_id>` /
   `silverhand thread unfollow --root <message_id>` (id = root or any reply).
-  These two are the LAST doors still resolved against the calling conversation
-  rather than an address — the root id is looked up within the route's `:cid`,
-  i.e. within `--route-conversation-id` — so de-anchoring them is #task:2030's
-  residual, not P4-4's (§5.1).
+  The backend resolves the root object globally, derives its owner conversation,
+  and then rechecks visibility/participation there. No route or target coordinate
+  is accepted; an invisible root is indistinguishable from a nonexistent one.
   Follow is a delivery **subscription, not a permission**; `source='manual'`
   records the entry and is immutable. A new follow backfills the cluster's
   prior history into the agent's inbox once; re-follow returns
@@ -639,16 +640,11 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
   to one artifact by a drift gate that instantiates every taught placeholder and
   feeds it back through the codec
   (`packages/shared/tests/platform-prompt-delivery-target.test.ts`).
-- **Two doors are still route-anchored, not addressed (#task:2030 residual).**
-  `thread follow` / `thread unfollow` take `--root <message_id>` and resolve it
-  within the CALLING conversation (`--route-conversation-id`'s `:cid`), so a
-  cluster in another conversation is unfollowable by address — the only
-  remaining place where a coordinate is relative to the credential.
-  The AgentSlot `--route-conversation-id` anchor itself is the same debt seen
-  from the transport side: it exists because those doors, and the daemon's
-  per-conversation session routing, still need an ambient conversation. #2030
-  removes the anchor and the runtime-scope banner
-  (`packages/shared/src/runtime-scope-banner.ts`) together.
+- **Object-addressed doors do not accept a second coordinate.** `thread follow` /
+  `thread unfollow` derive the conversation from `--root`; message reactions and
+  file view/update do the same from their object ids. The AgentSlot runtime banner
+  remains the authority for per-delivery `workdir`, but carries no conversation
+  route coordinate.
 - **Task notice suffix.** When the delivered row is a task **system
   event** (task created, claimed, status-changed, or **edited**), the header
   gains a trailing ` task=#<number> status=<status>` **inside the brackets**
@@ -814,7 +810,8 @@ winner produces wrong answers nobody notices.
 
 1. **A range is named by exactly one selector.** No command pairs a mode word
    with the value it selects. `message search` is the canonical case: absence
-   of a selector means the calling conversation, and `--current-workspace` /
+   of a selector means the ConversationSlot's own conversation; an AgentSlot
+   has no such default and must name a workspace or conversation. `--current-workspace` /
    `--workspace-id <id>` / `--conversation-id <id>` each fully determine the
    range. Two selectors are `mutually_exclusive`, never
    first-wins or last-wins. Where the answer still needs to *report* where it
@@ -1025,16 +1022,17 @@ not just that it guessed wrong. Currently retired this way: `--task-number` on
 the five by-number `task` verbs (replaced by the positional operand, §3.10),
 `--attachment` (→ `--attachment-id`), `--channel-id` and `--scope` on
 `message search` (→ the conversation/workspace selectors), and `--event-id` on
-`message stale-resolve` (an agent has at most one unresolved stale event, so
-there is nothing to address). Reserve `removedFlags` for spellings that were
-once real; a never-existing typo should stay an `unknown_flag` with a
-did-you-mean.
+`message stale-resolve` (→ `--stale-event-id`, the exact object id returned by
+the conflict). Reserve `removedFlags` for spellings that were once real; a
+never-existing typo should stay an `unknown_flag` with a did-you-mean.
 
 ## 5. Security
 
 The CLI reads bearer auth from `SILVERHAND_AUTH_TOKEN`. The backend verifies
-the token against the URL's `(conversationId, agentId)` tuple on every
-internal request. A token is revoked when the runtime process exits.
+the token against the URL agent id and exact live runtime custody. Domain
+coordinates are then resolved from an explicit address, selector, or object
+identity and authorized independently. A token is revoked when the runtime
+process exits.
 
 This moves the previous process-bound context into an explicit principal
 check:
@@ -1232,10 +1230,10 @@ routes do not expose log-level mutation.
 `cli-<utc>.log` carries two distinct categories:
 
 - `cli.invoke` — one line per call against any
-  `/internal/conversations/:cid/agents/:aid/...` route. Emitted by the
+  `/internal/agents/:aid/...` route. Emitted by the
   Hono middleware in
   `packages/backend/src/observability/cli-invoke-middleware.ts`. Fields:
-  `{ts, level, category, request_id, conversationId, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?, stale_resolution_reason?}`.
+  `{ts, level, category, request_id, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?, stale_resolution_reason?}`.
   `route_suffix` is the *matched route pattern* — never the raw URL
   path — so wildcard segments like `attachments/<id>/locate` collapse
   to `attachments/*/locate` and ids never leak. The `query_keys` array
@@ -1255,7 +1253,7 @@ routes do not expose log-level mutation.
   out before reaching any business route (`unknown noun`, strict-flag
   rejection, removed-flag use, dispatcher hard-guard rejection,
   message-send stdin pre-flight). Reported by the CLI itself via
-  `POST /internal/conversations/:cid/agents/:aid/cli-trace` and logged
+  `POST /internal/agents/:aid/cli-trace` and logged
   by the trace handler. Best-effort: 50ms timeout, no retry, never
   affects the CLI's exit code or stderr. Excluded from
   `cli.invoke` aggregations. Carries `error_code`, optional

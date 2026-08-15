@@ -115,7 +115,7 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('Runtime scope: agent');
     expect(text).toContain('## Agent-Global Memory');
     expect(text).toContain('# Agent-global memory');
-    expect(text).toContain('AgentSlot has no ambient conversation');
+    expect(text).toContain('there is no ambient workspace or channel');
     expect(text).not.toContain('## Workspace & Memory');
     expect(text).not.toContain('## Workspace Memory Index');
     expect(text).not.toContain('secret workspace');

@@ -9,7 +9,12 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotAuth,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 import { channelServiceErrorResponse } from '../../src/routes/responses.js';
 import { ActorError } from '../../src/services/channel-service.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -886,8 +891,11 @@ describe('workspace channel routes', () => {
       })
     ).json() as any;
     const internal = await (
-      await http(t).post(
-        `/internal/conversations/${workspace.onboarding_channel_id}/agents/${aliceId}/create-channel`,
+      await http(
+        t,
+        conversationSlotAuth(t, workspace.onboarding_channel_id, aliceId),
+      ).post(
+        `/internal/agents/${aliceId}/create-channel`,
         {
           title: 'agent-created',
           context_summary: 'split out',
@@ -2112,7 +2120,7 @@ describe('channel detail is_member + messages viewer_reacted neutralization', ()
       content: 'please fix the flaky test',
     }).id;
     const created = await http(t).post(
-      `/internal/conversations/${channelId}/agents/${agentId}/tasks/create`,
+      `/internal/agents/${agentId}/tasks/create`,
       { target: `#conv:${channelId}`, tasks: [{ title: 'fix flaky test', source_message_id: sourceId }] },
     );
     expect(created.status).toBe(200);

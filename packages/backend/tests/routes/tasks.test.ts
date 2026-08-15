@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotTestPath,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 import { canPostToConversation, canViewConversation } from '../../src/permissions.js';
 import type { AgentPrincipal } from '../../src/auth/principal.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
@@ -44,6 +49,12 @@ async function setup(
   ).json()) as any;
   t.fake.starts = [];
   t.fake.delivered = [];
+  for (const agentId of Object.values(agentIds)) {
+    conversationSlotTestPath(
+      `/internal/agents/${agentId}/tasks`,
+      ws.onboarding_channel_id,
+    );
+  }
   return {
     workspaceId: ws.workspace.id,
     conversationId: ws.onboarding_channel_id,
@@ -67,7 +78,7 @@ describe('Tasks (PR-T1)', () => {
 
     const r1 = await (
       await h.post(
-        `/internal/conversations/${conversationId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${conversationId}`, tasks: [{ title: 'fix login' }, { title: 'add logout' }] },
       )
     ).json() as any;
@@ -279,7 +290,7 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'shared work' }] },
       )
     ).json()) as any;
@@ -287,7 +298,7 @@ describe('Tasks (PR-T1)', () => {
 
     const aliceClaim = await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+        `/internal/agents/${agentIds.alice}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json() as any;
@@ -295,7 +306,7 @@ describe('Tasks (PR-T1)', () => {
 
     const bobClaim = await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.bob}/tasks/claim`,
+        `/internal/agents/${agentIds.bob}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json() as any;
@@ -326,12 +337,12 @@ describe('Tasks (PR-T1)', () => {
     // semantics: same workspace, so the lookup resolves via the
     // actor's current workspace and succeeds.
     await h.post(
-      `/internal/conversations/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks/create`,
+      `/internal/agents/${s1.agentIds.alice}/tasks/create`,
       { target: `#conv:${s1.sessionId}`, tasks: [{ title: 'in session 1' }] },
     );
     const crossClaim = await (
       await h.post(
-        `/internal/conversations/${sessionId2}/agents/${s1.agentIds.bob}/tasks/claim`,
+        `/internal/agents/${s1.agentIds.bob}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json() as any;
@@ -341,7 +352,7 @@ describe('Tasks (PR-T1)', () => {
     // aggregation).
     const listed = await (
       await h.get(
-        `/internal/conversations/${sessionId2}/agents/${s1.agentIds.bob}/tasks`,
+        `/internal/agents/${s1.agentIds.bob}/tasks`,
       )
     ).json() as any;
     expect(listed.tasks).toHaveLength(1);
@@ -355,18 +366,18 @@ describe('Tasks (PR-T1)', () => {
     const h = http(t);
 
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${sessionId}`, tasks: [{ title: 'ship' }] },
     );
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
 
     // bob (not assignee) can't update.
     const bobUpdate = await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.bob}/tasks/update-status`,
+        `/internal/agents/${agentIds.bob}/tasks/update-status`,
         { task_number: 1, status: 'in_review' },
       )
     ).json() as any;
@@ -376,7 +387,7 @@ describe('Tasks (PR-T1)', () => {
     // alice in_progress → in_review OK.
     const ok = await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+        `/internal/agents/${agentIds.alice}/tasks/update-status`,
         { task_number: 1, status: 'in_review' },
       )
     ).json() as any;
@@ -385,7 +396,7 @@ describe('Tasks (PR-T1)', () => {
     // in_review → todo rejected (not in VALID_TRANSITIONS).
     const bad = await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+        `/internal/agents/${agentIds.alice}/tasks/update-status`,
         { task_number: 1, status: 'todo' },
       )
     ).json() as any;
@@ -400,17 +411,17 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'review me' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+      `/internal/agents/${agentIds.alice}/tasks/update-status`,
       { task_number: 1, status: 'in_review' },
     );
 
@@ -431,11 +442,11 @@ describe('Tasks (PR-T1)', () => {
     const unsub = t.ctx.events.subscribe(sessionId, e => received.push(e));
 
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${sessionId}`, tasks: [{ title: 'x' }] },
     );
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
 
@@ -467,11 +478,11 @@ describe('Tasks (PR-T1)', () => {
     );
 
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${sessionId}`, tasks: [{ title: 'task board task' }] },
     );
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
 
@@ -495,7 +506,7 @@ describe('Tasks (PR-T1)', () => {
     t.fake.delivered = []; // clear setup noise
 
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${sessionId}`, tasks: [{ title: 'shared work' }] },
     );
     // Both alice and bob should receive the system message via inbox.
@@ -511,7 +522,7 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'plain' }] },
       )
     ).json()) as any;
@@ -540,17 +551,17 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'review me' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+      `/internal/agents/${agentIds.alice}/tasks/update-status`,
       { task_number: 1, status: 'in_review' },
     );
 
@@ -571,13 +582,13 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'finished' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
     );
     await http(t).post(`/api/tasks/${taskId}/status`, { status: 'done' });
@@ -608,14 +619,14 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'unclaim me' }] },
       )
     ).json()) as any;
     const taskId = created.tasks[0].id;
     const claim = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+        `/internal/agents/${agentIds.alice}/tasks/claim`,
         { task_numbers: [1] },
       )
     ).json()) as any;
@@ -626,7 +637,7 @@ describe('Tasks (PR-T1)', () => {
     expect(afterClaim.assignee?.id).toBe(agentIds.alice);
 
     const res = await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/unclaim`,
+      `/internal/agents/${agentIds.alice}/tasks/unclaim`,
       { task_number: 1 },
     );
     expect(res.status).toBe(200);
@@ -645,7 +656,7 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'shortcut' }] },
       )
     ).json()) as any;
@@ -666,7 +677,7 @@ describe('Tasks (PR-T1)', () => {
 
     const created = (await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'file later' }] },
       )
     ).json()) as any;
@@ -714,7 +725,7 @@ describe('Tasks (PR-T1)', () => {
     // Seed 5 tasks created by alice. Claim #2 + #3 (alice in_progress),
     // claim+in_review #4 (alice).
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       {
         target: `#conv:${sessionId}`,
         tasks: [
@@ -727,15 +738,15 @@ describe('Tasks (PR-T1)', () => {
       },
     );
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [2, 3, 4] },
     );
     await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/update-status`,
+      `/internal/agents/${agentIds.alice}/tasks/update-status`,
       { task_number: 4, status: 'in_review' },
     );
 
-    const listPath = `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks`;
+    const listPath = `/internal/agents/${agentIds.alice}/tasks`;
 
     // Repeated task_number (the regression we are fixing).
     const byNumbers = (await (
@@ -805,7 +816,7 @@ describe('Tasks (PR-T1)', () => {
     expect(ws2.workspace?.id).toBeDefined();
 
     // Alice (current conv = s1.sessionId, ws=eng) tries to list ws2.
-    const listPath = `/internal/conversations/${s1.sessionId}/agents/${s1.agentIds.alice}/tasks`;
+    const listPath = `/internal/agents/${s1.agentIds.alice}/tasks`;
     const denied = await h.get(`${listPath}?workspace_id=${ws2.workspace.id}`);
     expect(denied.status).toBe(403);
     const deniedBody = (await denied.json()) as any;
@@ -850,7 +861,7 @@ describe('Task create/edit/detail routes', () => {
 
     const created = await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         {
           target: `#conv:${sessionId}`,
           tasks: [{ title: 'derived', source_message_id: src.message.id }],
@@ -862,7 +873,7 @@ describe('Task create/edit/detail routes', () => {
 
     const detail = await (
       await h.get(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/detail?task_number=${taskNumber}`,
+        `/internal/agents/${agentIds.alice}/tasks/detail?task_number=${taskNumber}`,
       )
     ).json() as any;
     expect(detail.task.source_message_id).toBe(src.message.id);
@@ -877,7 +888,7 @@ describe('Task create/edit/detail routes', () => {
     const src = await (
       await h.post(`/api/channels/${sessionId}/messages`, { content: 'prompt' })
     ).json() as any;
-    const createPath = `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`;
+    const createPath = `/internal/agents/${agentIds.alice}/tasks/create`;
     const target = `#conv:${sessionId}`;
     const first = await (
       await h.post(createPath, {
@@ -926,7 +937,7 @@ describe('Task create/edit/detail routes', () => {
     const sysBBefore = countByKind(convB, 'system');
 
     const res = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convB}`, tasks: [{ title: 'file me in B' }] },
     );
     expect(res.status).toBe(200);
@@ -935,7 +946,7 @@ describe('Task create/edit/detail routes', () => {
 
     // Row + number + workflow belong to B — read it back as a B member.
     const listedB = (await (
-      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+      await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
     const row = listedB.tasks.find((x: any) => x.title === 'file me in B');
     expect(row).toBeTruthy();
@@ -961,7 +972,7 @@ describe('Task create/edit/detail routes', () => {
     const convB = ws2.onboarding_channel_id;
 
     const res = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convB}`, tasks: [{ title: 'cross-ws' }] },
     );
     expect(res.status).toBe(200);
@@ -969,14 +980,18 @@ describe('Task create/edit/detail routes', () => {
 
     // Task lives in B's (other) workspace — success itself proves create_tasks
     // was judged against ws2, where alice is a member.
+    conversationSlotTestPath(
+      `/internal/agents/${agentIds.alice}/tasks`,
+      convB,
+    );
     const detail = (await (
       await h.get(
-        `/internal/conversations/${convB}/agents/${agentIds.alice}/tasks/detail?task_number=${created.tasks[0].task_number}`,
+        `/internal/agents/${agentIds.alice}/tasks/detail?task_number=${created.tasks[0].task_number}`,
       )
     ).json()) as any;
     expect(detail.task.title).toBe('cross-ws');
     const listedB = (await (
-      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+      await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
     expect(listedB.tasks.find((x: any) => x.title === 'cross-ws').board).toMatchObject({
       kind: 'workspace',
@@ -1005,7 +1020,7 @@ describe('Task create/edit/detail routes', () => {
     const sysBBefore = countByKind(convB, 'system');
 
     const res = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convB}`, tasks: [{ title: 'blocked-by-B-caps' }] },
     );
     // Typed capability denial keyed to the missing bucket — never string-stuffed.
@@ -1018,7 +1033,7 @@ describe('Task create/edit/detail routes', () => {
     // Zero write in B.
     expect(countByKind(convB, 'system') - sysBBefore).toBe(0);
     const listedB = (await (
-      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+      await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
     expect(listedB.tasks.some((x: any) => x.title === 'blocked-by-B-caps')).toBe(false);
   });
@@ -1040,7 +1055,7 @@ describe('Task create/edit/detail routes', () => {
     const sysBefore = countByKind(convA, 'system');
 
     const res = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convA}`, claim: true, tasks: [{ title: 'claim-blocked' }] },
     );
     expect(res.status).toBe(403);
@@ -1052,7 +1067,7 @@ describe('Task create/edit/detail routes', () => {
     // The claim gate runs BEFORE createTasks, so nothing is written.
     expect(countByKind(convA, 'system') - sysBefore).toBe(0);
     const listed = (await (
-      await h.get(`/internal/conversations/${convA}/agents/${agentIds.alice}/tasks`)
+      await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
     expect(listed.tasks.some((x: any) => x.title === 'claim-blocked')).toBe(false);
   });
@@ -1076,7 +1091,7 @@ describe('Task create/edit/detail routes', () => {
     // member picks it up — so `--claim` (self-assign to the caller) is refused
     // with the typed op error and writes nothing.
     const res = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convB}`, claim: true, tasks: [{ title: 'cross-claim' }] },
     );
     expect(res.status).toBe(200);
@@ -1084,7 +1099,7 @@ describe('Task create/edit/detail routes', () => {
     expect(countByKind(convB, 'system') - sysBBefore).toBe(0);
     expect(countByKind(convA, 'system') - sysABefore).toBe(0);
     const listedB = (await (
-      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+      await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
     expect(listedB.tasks.some((x: any) => x.title === 'cross-claim')).toBe(false);
 
@@ -1096,7 +1111,7 @@ describe('Task create/edit/detail routes', () => {
     // unknown and unauthorized are byte-identical refusals — so the probe has
     // nothing to report either way. Proven below rather than assumed.
     const resUnknown = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${MISSING_ID}`, claim: true, tasks: [{ title: 'x' }] },
     );
     expect(resUnknown.status).toBe(404);
@@ -1143,11 +1158,18 @@ describe('Task create/edit/detail routes', () => {
         )
         .get(conversationId) as { content: string; metadata: string | null };
 
+    // The global URL carries no frame. Select the ConversationSlot explicitly:
+    // B is cross-stream from A, then A is the same-stream control.
+    conversationSlotTestPath(
+      `/internal/agents/${agentIds.alice}/tasks`,
+      convA,
+    );
+
     // Cross-channel create (from A into B). The narration is conversation-neutral
     // ("here from another conversation") because the destination may be a DM, not
     // just a channel — the contract is a conversation.
     await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convB}`, tasks: [{ title: 'ship it' }] },
     );
     const crossMsg = latestSystem(convB);
@@ -1167,7 +1189,7 @@ describe('Task create/edit/detail routes', () => {
 
     // Same-channel create (in A): classic `created` narration, no cross bit.
     await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convA}`, tasks: [{ title: 'local task' }] },
     );
     const sameMsg = latestSystem(convA);
@@ -1188,7 +1210,7 @@ describe('Task create/edit/detail routes', () => {
     t = buildTestApp();
     const { sessionId: convA, channelId, agentIds } = await setup(t);
     const h = http(t);
-    const createFromA = `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`;
+    const createFromA = `/internal/agents/${agentIds.alice}/tasks/create`;
 
     // (1) An id no conversation has.
     const unknown = await h.post(createFromA, {
@@ -1260,14 +1282,14 @@ describe('Task create/edit/detail routes', () => {
     const listTasks = async (): Promise<any[]> =>
       (
         (await (
-          await h.get(`/internal/conversations/${conv}/agents/${agentIds.alice}/tasks`)
+          await h.get(`/internal/agents/${agentIds.alice}/tasks`)
         ).json()) as any
       ).tasks;
 
     // The ROOT: the suffix survives resolution and reaches the aggregate as the
     // task's cluster.
     const ok = await h.post(
-      `/internal/conversations/${conv}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${conv}/thread:${root.id}`, tasks: [{ title: 'in the cluster' }] },
     );
     expect(ok.status).toBe(200);
@@ -1285,7 +1307,7 @@ describe('Task create/edit/detail routes', () => {
     // so there is no second opinion left to disagree with it.
     for (const rootish of [reply.id, MISSING_ID]) {
       const res = await h.post(
-        `/internal/conversations/${conv}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${conv}/thread:${rootish}`, tasks: [{ title: 'must not be born' }] },
       );
       expect(res.status, rootish).toBe(404);
@@ -1317,7 +1339,7 @@ describe('Task create/edit/detail routes', () => {
     const sysBBefore = countByKind(convB, 'system');
 
     const res = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       {
         target: `#conv:${convB}`,
         tasks: [{ title: 'derived', source_message_id: src.message.id }],
@@ -1329,7 +1351,7 @@ describe('Task create/edit/detail routes', () => {
     // Zero task + zero event in the destination.
     expect(countByKind(convB, 'system') - sysBBefore).toBe(0);
     const listedB = (await (
-      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+      await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
     expect(listedB.tasks.some((x: any) => x.title === 'derived')).toBe(false);
   });
@@ -1345,7 +1367,7 @@ describe('Task create/edit/detail routes', () => {
       })
     ).json()) as any;
     const convB = chB.channel.id;
-    const createFromA = `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`;
+    const createFromA = `/internal/agents/${agentIds.alice}/tasks/create`;
     const isCreateAudit = (call: unknown[]): boolean =>
       (call[0] as any)?.op === 'task_cross_op' && (call[0] as any)?.action === 'create';
 
@@ -1383,7 +1405,7 @@ describe('Task create/edit/detail routes', () => {
 
     // Cross-channel create succeeds (narrow, create-specific authorization)…
     const res = await h.post(
-      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      `/internal/agents/${agentIds.alice}/tasks/create`,
       { target: `#conv:${convB}`, tasks: [{ title: 'ok' }] },
     );
     expect(res.status).toBe(200);
@@ -1408,7 +1430,7 @@ describe('Task create/edit/detail routes', () => {
     const h = http(t);
     const created = await (
       await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        `/internal/agents/${agentIds.alice}/tasks/create`,
         { target: `#conv:${sessionId}`, tasks: [{ title: 'orig', body: 'orig body' }] },
       )
     ).json() as any;
@@ -1444,7 +1466,7 @@ describe('Task create/edit/detail routes', () => {
       const { workspaceId, conversationId, agentIds } = await setup(app, [member], workspaceName);
       const created = (await (
         await http(app).post(
-          `/internal/conversations/${conversationId}/agents/${agentIds[member]}/tasks/create`,
+          `/internal/agents/${agentIds[member]}/tasks/create`,
           { target: `#conv:${conversationId}`, tasks: [{ title }] },
         )
       ).json()) as any;

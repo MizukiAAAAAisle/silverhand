@@ -17,6 +17,7 @@
 // refusals come from the one P4 mapping (`delivery-target.ts`).
 import type { Hono } from 'hono';
 import {
+  agentPrincipalIn,
   getAgentPrincipal,
   type AppEnv,
 } from '../../auth/principal.js';
@@ -38,10 +39,9 @@ export function registerScheduleRoutes(
   const { ctx, conversations } = deps;
 
   app.post(internalAgentRoutePaths.schedules, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = ScheduleCreateInputSchema.safeParse(body);
@@ -65,6 +65,7 @@ export function registerScheduleRoutes(
     });
     if (!resolved.ok) return resolved.response;
     const destination = resolved.target.stream.conversationId;
+    const targetPrincipal = agentPrincipalIn(c, destination);
     // `manage_schedules` is judged where the wake LANDS, by the placement rule —
     // not by the calling conversation's workspace, and not by a raw
     // `workspace_id` (a `direct_pair` has none, and reading its null coordinate
@@ -73,7 +74,7 @@ export function registerScheduleRoutes(
       const denied = requireAgentConversationCapability(
         c,
         ctx,
-        principal,
+        targetPrincipal,
         'manage_schedules',
         conversations.getIdentity(destination),
       );
@@ -99,10 +100,9 @@ export function registerScheduleRoutes(
   });
 
   app.post(internalAgentRoutePaths.scheduleList, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = ScheduleListInputSchema.safeParse(body);
@@ -122,10 +122,9 @@ export function registerScheduleRoutes(
   });
 
   app.post(internalAgentRoutePaths.scheduleCancel, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = ScheduleCancelInputSchema.safeParse(body);

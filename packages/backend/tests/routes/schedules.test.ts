@@ -6,7 +6,12 @@ import {
   SCHEDULE_MIN_DELAY_SECONDS,
   type ScheduleDto,
 } from '@silverhand/shared';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotTestPath,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 
 /**
  * Route-level coverage for the agent-owned `schedule` MCP tools.
@@ -55,13 +60,13 @@ async function setupTwoAgentChannel(t: TestApp): Promise<Setup> {
 }
 
 function createPath(cid: string, aid: string): string {
-  return internalPaths.agentScheduleCreate(cid, aid);
+  return conversationSlotTestPath(internalPaths.agentScheduleCreate(aid), cid);
 }
 function listPath(cid: string, aid: string): string {
-  return internalPaths.agentScheduleList(cid, aid);
+  return conversationSlotTestPath(internalPaths.agentScheduleList(aid), cid);
 }
 function cancelPath(cid: string, aid: string): string {
-  return internalPaths.agentScheduleCancel(cid, aid);
+  return conversationSlotTestPath(internalPaths.agentScheduleCancel(aid), cid);
 }
 
 describe('Internal routes — agent schedules', () => {
@@ -473,24 +478,25 @@ describe('Internal routes — agent schedules', () => {
     expect(res.status).toBe(401);
   });
 
-  it('rejects an agent that is not a member of the principal conversation (403)', async () => {
+  it('folds a wake target the authenticated agent does not participate in to 404', async () => {
     t = buildTestApp();
     const { conversationId, aliceId } = await setupTwoAgentChannel(t);
-    // Provision a third agent that is NOT a member of the chosen
-    // principal conversation. The internal middleware rejects before
-    // the route ever runs.
+    // Provision a third agent with its own valid ConversationSlot, but no
+    // participation in the addressed wake destination. Authentication succeeds;
+    // the target resolver then gives the same answer as an unknown address.
     const stranger = await (
       await http(t).post('/api/agents', { name: 'carol', runtime: 'claude' })
     ).json() as any;
     const carolId = stranger.agent.id as string;
     expect(carolId).not.toBe(aliceId);
-    const res = await http(t).post(createPath(conversationId, carolId), {
+    const res = await http(t).post(internalPaths.agentScheduleCreate(carolId), {
       target_conversation: `#conv:${conversationId}`,
       title: 'Test schedule',
       message: 'x',
       spec: { kind: 'once', delay_seconds: 60 },
     });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: 'target_unresolved' });
   });
 
   it('rejects unauthenticated requests (401)', async () => {

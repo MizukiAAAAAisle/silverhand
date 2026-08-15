@@ -65,9 +65,6 @@ type Auth = { authorization: string };
 interface Credential {
   readonly label: 'conversation_slot' | 'agent_slot';
   readonly agentId: string;
-  /** The route anchor. For a ConversationSlot it is also the stream it owns; for
-   *  an AgentSlot it is only a transport coordinate. */
-  readonly anchorId: string;
   readonly auth: Auth;
 }
 
@@ -84,7 +81,7 @@ const DOORS: ReadonlyArray<{
     operation: 'message_send',
     call: (t, cred, target) =>
       http(t, cred.auth).post(
-        internalPaths.agentSendConversationMessage(cred.anchorId, cred.agentId),
+        internalPaths.agentSendConversationMessage(cred.agentId),
         { content: 'hello', target },
       ),
   },
@@ -92,7 +89,7 @@ const DOORS: ReadonlyArray<{
     operation: 'message_history',
     call: (t, cred, target) =>
       http(t, cred.auth).post(
-        internalPaths.agentReadHistory(cred.anchorId, cred.agentId),
+        internalPaths.agentReadHistory(cred.agentId),
         { target, limit: 10 },
       ),
   },
@@ -100,7 +97,7 @@ const DOORS: ReadonlyArray<{
     operation: 'task_create',
     call: (t, cred, target) =>
       http(t, cred.auth).post(
-        internalPaths.agentCreateConversationTasks(cred.anchorId, cred.agentId),
+        internalPaths.agentCreateConversationTasks(cred.agentId),
         { tasks: [{ title: 'a task' }], target },
       ),
   },
@@ -108,7 +105,7 @@ const DOORS: ReadonlyArray<{
     operation: 'schedule_create',
     call: (t, cred, target) =>
       http(t, cred.auth).post(
-        internalPaths.agentScheduleCreate(cred.anchorId, cred.agentId),
+        internalPaths.agentScheduleCreate(cred.agentId),
         {
           title: 'wake',
           message: 'do the thing',
@@ -121,7 +118,7 @@ const DOORS: ReadonlyArray<{
     operation: 'channel_fork_source',
     call: (t, cred, target) =>
       http(t, cred.auth).post(
-        internalPaths.agentCreateChannel(cred.anchorId, cred.agentId),
+        internalPaths.agentCreateChannel(cred.agentId),
         {
           title: `forked-${Math.random().toString(36).slice(2, 8)}`,
           context_summary: 'split this out',
@@ -134,7 +131,7 @@ const DOORS: ReadonlyArray<{
     operation: 'member_add',
     call: (t, cred, target) =>
       http(t, cred.auth).post(
-        internalPaths.agentAddConversationMember(cred.anchorId, cred.agentId),
+        internalPaths.agentAddConversationMember(cred.agentId),
         { handle: 'nobody-holds-this', target },
       ),
   },
@@ -152,7 +149,6 @@ const DOORS: ReadonlyArray<{
       return await t.app.fetch(
         new Request(
           `http://localhost${internalPaths.agentUploadAttachment(
-            cred.anchorId,
             cred.agentId,
           )}`,
           { method: 'POST', headers: { ...cred.auth }, body: form },
@@ -222,7 +218,6 @@ async function scene(t: TestApp): Promise<Scene> {
       {
         label: 'conversation_slot',
         agentId: connie,
-        anchorId: anchor,
         auth: {
           authorization: `Bearer ${issueTestConversationRuntimeToken(t, anchor, connie)}`,
         },
@@ -230,7 +225,6 @@ async function scene(t: TestApp): Promise<Scene> {
       {
         label: 'agent_slot',
         agentId: aria,
-        anchorId: anchor,
         auth: agentSlotAuth(t, aria),
       },
     ],

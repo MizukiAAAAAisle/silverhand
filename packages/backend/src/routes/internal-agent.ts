@@ -68,54 +68,27 @@ export function createInternalRouter(
     workspaces,
   };
 
-  // Observe every attempt before authentication. Otherwise expired/unknown
-  // legacy bearers disappear into a false zero and the bridge can never have a
-  // sound deletion gate. This logs only route coordinates + declared caller;
-  // authorization remains exclusively in RuntimePrincipalVerifier below.
-  app.use('/internal/conversations/:cid/agents/:aid/*', async (c, next) => {
-    ctx.logger.info(
-      {
-        action: 'legacy_internal_agent_route',
-        conversationId: c.req.param('cid'),
-        agentId: c.req.param('aid'),
-        path: c.req.path,
-        caller: c.req.header('x-agent-hub-caller') ?? 'unknown',
-        routeFamily: 'legacy',
-      },
-      'legacy internal-agent route bridge used',
-    );
-    c.header('Deprecation', 'true');
-    await next();
-  });
-
   installInternalPrincipalMiddleware(
     app,
     new RuntimePrincipalVerifier(
       ctx.agentTokens,
       persistence.repos.runtimeSlots,
-      conversations,
     ),
   );
 
   // CLI invocation logging — must run after auth so we only emit lines
   // for verified principals, but before route handlers so handler
   // throws/short-circuits still produce one line per call.
-  app.use(
-    '/internal/conversations/:cid/agents/:aid/*',
-    createCliInvokeMiddleware(ctx),
-  );
-  app.use(
-    '/internal/agents/:aid/conversations/:cid/*',
-    createCliInvokeMiddleware(ctx),
-  );
+  app.use('/internal/agents/:aid/*', createCliInvokeMiddleware(ctx));
 
   // Observability-only pre-flight failure trace — registered first so it keeps
   // its original position ahead of the membership mount.
   registerDiagnosticsRoutes(routes, deps);
 
-  // ── canonical conversation-scoped MCP routes ───────────────────
-  // Internal membership routes are wrapped by the param-scoped agent-token auth
-  // + getAgentPrincipal middleware installed above.
+  // ── canonical agent-global command routes ───────────────────────
+  // Internal membership routes share the same agent-token auth and principal
+  // middleware installed above. Their semantic conversation arrives in the
+  // command input; the URL contributes only agent identity.
   routes.route(
     '/',
     createInternalMembershipApp({
@@ -151,10 +124,7 @@ export function createInternalRouter(
   registerProfileMcpRoutes(routes, deps);
   registerScheduleRoutes(routes, deps);
 
-  // One handler graph, two mounts. Canonical is the long-term authority;
-  // legacy only adapts its path coordinate into the same `:cid` target.
-  app.route('/internal/agents/:aid/conversations/:cid', routes);
-  app.route('/internal/conversations/:cid/agents/:aid', routes);
+  app.route('/internal/agents/:aid', routes);
 
   return app;
 }

@@ -3,7 +3,12 @@ import { internalPaths, type ScheduleDto } from '@silverhand/shared';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 
 /**
  * #task:2021 P4-4: the wake destination is ONE absolute address.
@@ -84,8 +89,14 @@ function create(
   target: string | null,
   extra: Record<string, unknown> = {},
 ): Promise<Response> {
-  return http(t).post(
-    internalPaths.agentScheduleCreate(credential.conversationId, credential.agentId),
+  return http(t, {
+    authorization: `Bearer ${issueTestConversationRuntimeToken(
+      t,
+      credential.conversationId,
+      credential.agentId,
+    )}`,
+  }).post(
+    internalPaths.agentScheduleCreate(credential.agentId),
     {
       title: 'wake',
       message: 'do the thing',

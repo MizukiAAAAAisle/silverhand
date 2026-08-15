@@ -19,7 +19,12 @@
 //    pair task from any frame the policy admits;
 //  - tombstoned endpoints keep the projection total (identity-only DTO).
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotTestPath,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 import {
   agentSlotAuth,
   canonicalTasksPath,
@@ -85,7 +90,7 @@ async function channel(
 }
 
 const agentBase = (cid: string, aid: string): string =>
-  `/internal/conversations/${cid}/agents/${aid}/tasks`;
+  conversationSlotTestPath(`/internal/agents/${aid}/tasks`, cid);
 
 function hardDeleteAgent(t: TestApp, agentId: string): void {
   createSqliteAgentTeardownPersistence(t.ctx.db).uow.atomicallyForAgent(

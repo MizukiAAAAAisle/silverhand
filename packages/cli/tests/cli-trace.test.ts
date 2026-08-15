@@ -63,7 +63,7 @@ describe('cli-trace fire-and-forget reporter', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe(
-      'http://localhost:9999/internal/agents/agent-1/conversations/conv-1/cli-trace',
+      'http://localhost:9999/internal/agents/agent-1/cli-trace',
     );
     expect(init.method).toBe('POST');
     expect(init.headers.authorization).toBe('Bearer tok-1');

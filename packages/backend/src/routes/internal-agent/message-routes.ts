@@ -4,6 +4,7 @@
 import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import {
+  agentPrincipalIn,
   getAgentPrincipal,
   type AppEnv,
 } from '../../auth/principal.js';
@@ -56,10 +57,9 @@ export function registerMessageRoutes(
   });
 
   app.post(internalAgentRoutePaths.sendMessage, sendBodyLimit, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     // `bodyLimit` signals a chunked-body overflow by erroring the wrapped
     // stream mid-read; rethrow it so the middleware's post-`next()` check
@@ -74,7 +74,7 @@ export function registerMessageRoutes(
     const parsed = AgentSendMessageInputSchema.safeParse(body);
     if (!parsed.success) {
       ctx.logger.warn(
-        { conversationId: cid, agentId: aid, issues: parsed.error.issues },
+        { agentId: aid, issues: parsed.error.issues },
         'internal: agent send-message rejected (invalid input)',
       );
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
@@ -91,19 +91,6 @@ export function registerMessageRoutes(
       );
     }
     const principal = getAgentPrincipal(c);
-    // TWO GATES, TWO SUBJECTS (#task:2021 P4-4).
-    //
-    // This one is the CREDENTIAL: may this principal post AT ALL, from the
-    // conversation its token is scoped to. `canPostToConversation` is the right
-    // authority for that and the wrong one for the target — its participation face
-    // narrows `direct_pair` / `agent_inbox` with `runningInConversationId`, so
-    // asking it about a foreign stream would refuse every cross-conversation DM
-    // send, which is the whole point of the address. The TARGET's authority is the
-    // resolver below (participation, placement) plus the send transaction's own
-    // in-tx `assertPostAuthority` (postability, re-read after resolution).
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const resolved = resolveDeliveryTargetForRoute(c, deps, {
       address: parsed.data.target,
       operation: 'message_send',
@@ -111,6 +98,10 @@ export function registerMessageRoutes(
       now: Date.now(),
     });
     if (!resolved.ok) return resolved.response;
+    const targetPrincipal = agentPrincipalIn(
+      c,
+      resolved.target.stream.conversationId,
+    );
     {
       // The TARGET conversation's placement governs the capability, exactly as it
       // does on the read side: its workspace grant, self-authority for the
@@ -118,7 +109,7 @@ export function registerMessageRoutes(
       // SOURCE would grant a send into any stream to anyone who could post in
       // their own — the credential gate above is about the caller, this is about
       // where the words land.
-      const denied = requireAgentConversationCapability(c, ctx, principal,
+      const denied = requireAgentConversationCapability(c, ctx, targetPrincipal,
         'send_messages',
         conversations.getIdentity(resolved.target.stream.conversationId));
       if (denied) return denied;
@@ -132,8 +123,8 @@ export function registerMessageRoutes(
     }
     try {
       const result = await ctx.conversationMessageService.sendMessage({
-        conversationId: principal.conversationId,
-        actor: principal,
+        conversationId: targetPrincipal.conversationId,
+        actor: targetPrincipal,
         content: parsed.data.content,
         attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
         destination: { kind: 'stream', stream: resolved.target.stream },
@@ -173,21 +164,20 @@ export function registerMessageRoutes(
   });
 
   app.post(internalAgentRoutePaths.resolveStaleMessage, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentResolveStaleMessageInputSchema.safeParse(body);
     if (!parsed.success) {
       ctx.logger.warn(
-        { conversationId: cid, agentId: aid, issues: parsed.error.issues },
+        { agentId: aid, issues: parsed.error.issues },
         'internal: agent stale-resolution rejected (invalid input)',
       );
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const principal = getAgentPrincipal(c);
+    const principal = agentPrincipalIn(c, parsed.data.conversation_id);
     if (!canPostToConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
@@ -207,10 +197,9 @@ export function registerMessageRoutes(
   });
 
   app.post(internalAgentRoutePaths.readHistory, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentReadHistoryInputSchema.safeParse(body);
@@ -218,9 +207,6 @@ export function registerMessageRoutes(
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const principal = getAgentPrincipal(c);
-    if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     // ONE resolver for both doors (#task:2021 P4-4). The read intent differs from
     // the write only in what it refuses to do — never allocate a direct pair — and
     // that asymmetry lives inside the resolver, so this route carries no rule of
@@ -243,6 +229,10 @@ export function registerMessageRoutes(
       now: Date.now(),
     });
     if (!resolved.ok) return resolved.response;
+    const targetPrincipal = agentPrincipalIn(
+      c,
+      resolved.target.stream.conversationId,
+    );
     const targetConversation = conversations.get(
       resolved.target.stream.conversationId,
     );
@@ -254,7 +244,7 @@ export function registerMessageRoutes(
     {
       // The TARGET conversation's placement governs: its workspace grant, or
       // self-authority when the target is the caller's own inbox (v71).
-      const denied = requireAgentConversationCapability(c, ctx, principal,
+      const denied = requireAgentConversationCapability(c, ctx, targetPrincipal,
         'read_messages', conversations.getIdentity(targetConversation.id));
       if (denied) return denied;
     }
@@ -262,7 +252,7 @@ export function registerMessageRoutes(
       ctx,
       'agent.read_history',
       {
-        sourceConversationId: principal.conversationId,
+        runtimeConversationId: principal.conversationId,
         targetConversationId: targetConversation.id,
         agentId: principal.agentId,
         limit: parsed.data.limit,
@@ -285,10 +275,9 @@ export function registerMessageRoutes(
   });
 
   app.post(internalAgentRoutePaths.searchMessages, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentSearchMessagesInputSchema.safeParse(body);
@@ -296,18 +285,19 @@ export function registerMessageRoutes(
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const principal = getAgentPrincipal(c);
-    if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
+    const sourceConversation = principal.conversationId === null
+      ? null
+      : conversations.get(principal.conversationId);
+    if (principal.conversationId !== null && !sourceConversation) {
+      return c.json({ error: 'conversation not found' }, 404);
     }
-    const sourceConversation = conversations.get(principal.conversationId);
-    if (!sourceConversation) return c.json({ error: 'conversation not found' }, 404);
     // Cross-workspace search is gated up-front by
     // `canAgentAccessWorkspace`. The dto builder still runs the
     // conversation_agents JOIN as the bottom guard, so unjoined
     // channels in the target workspace stay invisible.
     if (
       parsed.data.workspace_id &&
-      parsed.data.workspace_id !== sourceConversation.workspace_id
+      parsed.data.workspace_id !== sourceConversation?.workspace_id
     ) {
       if (
         !canAgentAccessWorkspace(
@@ -338,11 +328,16 @@ export function registerMessageRoutes(
           'read_messages', selected);
         if (denied) return denied;
       } else {
-        const scope = resolveAgentQueryWorkspaceId(
-          c,
-          sourceConversation,
-          parsed.data.workspace_id,
-        );
+        const explicitWorkspaceId = parsed.data.workspace_id;
+        if (sourceConversation === null && explicitWorkspaceId === undefined) {
+          return c.json({
+            error: 'agent-scoped message search must name conversation_id or workspace_id',
+            code: 'search_scope_required',
+          }, 400);
+        }
+        const scope = sourceConversation === null
+          ? { ok: true as const, workspaceId: explicitWorkspaceId! }
+          : resolveAgentQueryWorkspaceId(c, sourceConversation, explicitWorkspaceId);
         if (!scope.ok) return scope.response;
         const denied = requireAgentCapability(c, ctx, principal, 'read_messages',
           scope.workspaceId);

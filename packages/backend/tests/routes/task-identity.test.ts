@@ -14,7 +14,12 @@
 //    gets the same uniform task_not_found for every one of them.
 //  - By-number addressing and its typed board errors are untouched.
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  conversationSlotTestPath,
+  http,
+  type TestApp,
+} from '../utils/app.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
 
@@ -64,8 +69,12 @@ async function createTask(
   title: string,
 ): Promise<{ id: string; task_number: number }> {
   const h = http(t);
+  const base = conversationSlotTestPath(
+    `/internal/agents/${agentId}/tasks`,
+    conversationId,
+  );
   const r = (await (
-    await h.post(`/internal/conversations/${conversationId}/agents/${agentId}/tasks/create`, {
+    await h.post(`${base}/create`, {
       target: `#conv:${conversationId}`,
       tasks: [{ title }],
     })
@@ -82,8 +91,12 @@ async function detailById(
   taskId: string,
 ): Promise<{ status: number; body: unknown }> {
   const h = http(t);
+  const base = conversationSlotTestPath(
+    `/internal/agents/${agentId}/tasks`,
+    conversationId,
+  );
   const res = await h.get(
-    `/internal/conversations/${conversationId}/agents/${agentId}/tasks/detail?task_id=${encodeURIComponent(taskId)}`,
+    `${base}/detail?task_id=${encodeURIComponent(taskId)}`,
   );
   return { status: res.status, body: await res.json() };
 }
@@ -106,7 +119,7 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     expect(byId.status).toBe(200);
     const byNumber = (await (
       await h.get(
-        `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/detail?task_number=${created.task_number}`,
+        `/internal/agents/${agentIds.alice}/tasks/detail?task_number=${created.task_number}`,
       )
     ).json()) as any;
     // Same task through both coordinate systems — byte-for-byte.
@@ -155,7 +168,7 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     const h = http(t);
     const n1 = (await (
       await h.get(
-        `/internal/conversations/${ch1}/agents/${s1.agentIds.alice}/tasks/detail?task_number=1`,
+        `/internal/agents/${s1.agentIds.alice}/tasks/detail?task_number=1`,
       )
     ).json()) as any;
     expect(n1.task.id).toBe(t1.id);
@@ -214,7 +227,7 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     }
     // …and the shape is the SAME one a by-number miss produces.
     const numberMiss = await h.get(
-      `/internal/conversations/${chAlice}/agents/${agentIds.alice}/tasks/detail?task_number=999`,
+      `/internal/agents/${agentIds.alice}/tasks/detail?task_number=999`,
     );
     expect(numberMiss.status).toBe(404);
     expect(JSON.stringify(await numberMiss.json())).toBe(canonical);
@@ -234,7 +247,7 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
 
     // list: only the participant rows; every row self-carries coordinates.
     const listed = (await (
-      await h.get(`/internal/conversations/${chAlice}/agents/${agentIds.alice}/tasks`)
+      await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
     const ids = listed.tasks.map((row: any) => row.id);
     expect(ids).toContain(mine.id);
@@ -248,19 +261,19 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     }
     // bob still sees his own rows (the narrowing is per-viewer, not global).
     const bobListed = (await (
-      await h.get(`/internal/conversations/${chBobPrivate}/agents/${agentIds.bob}/tasks`)
+      await h.get(`/internal/agents/${agentIds.bob}/tasks`)
     ).json()) as any;
     expect(bobListed.tasks.map((row: any) => row.id)).toContain(theirPrivate.id);
 
     // by-number detail folds the same way (coordinate is right, ACL is not).
     const detailPrivate = await h.get(
-      `/internal/conversations/${chAlice}/agents/${agentIds.alice}/tasks/detail?task_number=${theirPrivate.task_number}`,
+      `/internal/agents/${agentIds.alice}/tasks/detail?task_number=${theirPrivate.task_number}`,
     );
     expect(detailPrivate.status).toBe(404);
     // …while a filtered list narrows and never widens.
     const filtered = (await (
       await h.get(
-        `/internal/conversations/${chAlice}/agents/${agentIds.alice}/tasks?conversation_id=${chBobPrivate}`,
+        `/internal/agents/${agentIds.alice}/tasks?conversation_id=${chBobPrivate}`,
       )
     ).json()) as any;
     expect(filtered.tasks).toHaveLength(0);
@@ -277,7 +290,7 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
 
     // claim (batch): entries echo the caller's own id, nothing else differs.
     const claim = (await (
-      await h.post(`/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/claim`, {
+      await h.post(`/internal/agents/${agentIds.alice}/tasks/claim`, {
         task_ids: [visible.id, unknown],
       })
     ).json()) as any;
@@ -299,13 +312,13 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     ] as const) {
       const forVisible = (await (
         await h.post(
-          `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/${body.path}`,
+          `/internal/agents/${agentIds.alice}/tasks/${body.path}`,
           body.payload(visible.id),
         )
       ).json()) as any;
       const forUnknown = (await (
         await h.post(
-          `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/${body.path}`,
+          `/internal/agents/${agentIds.alice}/tasks/${body.path}`,
           body.payload(unknown),
         )
       ).json()) as any;
@@ -334,7 +347,7 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     // Unknown workspace still names ITS OWN coordinate failure (typed) —
     // the caller addressed a board, not a task.
     const unknownWs = (await (
-      await h.post(`/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/claim`, {
+      await h.post(`/internal/agents/${agentIds.alice}/tasks/claim`, {
         task_numbers: [1],
         workspace_id: 'no-such-workspace',
       })
@@ -350,12 +363,12 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
 
     // detail: both selectors → 400.
     const both = await h.get(
-      `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/detail?task_number=1&task_id=abc`,
+      `/internal/agents/${agentIds.alice}/tasks/detail?task_number=1&task_id=abc`,
     );
     expect(both.status).toBe(400);
     // detail: id + workspace selector → 400.
     const withWs = await h.get(
-      `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/detail?task_id=abc&workspace_id=${workspaceId}`,
+      `/internal/agents/${agentIds.alice}/tasks/detail?task_id=abc&workspace_id=${workspaceId}`,
     );
     expect(withWs.status).toBe(400);
 
@@ -365,29 +378,29 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
       ['edit', { title: 'x' }],
     ] as const) {
       const bothBody = await h.post(
-        `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/${path}`,
+        `/internal/agents/${agentIds.alice}/tasks/${path}`,
         { ...base, task_number: 1, task_id: 'abc' },
       );
       expect(bothBody.status, `${path} both`).toBe(400);
       const neither = await h.post(
-        `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/${path}`,
+        `/internal/agents/${agentIds.alice}/tasks/${path}`,
         { ...base },
       );
       expect(neither.status, `${path} neither`).toBe(400);
       const idPlusSelector = await h.post(
-        `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/${path}`,
+        `/internal/agents/${agentIds.alice}/tasks/${path}`,
         { ...base, task_id: 'abc', workspace_id: workspaceId },
       );
       expect(idPlusSelector.status, `${path} id+selector`).toBe(400);
     }
     // claim: mixed batch and id+selector are 400s.
     const mixed = await h.post(
-      `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1], task_ids: ['abc'] },
     );
     expect(mixed.status).toBe(400);
     const claimIdSelector = await h.post(
-      `/internal/conversations/${chA}/agents/${agentIds.alice}/tasks/claim`,
+      `/internal/agents/${agentIds.alice}/tasks/claim`,
       { task_ids: ['abc'], workspace_id: workspaceId },
     );
     expect(claimIdSelector.status).toBe(400);
@@ -436,7 +449,7 @@ describe('P0-g B2 — participation gates the WRITE face too (#task:2018 review 
     const beforePrivate = await messageCount(chBobPrivate);
     const beforePublic = await messageCount(chBobPublic);
 
-    const agentBase = `/internal/conversations/${chAlice}/agents/${agentIds.alice}/tasks`;
+    const agentBase = `/internal/agents/${agentIds.alice}/tasks`;
     const missEnvelope = async (path: string, payload: (n: number) => unknown): Promise<string> => {
       const res = (await (await h.post(`${agentBase}/${path}`, payload(999))).json()) as any;
       return JSON.stringify(path === 'claim' ? res.results[0] : res);
@@ -486,7 +499,7 @@ describe('P0-g B2 — participation gates the WRITE face too (#task:2018 review 
     ] as const) {
       const seen = (await (
         await h.get(
-          `/internal/conversations/${conv}/agents/${agentIds.bob}/tasks/detail?task_number=${task.task_number}`,
+          `/internal/agents/${agentIds.bob}/tasks/detail?task_number=${task.task_number}`,
         )
       ).json()) as any;
       expect(seen.task.status).toBe('todo');
@@ -499,7 +512,7 @@ describe('P0-g B2 — participation gates the WRITE face too (#task:2018 review 
 
     // Participant control: bob claims his own task by the same number.
     const bobClaim = (await (
-      await h.post(`/internal/conversations/${chBobPrivate}/agents/${agentIds.bob}/tasks/claim`, {
+      await h.post(`/internal/agents/${agentIds.bob}/tasks/claim`, {
         task_numbers: [privateTask.task_number],
       })
     ).json()) as any;

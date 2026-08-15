@@ -5,6 +5,7 @@ import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import {
   buildTestApp,
+  conversationSlotAuth,
   http,
   issueTestConversationRuntimeToken,
   type TestApp,
@@ -14,9 +15,9 @@ import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
 /**
  * #task:2021 P4-4: the agent's upload door takes ONE absolute address.
  *
- * An attachment is owned by a CONVERSATION, and the conversation in the route
- * path is the CREDENTIAL's — where the token was minted — so the destination is
- * now its own fact, carried as a form field beside the bytes. These are the
+ * An attachment is owned by a CONVERSATION, while the runtime credential carries
+ * custody rather than a route destination, so the destination is its own fact,
+ * carried as a form field beside the bytes. These are the
  * differentials that would still pass if the route quietly kept uploading into
  * the credential's conversation, or accepted a `/thread:` suffix and dropped it,
  * or judged the capability where the token lives instead of where the file
@@ -80,10 +81,11 @@ async function createChannel(
  * address is a form field, and `target: null` omits the field entirely (the
  * hand-rolled-client path — the CLI refuses a missing `--target` locally).
  *
- * `credential.conversationId` is the ROUTE ANCHOR. Which bearer signs it decides
- * how far the address may reach (#task:2021 P4-4): `file_upload` is confined to a
- * ConversationSlot's own stream, so every cross-stream case here is signed by a real
- * AgentSlot — the credential kind that reaches by participation.
+ * `credential.conversationId` is used only to mint the default ConversationSlot
+ * bearer. Which bearer signs the agent-global route decides how far the address
+ * may reach (#task:2021 P4-4): `file_upload` is confined to a ConversationSlot's
+ * own stream, so every cross-stream case here is signed by a real AgentSlot — the
+ * credential kind that reaches by participation.
  */
 async function upload(
   t: TestApp,
@@ -97,7 +99,6 @@ async function upload(
   return t.app.fetch(
     new Request(
       `http://localhost${internalPaths.agentUploadAttachment(
-        credential.conversationId,
         credential.agentId,
       )}`,
       {
@@ -127,6 +128,28 @@ function attachmentsIn(t: TestApp, conversationId: string): number {
   return new AttachmentRepo(t.ctx.db).listByChannel(conversationId).length;
 }
 
+async function patchAttachment(
+  t: TestApp,
+  agentId: string,
+  attachmentId: string,
+  auth: { authorization: string },
+): Promise<Response> {
+  const form = new FormData();
+  form.append(
+    'file',
+    new Blob([Buffer.concat([PNG_BYTES, Buffer.from('revised')])], {
+      type: 'image/png',
+    }),
+    'shot.png',
+  );
+  return t.app.fetch(
+    new Request(
+      `http://localhost${internalPaths.agentUpdateAttachment(agentId, attachmentId)}`,
+      { method: 'PATCH', headers: auth, body: form },
+    ),
+  );
+}
+
 describe('internal file upload — the address is the destination', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -134,7 +157,7 @@ describe('internal file upload — the address is the destination', () => {
     t = null;
   });
 
-  it('lands in the conversation the ADDRESS names, not the one the credential is scoped to', async () => {
+  it('lands in the conversation the ADDRESS names, independent of runtime provenance', async () => {
     t = buildTestApp();
     const seed = await makeAgent(t, 'seed');
     const alice = insertAgentScopedAgent(t, seed, 'alice');
@@ -151,7 +174,7 @@ describe('internal file upload — the address is the destination', () => {
     expect(res.status).toBe(201);
     const dto = (await res.json()) as any;
     // `channel_id` is the owning conversation, and it is the destination — not
-    // the place the token happens to be valid.
+    // any transport coordinate.
     expect(dto.channel_id).toBe(destination);
     expect(dto.source_conversation_id).toBe(destination);
   });
@@ -280,5 +303,61 @@ describe('internal file upload — the address is the destination', () => {
     );
     expect(ok.status).toBe(201);
     expect(((await ok.json()) as any).channel_id).toBe(away.channelId);
+  });
+
+  it('keeps object-addressed attachment writes inside a ConversationSlot while AgentSlot remains cross-stream', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const global = insertAgentScopedAgent(t, alice, 'global');
+    const ws = await makeWorkspace(t, 'attachment-update-reach', [alice, global]);
+    const anchor = await createChannel(t, ws.workspaceId, 'anchor', [alice, global]);
+    const owner = await createChannel(t, ws.workspaceId, 'owner', [alice, global]);
+    const uploaded = await upload(
+      t,
+      { conversationId: anchor, agentId: alice },
+      `#conv:${owner}`,
+      conversationSlotAuth(t, owner, alice),
+    );
+    expect(uploaded.status).toBe(201);
+    const dto = (await uploaded.json()) as { id: string };
+    const attachments = new AttachmentRepo(t.ctx.db);
+
+    const confined = await patchAttachment(
+      t,
+      alice,
+      dto.id,
+      conversationSlotAuth(t, anchor, alice),
+    );
+    expect(confined.status).toBe(404);
+    expect(await confined.json()).toEqual({ error: 'attachment not found' });
+    expect(attachments.getById(dto.id)?.content_revision).toBe(1);
+
+    const ownStream = await patchAttachment(
+      t,
+      alice,
+      dto.id,
+      conversationSlotAuth(t, owner, alice),
+    );
+    expect(ownStream.status).toBe(200);
+    expect(((await ownStream.json()) as any).content_revision).toBe(2);
+    expect(attachments.getById(dto.id)?.content_revision).toBe(2);
+
+    const globalAuth = agentSlotAuth(t, global);
+    const globalUpload = await upload(
+      t,
+      { conversationId: anchor, agentId: global },
+      `#conv:${owner}`,
+      globalAuth,
+    );
+    expect(globalUpload.status).toBe(201);
+    const globalDto = (await globalUpload.json()) as { id: string };
+    const globalPatch = await patchAttachment(
+      t,
+      global,
+      globalDto.id,
+      globalAuth,
+    );
+    expect(globalPatch.status).toBe(200);
+    expect(((await globalPatch.json()) as any).content_revision).toBe(2);
   });
 });

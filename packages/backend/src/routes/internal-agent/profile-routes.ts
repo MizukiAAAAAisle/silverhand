@@ -76,12 +76,10 @@ export function registerProfileRoutes(
   // PR.
 
   app.post(internalAgentRoutePaths.avatar, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
     if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
     const principal = getAgentPrincipal(c);
     if (!canEditAgent(ctx, principal, aid)) {
@@ -113,12 +111,10 @@ export function registerProfileRoutes(
   });
 
   app.delete(internalAgentRoutePaths.avatar, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
     if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
     const principal = getAgentPrincipal(c);
     if (!canEditAgent(ctx, principal, aid)) {
@@ -163,12 +159,10 @@ export function registerProfileRoutes(
   // MIME/size/storage validator.
 
   app.get(internalAgentRoutePaths.profile, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
     const agent = agents.get(aid);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
     const principal = getAgentPrincipal(c);
@@ -179,12 +173,10 @@ export function registerProfileRoutes(
   });
 
   app.post(internalAgentRoutePaths.profile, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
-    if (!conversations.get(cid)) return c.json({ error: 'conversation not found' }, 404);
     if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
     const principal = getAgentPrincipal(c);
     if (!canEditAgent(ctx, principal, aid)) {
@@ -286,10 +278,9 @@ export function registerProfileRoutes(
   // `agents.name`, so a distinguishable "that's a human" would answer a
   // cross-workspace existence question (§AP).
   app.get(internalAgentRoutePaths.peerProfile, c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const parsedQuery = AgentPeerProfileQuerySchema.safeParse({
       handle: c.req.query('handle'),
@@ -302,11 +293,10 @@ export function registerProfileRoutes(
       );
     }
     const principal = getAgentPrincipal(c);
-    if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-    const sourceConversation = conversations.get(principal.conversationId);
-    if (!sourceConversation) {
+    const sourceConversation = principal.conversationId === null
+      ? null
+      : conversations.get(principal.conversationId);
+    if (principal.conversationId !== null && !sourceConversation) {
       return c.json({ error: 'conversation not found' }, 404);
     }
     // Default to the source workspace; a cross-workspace target is gated by
@@ -315,14 +305,18 @@ export function registerProfileRoutes(
     // is this handle" is a WORKSPACE-scoped question here — the answer is a
     // `workspace_members` edge — so from a workspace-less placement the caller
     // must name the workspace instead of getting a bare `agent not found` (v71).
-    const scope = resolveAgentQueryWorkspaceId(
-      c,
-      sourceConversation,
-      parsedQuery.data.workspace_id,
-    );
+    if (sourceConversation === null && parsedQuery.data.workspace_id === undefined) {
+      return c.json({
+        error: 'agent-scoped peer lookup must name workspace_id',
+        code: 'workspace_scope_required',
+      }, 400);
+    }
+    const scope = sourceConversation === null
+      ? { ok: true as const, workspaceId: parsedQuery.data.workspace_id! }
+      : resolveAgentQueryWorkspaceId(c, sourceConversation, parsedQuery.data.workspace_id);
     if (!scope.ok) return scope.response;
     const targetWorkspaceId = scope.workspaceId;
-    if (targetWorkspaceId !== sourceConversation.workspace_id) {
+    if (targetWorkspaceId !== sourceConversation?.workspace_id) {
       if (!canAgentAccessWorkspace(ctx, principal.agentId, targetWorkspaceId)) {
         return c.json({ error: 'forbidden' }, 403);
       }

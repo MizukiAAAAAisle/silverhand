@@ -6,6 +6,7 @@
 import type { Hono } from 'hono';
 import { performance } from 'node:perf_hooks';
 import {
+  agentPrincipalIn,
   getAgentPrincipal,
   type AppEnv,
 } from '../../auth/principal.js';
@@ -171,10 +172,9 @@ export function registerConversationRoutes(
   const { ctx, agentReads, conversations } = deps;
 
   app.post(internalAgentRoutePaths.createChannel, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentCreateChannelInputSchema.safeParse(body);
@@ -187,10 +187,9 @@ export function registerConversationRoutes(
     // (#task:2021 P4-4). This door is a single-stream SOURCE operation: it reads
     // one conversation's placement (the workspace the channel is born into) and
     // its agent roster (the members it starts with). Before P4-4 both came from
-    // `principal.conversationId`, which under an agent-scoped session is a
-    // transport anchor and not a place the actor chose — and once
-    // `--route-conversation-id` is retired (#task:2030) it would have had no
-    // source for either.
+    // `principal.conversationId`, which under an agent-scoped session was a
+    // transport coordinate and not a place the actor chose. The agent-global
+    // route deliberately carries no source coordinate.
     //
     // READ intent: nothing is posted into the source, so the one allocating arm
     // (`dm:@handle`) must not open a pair — a pair has no workspace and would be
@@ -270,22 +269,32 @@ export function registerConversationRoutes(
   });
 
   app.post(internalAgentRoutePaths.followThread, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentFollowThreadInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const principal = getAgentPrincipal(c);
-    // Following is a read-side subscription within the agent's own
-    // conversation — gate on view + read_messages, not post (§4.1: follow
-    // is not a membership/permission backdoor).
+    const root = deps.messages.getById(parsed.data.root_message_id);
+    if (!root) {
+      return c.json(
+        { error: 'thread root message not found in conversation', code: 'reply_target_not_found' },
+        404,
+      );
+    }
+    const principal = agentPrincipalIn(c, root.conversation_id);
+    // Following is a read-side subscription to the ROOT's conversation — gate
+    // on view + read_messages, not post (§4.1: follow is not a
+    // membership/permission backdoor). The credential contributes no ambient
+    // conversation coordinate.
     if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
+      return c.json(
+        { error: 'thread root message not found in conversation', code: 'reply_target_not_found' },
+        404,
+      );
     }
     {
       const denied = requireAgentConversationCapability(c, ctx, principal,
@@ -307,19 +316,28 @@ export function registerConversationRoutes(
   });
 
   app.post(internalAgentRoutePaths.unfollowThread, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const body = await c.req.json().catch(() => ({}));
     const parsed = AgentFollowThreadInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const principal = getAgentPrincipal(c);
+    const root = deps.messages.getById(parsed.data.root_message_id);
+    if (!root) {
+      return c.json(
+        { error: 'thread root message not found in conversation', code: 'reply_target_not_found' },
+        404,
+      );
+    }
+    const principal = agentPrincipalIn(c, root.conversation_id);
     if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
+      return c.json(
+        { error: 'thread root message not found in conversation', code: 'reply_target_not_found' },
+        404,
+      );
     }
     {
       const denied = requireAgentConversationCapability(c, ctx, principal,
@@ -341,15 +359,11 @@ export function registerConversationRoutes(
   });
 
   app.get(internalAgentRoutePaths.listWorkspaces, async c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const principal = getAgentPrincipal(c);
-    if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const startedAt = performance.now();
     const outcome = await buildAgentListWorkspacesDto(deps, principal.agentId);
     const elapsedMs = elapsedSince(startedAt);
@@ -375,10 +389,9 @@ export function registerConversationRoutes(
   });
 
   app.get(internalAgentRoutePaths.listChannels, c => {
-    const cid = c.req.param('cid');
     const aid = c.req.param('aid');
-    if (!cid || !aid) {
-      return c.json({ error: 'conversation id and agent id required' }, 400);
+    if (!aid) {
+      return c.json({ error: 'agent id required' }, 400);
     }
     const parsedQuery = AgentListChannelsQuerySchema.safeParse({
       workspace_id: c.req.query('workspace_id') || undefined,
@@ -387,23 +400,28 @@ export function registerConversationRoutes(
       return c.json({ error: 'invalid query', issues: parsedQuery.error.issues }, 400);
     }
     const principal = getAgentPrincipal(c);
-    if (!canViewConversation(ctx, principal, principal.conversationId)) {
-      return c.json({ error: 'forbidden' }, 403);
+    const sourceConversation = principal.conversationId === null
+      ? null
+      : conversations.get(principal.conversationId);
+    if (principal.conversationId !== null && !sourceConversation) {
+      return c.json({ error: 'conversation not found' }, 404);
     }
-    const sourceConversation = conversations.get(principal.conversationId);
-    if (!sourceConversation) return c.json({ error: 'conversation not found' }, 404);
     // Default to source workspace; cross-workspace access is gated by
     // `canAgentAccessWorkspace` (workspace_members ∪ owned agent_home). From a
     // placement with no workspace the default is undefined, so `workspace_id`
     // becomes REQUIRED instead of resolving to a silently empty list (v71).
-    const scope = resolveAgentQueryWorkspaceId(
-      c,
-      sourceConversation,
-      parsedQuery.data.workspace_id,
-    );
+    if (sourceConversation === null && parsedQuery.data.workspace_id === undefined) {
+      return c.json({
+        error: 'agent-scoped channel listing must name workspace_id',
+        code: 'workspace_scope_required',
+      }, 400);
+    }
+    const scope = sourceConversation === null
+      ? { ok: true as const, workspaceId: parsedQuery.data.workspace_id! }
+      : resolveAgentQueryWorkspaceId(c, sourceConversation, parsedQuery.data.workspace_id);
     if (!scope.ok) return scope.response;
     const targetWorkspaceId = scope.workspaceId;
-    if (targetWorkspaceId !== sourceConversation.workspace_id) {
+    if (targetWorkspaceId !== sourceConversation?.workspace_id) {
       if (!canAgentAccessWorkspace(ctx, principal.agentId, targetWorkspaceId)) {
         return c.json({ error: 'forbidden' }, 403);
       }
@@ -417,7 +435,7 @@ export function registerConversationRoutes(
       'agent.list_channels',
       {
         sourceConversationId: principal.conversationId,
-        sourceWorkspaceId: sourceConversation.workspace_id,
+        sourceWorkspaceId: sourceConversation?.workspace_id ?? null,
         targetWorkspaceId,
         agentId: principal.agentId,
       },

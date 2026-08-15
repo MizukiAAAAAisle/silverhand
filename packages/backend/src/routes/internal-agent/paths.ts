@@ -1,4 +1,4 @@
-/** Route suffixes registered once and mounted under both canonical and legacy roots. */
+/** Route suffixes mounted once under the canonical agent-global root. */
 export const internalAgentRoutePaths = {
   sendMessage: '/send-message',
   resolveStaleMessage: '/stale-message-resolution',

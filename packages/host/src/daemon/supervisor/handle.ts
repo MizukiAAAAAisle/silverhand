@@ -351,8 +351,9 @@ export interface RuntimeHandle {
    *  overwritten back into "reserved" and the queue held forever
    *  (#1558 final-gate P1-1). */
   turnEndCount: number;
-  /** Pending stale-send events keyed by origin conversation. AgentSlot may
-   * hold several independently; ConversationSlot naturally has one key. */
+  /** Pending stale-send events keyed by the addressed stream's storage key.
+   * An AgentSlot can hold independent conflicts in several conversations; the
+   * runtime scope identifies custody, not the stream whose CAS failed. */
   pendingStaleEvents: Map<string, PendingStaleEvent>;
   /** Absolute per-origin action directories whose existence was verified for
    * this live aggregate. Avoids turning every delivery into an async fs gap;

@@ -333,7 +333,7 @@ describe('Internal agent avatar routes', () => {
     form.set('file', pngFile());
     const post = await t.app.fetch(
       new Request(
-        `http://localhost${internalPaths.agentUploadAvatar(channelId, agentId)}`,
+        `http://localhost${internalPaths.agentUploadAvatar(agentId)}`,
         {
           method: 'POST',
           headers: { authorization: `Bearer ${token}` },
@@ -354,7 +354,7 @@ describe('Internal agent avatar routes', () => {
 
     const del = await t.app.fetch(
       new Request(
-        `http://localhost${internalPaths.agentDeleteAvatar(channelId, agentId)}`,
+        `http://localhost${internalPaths.agentDeleteAvatar(agentId)}`,
         {
           method: 'DELETE',
           headers: { authorization: `Bearer ${token}` },
@@ -377,7 +377,7 @@ describe('Internal agent avatar routes', () => {
     form.set('file', pngFile());
     const res = await t.app.fetch(
       new Request(
-        `http://localhost${internalPaths.agentUploadAvatar(channelId, agentId)}`,
+        `http://localhost${internalPaths.agentUploadAvatar(agentId)}`,
         { method: 'POST', body: form },
       ),
     );
@@ -396,7 +396,7 @@ describe('Internal agent avatar routes', () => {
     form.set('file', pngFile());
     const res = await t.app.fetch(
       new Request(
-        `http://localhost${internalPaths.agentUploadAvatar(a.channelId, a.agentId)}`,
+        `http://localhost${internalPaths.agentUploadAvatar(a.agentId)}`,
         {
           method: 'POST',
           headers: { authorization: `Bearer ${b.token}` },

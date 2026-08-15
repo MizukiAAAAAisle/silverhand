@@ -8,7 +8,7 @@
  * before any HTTP request is made.
  *
  * To recover that observability, the CLI fires a single best-effort
- * `POST /internal/agents/:aid/conversations/:cid/cli-trace` whenever
+ * `POST /internal/agents/:aid/cli-trace` whenever
  * it errors out before sending any business request. The endpoint:
  *
  *   - is excluded from the cli.invoke middleware (logged separately
@@ -77,7 +77,7 @@ export async function reportPreflightFailure(payload: CliTraceInput): Promise<vo
       : {}),
   };
 
-  const url = `${env.serverUrl}${internalPaths.agentCliTrace(env.conversationId, env.agentId)}`;
+  const url = `${env.serverUrl}${internalPaths.agentCliTrace(env.agentId)}`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TRACE_TIMEOUT_MS);
   try {
