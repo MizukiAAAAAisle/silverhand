@@ -7623,6 +7623,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       expect(fromA.disposition).toBe('spawning');
       if (fromA.disposition === 'refused') throw new Error('A was refused');
       await waitForDeliveryConsumed(h.events, 1);
+      h.drive([{ kind: 'session_init', sessionId: 'agent-slot-vendor-session' }]);
+      await waitFor(() => h.events.some(event =>
+        event.event === 'runtime_parsed_event'
+        && event.parsed.kind === 'session_init'
+      ));
       h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
       await waitFor(() => h.events.some(event =>
         event.event === 'runtime_state'
@@ -7658,9 +7663,26 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       if (fromInbox.disposition === 'refused') throw new Error('inbox was refused');
       await waitForDeliveryConsumed(h.events, 3);
 
+      // Return to A after a workspace-less direct-message origin. The semantic
+      // `dm:@handle` spelling is covered by the real CLI subprocess matrix;
+      // here the host proves that A → B → DM → A remains one vendor process.
+      const backToA = await deliver(
+        'Conversation0001',
+        { id: 'ws1', name: 'one', kind: 'regular' },
+        4,
+      );
+      expect(backToA.disposition).toBe('admitted');
+      if (backToA.disposition === 'refused') throw new Error('return to A was refused');
+      await waitForDeliveryConsumed(h.events, 4);
+
       expect(fromA.pid).toBe(fromB.pid);
       expect(fromB.pid).toBe(fromInbox.pid);
+      expect(fromInbox.pid).toBe(backToA.pid);
       expect(h.supervisor.status({}).runtimes).toHaveLength(1);
+      expect(h.events.filter(event =>
+        event.event === 'runtime_parsed_event'
+        && event.parsed.kind === 'session_init'
+      )).toHaveLength(1);
       const visible = h.stub.written.map(decoded);
       expect(visible[0]).toContain(formatAgentRuntimeScopeBanner(
         join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
@@ -7670,6 +7692,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       ));
       expect(visible[2]).toContain(formatAgentRuntimeScopeBanner(
         join(SUPERVISOR_AGENTS_ROOT, 'a1', 'conversations', 'Conversation0003'),
+      ));
+      expect(visible[3]).toContain(formatAgentRuntimeScopeBanner(
+        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
       ));
       for (const text of visible) expect(text).not.toContain('target=');
       for (const text of visible) {

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { DbRuntimeStatusProjector } from '../../src/runtime/status-projector.js';
@@ -28,6 +30,15 @@ describe('membership and runtime projection authority (#task:2026)', () => {
         session_scope: 'agent',
       })
     ).json() as any;
+    expect(conversationScoped.dm_channel_id).toEqual(expect.any(String));
+    expect(agentScoped.dm_channel_id).toBeNull();
+    const management = await (await http(t).get('/api/agents')).json() as any;
+    expect(management.agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: agentScoped.agent.id,
+        session_scope: 'agent',
+      }),
+    ]));
     const agentIds = [conversationScoped.agent.id, agentScoped.agent.id];
     const workspace = await (
       await http(t).post('/api/workspaces', {
@@ -54,6 +65,43 @@ describe('membership and runtime projection authority (#task:2026)', () => {
       ]);
     }
 
+    // Both runtime families are LIVE in the same conversation, but their
+    // custody, pid and vendor session remain separate semantic seats.
+    const runtimeSlots = new RuntimeSlotRepo(t.ctx.db);
+    const conversationScope = {
+      kind: 'conversation' as const,
+      conversationId: channel.channel.id,
+      agentId: conversationScoped.agent.id,
+    };
+    const agentScope = {
+      kind: 'agent' as const,
+      agentId: agentScoped.agent.id,
+    };
+    expect(runtimeSlots.claimGeneration({
+      scope: conversationScope,
+      daemonInstanceId: 'daemon-conversation-slot',
+      status: 'active',
+      pid: 4101,
+    })?.generation).toBe(1);
+    expect(runtimeSlots.compareAndSetProjection({
+      scope: conversationScope,
+      expectedGeneration: 1,
+      expectedDaemonInstanceId: 'daemon-conversation-slot',
+      patch: { cliSessionId: 'vendor-conversation-slot' },
+    })).not.toBeNull();
+    expect(runtimeSlots.claimGeneration({
+      scope: agentScope,
+      daemonInstanceId: 'daemon-agent-slot',
+      status: 'active',
+      pid: 4201,
+    })?.generation).toBe(1);
+    expect(runtimeSlots.compareAndSetProjection({
+      scope: agentScope,
+      expectedGeneration: 1,
+      expectedDaemonInstanceId: 'daemon-agent-slot',
+      patch: { cliSessionId: 'vendor-agent-slot' },
+    })).not.toBeNull();
+
     const runtime = await (
       await http(t).get(`/api/channels/${channel.channel.id}/agent-runtime`)
     ).json() as any;
@@ -61,10 +109,16 @@ describe('membership and runtime projection authority (#task:2026)', () => {
       expect.objectContaining({
         agent_id: conversationScoped.agent.id,
         scope_kind: 'conversation',
+        status: 'active',
+        pid: 4101,
+        cli_session_id: 'vendor-conversation-slot',
       }),
       expect.objectContaining({
         agent_id: agentScoped.agent.id,
         scope_kind: 'agent',
+        status: 'active',
+        pid: 4201,
+        cli_session_id: 'vendor-agent-slot',
       }),
     ]));
 
@@ -75,7 +129,7 @@ describe('membership and runtime projection authority (#task:2026)', () => {
       })
     ).json() as any;
     expect(second.channel.id).not.toBe(channel.channel.id);
-    expect(new RuntimeSlotRepo(t.ctx.db).listSeats(agentScoped.agent.id)).toEqual([
+    expect(runtimeSlots.listSeats(agentScoped.agent.id)).toEqual([
       expect.objectContaining({ scope: { kind: 'agent', agentId: agentScoped.agent.id } }),
     ]);
 
@@ -119,6 +173,27 @@ describe('membership and runtime projection authority (#task:2026)', () => {
     ).json() as any;
     t.fake.clearSessionResult.focusConversationId = channel.channel.id;
 
+    const second = await (
+      await http(t).post(`/api/workspaces/${workspace.workspace.id}/channels`, {
+        title: 'projection-focus-second',
+        member_agent_ids: [created.agent.id],
+      })
+    ).json() as any;
+    const messages = new MessageRepo(t.ctx.db);
+    const inbox = new ConversationInboxRepo(t.ctx.db);
+    for (const [conversationId, content] of [
+      [channel.channel.id, 'hidden-focus-queued'],
+      [second.channel.id, 'visible-peer-queued'],
+    ] as const) {
+      const message = messages.insertForConversation({
+        conversationId,
+        fromKind: 'user',
+        fromUserId: t.viewerUserId,
+        content,
+      });
+      inbox.ensureDelivery(conversationId, created.agent.id, message.id);
+    }
+
     const visible = await (
       await http(t).get(`/api/agents/${created.agent.id}/runtime-state`)
     ).json() as any;
@@ -126,6 +201,7 @@ describe('membership and runtime projection authority (#task:2026)', () => {
     expect(visible.seats[0]).toMatchObject({
       scope: { kind: 'agent' },
       focus: { kind: 'conversation', conversation_id: channel.channel.id },
+      queue_depth: 2,
     });
 
     new ConversationRepo(t.ctx.db).removeUser(channel.channel.id, t.viewerUserId);
@@ -138,6 +214,7 @@ describe('membership and runtime projection authority (#task:2026)', () => {
     expect(redacted.seats[0]).toMatchObject({
       scope: { kind: 'agent' },
       focus: { kind: 'other' },
+      queue_depth: 2,
     });
   });
 
