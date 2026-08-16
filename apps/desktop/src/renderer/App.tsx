@@ -51,12 +51,11 @@ import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettings
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
-import { activeTaskCount } from '@/features/tasks/boardAuthority';
+import { useTaskBoardRealtime } from '@/features/tasks/useBoard';
 import {
-  useBoardCounts,
-  useTaskBoardRealtime,
-} from '@/features/tasks/useBoard';
-import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
+  taskContainerForPosition,
+  type TaskBoardContainer,
+} from '@/features/tasks/taskContainer';
 import {
   EMPTY_REVEAL_SLOT,
   nextRevealSlot,
@@ -758,30 +757,6 @@ function RegisteredAppShell({
   useNotificationToasts(focusedConversation?.id ?? null, target =>
     handleJumpToMessage(target),
   );
-  // Active-task count for the titlebar Tasks badge — scoped to the
-  // current workspace so the number matches what the panel will show
-  // when opened (default filter = current channel, but the badge is
-  // workspace-aggregate to match where the entry lives).
-  //
-  // Read from the counts-only authority face (#task:1884), not from a list: the
-  // number is a server `GROUP BY`, so a badge on a 3,000-task workspace costs one
-  // small response instead of downloading every task to call `.filter().length`
-  // (#task:1885). `activeTaskCount` is the SAME definition a board header uses, so
-  // the two can never disagree about what "active" means.
-  //
-  // `null` while the face has not answered — and the badge is deliberately hidden
-  // then, exactly as it is for a real zero: an unknown count has no honest number
-  // to print in 16px of chrome, and a placeholder there would read as a standing
-  // count of its own. The distinction is kept in the DATA (`activeTaskCount`
-  // returns `number | null`) so the board headers, which have room, can show it.
-  const workspaceTaskCounts = useBoardCounts(
-    useMemo(
-      () => ({ ...DEFAULT_TASK_FILTERS, workspaceId: selectedWorkspaceId }),
-      [selectedWorkspaceId],
-    ),
-    { enabled: !!selectedWorkspaceId },
-  );
-  const workspaceActiveTaskCount = activeTaskCount(workspaceTaskCounts);
 
   const resolveNavWorkspaceId = (
     workspaceId: string | undefined,
@@ -1388,13 +1363,54 @@ function RegisteredAppShell({
   );
   // ── The ONE visible task surface ────────────────────────────────────────
   //
-  // The task drawer belongs to Chat/Activity (it opens from that titlebar and is
-  // scoped to the channel context), and `/tasks` is an independent rail section.
-  // They are therefore two values of ONE discriminant, not two peers to arbitrate:
-  // at most one is on screen in any commit, and a reveal needs no owner (shiki).
+  // The task drawer belongs to Chat/Activity (it opens from the conversation
+  // header and is scoped to that conversation's container), and `/tasks` is an
+  // independent rail section. They are therefore two values of ONE discriminant,
+  // not two peers to arbitrate: at most one is on screen in any commit, and a
+  // reveal needs no owner (shiki).
   //
+  // WHICH container the drawer opens for is a discriminated identity, resolved
+  // once here (#task:2041 Phase B). It replaces the old pair of nullable
+  // coordinates, which could only describe the workspace arm: a `direct_pair`
+  // carries no workspace, so the old `selectedWorkspace !== null` gate below
+  // switched the entry off entirely for a DM — shiki's dogfood item ③, "channel
+  // header 右边也没有 task drawer 入口（DM 和 channel 都是）".
+  //
+  // Memoized on the PRIMITIVES, not on the carrier rows: both carriers are query
+  // data, so a refetch returning equal facts still returns fresh objects, and the
+  // container is an identity — it must change when the identity does and not when
+  // a list was re-read.
+  const pairContainerId = directPair?.conversation_id ?? null;
+  // Same presentation the sidebar row and the pane header use — the pair holds no
+  // title of its own, so its counterpart IS its name.
+  const pairContainerLabel = directPair
+    ? presentCounterpart(directPair.counterpart).label
+    : null;
+  const workspaceContainerId = selectedWorkspace?.id ?? null;
+  const workspaceContainerName = selectedWorkspace?.name ?? null;
+  const taskContainer = useMemo<TaskBoardContainer | null>(
+    () =>
+      taskContainerForPosition({
+        directPair:
+          pairContainerId !== null && pairContainerLabel !== null
+            ? { conversationId: pairContainerId, label: pairContainerLabel }
+            : null,
+        workspace:
+          workspaceContainerId !== null
+            ? { id: workspaceContainerId, name: workspaceContainerName }
+            : null,
+        conversationId: selectedChannelId,
+      }),
+    [
+      pairContainerId,
+      pairContainerLabel,
+      workspaceContainerId,
+      workspaceContainerName,
+      selectedChannelId,
+    ],
+  );
   // `drawerHostable` is the single definition of "this position can host the
-  // drawer" — the titlebar's Tasks button, the drawer's own visibility, the reveal
+  // drawer" — the header's Tasks button, the drawer's own visibility, the reveal
   // one-shot's hosting and the reveal's navigation branch all read it, so they
   // cannot drift. Visibility is DERIVED from it, deliberately not "navigate, then
   // an effect closes the drawer": the effect version leaves one commit where
@@ -1406,10 +1422,14 @@ function RegisteredAppShell({
   // no single owner (rail click, chip reveal and jump-to-message all navigate) and
   // would silently discard a panel state the user set.
   const drawerHostable =
-    selectedWorkspace !== null &&
+    taskContainer !== null &&
     ((appSection === 'chat' && view === 'channel') || appSection === 'activity');
   const drawerVisible = drawerHostable && tasksDrawerOpen;
   const sectionVisible = appSection === 'tasks';
+  // Stable identity: the entry now lives on the memoized primary pane, and a
+  // fresh arrow every render would re-render the heaviest view in the app on
+  // every unrelated commit.
+  const openTasksDrawer = useCallback(() => setTasksDrawerOpen(true), []);
 
   // Resolve which surface shows `?task=<id>`. The recorded host wins whenever it
   // matches the live pointer (an opener set it — the explicit entrance). A pointer
@@ -2031,6 +2051,13 @@ function RegisteredAppShell({
           : undefined
       }
       filesListActive={filesListMounted}
+      // Tasks board entry (#task:2041 Phase B). Gated on `drawerHostable`, the
+      // one predicate the drawer's own visibility reads, so the header can never
+      // offer a board that would not be shown. NOT gated on the channel-index
+      // toggles above: a `direct_pair` has no channel-scoped thread/attachment
+      // index but it does have tasks, which is precisely shiki's item ③.
+      onOpenTasks={drawerHostable ? openTasksDrawer : undefined}
+      tasksActive={drawerVisible}
       onArchiveChannel={handleArchiveChannelMutation}
       onRenameChannel={handleRenameChannelMutation}
       onSetChannelVisibility={handleSetChannelVisibilityMutation}
@@ -2274,18 +2301,6 @@ function RegisteredAppShell({
         onOpenWorkspaceSettings={
           selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
         }
-        onOpenTasks={
-          // Workspace task drawer is workspace-scoped, not chat-scoped: enable it
-          // wherever a workspace is selected AND we're viewing a channel — chat's
-          // `channel` view, or Activity's selected state (its right pane is the
-          // full ChannelView). `selectedWorkspace` is null on bare `/activity`
-          // (workspace derives from the selected channel), so `appSection ===
-          // 'activity'` alone already means "a channel is selected" (#task:1394).
-          // Same `drawerHostable` the drawer's visibility reads, so the button
-          // cannot offer a drawer that would not be shown.
-          drawerHostable ? () => setTasksDrawerOpen(true) : undefined
-        }
-        taskCount={workspaceActiveTaskCount}
         workspaceSidebarVisible={workspaceSidebarVisible}
         onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
         chromeMode={appSection === 'activity' ? 'activity' : 'chat'}
@@ -2780,13 +2795,11 @@ function RegisteredAppShell({
         archivedAt={selectedWorkspace?.archived_at ?? null}
         onDeleted={handleWorkspaceDeleted}
       />
-      {selectedWorkspace ? (
+      {taskContainer ? (
         <WorkspaceTasksDrawer
           open={drawerVisible}
           onOpenChange={setTasksDrawerOpen}
-          workspaceId={selectedWorkspace.id}
-          workspaceName={selectedWorkspace.name}
-          defaultConversationId={selectedChannelId}
+          container={taskContainer}
           revealTaskId={drawerVisible ? reveal.taskId : null}
           onRevealConsumed={clearReveal}
           detailOpen={taskModalId !== null}

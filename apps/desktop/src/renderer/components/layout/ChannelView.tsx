@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react';
 import {
+  CheckSquare,
   Maximize2,
   Minimize2,
   Paperclip,
@@ -135,6 +136,16 @@ interface ChannelViewProps {
   /** Whether the Attachments-list pane is currently open (drives the
    *  toggle's active styling + aria-pressed). */
   filesListActive?: boolean;
+  /** Open the tasks board for THIS conversation's container (#task:2041). The
+   *  entry lives here, in the conversation's own action group, so a channel and
+   *  a direct line reach the board the same way — the titlebar entry it replaces
+   *  could only be offered where a workspace existed, which is why a DM had
+   *  none. Only the primary pane passes it: a thread / side pane is a child view
+   *  of the same container, and a second entry to one board is noise. */
+  onOpenTasks?: () => void;
+  /** Whether the tasks drawer is currently open (active styling +
+   *  aria-pressed), like the two pane toggles above. */
+  tasksActive?: boolean;
   /** When set, renders an X button in the header that calls this back.
    *  Used by the right-side secondary pane to close itself. */
   onCloseChild?: () => void;
@@ -285,6 +296,8 @@ function ActiveChannelView({
   threadsListActive = false,
   onToggleFilesList,
   filesListActive = false,
+  onOpenTasks,
+  tasksActive = false,
   onCloseChild,
   closeLabel = 'Close thread',
   onJumpToOriginal,
@@ -811,6 +824,29 @@ function ActiveChannelView({
               }
             >
               <Paperclip className="size-3.5" />
+            </button>
+          ) : null}
+          {onOpenTasks && gate.allowMemberEffects ? (
+            // Same gate as the two pane toggles, for the same reason rather than
+            // by imitation: the board's population semi-joins the viewer's
+            // conversation rows, so for a viewer this gate excludes the entry
+            // would open onto nothing. A `direct_pair` passes it (an endpoint
+            // always has member effects), which is what gives a DM the entry it
+            // had none of.
+            <button
+              type="button"
+              onClick={onOpenTasks}
+              aria-label="Tasks"
+              aria-pressed={tasksActive}
+              title="Tasks"
+              className={
+                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
+                (tasksActive
+                  ? 'bg-bg-hover text-text-primary'
+                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
+              }
+            >
+              <CheckSquare className="size-3.5" />
             </button>
           ) : null}
           {rosterTarget !== null ? (

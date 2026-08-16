@@ -1,5 +1,4 @@
 import {
-  CheckSquare,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
@@ -18,14 +17,6 @@ interface TitlebarProps {
    *  workspace is missing from the main sidebar list. */
   workspaceArchivedAt: number | null;
   onOpenWorkspaceSettings?: () => void;
-  /** Tasks panel trigger. Provided only when a chat workspace is selected.
-   *  Click opens the workspace-wide tasks drawer (4-column kanban). */
-  onOpenTasks?: () => void;
-  /** Active-task count for the workspace — drives the small badge next to
-   *  the Tasks button. Hidden when 0 / undefined, and equally when `null`: the
-   *  counts face has not answered, and 16px of chrome has no honest way to say
-   *  that (#task:1885). */
-  taskCount?: number | null;
   workspaceSidebarVisible: boolean;
   onToggleWorkspaceSidebar: () => void;
   /** Which section's chrome the titlebar frames (#task:1394). `chat` shows the
@@ -59,8 +50,6 @@ export function Titlebar({
   workspaceKind,
   workspaceArchivedAt,
   onOpenWorkspaceSettings,
-  onOpenTasks,
-  taskCount,
   workspaceSidebarVisible,
   onToggleWorkspaceSidebar,
   chromeMode,
@@ -68,7 +57,6 @@ export function Titlebar({
   const hasWorkspace = workspaceName !== null;
   const showManageMembers = hasWorkspace && workspaceKind !== 'dm' && !!workspaceId;
   const showSettings = hasWorkspace && workspaceKind !== 'dm' && !!onOpenWorkspaceSettings;
-  const showTasks = hasWorkspace && !!onOpenTasks;
   const isArchived = workspaceArchivedAt !== null;
   // Activity has no browse sidebar — the Activity list IS the left column — so
   // its label offset is `NavRail + Activity-list` width, read from the SAME
@@ -166,23 +154,6 @@ export function Titlebar({
         <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
           archived
         </span>
-      ) : null}
-
-      {showTasks ? (
-        <button
-          type="button"
-          onClick={onOpenTasks}
-          aria-label="Tasks"
-          title="Tasks"
-          className="no-drag relative flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
-        >
-          <CheckSquare className="size-3.5" />
-          {taskCount && taskCount > 0 ? (
-            <span className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-accent px-1 text-[length:var(--text-badge)] font-medium leading-[14px] text-text-on-accent">
-              {taskCount}
-            </span>
-          ) : null}
-        </button>
       ) : null}
 
       {showManageMembers ? (

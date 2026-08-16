@@ -233,12 +233,20 @@ export function TaskFilterBar({
           }
         />
       ) : null}
-      <ChannelFilter
-        options={visibleChannelOptions}
-        allChannelsLabel={allChannelsLabel}
-        value={filters.channelId}
-        onChange={channelId => onChange({ ...filters, channelId })}
-      />
+      {/* Same rule as the workspace control above, for the same reason: with no
+          option to pick, the trigger can only report "ALL" — which is a false
+          statement whenever the board IS narrowed on a conversation the option
+          set doesn't contain. A drawer opened on a `direct_pair` is exactly
+          that: the pair is its whole coordinate and no workspace channel list
+          holds it (#task:2041 Phase B). */}
+      {visibleChannelOptions.length > 0 ? (
+        <ChannelFilter
+          options={visibleChannelOptions}
+          allChannelsLabel={allChannelsLabel}
+          value={filters.channelId}
+          onChange={channelId => onChange({ ...filters, channelId })}
+        />
+      ) : null}
       <PersonFilterControl
         icon={<User className="size-3.5" />}
         label="Assignee"

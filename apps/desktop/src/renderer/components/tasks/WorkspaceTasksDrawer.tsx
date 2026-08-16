@@ -44,6 +44,12 @@ import {
   DEFAULT_TASK_FILTERS,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
+import {
+  taskContainerBaseline,
+  taskContainerKey,
+  taskContainerLabel,
+  type TaskBoardContainer,
+} from '@/features/tasks/taskContainer';
 import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDnd';
 import { drawerShouldCloseOnEscape } from '@/features/tasks/taskDetail';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
@@ -66,21 +72,25 @@ import { Button } from '@/components/ui/button';
 import { primaryAction } from '@/features/common/PrimaryAction';
 
 /**
- * Workspace-wide tasks panel — a floating right-side drawer that overlays
+ * Conversation tasks panel — a floating right-side drawer that overlays
  * the main layout without displacing it. Width is user-adjustable via a
  * drag handle on the left edge and persisted in localStorage.
  *
  * Content is a five-column status kanban (Todo / In progress / In review /
  * Done / Closed) with a unified TaskFilterBar (channel / assignee /
  * creator) and card → jump navigation.
+ *
+ * It opens for a CONTAINER (`TaskBoardContainer`, #task:2041) — a workspace
+ * channel or a direct line — not for a workspace with a channel hanging off it.
+ * A `direct_pair` has no workspace, and the old `workspaceId: string` prop is
+ * what made the DM position unable to host this panel at all.
  */
 export interface WorkspaceTasksDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  workspaceId: string;
-  workspaceName: string | null;
-  /** Initially-selected conversation for the filter. null → all conversations. */
-  defaultConversationId: string | null;
+  /** Which container this drawer was opened for — decides the header label and
+   *  the baseline narrowing (`taskContainerBaseline`). */
+  container: TaskBoardContainer;
   /** ONE-SHOT reveal intent: a task id to scroll to and flash. Held in App
    *  memory, never in the URL (#task:1715) — a 1.4s pulse is an effect that
    *  self-expires, not a location worth being addressable. The drawer widens both
@@ -235,9 +245,7 @@ function useDrawerWidth(shellRef: RefObject<HTMLDivElement | null>) {
 export function WorkspaceTasksDrawer({
   open,
   onOpenChange,
-  workspaceId,
-  workspaceName,
-  defaultConversationId,
+  container,
   revealTaskId = null,
   onRevealConsumed,
   detailOpen = false,
@@ -245,24 +253,29 @@ export function WorkspaceTasksDrawer({
 }: WorkspaceTasksDrawerProps): JSX.Element {
   const drawerShellRef = useRef<HTMLDivElement>(null);
   const { width: drawerWidth, startResize } = useDrawerWidth(drawerShellRef);
+  const containerLabel = taskContainerLabel(container);
 
   // Unified filter model (channel / assignee / creator), shared with the
   // global Tasks board. `channelId` is a conversation id:
   //  - a channel id → matches that channel + all its threads;
   //  - a thread id  → matches only that thread.
-  // Baseline (= reset/Clear target) is the drawer's entry context: the
-  // current WORKSPACE + current CHANNEL. Both anchor on open — the drawer
-  // opens from inside a workspace, so defaulting its workspace filter to
-  // ALL surfaced unrelated workspaces' tasks (#task:1432). Both stay
-  // switchable to any workspace/channel or All; Clear restores this
-  // baseline rather than jumping to All.
+  // Baseline (= reset/Clear target) is the drawer's entry context, derived from
+  // the CONTAINER it was opened for (`taskContainerBaseline`, #task:2041): the
+  // workspace arm anchors workspace + channel, the pair arm anchors the pair's
+  // own conversation and mints no workspace. It anchors on open — the drawer
+  // opens from inside a conversation, so defaulting to ALL surfaced unrelated
+  // workspaces' tasks (#task:1432). Both filters stay switchable to any
+  // workspace/channel or All; Clear restores this baseline rather than jumping
+  // to All.
   const baselineFilters = useMemo<TaskFilters>(
-    () => ({
-      ...DEFAULT_TASK_FILTERS,
-      workspaceId,
-      channelId: defaultConversationId,
-    }),
-    [workspaceId, defaultConversationId],
+    () => taskContainerBaseline(container),
+    // Keyed on the container's VALUE (`taskContainerKey`), not on the prop's
+    // identity: the container is assembled from query rows, so a refetch that
+    // returns equal facts still hands over fresh objects. Identity here would
+    // re-run the baseline effect below on every such refetch and discard the
+    // narrowing the viewer set while the drawer was open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [taskContainerKey(container)],
   );
   const [filters, setFilters] = useState<TaskFilters>(baselineFilters);
   // Render window (#task:1885) — this drawer's OWN bound, not the pane's. The
@@ -337,6 +350,10 @@ export function WorkspaceTasksDrawer({
   // pre-focused on the current workspace + channel via the baseline above
   // (#task:1432); both filters stay switchable to All.
   const { workspaceOptions, channelOptions } = useTaskFilterOptions();
+  /** Whether the workspace / channel controls can describe THIS container. Both
+   *  are workspace-derived, so only the workspace arm can be described by them
+   *  — see the filter bar below. */
+  const containerAxesAvailable = container.kind === 'workspace_channel';
 
   // The bound the columns actually render against. A CLOSED drawer is pinned to
   // the first page: the shell stays mounted (translated off-screen) for the whole
@@ -521,12 +538,13 @@ export function WorkspaceTasksDrawer({
             />
             <span className="font-serif text-base font-semibold text-text-primary">
               Tasks
-              {workspaceName ? (
+              {containerLabel ? (
                 <span className="ml-2 text-sm font-normal text-text-muted">
                   {/* No `#`: that sigil belongs to channels. A workspace name
                       is a free-text label (#task:1827), so prefixing it reads
-                      as a broken channel reference. */}
-                  · {workspaceName}
+                      as a broken channel reference — and a direct line's label
+                      is a person, which is even less of a channel. */}
+                  · {containerLabel}
                 </span>
               ) : null}
             </span>
@@ -548,8 +566,18 @@ export function WorkspaceTasksDrawer({
               filters={filters}
               onChange={applyFilters}
               baselineFilters={baselineFilters}
-              workspaceOptions={workspaceOptions}
-              channelOptions={channelOptions}
+              // The pair arm withholds the two CONTAINER axes (#task:2041 Phase
+              // B). Not cosmetic: a `direct_pair` task carries `workspace_id`
+              // NULL, so every non-default value of the workspace control empties
+              // this board, and the pair is in no workspace's channel list, so the
+              // channel control cannot even name the narrowing already in force.
+              // The person axes are unaffected and stay. The three-arm
+              // `All | Workspace | Direct Messages` scope control that replaces
+              // both here is Phase B's filter half — it needs a placement axis on
+              // the board read that does not exist yet, so this withholds rather
+              // than fakes.
+              workspaceOptions={containerAxesAvailable ? workspaceOptions : []}
+              channelOptions={containerAxesAvailable ? channelOptions : []}
               allChannelsLabel="ALL"
               people={people}
             />
