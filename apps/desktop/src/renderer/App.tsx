@@ -2298,6 +2298,7 @@ function RegisteredAppShell({
                   key={selectedAgentId}
                   agentId={selectedAgentId}
                   onDeleted={() => nav.toMembers()}
+                  onOpenDirectPair={nav.toDirect}
                   onOpenConversation={s => {
                     // A seat whose conversation carries NO workspace coordinate
                     // is a `direct_pair` placement (#task:2020), which now has a

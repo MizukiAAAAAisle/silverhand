@@ -339,6 +339,16 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
     verdicts: ['cleaned'],
     reason: 'global list; every item carries conversation_id → registry `activity`',
   },
+  'agent-audit-chats': {
+    verdicts: ['retained'],
+    reason:
+      "['agent-audit-chats', agentId] — the owner-audit Chats list (#task:2036). Scoped by AGENT ownership + the agent's participation resolved server-side, NOT by the viewer's channel membership: a viewer losing a channel does not change the owner's audit ACL, so there is nothing to clean, and a local delete would diverge from an authoritative refetch. The key carries no channel_id to sweep by",
+  },
+  'agent-audit-transcript': {
+    verdicts: ['retained'],
+    reason:
+      "['agent-audit-transcript', agentId, conversationId] — conversationId sits at position 2, so it is never swept; and the read is gated by the OWNER's audit ACL over the agent, invariant to the viewer's own membership in that conversation. The owner can still audit the agent's transcript there after losing membership, so refetch stays authoritative and a local delete would diverge",
+  },
   agents: {
     verdicts: ['exempt'],
     reason:

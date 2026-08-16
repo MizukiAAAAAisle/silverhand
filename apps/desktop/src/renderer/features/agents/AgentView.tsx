@@ -22,12 +22,17 @@ import { AgentWorkspaceContainer, AgentWorkspacePane } from './AgentWorkspacePan
 import { AgentMcpPane } from './AgentMcpPane';
 import { AgentActivityPane } from './AgentActivityPane';
 import { AgentActivityTimeline } from './AgentActivityTimeline';
+import { AgentChatsPane } from './AgentChatsPane';
 import { AgentSidebar, type AgentSection } from './AgentSidebar';
 import {
   useAgent,
   useAgentRuntimeState,
 } from './hooks';
-import { canManageAgentSchedules, canViewAgentFiles } from './permissions';
+import {
+  canAuditAgentChats,
+  canManageAgentSchedules,
+  canViewAgentFiles,
+} from './permissions';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
 import { paneChrome } from '@/components/layout/pane-chrome';
@@ -39,6 +44,7 @@ const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
   'mcp',
   'activity',
   'schedules',
+  'chats',
 ];
 
 function readSection(): AgentSection {
@@ -64,6 +70,10 @@ interface AgentViewProps {
    *  channel/thread. Optional: if not provided, the column is
    *  still shown but rows aren't actionable. */
   onOpenConversation?: (s: AgentRuntimeParticipation) => void;
+  /** Full-page only: open the human↔agent direct line (existing or freshly
+   *  minted via the first-send door) for this agent. Threaded to the header's
+   *  Message entry (#task:2036 part ①). */
+  onOpenDirectPair?: (conversationId: string) => void;
   /** `full` (default) = the members-section page with the vertical section
    *  rail + hero header. `side` = the compact right-pane panel docked beside
    *  a channel (#task:1189): horizontal tabs, no hero chrome, Activity locked
@@ -85,6 +95,7 @@ export function AgentView({
   agentId,
   onDeleted,
   onOpenConversation,
+  onOpenDirectPair,
   variant = 'full',
   contextConversationId = null,
   contextWorkspaceId = null,
@@ -114,6 +125,16 @@ export function AgentView({
   const canViewFiles = agentForPermissions && viewerForPermissions
     ? canViewAgentFiles(viewerForPermissions, agentForPermissions)
     : false;
+  // The Chats audit section is owner-only and hidden entirely for non-owners.
+  // Backend re-checks (404 → 403) on every request; this only gates the entry.
+  const canAuditChats = agentForPermissions && viewerForPermissions
+    ? canAuditAgentChats(viewerForPermissions, agentForPermissions)
+    : false;
+  // A persisted `chats` selection must not strand a non-owner (or a viewer whose
+  // ownership hasn't resolved yet) on a section the rail won't show. Clamp the
+  // effective section back to Profile until owner access is known.
+  const effectiveSection: AgentSection =
+    section === 'chats' && !canAuditChats ? 'profile' : section;
 
   useEffect(() => {
     try {
@@ -183,13 +204,14 @@ export function AgentView({
         agent={agent}
         runtimeState={runtimeQuery.data}
         onDeleted={onDeleted}
+        onOpenDirectPair={onOpenDirectPair}
       />
 
       <div className="flex min-h-0 flex-1">
-        <AgentSidebar active={section} onChange={setSection} />
+        <AgentSidebar active={effectiveSection} onChange={setSection} canAudit={canAuditChats} />
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {section === 'workspace' ? (
+          {effectiveSection === 'workspace' ? (
             // Workspace pane manages its own scrolling — file tree and
             // preview each scroll internally. The outer column must NOT
             // add a vertical scrollbar of its own (would defeat the
@@ -210,7 +232,7 @@ export function AgentView({
                 <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
               )}
             </div>
-          ) : section === 'activity' ? (
+          ) : effectiveSection === 'activity' ? (
             // Activity is a master-detail surface (conversation rail +
             // per-conversation timeline) that owns its own two scroll
             // regions — like the workspace pane, no outer padding/scroll.
@@ -219,23 +241,29 @@ export function AgentView({
               state={runtimeQuery.data}
               onOpenConversation={onOpenConversation}
             />
+          ) : effectiveSection === 'chats' ? (
+            // Owner-only, read-only audit of the agent's conversations
+            // (#task:2036 part ②). Master-detail like Activity — owns its own
+            // two scroll regions, so no outer padding/scroll. Gated above:
+            // effectiveSection can only be 'chats' when canAuditChats is true.
+            <AgentChatsPane agentId={agent.id} />
           ) : (
             // Reserve scrollbar width only for profile editing; MCP and
             // schedules retain their full width.
             <div
               className={cn(
                 'flex-1 overflow-y-auto',
-                section === 'profile' && '[scrollbar-gutter:stable]',
+                effectiveSection === 'profile' && '[scrollbar-gutter:stable]',
               )}
             >
               <div className="px-8 py-6">
-                {section === 'profile' ? (
+                {effectiveSection === 'profile' ? (
                   <AgentProfileCard agent={agent} />
                 ) : null}
-                {section === 'mcp' ? (
+                {effectiveSection === 'mcp' ? (
                   <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
                 ) : null}
-                {section === 'schedules' ? (
+                {effectiveSection === 'schedules' ? (
                   canManageSchedules ? (
                     <AgentSchedulesCard agentId={agent.id} />
                   ) : (

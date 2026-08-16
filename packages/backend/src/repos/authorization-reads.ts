@@ -91,12 +91,15 @@ export function createSqliteAuthorizationReads(
       conversations.getAgent(conversationId, agentId) !== null,
     isConversationUser: (conversationId, userId) =>
       conversations.getUser(conversationId, userId) !== null,
+    isAgentParticipant: (conversationId, agentId) =>
+      conversations.isAgentParticipant(conversationId, agentId),
     agent: (agentId): AuthorizationAgentFacts | null => {
       const row = agents.get(agentId);
       if (!row) return null;
       return {
         created_by_user_id: row.created_by_user_id,
         materialization_status: row.materialization_status,
+        session_scope: row.session_scope,
       };
     },
     hasCapability: (workspaceId, agentId, capability) =>

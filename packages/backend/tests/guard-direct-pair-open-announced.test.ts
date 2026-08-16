@@ -19,9 +19,11 @@
  * not in the scanner: the invariant itself was "the callers happen to be right",
  * which no scanner can close.
  *
- * So the announcement moved INTO the mint, as a required port on the resolver
- * ({@link DeliveryTargetAllocationPort}), and the remaining static obligation is
- * the one a compiler cannot state: THAT PORT HAS EXACTLY ONE PRODUCTION
+ * So the announcement moved INTO the mint, as a required port ({@link
+ * DirectPairOpenedPort}) on the one operation both doors funnel through
+ * (`openDirectPair`, extracted to its own module for #task:2036 precisely because
+ * the human door is that second caller). The remaining static obligation is the
+ * one a compiler cannot state: THAT PORT HAS EXACTLY ONE PRODUCTION
  * IMPLEMENTATION, THE ONE THAT PUBLISHES. A hand-rolled `{ directPairOpened() {} }`
  * — the shape a door in a hurry reaches for — fails this gate, and the author is
  * made to answer where its announcement comes from.
@@ -30,6 +32,14 @@
  * silent hole: an UNEXPECTED site is an unannounced (or differently announced) pair,
  * and a MISSING expected site means the mint or the announcement was moved while
  * every allowlist entry still reads as if it were in force.
+ *
+ * A SECOND correction, same shape as the first (@Cindy #task:2036). The fence once
+ * reduced each file to a boolean — "does a mint appear here" — so a second mint
+ * added to an ALREADY-ALLOWED file (a new exported helper in `open-direct-pair.ts`
+ * that get-or-creates again without announcing) left every assertion green while
+ * reintroducing the exact hole. The allowlist now carries a per-file SITE COUNT:
+ * both a same-file second site and a new file trip it, and the patterns exclude
+ * declarations and prose so the counts cannot be padded into silence.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -66,45 +76,69 @@ const MINT_CALL = /\.getOrCreateDirectPair\s*\(/;
 
 /**
  * The allocation obligation, by the name only its implementers and its one caller
- * can avoid spelling.
+ * can avoid spelling — counted as SITES, not files.
  *
- * Any mention, not just a call: an implementation writes `directPairOpened:` or
- * `directPairOpened(id) {`, and a forwarder writes `.directPairOpened(`. All three
- * are the thing being fenced, so the pattern is the bare identifier and the
- * allowlist below is what carries the distinction.
+ * A definition or a call, not a prose mention: an implementation writes
+ * `directPairOpened(id) {` or `directPairOpened: (id) =>`, a declaration writes
+ * `directPairOpened(conversationId): void`, and a caller writes `.directPairOpened(`
+ * — all end the identifier with `(` or `:`. A docblock that merely NAMES the port
+ * (`the directPairOpened obligation`, `{@link DirectPairOpenedPort}`) has neither
+ * and is not counted, so the per-file count below cannot be inflated by prose into
+ * hiding a real second site.
  */
-const OBLIGATION = /\bdirectPairOpened\b/;
+const OBLIGATION = /directPairOpened\s*[(:]/;
 
 /**
- * Where a pair may be minted, and why each site is allowed to.
+ * Where a pair may be minted, HOW MANY TIMES each site may name it, and why.
  *
- * The value is the REASON, not a checkbox: an entry that cannot state how its
- * announcement happens is an entry that should not be here.
+ * The count is the invariant, not just the file: an entry that cannot state how
+ * its announcement happens should not be here, and a site that mints once more
+ * than declared is the hole this gate exists to stop.
  */
-const ALLOWED_MINT_SITES: Record<string, string> = {
-  'packages/backend/src/repos/delivery-target-persistence.ts':
-    'the resolver PORT wiring — passes the repo method through, adds no new caller',
-  'packages/backend/src/application/delivery-target-resolution.ts':
-    'the ONE allocating arm; announces through `ports.allocations` in the same breath',
+const ALLOWED_MINT_SITES: Record<string, { count: number; reason: string }> = {
+  'packages/backend/src/repos/delivery-target-persistence.ts': {
+    count: 2,
+    reason:
+      'the PORT wiring for BOTH doors — the resolver bag and the human-door bag each forward the repo method into a `DirectPairMintPort`, adding no new caller',
+  },
+  'packages/backend/src/application/open-direct-pair.ts': {
+    count: 1,
+    reason:
+      'the ONE mint operation both doors funnel through; announces through `ports.allocations` in the same breath',
+  },
 };
 
 /**
- * Who may name the obligation. TWO files, and the shape of the list is the
- * invariant: one declaration-and-caller, one implementation.
+ * Who may name the obligation, and HOW MANY TIMES. TWO files, and the shape of the
+ * counts is the invariant: one declaration-and-caller (2 sites — the port member
+ * plus the single call from the mint), one implementation (1 site).
  *
- * A third entry is the thing this gate exists to stop — a second implementation is
- * an announcement nobody wired, and a second caller is an announcement for a row
- * that did not just come into existence. Note that the PORT WIRING
- * (`delivery-target-persistence.ts`) is deliberately absent: it composes the
+ * A third file, or one extra site in either of these, is the thing this gate stops
+ * — a second implementation is an announcement nobody wired, and a second caller
+ * is an announcement for a row that did not just come into existence. The PORT
+ * WIRING (`delivery-target-persistence.ts`) is deliberately absent: it composes the
  * implementation through `directPairAllocationPort(...)`, so its appearance here
  * would mean someone inlined a second announcer beside the real one.
  */
-const ALLOWED_OBLIGATION_SITES: Record<string, string> = {
-  'packages/backend/src/application/delivery-target-resolution.ts':
-    'DECLARES the port and CALLS it, from the allocating arm, when the row was created',
-  'packages/backend/src/application/direct-pairs-changed.ts':
-    'the ONE implementation: publishes `direct_pairs_changed` to the pair’s human participants',
+const ALLOWED_OBLIGATION_SITES: Record<string, { count: number; reason: string }> = {
+  'packages/backend/src/application/open-direct-pair.ts': {
+    count: 2,
+    reason:
+      'DECLARES the port member and CALLS it, from the one mint operation, when the row was created',
+  },
+  'packages/backend/src/application/direct-pairs-changed.ts': {
+    count: 1,
+    reason:
+      'the ONE implementation: publishes `direct_pairs_changed` to the pair’s human participants',
+  },
 };
+
+/** Occurrences of `pattern` in one blob — the counting primitive both the site
+ *  fence and its own sensitivity meta-test run through, so a second same-file site
+ *  is a `2`, not a re-confirmed `true`. */
+function countIn(content: string, pattern: RegExp): number {
+  return (content.match(new RegExp(pattern.source, 'g')) ?? []).length;
+}
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -114,45 +148,63 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-function filesMatching(pattern: RegExp): string[] {
-  const hits: string[] = [];
+/** Per-file site counts across every production root, `{}` entries omitted. */
+function siteCounts(pattern: RegExp): Record<string, number> {
+  const counts: Record<string, number> = {};
   for (const root of PRODUCTION_ROOTS) {
     for (const file of sourceFiles(root)) {
-      if (pattern.test(readFileSync(file, 'utf8'))) {
-        hits.push(relative(repoRoot, file));
-      }
+      const n = countIn(readFileSync(file, 'utf8'), pattern);
+      if (n > 0) counts[relative(repoRoot, file)] = n;
     }
   }
-  return hits.sort();
+  return counts;
+}
+
+/** The declared shape, `{file: count}`, to compare `siteCounts` against. */
+function expectedCounts(
+  sites: Record<string, { count: number }>,
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(sites).map(([file, { count }]) => [file, count]),
+  );
 }
 
 describe('direct-pair open is announced (#task:2035 producer/consumer fence)', () => {
-  it('mints a DirectPair only inside the arm that announces it', () => {
-    expect(filesMatching(MINT_CALL)).toEqual(Object.keys(ALLOWED_MINT_SITES).sort());
+  it('mints a DirectPair only at the pinned sites, and only as many times as declared', () => {
+    expect(siteCounts(MINT_CALL)).toEqual(expectedCounts(ALLOWED_MINT_SITES));
   });
 
-  it('has exactly one implementation of the allocation obligation', () => {
-    expect(filesMatching(OBLIGATION)).toEqual(
-      Object.keys(ALLOWED_OBLIGATION_SITES).sort(),
-    );
+  it('names the allocation obligation only at the pinned sites, and only as many times as declared', () => {
+    expect(siteCounts(OBLIGATION)).toEqual(expectedCounts(ALLOWED_OBLIGATION_SITES));
   });
 
-  it('proves the scanners see a new mint / a second announcer instead of passing vacuously', () => {
-    // A #task:2036-shaped bypass: a human door opening the line itself, and a door
-    // satisfying the obligation with a port of its own that publishes nothing.
-    const bypass = `
-      const opened = this.conversations.getOrCreateDirectPair(me, them, now);
-      const allocations = { directPairOpened: () => {} };
+  it('counts a SECOND same-file site instead of collapsing it to a boolean', () => {
+    // The #task:2036-shaped bypass @Cindy proved: a second exported function in an
+    // ALREADY-ALLOWED file that get-or-creates again without announcing. A file-
+    // membership fence stays green (the file is still "allowed"); a site COUNT goes
+    // to 2 and trips, because the allowlist declares exactly one mint there.
+    const secondMintSameFile = `
+      export function openDirectPair(...) {
+        const opened = ports.conversations.getOrCreateDirectPair(x, y, now);
+        if (opened.created) ports.allocations.directPairOpened(opened.conversation.id);
+        return opened.conversation;
+      }
+      export function openDirectPairSneakily(...) {
+        return ports.conversations.getOrCreateDirectPair(x, y, now).conversation; // no announce
+      }
     `;
-    expect(MINT_CALL.test(bypass)).toBe(true);
-    expect(OBLIGATION.test(bypass)).toBe(true);
+    expect(countIn(secondMintSameFile, MINT_CALL)).toBe(2);
+    expect(countIn(secondMintSameFile, OBLIGATION)).toBe(1);
 
-    // …and that the mint pattern does not fire on a DECLARATION or a MENTION, which
-    // is what would make the allowlists above quietly wrong in the other direction.
+    // A DECLARATION and PROSE inflate neither count: the method definition has no
+    // leading `.`, and a docblock that only names the port has no `(`/`:` after it —
+    // which is what keeps the per-file counts above from being padded into silence.
     const declarationsAndProse = `
       getOrCreateDirectPair(a: X, b: X, now: number): Opened;
       // ConversationRepo.getOrCreateDirectPair derives created from the row count.
+      // The directPairOpened obligation travels with the mint; see {@link DirectPairOpenedPort}.
     `;
-    expect(MINT_CALL.test(declarationsAndProse)).toBe(false);
+    expect(countIn(declarationsAndProse, MINT_CALL)).toBe(0);
+    expect(countIn(declarationsAndProse, OBLIGATION)).toBe(0);
   });
 });

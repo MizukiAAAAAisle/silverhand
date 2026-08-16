@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Power, Trash2 } from 'lucide-react';
+import { MessageSquare, Power, Trash2 } from 'lucide-react';
 import type { AgentDto, AgentRuntimeStateDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
@@ -18,16 +18,21 @@ import { useAgentOnlineByHost } from '@/features/hosts/hooks';
 import { useStopAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { DeleteAgentDialog } from './DeleteAgentDialog';
+import { MessageAgentDialog } from './MessageAgentDialog';
 
 interface AgentHeaderProps {
   agent: AgentDto;
   runtimeState: AgentRuntimeStateDto | undefined;
   onDeleted: () => void;
+  /** Open the (existing or freshly minted) direct line with this agent —
+   *  the workspace-less chat route. Wired only on the full-page variant;
+   *  when absent, the Message entry is not offered. */
+  onOpenDirectPair?: (conversationId: string) => void;
 }
 
 /**
  * Agent panel header. Thin adapter over the shared {@link PersonHero}
- * primitive — owns the agent-specific data wiring (Stop button +
+ * primitive — owns the agent-specific data wiring (Message draft + Stop button +
  * mutation, Delete dialog, runtime presence aggregation, avatar
  * object URL) and forwards presentation to the Hero. Keeps `AgentView`
  * unchanged at the call site.
@@ -36,8 +41,10 @@ export function AgentHeader({
   agent,
   runtimeState,
   onDeleted,
+  onOpenDirectPair,
 }: AgentHeaderProps): JSX.Element {
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [messageOpen, setMessageOpen] = useState(false);
   const stopAgent = useStopAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
   // Hero status = agent-on-computer liveness (is the agent's runtime live on
@@ -54,6 +61,12 @@ export function AgentHeader({
     s => s.status === 'starting' || s.status === 'active',
   );
   const runningCount = running.length;
+
+  // Offer the Message entry only when there is a destination to open (full-page
+  // variant wires `onOpenDirectPair`) AND the agent's human line is a DirectPair
+  // — i.e. it is agent-scoped. A conversation-scoped agent's human entrance is
+  // its workspace/Agent Space, not this door.
+  const canMessage = Boolean(onOpenDirectPair) && agent.session_scope === 'agent';
 
   return (
     <>
@@ -95,6 +108,23 @@ export function AgentHeader({
                 and Delete's alpha-thinned red was the washed recipe already
                 rejected elsewhere. Neither is a primary CTA: this page has no
                 commit, so nothing here takes a fill. */}
+            {/* Message is offered only for agent-scoped agents (the sole scope
+                whose human line is a DirectPair). Visibility is product-domain
+                only — everyone who can see this page sees the entry (shiki
+                xpY0-CI0: "现在全部可见，将来再优化"); the door re-authorizes the
+                actual first send. */}
+            {canMessage ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setMessageOpen(true)}
+                title={`Message @${agent.name}`}
+                {...neutralAction()}
+              >
+                <MessageSquare className="size-3.5" />
+                Message
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               size="sm"
@@ -129,6 +159,14 @@ export function AgentHeader({
         agent={agent}
         onDeleted={onDeleted}
       />
+      {canMessage && onOpenDirectPair ? (
+        <MessageAgentDialog
+          open={messageOpen}
+          onOpenChange={setMessageOpen}
+          agent={agent}
+          onSent={onOpenDirectPair}
+        />
+      ) : null}
     </>
   );
 }

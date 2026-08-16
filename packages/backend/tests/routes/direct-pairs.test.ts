@@ -29,6 +29,7 @@ import {
   apiPaths,
   internalPaths,
   encodeUserPrincipalHeader,
+  MAX_MESSAGE_CONTENT_BYTES,
   X_SILVERHAND_PRINCIPAL_HEADER,
   type DirectPairListItem,
   type DirectPairListResponse,
@@ -671,5 +672,289 @@ describe('GET /api/direct-pairs + direct_pairs_changed', () => {
       conversation_id: ack!.conversation_id,
       unread_count: 1,
     });
+  });
+});
+
+/**
+ * #task:2036 part ① — the HUMAN first-send door: `POST /api/agents/:id/direct-messages`.
+ *
+ * Lazy allocate (@shiki): opening the page and composing touch nothing. No pair is
+ * minted until a person SENDS — and only for an AGENT-SCOPED agent, since a
+ * conversation-scoped agent's human entry stays its workspace/Agent Space. So this
+ * door is also the allocation point, and its ORDER is the contract (@Cindy): the
+ * two-step gate (anti-enum visibility → initiation authority) and every
+ * side-effect-free door-local preflight (schema, content cap, reply target) run
+ * BEFORE the mint, so an unauthorized or malformed request leaves ZERO pair and
+ * ZERO `direct_pairs_changed`. The mint happens the moment preflight passes and the
+ * send intent is committed — NOT "only on success": a downstream failure AFTER the
+ * mint may leave an empty, announced line, the same resolve-then-send window the
+ * agent side has, pinned here by a counter-example. What is idempotent under a
+ * double-submit is the pair ALLOCATION, not the POST — two sends post two messages.
+ * Both doors funnel through the one `openDirectPair`, so a first contact from
+ * either side resolves to one row.
+ *
+ * The refusal matrix below gives EACH ordering-load-bearing preflight branch its
+ * own falsifier — delete or reorder any one past the mint and a test goes red
+ * (@Cindy): unviewable → 404, viewable-but-conversation-scoped → 403, malformed
+ * payload → 400, content over cap → 413, reply target → 400, each asserting zero
+ * pair + zero `direct_pairs_changed`.
+ */
+describe('POST /api/agents/:id/direct-messages (human first-send door)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  /** The door: opening a line by sending its first message from an agent's page.
+   *  Keyed by AGENT id — the line has no conversation id yet. */
+  function openDmToAgent(
+    tt: TestApp,
+    agentId: string,
+    body: Record<string, unknown>,
+    userId?: string,
+  ): Promise<Response> {
+    return http(
+      tt,
+      userId === undefined
+        ? undefined
+        : { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(userId) },
+    ).post(apiPaths.agentDirectMessages(agentId), body);
+  }
+
+  function findViewerPair(tt: TestApp, agentId: string, userId?: string) {
+    return new ConversationRepo(tt.ctx.db).findDirectPair(
+      { kind: 'human', id: userId ?? tt.viewerUserId },
+      { kind: 'agent', id: agentId },
+    );
+  }
+
+  /** The valid TARGET for this door: an AGENT-SCOPED agent owned by the viewer.
+   *  Cloned from a viewer-created parent, so `canViewAgent` admits it on the owner
+   *  branch (page visibility = today's initiation policy) AND `session_scope` is
+   *  `'agent'`, which is the second half of the initiation verdict. A plain
+   *  `makeAgent` (conversation-scoped) is deliberately NOT this — it is the 403
+   *  counter-example below. */
+  async function agentScopedAssistant(tt: TestApp, name = 'assistant'): Promise<string> {
+    const parent = await makeAgent(tt, `${name}-parent`);
+    return insertAgentScopedAgent(tt, parent, name);
+  }
+
+  it('opens the line, sends the first message, and announces it on the sender’s own scope', async () => {
+    t = buildTestApp();
+    // Agent-scoped and owned by the viewer, so both halves of
+    // `canInitiateDirectMessageToAgent` (page visibility + `session_scope==='agent'`)
+    // admit the send.
+    const agentId = await agentScopedAssistant(t);
+    expect(await listDirectPairs(t)).toEqual([]);
+
+    let res: Response | null = null;
+    const frames = await framesDuring(t, async () => {
+      res = await openDmToAgent(t!, agentId, { content: 'hello there' });
+    });
+    expect(res!.status).toBe(201);
+    const conversationId = ((await res!.json()) as any).message.conversation_id as string;
+
+    // TWO viewer frames on first contact, exactly like the agent side: the line
+    // came into existence (`openDirectPair`), then it got its first message. The
+    // sender is a human participant, so their own send moves their own list.
+    const expectedFrame = {
+      scope: `viewer:${t.viewerUserId}`,
+      kind: 'direct_pairs_changed',
+      payload: { conversation_id: conversationId },
+    };
+    expect(viewerFrames(frames, t)).toEqual([expectedFrame, expectedFrame]);
+    // The message frame rides only the conversation scope.
+    expect(frames.filter(f => f.kind === 'message').map(f => f.scope)).toEqual([
+      `conversation:${conversationId}`,
+    ]);
+    expect(
+      frames.filter(
+        f => f.kind === 'unread_updated' || f.kind === 'attention_badge_updated',
+      ),
+    ).toEqual([]);
+
+    // Exactly one pair, and it is the row the sender now has (unread 0 — own send).
+    expect(findViewerPair(t, agentId)!.id).toBe(conversationId);
+    const rows = await listDirectPairs(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      conversation_id: conversationId,
+      counterpart: { status: 'active', kind: 'agent', id: agentId },
+      unread_count: 0,
+      read_only: false,
+    });
+  });
+
+  it('a double-submit resolves to one pair but posts a SECOND message: the ALLOCATION is idempotent, the POST is not', async () => {
+    t = buildTestApp();
+    const agentId = await agentScopedAssistant(t);
+    const first = await openDmToAgent(t, agentId, { content: 'one' });
+    expect(first.status).toBe(201);
+    const conversationId = ((await first.json()) as any).message.conversation_id as string;
+
+    const frames = await framesDuring(t, async () => {
+      const again = await openDmToAgent(t!, agentId, { content: 'two' });
+      expect(again.status).toBe(201);
+      // get-or-create: the second send lands in the same row.
+      expect(((await again.json()) as any).message.conversation_id).toBe(conversationId);
+    });
+    // No SECOND mint frame — `openDirectPair` found the existing row (created:false),
+    // so the only list change is the new message: one `direct_pairs_changed`, not two.
+    expect(viewerFrames(frames, t).map(f => f.kind)).toEqual(['direct_pairs_changed']);
+    // …but the POST is NOT idempotent: the second call posted a second message into
+    // the same line (one `message` frame on the conversation scope this round).
+    expect(frames.filter(f => f.kind === 'message').map(f => f.scope)).toEqual([
+      `conversation:${conversationId}`,
+    ]);
+    const rows = await listDirectPairs(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.conversation_id).toBe(conversationId);
+  });
+
+  it('refuses a DM to an agent the sender cannot even view — 404 (anti-enum), no pair, no frame', async () => {
+    // Membership must come from real surfaces, so the viewer and the teammate's
+    // agent genuinely share nothing (`seedAllFixtureMemberships: false`).
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const rTeammate = await http(t, {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(OTHER_USER_ID),
+    }).post('/api/agents', { name: 'theirs', runtime: 'claude' });
+    expect(rTeammate.status).toBe(201);
+    const agentId = ((await rTeammate.json()) as any).agent.id as string;
+
+    let res: Response | null = null;
+    const frames = await framesDuring(t, async () => {
+      res = await openDmToAgent(t!, agentId, { content: 'hi' });
+    });
+    // Step 1 (anti-enum) refused before any side effect: 404, indistinguishable from
+    // a nonexistent id, so a stranger cannot probe which agent ids exist. Zero pair,
+    // zero frame.
+    expect(res!.status).toBe(404);
+    expect(findViewerPair(t, agentId)).toBeNull();
+    expect(frames.filter(f => f.kind === 'direct_pairs_changed')).toEqual([]);
+    expect(await listDirectPairs(t)).toEqual([]);
+  });
+
+  it('refuses a DM to a CONVERSATION-SCOPED agent the sender owns — 403, no pair, no frame', async () => {
+    // @Cindy's required positive control: the viewer CAN view this agent (owner), so
+    // step-1 anti-enum passes — but its human entry is its workspace/Agent Space, not
+    // a workspace-less DirectPair. The initiation verdict's session-scope half refuses
+    // it at 403 (honest to a caller looking right at the page), and — the load-bearing
+    // half — leaves ZERO pair and ZERO `direct_pairs_changed`. Delete the scope check
+    // and this agent wrongly gets a DirectPair; this test goes red.
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'conversation-scoped'); // session_scope='conversation'
+
+    let res: Response | null = null;
+    const frames = await framesDuring(t, async () => {
+      res = await openDmToAgent(t!, agentId, { content: 'hi' });
+    });
+    expect(res!.status).toBe(403);
+    expect(findViewerPair(t, agentId)).toBeNull();
+    expect(frames.filter(f => f.kind === 'direct_pairs_changed')).toEqual([]);
+    expect(await listDirectPairs(t)).toEqual([]);
+  });
+
+  it('refuses a malformed payload (no content) — 400 before the mint, no pair, no frame', async () => {
+    // The schema branch's falsifier: move this parse past the mint and an empty POST
+    // would open a line. It must refuse side-effect-free.
+    t = buildTestApp();
+    const agentId = await agentScopedAssistant(t);
+
+    let res: Response | null = null;
+    const frames = await framesDuring(t, async () => {
+      res = await openDmToAgent(t!, agentId, {}); // no `content`
+    });
+    expect(res!.status).toBe(400);
+    expect(findViewerPair(t, agentId)).toBeNull();
+    expect(frames.filter(f => f.kind === 'direct_pairs_changed')).toEqual([]);
+    expect(await listDirectPairs(t)).toEqual([]);
+  });
+
+  it('refuses content over the cap — 413 before the mint, no pair, no frame', async () => {
+    // @Cindy's proven-missing falsifier: with no test here, the content cap could be
+    // deleted or moved AFTER allocation and the suite would still be green. An ASCII
+    // body one byte over the 64KiB content cap is far under the raw body limit, so it
+    // is the CONTENT check (413 `content_too_large`) that must fire — before the mint.
+    t = buildTestApp();
+    const agentId = await agentScopedAssistant(t);
+    const tooLong = 'a'.repeat(MAX_MESSAGE_CONTENT_BYTES + 1);
+
+    let res: Response | null = null;
+    const frames = await framesDuring(t, async () => {
+      res = await openDmToAgent(t!, agentId, { content: tooLong });
+    });
+    expect(res!.status).toBe(413);
+    expect(((await res!.json()) as any).code).toBe('content_too_large');
+    expect(findViewerPair(t, agentId)).toBeNull();
+    expect(frames.filter(f => f.kind === 'direct_pairs_changed')).toEqual([]);
+    expect(await listDirectPairs(t)).toEqual([]);
+  });
+
+  it('refuses a first send that names a reply cluster — no line to reply into, no pair, no frame', async () => {
+    t = buildTestApp();
+    const agentId = await agentScopedAssistant(t);
+
+    let res: Response | null = null;
+    const frames = await framesDuring(t, async () => {
+      res = await openDmToAgent(t!, agentId, { content: 'hi', reply_to_message_id: 'x' });
+    });
+    // A side-effect-free refusal (a brand-new line has no cluster): 400 before the
+    // mint, so no pair and no frame.
+    expect(res!.status).toBe(400);
+    expect(((await res!.json()) as any).code).toBe('reply_to_unsupported');
+    expect(findViewerPair(t, agentId)).toBeNull();
+    expect(frames.filter(f => f.kind === 'direct_pairs_changed')).toEqual([]);
+  });
+
+  it('a send that fails AFTER allocation leaves an announced empty line — the resolve-then-send window', async () => {
+    // @Cindy's required counter-example. A bogus attachment id fails INSIDE
+    // `sendMessage`, after `openDirectPair` minted and announced the row. This is
+    // the acceptable window, identical to the agent side: the frame announces a ROW
+    // THAT EXISTS, not a send that succeeded, and withdrawing it would strand a live
+    // client that a cold `GET /api/direct-pairs` would show the line to.
+    t = buildTestApp();
+    const agentId = await agentScopedAssistant(t);
+
+    let res: Response | null = null;
+    const frames = await framesDuring(t, async () => {
+      res = await openDmToAgent(t!, agentId, {
+        content: 'hi',
+        attachment_ids: ['att_does_not_exist'],
+      });
+    });
+    expect(res!.status).toBe(400);
+    // The line exists and was announced exactly once (the mint) — no message frame.
+    const pair = findViewerPair(t, agentId);
+    expect(pair).not.toBeNull();
+    expect(viewerFrames(frames, t)).toEqual([
+      {
+        scope: `viewer:${t.viewerUserId}`,
+        kind: 'direct_pairs_changed',
+        payload: { conversation_id: pair!.id },
+      },
+    ]);
+    expect(frames.filter(f => f.kind === 'message')).toEqual([]);
+    expect((await listDirectPairs(t))[0]).toMatchObject({
+      conversation_id: pair!.id,
+      unread_count: 0,
+    });
+  });
+
+  it('the human door and the agent door open the SAME pair — one row, either order', async () => {
+    t = buildTestApp();
+    const parent = await makeAgent(t, 'parent');
+    const stranger = insertAgentScopedAgent(t, parent, 'stranger');
+    // The agent opens the line first…
+    const opened = await dmTheViewer(t, stranger, 'agent first');
+    // …then the human sends through the first-send door to the SAME agent:
+    // `openDirectPair` finds the existing row rather than minting a second (the two
+    // doors funnel through one aggregate, and the endpoint order is canonicalized).
+    const res = await openDmToAgent(t, stranger, { content: 'human second' });
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as any).message.conversation_id).toBe(opened);
+    const rows = await listDirectPairs(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.conversation_id).toBe(opened);
   });
 });

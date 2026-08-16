@@ -42,7 +42,7 @@
  */
 import type { DirectPairsChangedPayload } from '@silverhand/shared';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
-import type { DeliveryTargetAllocationPort } from './delivery-target-resolution.js';
+import type { DirectPairOpenedPort } from './open-direct-pair.js';
 
 /** Emit to ONE viewer. Takes the bus rather than a `BackendContext` because the
  *  caller is a service that holds only its ports (#task:1983): a post-commit
@@ -117,7 +117,7 @@ export function publishDirectPairsChangedToViewers(
 export function directPairAllocationPort(
   events: ScopeEventBus,
   humanParticipantsOf: (conversationId: string) => readonly string[],
-): DeliveryTargetAllocationPort {
+): DirectPairOpenedPort {
   return {
     directPairOpened: conversationId => {
       publishDirectPairsChangedToViewers(

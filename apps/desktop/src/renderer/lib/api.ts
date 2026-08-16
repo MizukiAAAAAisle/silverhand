@@ -227,19 +227,23 @@ export async function fetchAttachmentBlob(attachmentId: string): Promise<{
   return fetchBackendBlob(`/api/attachments/${encodeURIComponent(attachmentId)}`);
 }
 
-/** Fetch an attachment as raw bytes — no `URL.createObjectURL` in the
- *  chain. For "open-with-OS" / "save-as" flows the renderer only needs
- *  the bytes to ship over IPC; going through the blob-URL API leaks a
- *  reference every call (attachments cap at 10MB, so repeated saves
- *  would accumulate). Use `fetchAttachmentBlob` only when you need a
- *  URL for `<img src>` / `<video src>` (image cache path). */
-export async function fetchAttachmentBytes(attachmentId: string): Promise<{
+/** Fetch an arbitrary backend path as raw bytes — no `URL.createObjectURL`
+ *  in the chain. For "open-with-OS" / "save-as" flows the renderer only
+ *  needs the bytes to ship over IPC; going through the blob-URL API leaks a
+ *  reference every call (attachments cap at 10MB, so repeated opens would
+ *  accumulate). Use `fetchBackendBlob` only when you need a URL for
+ *  `<img src>` / `<video src>` (image cache path).
+ *
+ *  Generic over the path so bytes faces other than the membership-scoped
+ *  `GET /api/attachments/:id` (e.g. the owner-audit
+ *  `agentChatAttachment` route) reuse the identical fetch + defensive copy. */
+export async function fetchBackendBytes(path: string): Promise<{
   bytes: Uint8Array;
   contentType: string;
   filename: string | null;
 }> {
   const res = await window.silverhand.backendRequest({
-    path: `/api/attachments/${encodeURIComponent(attachmentId)}`,
+    path,
     responseType: 'arrayBuffer',
   });
   assertOk(res);
@@ -254,6 +258,14 @@ export async function fetchAttachmentBytes(attachmentId: string): Promise<{
   const bytes = new Uint8Array(source.byteLength);
   bytes.set(source);
   return { bytes, contentType, filename };
+}
+
+export async function fetchAttachmentBytes(attachmentId: string): Promise<{
+  bytes: Uint8Array;
+  contentType: string;
+  filename: string | null;
+}> {
+  return fetchBackendBytes(`/api/attachments/${encodeURIComponent(attachmentId)}`);
 }
 
 function extractDispositionFilename(value: string): string | null {

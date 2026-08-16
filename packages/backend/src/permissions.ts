@@ -807,6 +807,115 @@ export function canViewAgent(
 
 const ACTIVE_ONLY: ReadonlyArray<AgentMaterializationStatus> = ['active'];
 
+/**
+ * May this principal OPEN a direct-message line to this agent (#task:2036)?
+ *
+ * The ONE home of the initiation policy, and a function of its own on purpose
+ * (@Cindy's #task:2036 boundary). "Who may start a DM" is not the same question
+ * as "who may see the agent's page" and it is emphatically not the owner audit
+ * ACL (part ②, read-only third-party transcripts) — welding initiation to either
+ * would let a widening of one silently widen the other. The human first-send door
+ * calls THIS, so the day @shiki rules on DM acceptance (an agent declining
+ * unsolicited contact, a workspace-scoped-only policy, …) the narrowing lands
+ * here and nowhere else, and every door inherits it without being edited.
+ *
+ * Today the verdict is the conjunction of THREE facts, and each is load-bearing:
+ *
+ *   1. the principal is not an agent — an agent reaches another agent through the
+ *      addressed resolver (`resolveDeliveryTarget`), not this human-facing door;
+ *   2. the principal may VIEW the agent's page ({@link canViewAgent}) — with no
+ *      DM-acceptance data in the model yet, page visibility is the acceptance
+ *      policy, and the day @shiki rules otherwise the narrowing lands right here;
+ *   3. the agent is AGENT-SCOPED (`session_scope === 'agent'`).
+ *
+ * Fact 3 is not incidental. A human↔agent DirectPair is the human entry point for
+ * an agent-scoped agent — the one whose identity is NOT a single conversation. A
+ * conversation-scoped agent already HAS a human entry: its workspace / Agent
+ * Space. Opening a workspace-less DirectPair for it would bypass the resolver's
+ * `own_stream` / allocation model and mint a second, parallel line for a lifecycle
+ * that is defined by its conversation — exactly the mutual exclusion #task:2036's
+ * canonical target names in its first clause ("对 agent-scoped agent"). So the
+ * scope belongs IN this verdict, not as a caller-side afterthought a second door
+ * could forget (@Cindy #task:2036).
+ *
+ * That the body reads facts through {@link canViewAgent} plus a scope read is an
+ * implementation detail; the contract is that initiation has ONE named gate,
+ * distinct from page visibility and from the owner audit ACL, and that it runs
+ * BEFORE any pair is minted.
+ */
+export function canInitiateDirectMessageToAgent(
+  ctx: BackendContext,
+  principal: Principal,
+  agentId: string,
+): boolean {
+  if (principal.kind === 'agent') return false;
+  if (!canViewAgent(ctx, principal, agentId)) return false;
+  // Only an agent-scoped agent takes a human-initiated DirectPair; a
+  // conversation-scoped agent's human entry stays its workspace/Agent Space.
+  return ctx.authorizationReads.agent(agentId)?.session_scope === 'agent';
+}
+
+/**
+ * May this principal AUDIT this agent's chats (#task:2036 part ②)?
+ *
+ * The ONE home of the owner-audit ACL, a named gate DISTINCT from both
+ * {@link canViewAgent} (page visibility) and {@link canInitiateDirectMessageToAgent}
+ * (@Cindy's #task:2036 boundary 1): the owner of an agent may read the full
+ * transcript of every conversation the agent is a party to, read-only, because
+ * they bear that agent's runtime and budget and can already see the same content
+ * through the runtime — so hiding it in the UI protects nothing (@shiki's part-②
+ * ruling). This is deliberately NOT participant-based (`canReadConversation`) and
+ * NOT credential-narrowed (`canViewConversation`): the owner is not a participant
+ * of the audited line and must never be disguised as one (boundary 2).
+ *
+ * Owner-only by construction: the verdict is `principal is a user` ∧ `principal
+ * owns the agent` (`created_by_user_id`). A workspace admin who is not the owner
+ * does not audit; a peer agent never does. System bypasses, mirroring
+ * {@link canViewAgent}, so the anti-enumeration ladder (canViewAgent → 404, this
+ * → 403) stays consistent for internal callers.
+ */
+export function canAuditAgentChats(
+  ctx: BackendContext,
+  principal: Principal,
+  agentId: string,
+): boolean {
+  if (principal.kind === 'system') return true;
+  if (principal.kind !== 'user') return false;
+  return ctx.authorizationReads.agent(agentId)?.created_by_user_id === principal.userId;
+}
+
+/**
+ * May this principal audit THIS conversation as one of the agent's chats
+ * (#task:2036 part ②)? The per-conversation companion to {@link canAuditAgentChats}:
+ * the list gate decides "may you audit this agent at all", this decides "is this
+ * conversation in the audit face's domain and does the agent actually belong to it".
+ *
+ * Three added conjuncts on top of the owner ACL, each load-bearing:
+ *
+ *   1. the conversation EXISTS — a miss collapses to the same denial as
+ *      unauthorized (the route runs canViewAgent → 404 first, so a non-owner never
+ *      reaches here to distinguish a real id from a bogus one: no existence oracle);
+ *   2. its `placement_kind` is NOT `agent_inbox` — the AgentInbox is the agent's
+ *      own private queue, outside the audit face's declared scope (the enumeration
+ *      excludes it too, so list and per-conversation gate agree);
+ *   3. the agent is a SUBJECT participant of it (`isAgentParticipant` — the full
+ *      participation arc WITHOUT running-in narrowing). This is what keeps the owner
+ *      from reading a conversation the agent is not a party to via a guessed id.
+ */
+export function canAuditAgentConversation(
+  ctx: BackendContext,
+  principal: Principal,
+  agentId: string,
+  conversationId: string,
+): boolean {
+  if (!canAuditAgentChats(ctx, principal, agentId)) return false;
+  const reads = ctx.authorizationReads;
+  const conversation = reads.conversation(conversationId);
+  if (!conversation) return false;
+  if (conversation.placement_kind === 'agent_inbox') return false;
+  return reads.isAgentParticipant(conversationId, agentId);
+}
+
 export function canViewAttachment(
   ctx: BackendContext,
   principal: Principal,

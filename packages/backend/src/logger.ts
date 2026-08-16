@@ -123,7 +123,7 @@ export function createCategorizedLoggers(
       ...opts,
       filenamePrefix: 'backend',
       logControl,
-      alwaysWriteCategories: EVENT_WS_DIAGNOSTIC_CATEGORIES,
+      alwaysWriteCategories: SYSTEM_ALWAYS_WRITE_CATEGORIES,
     }),
     agent: createFileLogger({ ...opts, filenamePrefix: 'agent', logControl }),
     cli: createFileLogger({
@@ -137,6 +137,18 @@ export function createCategorizedLoggers(
 }
 
 const CLI_AUDIT_CATEGORIES = ['cli.invoke', 'cli.preflight_failure'] as const;
+// Owner-audit read faces (#task:2036 part ②): the OWNER reading an agent's
+// third-party conversations is an authority-sensitive access, and in the v1
+// single-host model the system logger IS the audit trail — there is no separate
+// audit store. So these three records (chats listed, transcript read, attachment
+// bytes read) must survive the DEFAULT `warn` level (an `info` line is otherwise
+// dropped): they name a category the system sink writes unconditionally, exactly
+// as `cli.*` audit events do on the CLI sink.
+const AGENT_AUDIT_CATEGORIES = [
+  'agent_audit.chats_listed',
+  'agent_audit.transcript_read',
+  'agent_audit.attachment_read',
+] as const;
 const EVENT_WS_DIAGNOSTIC_CATEGORIES = [
   'event_ws.publish',
   'event_ws.subscribe',
@@ -145,6 +157,13 @@ const EVENT_WS_DIAGNOSTIC_CATEGORIES = [
   'event_ws.snapshot_required',
   'event_ws.send_skipped_non_open',
   'event_ws.renderer',
+] as const;
+// The system sink writes its WS diagnostics AND the owner-audit trail regardless
+// of the configured level — both are records whose value is in being complete,
+// not in being above a severity threshold.
+const SYSTEM_ALWAYS_WRITE_CATEGORIES = [
+  ...EVENT_WS_DIAGNOSTIC_CATEGORIES,
+  ...AGENT_AUDIT_CATEGORIES,
 ] as const;
 
 export function createLogLevelControl(

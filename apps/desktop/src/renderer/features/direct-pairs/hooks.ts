@@ -25,8 +25,12 @@
  * invalidation.
  */
 import { useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DirectPairListItem, DirectPairListResponse } from '@silverhand/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  DirectPairListItem,
+  DirectPairListResponse,
+  MessageSendAck,
+} from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import {
@@ -244,4 +248,39 @@ export function useDirectPairsSync(): void {
       unsub();
     };
   }, [qc]);
+}
+
+/**
+ * First-send door for a human-initiated human↔agent DirectPair (#task:2036
+ * part ①). POSTs the draft's text to `POST /api/agents/:id/direct-messages`,
+ * which is get-or-create: the pair is minted (and announced) the first time a
+ * send commits and reused on every later send. The renderer does NOT allocate
+ * the pair — opening or cancelling the draft has zero persistence, so there is
+ * nothing to invalidate until a send actually returns.
+ *
+ * This is emphatically NOT a renderer copy of the backend's initiation
+ * authority: the door re-authorizes every send (session scope, schema, content
+ * cap, reply target) and its 403/404/400/413 are the authoritative answers. The
+ * button's product-domain visibility (`session_scope === 'agent'`) narrows who
+ * is OFFERED the door; it never stands in for that check.
+ *
+ * On success we invalidate `directPairsKey` so a freshly minted pair appears in
+ * the DIRECT MESSAGES list even for a viewer whose cached list predates it; the
+ * caller reads `ack.message.conversation_id` to navigate to the new line. The
+ * mint is idempotent (get-or-create → one row) but the POST is not — a
+ * double-submit sends two messages into the same pair, so callers must guard the
+ * submit affordance rather than rely on this hook to dedupe.
+ */
+export function useInitiateDirectMessage(agentId: string) {
+  const qc = useQueryClient();
+  return useMutation<MessageSendAck, Error, { content: string }>({
+    mutationFn: async ({ content }) =>
+      api<MessageSendAck>(apiPaths.agentDirectMessages(agentId), {
+        method: 'POST',
+        body: JSON.stringify({ content } satisfies { content: string }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: directPairsKey });
+    },
+  });
 }

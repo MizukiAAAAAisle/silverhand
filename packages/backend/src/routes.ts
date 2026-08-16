@@ -530,7 +530,7 @@ export function createApiRouter(
   // a filter on it. Read-only.
   app.route(
     '/',
-    createDirectPairsApp({ ctx, directPairs: readModels.directPairs }),
+    createDirectPairsApp({ ctx, directPairs: readModels.directPairs, conversations }),
   );
 
   // Client-side diagnostics intake (#task:1664): failures the server cannot
@@ -633,6 +633,7 @@ export function createApiRouter(
       workspaces,
       conversations,
       messages,
+      agentAuditChats: readModels.agentAuditChats,
       conversationInboxes,
       runtimeSlots,
       users,

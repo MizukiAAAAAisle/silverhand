@@ -43,6 +43,8 @@ import { conversationViewerUserIds } from '../viewer-scope.js';
 import { deliveryTargetObserver } from '../observability/delivery-target-log.js';
 import { directPairAllocationPort } from '../application/direct-pairs-changed.js';
 import type { DeliveryTargetPorts } from '../application/delivery-target-resolution.js';
+import type { OpenDirectPairPorts } from '../application/open-direct-pair.js';
+import type { ConversationIdentity } from './conversation-repo.js';
 import { deliveryTargetWorkspacesPort } from '../application/workspace-address-resolution.js';
 
 export interface DeliveryTargetPortsDeps {
@@ -99,3 +101,39 @@ export function deliveryTargetPorts(
     ),
   };
 }
+
+export interface OpenDirectPairPortsDeps {
+  conversations: ConversationRepo;
+  /** For the mint's announcement — same requirement as the resolver's `events`. */
+  events: ScopeEventBus;
+}
+
+/**
+ * The mint's two ports, for the HUMAN door (#task:2036).
+ *
+ * The person pressing "Message" resolves no address — a human client posts where
+ * the person is looking, so there is nothing for `resolveDeliveryTarget` to parse —
+ * and therefore reaches the mint through {@link openDirectPair} directly rather
+ * than through the full resolver. It gets exactly the two ports that operation
+ * needs, assembled HERE for the same reason the resolver's whole bag is: so the
+ * announcement's audience is the placement authority (`conversationViewerUserIds`),
+ * never a roster read, and no route can assemble a mint that is missing the
+ * announcement. This is deliberately NOT the whole `DeliveryTargetPorts` — the
+ * human door does no address resolution, so handing it the lookups would be reach
+ * it never uses.
+ */
+export function openDirectPairPorts(
+  deps: OpenDirectPairPortsDeps,
+): OpenDirectPairPorts<ConversationIdentity> {
+  const { conversations, events } = deps;
+  return {
+    conversations: {
+      getOrCreateDirectPair: (x, y, now) =>
+        conversations.getOrCreateDirectPair(x, y, now),
+    },
+    allocations: directPairAllocationPort(events, conversationId =>
+      conversationViewerUserIds(conversations, conversationId),
+    ),
+  };
+}
+

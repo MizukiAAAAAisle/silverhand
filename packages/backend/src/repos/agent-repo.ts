@@ -6,6 +6,7 @@ import {
   type AgentDto,
   type AgentRow,
   type AgentRuntimeParticipation,
+  type ConversationEndpointKind,
   type ConversationPlacementKind,
   type ConversationRosterPolicy,
   type CreateAgentInput,
@@ -713,4 +714,78 @@ export class AgentRepo {
       .all(...params);
     return rows;
   }
+
+  /**
+   * The conversations this agent is a party to that its OWNER may AUDIT
+   * (#task:2036 part ②) — workspace-placed conversations and the agent's
+   * `direct_pair` lines, with the AgentInbox EXCLUDED.
+   *
+   * Participation is the same placement authority every other face embeds
+   * (`agentParticipates`: workspace roster ∪ direct_pair endpoint ∪ inbox owner),
+   * so this list cannot drift from what {@link isAgentParticipant} — the
+   * per-conversation gate the audit ACL asks — admits. The one narrowing is
+   * `placement_kind != 'agent_inbox'`: the inbox is the agent's own private queue,
+   * outside the audit face's declared scope, and dropping it HERE keeps the list
+   * and the gate agreeing (the gate refuses `agent_inbox` too).
+   *
+   * A projection, not a DTO: it carries the workspace coordinates a workspace row
+   * draws by AND the endpoint columns a `direct_pair` row derives its counterpart
+   * from (so the row satisfies `ConversationEndpointRef` unchanged), leaving the
+   * read model to turn each into the display union. Order is creation, oldest
+   * first — the same base order every sibling conversation list uses, since no
+   * conversation row carries a last-activity timestamp.
+   */
+  listAuditChats(agentId: string): AgentAuditChatRow[] {
+    const participates = agentParticipates('c', agentId);
+    const rows = this.db
+      .prepare<string[], AgentAuditChatRow>(
+        `SELECT
+           c.id                     AS id,
+           c.placement_kind         AS placement_kind,
+           c.roster_policy          AS roster_policy,
+           c.title                  AS title,
+           c.workspace_id           AS workspace_id,
+           w.name                   AS workspace_name,
+           w.workspace_kind         AS workspace_kind,
+           c.endpoint_a_kind        AS endpoint_a_kind,
+           c.endpoint_a_id          AS endpoint_a_id,
+           c.endpoint_b_kind        AS endpoint_b_kind,
+           c.endpoint_b_id          AS endpoint_b_id,
+           c.endpoint_a_deleted_at  AS endpoint_a_deleted_at,
+           c.endpoint_b_deleted_at  AS endpoint_b_deleted_at,
+           c.archived_at            AS archived_at,
+           c.created_at             AS created_at
+         FROM conversations c
+         LEFT JOIN workspaces w ON w.id = c.workspace_id
+         WHERE ${participates.sql}
+           AND c.placement_kind != 'agent_inbox'
+         ORDER BY c.created_at ASC, c.id ASC`,
+      )
+      .all(...participates.params);
+    return rows;
+  }
+}
+
+/**
+ * One row of {@link AgentRepo.listAuditChats}. EXTENDS `ConversationEndpointRef`
+ * so `directPairEndpointsOf` accepts it unchanged; the workspace coordinates are
+ * present-and-non-null exactly on the workspace arm and NULL on `direct_pair`,
+ * which the read model discriminates by `placement_kind`.
+ */
+export interface AgentAuditChatRow {
+  id: string;
+  placement_kind: ConversationPlacementKind;
+  roster_policy: ConversationRosterPolicy;
+  title: string;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_kind: WorkspaceKind | null;
+  endpoint_a_kind: ConversationEndpointKind | null;
+  endpoint_a_id: string | null;
+  endpoint_b_kind: ConversationEndpointKind | null;
+  endpoint_b_id: string | null;
+  endpoint_a_deleted_at: number | null;
+  endpoint_b_deleted_at: number | null;
+  archived_at: number | null;
+  created_at: number;
 }

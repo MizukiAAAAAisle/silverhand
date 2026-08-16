@@ -1,14 +1,32 @@
 import { type ComponentType, type SVGProps } from 'react';
-import { Activity, CalendarClock, FolderTree, Plug, User } from 'lucide-react';
+import {
+  Activity,
+  CalendarClock,
+  FolderTree,
+  MessagesSquare,
+  Plug,
+  User,
+} from 'lucide-react';
 import { cn } from '@/lib/cn';
 
-export type AgentSection = 'profile' | 'workspace' | 'mcp' | 'activity' | 'schedules';
+export type AgentSection =
+  | 'profile'
+  | 'workspace'
+  | 'mcp'
+  | 'activity'
+  | 'schedules'
+  | 'chats';
 
 interface SectionItem {
   id: AgentSection;
   label: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   hint: string;
+  /** Owner-only sections are hidden entirely for non-owners — not shown with a
+   *  "private" state. The Chats audit face is an explicit privacy capability, so
+   *  its very existence is not advertised to a non-owner (unlike Workspace files,
+   *  which show a neutral private placeholder). */
+  ownerOnly?: boolean;
 }
 
 export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
@@ -23,6 +41,13 @@ export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
     label: 'Schedules',
     icon: CalendarClock,
     hint: 'Cron / interval / one-shot wakeups.',
+  },
+  {
+    id: 'chats',
+    label: 'Chats',
+    icon: MessagesSquare,
+    hint: 'Owner-only, read-only audit of this agent’s conversations.',
+    ownerOnly: true,
   },
   {
     id: 'workspace',
@@ -47,6 +72,9 @@ export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
 interface AgentSidebarProps {
   active: AgentSection;
   onChange: (section: AgentSection) => void;
+  /** Whether the viewer may reach owner-only sections (Chats). Owner-only
+   *  entries are omitted from the rail when false. */
+  canAudit: boolean;
 }
 
 /**
@@ -61,13 +89,16 @@ interface AgentSidebarProps {
  * Width is intentionally tight (160 px) — labels are short, and a
  * narrower rail leaves more room for the content surface.
  */
-export function AgentSidebar({ active, onChange }: AgentSidebarProps): JSX.Element {
+export function AgentSidebar({ active, onChange, canAudit }: AgentSidebarProps): JSX.Element {
+  const sections = canAudit
+    ? AGENT_SECTIONS
+    : AGENT_SECTIONS.filter(item => !item.ownerOnly);
   return (
     <aside
       aria-label="Agent sections"
       className="flex h-full w-[160px] shrink-0 flex-col gap-0.5 border-r border-border-subtle bg-bg-floating px-1.5 py-2"
     >
-      {AGENT_SECTIONS.map(item => {
+      {sections.map(item => {
         const selected = item.id === active;
         const Icon = item.icon;
         return (

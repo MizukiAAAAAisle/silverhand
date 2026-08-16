@@ -87,7 +87,27 @@ export function canViewAgentFiles(
 }
 
 /**
- * Renderer-side mirror of the backend remove-from-conversation gate
+ * The owner-only audit face over an agent's chats (#task:2036 part ②) — the
+ * Chats section that lists the agent's conversations and reads their transcripts
+ * read-only — is gated by agent OWNERSHIP, the same `canAuditAgentChats` =
+ * `canViewAgent ∧ ownership` gate the backend enforces (403 for a peer agent, a
+ * non-owner admin, or the agent itself).
+ *
+ * This renderer hint exists for the SAME reason `canViewAgentFiles` does: hide a
+ * section whose every request a non-owner would just 403 on, and — because the
+ * face is an explicit privacy/audit capability — not even advertise its existence
+ * to a non-owner. The backend gate stays authoritative; this only decides whether
+ * the entry is offered. A named alias (not an inline `canEditAgentProfile`) so a
+ * future audit-delegation grant has one call site to widen.
+ */
+export function canAuditAgentChats(
+  viewer: MeResponse | undefined,
+  agent: Pick<AgentDto, 'created_by_user_id'>,
+): boolean {
+  return canEditAgentProfile(viewer, agent);
+}
+
+/**
  * (#task:957). The canonical authority is the backend route
  * `DELETE /api/conversations/:id/members/agents/:agentId`, which enforces
  * `canEditAgent(targetAgent) || canGovernWorkspace(ws, 'admin')` and

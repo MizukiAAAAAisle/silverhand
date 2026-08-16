@@ -108,6 +108,79 @@ export const apiPaths = {
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
   agentRuntime: (id: string) => `/api/agents/${id}/runtime`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
+  /** "Message this agent" — a human opens (or reuses) their DirectPair with an
+   *  AGENT-SCOPED agent and posts a message, in one call (#task:2036). Keyed by
+   *  AGENT id, not conversation id, because a brand-new line has no conversation id
+   *  yet: that is the whole reason this is its own door and not `channelMessages`.
+   *
+   *  LAZY ALLOCATE (@shiki's ruling): opening the composer and cancelling a draft
+   *  hit the server not at all — only a real send does. The pair is get-or-create,
+   *  so the ALLOCATION is idempotent under a double-submit (a second send lands in
+   *  the same row); the POST is NOT — two sends post two messages. The renderer
+   *  normally switches to `channelMessages` after the sidebar row appears.
+   *
+   *  Authorization is a two-step ladder, both BEFORE anything is created: anti-enum
+   *  page visibility (`canViewAgent` → 404, hiding existence) then the named
+   *  initiation gate (`canInitiateDirectMessageToAgent` → 403), whose verdict
+   *  includes the target's session scope — only an agent-scoped agent takes a
+   *  human-initiated line, a conversation-scoped agent's human entry stays its
+   *  workspace/Agent Space. Every side-effect-free preflight (schema, content cap,
+   *  reply-target rejection) also runs before the mint, so an unauthorized or
+   *  malformed request leaves no pair and emits no `direct_pairs_changed`; only a
+   *  downstream failure AFTER the mint may leave an announced empty line (the
+   *  resolve-then-send window; `GET /api/direct-pairs` is the authority for what
+   *  exists). Body is `SendMessageInput` (main-line only; `reply_to_message_id` is
+   *  rejected). Returns `MessageSendAck` (201); `message.conversation_id` is the
+   *  line the client then navigates to. */
+  agentDirectMessages: (id: string) => `/api/agents/${id}/direct-messages`,
+  /** Owner-audit chats list (#task:2036 part ②): the conversations the agent is a
+   *  party to that its OWNER may read in full, read-only. Enumerates the agent's
+   *  workspace conversations and its `direct_pair` lines; the AgentInbox is
+   *  excluded (the agent's own private queue, outside the audit face).
+   *
+   *  Owner-only by a two-step anti-enum ladder, matching `GET /api/agents/:id`:
+   *  `canViewAgent` → 404 (hides existence from a non-viewer), then
+   *  `canAuditAgentChats` → 403 (only the agent's creator, never a peer agent, a
+   *  non-owner admin, or the agent itself). Returns `AgentAuditChatListResponse`.
+   *  Each read leaves operator audit evidence in the request log. */
+  agentChats: (id: string) => `/api/agents/${id}/chats`,
+  /** Owner-audit transcript of ONE of the agent's chats (#task:2036 part ②):
+   *  the full conversation (mainline + thread replies interleaved), windowed,
+   *  read-only. Same window vocabulary as `channelMessages`
+   *  (`limit`/`before_seq`/`after_seq`/`around_message_id`) but NO
+   *  `thread_root_id` — the audit face returns the whole transcript, not a single
+   *  stream. Returns `AgentAuditTranscriptResponse`, which carries NO per-viewer
+   *  state: no reaction relation, no stream-head snapshot (the read advances no
+   *  cursor), no subscription.
+   *
+   *  Same ladder as the list, plus the per-conversation gate
+   *  (`canAuditAgentConversation`): `canViewAgent` → 404, then
+   *  `canAuditAgentConversation` → 403 (owner ∧ the conversation exists ∧ is not
+   *  the AgentInbox ∧ the agent is a SUBJECT participant of it). A conversation
+   *  the agent is not a party to is indistinguishable from a bogus id — no
+   *  existence oracle. Each read leaves operator audit evidence. */
+  agentChatTranscript: (id: string, conversationId: string) =>
+    `/api/agents/${id}/chats/${conversationId}/messages`,
+  /** Owner-audit read of ONE attachment's bytes inside one of the agent's chats
+   *  (#task:2036 part ②). The transcript lists the messages; a DM whose content
+   *  is an image or a file is only fully readable if the OWNER can fetch the blob
+   *  too — the ruling is that the owner already sees everything the agent sees, so
+   *  the audit face reads bytes read-only (never PATCH/DELETE, and this is NOT the
+   *  channel Attachments panel).
+   *
+   *  Its own compound gate, NOT the ordinary `canViewAttachment` (which is
+   *  membership-scoped and would still deny the owner on a third-party DM): the
+   *  SAME anti-enum ladder as the transcript — `canViewAgent` → 404, then
+   *  `canAuditAgentConversation` → 403 — AND the attachment must BELONG to that
+   *  audited conversation. An attachment from another channel (or a bogus id) is
+   *  the same 404, so the face reaches no blob outside the conversation it audits.
+   *  Serves the raw bytes (same body shape as `GET /api/attachments/:id`). Each
+   *  read leaves operator audit evidence. */
+  agentChatAttachment: (
+    id: string,
+    conversationId: string,
+    attachmentId: string,
+  ) => `/api/agents/${id}/chats/${conversationId}/attachments/${attachmentId}`,
   /** Public avatar fetch for any agent. Returns the blob bytes with a
    *  long immutable Cache-Control header (cache-busted via the
    *  `?v=updated_at` query param baked into `AgentDto.avatar_url`).

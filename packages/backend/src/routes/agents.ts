@@ -34,15 +34,20 @@ import {
 import type { BackendContext } from '../context.js';
 import {
   canEditAgent,
+  canAuditAgentChats,
+  canAuditAgentConversation,
   canViewConversation,
   canViewAgent,
   canViewAgentFiles,
   canViewWorkspace,
 } from '../permissions.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
+import type { AgentAuditChatsReadModel } from '../read-model/agent-audit-chats.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import { AnchorMessageNotInConversationError } from '../repos/message-repo.js';
+import { parseMessagesWindowQuery } from './message-window.js';
 import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import {
@@ -87,6 +92,8 @@ export interface AgentsRouteDeps {
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
+  /** #task:2036 part ② — the owner-audit chats list projection (bound handle). */
+  agentAuditChats: AgentAuditChatsReadModel;
   conversationInboxes: ConversationInboxRepo;
   runtimeSlots: RuntimeSlotRepo;
   users: UserRepo;
@@ -245,6 +252,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     workspaces,
     conversations,
     messages,
+    agentAuditChats,
     conversationInboxes,
     runtimeSlots,
     users,
@@ -986,7 +994,166 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     });
   });
 
-  // Schedules — user-facing read & cancel for the per-agent panel.
+  // ── Owner-audit chats (#task:2036 part ②) ────────────────────────────────
+  // The OWNER of an agent may read every conversation the agent is a party to
+  // (except the agent's own inbox), in full and read-only, because they bear the
+  // agent's runtime and can already see the same content through it — so hiding
+  // it in the UI protects nothing (@shiki's ruling). Two GET faces, both behind
+  // the SAME two-step anti-enum ladder as `GET /api/agents/:id`: `canViewAgent`
+  // → 404 hides the agent's existence from a non-viewer, then a NAMED audit gate
+  // → 403. The audit ACL is deliberately distinct from page visibility and from
+  // DM initiation, and it is owner-only (not a participant, never disguised as
+  // an endpoint). Each read leaves operator audit evidence (v1 single-host: the
+  // logger IS the audit trail).
+  app.get(apiPaths.agentChats(':id'), c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'agent id required' }, 400);
+    const agent = agents.get(id);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    if (!canAuditAgentChats(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const response = agentAuditChats.listChats(agent.id);
+    ctx.logger.info(
+      {
+        // Named audit category — the system logger writes it regardless of the
+        // configured level (default `warn`), so the record is durable. See
+        // AGENT_AUDIT_CATEGORIES in logger.ts.
+        category: 'agent_audit.chats_listed',
+        user_id: resolveViewerUserId(c),
+        agent_id: agent.id,
+        chat_count: response.chats.length,
+      },
+      'agent chats listed by owner (audit)',
+    );
+    return c.json(response);
+  });
+
+  app.get(apiPaths.agentChatTranscript(':id', ':conversationId'), c => {
+    const id = c.req.param('id');
+    const conversationId = c.req.param('conversationId');
+    if (!id || !conversationId) {
+      return c.json({ error: 'agent id and conversation id required' }, 400);
+    }
+    const agent = agents.get(id);
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    // ONE gate for existence + audit-face domain + participation. A conversation
+    // the agent is not a party to is indistinguishable from a bogus id (both 403)
+    // — no existence oracle, matching the task's boundary.
+    if (
+      !canAuditAgentConversation(
+        ctx,
+        getUserPrincipal(c),
+        agent.id,
+        conversationId,
+      )
+    ) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const parsed = parseMessagesWindowQuery(c);
+    if (!parsed.ok) return parsed.response;
+    const { limit, beforeSeq, afterSeq, aroundMessageId } = parsed;
+    try {
+      // mode:'all' — the full transcript (mainline + thread replies interleaved),
+      // windowed. A pure read: no per-viewer reaction relation is enriched, no
+      // stream-head snapshot is captured (the audit read advances NO cursor), no
+      // subscription. The window IS the response shape (`MessageWindow`).
+      const window = messages.listWindowForConversation(conversationId, {
+        limit,
+        beforeSeq,
+        afterSeq,
+        aroundMessageId,
+      });
+      ctx.logger.info(
+        {
+          category: 'agent_audit.transcript_read',
+          user_id: resolveViewerUserId(c),
+          agent_id: agent.id,
+          conversation_id: conversationId,
+          message_count: window.messages.length,
+        },
+        'agent chat transcript read by owner (audit)',
+      );
+      return c.json(window);
+    } catch (err) {
+      if (err instanceof AnchorMessageNotInConversationError) {
+        return c.json(
+          {
+            error: 'around_message_id not found in this conversation',
+            code: 'message_not_found',
+          },
+          404,
+        );
+      }
+      throw err;
+    }
+  });
+
+  // Owner-audit attachment bytes (#task:2036 part ②). The transcript lists a DM's
+  // messages; when a message IS an image/file, "read the chat in full" is only
+  // true if the owner can fetch the blob too. Read-only bytes, NEVER a mutation
+  // (no PATCH/DELETE) and NOT the channel Attachments panel. This does NOT loosen
+  // the ordinary `canViewAttachment` (membership-scoped, which correctly still
+  // denies the owner a third-party DM's blob on `GET /api/attachments/:id`); it is
+  // a SEPARATE face with its own compound gate.
+  app.get(
+    apiPaths.agentChatAttachment(':id', ':conversationId', ':attachmentId'),
+    async c => {
+      const id = c.req.param('id');
+      const conversationId = c.req.param('conversationId');
+      const attachmentId = c.req.param('attachmentId');
+      if (!id || !conversationId || !attachmentId) {
+        return c.json(
+          { error: 'agent id, conversation id, and attachment id required' },
+          400,
+        );
+      }
+      const agent = agents.get(id);
+      if (!agent) return c.json({ error: 'agent not found' }, 404);
+      if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+        return c.json({ error: 'agent not found' }, 404);
+      }
+      // owner(agent) ∧ agent participates(conversation) ∧ conversation is not the
+      // inbox — the SAME gate the transcript uses, so the two faces draw one
+      // boundary. Not-a-party / inbox / bogus conversation all collapse to 403.
+      if (
+        !canAuditAgentConversation(
+          ctx,
+          getUserPrincipal(c),
+          agent.id,
+          conversationId,
+        )
+      ) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      // The third conjunct: the attachment must BELONG to the audited
+      // conversation. A blob from another channel — or a non-existent id — folds
+      // to the same 404, so this face reaches no bytes outside the conversation it
+      // is authorized to audit (it does not widen to the agent's OTHER chats).
+      const response = await ctx.attachmentService.serveForViewer(
+        attachmentId,
+        row => row.channel_id === conversationId,
+      );
+      if (!response) return c.json({ error: 'attachment not found' }, 404);
+      ctx.logger.info(
+        {
+          category: 'agent_audit.attachment_read',
+          user_id: resolveViewerUserId(c),
+          agent_id: agent.id,
+          conversation_id: conversationId,
+          attachment_id: attachmentId,
+        },
+        'agent chat attachment read by owner (audit)',
+      );
+      return response;
+    },
+  );
   // Reuses ScheduleService (same code path the agent's MCP tools use)
   // so the data is identical to what the agent sees via list_schedules.
   // Permission posture matches the rest of /api/agents/:id/* — host

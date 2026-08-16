@@ -89,10 +89,11 @@ export type AuthorizationConversationFacts = Pick<
     | 'endpoint_b_deleted_at'
   >;
 
-/** Only what agent ownership and the `materialization_status` widener read. */
+/** Only what agent ownership, the `materialization_status` widener, and the
+ *  DM-initiation scope check read. */
 export type AuthorizationAgentFacts = Pick<
   AgentDto,
-  'created_by_user_id' | 'materialization_status'
+  'created_by_user_id' | 'materialization_status' | 'session_scope'
 >;
 
 export interface AuthorizationReadPort {
@@ -120,6 +121,18 @@ export interface AuthorizationReadPort {
   }): boolean;
   isConversationAgent(conversationId: string, agentId: string): boolean;
   isConversationUser(conversationId: string, userId: string): boolean;
+  /**
+   * Is the agent an ENDPOINT/participant of this conversation regardless of
+   * where its runtime is currently seated — the SUBJECT-participation question
+   * the owner-audit ACL asks. Distinct from {@link isConversationAgent}, which
+   * is only the `workspace`-placement roster edge; this is the full participation
+   * arc (workspace roster ∪ `direct_pair` endpoint ∪ `agent_inbox` owner), the
+   * same three arms the runtime target gate resolves — but WITHOUT the
+   * running-in narrowing, because audit asks "is this agent a party here at all",
+   * not "is its seat here right now". Collapsed to a boolean like the membership
+   * reads: the audit face reaches no endpoint columns through this port.
+   */
+  isAgentParticipant(conversationId: string, agentId: string): boolean;
   agent(agentId: string): AuthorizationAgentFacts | null;
   hasCapability(
     workspaceId: string,
