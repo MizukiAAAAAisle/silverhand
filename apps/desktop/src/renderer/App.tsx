@@ -787,6 +787,25 @@ function RegisteredAppShell({
     return dmWorkspace?.id ?? workspaceId;
   };
 
+  // Open one of an agent's conversations from the agent page, in the ordinary
+  // chat surface. TWO destinations because there are two placements: a
+  // `direct_pair` has no workspace coordinate (#task:2020 / #task:2035) and gets
+  // the workspace-less route; anything else resolves its container first. One
+  // rule for both agent-page lists (Activity seats and Chats rows) so they can't
+  // drift into two navigation models.
+  const openAgentConversation = (
+    conversationId: string,
+    workspaceId: string | null,
+  ): void => {
+    if (workspaceId === null) {
+      nav.toDirect(conversationId);
+      return;
+    }
+    const wid = resolveNavWorkspaceId(workspaceId, conversationId);
+    if (!wid) return;
+    nav.toChannel(wid, conversationId);
+  };
+
   // Auto-select a workspace when chat is open without a workspace id.
   // Restore the one the user last had open (clicking the "Chat" navrail item
   // routes to bare `/chat`, dropping the workspaceId), falling back to the
@@ -2358,21 +2377,12 @@ function RegisteredAppShell({
                   agentId={selectedAgentId}
                   onDeleted={() => nav.toMembers()}
                   onMessageAgent={handleMessageAgent}
-                  onOpenConversation={s => {
-                    // A seat whose conversation carries NO workspace coordinate
-                    // is a `direct_pair` placement (#task:2020), which now has a
-                    // destination of its own: the workspace-less chat route
-                    // (#task:2035). Two navigations, because they mean two
-                    // different placements — not one with an optional argument.
-                    if (s.workspace_id === null) {
-                      nav.toDirect(s.channel_id);
-                      return;
-                    }
-                    // Jump back to chat view, focusing the agent's channel.
-                    const workspaceId = resolveNavWorkspaceId(s.workspace_id, s.channel_id);
-                    if (!workspaceId) return;
-                    nav.toChannel(workspaceId, s.channel_id);
-                  }}
+                  onOpenConversation={s =>
+                    openAgentConversation(s.channel_id, s.workspace_id)
+                  }
+                  onOpenChat={t =>
+                    openAgentConversation(t.conversationId, t.workspaceId)
+                  }
                 />
               ) : (
                 <main

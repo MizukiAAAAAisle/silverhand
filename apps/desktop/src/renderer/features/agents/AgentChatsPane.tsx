@@ -1,355 +1,298 @@
-import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
-import { FolderTree, MessagesSquare } from 'lucide-react';
-import type {
-  AgentAuditChatSummary,
-  DirectPairCounterpart,
-  MessageDto,
-} from '@silverhand/shared';
-import { resolveAttachmentLabels } from '@silverhand/shared';
+/**
+ * The agent's conversations, flat and full width (#task:2040).
+ *
+ * shiki's ruling replaced the master-detail shape this section shipped with: no
+ * secondary side nav, one full-width list, and a row is either a way INTO the
+ * conversation or inert («如果是有我参与的，应该直接跳转对应的 conversation，如果没有
+ * 我参与的，暂时变为不可点击»). The in-place owner-audit transcript is gone with the
+ * rail — a row now leads to the ordinary chat surface or nowhere, so there is no
+ * second place to read a conversation from.
+ *
+ * The list itself is still the OWNER-AUDIT read (`GET /api/agents/:id/chats`):
+ * the owner may see which conversations their agent is in, including lines they
+ * are no part of. Clickability is a different question with different
+ * authorities, and mixing the two is the one real hazard here — so the judgment
+ * lives in {@link decideAgentChatRowAccess} and this file only paints its verdict.
+ * The viewer-scoped authorities it feeds on:
+ *   - workspace rows → the viewer's OWN channel lists, BOTH tables (active and
+ *     archived carry the same per-viewer `is_member`, and a joined-then-archived
+ *     channel exists only in the second), `is_member` only — a list is a
+ *     discovery union, so presence in it proves nothing;
+ *   - `direct_pair` rows → the viewer's own `GET /api/direct-pairs`, which is the
+ *     set of lines they are an endpoint of.
+ *
+ * READINESS COVERS EVERY AUTHORITY IN THE CHAIN, including the viewer's workspace
+ * list: it is what maps a row onto a container, so before it answers there is
+ * nothing to fan out over and an empty fan-out must not read as "asked and
+ * answered" (@Cindy, #task:2040 review). Settled, not successful — a failed
+ * authority leaves its rows inert rather than holding the pane in a loading state
+ * it can never leave. Nothing is prefetched for an inert row.
+ *
+ * A row whose authority FAILED is disabled but says so honestly: fail-closed
+ * licenses the disabling, not the claim that the viewer is not a participant.
+ */
+import { useMemo, type JSX, type ReactNode } from 'react';
+import type { AgentAuditChatSummary } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { Markdown } from '@/components/chat/Markdown';
-import { presentAuthor } from '@/components/chat/author-presentation';
-import { openAuditAttachmentExternally } from '@/components/chat/open-attachment';
+import { dmWorkspaceLabel } from '@/lib/workspace-name';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   AuthorAvatarView,
-  AuthorName,
+  DeletedActorMarker,
 } from '@/components/chat/author-avatar-view';
-import { useAgentAuditChats, useAgentChatTranscript } from './audit-hooks';
-import { flattenTranscriptPages } from './audit-transcript-paging';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import {
+  collectCounterpartAvatarSources,
+  presentCounterpart,
+  type CounterpartPresentation,
+} from '@/features/direct-pairs/counterpart-presentation';
+import { useDirectPairsList } from '@/features/direct-pairs/hooks';
+import {
+  useArchivedChannelsAcrossWorkspaces,
+  useChannelsAcrossWorkspaces,
+  useWorkspaces,
+} from '@/features/workspaces/hooks';
+import { useAgentAuditChats } from './audit-hooks';
+import {
+  collectMemberConversationIds,
+  decideAgentChatRowAccess,
+  participationWorkspaceIds,
+  viewerAuthoritiesSettled,
+  type AgentChatBlockedReason,
+  type AgentChatRowAccess,
+  type ViewerParticipation,
+} from './audit-participation';
 
 interface AgentChatsPaneProps {
   agentId: string;
+  /** Open a conversation the viewer takes part in, in the ordinary chat surface.
+   *  Carries the placement (`workspaceId: null` = a `direct_pair`) because the two
+   *  placements have two destinations. Optional like its sibling on the Activity
+   *  pane: without it the list still reads, and no row is actionable. */
+  onOpenChat?: (target: { conversationId: string; workspaceId: string | null }) => void;
 }
 
-/**
- * Owner-only, read-only audit of an agent's conversations (#task:2036 part ②).
- * Master-detail like {@link AgentActivityPane}: a rail of the agent's chats
- * (workspace conversations + its DirectPair lines; the AgentInbox is excluded by
- * the backend) and a read-only transcript on the right.
- *
- * READ-ONLY BY CONSTRUCTION: there is no composer, no reaction affordance, no
- * context menu, and no cursor write anywhere in this tree. It reuses the pure
- * presentation helpers (`Markdown` in non-interactive mode, `presentAuthor`) and
- * never the interactive `MessageItem`, so a mutation path cannot leak in through
- * a prop. Attachments are fetched through the dedicated owner-audit bytes face
- * (`agentChatAttachment`), never the membership-scoped `GET /api/attachments/:id`
- * — the owner is auditing a third party's DM, not participating in it.
- *
- * The section itself is owner-gated by the caller ({@link canAuditAgentChats});
- * the backend re-checks (404 then 403) on every request here.
- */
-export function AgentChatsPane({ agentId }: AgentChatsPaneProps): JSX.Element {
+export function AgentChatsPane({
+  agentId,
+  onOpenChat,
+}: AgentChatsPaneProps): JSX.Element {
   const chatsQuery = useAgentAuditChats(agentId, true);
   const chats = chatsQuery.data?.chats;
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Default the selection to the first chat once the list lands; if the
-  // selected chat drops out of a refetched list, fall back to the first again.
-  useEffect(() => {
-    if (!chats || chats.length === 0) {
-      if (selectedId !== null) setSelectedId(null);
-      return;
-    }
-    if (!selectedId || !chats.some(c => c.conversation_id === selectedId)) {
-      setSelectedId(chats[0]!.conversation_id);
-    }
-  }, [chats, selectedId]);
+  // Only the viewer's OWN workspaces that could hold one of these rows: a list
+  // from a workspace they are not in would simply be refused. This query is an
+  // authority in its own right — until it answers, no row can even be mapped to
+  // a container.
+  const workspacesQuery = useWorkspaces();
+  const viewerWorkspaces = workspacesQuery.data;
+  const workspaceIds = useMemo(
+    () => participationWorkspaceIds(chats, viewerWorkspaces ?? []),
+    [chats, viewerWorkspaces],
+  );
+  const activeLists = useChannelsAcrossWorkspaces(workspaceIds);
+  const archivedLists = useArchivedChannelsAcrossWorkspaces(workspaceIds);
+  const pairsQuery = useDirectPairsList();
+
+  // Recomputed per render rather than memoised: `useQueries` hands back a fresh
+  // array every time, so a dependency on it would be a lie that reads as a
+  // guarantee. The inputs are two small id sets.
+  //
+  // A workspace counts as ANSWERED only when BOTH of its tables succeeded — a
+  // conversation the viewer joined may sit in either one, so half an answer
+  // cannot license "not a member".
+  const participation: ViewerParticipation = {
+    workspaces: viewerWorkspaces ?? null,
+    resolvedWorkspaceIds: new Set(
+      workspaceIds.filter(
+        (_, i) => activeLists[i]?.isSuccess && archivedLists[i]?.isSuccess,
+      ),
+    ),
+    memberConversationIds: collectMemberConversationIds([
+      ...activeLists.map(q => q.data),
+      ...archivedLists.map(q => q.data),
+    ]),
+    directPairIds: pairsQuery.data
+      ? new Set(pairsQuery.data.direct_pairs.map(p => p.conversation_id))
+      : null,
+  };
+  // Settled, not successful, and covering EVERY authority — the workspace list
+  // included. The rule (and the empty-fan-out trap it avoids) lives in the seam.
+  const participationSettled = viewerAuthoritiesSettled({
+    workspacesPending: workspacesQuery.isPending,
+    pairsPending: pairsQuery.isPending,
+    channelTablesPending: [...activeLists, ...archivedLists].map(q => q.isPending),
+  });
+
+  // ONE avatar batch for the surface, over the counterpart set — the discipline
+  // every author surface follows. Deleted counterparts fetch nothing.
+  const { agents, users } = useMemo(
+    () =>
+      collectCounterpartAvatarSources(
+        (chats ?? []).flatMap(c => (c.placement_kind === 'direct_pair' ? [c] : [])),
+      ),
+    [chats],
+  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const humanAvatarUrls = useUserAvatarObjectUrls(users);
+
+  if (chatsQuery.isPending || !participationSettled) {
+    return <PaneNote>Loading chats…</PaneNote>;
+  }
+  if (chatsQuery.isError) {
+    return <PaneNote>Couldn’t load this agent’s chats.</PaneNote>;
+  }
+  if (!chats || chats.length === 0) {
+    return <PaneNote>This agent has no conversations yet.</PaneNote>;
+  }
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <aside className="flex h-full w-[240px] shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-bg-floating py-2">
-        {chatsQuery.isPending ? (
-          <PaneNote>Loading chats…</PaneNote>
-        ) : chatsQuery.isError ? (
-          <PaneNote>Couldn’t load this agent’s chats.</PaneNote>
-        ) : !chats || chats.length === 0 ? (
-          <PaneNote>This agent has no conversations yet.</PaneNote>
-        ) : (
-          chats.map(chat => (
-            <ChatRow
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="px-8 py-6">
+        <ul className="border-y border-border-subtle">
+          {chats.map(chat => (
+            <li
               key={chat.conversation_id}
-              chat={chat}
-              selected={chat.conversation_id === selectedId}
-              onSelect={() => setSelectedId(chat.conversation_id)}
-            />
-          ))
-        )}
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {selectedId ? (
-          <AgentChatTranscript agentId={agentId} conversationId={selectedId} />
-        ) : (
-          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-            Select a conversation to read it.
-          </div>
-        )}
+              className="border-b border-border-subtle last:border-b-0"
+            >
+              <ChatRow
+                chat={chat}
+                access={decideAgentChatRowAccess(chat, participation)}
+                agentAvatarUrls={agentAvatarUrls}
+                humanAvatarUrls={humanAvatarUrls}
+                onOpen={onOpenChat}
+              />
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
 }
 
 function PaneNote({ children }: { children: ReactNode }): JSX.Element {
-  return <div className="px-3 py-2 text-xs text-text-muted">{children}</div>;
-}
-
-/** The counterpart of a DirectPair is the endpoint that is NOT the audited agent
- *  — resolved server-side. Render its display name, or a neutral label when the
- *  other side was deleted. */
-function counterpartLabel(counterpart: DirectPairCounterpart): string {
-  if (counterpart.status === 'deleted') {
-    return counterpart.kind === 'agent' ? 'Deleted agent' : 'Deleted user';
-  }
-  return counterpart.display_name.trim() || counterpart.name;
-}
-
-function ChatRow({
-  chat,
-  selected,
-  onSelect,
-}: {
-  chat: AgentAuditChatSummary;
-  selected: boolean;
-  onSelect: () => void;
-}): JSX.Element {
-  const isWorkspace = chat.placement_kind === 'workspace';
-  const title = isWorkspace ? chat.title : counterpartLabel(chat.counterpart);
-  const meta = isWorkspace
-    ? chat.workspace_name
-    : 'Direct message';
-  const Icon = isWorkspace ? FolderTree : MessagesSquare;
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={selected ? 'true' : undefined}
-      className={cn(
-        'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors',
-        selected
-          ? 'bg-bg-hover/60 text-text-primary'
-          : 'text-text-muted hover:bg-bg-hover/40 hover:text-text-primary',
-      )}
-    >
-      <Icon className="size-3.5 shrink-0" />
-      <span className="flex min-w-0 flex-col">
-        <span className="truncate font-medium text-text-primary">{title}</span>
-        <span className="truncate text-[length:var(--text-badge)] text-text-muted">
-          {meta}
-          {chat.archived_at !== null ? ' · archived' : ''}
-        </span>
-      </span>
-    </button>
-  );
-}
-
-function AgentChatTranscript({
-  agentId,
-  conversationId,
-}: {
-  agentId: string;
-  conversationId: string;
-}): JSX.Element {
-  const query = useAgentChatTranscript(agentId, conversationId, true);
-
-  // Flatten the backward-paged windows into one ascending stream — the order,
-  // dedup, and pre-load handling all live in the pure paging seam.
-  const messages = useMemo(
-    () => flattenTranscriptPages(query.data?.pages),
-    [query.data],
-  );
-
-  if (query.isPending) {
-    return <TranscriptNote>Loading transcript…</TranscriptNote>;
-  }
-  if (query.isError) {
-    return <TranscriptNote>Couldn’t load this transcript.</TranscriptNote>;
-  }
-  if (messages.length === 0) {
-    return <TranscriptNote>No messages in this conversation.</TranscriptNote>;
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-4">
-      {query.hasPreviousPage ? (
-        <div className="pb-3 text-center">
-          <button
-            type="button"
-            onClick={() => void query.fetchPreviousPage()}
-            disabled={query.isFetchingPreviousPage}
-            className="text-[length:var(--text-badge)] text-text-muted underline-offset-2 hover:text-text-primary hover:underline disabled:opacity-60"
-          >
-            {query.isFetchingPreviousPage
-              ? 'Loading older messages…'
-              : 'Load older messages'}
-          </button>
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-4">
-        {messages.map(message => (
-          <AuditMessageRow
-            key={message.id}
-            agentId={agentId}
-            conversationId={conversationId}
-            message={message}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function TranscriptNote({ children }: { children: ReactNode }): JSX.Element {
-  return (
-    <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+    <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-text-muted">
       {children}
     </div>
   );
 }
 
-function AuditMessageRow({
-  agentId,
-  conversationId,
-  message,
-}: {
-  agentId: string;
-  conversationId: string;
-  message: MessageDto;
-}): JSX.Element {
-  const presentation = message.author ? presentAuthor(message.author) : null;
-  const when = formatTimestamp(message.created_at);
+/** Why an inert row is inert. Short, and about the conversation rather than about
+ *  permissions machinery — except that "we couldn't find out" must never be
+ *  dressed up as "you're not in it": the second is a claim, the first is a
+ *  temporary failure the viewer can retry by reopening the page. */
+const BLOCKED_TITLE: Record<AgentChatBlockedReason, string> = {
+  'not-a-participant': 'You’re not in this conversation.',
+  unverified: 'Couldn’t check your access to this conversation.',
+};
 
-  // System messages have no author — render a quiet, centered notice.
-  if (!presentation) {
-    return (
-      <div className="text-center text-xs text-text-muted">
-        <Markdown content={message.content} interactive={false} />
-      </div>
-    );
+/**
+ * How one row names itself, derived in a SINGLE narrowing of the placement union:
+ * the two arms don't share a name field — a workspace channel has a title, a
+ * direct line is named by its counterpart — and they carry different metas.
+ * Keeping it in one place also keeps the avatar/icon choice honest: `counterpart`
+ * is non-null exactly for the rows that wear a face.
+ */
+function describeChatRow(chat: AgentAuditChatSummary): {
+  title: string;
+  meta: string;
+  counterpart: CounterpartPresentation | null;
+} {
+  if (chat.placement_kind === 'direct_pair') {
+    const counterpart = presentCounterpart(chat.counterpart);
+    return { title: counterpart.label, meta: 'Direct message', counterpart };
   }
-
-  return (
-    <div className="flex gap-2.5">
-      <AuthorAvatarView
-        avatar={presentation.avatar}
-        size={AVATAR_PX.sm}
-        label={presentation.label}
-        className="mt-0.5 shrink-0"
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-baseline gap-2">
-          <AuthorName
-            presentation={presentation}
-            className="text-sm font-medium text-text-primary"
-          />
-          <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">
-            {when}
-          </span>
-          {message.thread_root_id ? (
-            <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">
-              · reply
-            </span>
-          ) : null}
-        </div>
-        {message.content ? (
-          <div className="text-sm text-text-primary">
-            <Markdown content={message.content} interactive={false} />
-          </div>
-        ) : null}
-        {message.attachments && message.attachments.length > 0 ? (
-          <AuditAttachments
-            agentId={agentId}
-            conversationId={conversationId}
-            attachments={message.attachments}
-          />
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function AuditAttachments({
-  agentId,
-  conversationId,
-  attachments,
-}: {
-  agentId: string;
-  conversationId: string;
-  attachments: NonNullable<MessageDto['attachments']>;
-}): JSX.Element {
-  const labels = useMemo(() => resolveAttachmentLabels(attachments), [attachments]);
-  return (
-    <div className="mt-1.5 flex flex-wrap gap-1.5">
-      {attachments.map((att, i) => (
-        <AuditAttachmentChip
-          key={att.id}
-          agentId={agentId}
-          conversationId={conversationId}
-          attachmentId={att.id}
-          label={labels[i] ?? att.filename}
-          filename={att.filename}
-        />
-      ))}
-    </div>
-  );
-}
-
-function AuditAttachmentChip({
-  agentId,
-  conversationId,
-  attachmentId,
-  label,
-  filename,
-}: {
-  agentId: string;
-  conversationId: string;
-  attachmentId: string;
-  label: string;
-  filename: string;
-}): JSX.Element {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const onOpen = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    // Reuse the shared, safe open boundary: bytes come from the dedicated
-    // owner-audit face (`agentChatAttachment`) — NOT the membership-scoped
-    // `GET /api/attachments/:id` — and the open action goes through the
-    // main-process `attachment:openExternal` IPC (safe-extension + temp 0600
-    // file + `shell.openPath`). No `window.open`, no object URL: a
-    // renderer-scoped `blob:` can't be resolved by `shell.openExternal`
-    // anyway (surface-ipc denies it), and the blob-URL path leaks a
-    // reference every open (attachments cap at 10MB).
-    await openAuditAttachmentExternally(
-      { agentId, conversationId, attachmentId, filename },
-      { onInlineError: setError },
-    );
-    setBusy(false);
+  return {
+    title: chat.title,
+    // The audit DTO carries the STORED workspace kind (`regular` | `agent_home`),
+    // not the workspace-list UI kind (`regular` | `dm`), so `workspaceDisplayName`
+    // doesn't apply here. An agent home still reads as the handle it reads as in
+    // every other picker/filter row, through the same helper.
+    meta:
+      chat.workspace_kind === 'agent_home'
+        ? dmWorkspaceLabel(chat.workspace_name)
+        : chat.workspace_name,
+    counterpart: null,
   };
-
-  return (
-    <button
-      type="button"
-      onClick={() => void onOpen()}
-      disabled={busy}
-      title={error ?? filename}
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-[var(--chip-radius)] border border-border bg-bg-elevated px-2 py-1 text-xs text-text-primary transition-colors hover:bg-bg-hover disabled:opacity-60',
-        error && 'border-error text-error',
-      )}
-    >
-      <span className="truncate">{label}</span>
-      {busy ? <span className="text-text-muted">…</span> : null}
-    </button>
-  );
 }
 
-function formatTimestamp(ms: number): string {
-  try {
-    return new Date(ms).toLocaleString();
-  } catch {
-    return '';
+/**
+ * One row. Identity primitive per entity, not one glyph everywhere: a workspace
+ * channel wears the canonical `#`, a direct line wears its counterpart's avatar —
+ * the same faces these conversations have in the sidebar.
+ *
+ * Two shells, chosen by the verdict, because they are two different things: a way
+ * in (a real `<button>`, with the hover the rest of the app gives a navigable row)
+ * and a fact on the page (no button, no hover, muted, with the reason on hover).
+ */
+function ChatRow({
+  chat,
+  access,
+  agentAvatarUrls,
+  humanAvatarUrls,
+  onOpen,
+}: {
+  chat: AgentAuditChatSummary;
+  access: AgentChatRowAccess;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  humanAvatarUrls: ReadonlyMap<string, string | null>;
+  onOpen?: (target: { conversationId: string; workspaceId: string | null }) => void;
+}): JSX.Element {
+  const { title, meta, counterpart } = describeChatRow(chat);
+
+  const body = (
+    <>
+      {counterpart ? (
+        <AuthorAvatarView
+          avatar={counterpart.avatar}
+          size={16}
+          label={counterpart.label}
+          agentAvatarUrls={agentAvatarUrls}
+          humanAvatarUrls={humanAvatarUrls}
+        />
+      ) : (
+        <ChannelIcon variant="sticker" />
+      )}
+      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {counterpart?.isDeleted ? (
+        <span className="flex shrink-0 items-center">
+          <DeletedActorMarker />
+        </span>
+      ) : null}
+      <span className="shrink-0 text-xs text-text-muted">
+        {meta}
+        {chat.archived_at !== null ? ' · Archived' : ''}
+      </span>
+    </>
+  );
+
+  const shell = 'flex h-11 w-full items-center gap-2.5 px-3 text-left text-sm';
+
+  if (access.kind === 'open' && onOpen) {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpen({
+          conversationId: access.conversationId,
+          workspaceId: access.workspaceId,
+        })}
+        className={cn(
+          shell,
+          'text-text-primary transition-colors hover:bg-bg-hover/50 focus-outline',
+        )}
+      >
+        {body}
+      </button>
+    );
   }
+
+  return (
+    <div
+      className={cn(shell, 'text-text-muted')}
+      title={access.kind === 'blocked' ? BLOCKED_TITLE[access.reason] : undefined}
+    >
+      {body}
+    </div>
+  );
 }

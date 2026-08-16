@@ -23,7 +23,7 @@
  * spelling) while the avatar variant vocabulary is `'user'` (the message-author
  * one). The translation happens HERE, once, instead of at each rendering surface.
  */
-import type { DirectPairCounterpart, DirectPairListItem } from '@silverhand/shared';
+import type { DirectPairCounterpart } from '@silverhand/shared';
 import type { AuthorAvatar, AuthorAvatarSources } from '@/components/chat/author-presentation';
 
 export interface CounterpartPresentation {
@@ -86,9 +86,14 @@ export function presentCounterpart(
  * Only the `active` arm contributes: a deleted endpoint has no `avatar_url` to
  * fetch and renders a neutral glyph. Deduped by id, which also covers the (legal)
  * case of one principal appearing in more than one row.
+ *
+ * Takes anything that CARRIES a counterpart, not `DirectPairListItem` specifically:
+ * the agent page's Chats rows are pair rows of a different DTO (the owner-audit
+ * summary) and must resolve their faces through this same one batch rather than a
+ * parallel copy of it.
  */
 export function collectCounterpartAvatarSources(
-  pairs: readonly DirectPairListItem[],
+  pairs: readonly { counterpart: DirectPairCounterpart }[],
 ): AuthorAvatarSources {
   const agents = new Map<string, string | null>();
   const users = new Map<string, string | null>();

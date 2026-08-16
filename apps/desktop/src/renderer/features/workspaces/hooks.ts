@@ -732,6 +732,27 @@ export function useChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
   });
 }
 
+/** Archived twin of {@link useChannelsAcrossWorkspaces}, index-aligned with
+ *  `workspaceIds` the same way and sharing `archivedChannelsKey` with
+ *  `useArchivedChannelsForWorkspace`.
+ *
+ *  A consumer asking "is the viewer a member of conversation X" needs BOTH
+ *  tables: since #task:1691 the archived route returns the same
+ *  `WorkspaceChannelListItem` rows carrying the same viewer-scoped `is_member`,
+ *  and the archived set is itself membership-filtered — so a joined channel that
+ *  has since been archived lives only here. Reading the active list alone would
+ *  answer "not a member" for it, which is a different claim from the truth
+ *  (#task:2040, @Cindy). No kind gating: the endpoint is channel-like for
+ *  `regular` and `agent_home` alike (see {@link archivedChannelsEnabledForKind}). */
+export function useArchivedChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
+  return useQueries({
+    queries: workspaceIds.map(id => ({
+      queryKey: archivedChannelsKey(id),
+      queryFn: () => fetchWorkspaceArchivedChannels(id),
+    })),
+  });
+}
+
 // ---- Per-user list sort mutations (#task:1146 / #task:1147) ----
 
 type SortCachePayload = { items: unknown; viewerSort: ViewerSortStateDto };

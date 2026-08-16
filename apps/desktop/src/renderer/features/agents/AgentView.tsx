@@ -71,6 +71,11 @@ interface AgentViewProps {
    *  channel/thread. Optional: if not provided, the column is
    *  still shown but rows aren't actionable. */
   onOpenConversation?: (s: AgentRuntimeParticipation) => void;
+  /** full only: open a row of the Chats list in the ordinary chat surface. Only
+   *  offered for a conversation the VIEWER takes part in — the verdict is made
+   *  inside the pane; this is the navigation half of it. `workspaceId: null` is a
+   *  `direct_pair`, which has no container (#task:2040). */
+  onOpenChat?: (target: { conversationId: string; workspaceId: string | null }) => void;
   /** Open the direct line with this agent — the existing pair's route, or the
    *  pre-mint draft when there is none. Wired on BOTH variants (@shiki,
    *  #task:2039: reaching the agent through the side panel must not be the one
@@ -97,6 +102,7 @@ export function AgentView({
   agentId,
   onDeleted,
   onOpenConversation,
+  onOpenChat,
   onMessageAgent,
   variant = 'full',
   contextConversationId = null,
@@ -245,11 +251,13 @@ export function AgentView({
               onOpenConversation={onOpenConversation}
             />
           ) : effectiveSection === 'chats' ? (
-            // Owner-only, read-only audit of the agent's conversations
-            // (#task:2036 part ②). Master-detail like Activity — owns its own
-            // two scroll regions, so no outer padding/scroll. Gated above:
-            // effectiveSection can only be 'chats' when canAuditChats is true.
-            <AgentChatsPane agentId={agent.id} />
+            // The agent's conversations as one full-width list (#task:2040,
+            // shiki). It owns its own scroll and its own padded inset, like the
+            // panes above. Gated above: effectiveSection can only be 'chats'
+            // when canAuditChats is true — the LIST is owner-audit; whether a
+            // row can be walked into is a separate, viewer-scoped judgment the
+            // pane makes.
+            <AgentChatsPane agentId={agent.id} onOpenChat={onOpenChat} />
           ) : (
             // Reserve scrollbar width only for profile editing; MCP and
             // schedules retain their full width.
