@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { MessageSquare } from 'lucide-react';
-import type { DirectPairListItem } from '@silverhand/shared';
+import { useAgent } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
@@ -10,11 +10,14 @@ import {
 import { useDirectPairs } from '@/features/direct-pairs/hooks';
 import {
   collectCounterpartAvatarSources,
+  counterpartFromAgent,
   presentCounterpart,
-  type CounterpartPresentation,
 } from '@/features/direct-pairs/counterpart-presentation';
+import {
+  mergeDirectLineRows,
+  type DirectLineRow,
+} from '@/features/direct-pairs/direct-line-rows';
 import { channelRowBadge } from '@/lib/attention-mode';
-import { conversationSelectionTier } from '@/lib/rail-selection';
 import { ConversationRowLayout, SidebarSection, UnreadBadge } from './sidebar-shared';
 
 /**
@@ -45,47 +48,82 @@ import { ConversationRowLayout, SidebarSection, UnreadBadge } from './sidebar-sh
  * handler. Renders nothing when empty — a viewer with no open lines sees no
  * section, and per @shiki's ruling this list never pre-lists agents that could be
  * messaged (the agent's own page is that entrance).
+ *
+ * The one row that is NOT a pair: while `/chat/d/new/:agentId` is the open pane,
+ * the section shows a transient row for that agent (@shiki, #task:2039: «打开 DM 的
+ * 时候，sidebar 上的 DM 分组里没有出现这个 agent 的行»). It is derived from the ROUTE, not
+ * from a pre-minted conversation — no empty pair is created to make the sidebar
+ * grow a line — so leaving the draft removes it with nothing left behind.
+ *
+ * One agent is one row even when both facts are true at once, and WHICH of the two
+ * owns that row is decided by {@link mergeDirectLineRows}, not here: a draft that
+ * is still open owns its line (selected, and clicking it stays on the draft) until
+ * the pane's own `decideDraftHandoff` releases the route. @Cindy's review of the
+ * first cut: this component suppressed the draft row as soon as a pair existed, so
+ * a dirty or send-failed draft was represented by an unselected pair row one click
+ * away from discarding it.
  */
 export function DirectMessagesGroup(props: {
   /** The open conversation — the ONLY thing that highlights a row here. */
   selectedChannelId: string | null;
+  /** The agent whose pre-mint draft pane is open, if any. Nothing about it is
+   *  stored: it comes from the route and leaves with it. */
+  draftAgentId?: string | null;
   /** Open a pair. Takes no workspace: there is none, and that is the point. */
   onSelectDirectPair: (conversationId: string) => void;
+  /** Re-open the draft pane — the transient row's only action. */
+  onSelectDirectDraft?: (agentId: string) => void;
 }): JSX.Element | null {
   const pairs = useDirectPairs();
-  // ONE avatar batch for the section, over the counterpart set — the same
-  // discipline every author surface follows (a leaf row never fetches its own
-  // blob). Deleted counterparts contribute nothing and fetch nothing.
+  const draftAgentId = props.draftAgentId ?? null;
+  // The draft pane already reads this agent (it is the route's subject), so this
+  // is a cache hit in practice, not a second fetch for the sidebar's sake.
+  const draftAgent = useAgent(draftAgentId).data;
+  // The open draft, as the seam takes it. Its counterpart is only the fallback for
+  // a line with no pair yet — a merged row wears the pair's.
+  const draft = useMemo(
+    () =>
+      draftAgentId !== null && draftAgent
+        ? { agentId: draftAgentId, counterpart: counterpartFromAgent(draftAgent) }
+        : null,
+    [draftAgentId, draftAgent],
+  );
+  // Merging, ordering and selection are ONE pure decision (`mergeDirectLineRows`),
+  // so this component only paints what it is handed.
+  const rows = useMemo(
+    () =>
+      mergeDirectLineRows({
+        pairs,
+        draft,
+        selectedConversationId: props.selectedChannelId,
+      }),
+    [pairs, draft, props.selectedChannelId],
+  );
+  // ONE avatar batch for the section, over the counterpart set of the rows that
+  // are actually rendered — the same discipline every author surface follows (a
+  // leaf row never fetches its own blob). Deleted counterparts contribute nothing
+  // and fetch nothing.
   const { agents, users } = useMemo(
-    () => collectCounterpartAvatarSources(pairs),
-    [pairs],
+    () => collectCounterpartAvatarSources(rows),
+    [rows],
   );
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
-  // Resolve every label once, here: the label is also the pane's title, and both
-  // must come from the same presentation rule (see `presentCounterpart`).
-  const rows = useMemo(
-    () =>
-      pairs.map(pair => ({
-        pair,
-        counterpart: presentCounterpart(pair.counterpart),
-      })),
-    [pairs],
-  );
 
   if (rows.length === 0) return null;
 
-  // Collapsed section, open pair: keep that one row, so collapsing never leaves
+  // Collapsed section, open line: keep that one row, so collapsing never leaves
   // the sidebar with no selection while the pane shows that conversation
-  // (`SidebarSection.collapsedContent`, app-layout.md §3).
-  const selectedRow = props.selectedChannelId
-    ? rows.find(r => r.pair.conversation_id === props.selectedChannelId)
-    : undefined;
+  // (`SidebarSection.collapsedContent`, app-layout.md §3). The draft row is the
+  // open pane just as much, so it survives collapsing the same way.
+  const selectedRow = rows.find(row => row.selected);
 
   return (
     <SidebarSection
       label="DIRECT MESSAGES"
       icon={<MessageSquare className="size-3.5" />}
+      // The count is the number of lines the section shows, draft included —
+      // a count that disagreed with the visible rows would read as a bug.
       count={rows.length}
       collapsible
       defaultExpanded
@@ -93,27 +131,25 @@ export function DirectMessagesGroup(props: {
       collapsedContent={
         selectedRow ? (
           <li>
-            <DirectPairRow
-              pair={selectedRow.pair}
-              counterpart={selectedRow.counterpart}
-              selectedChannelId={props.selectedChannelId}
+            <DirectMessageRow
+              row={selectedRow}
               agentAvatarUrls={agentAvatarUrls}
               humanAvatarUrls={humanAvatarUrls}
-              onSelect={props.onSelectDirectPair}
+              onSelectDirectPair={props.onSelectDirectPair}
+              onSelectDirectDraft={props.onSelectDirectDraft}
             />
           </li>
         ) : null
       }
     >
-      {rows.map(({ pair, counterpart }) => (
-        <li key={pair.conversation_id}>
-          <DirectPairRow
-            pair={pair}
-            counterpart={counterpart}
-            selectedChannelId={props.selectedChannelId}
+      {rows.map(row => (
+        <li key={row.key}>
+          <DirectMessageRow
+            row={row}
             agentAvatarUrls={agentAvatarUrls}
             humanAvatarUrls={humanAvatarUrls}
-            onSelect={props.onSelectDirectPair}
+            onSelectDirectPair={props.onSelectDirectPair}
+            onSelectDirectDraft={props.onSelectDirectDraft}
           />
         </li>
       ))}
@@ -121,40 +157,53 @@ export function DirectMessagesGroup(props: {
   );
 }
 
-/** One pair row. The counterpart IS the row: its avatar, its name, and — when the
+/** One line's row. The counterpart IS the row: its avatar, its name, and — when the
  *  principal is gone — the same quiet deleted marker a byline shows, which is also
- *  the ONLY on-row explanation for the pane's read-only composer. */
-function DirectPairRow({
-  pair,
-  counterpart,
-  selectedChannelId,
+ *  the ONLY on-row explanation for the pane's read-only composer.
+ *
+ *  A pair and a draft differ in exactly one thing — WHAT opening it navigates to —
+ *  so they share one component instead of a second row species with its own
+ *  painting. */
+function DirectMessageRow({
+  row,
   agentAvatarUrls,
   humanAvatarUrls,
-  onSelect,
+  onSelectDirectPair,
+  onSelectDirectDraft,
 }: {
-  pair: DirectPairListItem;
-  counterpart: CounterpartPresentation;
-  selectedChannelId: string | null;
+  row: DirectLineRow;
   agentAvatarUrls: ReadonlyMap<string, string | null>;
   humanAvatarUrls: ReadonlyMap<string, string | null>;
-  onSelect: (conversationId: string) => void;
+  onSelectDirectPair: (conversationId: string) => void;
+  onSelectDirectDraft?: (agentId: string) => void;
 }): JSX.Element {
-  const isPrimary =
-    conversationSelectionTier(pair.conversation_id, selectedChannelId) === 'primary';
+  // The label is also the pane's title, and both must come from the same
+  // presentation rule (see `presentCounterpart`) — so the draft row's face and
+  // name are already the ones the minted pair will wear.
+  const counterpart = presentCounterpart(row.counterpart);
+  // A draft has no unread state to have — it has no messages, by construction.
   const badge = channelRowBadge({
     effectiveMode: 'all',
-    positionalUnread: pair.unread_count,
+    positionalUnread: row.unread,
     directedUnread: 0,
   });
 
   return (
     <ConversationRowLayout
-      selected={isPrimary}
+      selected={row.selected}
       // The section IS this row's parent, so it sits on the outer glyph column —
       // flush with STARRED's rows and the workspace containers, like every row
       // whose parent is a section rather than a workspace.
       column="outer"
-      onSelect={() => onSelect(pair.conversation_id)}
+      onSelect={() => {
+        // A draft row stays on the draft even when a pair for the same agent
+        // exists: that is what makes it one row instead of two.
+        if (row.kind === 'draft') {
+          onSelectDirectDraft?.(row.agentId);
+          return;
+        }
+        onSelectDirectPair(row.conversationId);
+      }}
     >
       <AuthorAvatarView
         avatar={counterpart.avatar}

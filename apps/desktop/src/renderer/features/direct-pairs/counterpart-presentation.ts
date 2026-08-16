@@ -23,7 +23,7 @@
  * spelling) while the avatar variant vocabulary is `'user'` (the message-author
  * one). The translation happens HERE, once, instead of at each rendering surface.
  */
-import type { DirectPairCounterpart } from '@silverhand/shared';
+import type { AgentDto, DirectPairCounterpart } from '@silverhand/shared';
 import type { AuthorAvatar, AuthorAvatarSources } from '@/components/chat/author-presentation';
 
 export interface CounterpartPresentation {
@@ -74,6 +74,32 @@ export function presentCounterpart(
       counterpart.kind === 'agent'
         ? { variant: 'agent', id: counterpart.id, runtime: counterpart.runtime }
         : { variant: 'user', id: counterpart.id },
+  };
+}
+
+/**
+ * The counterpart of a line that does not exist yet (#task:2039): the agent the
+ * route names, read as if the pair were already there.
+ *
+ * A pre-mint draft has no `DirectPairListItem` to carry a counterpart, and the two
+ * surfaces that show one (the draft pane's header and the sidebar's transient
+ * draft row) must not each invent their own — the whole point of the draft state is
+ * that NOTHING moves when the first send converges it onto the real pair, and that
+ * only holds if the face and the label come from this one rule.
+ *
+ * Always the `active` arm: the viewer is reading this agent's page, so the DTO
+ * exists by construction. Nothing is persisted or pre-allocated by calling this —
+ * it is a projection of an agent the renderer already fetched.
+ */
+export function counterpartFromAgent(agent: AgentDto): DirectPairCounterpart {
+  return {
+    status: 'active',
+    kind: 'agent',
+    id: agent.id,
+    name: agent.name,
+    display_name: agent.display_name,
+    avatar_url: agent.avatar_url,
+    runtime: agent.runtime,
   };
 }
 

@@ -15,6 +15,7 @@
 import type {
   ConversationPlacementKind,
   ConversationRosterPolicy,
+  DirectPairCounterpart,
   DirectPairListItem,
 } from '@silverhand/shared';
 
@@ -49,6 +50,13 @@ export interface ConversationPaneDescriptor {
    *  `direct_pair`, whose counterpart principal is gone. Distinct from
    *  `closed_at` (an operator action a channel can come back from). */
   read_only?: boolean;
+  /** The OTHER endpoint of a `direct_pair`, when the carrier resolved one. It is
+   *  the pair's identity — the header wears its face instead of a channel `#`
+   *  (#task:2039) — and `title` is already this counterpart's label, so the two
+   *  never disagree. Absent for every other placement, and absent for a pair
+   *  whose carrier knows only the conversation id (a deep link): the header then
+   *  shows the title alone rather than borrowing channel chrome. */
+  counterpart?: DirectPairCounterpart;
 }
 
 /**
@@ -82,5 +90,8 @@ export function directPairPaneDescriptor(
     archived_at: null,
     workspace_id: null,
     read_only: pair.read_only,
+    // The pair's identity, carried so the pane's header does not re-fetch or
+    // re-resolve what the list row already holds.
+    counterpart: pair.counterpart,
   };
 }

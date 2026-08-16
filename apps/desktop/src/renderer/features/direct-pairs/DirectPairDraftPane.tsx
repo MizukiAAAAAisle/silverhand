@@ -29,13 +29,14 @@
  * — which is stated by the absent affordance rather than a sentence of copy.
  */
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Hash } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { resizeTextarea } from '@/components/chat/Composer';
 import { EmptyConversation } from '@/components/layout/channel-view/empty-conversation';
+import { ConversationHeaderIdentity } from '@/components/layout/channel-view/conversation-header-identity';
 import { paneChrome } from '@/components/layout/pane-chrome';
 import { ApiError } from '@/lib/api';
 import { useAgent } from '@/features/agents/hooks';
+import { counterpartFromAgent } from './counterpart-presentation';
 import {
   decideDraftHandoff,
   findAgentDirectPair,
@@ -155,21 +156,17 @@ export function DirectPairDraftPane({
       style={paneChrome}
     >
       {/* Header is the pair header's markup, verbatim: the same height, the same
-          `#` hero sticker, the same serif title. The convergence after the first
-          send must not move a pixel of chrome — only the messages arrive. */}
+          identity (the agent's own face — a pair wears its counterpart, not the
+          channel `#`, #task:2039), the same serif title. The convergence after
+          the first send must not move a pixel of chrome — only the messages
+          arrive, which is why the counterpart is synthesized from the agent the
+          route names instead of waiting for the pair's list row. */}
       <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <span
-          data-conversation-title
-          className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
-        >
-          <Hash
-            data-conversation-hash-icon
-            data-sticker
-            data-sticker-tone="channel"
-            className="size-4 shrink-0 align-[-0.15em]"
-          />
-          {title}
-        </span>
+        <ConversationHeaderIdentity
+          identity="counterpart"
+          title={title}
+          counterpart={counterpartFromAgent(agent)}
+        />
       </header>
 
       <div className="relative min-h-0 flex-1">

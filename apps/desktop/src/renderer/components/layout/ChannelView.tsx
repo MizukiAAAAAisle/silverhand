@@ -7,7 +7,6 @@ import {
   useState,
 } from 'react';
 import {
-  Hash,
   Maximize2,
   Minimize2,
   Paperclip,
@@ -62,6 +61,13 @@ import type {
   ConversationPaneDescriptor,
   WorkspaceUiKind,
 } from '@/features/conversations/pane-descriptor';
+import {
+  paneCapabilities,
+  projectConversationPaneMode,
+  rosterQueryTarget,
+} from '@/features/conversations/pane-mode';
+import { ConversationPaneCapabilitiesProvider } from '@/features/conversations/pane-capabilities-context';
+import { ConversationHeaderIdentity } from './channel-view/conversation-header-identity';
 import { paneChrome } from './pane-chrome';
 
 interface ChannelViewProps {
@@ -326,13 +332,32 @@ function ActiveChannelView({
   // A `direct_pair` takes the third argument instead (#task:2035): it has no
   // membership axis, no `is_member` carrier and no channel detail to fetch — see
   // `directPairGate`.
-  const isDirectPair = conversation.placement_kind === 'direct_pair';
+  // The pane's MODE, projected ONCE from the conversation's placement
+  // (#task:2039). Every placement-dependent affordance below reads
+  // `paneCaps` instead of re-deriving the mode from `workspace_id === null`, the
+  // route, or a local boolean — that scatter is what produced four separate
+  // dogfood findings. It decides UI capability only; authorization stays the
+  // backend's answer (@Cindy).
+  const paneMode = projectConversationPaneMode(conversation);
+  const paneCaps = paneCapabilities(paneMode);
+  const isDirectPair = paneMode.kind === 'direct_message';
   const { gate } = useChannelMembership(
     conversation,
     conversation.id,
     isDirectPair ? { readOnly: conversation.read_only === true } : null,
   );
   const joinChannel = useJoinChannel(conversation.workspace_id);
+  // WHETHER this pane reads the roster at all, resolved once from the capability
+  // and the membership gate (`rosterQueryTarget`). Non-null is also the single
+  // gate for every roster SURFACE below, so the reads and the affordances cannot
+  // drift apart: a pane that shows no member surfaces starts no roster query, and
+  // one that starts none shows nothing that would be empty (@Cindy, #task:2039
+  // review — capability, not "the response happened to be empty").
+  const rosterTarget = rosterQueryTarget(
+    paneCaps,
+    conversation.id,
+    gate.allowMemberEffects,
+  );
 
   // Per-viewer server-scored unread for this conversation's reply-clusters
   // (#task:1226). The SINGLE source of the chip's "N new" + first-unread —
@@ -416,7 +441,7 @@ function ActiveChannelView({
   // Visibility toggle + self-leave are workspace/open-roster only. A
   // fixed-roster conversation has neither a visibility choice nor a leave path.
   const isRegularChannel =
-    conversation.placement_kind === 'workspace'
+    paneMode.kind === 'workspace_channel'
     && conversation.roster_policy === 'open';
   // The "+ add member" target workspace, resolved ONCE for the three surfaces
   // that offer it (both header variants + the members modal). Non-null is the
@@ -427,7 +452,7 @@ function ActiveChannelView({
   // has no workspace.
   const addMemberWorkspaceId =
     canAddMember(conversation, closed) && gate.allowMutations
-      ? conversation.workspace_id
+      ? paneCaps.workspaceScope
       : null;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
@@ -452,15 +477,13 @@ function ActiveChannelView({
   const canLeaveChannel = channelDetail?.can_leave ?? false;
   const leaveBlockedReason = channelDetail?.leave_blocked_reason ?? null;
   const { data: viewer } = useViewerUser();
-  // The channel roster is a member surface — the roster/agent
-  // strip + the restart/stop controls it feeds are join-gated. Disable the
-  // fetch (query + WS interest) for a non-member by passing a null id.
-  const { data: channelAgents = [] } = useChannelAgents(
-    gate.allowMemberEffects ? conversation.id : null,
-  );
-  const { data: channelAgentRuntime = [] } = useChannelAgentRuntime(
-    gate.allowMemberEffects ? conversation.id : null,
-  );
+  // The channel roster is a member surface AND a placement-specific one — the
+  // roster/agent strip, the members modal and the restart/stop controls it feeds.
+  // `rosterTarget` is null for a non-member and for a placement with no roster
+  // (a `direct_pair`), and a null id disables the query AND the WS interest — so
+  // a DM starts neither read.
+  const { data: channelAgents = [] } = useChannelAgents(rosterTarget);
+  const { data: channelAgentRuntime = [] } = useChannelAgentRuntime(rosterTarget);
   const startAgent = useStartAgent(conversation.id);
   const stopAgent = useStopAgent(conversation.id);
   const agentIds = useMemo(
@@ -511,8 +534,10 @@ function ActiveChannelView({
     }
   }, [agentActionDisabled, agentIds, stopAgent]);
   // The roster/agent strip is a member surface — hidden for a
-  // non-member (channelAgents is also empty there, the fetch being gated off).
-  const memberStrip = gate.allowMemberEffects ? (
+  // non-member (channelAgents is also empty there, the fetch being gated off) —
+  // and a ROSTER surface: a pair's two endpoints are not a roster, so the mode
+  // withholds it outright (shiki, #task:2039).
+  const memberStrip = rosterTarget !== null ? (
     <MemberStrip
       channelId={conversation.id}
       agentRuntime={channelAgentRuntime}
@@ -575,18 +600,19 @@ function ActiveChannelView({
   // therefore look up tasks in the foreign workspace transparently, and
   // the click hands up the resolved id, which needs no workspace.
   const taskRefContext = useMemo(
-    () => ({ workspaceId: conversation.workspace_id, onOpenTask }),
-    [conversation.workspace_id, onOpenTask],
+    () => ({ workspaceId: paneCaps.workspaceScope, onOpenTask }),
+    [paneCaps.workspaceScope, onOpenTask],
   );
   const handleOpenChannelRef = useCallback(
     (channelId: string) => {
       // `#channel` refs resolve per-workspace, so a workspace-less pane has no
       // namespace to open one in and the affordance is withheld below rather
       // than guessing a workspace here.
-      if (conversation.workspace_id === null) return;
-      onOpenChannelRef?.(conversation.workspace_id, channelId);
+      const workspaceId = paneCaps.workspaceScope;
+      if (workspaceId === null) return;
+      onOpenChannelRef?.(workspaceId, channelId);
     },
-    [conversation.workspace_id, onOpenChannelRef],
+    [paneCaps.workspaceScope, onOpenChannelRef],
   );
 
   // In-conversation header find (#task:1335). Local to this pane. Navigation is
@@ -647,6 +673,7 @@ function ActiveChannelView({
 
   return (
     <TaskRefContextProvider value={taskRefContext}>
+    <ConversationPaneCapabilitiesProvider value={paneCaps}>
     <main
       ref={findRootRef}
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
@@ -687,26 +714,18 @@ function ActiveChannelView({
           </>
         ) : (
           <>
-            <span
-              data-conversation-title
-              className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
-            >
-              {/* Every conversation header carries the channel `#` — a
-                  channel-like conversation always earns it, so there's no
-                  branch: this else-branch is the main channel/DM header and
-                  `conversation` is always `channel` | `dm_channel`. (Threads
-                  take the showThreadHeader branch above, which shows the
-                  `ThreadIcon` instead — no `#`.) Painted per
-                  theme via `[data-conversation-hash-icon]` (shiki: "只要是
-                  channel 都需要 # icon,逻辑上不需要分支", #task:1373). */}
-              <Hash
-                data-conversation-hash-icon
-                data-sticker
-                data-sticker-tone="channel"
-                className="size-4 shrink-0 align-[-0.15em]"
-              />
-              {conversation.title}
-            </span>
+            {/* Identity by MODE, resolved in one place (#task:2039): a workspace
+                channel wears the `#` (shiki: "只要是 channel 都需要 # icon,逻辑上
+                不需要分支", #task:1373 — that ruling is about channels, and a
+                `direct_pair` is not one), a direct line wears its counterpart's
+                face. Threads take the branch above and wear the `ThreadIcon`. */}
+            <ConversationHeaderIdentity
+              identity={paneCaps.headerIdentity}
+              title={conversation.title}
+              counterpart={
+                paneMode.kind === 'direct_message' ? paneMode.counterpart : null
+              }
+            />
             {memberStrip}
             {addMemberWorkspaceId !== null ? (
               <AddConversationMemberPopover
@@ -794,12 +813,12 @@ function ActiveChannelView({
               <Paperclip className="size-3.5" />
             </button>
           ) : null}
-          {gate.allowMemberEffects ? (
+          {rosterTarget !== null ? (
             // Carries the member count (shiki 2026-07-28). The number is
             // derived inside from the roster read model the strip already
             // holds — no count endpoint, no second state — which is also why
             // the read lives in the component and not here: it must not mount
-            // for a viewer this gate excludes.
+            // for a viewer this gate excludes. A pair has no roster to count.
             <MembersButton
               channelId={conversation.id}
               onOpen={() => setMembersOpen(true)}
@@ -899,7 +918,7 @@ function ActiveChannelView({
         />
       ) : null}
 
-      {gate.allowMemberEffects ? (
+      {rosterTarget !== null ? (
         <ChannelMembersDialog
           open={membersOpen}
           onOpenChange={setMembersOpen}
@@ -988,7 +1007,7 @@ function ActiveChannelView({
               // A `#channel` chip resolves inside a workspace, so a
               // workspace-less pane offers no navigation for one (it still
               // renders as muted text, exactly like an unresolvable ref).
-              onOpenChannelRef && conversation.workspace_id !== null
+              onOpenChannelRef && paneCaps.workspaceScope !== null
                 ? handleOpenChannelRef
                 : undefined
             }
@@ -1026,6 +1045,7 @@ function ActiveChannelView({
         ) : null}
       </div>
     </main>
+    </ConversationPaneCapabilitiesProvider>
     </TaskRefContextProvider>
   );
 }

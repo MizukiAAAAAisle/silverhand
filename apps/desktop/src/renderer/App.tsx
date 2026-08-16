@@ -2573,6 +2573,14 @@ function RegisteredAppShell({
                       // threads-list / side) are channel-scoped, so there is
                       // nothing recorded for a pair to restore (#task:2035).
                       onSelectDirectPair={nav.toDirect}
+                      // The transient draft row (#task:2039) re-opens THE DRAFT,
+                      // never the pair: while the draft route is open that row is
+                      // the draft's (`mergeDirectLineRows`), and it holds unsent
+                      // text or a failed first send. Routing it through
+                      // `handleMessageAgent` — which prefers an existing pair —
+                      // would discard both (@Cindy, #task:2039 review).
+                      directDraftAgentId={directDraftAgentId}
+                      onSelectDirectDraft={nav.toDirectDraft}
                       onCreateChannel={setCreateChannelWorkspaceId}
                       // STARRED is global, so the parent workspace is explicit —
                       // `handleSelectChannel` then opens a starred channel in another

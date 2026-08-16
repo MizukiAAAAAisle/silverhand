@@ -55,6 +55,12 @@ interface SidebarProps {
    *  navigations land on different routes: passing a null workspace to the
    *  workspace-keyed one would either fabricate a coordinate or silently no-op. */
   onSelectDirectPair: (conversationId: string) => void;
+  /** The agent whose pre-mint draft line is the open pane (`/chat/d/new/:agentId`),
+   *  if any — the sidebar shows a transient row for it (#task:2039). Route state,
+   *  not stored state: no pair exists yet. */
+  directDraftAgentId: string | null;
+  /** Re-open that draft line. */
+  onSelectDirectDraft: (agentId: string) => void;
   /** Open a conversation inside a given workspace. STARRED is global, so the
    *  parent workspace is explicit: the handler owns the cross-workspace open
    *  (remembered layout restore included), STARRED never a second nav model. */
@@ -337,6 +343,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <DirectMessagesGroup
           selectedChannelId={props.selectedChannelId}
           onSelectDirectPair={props.onSelectDirectPair}
+          draftAgentId={props.directDraftAgentId}
+          onSelectDirectDraft={props.onSelectDirectDraft}
         />
         <WorkspaceGroup
           // AGENT SPACES, not "DM" (#task:2035): these rows are agent-home

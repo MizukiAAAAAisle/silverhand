@@ -15,6 +15,9 @@ import {
   canRemoveAgentFromChannel,
 } from '@/features/agents/permissions';
 import { useConversationById } from '@/features/conversations/useConversationById';
+import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
+import type { AgentPresenceSource } from '@/features/conversations/pane-mode';
+import { useAgentOnlineByHost } from '@/features/hosts/hooks';
 import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import {
@@ -45,8 +48,10 @@ interface AgentInfoPopoverProps {
   children: ReactNode;
   side?: 'top' | 'bottom' | 'left' | 'right';
   align?: 'start' | 'center' | 'end';
-  /** When set, looks up the agent's per-conversation status to render an
-   *  IM-style presence line + (when crashed) a retry action. */
+  /** When set, the card carries a presence line + (when crashed) a retry
+   *  action. WHICH authority answers presence is the surface's, not this prop's:
+   *  a roster-bearing conversation reports the agent's status in it, a
+   *  workspace-less one reports the agent's own liveness (#task:2039). */
   conversationId?: string | null;
   /** `'click'` (default) opens on click for standalone controls.
    *  `'hover'` opens on pointer-enter and
@@ -79,8 +84,8 @@ const HOVER_CLOSE_DELAY_MS = 120;
 
 /**
  * Compact agent info card. Shows avatar, display name + handle,
- * runtime/model, presence (per-conversation), and an optional retry
- * affordance when the agent has crashed in this conversation.
+ * runtime/model, presence (from the authority the pane's placement names), and an
+ * optional retry affordance when the agent has crashed in this conversation.
  *
  * Two trigger modes: click (standalone controls) and hover
  * (inline mentions, message author/avatar, and member strip in conversation header). Hover mode is implemented via
@@ -90,8 +95,9 @@ const HOVER_CLOSE_DELAY_MS = 120;
  * Single visual contract — the same card renders on every surface
  * (header member chip, message stream avatar/author, inline @mention).
  * Per-conversation management actions render in the top-right when the
- * viewer can edit the agent and a `conversationId` is provided; that
- * gating is internal to `AgentManagementActions`. There is no per-call
+ * placement HAS a roster (`paneCaps.hasRoster`) and a `conversationId` is
+ * provided; permission gating within that is internal to
+ * `AgentManagementActions`. There is no per-call
  * `management` switch (#task:912 review round 8 — the user noted that
  * the chip and the message-stream popover should not diverge).
  */
@@ -106,6 +112,11 @@ export function AgentInfoPopover({
 }: AgentInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
   const [managementDialogOpen, setManagementDialogOpen] = useState(false);
+  // What the SURFACE this card is rendered in can do — the pane's mode
+  // projection answers it (#task:2039), so the popover neither infers presence
+  // from where it happens to be rendered nor starts a roster read that the
+  // placement has no roster for.
+  const paneCaps = useConversationPaneCapabilities();
   // Fallback only when the caller is unbatched (`undefined`). The
   // explicit `null` case from a batched parent means "no avatar yet"
   // and must NOT trigger an internal fetch — that was the PR-2 review
@@ -191,17 +202,19 @@ export function AgentInfoPopover({
             />
             <div className="min-w-0 flex-1">
               {/* Name + inline presence dot. Presence sits as the
-                  semantic state next to the name; per-conversation
-                  only (without conversationId there's no presence to
-                  show). */}
+                  semantic state next to the name, and is only shown
+                  when the card was opened FROM a conversation — which
+                  authority then answers it is the surface's
+                  (`useConversationPaneCapabilities`), not this gate's. */}
               <div className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 truncate text-sm font-semibold text-text-primary">
                   {agent.display_name || agent.name}
                 </span>
                 {conversationId ? (
                   <PresenceInline
-                    agentId={agent.id}
+                    agent={agent}
                     conversationId={conversationId}
+                    source={paneCaps.agentPresence}
                   />
                 ) : null}
               </div>
@@ -222,7 +235,14 @@ export function AgentInfoPopover({
                 against the two text rows) so actions still sit in
                 the top-right corner instead of riding the row's
                 vertical center. */}
-            {conversationId ? (
+            {/* Per-conversation agent management is a ROSTER surface, so the
+                placement's capability decides whether it is mounted at all
+                (@Cindy, #task:2039 review): this component starts four
+                conversation-scoped reads and used to hide itself when the roster
+                response came back without a row for the agent — a pair has no
+                such row and never will, which made "no controls" a property of
+                the data instead of the mode. */}
+            {conversationId && paneCaps.hasRoster ? (
               <div className="self-start">
                 <AgentManagementActions
                   agent={agent}
@@ -255,7 +275,67 @@ const PRESENCE_DOT: Record<ConversationAgentStatus, string> = {
   crashed: 'bg-error',
 };
 
+/** One visual contract for every presence line, whichever authority answered:
+ *  the same pip + the same caption slot next to the name. */
+function PresenceLine({ dot, label }: { dot: string; label: string }): JSX.Element {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
+      title={label}
+    >
+      <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + dot} />
+      {label}
+    </span>
+  );
+}
+
+/**
+ * The agent's presence, from the authority this SURFACE has (#task:2039).
+ *
+ * Which one that is comes from the pane's mode projection via context, never from
+ * a guess here — the two answer different questions and only one of them exists
+ * per placement:
+ *
+ *  - `conversation_roster` — the agent's status IN this conversation. "Not here"
+ *    is a real fact there: a channel has a roster and the agent is not on it.
+ *  - `global_runtime` — the agent's liveness on its computer, the authority the
+ *    agent page's hero pill reads. A `direct_pair` has no roster row and never
+ *    will, so reading one there turned membership into presence and told the user
+ *    their DM counterpart was `Not here` while it was answering them
+ *    (shiki, #task:2039).
+ *
+ * The global arm renders NOTHING when the liveness map has no entry for this
+ * agent: an absent entry means the host status hasn't answered (or the computer
+ * is unknown), and `Offline` would be a claim rather than an answer.
+ */
 function PresenceInline({
+  agent,
+  conversationId,
+  source,
+}: {
+  agent: AgentDto;
+  conversationId: string;
+  source: AgentPresenceSource;
+}): JSX.Element | null {
+  if (source === 'global_runtime') {
+    return <GlobalPresenceInline agent={agent} />;
+  }
+  return <RosterPresenceInline agentId={agent.id} conversationId={conversationId} />;
+}
+
+function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | null {
+  const onlineByAgent = useAgentOnlineByHost([agent.host_id]);
+  const online = onlineByAgent.get(agent.id);
+  if (online === undefined) return null;
+  return (
+    <PresenceLine
+      dot={online ? 'bg-success' : 'bg-text-muted/40'}
+      label={online ? 'Online' : 'Offline'}
+    />
+  );
+}
+
+function RosterPresenceInline({
   agentId,
   conversationId,
 }: {
@@ -271,24 +351,9 @@ function PresenceInline({
   // vertical space without earning it). When the agent isn't in this
   // conversation we still want a faint hint, so we render the muted
   // dot + "Not here" rather than collapse silently.
-  if (!member) {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted">
-        <span data-status-pip className="size-1.5 rounded-[var(--pill-radius)] bg-text-muted/40" />
-        Not here
-      </span>
-    );
-  }
+  if (!member) return <PresenceLine dot="bg-text-muted/40" label="Not here" />;
   const status = row?.status ?? 'idle';
-  return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
-      title={PRESENCE_LABEL[status]}
-    >
-      <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + PRESENCE_DOT[status]} />
-      {PRESENCE_LABEL[status]}
-    </span>
-  );
+  return <PresenceLine dot={PRESENCE_DOT[status]} label={PRESENCE_LABEL[status]} />;
 }
 
 function AgentManagementActions({
