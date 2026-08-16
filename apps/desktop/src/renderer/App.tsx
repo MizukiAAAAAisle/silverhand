@@ -132,9 +132,11 @@ import {
 } from '@/features/conversations/pane-descriptor';
 import {
   directPairPaneProps,
+  findAgentDirectPair,
   useDirectPairPane,
   useDirectPairs,
 } from '@/features/direct-pairs/hooks';
+import { DirectPairDraftPane } from '@/features/direct-pairs/DirectPairDraftPane';
 import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
 import {
   buildChannelLayoutUrl,
@@ -340,6 +342,10 @@ function RegisteredAppShell({
     // conversation's id in `selectedChannelId`, and this says which carrier owns
     // it (the workspace's channel list, or the viewer's direct-pair list).
     directConversationId,
+    // Set only by `/chat/d/new/:agentId` — an AGENT identity, not a conversation.
+    // Nothing is selected while it is set (there is no conversation yet), so it
+    // never reaches `selectedChannelId` or the layout cache.
+    directDraftAgentId,
     sideConversationId,
     threadRootId,
     threadsListOpen,
@@ -793,6 +799,10 @@ function RegisteredAppShell({
     // restore would navigate the user straight out of the DM they just opened.
     // The absent workspace is the route's meaning here, not a gap to fill.
     if (directConversationId) return;
+    // Same for the pre-mint draft `/chat/d/new/:agentId` (#task:2039): a line that
+    // does not exist yet has no workspace either, and the pair it mints will not
+    // have one.
+    if (directDraftAgentId) return;
     if (selectedWorkspaceId) return;
     if (workspaces.length === 0) return;
     const target = pickWorkspaceToRestore(
@@ -804,6 +814,7 @@ function RegisteredAppShell({
     appSection,
     view,
     directConversationId,
+    directDraftAgentId,
     selectedWorkspaceId,
     workspaces,
     nav.go,
@@ -1580,6 +1591,36 @@ function RegisteredAppShell({
     nav.closeSide();
   }, [nav.closeSide]);
 
+  // The agent page's `Message` entry, from BOTH its full page and its side panel
+  // (#task:2039). One destination model, one interface: an existing line opens at
+  // its own route, and an agent the viewer has never messaged opens the same chat
+  // surface as a DRAFT (`/chat/d/new/:agentId`) whose first send mints the pair
+  // through the initiation door. Nothing is allocated by clicking — a viewer whose
+  // pair list is still cold falls through to the draft, and that draft's first
+  // send converges on the same pair via get-or-create.
+  const handleMessageAgent = useCallback(
+    (agentId: string): void => {
+      const existing = findAgentDirectPair(directPairs, agentId);
+      if (existing) {
+        nav.toDirect(existing.conversation_id);
+        return;
+      }
+      nav.toDirectDraft(agentId);
+    },
+    [directPairs, nav.toDirect, nav.toDirectDraft],
+  );
+
+  // The draft's exit: the id the first send (or a line that turned out to exist)
+  // hands back. `replace`, because `/chat/d/new/:agentId` is a pre-mint stand-in
+  // for exactly this route — leaving it in history would give Back a draft for a
+  // line that now exists.
+  const handleDraftOpenedPair = useCallback(
+    (conversationId: string): void => {
+      nav.go(routes.chatDirect(conversationId), { replace: true });
+    },
+    [nav.go],
+  );
+
   // ── Stable refs for ChannelView (so React.memo can short-circuit when
   //    only sidebar visibility flips). Recompute deliberately when the
   //    underlying nav / channel / mutation identity changes. ──────────────
@@ -1858,7 +1899,22 @@ function RegisteredAppShell({
     nav.openThread(rootMessageId);
   };
 
-  const parentView = (
+  const parentView = directDraftAgentId ? (
+    // The pre-mint direct line (#task:2039). Its own pane rather than a
+    // `ChannelView` with a synthetic descriptor: every conversation-keyed reader
+    // ChannelView owns (messages, roster, read cursor, attachments) would be
+    // asking about an id that does not exist yet. It renders the same chrome, and
+    // the first send replaces this route with the pair's own.
+    // Keyed by agent identity: the draft (and the send's error/pending state) is
+    // ABOUT one agent, so `/new/A → /new/B` must remount rather than re-use the
+    // instance. Without this, text written to A survives into B's pane and one
+    // Enter sends it to the wrong agent (@Cindy, #task:2039 review).
+    <DirectPairDraftPane
+      key={directDraftAgentId}
+      agentId={directDraftAgentId}
+      onOpenPair={handleDraftOpenedPair}
+    />
+  ) : (
     <ChannelView
       channelKind={primaryPaneChannelKind}
       conversation={primaryPaneDescriptor}
@@ -1950,6 +2006,9 @@ function RegisteredAppShell({
         contextWorkspaceId={selectedWorkspaceId ?? null}
         onClose={nav.closeAgentPanel}
         onDeleted={nav.closeAgentPanel}
+        // The same DM entry the full page offers (@shiki, #task:2039): reaching an
+        // agent through the side panel must not be the one way that loses it.
+        onMessageAgent={handleMessageAgent}
       />
     );
   } else if (filesListMounted && selectedChannelId && selectedWorkspaceId) {
@@ -2298,7 +2357,7 @@ function RegisteredAppShell({
                   key={selectedAgentId}
                   agentId={selectedAgentId}
                   onDeleted={() => nav.toMembers()}
-                  onOpenDirectPair={nav.toDirect}
+                  onMessageAgent={handleMessageAgent}
                   onOpenConversation={s => {
                     // A seat whose conversation carries NO workspace coordinate
                     // is a `direct_pair` placement (#task:2020), which now has a

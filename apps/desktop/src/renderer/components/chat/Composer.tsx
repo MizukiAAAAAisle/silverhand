@@ -1093,7 +1093,10 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-function resizeTextarea(el: HTMLTextAreaElement | null): void {
+/** Grow a composer textarea with its content up to `MAX_TEXTAREA_HEIGHT`, then
+ *  scroll. Exported because the pre-mint direct-line composer (#task:2039) sizes
+ *  its textarea by the same rule — one autosize behaviour, not two that drift. */
+export function resizeTextarea(el: HTMLTextAreaElement | null): void {
   if (!el) return;
   el.style.height = 'auto';
   const nextHeight = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);

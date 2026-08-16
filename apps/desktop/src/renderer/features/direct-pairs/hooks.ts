@@ -69,6 +69,88 @@ export function useDirectPairs(): readonly DirectPairListItem[] {
 }
 
 /**
+ * The viewer's existing line with one agent, or `null` when they have never
+ * messaged each other (#task:2039). Pure, so the "existing line vs. new draft"
+ * decision behind every `Message` entry is one testable rule rather than a
+ * `.find` re-typed per surface.
+ *
+ * Matched on the counterpart's kind + id, INCLUDING the `deleted` arm: that arm
+ * still names the endpoint, and a pair whose agent is gone is still the line
+ * these two have — routing a viewer into a fresh draft instead would offer to
+ * start a line that cannot be started (the door answers 404) while hiding the one
+ * that exists, with its history.
+ *
+ * `rows: undefined` (a cold list) reads as "no pair" on purpose: the caller's
+ * fallback is the draft route, whose first send is get-or-create — so a stale
+ * miss costs a converge-on-send, never a duplicate line.
+ */
+export function findAgentDirectPair(
+  pairs: readonly DirectPairListItem[],
+  agentId: string,
+): DirectPairListItem | null {
+  return (
+    pairs.find(
+      p => p.counterpart.kind === 'agent' && p.counterpart.id === agentId,
+    ) ?? null
+  );
+}
+
+/**
+ * The facts the pre-mint draft pane's handoff decision rests on
+ * ({@link decideDraftHandoff}). Named so the decision is a pure function instead
+ * of conditions scattered through an effect.
+ */
+export interface DraftHandoffFacts {
+  /** The pair the viewer turns out to already have with this agent, if the list
+   *  now contains one — {@link findAgentDirectPair}. `null` while they have
+   *  none, which is the whole point of the draft route. */
+  existingPairId: string | null;
+  /** The composer holds content the user typed (trimmed, non-empty). */
+  draftDirty: boolean;
+  /** A first send is in flight. */
+  sendPending: boolean;
+  /** The last send attempt settled in failure. */
+  sendFailed: boolean;
+}
+
+/** Handoff verdict: leave the draft route for the real pair, or stay. */
+export type DraftHandoffDecision =
+  | { kind: 'stay' }
+  | { kind: 'handoff'; conversationId: string };
+
+/**
+ * Should the draft pane hand over to the pair's own route?
+ *
+ * A pair can appear underneath the draft at any moment — the agent may open the
+ * line from its side, or our own first send may have MINTED the pair and then
+ * failed to persist the message (a window #task:2036 accepts). Handing over
+ * automatically in those moments discards whatever the pane is holding: the text
+ * the user has typed but not sent, and the failure they have not read yet, both
+ * of which live only in this pane's state (@Cindy, #task:2039 review).
+ *
+ * So only an UNTOUCHED, quiet pane may hand over. The four cells:
+ *
+ *  - empty — nothing typed, nothing in flight, nothing failed → `handoff`. The
+ *    viewer loses nothing and lands on the line that now exists.
+ *  - dirty — text is in the composer → `stay`. It is theirs to send; the send
+ *    itself is get-or-create, so it converges on the very same pair.
+ *  - pending — a send is in flight → `stay`. Its own success path navigates with
+ *    the ack's conversation id; racing it here would move the pane out from
+ *    under an unsettled mutation.
+ *  - post-mint error — the send failed with a pair now existing → `stay`, so the
+ *    reason stays on screen and the retry re-enters the same door.
+ */
+export function decideDraftHandoff(
+  facts: DraftHandoffFacts,
+): DraftHandoffDecision {
+  if (facts.existingPairId === null) return { kind: 'stay' };
+  if (facts.sendPending || facts.sendFailed || facts.draftDirty) {
+    return { kind: 'stay' };
+  }
+  return { kind: 'handoff', conversationId: facts.existingPairId };
+}
+
+/**
  * What the pane can know about the pair named by `/chat/d/:conversationId`.
  *
  * FIVE states — a row, plus the FOUR different things "no row" can mean, which

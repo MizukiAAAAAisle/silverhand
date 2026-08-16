@@ -4,6 +4,7 @@ import {
   CalendarClock,
   FolderTree,
   Lock,
+  MessageSquare,
   User,
 } from 'lucide-react';
 import type {
@@ -70,10 +71,11 @@ interface AgentViewProps {
    *  channel/thread. Optional: if not provided, the column is
    *  still shown but rows aren't actionable. */
   onOpenConversation?: (s: AgentRuntimeParticipation) => void;
-  /** Full-page only: open the human↔agent direct line (existing or freshly
-   *  minted via the first-send door) for this agent. Threaded to the header's
-   *  Message entry (#task:2036 part ①). */
-  onOpenDirectPair?: (conversationId: string) => void;
+  /** Open the direct line with this agent — the existing pair's route, or the
+   *  pre-mint draft when there is none. Wired on BOTH variants (@shiki,
+   *  #task:2039: reaching the agent through the side panel must not be the one
+   *  way that loses the DM entry). Navigation only — nothing is created here. */
+  onMessageAgent?: (agentId: string) => void;
   /** `full` (default) = the members-section page with the vertical section
    *  rail + hero header. `side` = the compact right-pane panel docked beside
    *  a channel (#task:1189): horizontal tabs, no hero chrome, Activity locked
@@ -95,7 +97,7 @@ export function AgentView({
   agentId,
   onDeleted,
   onOpenConversation,
-  onOpenDirectPair,
+  onMessageAgent,
   variant = 'full',
   contextConversationId = null,
   contextWorkspaceId = null,
@@ -191,6 +193,7 @@ export function AgentView({
         contextConversationId={contextConversationId}
         contextWorkspaceId={contextWorkspaceId}
         onClose={onClose}
+        onMessageAgent={onMessageAgent}
       />
     );
   }
@@ -204,7 +207,7 @@ export function AgentView({
         agent={agent}
         runtimeState={runtimeQuery.data}
         onDeleted={onDeleted}
-        onOpenDirectPair={onOpenDirectPair}
+        onMessageAgent={onMessageAgent}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -363,6 +366,7 @@ export function focusAgentSideSection(
  */
 function SidePanelShell({
   header,
+  actions,
   onClose,
   children,
 }: {
@@ -370,6 +374,10 @@ function SidePanelShell({
    *  (avatar + name/description). Omitted for the loading / error states,
    *  which show only the close affordance. */
   header?: React.ReactNode;
+  /** Trailing controls, rendered to the LEFT of the close button in the shared
+   *  sticker cluster. Omitted for the loading / error states: they have no agent
+   *  to act on. */
+  actions?: React.ReactNode;
   onClose?: () => void;
   children: React.ReactNode;
 }): JSX.Element {
@@ -385,7 +393,9 @@ function SidePanelShell({
           (shiki 2026-07-21). Only the card `<section>` frame is panel-specific.
           `header` (avatar + name/description) is omitted for the loading / error
           states, which show only the close affordance. */}
-      <SidePanelHeader onClose={onClose}>{header}</SidePanelHeader>
+      <SidePanelHeader onClose={onClose} actions={actions}>
+        {header}
+      </SidePanelHeader>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </section>
   );
@@ -410,6 +420,7 @@ function AgentSidePanel({
   contextConversationId,
   contextWorkspaceId,
   onClose,
+  onMessageAgent,
 }: {
   agent: AgentDto;
   runtimeState: AgentRuntimeStateDto | undefined;
@@ -420,6 +431,7 @@ function AgentSidePanel({
   contextConversationId: string | null;
   contextWorkspaceId: string | null;
   onClose?: () => void;
+  onMessageAgent?: (agentId: string) => void;
 }): JSX.Element {
   const [section, setSection] = useState<SideSectionItem['id']>(() =>
     readSideSection(),
@@ -447,6 +459,10 @@ function AgentSidePanel({
 
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
 
+  // Same product-domain gate as the full page's `Message` button: a DirectPair is
+  // the human line of an AGENT-scoped agent only. The door re-authorizes the send.
+  const canMessage = Boolean(onMessageAgent) && agent.session_scope === 'agent';
+
   // A=Activity-follows-channel membership gate (#task:1189, Cindy P2): the
   // per-(agent, conversation) activity endpoint is membership-gated, so blindly
   // mounting the timeline for a channel the agent isn't in renders the backend
@@ -464,6 +480,24 @@ function AgentSidePanel({
   return (
     <SidePanelShell
       onClose={onClose}
+      actions={
+        // The docked panel's DM entry (@shiki, #task:2039), immediately left of
+        // Close in the shared actions cluster. Same gate and same destination as
+        // the full page's `Message` button — icon-only because this row is a
+        // 48px sticker cluster, where a labelled button would be the only wide
+        // control among size-7 squares; the title carries the label.
+        canMessage && onMessageAgent ? (
+          <button
+            type="button"
+            aria-label={`Message @${agent.name}`}
+            title={`Message @${agent.name}`}
+            onClick={() => onMessageAgent(agent.id)}
+            className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
+          >
+            <MessageSquare className="size-3.5" />
+          </button>
+        ) : null
+      }
       header={
         <>
           <AgentAvatar

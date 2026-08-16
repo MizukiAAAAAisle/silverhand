@@ -18,16 +18,15 @@ import { useAgentOnlineByHost } from '@/features/hosts/hooks';
 import { useStopAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { DeleteAgentDialog } from './DeleteAgentDialog';
-import { MessageAgentDialog } from './MessageAgentDialog';
 
 interface AgentHeaderProps {
   agent: AgentDto;
   runtimeState: AgentRuntimeStateDto | undefined;
   onDeleted: () => void;
-  /** Open the (existing or freshly minted) direct line with this agent —
-   *  the workspace-less chat route. Wired only on the full-page variant;
-   *  when absent, the Message entry is not offered. */
-  onOpenDirectPair?: (conversationId: string) => void;
+  /** Open the direct line with this agent — the existing one, or the pre-mint
+   *  draft when there is none. Navigation only: nothing is created by asking for
+   *  it (#task:2039). When absent, the Message entry is not offered. */
+  onMessageAgent?: (agentId: string) => void;
 }
 
 /**
@@ -41,10 +40,9 @@ export function AgentHeader({
   agent,
   runtimeState,
   onDeleted,
-  onOpenDirectPair,
+  onMessageAgent,
 }: AgentHeaderProps): JSX.Element {
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [messageOpen, setMessageOpen] = useState(false);
   const stopAgent = useStopAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
   // Hero status = agent-on-computer liveness (is the agent's runtime live on
@@ -62,11 +60,11 @@ export function AgentHeader({
   );
   const runningCount = running.length;
 
-  // Offer the Message entry only when there is a destination to open (full-page
-  // variant wires `onOpenDirectPair`) AND the agent's human line is a DirectPair
-  // — i.e. it is agent-scoped. A conversation-scoped agent's human entrance is
-  // its workspace/Agent Space, not this door.
-  const canMessage = Boolean(onOpenDirectPair) && agent.session_scope === 'agent';
+  // Offer the Message entry only when there is somewhere to go (the caller wires
+  // `onMessageAgent`) AND the agent's human line is a DirectPair — i.e. it is
+  // agent-scoped. A conversation-scoped agent's human entrance is its
+  // workspace/Agent Space, not this door.
+  const canMessage = Boolean(onMessageAgent) && agent.session_scope === 'agent';
 
   return (
     <>
@@ -112,12 +110,14 @@ export function AgentHeader({
                 whose human line is a DirectPair). Visibility is product-domain
                 only — everyone who can see this page sees the entry (shiki
                 xpY0-CI0: "现在全部可见，将来再优化"); the door re-authorizes the
-                actual first send. */}
-            {canMessage ? (
+                actual first send. It NAVIGATES: the ordinary chat interface, the
+                line's own route when it exists and a draft of the same surface
+                when it does not (@shiki, #task:2039 — no modal). */}
+            {canMessage && onMessageAgent ? (
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setMessageOpen(true)}
+                onClick={() => onMessageAgent(agent.id)}
                 title={`Message @${agent.name}`}
                 {...neutralAction()}
               >
@@ -159,14 +159,6 @@ export function AgentHeader({
         agent={agent}
         onDeleted={onDeleted}
       />
-      {canMessage && onOpenDirectPair ? (
-        <MessageAgentDialog
-          open={messageOpen}
-          onOpenChange={setMessageOpen}
-          agent={agent}
-          onSent={onOpenDirectPair}
-        />
-      ) : null}
     </>
   );
 }

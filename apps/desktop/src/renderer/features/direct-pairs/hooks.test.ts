@@ -4,10 +4,13 @@ import { fileURLToPath } from 'node:url';
 import type { DirectPairListItem } from '@silverhand/shared';
 import {
   decideDirectPairsInvalidation,
+  decideDraftHandoff,
   directPairPaneProps,
+  findAgentDirectPair,
   projectDirectPairPane,
   type DirectPairListQueryFacts,
   type DirectPairPaneState,
+  type DraftHandoffFacts,
 } from './hooks';
 
 // #task:2035 — the two judgments the DM live-discovery chain rests on, both pure:
@@ -49,6 +52,88 @@ function pair(conversationId: string): DirectPairListItem {
 function settled(rows: readonly DirectPairListItem[]): DirectPairListQueryFacts {
   return { rows, isPending: false, isFetching: false, isError: false };
 }
+
+/** Source with comments removed. Load-bearing for the structural counts below: a
+ *  probe that COMMENTS OUT a mount or a prop is the likeliest way these
+ *  obligations die, and a raw `includes` would still find the call inside the
+ *  comment and stay green. (Only `//` that does not follow a `:` is stripped, so a
+ *  `scheme://` literal survives.) */
+function code(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+function read(relative: string): string {
+  return code(
+    readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8'),
+  );
+}
+
+describe('findAgentDirectPair — existing line, or a draft', () => {
+  /** A pair whose counterpart is a named agent. */
+  function agentPair(conversationId: string, agentId: string): DirectPairListItem {
+    return {
+      ...pair(conversationId),
+      counterpart: {
+        status: 'active',
+        kind: 'agent',
+        id: agentId,
+        name: agentId,
+        display_name: '',
+        avatar_url: null,
+        runtime: 'claude',
+      },
+    };
+  }
+  /** A pair whose agent is gone. The `deleted` arm carries only kind + id. */
+  function deletedPair(conversationId: string, agentId: string): DirectPairListItem {
+    return {
+      ...pair(conversationId),
+      counterpart: { status: 'deleted', kind: 'agent', id: agentId },
+    };
+  }
+
+  it('finds the line the viewer already has with that agent', () => {
+    const mine = agentPair('c-mine', 'a-target');
+    expect(
+      findAgentDirectPair([agentPair('c-other', 'a-other'), mine], 'a-target'),
+    ).toEqual(mine);
+  });
+
+  it('finds it even when the agent is gone — history beats a door that answers 404', () => {
+    // The `deleted` arm still NAMES the endpoint. Falling through to the draft
+    // route would offer to start a line that cannot be started, while hiding the
+    // one that exists.
+    const gone = deletedPair('c-gone', 'a-target');
+    expect(findAgentDirectPair([gone], 'a-target')).toEqual(gone);
+  });
+
+  it('never matches a human counterpart that happens to share the id', () => {
+    // Ids are per-kind, so `agent:a-1` and `human:a-1` can coexist; the caller
+    // asks about an AGENT and a human row is a different line entirely.
+    const human: DirectPairListItem = {
+      ...pair('c-human'),
+      counterpart: {
+        status: 'active',
+        kind: 'human',
+        id: 'a-target',
+        name: 'shiki',
+        display_name: 'shiki',
+        avatar_url: null,
+        runtime: null,
+      },
+    };
+    expect(findAgentDirectPair([human], 'a-target')).toBeNull();
+  });
+
+  it('returns null for an agent with no line, and for a cold list', () => {
+    // Both read as "no pair" on purpose: the caller's fallback is the draft
+    // route, whose first send is get-or-create — a stale miss costs a
+    // converge-on-send, never a duplicate line.
+    expect(findAgentDirectPair([agentPair('c-other', 'a-other')], 'a-target')).toBeNull();
+    expect(findAgentDirectPair([], 'a-target')).toBeNull();
+  });
+});
 
 describe('decideDirectPairsInvalidation — which viewer frame re-reads the list', () => {
   it('re-reads on direct_pairs_changed', () => {
@@ -288,22 +373,98 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
   });
 });
 
+describe('decideDraftHandoff — when the draft pane may leave for the real pair', () => {
+  // @Cindy's #task:2039 review, finding 2: the pane holds the only copy of two
+  // things — the unsent text and the unread failure — so an automatic handoff is
+  // a data-loss path, not a navigation detail. Four cells, all reachable.
+  const facts = (over: Partial<DraftHandoffFacts> = {}): DraftHandoffFacts => ({
+    existingPairId: 'c-pair',
+    draftDirty: false,
+    sendPending: false,
+    sendFailed: false,
+    ...over,
+  });
+
+  it('stays while the viewer has no pair with this agent — that is the whole route', () => {
+    expect(decideDraftHandoff(facts({ existingPairId: null }))).toEqual({
+      kind: 'stay',
+    });
+    // Including while typing, sending and after a failure: with no pair there is
+    // nowhere to hand over to.
+    expect(
+      decideDraftHandoff({
+        existingPairId: null,
+        draftDirty: true,
+        sendPending: true,
+        sendFailed: true,
+      }),
+    ).toEqual({ kind: 'stay' });
+  });
+
+  it('EMPTY: hands over to the pair that appeared underneath an untouched pane', () => {
+    // The agent opened the line from its side. Nothing is lost, and the pair's
+    // own route is the same interface with the history.
+    expect(decideDraftHandoff(facts())).toEqual({
+      kind: 'handoff',
+      conversationId: 'c-pair',
+    });
+  });
+
+  it('DIRTY: keeps unsent text instead of navigating away from it', () => {
+    // The send is get-or-create, so staying costs nothing: their retry converges
+    // on the very same pair.
+    expect(decideDraftHandoff(facts({ draftDirty: true }))).toEqual({
+      kind: 'stay',
+    });
+  });
+
+  it('PENDING: never moves the pane out from under an unsettled send', () => {
+    // That send's own ack navigates with the conversation id the backend chose.
+    expect(decideDraftHandoff(facts({ sendPending: true }))).toEqual({
+      kind: 'stay',
+    });
+  });
+
+  it('POST-MINT ERROR: a pair exists AND the send failed → stay, so the reason is readable', () => {
+    // The window #task:2036 accepts: initiation minted and announced the pair,
+    // then message persistence failed. The pair now exists, so an
+    // `existingPairId`-only rule would jump to an empty line and take the failure
+    // off screen. Also with the draft cleared — `sendFailed` alone must hold.
+    expect(decideDraftHandoff(facts({ sendFailed: true }))).toEqual({
+      kind: 'stay',
+    });
+    expect(
+      decideDraftHandoff(facts({ sendFailed: true, draftDirty: true })),
+    ).toEqual({ kind: 'stay' });
+  });
+
+  it('carries the pair id through untouched — the pane never invents a destination', () => {
+    expect(decideDraftHandoff(facts({ existingPairId: 'c-other' }))).toEqual({
+      kind: 'handoff',
+      conversationId: 'c-other',
+    });
+  });
+});
+
+describe('the draft pane is per-agent, and defers to the pure handoff rule', () => {
+  const paneSource = read('./DirectPairDraftPane.tsx');
+  const appSource = read('../../App.tsx');
+
+  it('remounts on agent identity — a draft written to A can never be sent to B', () => {
+    // @Cindy's finding 1: without the key, `/chat/d/new/A → /new/B` re-uses the
+    // instance and carries `draft` plus the mutation state across agents.
+    expect(appSource).toContain('key={directDraftAgentId}');
+  });
+
+  it('takes the handoff decision from the seam, not from its own conditions', () => {
+    expect(paneSource).toContain('decideDraftHandoff({');
+    // The shape the review rejected: an effect that navigates on the pair's
+    // existence, gated only by whether a send is in flight.
+    expect(paneSource).not.toContain('initiate.isPending) return');
+  });
+});
+
 describe('the live-discovery subscription is mounted once, by the session', () => {
-  /** Source with comments removed. Load-bearing for the counts below: a probe
-   *  that COMMENTS OUT a mount is the likeliest way these obligations die, and
-   *  a raw `includes` would still find the call inside the comment and stay
-   *  green. (Only `//` that does not follow a `:` is stripped, so a `scheme://`
-   *  literal survives.) */
-  function code(source: string): string {
-    return source
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/(^|[^:])\/\/.*$/gm, '$1');
-  }
-  function read(relative: string): string {
-    return code(
-      readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8'),
-    );
-  }
   const hooksSource = read('./hooks.ts');
   const appSource = read('../../App.tsx');
   const shellSource = read('../app-shell/effects.ts');

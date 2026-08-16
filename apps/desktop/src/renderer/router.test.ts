@@ -1005,6 +1005,68 @@ describe('parseRouteState — the workspace-less /chat/d/:id route', () => {
   });
 });
 
+/**
+ * The PRE-MINT direct route (#task:2039). `/chat/d/new/:agentId` names an AGENT,
+ * not a conversation — the pair does not exist until a first send mints it — so
+ * the load-bearing property is negative: the agent id must not leak into any
+ * conversation coordinate. `channelId` drives conversation-keyed readers and
+ * layout memory, `directConversationId` drives the pair pane; an agent id in
+ * either would have those ask the backend about a conversation that does not
+ * exist, and would record an agent id as a remembered channel (@Cindy's
+ * #task:2039 boundary, previously only a read-the-code conclusion).
+ */
+describe('parseRouteState — the pre-mint /chat/d/new/:agentId route', () => {
+  it('names the agent and NO conversation', () => {
+    const r = parseRouteState('/chat/d/new/a-1', '');
+    expect(r).toMatchObject({
+      section: 'chat',
+      // The draft renders in the channel pane's slot, so the section's view is
+      // the channel one — with nothing selected in it.
+      chatView: 'channel',
+      directDraftAgentId: 'a-1',
+      channelId: null,
+      directConversationId: null,
+      workspaceId: null,
+    });
+  });
+
+  it('is matched before the pair pattern — `new` is never read as a pair id', () => {
+    // Both patterns start `/chat/d/`; if `chatDirect` won, the pane would open a
+    // conversation literally called `new` and the agent id would be lost.
+    expect(parseRouteState('/chat/d/new/a-1', '').directConversationId).toBeNull();
+    expect(parseRouteState('/chat/d/new/a-1', '').channelId).toBeNull();
+  });
+
+  it('leaves the existing pair route unchanged — no drift', () => {
+    const r = parseRouteState('/chat/d/c-pair', '');
+    expect(r).toMatchObject({
+      directConversationId: 'c-pair',
+      channelId: 'c-pair',
+      directDraftAgentId: null,
+      workspaceId: null,
+    });
+  });
+
+  it('leaves directDraftAgentId null for every other URL', () => {
+    for (const pathname of [
+      '/chat',
+      '/chat/search',
+      '/chat/saved',
+      '/activity',
+      '/chat/w/w-1',
+      '/chat/w/w-1/c/c-a',
+      '/chat/d/c-pair',
+    ]) {
+      expect(parseRouteState(pathname, '').directDraftAgentId).toBeNull();
+    }
+  });
+
+  it('records no layout memory for the draft — there is no channel to restore', () => {
+    const r = parseRouteState('/chat/d/new/a-1', '');
+    expect(layoutMemoryFromRoute(r)).toEqual({ kind: 'none' });
+  });
+});
+
 // No `buildChannelLayoutUrl` cases for a pair: layout memory is withheld for the
 // workspace-less placement, and the builder's `workspaceId` is non-null by type.
 // A test that drove the removed null arm was asserting the opposite of the
