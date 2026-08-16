@@ -13,7 +13,10 @@
  * in-process Map so App.tsx's restore effect sees an empty slate.
  *
  * Besides the last workspace and last channel per workspace, we also remember
- * the last **secondary-pane layout per channel** ({@link lastLayoutByChannel})
+ * which ARM the Chat rail was last on ({@link getLastChatPlace}) so leaving the
+ * rail and coming back restores a DIRECT line as faithfully as a workspace
+ * channel, plus the last **secondary-pane layout per channel**
+ * ({@link lastLayoutByChannel})
  * so switching away from a channel and back restores its threads-list /
  * thread / side overlay instead of dropping to a bare channel, plus a
  * per-channel **explicit-close watermark**
@@ -32,6 +35,7 @@ import { decodeMessageSeq } from '@silverhand/shared';
 
 export const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
 export const LAST_WORKSPACE_KEY = 'silverhand:layout.last-workspace';
+export const LAST_CHAT_PLACE_KEY = 'silverhand:layout.last-chat-place';
 export const LAST_LAYOUT_KEY = 'silverhand:layout.last-layout-by-channel';
 export const CLOSE_WATERMARK_KEY = 'silverhand:layout.close-watermark-by-channel';
 
@@ -116,6 +120,74 @@ export function recordLastWorkspace(workspaceId: string): void {
 
 export function persistLastChannel(): void {
   saveStringMap(LAST_CHANNEL_KEY, lastChannelByWorkspace);
+}
+
+/**
+ * WHICH ARM of the Chat rail the viewer was last on (#task:2042).
+ *
+ * The rail's restorable selection is one union, deliberately not one id: a
+ * `workspace_channel` place carries NO coordinate here because the workspace and
+ * channel arms already have their own memory above ({@link recordLastWorkspace} /
+ * {@link lastChannelByWorkspace}), and a second copy of a coordinate is a second
+ * thing that can disagree with the first. A `direct_pair` place is the only arm
+ * that owns a coordinate, because nothing else stores one: #task:2035 keeps a
+ * workspace-less line out of the workspace-keyed memory on purpose, and that gate
+ * stays — this is a placement-aware selection authority beside it, not a
+ * widening of it.
+ *
+ * A recorded pair id is NOT a claim that the line is still reachable. It is
+ * re-verified against the viewer's own `direct-pairs` list at restore
+ * (`resolveChatPlaceRestore`), so a pair that was deleted, or whose counterpart
+ * the viewer is no longer an endpoint across from, degrades to the workspace arm
+ * instead of restoring a dead route from stale memory.
+ */
+export type ChatPlace =
+  | { kind: 'workspace_channel' }
+  | { kind: 'direct_pair'; conversationId: string };
+
+/** Validate one persisted place. Any shape that doesn't round-trip the
+ *  {@link ChatPlace} contract is dropped rather than trusted — same discipline as
+ *  {@link parseLayout}, and the reason a hand-edited value cannot become a route. */
+function parseChatPlace(value: unknown): ChatPlace | null {
+  if (!value || typeof value !== 'object') return null;
+  const place = value as { kind?: unknown; conversationId?: unknown };
+  if (place.kind === 'workspace_channel') return { kind: 'workspace_channel' };
+  if (place.kind === 'direct_pair') {
+    return typeof place.conversationId === 'string' && place.conversationId.length > 0
+      ? { kind: 'direct_pair', conversationId: place.conversationId }
+      : null;
+  }
+  return null;
+}
+
+let lastChatPlace: ChatPlace | null = (() => {
+  const raw = loadStringValue(LAST_CHAT_PLACE_KEY);
+  if (raw === null) return null;
+  try {
+    return parseChatPlace(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+})();
+
+/** The last Chat-rail place, or null when nothing has been recorded (cold
+ *  start / after logout). */
+export function getLastChatPlace(): ChatPlace | null {
+  return lastChatPlace;
+}
+
+/** Record the Chat rail's place, persisting through to disk. No-ops when the
+ *  place is unchanged so an unrelated route change doesn't thrash localStorage. */
+export function recordLastChatPlace(place: ChatPlace): void {
+  if (
+    lastChatPlace
+    && lastChatPlace.kind === place.kind
+    && (place.kind === 'workspace_channel'
+      || (lastChatPlace.kind === 'direct_pair'
+        && lastChatPlace.conversationId === place.conversationId))
+  ) return;
+  lastChatPlace = place;
+  saveStringValue(LAST_CHAT_PLACE_KEY, JSON.stringify(place));
 }
 
 /**
@@ -246,12 +318,14 @@ export function recordCloseWatermark(channelId: string, seq: MessageSeq): void {
  */
 export function clearPlaceMemory(): void {
   lastWorkspaceId = null;
+  lastChatPlace = null;
   lastChannelByWorkspace.clear();
   lastLayoutByChannel.clear();
   closeWatermarkByChannel.clear();
   try {
     localStorage.removeItem(LAST_WORKSPACE_KEY);
     localStorage.removeItem(LAST_CHANNEL_KEY);
+    localStorage.removeItem(LAST_CHAT_PLACE_KEY);
     localStorage.removeItem(LAST_LAYOUT_KEY);
     localStorage.removeItem(CLOSE_WATERMARK_KEY);
   } catch {

@@ -134,7 +134,7 @@ import {
   directPairPaneProps,
   findAgentDirectPair,
   useDirectPairPane,
-  useDirectPairs,
+  useDirectPairsList,
 } from '@/features/direct-pairs/hooks';
 import { DirectPairDraftPane } from '@/features/direct-pairs/DirectPairDraftPane';
 import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
@@ -159,12 +159,18 @@ import {
   clearPlaceMemory,
   getChannelLayout,
   getCloseWatermark,
+  getLastChatPlace,
   getLastWorkspaceId,
   lastChannelByWorkspace,
   persistLastChannel,
   recordChannelLayout,
   recordCloseWatermark,
 } from '@/lib/place-memory';
+import {
+  directPairAuthorityFromQuery,
+  resolveChatPlaceRestore,
+  type DirectPairAuthority,
+} from '@/lib/chat-place-restore';
 export {
   LAST_CHANNEL_KEY,
   clearPlaceMemory,
@@ -688,7 +694,11 @@ function RegisteredAppShell({
   // which one owns the id, so the lookup happens ONCE here and every downstream
   // consumer (read cursor, focus, pane descriptor, membership gate) reads the
   // resolved carrier instead of guessing from `channels`.
-  const directPairs = useDirectPairs();
+  // The list hook, not the rows-only helper: the Chat-rail restore below has to
+  // tell "you have no pairs" from "the list has not answered yet" before it
+  // decides where a bare `/chat` lands (#task:2042). Same single cache entry.
+  const directPairsQuery = useDirectPairsList();
+  const directPairs = directPairsQuery.data?.direct_pairs ?? [];
   // The pair arm's states (#task:2035 B8). The state machine lives in
   // `useDirectPairPane` and the CONSUMER mapping in `directPairPaneProps` — both
   // pure, so every state has a rendering by construction and collapsing two of
@@ -806,11 +816,35 @@ function RegisteredAppShell({
     nav.toChannel(wid, conversationId);
   };
 
+  // Which arm a bare `/chat` restores (#task:2042). The mapping from query state
+  // to authority is itself pure (`directPairAuthorityFromQuery`) — it is where
+  // "cached rows are not the current answer" is enforced, so it must be
+  // falsifiable rather than inline. The only thing this side owns is the
+  // distinction the set alone cannot carry: an empty set is an answer, a cold
+  // query is not, so the ids go in ONLY when a read has answered.
+  const answeredPairIds = directPairsQuery.data ? directPairIds : undefined;
+  const directPairAuthority = useMemo<DirectPairAuthority>(
+    () =>
+      directPairAuthorityFromQuery({
+        answered: answeredPairIds,
+        isFetching: directPairsQuery.isFetching,
+        isError: directPairsQuery.isError,
+      }),
+    [answeredPairIds, directPairsQuery.isFetching, directPairsQuery.isError],
+  );
+
   // Auto-select a workspace when chat is open without a workspace id.
   // Restore the one the user last had open (clicking the "Chat" navrail item
   // routes to bare `/chat`, dropping the workspaceId), falling back to the
   // first workspace only on a cold start (#task:1222).
   // Replace so the bare /chat URL doesn't pile up in history.
+  //
+  // Since #task:2042 the workspace arm is the SECOND question this effect asks.
+  // The rail has two restorable arms, and the viewer's last one may have been a
+  // direct line, which has no workspace to auto-pick: picking one anyway is how
+  // a DM selection got silently traded for a channel. The order (and the "wait
+  // for the pair list rather than guess" rule) lives in the pure
+  // `resolveChatPlaceRestore`; this effect executes its action.
   useEffect(() => {
     if (appSection !== 'chat' || view !== 'channel') return;
     // `/chat/d/:id` is a chat-channel URL with NO workspace on purpose
@@ -823,6 +857,18 @@ function RegisteredAppShell({
     // have one.
     if (directDraftAgentId) return;
     if (selectedWorkspaceId) return;
+    const restore = resolveChatPlaceRestore({
+      place: getLastChatPlace(),
+      pairs: directPairAuthority,
+    });
+    // Hold the bare route: the pair list is still answering whether that line is
+    // still the viewer's. One extra render of `/chat` is cheaper than a
+    // navigation that has to be taken back.
+    if (restore.kind === 'wait') return;
+    if (restore.kind === 'open-direct') {
+      nav.go(routes.chatDirect(restore.conversationId), { replace: true });
+      return;
+    }
     if (workspaces.length === 0) return;
     const target = pickWorkspaceToRestore(
       workspaces,
@@ -835,6 +881,7 @@ function RegisteredAppShell({
     directConversationId,
     directDraftAgentId,
     selectedWorkspaceId,
+    directPairAuthority,
     workspaces,
     nav.go,
   ]);
@@ -939,14 +986,17 @@ function RegisteredAppShell({
   }, [activeChannels]);
 
   // Selection-persistence side-effects (#task:1295): last-viewed-channel
-  // memory, recent-opened sort stamps (channel + workspace rail), and the
-  // members/chat last-selected memory. Byte-for-byte the same effects, lifted
-  // into a hook so `App` stays a thinner composition root; the high-risk
+  // memory, the Chat rail's last ARM (#task:2042), recent-opened sort stamps
+  // (channel + workspace rail), and the members/chat last-selected memory —
+  // lifted into a hook so `App` stays a thinner composition root; the high-risk
   // restore / auto-select / layout-watermark effects deliberately stay inline.
   useSelectionPersistenceEffects({
     selectedWorkspaceId,
     selectedChannelId,
     selectedAgentId,
+    chatSectionActive: appSection === 'chat',
+    directConversationId,
+    directDraftAgentId,
     activeChannels: memberActiveChannels,
     workspaces,
     agents,

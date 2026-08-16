@@ -30,16 +30,19 @@ const polyfill = {
 const {
   LAST_CHANNEL_KEY,
   LAST_WORKSPACE_KEY,
+  LAST_CHAT_PLACE_KEY,
   LAST_LAYOUT_KEY,
   CLOSE_WATERMARK_KEY,
   clearPlaceMemory,
   closeWatermarkByChannel,
   getChannelLayout,
   getCloseWatermark,
+  getLastChatPlace,
   getLastWorkspaceId,
   lastChannelByWorkspace,
   lastLayoutByChannel,
   persistLastChannel,
+  recordLastChatPlace,
   recordLastWorkspace,
   recordChannelLayout,
   recordCloseWatermark,
@@ -112,6 +115,100 @@ describe('place-memory', () => {
       const fresh = await import('./place-memory');
 
       expect(fresh.getLastWorkspaceId()).toBe('ws-persisted');
+      vi.resetModules();
+    });
+  });
+
+  describe('Chat-rail place memory (#task:2042)', () => {
+    it('records the direct arm with its conversation id and reads it back', () => {
+      recordLastChatPlace({ kind: 'direct_pair', conversationId: 'c-dm' });
+
+      expect(getLastChatPlace()).toEqual({
+        kind: 'direct_pair',
+        conversationId: 'c-dm',
+      });
+      expect(JSON.parse(localStorage.getItem(LAST_CHAT_PLACE_KEY)!)).toEqual({
+        kind: 'direct_pair',
+        conversationId: 'c-dm',
+      });
+    });
+
+    it('records the workspace arm without any coordinate', () => {
+      recordLastChatPlace({ kind: 'workspace_channel' });
+
+      // No workspace/channel id here on purpose — those live in their own
+      // memory, and a second copy could disagree with the first.
+      expect(JSON.parse(localStorage.getItem(LAST_CHAT_PLACE_KEY)!)).toEqual({
+        kind: 'workspace_channel',
+      });
+    });
+
+    it('switching arms overwrites, so the newest place wins', () => {
+      recordLastChatPlace({ kind: 'direct_pair', conversationId: 'c-dm' });
+      recordLastChatPlace({ kind: 'workspace_channel' });
+      expect(getLastChatPlace()).toEqual({ kind: 'workspace_channel' });
+
+      recordLastChatPlace({ kind: 'direct_pair', conversationId: 'c-other' });
+      expect(getLastChatPlace()).toEqual({
+        kind: 'direct_pair',
+        conversationId: 'c-other',
+      });
+    });
+
+    it('keeps a DirectPair id out of the workspace-keyed memory', () => {
+      // #task:2035's gate: a workspace-less line must not be written into the
+      // per-workspace channel map, whose keys are workspace ids. Recording the
+      // rail's arm must not have re-opened that door.
+      recordLastChatPlace({ kind: 'direct_pair', conversationId: 'c-dm' });
+
+      expect(lastChannelByWorkspace.size).toBe(0);
+      expect(localStorage.getItem(LAST_CHANNEL_KEY)).toBeNull();
+      expect(getLastWorkspaceId()).toBeNull();
+      expect(lastLayoutByChannel.has('c-dm')).toBe(false);
+    });
+
+    it('clearPlaceMemory wipes the place + its localStorage key', () => {
+      // Per-viewer: the next signed-in human must not inherit a DM id.
+      recordLastChatPlace({ kind: 'direct_pair', conversationId: 'c-dm' });
+      expect(localStorage.getItem(LAST_CHAT_PLACE_KEY)).not.toBeNull();
+
+      clearPlaceMemory();
+
+      expect(getLastChatPlace()).toBeNull();
+      expect(localStorage.getItem(LAST_CHAT_PLACE_KEY)).toBeNull();
+    });
+
+    it('hydrates the place from localStorage on module load', async () => {
+      memoryStore.set(
+        LAST_CHAT_PLACE_KEY,
+        JSON.stringify({ kind: 'direct_pair', conversationId: 'c-persisted' }),
+      );
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+
+      expect(fresh.getLastChatPlace()).toEqual({
+        kind: 'direct_pair',
+        conversationId: 'c-persisted',
+      });
+      vi.resetModules();
+    });
+
+    it('drops a malformed persisted place rather than routing from it', async () => {
+      // A direct arm with no id, an unknown kind, and non-JSON all fail the
+      // codec: the value cannot become a route, so the rail falls back to the
+      // workspace arm instead of navigating somewhere half-built.
+      for (const raw of [
+        JSON.stringify({ kind: 'direct_pair' }),
+        JSON.stringify({ kind: 'direct_pair', conversationId: '' }),
+        JSON.stringify({ kind: 'wat' }),
+        JSON.stringify('direct_pair'),
+        'not json',
+      ]) {
+        memoryStore.set(LAST_CHAT_PLACE_KEY, raw);
+        vi.resetModules();
+        const fresh = await import('./place-memory');
+        expect(fresh.getLastChatPlace()).toBeNull();
+      }
       vi.resetModules();
     });
   });

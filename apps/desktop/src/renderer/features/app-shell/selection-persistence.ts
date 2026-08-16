@@ -8,8 +8,10 @@ import {
 import {
   lastChannelByWorkspace,
   persistLastChannel,
+  recordLastChatPlace,
   recordLastWorkspace,
 } from '@/lib/place-memory';
+import { chatPlaceForRoute } from '@/lib/chat-place-restore';
 
 /**
  * Selection-persistence side-effects lifted out of `App` (#task:1295) so the
@@ -30,6 +32,9 @@ export function useSelectionPersistenceEffects(params: {
   selectedWorkspaceId: string | null;
   selectedChannelId: string | null;
   selectedAgentId: string | null;
+  chatSectionActive: boolean;
+  directConversationId: string | null;
+  directDraftAgentId: string | null;
   activeChannels: ChannelListItem[];
   workspaces: WorkspaceListItem[];
   agents: AgentDto[];
@@ -40,6 +45,9 @@ export function useSelectionPersistenceEffects(params: {
     selectedWorkspaceId,
     selectedChannelId,
     selectedAgentId,
+    chatSectionActive,
+    directConversationId,
+    directDraftAgentId,
     activeChannels,
     workspaces,
     agents,
@@ -65,6 +73,29 @@ export function useSelectionPersistenceEffects(params: {
       persistLastChannel();
     }
   }, [selectedWorkspaceId, selectedChannelId]);
+
+  // Record WHICH ARM of the Chat rail is open (#task:2042), beside the
+  // workspace-keyed memory above rather than inside it: a direct line has no
+  // workspace, so the effect above cannot see it, and stuffing a pair id into a
+  // workspace-keyed map is exactly the drift #task:2035 closed. The arm decision
+  // itself is pure (`chatPlaceForRoute`) — a null means "nothing worth
+  // remembering", including the pre-mint draft route, so passing through the
+  // rail's own restore never overwrites what it is restoring.
+  useEffect(() => {
+    const place = chatPlaceForRoute({
+      chatSectionActive,
+      directDraftAgentId,
+      directConversationId,
+      selectedWorkspaceId,
+    });
+    if (place === null) return;
+    recordLastChatPlace(place);
+  }, [
+    chatSectionActive,
+    directDraftAgentId,
+    directConversationId,
+    selectedWorkspaceId,
+  ]);
 
   // Stamp "recently opened" for the channel sort list whenever the viewer
   // selects a top-level channel (#task:1146). Recent = recently-OPENED by
