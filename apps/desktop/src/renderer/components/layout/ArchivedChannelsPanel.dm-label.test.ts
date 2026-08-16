@@ -1,9 +1,10 @@
 /**
  * #task:1145 / #task:1156 — the global Archived recovery index mixes regular
- * channels AND archived DMs (`dm_channel`). A DM row's workspace context must
- * read `@<agentName>` — the same handle the filter dropdown and the rail use
- * (label convergence #task:1156; was `DM <agentName>`) — while every row keeps
- * the same `#` channel glyph (DM is channel-like, not a separate icon).
+ * channels AND channels from agent spaces. An agent-space row's workspace
+ * context must read the AGENT NAME — the same label the filter dropdown and the
+ * rail use (label convergence #task:1156; `@<agent>` and the word "DM" now
+ * belong to the direct pair, #task:2044) — while every row keeps the same `#`
+ * channel glyph (an agent-space channel is channel-like, not a separate icon).
  *
  * The subtle part is that the SAME agent surfaces under two name shapes:
  *   - the `WorkspaceListItem` (filter dropdown) carries a UI `dm-` prefix
@@ -11,7 +12,7 @@
  *   - the backend archived aggregate (`item.workspace.name`) returns the
  *     bare agent name (`insertAgentHome` sets `name = agent.name`), e.g.
  *     `Norman`.
- * Both must normalize to the identical `@Norman` label. The prefix-stripping
+ * Both must normalize to the identical `Norman` label. The prefix-stripping
  * convergence itself is pinned in `lib/workspace-name.test.ts`; here we pin the
  * archived row's kind → label wiring.
  */
@@ -42,12 +43,12 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
     expect(archivedRowWorkspaceLabel(item)).toBe('Engineering');
   });
 
-  it('`dm_channel` row renders `@<agentName>` from the bare aggregate name', () => {
+  it('agent-space row renders the agent name from the bare aggregate name', () => {
     const item = {
       channel: { ...baseChannel, placement_kind: 'workspace', roster_policy: 'fixed' },
       workspace: { id: 'w2', name: 'Norman', archived_at: null },
     } as unknown as ArchivedChannelListItemDto;
-    expect(archivedRowWorkspaceLabel(item)).toBe('@Norman');
+    expect(archivedRowWorkspaceLabel(item)).toBe('Norman');
   });
 });
 
@@ -164,11 +165,11 @@ describe('archivedWorkspaceRowLabel — one workspace, one label', () => {
     expect(archivedWorkspaceRowLabel(ws({}))).toBe('Engineering');
   });
 
-  it('DM home converges on the same `@<agent>` handle the channel rows show', () => {
+  it('agent space converges on the same agent name the channel rows show', () => {
     // The list shape carries the `dm-` UI prefix (`workspaceToListItem`); the
-    // channel rows' context line arrives bare. Both must read `@Norman`.
+    // channel rows' context line arrives bare. Both must read `Norman`.
     expect(archivedWorkspaceRowLabel(ws({ kind: 'dm', name: 'dm-Norman' }))).toBe(
-      '@Norman',
+      'Norman',
     );
   });
 });

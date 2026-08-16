@@ -34,7 +34,7 @@
 import { useMemo, type JSX, type ReactNode } from 'react';
 import type { AgentAuditChatSummary } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { dmWorkspaceLabel } from '@/lib/workspace-name';
+import { agentSpaceLabel } from '@/lib/workspace-name';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   AuthorAvatarView,
@@ -207,11 +207,11 @@ function describeChatRow(chat: AgentAuditChatSummary): {
     title: chat.title,
     // The audit DTO carries the STORED workspace kind (`regular` | `agent_home`),
     // not the workspace-list UI kind (`regular` | `dm`), so `workspaceDisplayName`
-    // doesn't apply here. An agent home still reads as the handle it reads as in
-    // every other picker/filter row, through the same helper.
+    // doesn't apply here. An agent space still reads as the agent name it reads as
+    // in every other picker/filter row, through the same helper.
     meta:
       chat.workspace_kind === 'agent_home'
-        ? dmWorkspaceLabel(chat.workspace_name)
+        ? agentSpaceLabel(chat.workspace_name)
         : chat.workspace_name,
     counterpart: null,
   };

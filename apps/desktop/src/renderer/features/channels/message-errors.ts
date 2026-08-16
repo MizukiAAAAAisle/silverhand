@@ -74,7 +74,9 @@ export function formatRemoveAgentError(err: unknown): string {
     const body = parseApiErrorBody(err);
     const code = typeof body?.code === 'string' ? body.code : null;
     if (code === 'conversation_member_remove_unsupported') {
-      return 'Members can be removed from a channel or a thread, not a DM.';
+      // Capability, not kind (#task:2044): a direct pair and a fixed-roster
+      // agent-space channel both land here, so the line can't name one of them.
+      return "This conversation's members are fixed and can't be changed.";
     }
     if (code === 'conversation_closed') {
       return "This conversation is closed. Members can't be removed.";
@@ -110,7 +112,8 @@ export function formatRemoveHumanError(err: unknown): string {
     const body = parseApiErrorBody(err);
     const code = typeof body?.code === 'string' ? body.code : null;
     if (code === 'conversation_member_remove_unsupported') {
-      return 'Members can be removed from a channel, not a DM.';
+      // Same capability line as the agent path above — one fact, one wording.
+      return "This conversation's members are fixed and can't be changed.";
     }
     if (code === 'conversation_closed') {
       return "This channel is closed. Members can't be removed.";

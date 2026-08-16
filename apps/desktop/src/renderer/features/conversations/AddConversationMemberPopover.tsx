@@ -301,7 +301,11 @@ function formatError(err: unknown): string {
       case 'handle_ambiguous':
         return 'Several candidates share this handle.';
       case 'conversation_member_add_unsupported':
-        return 'Members can be added to a channel or a thread, not a DM.';
+        // States the CAPABILITY, not a guess at which kind of conversation this
+        // is (#task:2044): the same code covers a direct pair AND a fixed-roster
+        // channel in an agent space, so naming either one would be wrong half
+        // the time — and "DM" is exactly the word that stopped being unambiguous.
+        return "This conversation's members are fixed and can't be changed.";
       case 'conversation_closed':
         return "This conversation is closed. Members can't be added.";
       default:

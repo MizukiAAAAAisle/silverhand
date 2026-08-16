@@ -379,7 +379,7 @@ function WorkspaceFilterSelect({
             {dms.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
-                  DMs
+                  Agent Spaces
                 </Select.Label>
                 {dms.map(workspace => (
                   <SelectItem
@@ -781,8 +781,9 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
       results: conversations,
     },
     {
+      // `key` stays `dms`: it is this group's internal identity, not its copy.
       key: 'dms',
-      label: 'DMs',
+      label: 'Agent Spaces',
       icon: <User className="size-3" />,
       results: dms,
     },
@@ -819,7 +820,7 @@ function resultIcon(result: SearchResultDto): JSX.Element {
  *  instead, so they don't pass through here. */
 function resultMeta(result: SearchResultDto): string[] {
   if (result.type === 'workspace') {
-    return [result.workspace.kind === 'dm' ? 'DM' : 'Workspace'];
+    return [result.workspace.kind === 'dm' ? 'Agent Space' : 'Workspace'];
   }
   if (result.type === 'conversation') {
     return [

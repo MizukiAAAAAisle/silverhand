@@ -77,9 +77,9 @@ export interface ChannelOption {
    *  value stays a plain channel id. */
   group: 'dm' | 'workspace';
   /** Secondary line = the source: the workspace name for a regular channel,
-   *  `@<agent>` for a DM channel. This is what disambiguates an agent's
-   *  multiple DM channels (same title space, distinct titles, shared
-   *  `@agent` subtitle). */
+   *  the AGENT'S NAME for an agent-space channel (#task:2044 — no `@`, that
+   *  form belongs to the direct pair). This is what disambiguates the several
+   *  channels inside one agent's space: distinct titles, shared subtitle. */
   sublabel?: string;
 }
 
@@ -110,7 +110,8 @@ export interface ChannelFilterCandidate {
   /** True when the owning workspace is a DM workspace — drives the data-source
    *  group even though the conversation kind is plain 'channel'. */
   fromDmWorkspace?: boolean;
-  /** Secondary line = the source (workspace name, or `@<agent>` for a DM). */
+  /** Secondary line = the source (workspace name, or the agent's name for an
+   *  agent space). */
   sublabel?: string;
 }
 
@@ -505,17 +506,17 @@ function ChannelFilter({
         (o.sublabel?.toLowerCase().includes(q) ?? false),
     );
   }, [options, query]);
-  // Order the options — regular-workspace channels first, then DMs — so the
-  // flat list reads in a stable grouping. No section HEADERS: each row's
-  // sublabel already names its source (workspace / @agent), so a "Workspaces"
-  // header over channel rows was both redundant and semantically wrong
-  // (shiki #task:1387 review — the label named workspaces but the rows are
+  // Order the options — regular-workspace channels first, then agent-space
+  // channels — so the flat list reads in a stable grouping. No section HEADERS:
+  // each row's sublabel already names its source (workspace / agent), so a
+  // "Workspaces" header over channel rows was both redundant and semantically
+  // wrong (shiki #task:1387 review — the label named workspaces but the rows are
   // channels). The ALL row stays at the top.
   const sections = useMemo(
     () =>
       [
         { key: 'workspace' as const, label: 'Workspaces' },
-        { key: 'dm' as const, label: 'DMs' },
+        { key: 'dm' as const, label: 'Agent Spaces' },
       ]
         .map(s => ({ ...s, items: filtered.filter(o => o.group === s.key) }))
         .filter(s => s.items.length > 0),
@@ -523,8 +524,9 @@ function ChannelFilter({
   );
 
   // Flat, in-render-order option list for roving keyboard nav (#task:1257):
-  // the ALL row at index 0, then every section's items (Workspaces then DMs),
-  // matching the visual order below so arrow keys walk the list as it reads.
+  // the ALL row at index 0, then every section's items (Workspaces then Agent
+  // Spaces), matching the visual order below so arrow keys walk the list as it
+  // reads.
   const flatOptions = useMemo(() => sections.flatMap(s => s.items), [sections]);
   const optionIndex = useMemo(() => {
     const m = new Map<string, number>();
@@ -693,14 +695,14 @@ function WorkspaceFilter({
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
 
   // Grouped like the search workspace filter (#task:1387 shiki review):
-  // regular Workspaces first, then DMs. Both kinds are selectable — the
-  // cascade matches on `task.board.workspace_id`, so a legacy DM workspace filters exactly
-  // like a regular one.
+  // regular Workspaces first, then Agent Spaces. Both kinds are selectable — the
+  // cascade matches on `task.board.workspace_id`, so an agent space filters
+  // exactly like a regular workspace.
   const sections = useMemo(
     () =>
       [
         { key: 'regular' as const, label: 'Workspaces' },
-        { key: 'dm' as const, label: 'DMs' },
+        { key: 'dm' as const, label: 'Agent Spaces' },
       ]
         .map(s => ({ ...s, items: options.filter(o => o.kind === s.key) }))
         .filter(s => s.items.length > 0),

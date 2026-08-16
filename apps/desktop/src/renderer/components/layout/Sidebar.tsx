@@ -359,7 +359,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selected={selected}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
-          emptyHint="Creating an agent opens a DM"
+          emptyHint="Creating an agent opens its space"
           agentsById={props.agentsById}
           dmAgentAvatarUrls={dmAgentAvatarUrls}
           headerAction={sortMenuFor('dm')}

@@ -15,11 +15,11 @@ import {
 
 /**
  * Shared "filter by workspace" dropdown. One component, one data source
- * (`WorkspaceListItem[]`), one item design — DMs group then Workspaces, each
- * row a `WorkspaceIcon` (DM → agent avatar, regular → serif W) + the canonical
- * `workspaceDisplayName`. ArchivedChannelsPanel and SavedListView both render
- * through THIS so the two workspace filters are identical rather than each
- * deriving an ad-hoc `{id, name}` list off its own rows (shiki #task:1258:
+ * (`WorkspaceListItem[]`), one item design — Agent Spaces group then Workspaces,
+ * each row a `WorkspaceIcon` (agent space → agent avatar, regular → serif W) +
+ * the canonical `workspaceDisplayName`. ArchivedChannelsPanel and SavedListView
+ * both render through THIS so the two workspace filters are identical rather than
+ * each deriving an ad-hoc `{id, name}` list off its own rows (shiki #task:1258:
  * match Archived's item design + data source). Built on the Radix-Select
  * primitive (`filter-select.tsx`), so keyboard nav / focus ring / Esc-Enter and
  * per-theme radius come for free.
@@ -96,12 +96,12 @@ export function WorkspaceFilterSelect({
             <FilterSelectItem value="all" icon={allIcon}>
               {allLabel}
             </FilterSelectItem>
-            {/* DMs lead, mirroring SearchPanel/Archived order so every
+            {/* Agent spaces lead, mirroring SearchPanel/Archived order so every
                 workspace-filter dropdown reads the same. */}
             {dms.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
-                  DMs
+                  Agent Spaces
                 </Select.Label>
                 {dms.map(workspace => (
                   <FilterSelectItem

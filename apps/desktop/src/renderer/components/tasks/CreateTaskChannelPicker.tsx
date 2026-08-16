@@ -46,9 +46,10 @@ export function CreateTaskChannelPicker({
     );
   }, [channelOptions, query]);
 
-  // One group per workspace / per DM, keyed by workspaceId and titled by the
-  // source name (`sublabel`: workspace name, or `@agent` for a DM). Regular
-  // workspaces sort before DMs; insertion order is preserved within a group and
+  // One group per workspace / per agent space, keyed by workspaceId and titled
+  // by the source name (`sublabel`: the workspace name, or the agent's name for
+  // an agent space — #task:2044). Regular workspaces sort before agent spaces;
+  // insertion order is preserved within a group and
   // across same-kind groups (stable sort, comparator returns 0 on a tie).
   const groups = useMemo(() => {
     const byWorkspace = new Map<

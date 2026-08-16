@@ -363,16 +363,19 @@ function GeneralSection({
   onLeave,
   leavePending,
 }: GeneralSectionProps): JSX.Element {
-  // A DM name is immutable (auto-generated); a regular workspace is editable
-  // only for owner|admin. Everyone else sees the name read-only — the value is
-  // still worth showing, but there is no Save affordance that would 403.
+  // An agent space's name is immutable (it follows its agent); a regular
+  // workspace is editable only for owner|admin. Everyone else sees the name
+  // read-only — the value is still worth showing, but there is no Save
+  // affordance that would 403.
   const nameEditable = !isDm && canRename;
 
   return (
     <div className="flex flex-col gap-4">
       {isDm ? (
         <p className="text-xs text-text-muted">
-          {'DM workspace names are auto-generated as dm-<agent> and cannot be changed.'}
+          {/* Says WHY it is fixed, without leaking the internal `dm-` encoding
+            * to the user (#task:2044 — the space reads as its agent's name). */}
+          An agent space takes its name from its agent and cannot be renamed.
         </p>
       ) : canRename ? (
         <p className="text-xs text-text-muted">

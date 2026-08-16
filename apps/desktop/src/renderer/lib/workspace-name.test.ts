@@ -1,12 +1,15 @@
 /**
- * #task:1156 — one canonical DM/workspace label so the message-search filter,
- * the archived-channel filter, and the rail can't drift apart again. Pins the
- * `dm-` prefix-stripping convergence (the two DM name shapes — UI `dm-Norman`
- * vs bare aggregate `Norman` — must collapse to the same `@Norman` handle).
+ * #task:1156 — one canonical workspace label so the message-search filter, the
+ * archived-channel filter, and the rail can't drift apart again. Pins the `dm-`
+ * prefix-stripping convergence (the two agent-space name shapes — UI
+ * `dm-Norman` vs bare aggregate `Norman` — must collapse to the same label).
+ *
+ * #task:2044 changed WHAT that label is: an agent space reads as the agent's
+ * name, never `@<agent>`, because the handle form now belongs to the direct pair.
  */
 import { describe, expect, it } from 'vitest';
 import {
-  dmWorkspaceLabel,
+  agentSpaceLabel,
   stripDmPrefix,
   workspaceDisplayName,
 } from './workspace-name';
@@ -23,12 +26,15 @@ describe('stripDmPrefix', () => {
   });
 });
 
-describe('dmWorkspaceLabel — both name shapes converge to `@<agentName>`', () => {
+describe('agentSpaceLabel — both name shapes converge to the agent name', () => {
   it('UI `dm-` shape', () => {
-    expect(dmWorkspaceLabel('dm-Norman')).toBe('@Norman');
+    expect(agentSpaceLabel('dm-Norman')).toBe('Norman');
   });
   it('bare aggregate shape', () => {
-    expect(dmWorkspaceLabel('Norman')).toBe('@Norman');
+    expect(agentSpaceLabel('Norman')).toBe('Norman');
+  });
+  it('carries no `@` — that form is the direct pair\'s (#task:2044)', () => {
+    expect(agentSpaceLabel('dm-Norman')).not.toContain('@');
   });
 });
 
@@ -38,7 +44,7 @@ describe('workspaceDisplayName — kind drives the form', () => {
       'Engineering',
     );
   });
-  it('DM workspace shows `@<agentName>` (UI prefix stripped)', () => {
-    expect(workspaceDisplayName({ name: 'dm-Norman', kind: 'dm' })).toBe('@Norman');
+  it('agent space shows the agent name (UI prefix stripped, no `@`)', () => {
+    expect(workspaceDisplayName({ name: 'dm-Norman', kind: 'dm' })).toBe('Norman');
   });
 });

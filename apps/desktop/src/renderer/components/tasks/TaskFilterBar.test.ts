@@ -118,16 +118,16 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
     });
   });
 
-  it("an agent's multiple DM channels stay distinct: titles differ, subtitle shares `@agent` (the #1165 bug)", () => {
+  it("an agent's multiple channels stay distinct: titles differ, subtitle shares the agent name (the #1165 bug)", () => {
     // Alice/Cindy/Norman each own `Mentions` + `Onboarding`; before the fix
-    // both rendered as the same `@Alice` label. Now the channel title is the
-    // label, `@agent` the subtitle — so the rows are distinguishable.
+    // both rendered as the same `Alice` label. Now the channel title is the
+    // label, the agent name the subtitle — so the rows are distinguishable.
     const out = workspaceChannelCandidates({ id: 'ws-alice', name: 'dm-Alice', kind: 'dm' }, [
       ch('c1', 'Mentions', { roster_policy: 'fixed' }),
       ch('c2', 'Onboarding', { roster_policy: 'fixed' }),
     ]);
     expect(out.map(c => c.title)).toEqual(['Mentions', 'Onboarding']);
-    expect(out.every(c => c.sublabel === '@Alice')).toBe(true);
+    expect(out.every(c => c.sublabel === 'Alice')).toBe(true);
     // No two rows collide on (label, subtitle).
     const built = buildChannelFilterOptions(out);
     const keys = built.map(o => `${o.label}::${o.sublabel}`);
@@ -135,11 +135,11 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
     expect(built.map(o => o.label)).toEqual(['Mentions', 'Onboarding']);
   });
 
-  it('a single-channel DM still carries the `@agent` subtitle', () => {
+  it('a single-channel agent space still carries the agent-name subtitle', () => {
     const out = workspaceChannelCandidates({ id: 'ws-judy', name: 'dm-Judy', kind: 'dm' }, [
       ch('c1', 'Onboarding', { roster_policy: 'fixed' }),
     ]);
-    expect(out[0]).toMatchObject({ title: 'Onboarding', sublabel: '@Judy' });
+    expect(out[0]).toMatchObject({ title: 'Onboarding', sublabel: 'Judy' });
   });
 });
 

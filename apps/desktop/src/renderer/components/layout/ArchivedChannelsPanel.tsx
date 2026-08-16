@@ -14,7 +14,7 @@ import {
   useArchiveWorkspace,
   type WorkspaceListItem,
 } from '@/features/workspaces/hooks';
-import { dmWorkspaceLabel } from '@/lib/workspace-name';
+import { agentSpaceLabel, workspaceDisplayName } from '@/lib/workspace-name';
 import { FilterBlock } from '@/components/ui/filter-select';
 import {
   WorkspaceFilterSelect,
@@ -363,19 +363,17 @@ function EmptyState({ text }: { text: string }): JSX.Element {
 /**
  * Workspace label for an archived row's context (#task:1145, label converged
  * #task:1156). A regular `channel` row shows its bare workspace name; a
- * `dm_channel` row shows `@<agentName>` — the same handle the filter dropdown
- * shows (one shared `dmWorkspaceLabel`). The workspace RAIL is the one
- * exception: it shows the agent's raw display name, no `@` (#task:1768) — a
- * recognition surface, not a handle ref. The DM name arrives bare here
- * (`insertAgentHome` sets `name = agent.name`); `dmWorkspaceLabel` also strips
- * the `dm-` UI prefix the dropdown shape carries, so both normalize to the
- * same handle.
+ * `dm_channel` row shows the agent's name — the same label the filter dropdown
+ * shows (one shared `agentSpaceLabel`, #task:2044: no `@`, that form belongs to
+ * the direct pair). The agent-space name arrives bare here (`insertAgentHome`
+ * sets `name = agent.name`); `agentSpaceLabel` also strips the `dm-` UI prefix
+ * the dropdown shape carries, so both normalize to the same label.
  */
 export function archivedRowWorkspaceLabel(
   item: ArchivedChannelListItemDto,
 ): string {
   return item.channel.roster_policy === 'fixed'
-    ? dmWorkspaceLabel(item.workspace.name)
+    ? agentSpaceLabel(item.workspace.name)
     : item.workspace.name;
 }
 
@@ -420,15 +418,12 @@ export function archivedWorkspaceRows(
   });
 }
 
-/** An archived workspace row's own label: `@<agent>` for a DM home, the bare
- *  name otherwise — the same normalization the channel rows' context line uses
- *  (`archivedRowWorkspaceLabel`), so one workspace reads identically in both
- *  sections. `dmWorkspaceLabel` strips the `dm-` UI prefix
- *  `workspaceToListItem` adds. */
+/** An archived workspace row's own label: the agent's name for an agent space,
+ *  the bare name otherwise — deferred to the shared `workspaceDisplayName` so a
+ *  workspace reads identically here, in the channel rows' context line
+ *  (`archivedRowWorkspaceLabel`), and in every picker. */
 export function archivedWorkspaceRowLabel(
   workspace: WorkspaceListItem,
 ): string {
-  return workspace.kind === 'dm'
-    ? dmWorkspaceLabel(workspace.name)
-    : workspace.name;
+  return workspaceDisplayName(workspace);
 }
