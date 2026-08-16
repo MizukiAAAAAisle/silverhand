@@ -54,6 +54,19 @@
 // allocates ({@link DeliveryAllocation}), so no refusal of any kind leaves a
 // conversation behind it.
 //
+// THE ONE ALLOCATION CARRIES ITS OWN ANNOUNCEMENT ({@link
+// DeliveryTargetAllocationPort}). A pair coming into existence changes what a
+// human's DM list shows, and the obligation to say so lives HERE, at the mint,
+// rather than on whoever called this function (#task:2035, @Cindy B4). The
+// earlier shape reported `created` on the answer and had ONE route funnel consume
+// it — which made the invariant "every door announces" a property of that funnel
+// being the only caller, not of the allocation. A second caller (the
+// human-initiated open, #task:2036, or any wrapper forwarding these same
+// arguments) silently minted an unannounced pair, and no test of today's doors
+// went red. Now the effect is a REQUIRED port: the answer carries no obligation
+// to forget, and a caller that reaches the allocating arm cannot fail to
+// announce, because announcing is what that arm does.
+//
 // WHAT THIS MODULE DELIBERATELY DOES NOT DECIDE. Whether the stream accepts a
 // message right now — archived, closed, a `direct_pair` whose other endpoint is
 // deleted — belongs to the WRITE gate (`canPostToConversation`), which reads the
@@ -179,6 +192,9 @@ export interface DeliveryTargetPorts {
    *  that a surface forgets to pass, which loses the operator's only account of
    *  why an address was refused. */
   observer: DeliveryTargetObserverPort;
+  /** Where the one side effect's CONSEQUENCE goes. Required for the same shape of
+   *  reason and a stronger one — see {@link DeliveryTargetAllocationPort}. */
+  allocations: DeliveryTargetAllocationPort;
 }
 
 /**
@@ -310,6 +326,37 @@ export interface DeliveryTargetObserverPort {
   refused(report: DeliveryTargetRefusalReport): void;
 }
 
+/**
+ * The obligation that travels WITH the one side effect: a pair that came into
+ * existence has been announced to its human participants (#task:2035).
+ *
+ * Required, and required for a sharper reason than {@link
+ * DeliveryTargetObserverPort}: this is not observability, it is the second half of
+ * the write. `getOrCreateDirectPair` inserts a row that a human's DM list is the
+ * read surface for, and a list that is never invalidated shows a conversation the
+ * live client cannot learn about until it restarts — the whole of #task:2035.
+ *
+ * WHY IT IS A PORT ON THE RESOLVER AND NOT A FIELD ON THE ANSWER. Both shapes
+ * make the announcement possible; only this one makes it unavoidable. A `created`
+ * flag is a request that every present and future caller remember to act on it,
+ * enforced by nothing a compiler or a test can see — and the caller that forgets
+ * is precisely the one being added later, for a door nobody has written yet
+ * (#task:2036). A required port instead makes the effect part of the CAPABILITY
+ * this function must be handed: a caller cannot obtain a resolution without
+ * having supplied the announcement, and the member name is distinctive enough
+ * that `guard-direct-pair-open-announced.test.ts` can close the set of production
+ * implementations to the one that really publishes.
+ *
+ * Called AFTER the row exists and only when THIS call created it (the row count
+ * elects one winner under the get-or-create race, so a loser announces nothing).
+ * A throw is not swallowed, same as the observer: an announcement path that
+ * faults is a wiring bug, and the alternative — a resolution that succeeded while
+ * its line stayed invisible — is the bug this port exists to prevent.
+ */
+export interface DeliveryTargetAllocationPort {
+  directPairOpened(conversationId: string): void;
+}
+
 export interface ResolvedDeliveryTarget {
   /** The canonical value object: what the delivery header renders and what a
    *  reply copies back. Built from OUR OWN ids, hence `requireAddressableId` —
@@ -317,10 +364,6 @@ export interface ResolvedDeliveryTarget {
    *  is the ambient guess P4 exists to remove. */
   stream: DeliveryTarget;
   placementKind: ConversationPlacementKind;
-  /** True iff THIS resolution opened the direct pair. For a caller that must
-   *  post a first message or emit an event exactly once; accurate under the
-   *  get-or-create race, which the DB elects. */
-  created: boolean;
 }
 
 export type DeliveryTargetResolution =
@@ -369,7 +412,8 @@ function resolveHandleEndpoint(
  * refusal is reported once through `ports.observer`. The only throw is
  * `requireAddressableId` on a resolved conversation's own id, which is corruption
  * rather than input (a row whose id no address can carry) — plus whatever the
- * observer itself raises, which is not swallowed on purpose.
+ * observer or the allocation port itself raises, which is not swallowed on
+ * purpose.
  */
 export function resolveDeliveryTarget(
   ports: DeliveryTargetPorts,
@@ -401,7 +445,6 @@ export function resolveDeliveryTarget(
 
   // ── Head → conversation ───────────────────────────────────────
   let conversation: DeliveryTargetConversation;
-  let created = false;
   if (input.kind === 'stream') {
     const found = ports.conversations.getIdentity(input.stream.conversationId);
     if (found === null) return refuse('target_unresolved', 'conversation_not_found');
@@ -456,7 +499,15 @@ export function resolveDeliveryTarget(
     ) {
       const opened = ports.conversations.getOrCreateDirectPair(me, them, request.now);
       conversation = opened.conversation;
-      created = opened.created;
+      // The mint's second half, inseparable from its first: the row exists now,
+      // and its human participants are told so before this function returns.
+      // Ordered after the write and before every remaining rule, because what is
+      // announced is THE ROW, not the resolution — see the port's docblock and
+      // `direct-pairs-changed.ts`. Nothing below can refuse this arm anyway
+      // (participation holds by the endpoint the pair was built from, an inbox is
+      // a different placement, and a thread suffix never reaches here), so there
+      // is no reachable state in which a refusal leaves an announcement behind.
+      if (opened.created) ports.allocations.directPairOpened(conversation.id);
     } else {
       const found = ports.conversations.findDirectPair(me, them);
       if (found === null) return refuse('target_unresolved', 'direct_pair_not_found');
@@ -503,7 +554,6 @@ export function resolveDeliveryTarget(
         threadRootId,
       },
       placementKind: conversation.placement_kind,
-      created,
     },
   };
 }

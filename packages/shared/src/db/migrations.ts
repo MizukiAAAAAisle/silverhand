@@ -3315,6 +3315,38 @@ export const migrations: Migration[] = [
         END;
     `,
   },
+  {
+    version: 80,
+    name: 'direct_pair_endpoint_b_index',
+    // #task:2035 — SEEK A PAIR FROM EITHER END.
+    //
+    // v74 gave `direct_pair` two access paths, and both are keyed from slot A:
+    // the endpoints index leads with `endpoint_a_kind, endpoint_a_id`, and
+    // `pair_key` folds the canonical order into one string. That is enough to
+    // answer "does this pair exist" (the writer always knows both ends), but not
+    // "which pairs does this principal have" — and the second question is the one
+    // a viewer's Direct Messages list asks on every load.
+    //
+    // The asymmetry is structural, not incidental: `canonicalEndpointOrder`
+    // sorts by kind before id and 'agent' < 'human', so in EVERY agent<->human
+    // pair the agent takes slot A and the person takes slot B. The human arm of
+    // the viewer read is therefore exactly the arm with no seekable prefix, and
+    // without this index it degrades to a scan of `conversations`.
+    //
+    // Deliberately narrow. `placement_kind` stays out of the key because the
+    // partial predicate already fixes it, and `updated_at` stays out because a
+    // wider index buys write amplification for an ordering a bounded per-viewer
+    // pair set can do in the sort. Canonical order and `pair_key` semantics are
+    // untouched: making the read symmetric is an index concern, and reshaping the
+    // canonical order would turn it into an identity/uniqueness migration.
+    //
+    // No data migration: an index over existing rows, no column and no backfill.
+    up: `
+      CREATE INDEX idx_conversations_direct_pair_endpoint_b
+        ON conversations(endpoint_b_kind, endpoint_b_id)
+        WHERE placement_kind = 'direct_pair';
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

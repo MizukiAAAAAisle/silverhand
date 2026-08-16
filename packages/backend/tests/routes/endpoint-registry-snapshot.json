@@ -42,6 +42,7 @@
   "POST /api/channels/:id/star",
   "DELETE /api/channels/:id/star",
   "GET /api/favorites",
+  "GET /api/direct-pairs",
   "POST /api/client-diagnostics/layout-migration",
   "POST /api/client-diagnostics/layout-migration",
   "GET /api/workspaces/:id/members",

@@ -157,7 +157,10 @@ export type DeliveryTargetRouteDeps = Pick<
  * side-effecting arm (`dm:@handle` opening a pair on a write) stamps a row with
  * it, and a route that already has a request clock must not end up with two. That
  * arm is also why `allocation` is derived from the SAME reach table: a confined
- * door must not open a pair one step before refusing to use it.
+ * door must not open a pair one step before refusing to use it. That arm's
+ * CONSEQUENCE for a human's DM list is not this funnel's business either — it is
+ * carried by the resolver's `allocations` port, so a door that does not come
+ * through here still announces what it opened (see the note above the return).
  */
 export function resolveDeliveryTargetForRoute(
   c: Context<AppEnv>,
@@ -178,6 +181,7 @@ export function resolveDeliveryTargetForRoute(
       users: deps.users,
       workspaces: deps.workspaces,
       logger: deps.ctx.logger,
+      events: deps.ctx.events,
     }),
     {
       address: params.address,
@@ -211,6 +215,20 @@ export function resolveDeliveryTargetForRoute(
       ),
     };
   }
+  // The pair this call may just have MINTED was already announced, by the mint
+  // itself (#task:2035). This funnel deliberately holds NO step for it: an
+  // announcement that lived here would be a property of every door happening to
+  // come through this function, and the door that does not — a human-initiated
+  // open, #task:2036 — is exactly the one being written next (@Cindy B4). The
+  // obligation therefore travels with the effect, as `allocations` on the
+  // resolver's ports; see `application/direct-pairs-changed.ts`.
+  //
+  // Announcing at the mint also puts the frame BEFORE this reach verdict, which
+  // costs nothing that could be missed: `mayAllocateFor` derives `allocation` from
+  // the same table `judgeDeliveryReach` reads, so a resolution that ALLOCATED had
+  // a non-confined domain and cannot be refused here. That implication is pinned
+  // exhaustively over (door × slot kind) in `delivery-reach.test.ts` rather than
+  // asserted in prose, because it is what makes the ordering unobservable.
   return { ok: true, target: resolved.target };
 }
 

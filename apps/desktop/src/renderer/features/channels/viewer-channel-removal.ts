@@ -374,6 +374,11 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
     verdicts: ['swept'],
     reason: "['conversations', cid, 'agent-activity', agentId] → position 1",
   },
+  'direct-pairs': {
+    verdicts: ['exempt'],
+    reason:
+      "['direct-pairs'] — the viewer's `direct_pair` list (#task:2035). Not a channel projection in either direction: the rows have no workspace and no channel_id to filter by, and a pair can never BE the lost channel — its roster is its two endpoints, so there is no `conversation_users` row to lose and no channel list that could detect one. The viewer-scoped `direct_pairs_changed` invalidation is this list's only settler",
+  },
   favorites: {
     verdicts: ['exempt'],
     reason:

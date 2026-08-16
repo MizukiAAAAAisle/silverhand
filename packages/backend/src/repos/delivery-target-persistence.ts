@@ -24,13 +24,24 @@
 // The workspace root is the exception, and deliberately: its adapter lives with
 // its own authority in `workspace-address-resolution.ts`, because that authority
 // owns the "ambiguous is not unresolved" distinction and its log line.
+//
+// TWO OF THE PORTS ARE EFFECTS, not lookups: the refusal `observer` and the
+// `allocations` announcement. They are wired HERE for the same reason as the
+// lookups — so that no surface can assemble a resolver that is missing one. A bag
+// built anywhere else could hand the resolver a silent sink and a mint that
+// nobody hears about (#task:2035 @Cindy B4), which is why the fence
+// `guard-direct-pair-open-announced.test.ts` closes the set of files that may
+// name the allocation port's member at all.
 import type { BackendLogger } from '../context.js';
 import type { AgentRepo } from './agent-repo.js';
 import type { ConversationRepo } from './conversation-repo.js';
 import type { MessageRepo } from './message-repo.js';
 import type { UserRepo } from './user-repo.js';
 import type { WorkspaceRepo } from './workspace-repo.js';
+import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import { conversationViewerUserIds } from '../viewer-scope.js';
 import { deliveryTargetObserver } from '../observability/delivery-target-log.js';
+import { directPairAllocationPort } from '../application/direct-pairs-changed.js';
 import type { DeliveryTargetPorts } from '../application/delivery-target-resolution.js';
 import { deliveryTargetWorkspacesPort } from '../application/workspace-address-resolution.js';
 
@@ -41,6 +52,9 @@ export interface DeliveryTargetPortsDeps {
   users: UserRepo;
   workspaces: WorkspaceRepo;
   logger: BackendLogger;
+  /** For the one allocating arm's announcement. Required, like `logger`: a
+   *  resolver assembled without it could open a DM nobody's client hears about. */
+  events: ScopeEventBus;
 }
 
 /**
@@ -54,7 +68,7 @@ export interface DeliveryTargetPortsDeps {
 export function deliveryTargetPorts(
   deps: DeliveryTargetPortsDeps,
 ): DeliveryTargetPorts {
-  const { agents, conversations, messages, users, workspaces, logger } = deps;
+  const { agents, conversations, messages, users, workspaces, logger, events } = deps;
   return {
     conversations: {
       getIdentity: id => conversations.getIdentity(id),
@@ -77,5 +91,11 @@ export function deliveryTargetPorts(
     agents: { getByName: name => agents.getByName(name) },
     users: { getByName: name => users.getByName(name) },
     observer: deliveryTargetObserver(logger),
+    // The announcement's audience is the PLACEMENT authority's human
+    // participants, never `conversation_users` — for a `direct_pair` the roster
+    // table is empty, which is the bug #task:2035 started as.
+    allocations: directPairAllocationPort(events, conversationId =>
+      conversationViewerUserIds(conversations, conversationId),
+    ),
   };
 }

@@ -2,6 +2,7 @@ import { useChannelDetail } from '@/features/workspaces/hooks';
 import {
   channelGateFor,
   deriveChannelMembership,
+  directPairGate,
   type ChannelGate,
   type MembershipCarrier,
   type MembershipState,
@@ -24,16 +25,28 @@ export interface ResolvedChannelMembership {
  * (carrier already stamped) fires zero extra network and never flickers.
  *
  * `channelId` null (no channel selected) leaves the fetch disabled → `unknown`.
+ *
+ * `directPair` switches the whole derivation off (#task:2035): a pair has no
+ * membership axis and no channel to fetch detail for, so the caller passes its
+ * `read_only` and gets `directPairGate`. The reported `membership` is `'member'`
+ * — a PROJECTION of "the viewer is an endpoint" onto this three-state axis for
+ * the consumers that only ask "may member-scoped surfaces mount", not an
+ * `is_member` inference from a placement axis (the caller states the placement;
+ * the row's existence in the viewer's own pair list is the proof).
  */
 export function useChannelMembership(
   carrier: MembershipCarrier | null | undefined,
   channelId: string | null,
+  directPair?: { readOnly: boolean } | null,
 ): ResolvedChannelMembership {
   const carrierMembership = deriveChannelMembership(carrier ?? undefined);
-  const needsDetail = carrierMembership === 'unknown' && !!channelId;
+  const needsDetail = !directPair && carrierMembership === 'unknown' && !!channelId;
   const { data: detail } = useChannelDetail(channelId, needsDetail);
   const membership = needsDetail
     ? deriveChannelMembership(carrier ?? undefined, detail?.is_member)
     : carrierMembership;
+  if (directPair) {
+    return { membership: 'member', gate: directPairGate(directPair.readOnly) };
+  }
   return { membership, gate: channelGateFor(membership) };
 }

@@ -24,6 +24,7 @@ import type {
   Reference,
 } from '@silverhand/shared';
 import { isWorkspacePlaced } from '@silverhand/shared';
+import { publishDirectPairsChangedToViewers } from '../../application/direct-pairs-changed.js';
 import { dispatchMentionCcEffects } from '../../application/mention-cc.js';
 import type { MentionCcReport } from '../../application/mention-cc.js';
 import type { BackendLogger } from '../../context.js';
@@ -72,26 +73,44 @@ export class MessageDeliveryCoordinator {
    *  The adapter behind this port co-emits the tiered attention badge
    *  (#task:1870) — that pairing stays enforced inside `viewer-scope.ts`.
    *
-   *  WORKSPACE PLACEMENTS ONLY, and the split is HERE rather than in the
-   *  publisher (#task:2021 P4-4). That read model's unit is (human viewer,
-   *  WORKSPACE): a workspace-less placement has no coordinate in it, so
+   *  TWO ARMS, and the split is HERE rather than in the publisher (#task:2021
+   *  P4-4). That read model's unit is (human viewer, WORKSPACE): a workspace-less
+   *  placement has no coordinate in it, so
    *  `publishUnreadUpdatedToConversationViewers` throws on one — deliberately,
    *  because for a channel a missing workspace means a corrupt row, and it will
-   *  not turn a routing bug into a silent no-op. Once a `direct_pair` send is
-   *  reachable that stops being a bug and becomes a placement the read model
-   *  does not cover yet: the send commits and then this post-commit call throws,
-   *  i.e. the caller is told its message failed while the row is durable.
+   *  not turn a routing bug into a silent no-op. Reaching it with a `direct_pair`
+   *  would mean the send commits and then this post-commit call throws, i.e. the
+   *  caller is told its message failed while the row is durable.
    *
    *  So the CALLER side answers it, as an honest branch on the placement instead
-   *  of a widened publisher. What is skipped is real and named: a `direct_pair`
-   *  with a human endpoint has a human who ought to see unread, and giving them
-   *  one needs an unread coordinate that is not workspace-keyed — the DM read
-   *  surface, a separate slice. The skip is pinned by test rather than logged:
-   *  it happens on every DM message, so a log line would be pure volume. */
+   *  of a widened publisher:
+   *    - `workspace` → the unread + badge pair, unchanged.
+   *    - `direct_pair` → `direct_pairs_changed` (#task:2035), the viewer-scoped
+   *      DM-list invalidation. It is NOT an unread frame in disguise: the row may
+   *      not exist in the client's cache at all (a stranger's first DM), so the
+   *      authority is the re-read of `GET /api/direct-pairs`, which carries the
+   *      pair's unread. See `application/direct-pairs-changed.ts`.
+   *  The `agent_inbox` arm is neither: an inbox has no human participant, so
+   *  there is no viewer-scoped frame to send.
+   *
+   *  Every caller of this method is post-commit, and all three describe a change
+   *  the DM list would show: a send, and the two thread follow-state writes
+   *  (`followHumanThread` / `unfollowHumanThread`) that move the viewer's unread
+   *  roll-up by adding or dropping a followed cluster. */
   publishUnreadUpdated(conversationId: string): void {
     const conversation = this.read.getConversation(conversationId);
-    if (!conversation || !isWorkspacePlaced(conversation)) return;
-    this.unreadPublish.publishUnreadUpdatedToConversationViewers(conversationId);
+    if (!conversation) return;
+    if (isWorkspacePlaced(conversation)) {
+      this.unreadPublish.publishUnreadUpdatedToConversationViewers(conversationId);
+      return;
+    }
+    if (conversation.placement_kind === 'direct_pair') {
+      publishDirectPairsChangedToViewers(
+        this.events,
+        this.read.viewerUserIds(conversationId),
+        conversationId,
+      );
+    }
   }
 
   /**
@@ -111,6 +130,20 @@ export class MessageDeliveryCoordinator {
    * (Cindy round-2 MUST FIX 1). It is a required argument rather than a
    * re-parse so that "one parse per send" is a signature, not a convention:
    * every in-send consumer of the addressing contract is handed the same set.
+   *
+   * WORKSPACE PLACEMENTS ONLY, and not as a deferral (#task:2035). In a
+   * `direct_pair` THE STREAM IS THE MENTION: the placement has two endpoints, the
+   * human is a party to every message in it by construction, and a `mention_self`
+   * row would tell them something they were already told — while the surface it
+   * feeds (`notifications` → Activity) is coordinated by (workspace,
+   * conversation), which a DM has no first half of. Inserting one anyway shipped an
+   * Activity item with `workspace_id: ''` and `title: ''` (@Cindy's probe): not a
+   * navigable coordinate, and a fabricated workspace is worse than the silent
+   * mis-delivery it replaced. The DM's unread surface is `GET /api/direct-pairs`,
+   * invalidated for these same viewers by `publishUnreadUpdated` above.
+   *
+   * This is about the NOTIFICATION face only: the reference resolved, and nothing
+   * here reports it as unresolved.
    */
   notifyViewerMentionBestEffort(
     conversation: ConversationDto,
@@ -118,6 +151,8 @@ export class MessageDeliveryCoordinator {
     references: readonly Reference[],
   ): void {
     try {
+      if (!isWorkspacePlaced(conversation)) return;
+      const workspaceId = conversation.workspace_id;
       const mentionedHandles = new Set(
         references
           .filter(ref => ref.kind === 'human')
@@ -135,10 +170,10 @@ export class MessageDeliveryCoordinator {
         this.write.insertNotification({
           kind: 'mention_self',
           userId: viewerUserId,
-          workspaceId: conversation.workspace_id,
+          workspaceId,
           conversationId: conversation.id,
           messageId: message.id,
-          sourceWorkspaceId: conversation.workspace_id,
+          sourceWorkspaceId: workspaceId,
           sourceConversationId: conversation.id,
           sourceMessageId: message.id,
           payload: {

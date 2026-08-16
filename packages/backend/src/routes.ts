@@ -22,6 +22,7 @@ import { createHostApp } from './routes/hosts.js';
 import { createWorkspacesApp } from './routes/workspaces.js';
 import { createSortApp } from './routes/sort.js';
 import { createFavoritesApp } from './routes/favorites.js';
+import { createDirectPairsApp } from './routes/direct-pairs.js';
 import { createClientDiagnosticsApp } from './routes/client-diagnostics.js';
 import { createTasksApp } from './routes/tasks.js';
 import { createNotificationsApp } from './routes/notifications.js';
@@ -523,6 +524,14 @@ export function createApiRouter(
   // sort context's starred_at in each workspace's conversation list; containers
   // cannot star at all since #task:1899). Read-only.
   app.route('/', createFavoritesApp({ ctx, favorites: readModels.favorites }));
+
+  // Direct Messages: the viewer's existing `direct_pair` lines (#task:2035).
+  // Workspace-free, so it is a sibling of the workspace channel list rather than
+  // a filter on it. Read-only.
+  app.route(
+    '/',
+    createDirectPairsApp({ ctx, directPairs: readModels.directPairs }),
+  );
 
   // Client-side diagnostics intake (#task:1664): failures the server cannot
   // observe when they happen, reported by the desktop on its next

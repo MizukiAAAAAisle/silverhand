@@ -50,10 +50,12 @@ import type { Database as Db } from 'better-sqlite3';
 import { prepareObserved } from '../observability/observed-statement.js';
 import { channelAmbientEntersPredicate } from '../repos/attention-tier-predicates.js';
 import { LIVE_CONVERSATION_PREDICATE } from '../repos/conversation-liveness.js';
+import { WORKSPACE_PLACED } from '../repos/conversation-placement-sql.js';
 import { EFFECTIVE_DIRECTED_MENTION_PREDICATE } from '../repos/directed-claim-predicate.js';
 import {
   apiPaths,
   DEFAULT_CHANNEL_ATTENTION_MODE,
+  principalAvatarUrl,
   resolveMessageAuthor,
   type ActivityItemDto,
   type ActivitySalience,
@@ -140,13 +142,13 @@ function buildPreviewSender(row: SenderColumns): MessageAuthorDto | null {
       ? {
           name: row.live_name,
           display_name: row.live_display_name ?? row.live_name,
-          avatar_url: row.live_avatar_key
-            ? `${
-                fromKind === 'user'
-                  ? apiPaths.userAvatar(fkId)
-                  : apiPaths.agentAvatar(fkId)
-              }?v=${row.live_updated_at ?? 0}`
-            : null,
+          avatar_url: principalAvatarUrl(
+            fromKind === 'user'
+              ? apiPaths.userAvatar(fkId)
+              : apiPaths.agentAvatar(fkId),
+            row.live_avatar_key,
+            row.live_updated_at ?? 0,
+          ),
           // Agent → its current runtime (agents.runtime, NOT NULL); user → null.
           // The DB value is a validated RuntimeKind; the resolver fails closed if
           // an agent's runtime is somehow absent.
@@ -200,7 +202,20 @@ interface DirectedNotificationRow extends SenderColumns {
   root_content: string | null;
   message_content: string | null;
   conversation_title: string | null;
-  workspace_id: string | null;
+  /** NON-NULLABLE, and the query is what makes it so: the WHERE clause restricts
+   *  this source to WORKSPACE-placed conversations, and `placement_kind =
+   *  'workspace' ⇒ workspace_id IS NOT NULL` is a CHECK on `conversations`. So
+   *  the coordinate `ActivityItemDto` requires is a consequence of the domain
+   *  restriction, declared here rather than re-tested per item.
+   *
+   *  It is declared instead of re-tested DELIBERATELY (@Cindy B5). A second
+   *  `if (!row.workspace_id) continue` in the loop below read as belt-and-braces
+   *  but made BOTH copies unfalsifiable: deleting either one alone changed no
+   *  behavior, so no test could distinguish the domain restriction from its
+   *  absence, and the SQL text was the only evidence the restriction existed. One
+   *  decision, in the place that can express it as a domain (`WORKSPACE_PLACED`);
+   *  everything downstream reads the type. */
+  workspace_id: string;
   payload: string | null;
   created_at: number;
 }
@@ -306,6 +321,26 @@ const assembleDirectedNotifications: ActivitySource = ac => {
          -- (archived/deleted) are not visible Activity — see
          -- LIVE_CONVERSATION_PREDICATE (the shared gate).
          AND ${LIVE_CONVERSATION_PREDICATE}
+         -- ...and conversation-backed here means WORKSPACE-PLACED. Every Activity
+         -- item's coordinate is (workspace, conversation) — ActivityItemDto
+         -- declares workspace_id as a string and the client navigates with it — so
+         -- a notification about a workspace-less placement (a direct_pair) has no
+         -- item in this read model. It used to be shipped anyway, with an EMPTY
+         -- workspace_id and title: a row nothing can open (#task:2035, Cindy
+         -- FAIL 3). The DM surface is GET /api/direct-pairs, and the bell face
+         -- keeps the notification itself — that DTO's workspace_id is honestly
+         -- nullable. A DOMAIN restriction of this read model, not a claim that the
+         -- reference was unresolved.
+         --
+         -- Stated as the shared placement discriminator, not as "the workspace
+         -- column is not null" (Cindy B5): placement_kind is this feature's single
+         -- truth for which placement a row is, and a nullable column is its
+         -- CONSEQUENCE. Reading the consequence is how two faces of one domain
+         -- drift, and conversation-placement-sql.ts requires the workspace face to
+         -- carry WORKSPACE_PLACED explicitly for exactly that reason. It is also
+         -- NULL-safe on the LEFT JOIN above: a notification whose conversation row
+         -- is gone is not workspace-placed, so it cannot enter.
+         AND ${WORKSPACE_PLACED}
          AND (@ws IS NULL OR COALESCE(n.workspace_id, c.workspace_id) = @ws)
        ORDER BY n.created_at DESC`,
     )
@@ -332,7 +367,7 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         id: `mention:${n.id}`,
         kind: 'mention',
         salience: 'directed',
-        workspace_id: n.workspace_id ?? '',
+        workspace_id: n.workspace_id,
         conversation_id: n.conversation_id,
         conversation_roster_policy: n.conversation_roster_policy ?? 'open',
         thread_root_id: n.thread_root_id,
@@ -362,7 +397,7 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         id: `agent_failed:${n.id}`,
         kind: 'agent_failed',
         salience: 'directed',
-        workspace_id: n.workspace_id ?? '',
+        workspace_id: n.workspace_id,
         conversation_id: n.conversation_id ?? '',
         conversation_roster_policy: n.conversation_roster_policy ?? 'open',
         thread_root_id: null,
@@ -444,6 +479,29 @@ export const POSITIONAL_STREAMS_SQL = `
        AND cr.conversation_id = c.id
        AND cr.thread_root_id IS sh.thread_root_id
      WHERE ${LIVE_CONVERSATION_PREDICATE}
+       -- WORKSPACE PLACEMENTS ONLY, the same domain restriction the directed
+       -- source carries, stated with the same shared discriminator and for the
+       -- same reason (#task:2035, Cindy B5). An Activity item is a NAVIGABLE
+       -- COORDINATE: ActivityItemDto.workspace_id is a required string and the
+       -- client opens the item with it, so a workspace-less placement has no item
+       -- here. PositionalStreamRow.workspace_id declares that as a fact
+       -- (non-nullable) and this conjunct is what makes it one.
+       --
+       -- HOW REACHABLE IT IS, stated honestly rather than borrowed from the
+       -- directed source's story: the join above needs a conversation_users row,
+       -- and a canonical DirectPair has none (getOrCreateDirectPair writes the two
+       -- endpoint columns and no roster row), so today's DM traffic never entered
+       -- this source. What this conjunct defends is a STRAY roster row on a
+       -- workspace-less placement — a member door that stops failing closed, a
+       -- backfill, a future placement — where the symptom would be silent: an item
+       -- with a null workspace_id typed as a string.
+       --
+       -- Nothing is lost either way: a DM's unread is carried by its own read
+       -- surface (GET /api/direct-pairs, invalidated by direct_pairs_changed),
+       -- viewer-scoped exactly because the placement is workspace-free. And this
+       -- does NOT touch the agent_home DM channels the roster_policy = 'fixed'
+       -- arm below exists for: those are workspace-placed and keep entering.
+       AND ${WORKSPACE_PLACED}
        AND (@ws IS NULL OR c.workspace_id = @ws)
        AND (
          -- DM mainline: directed-grade, always enters (§5.1).

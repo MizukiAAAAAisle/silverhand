@@ -41,6 +41,21 @@ export const routes = {
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
   chatChannel: (workspaceId: string, channelId: string) =>
     `/chat/w/${workspaceId}/c/${channelId}`,
+  /**
+   * A WORKSPACE-LESS conversation (#task:2035): the `direct_pair` between the
+   * viewer and one agent. One segment, because the conversation id is the WHOLE
+   * coordinate — a pair has no container to name (`placement_kind =
+   * 'direct_pair'` ⇒ `workspace_id IS NULL`), and `/chat/w/<something>/c/<id>`
+   * could only be reached by inventing a workspace the row does not belong to.
+   *
+   * Deliberately a SECOND base path rather than making `:workspaceId` optional
+   * on `chatChannel`: an optional segment would make "which container is this
+   * pane in" a runtime question at every consumer, whereas two patterns let
+   * `parseRouteState` answer it once (`directConversationId`) and let the
+   * secondary-pane query writers — which operate on the current pathname, never
+   * on a rebuilt one — carry over untouched.
+   */
+  chatDirect: (conversationId: string) => `/chat/d/${conversationId}`,
   // Activity is a top-level NavRail section (peer to chat, #task:1394). It has
   // exactly TWO states, both a pure projection of the route: bare `/activity`
   // (no workspace, no channel — the full-width global list) and the selected
@@ -69,6 +84,7 @@ export const routes = {
 
 export const routePatterns = {
   chatChannel: '/chat/w/:workspaceId/c/:channelId',
+  chatDirect: '/chat/d/:conversationId',
   chatWorkspace: '/chat/w/:workspaceId',
   chatArchived: '/chat/archived',
   chatSearch: '/chat/search',
@@ -100,6 +116,21 @@ export interface RouteState {
   searchQuery: string | null;
   workspaceId: string | null;
   channelId: string | null;
+  /**
+   * Set to `channelId` iff the URL is the workspace-less `/chat/d/:conversationId`
+   * (#task:2035) — the EXPLICIT discriminator for "this pane has no workspace
+   * coordinate".
+   *
+   * It exists because `workspaceId === null` does not mean that: a bare `/chat`,
+   * `/chat/search`, and every non-chat section also carry a null workspace, and
+   * App's auto-select effect reads exactly that condition to bounce the user into
+   * their first workspace. Without a positive marker, landing on a pair would be
+   * indistinguishable from landing nowhere and would be redirected away
+   * immediately. `channelId` is populated as usual, so every consumer that only
+   * needs "which conversation is open" (the secondary panes, read cursors,
+   * notification suppression) needs no new branch.
+   */
+  directConversationId: string | null;
   /** Generic side-pane pointer (`?side=<conversation_id>`). May be any
    *  conversation id (channel/thread/dm). PR-1 only resolves ids that
    *  exist in the current workspace's channels union; cross-workspace
@@ -195,6 +226,9 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // matches no pattern here and resolves to activity section + no workspace/no
   // channel (the full-width list), never a phantom workspace selection.
   const mWorkspace = matchPath(routePatterns.chatWorkspace, pathname);
+  // The workspace-less conversation route (#task:2035). Disjoint from the two
+  // channel patterns by its `/d/` segment, so no ordering question arises.
+  const mDirect = matchPath(routePatterns.chatDirect, pathname);
   // Order matters: the user route is more specific (`/members/u/:userId`,
   // three segments) than the agent route (`/members/:agentId`, two
   // segments), and matchPath returns the first match. Trying the user
@@ -207,7 +241,10 @@ export function parseRouteState(pathname: string, search: string): RouteState {
 
   const workspaceId =
     mChannel?.params.workspaceId ?? mWorkspace?.params.workspaceId ?? null;
-  const channelId = mChannel?.params.channelId ?? null;
+  // A pair's conversation id lands in `channelId` like any other open
+  // conversation; `directConversationId` is what says it has no workspace.
+  const directConversationId = mDirect?.params.conversationId ?? null;
+  const channelId = mChannel?.params.channelId ?? directConversationId ?? null;
   const searchParams = new URLSearchParams(search);
   const fullscreen = searchParams.get('fullscreen') === '1';
   const rawSide = searchParams.get('side');
@@ -268,6 +305,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     searchQuery,
     workspaceId: workspaceId ?? null,
     channelId: channelId ?? null,
+    directConversationId,
     sideConversationId,
     threadRootId,
     threadsListOpen,
@@ -356,6 +394,16 @@ export function layoutMemoryFromRoute(
  * its query param. Mirrors the `withSide/Thread/ThreadsQuery` writers but
  * composes the layout from scratch onto a fresh path so it is independent
  * of whatever query the previous channel carried.
+ *
+ * `workspaceId` is NON-NULL by contract: layout memory is a channel-restore
+ * mechanism, and the workspace-less `direct_pair` route (#task:2035) is
+ * deliberately outside it — a pair withholds the panes this URL would restore
+ * (threads/attachments resolve through the backend's channel-like index, which
+ * does not serve a pair), so a `/chat/d/:id?thread=…` could only preserve a pane
+ * that never mounts. A pair is opened with `routes.chatDirect` directly, and
+ * nothing records layout for it (see App's layout-memory effect), so there is
+ * no null caller to serve here. Do NOT widen this to `string | null` to make a
+ * test compile.
  */
 export function buildChannelLayoutUrl(
   workspaceId: string,
@@ -787,6 +835,11 @@ export function useNav(): {
   toActivity: () => void;
   toWorkspace: (workspaceId: string) => void;
   toChannel: (workspaceId: string, channelId: string) => void;
+  /** Open a WORKSPACE-LESS conversation (`/chat/d/:conversationId`, #task:2035).
+   *  A separate helper rather than `toChannel(null, id)` so a caller that has a
+   *  workspace cannot accidentally drop it: the two navigations mean different
+   *  placements, not one navigation with an optional argument. */
+  toDirect: (conversationId: string) => void;
   toMembers: (agentId?: string) => void;
   /** Navigate the members section to a human's profile by user id.
    *  Mutually exclusive with the agent form — only one of agentId /
@@ -960,6 +1013,10 @@ export function useNav(): {
     (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
     [go],
   );
+  const toDirect = useCallback(
+    (cid: string) => go(routes.chatDirect(cid)),
+    [go],
+  );
   const toMembers = useCallback(
     (agentId?: string) =>
       go(agentId ? routes.membersAgent(agentId) : routes.members()),
@@ -982,6 +1039,7 @@ export function useNav(): {
     toActivity,
     toWorkspace,
     toChannel,
+    toDirect,
     toMembers,
     toMembersUser,
     toComputers,
@@ -1010,6 +1068,7 @@ export function useNav(): {
     toActivity,
     toWorkspace,
     toChannel,
+    toDirect,
     toMembers,
     toMembersUser,
     toComputers,

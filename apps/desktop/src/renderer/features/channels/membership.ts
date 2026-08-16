@@ -86,6 +86,37 @@ export function channelGateFor(state: MembershipState): ChannelGate {
 }
 
 /**
+ * The gate for a `direct_pair` (#task:2035). A sibling CONSTRUCTOR, not a fourth
+ * membership state, because an endpoint is not a member: a pair's participation
+ * is a stored coordinate (`endpoint_a` / `endpoint_b`), the read model returns a
+ * row only to a viewer who IS one of them, and so the row's own presence is the
+ * authoritative proof. That does not violate the authority rule above — this is a
+ * different concept carried by a different payload, not `is_member` inferred from
+ * a placement axis. A pair must therefore never be handed to
+ * `deriveChannelMembership` with a synthesized `is_member: true`.
+ *
+ * There is no three-state axis here and no browse-then-Join path (`showJoin`
+ * false, always): a pair cannot be discovered without being an endpoint of it,
+ * and nobody can join one.
+ *
+ * `readOnly` is the pair's own write axis — the counterpart principal is gone, so
+ * no send can ever succeed. It withdraws mutations but NOT member effects:
+ * mark-read must keep working, otherwise the survivor of a deleted counterpart is
+ * left with a badge they can never clear.
+ */
+export function directPairGate(readOnly: boolean): ChannelGate {
+  return {
+    allowMutations: !readOnly,
+    allowMemberEffects: true,
+    // Shown even when read-only, disabled with its own copy: a composer that
+    // silently vanishes reads as a bug, and the header already says WHY (the
+    // counterpart renders as a deleted actor).
+    showComposer: true,
+    showJoin: false,
+  };
+}
+
+/**
  * The member-scoped inclusion predicate: `true` ONLY for an authoritative
  * member. Member-scoped consumers (auto-select / remembered / default /
  * fallback / persistence, member-scoped aggregates like the Tasks filter,

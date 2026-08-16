@@ -10,6 +10,7 @@ import type { MessageRepo } from '../repos/message-repo.js';
 import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
 import { canViewConversation } from '../permissions.js';
+import { publishDirectPairsChangedToViewer } from './direct-pairs-changed.js';
 import {
   publishAttentionBadgeUpdated,
   publishUnreadUpdatedToViewer,
@@ -303,14 +304,35 @@ export async function observe(
     for (const conversationId of outcome.changedConversations) {
       const conversation = deps.conversations.get(conversationId);
       if (!conversation) continue;
-      // Both frames below are keyed on (viewer, WORKSPACE): `workspace_unread_count`
-      // and the tiered badge are workspace roll-ups, so this read model has no
-      // shape for a placement that carries no workspace coordinate. A viewer only
-      // reaches this loop through a cursor they were allowed to move, and a human
-      // is never a participant of a workspace-less placement (§4.2) — so a
-      // non-workspace conversation here is an upstream ACL/routing bug. Fail loud
-      // rather than skip: skipping would leave the client's absolute roll-up frozen
-      // at a stale value with no second chance to correct it.
+      // PLACEMENT SPLIT, and it lives HERE rather than inside a widened publisher
+      // (#task:2035, same shape as `conversation-message/delivery.ts`). Both
+      // workspace frames are keyed on (viewer, WORKSPACE): `workspace_unread_count`
+      // and the tiered badge are workspace roll-ups, so that read model has no
+      // shape for a placement carrying no workspace coordinate, and its publisher
+      // says so by throwing.
+      //
+      // A `direct_pair` now reaches this loop for real: its HUMAN ENDPOINT is a
+      // participant (§4.2 dispatch in `permissions.ts`), so the viewer may open the
+      // line and clear it — and the cursor is committed by the transaction above
+      // BEFORE anything here runs. An unconditional `requireWorkspacePlacement`
+      // therefore turned every DM read into "cursor lowered, 500 returned, client
+      // never told": the worst of both outcomes. What the viewer's DM row shows is
+      // its unread, so the honest frame is the list invalidation.
+      if (conversation.placement_kind === 'direct_pair') {
+        // Only the OBSERVING viewer: this batch moved their read state and nobody
+        // else's (the unit of work is viewer-bound), exactly as the workspace arm
+        // publishes to `input.viewerUserId` alone.
+        effects.push(() =>
+          publishDirectPairsChangedToViewer(deps.ctx.events, input.viewerUserId, {
+            conversation_id: conversationId,
+          }),
+        );
+        continue;
+      }
+      // `agent_inbox` still FAILS LOUD here, and that premise is not the one #2035
+      // refuted: an inbox has exactly one participant and it is an AGENT, so a human
+      // clearing one is an upstream ACL/routing bug rather than a placement this
+      // read model merely has no coordinate for.
       const workspaceId = requireWorkspacePlacement(conversation);
       badgedWorkspaces.add(workspaceId);
       // Enriched message variant (#task:1283): the closure runs POST-COMMIT, so

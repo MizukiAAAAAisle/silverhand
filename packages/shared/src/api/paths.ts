@@ -275,6 +275,21 @@ export const apiPaths = {
    *  `items` order is only a deterministic fallback, NOT pre-sorted by starred_at.
    *  Read-only, human viewer-scoped, global (no workspace filter). */
   favorites: '/api/favorites',
+  /** The viewer's DIRECT MESSAGES list (#task:2035): every `direct_pair` the
+   *  viewer is an endpoint of, with the counterpart resolved and the same unread
+   *  roll-up a channel row shows. Returns `DirectPairListResponse`.
+   *
+   *  GLOBAL AND VIEWER-SCOPED, with no workspace parameter, because a
+   *  `direct_pair` HAS no workspace coordinate (agent-scoped-session-v1 §4.1). That
+   *  is why this is its own route and not an arm of `workspaceChannels`: there is no
+   *  `:id` a DM belongs to, so a workspace-scoped response could only carry it by
+   *  attaching it to whichever workspace the client asked about first.
+   *
+   *  Rows are EXISTING pairs. An agent the viewer has never messaged is absent
+   *  (@shiki's ruling) — starting a line is the agent page's job. Refreshed by the
+   *  viewer-scoped `direct_pairs_changed` signal, which is what makes a FIRST DM
+   *  from a stranger appear without a reload. Read-only. */
+  directPairs: '/api/direct-pairs',
   /** The single Attention eliminate primitive:
    *  every read-cleared Activity item collapses into one `observe(source_ref[])`
    *  use case that delegates the write back to the source aggregate (per-stream

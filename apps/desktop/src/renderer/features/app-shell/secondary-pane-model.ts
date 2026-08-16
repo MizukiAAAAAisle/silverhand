@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { useConversationById } from '@/features/conversations/useConversationById';
-import type { ChannelListItem } from '@/features/workspaces/hooks';
 import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
@@ -24,10 +23,16 @@ import {
  *
  * `primaryPointer` and `sideRef` are internal — no consumer outside this cluster
  * reads them, so they aren't returned.
+ *
+ * The PRIMARY pointer arrives already resolved (#task:2035). This model used to
+ * look the selection up in the workspace channel list itself, which silently
+ * excluded the one placement that is not in any such list — a `direct_pair`, whose
+ * pane then advanced no read cursor and never took focus. Resolving the carrier is
+ * the shell's job because only the shell knows which carrier the route named; this
+ * cluster's job is `?side`.
  */
 export function useSecondaryPaneModel(params: {
-  selectedChannelId: string | null;
-  channels: ChannelListItem[];
+  primary: ConversationPointer | null;
   sideConversationId: string | null;
   selectedWorkspaceId: string | null;
   routeFullscreen: boolean;
@@ -37,19 +42,13 @@ export function useSecondaryPaneModel(params: {
   focusedConversation: ReturnType<typeof selectFocusedConversation>;
 } {
   const {
-    selectedChannelId,
-    channels,
+    primary: primaryPointer,
     sideConversationId,
     selectedWorkspaceId,
     routeFullscreen,
   } = params;
 
-  const primaryPointer = useMemo<ConversationPointer | null>(() => {
-    if (!selectedChannelId) return null;
-    const hit = channels.find(c => c.id === selectedChannelId);
-    if (!hit) return null;
-    return { id: hit.id, rosterPolicy: hit.roster_policy };
-  }, [channels, selectedChannelId]);
+
   // PR-2: cross-workspace `?side=<id>` resolution. The ref hook is the single
   // source of truth for the right pane's identity & workspace — same-workspace
   // and cross-workspace ids both flow through it. The fetch is React-Query–

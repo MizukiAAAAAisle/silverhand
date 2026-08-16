@@ -38,7 +38,7 @@ import {
   type WorkspaceHumanMember,
   type WorkspaceMemberLists,
 } from '@/features/workspaces/hooks';
-import { useConversationById } from '@/features/conversations/useConversationById';
+import type { WorkspaceUiKind } from '@/features/conversations/pane-descriptor';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
 import {
@@ -69,6 +69,20 @@ import { ComposerActivityHeader } from './ComposerActivityHeader';
 
 interface ComposerProps {
   conversationId: string;
+  /** The conversation's workspace, resolved by the PANE that owns the
+   *  descriptor — never re-derived here. `null` means this conversation has no
+   *  workspace at all (a `direct_pair`, #task:2035): a terminal fact, not a
+   *  loading state, so both autocompletes stay empty and no WORKSPACE roster is
+   *  fetched or awaited. The CONVERSATION roster read still happens (it is keyed
+   *  by conversation, and a pair endpoint is admitted by the placement ACL) — it
+   *  answers 200 with an EMPTY member set, since a fixed-roster placement has no
+   *  `conversation_users` rows; only unresolved `@human` chips degrade to plain
+   *  text. */
+  workspaceId: string | null;
+  /** That workspace's kind, in the renderer's projection (`agent_home → 'dm'`).
+   *  `null` whenever `workspaceId` is, and also while a workspace's own kind is
+   *  unresolved — the `#` channel query treats both as "don't ask". */
+  workspaceKind: WorkspaceUiKind | null;
   /** When set, this composer posts replies into the given root's reply
    *  cluster (sends `reply_to_message_id`) and keeps its own draft,
    *  isolated from the channel's main composer. The channel id in
@@ -80,6 +94,11 @@ interface ComposerProps {
    *  Independent of `disabled` (closed) so we can distinguish the reason
    *  in the placeholder copy without losing other disabled paths. */
   archived?: boolean;
+  /** When true, the conversation can never accept another message — today only a
+   *  `direct_pair` whose counterpart principal is gone (#task:2035). A third
+   *  reason alongside `disabled` (closed) and `archived`, because both of those
+   *  describe reversible operator state and their copy would be a lie here. */
+  readOnly?: boolean;
   /** Restrict the run-state activity bubble to these agent ids. The
    *  ThreadPanel passes the thread's follower agent ids so the bubble
    *  only reflects agents participating in this reply cluster, not the
@@ -145,14 +164,18 @@ type SubmittingSnapshot = {
  */
 export function Composer({
   conversationId,
+  workspaceId,
+  workspaceKind,
   threadRootId,
   disabled: disabledProp,
   archived = false,
+  readOnly = false,
   activityAgentIds,
 }: ComposerProps): JSX.Element {
-  // Treat archived as another flavor of disabled so every send/attach
-  // path is gated identically. Placeholder below distinguishes the copy.
-  const disabled = disabledProp || archived;
+  // Treat archived and read-only as further flavors of disabled so every
+  // send/attach path is gated identically. Placeholder below distinguishes the
+  // copy — that is the only thing the three reasons differ in.
+  const disabled = disabledProp || archived || readOnly;
   // Draft identity: a reply-cluster composer keeps its own draft so it
   // never clobbers the channel's main draft. Network ops (send target,
   // members, attachment upload path) still use the real `conversationId`.
@@ -301,18 +324,20 @@ export function Composer({
   }, [draftKey]);
 
   // Both autocomplete kinds are scoped to the CURRENT conversation's
-  // workspace, so resolve that workspace once, up front. `workspaceId`
-  // is read from `useConversationById(conversationId).ref`, which
-  // resolves asynchronously — cold start, deep link, HMR, or a cleared
-  // cache can leave it null for a few frames. Everything downstream
-  // (member lists AND channel list) must fail CLOSED to empty in that
-  // window rather than fall back to a global directory, or the `@`
-  // picker would briefly leak candidates from outside this workspace
-  // (#task:1720). The product premise "there is no composer without a
-  // workspace" holds; this only closes the renderer resolution timing.
-  const conv = useConversationById(conversationId);
-  const workspaceId = conv.ref?.workspace_id ?? null;
-  const workspaceKind = conv.ref?.workspace_kind ?? null;
+  // workspace, and that coordinate comes from the PANE (which cannot render
+  // without a descriptor) rather than from a conversation-ref fetch of this
+  // component's own. Two consequences, both deliberate:
+  //  - There is no longer a window in which the coordinate is merely UNRESOLVED,
+  //    which is what used to make cold start / deep link / HMR / a restored
+  //    draft dangerous (#task:1720). The member-list QUERY still has its own
+  //    loading window, and everything downstream still fails CLOSED to empty
+  //    over it rather than falling back to a global directory.
+  //  - A null `workspaceId` is now a POSITIVE, terminal fact: this conversation
+  //    has no workspace at all (a `direct_pair`, #task:2035). The old premise
+  //    "there is no composer without a workspace" is FALSE as of that feature —
+  //    a DM has no container to scope candidates to, so both pickers offer
+  //    nothing and the send path stops waiting for a roster that can never land.
+  const isWorkspaceless = workspaceId === null;
   // `@` mention candidates come ONLY from this workspace's members — an
   // agent or human outside the workspace must never be offered. While
   // `workspaceId` is null or the query is loading, `useWorkspaceMemberLists`
@@ -590,16 +615,24 @@ export function Composer({
       dispatch(rewriteShorthandReferences(content, resolveShorthand));
       return;
     }
+    // A workspace-less conversation has no roster to canonicalize against, and
+    // never will (#task:2035) — so "wait for it" below would mean this body can
+    // never be sent at all. Send it as authored instead: a `direct_pair`
+    // delivers to its ENDPOINT, so the recipient is the same whether or not a
+    // handle in the text also addresses them, and a plain `@handle` addressing
+    // nobody is exactly the documented meaning of the bytes the author typed.
+    if (isWorkspaceless) {
+      dispatch(content);
+      return;
+    }
     // The roster has not landed and this body names someone, so spelling it as a
     // canonical reference is part of sending it (#task:2001 review). Sending now
     // would ship a body that addresses nobody with no signal anywhere, so wait
     // for the authoritative member set instead — and if it cannot be had, hand
     // the draft back exactly as a failed send does rather than store a
-    // half-truth.
-    if (!workspaceId) {
-      restoreDraft();
-      return;
-    }
+    // half-truth. (There is no "workspace not resolved yet" arm left to guard:
+    // the coordinate is a prop, so `workspaceId` non-null is already established
+    // by the workspace-less branch above.)
     void memberLists
       .refetch()
       .then(result => {
@@ -893,9 +926,11 @@ export function Composer({
             placeholder={
               archived
                 ? 'This conversation is archived'
-                : disabled
-                  ? 'This conversation is closed'
-                  : 'Enter to send · Shift + Enter for a new line · @member · #channel'
+                : readOnly
+                  ? 'This conversation is read-only'
+                  : disabled
+                    ? 'This conversation is closed'
+                    : 'Enter to send · Shift + Enter for a new line · @member · #channel'
             }
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the

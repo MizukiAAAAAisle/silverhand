@@ -21,6 +21,7 @@ index idx_conversation_stream_heads_conversation: CREATE INDEX idx_conversation_
 index idx_conversation_stream_heads_thread_root: CREATE INDEX idx_conversation_stream_heads_thread_root ON conversation_stream_heads(thread_root_id)
 index idx_conversation_users_user: CREATE INDEX idx_conversation_users_user ON conversation_users(user_id, joined_at)
 index idx_conversations_archived_at: CREATE INDEX idx_conversations_archived_at ON conversations(workspace_id) WHERE archived_at IS NOT NULL
+index idx_conversations_direct_pair_endpoint_b: CREATE INDEX idx_conversations_direct_pair_endpoint_b ON conversations(endpoint_b_kind, endpoint_b_id) WHERE placement_kind = 'direct_pair'
 index idx_conversations_direct_pair_endpoints: CREATE UNIQUE INDEX idx_conversations_direct_pair_endpoints ON conversations( endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id ) WHERE placement_kind = 'direct_pair'
 index idx_conversations_inbox_agent: CREATE UNIQUE INDEX idx_conversations_inbox_agent ON conversations(inbox_agent_id) WHERE placement_kind = 'agent_inbox'
 index idx_conversations_pair_key: CREATE UNIQUE INDEX idx_conversations_pair_key ON conversations(pair_key) WHERE placement_kind = 'direct_pair'

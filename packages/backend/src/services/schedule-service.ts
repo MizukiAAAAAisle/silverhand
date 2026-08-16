@@ -23,7 +23,11 @@ import type { MessageRepo } from '../repos/message-repo.js';
 import type { ScheduleRepo } from '../repos/schedule-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
-import { publishUnreadUpdatedToConversationViewers } from '../viewer-scope.js';
+import {
+  conversationViewerUserIds,
+  publishUnreadUpdatedToConversationViewers,
+} from '../viewer-scope.js';
+import { publishDirectPairsChangedToViewers } from '../application/direct-pairs-changed.js';
 import type { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
 
 /** Reasons a `schedule` request is rejected. The MCP route in PR-2 maps
@@ -815,7 +819,7 @@ export class ScheduleService {
       kind: 'message',
       payload: { message: msg },
     });
-    // WORKSPACE PLACEMENTS ONLY, branched HERE rather than inside the publisher
+    // PLACEMENT SPLIT, branched HERE rather than inside the publisher
     // (#task:2021 P4-4, same split as `conversation-message/delivery.ts`). The
     // unread read model is keyed by workspace, so it has no coordinate for a
     // workspace-less placement and the publisher says so by throwing. Since P4-4
@@ -824,18 +828,30 @@ export class ScheduleService {
     // into `status='failed'` with a placement error as its `failure_reason`:
     // schedules that create cleanly and then fire exactly zero times.
     //
-    // What is skipped is real and named: a pair with a human endpoint has a human
-    // who ought to see this wake as unread, and giving them one needs an unread
-    // coordinate that is not workspace-keyed — the DM read surface, a separate
-    // slice. The renderer's live path is unaffected: the `message` event above is
-    // published for every placement. Pinned by test, not logged — it happens on
-    // every DM fire, so a log line would be pure volume.
+    // The `direct_pair` arm is no longer a NAMED SKIP either. When P4-4 wrote this
+    // branch the DM read surface did not exist, so a human endpoint's view of the
+    // pair had nowhere to go; #task:2035 is that surface, and the frame it takes is
+    // the list invalidation.
+    //
+    // Both arms publish under the same honest limit, and it is worth stating rather
+    // than implying: the wake row is `from_kind='system'`, which `ROLLUP_UNREAD`
+    // excludes, so NEITHER frame moves an unread number by itself. What they carry
+    // is "the line the wake landed in changed" — and the reason the DM arm is not
+    // left as a skip is that this must not be the one place a placement's
+    // viewer-facing surface is silently absent. That asymmetry, not a missing
+    // number, is the class of bug #task:2035 was.
     if (isWorkspacePlaced(target)) {
       publishUnreadUpdatedToConversationViewers(
         this.events,
         this.attentionBadges,
         this.conversations,
         this.conversationReads,
+        targetConvId,
+      );
+    } else if (target.placement_kind === 'direct_pair') {
+      publishDirectPairsChangedToViewers(
+        this.events,
+        conversationViewerUserIds(this.conversations, targetConvId),
         targetConvId,
       );
     }

@@ -58,38 +58,42 @@ import {
 } from '@/features/search/useInlineFind';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 import type { ConversationVisibility } from '@silverhand/shared';
+import type {
+  ConversationPaneDescriptor,
+  WorkspaceUiKind,
+} from '@/features/conversations/pane-descriptor';
 import { paneChrome } from './pane-chrome';
-
-type WorkspaceUiKind = 'regular' | 'dm';
-
-interface ChannelDescriptor {
-  id: string;
-  title: string;
-  placement_kind: 'workspace' | 'direct_pair' | 'agent_inbox';
-  roster_policy: 'open' | 'fixed';
-  closed_at: number | null;
-  archived_at: number | null;
-  workspace_id: string;
-  /** Per-viewer membership, when the carrier (discovery-union list item)
-   *  provides it. Absent on a cross-workspace `?side` ref / deep link →
-   *  the view resolves it via a channel-detail fetch (see the membership
-   *  derivation below). Drives the read-only-browse + Join gate for a
-   *  public channel the viewer hasn't joined. */
-  is_member?: boolean;
-}
 
 interface ChannelViewProps {
   /** Kind of the parent workspace. DM and regular channels diverge in
    *  several places (agent strip, sub-thread affordances, member
-   *  management). Threaded as a prop so the divergences stay local. */
+   *  management). Threaded as a prop so the divergences stay local.
+   *  `null` for a workspace-less conversation (a `direct_pair`, #task:2035) as
+   *  well as for a workspace whose kind hasn't resolved — both must withhold
+   *  every workspace-kind-specific affordance, so one null serves. */
   channelKind: WorkspaceUiKind | null;
-  conversation: ChannelDescriptor | null;
+  conversation: ConversationPaneDescriptor | null;
   /** True when a channel IS selected in the route but its workspace's channel
    *  list hasn't resolved yet (e.g. a cross-workspace jump from Activity's
    *  "back to source"): `conversation` is transiently null. Distinguishes this
    *  loading window from "no channel selected" so the pane shows a loader
    *  instead of the misleading "select a channel" empty state (#task:1269). */
   resolving?: boolean;
+  /** True when the read that would resolve `conversation` FAILED and left
+   *  nothing — a third state beside "still resolving" and "nothing selected"
+   *  (#task:2035). Both of the others lie about a failure: the skeleton promises
+   *  an answer that is not coming, and "Select a channel" claims the viewer
+   *  chose nothing. Only consulted when `conversation` is null and `resolving`
+   *  is false, so an in-flight retry keeps showing the loader. */
+  loadFailed?: boolean;
+  /** True when the authority ANSWERED and the route's conversation is not one
+   *  the viewer can open — today the `direct_pair` arm's settled absence: a bad
+   *  or stale `/chat/d/:id`, or a pair the viewer is no longer an endpoint of
+   *  (#task:2035). A FOURTH state, because "Select a channel" would claim the
+   *  viewer chose nothing while the route names a conversation, and the loader
+   *  would promise an answer that has already arrived. Only consulted when
+   *  `conversation` is null and neither `resolving` nor `loadFailed` holds. */
+  notFound?: boolean;
   parentTitle?: string | null;
   /** One-shot scroll-to target. When set and the target message is in
    *  the current channel, MessageList scrolls + flashes it, then calls
@@ -208,6 +212,32 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
       // "no channel" empty text during the 1-2s resolve.
       return <ConversationViewSkeleton />;
     }
+    if (props.loadFailed) {
+      // Resolved to a FAILURE, not to an absence: say so plainly. Re-entering
+      // the conversation remounts the query, which refetches an errored key, so
+      // "reopen" is a real retry rather than advice we can't honour.
+      return (
+        <main
+          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
+          style={paneChrome}
+        >
+          Couldn&apos;t load this conversation — reopen it to retry.
+        </main>
+      );
+    }
+    if (props.notFound) {
+      // Resolved to an ANSWERED absence: the route names a conversation and the
+      // authority says this viewer cannot open it. Neither the loader nor
+      // "Select a channel" is true here.
+      return (
+        <main
+          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
+          style={paneChrome}
+        >
+          This conversation isn&apos;t available to you.
+        </main>
+      );
+    }
     return (
       <main
         className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
@@ -267,7 +297,7 @@ function ActiveChannelView({
   onOpenTask,
   onJumpToMessage,
   onOpenAdvancedSearch,
-}: ChannelViewProps & { conversation: ChannelDescriptor }): JSX.Element {
+}: ChannelViewProps & { conversation: ConversationPaneDescriptor }): JSX.Element {
   const {
     data: messages = [],
     isLoading,
@@ -292,7 +322,16 @@ function ActiveChannelView({
   // `member`, no member effect fires and no write affordance renders. DMs and
   // private channels always resolve to `member` (the backend stamps
   // `is_member: true`), so this is a no-op regression-wise there.
-  const { gate } = useChannelMembership(conversation, conversation.id);
+  //
+  // A `direct_pair` takes the third argument instead (#task:2035): it has no
+  // membership axis, no `is_member` carrier and no channel detail to fetch — see
+  // `directPairGate`.
+  const isDirectPair = conversation.placement_kind === 'direct_pair';
+  const { gate } = useChannelMembership(
+    conversation,
+    conversation.id,
+    isDirectPair ? { readOnly: conversation.read_only === true } : null,
+  );
   const joinChannel = useJoinChannel(conversation.workspace_id);
 
   // Per-viewer server-scored unread for this conversation's reply-clusters
@@ -379,6 +418,17 @@ function ActiveChannelView({
   const isRegularChannel =
     conversation.placement_kind === 'workspace'
     && conversation.roster_policy === 'open';
+  // The "+ add member" target workspace, resolved ONCE for the three surfaces
+  // that offer it (both header variants + the members modal). Non-null is the
+  // whole permission: an open roster, not closed, mutations allowed, and a
+  // workspace to search candidates in. The `workspace_id` conjunct is how the
+  // last of those becomes a type — adding a member is a workspace-scoped
+  // candidate search, and a fixed roster already excludes the one placement that
+  // has no workspace.
+  const addMemberWorkspaceId =
+    canAddMember(conversation, closed) && gate.allowMutations
+      ? conversation.workspace_id
+      : null;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   // The visibility/leave capability carriers (`can_update_visibility`,
@@ -530,6 +580,10 @@ function ActiveChannelView({
   );
   const handleOpenChannelRef = useCallback(
     (channelId: string) => {
+      // `#channel` refs resolve per-workspace, so a workspace-less pane has no
+      // namespace to open one in and the affordance is withheld below rather
+      // than guessing a workspace here.
+      if (conversation.workspace_id === null) return;
       onOpenChannelRef?.(conversation.workspace_id, channelId);
     },
     [conversation.workspace_id, onOpenChannelRef],
@@ -559,7 +613,7 @@ function ActiveChannelView({
       // matches to the heavier jump/prime path.
       if (loadedMessageIds.has(messageId)) return;
       onJumpToMessage?.({
-        workspaceId: conversation.workspace_id,
+        workspaceId: conversation.workspace_id ?? undefined,
         channelId: conversation.id,
         messageId,
         // Main-stream ensure-visible: prime + locate in THIS already-open
@@ -614,9 +668,9 @@ function ActiveChannelView({
               {parentTitle ?? conversation.title}
             </span>
             {memberStrip}
-            {canAddMember(conversation, closed) && gate.allowMutations ? (
+            {addMemberWorkspaceId !== null ? (
               <AddConversationMemberPopover
-                workspaceId={conversation.workspace_id}
+                workspaceId={addMemberWorkspaceId}
                 conversationId={conversation.id}
               />
             ) : null}
@@ -654,9 +708,9 @@ function ActiveChannelView({
               {conversation.title}
             </span>
             {memberStrip}
-            {canAddMember(conversation, closed) && gate.allowMutations ? (
+            {addMemberWorkspaceId !== null ? (
               <AddConversationMemberPopover
-                workspaceId={conversation.workspace_id}
+                workspaceId={addMemberWorkspaceId}
                 conversationId={conversation.id}
               />
             ) : null}
@@ -803,7 +857,7 @@ function ActiveChannelView({
           <InlineFindBar
             controller={find}
             onOpenAdvanced={() =>
-              onOpenAdvancedSearch?.(find.query, conversation.workspace_id)
+              onOpenAdvancedSearch?.(find.query, conversation.workspace_id ?? undefined)
             }
             placeholder="Search this channel"
           />
@@ -870,11 +924,7 @@ function ActiveChannelView({
           // Same floor as the header `+`: a member of a non-closed regular
           // channel may open the picker. Who is actually addable stays the
           // picker's per-candidate answer.
-          addMemberWorkspaceId={
-            canAddMember(conversation, closed) && gate.allowMutations
-              ? conversation.workspace_id
-              : undefined
-          }
+          addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
         />
       ) : null}
 
@@ -934,7 +984,14 @@ function ActiveChannelView({
             threadUnreadByRoot={threadUnreadByRoot}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
-            onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
+            onOpenChannelRef={
+              // A `#channel` chip resolves inside a workspace, so a
+              // workspace-less pane offers no navigation for one (it still
+              // renders as muted text, exactly like an unresolvable ref).
+              onOpenChannelRef && conversation.workspace_id !== null
+                ? handleOpenChannelRef
+                : undefined
+            }
             searchQuery={find.highlightQuery}
             searchActiveMessageId={find.activeMessageId}
           />
@@ -948,8 +1005,14 @@ function ActiveChannelView({
           <Composer
             key={conversation.id}
             conversationId={conversation.id}
+            workspaceId={conversation.workspace_id}
+            workspaceKind={channelKind}
             disabled={closed}
             archived={isArchived}
+            // A pair whose counterpart principal is gone: writes can never
+            // succeed again, which is not the same fact as `closed` and must not
+            // borrow its copy.
+            readOnly={conversation.read_only === true}
           />
         ) : gate.showJoin ? (
           // Resolved non-member browsing a public channel: Join replaces the

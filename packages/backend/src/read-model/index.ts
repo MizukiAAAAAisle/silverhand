@@ -28,6 +28,10 @@ import type { Database as Db } from 'better-sqlite3';
 import { createActivityReadModel, type ActivityReadModel } from './activity.js';
 import { createAgentReadModel, type AgentReadModel } from './agent-read.js';
 import {
+  createDirectPairsReadModel,
+  type DirectPairsReadModel,
+} from './direct-pairs.js';
+import {
   createFavoritesReadModel,
   type FavoritesReadModel,
 } from './favorites.js';
@@ -41,6 +45,10 @@ export interface BackendReadModels {
   readonly activity: ActivityReadModel;
   /** The agent-facing history / channel-list / search projections. */
   readonly agent: AgentReadModel;
+  /** `GET /api/direct-pairs` — the viewer's existing DM lines (#task:2035).
+   *  Viewer-scoped and workspace-free, because a `direct_pair` has no workspace
+   *  coordinate to list it under. */
+  readonly directPairs: DirectPairsReadModel;
   /** `GET /api/favorites` — the viewer's flat starred list + ordering state. */
   readonly favorites: FavoritesReadModel;
   /** Reaction aggregates for a message window + the lazy reactor detail. */
@@ -51,6 +59,7 @@ export function createReadModels(db: Db): BackendReadModels {
   return {
     activity: createActivityReadModel(db),
     agent: createAgentReadModel(db),
+    directPairs: createDirectPairsReadModel(db),
     favorites: createFavoritesReadModel(db),
     reactions: createMessageReactionsReadModel(db),
   };

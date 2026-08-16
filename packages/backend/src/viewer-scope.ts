@@ -8,11 +8,22 @@ import type { ConversationRepo } from './repos/conversation-repo.js';
 import type { ConversationReadRepo } from './repos/conversation-read-repo.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 
+/**
+ * The humans a conversation's viewer-scoped frames go to: its HUMAN
+ * PARTICIPANTS (§4.2), read through the placement authority (#task:2035).
+ *
+ * NOT `listUsers`, which is what this was. `conversation_users` is the authority
+ * for the WORKSPACE arm only, so for a `direct_pair` it returned the empty set and
+ * every frame built here went to nobody — an agent's DM committed and the
+ * recipient's UI was never told. The participants of a DM are its two endpoints;
+ * asking the roster for them is not "they have no viewers" but "this query cannot
+ * express who they are".
+ */
 export function conversationViewerUserIds(
   conversations: ConversationRepo,
   conversationId: string,
 ): string[] {
-  return conversations.listUsers(conversationId).map(member => member.user_id);
+  return conversations.listParticipantUserIds(conversationId);
 }
 
 export function singleConversationViewerUserId(
@@ -143,14 +154,20 @@ export function publishUnreadUpdatedToConversationViewers(
   if (!conversation) return;
   // This whole read model's unit is (HUMAN viewer, WORKSPACE) — see
   // `buildUnreadUpdatedMessagePayload`. A workspace-less placement therefore has
-  // no payload to build, and by §4.2 no human participant either, so every
-  // caller that routes one here is announcing a human-facing unread change for a
-  // conversation no human can see.
+  // no payload to build: `workspace_unread_count` and the tiered badge are both
+  // keyed by a workspace this conversation does not have.
+  //
+  // A `direct_pair` DOES have a human participant who ought to hear about a new
+  // message — that is what `conversationViewerUserIds` now enumerates — so what
+  // is missing here is a COORDINATE, not a viewer. Their frame is
+  // `direct_pairs_changed` (#task:2035), a viewer-scoped invalidation of the DM
+  // list whose re-read carries the pair's unread; the caller that can route a
+  // non-workspace placement branches on the placement itself
+  // (`MessageDeliveryCoordinator.publishUnreadUpdated`).
   //
   // Deliberately NOT reordered into "list viewers first, return when empty":
-  // that would turn the routing bug into a silent no-op justified by a
-  // CONSEQUENCE of the same placement fact, which is exactly the incidental
-  // disappearance this feature exists to remove.
+  // that would turn a routing bug into a silent no-op, which is exactly the
+  // incidental disappearance this feature exists to remove.
   const workspaceId = requireWorkspacePlacement(conversation);
   // Per-viewer: unread is viewer-specific, so the payload is computed inside the
   // loop (never one payload reused across viewers). The frame rides the

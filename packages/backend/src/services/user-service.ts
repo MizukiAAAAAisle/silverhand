@@ -1,4 +1,4 @@
-import { apiPaths, validateAvatarFile } from '@silverhand/shared';
+import { apiPaths, principalAvatarUrl, validateAvatarFile } from '@silverhand/shared';
 import type { BlobFileStorage } from '../storage/blob-file-storage.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import type {
@@ -368,9 +368,11 @@ function snapshotToDto(row: UserProfileSnapshot): UserDto {
     id: row.id,
     name: row.name,
     display_name: row.display_name,
-    avatar_url: row.avatar_storage_key
-      ? `${apiPaths.userAvatar(row.id)}?v=${row.updated_at}`
-      : null,
+    avatar_url: principalAvatarUrl(
+      apiPaths.userAvatar(row.id),
+      row.avatar_storage_key,
+      row.updated_at,
+    ),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

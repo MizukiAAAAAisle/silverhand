@@ -1,6 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import {
   apiPaths,
+  principalAvatarUrl,
   resolveMessageAuthor,
   type MessageAuthorDto,
   type MessageAuthorLiveActor,
@@ -30,9 +31,11 @@ function liveActorFrom(
   return {
     name: row.name,
     display_name: row.display_name,
-    avatar_url: row.avatar_storage_key
-      ? `${avatarPath(row.id)}?v=${row.updated_at}`
-      : null,
+    avatar_url: principalAvatarUrl(
+      avatarPath(row.id),
+      row.avatar_storage_key,
+      row.updated_at,
+    ),
     runtime: row.runtime,
   };
 }

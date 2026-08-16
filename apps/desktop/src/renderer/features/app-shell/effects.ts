@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useViewerWorkspacesSync } from '@/features/workspaces/hooks';
+import { useDirectPairsSync } from '@/features/direct-pairs/hooks';
 import { usePresenceSync } from '@/features/presence/hooks';
 import { useAgentSync } from '@/features/agents/agent-sync';
 import { useUserSync } from '@/features/users/user-sync';
@@ -24,6 +25,11 @@ export function useAppShellGlobalSync(): void {
   // changes (added/removed/role-changed), incl. "added to your first
   // workspace". See docs/viewer-visibility-sync-v1.md.
   useViewerWorkspacesSync();
+  // Same shape for the viewer's WORKSPACE-LESS lines (#task:2035): a
+  // `direct_pair`'s only carrier is the viewer scope, and the case that forces
+  // this to be mount-once is a stranger's FIRST DM — a row no cache holds yet,
+  // arriving while the viewer may be looking at any section.
+  useDirectPairsSync();
   // Keep human online/offline presence live — the global `app`-scope
   // `user_presence` deltas patch the shared ['presence'] cache regardless of
   // which surface reads it. See docs/human-presence-v1.md.

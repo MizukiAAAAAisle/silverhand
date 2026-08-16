@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import {
   apiPaths,
+  principalAvatarUrl,
   type AgentDto,
   type AgentRow,
   type AgentRuntimeParticipation,
@@ -39,9 +40,11 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     // cache-busted via `updated_at` so the renderer's HTTP cache
     // refreshes whenever AgentService.uploadAvatar / clearAvatar runs
     // (both bump updated_at via `setAvatar`/`clearAvatar`).
-    avatar_url: row.avatar_storage_key
-      ? `${apiPaths.agentAvatar(row.id)}?v=${row.updated_at}`
-      : null,
+    avatar_url: principalAvatarUrl(
+      apiPaths.agentAvatar(row.id),
+      row.avatar_storage_key,
+      row.updated_at,
+    ),
     // v33 (D4.d): materialization lifecycle. `idempotency_key` is
     // intentionally NOT projected — retry uses a route-local
     // management payload, not the default DTO (Cindy D1 round-2 P2).

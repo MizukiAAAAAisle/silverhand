@@ -271,14 +271,15 @@ export function agentParticipatesCorrelated(
  * removed from the workspace but whose channel row outlived the removal.
  *
  * NO EXPRESSION PARAMETER, unlike {@link workspaceAgentRosterEdge}, and the
- * asymmetry is caller-driven rather than an oversight: only AGENTS are ever
- * enumerated. Runtime delivery targets are agents by definition, so a
- * conversation's agent participants are read as a set, while the human rule is
- * only ever asked about ONE person (the write gate's actor, a thread-follower
- * candidate). A parameter whose every call site passes `'?'` is a seam with one
- * legal value — an abstraction pretending to a generality nothing asks for — so
- * this face binds the user id
- * directly and gains an expression the day a second reading actually exists.
+ * asymmetry SURVIVES the arrival of a human set reading (#task:2035). The two
+ * readings of the human rule are this predicate and
+ * {@link workspaceHumanRosterMembers}, and the set form does not test a supplied
+ * principal at all — it PRODUCES the seat's own `user_id`. So there is still
+ * exactly one thing to interpolate here, and a parameter whose every call site
+ * passes `'?'` would be a seam with one legal value: an abstraction pretending to
+ * a generality nothing asks for. The agent side needs its expression for a
+ * different reason — a CORRELATED point check over a column of the enclosing
+ * query — and no human caller wants that reading.
  */
 function workspaceHumanRosterEdge(conversationAlias: string): string {
   return `(${conversationAlias}.placement_kind = 'workspace'
@@ -310,6 +311,8 @@ function workspaceHumanRosterEdge(conversationAlias: string): string {
  *     message ACL (the same wording shared's `resolveParticipation` carries). So
  *     this predicate is FALSE there by having no arm to be true in, which is why
  *     there is nothing to keep in sync with the code face.
+ *
+ * Its set-shaped twin is {@link PARTICIPANT_USER_IDS_SQL}.
  */
 export function userParticipates(
   conversationAlias: string,
@@ -325,3 +328,123 @@ export function userParticipates(
     params: [userId, userId, userId, userId],
   };
 }
+
+/**
+ * THE SET-SHAPED human roster read: the `conversation_users` seats of ONE
+ * workspace conversation that are ALSO workspace memberships, as user ids. The
+ * twin of {@link workspaceHumanRosterEdge} — same two tables, same workspace
+ * gating ANDed INSIDE the fragment, same reason it is a pinned fragment rather
+ * than an inline clause — asked in the other DIRECTION.
+ *
+ * The v25 PAIR travels with it, and that is the whole reason this is a fragment
+ * and not a bare `JOIN conversation_users`: the seat produces the candidate and
+ * workspace membership is a CORRELATED conjunct on the candidate's own id
+ * (`cu_p.user_id`), so the set cannot admit someone the predicate would reject.
+ * The predicate binds one supplied user id twice; here the two facts are joined
+ * on the row being produced. Same rule, two directions, one gating text each.
+ */
+function workspaceHumanRosterMembers(): string {
+  return `SELECT cu_p.user_id AS user_id
+              FROM conversations c_p
+              JOIN conversation_users cu_p
+                ON cu_p.conversation_id = c_p.id
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'workspace'
+               AND EXISTS (
+                 SELECT 1 FROM workspace_users wu_p
+                  WHERE wu_p.workspace_id = c_p.workspace_id
+                    AND wu_p.user_id = cu_p.user_id
+               )`;
+}
+
+/**
+ * The HUMAN PARTICIPANTS of one conversation, as a set of candidate ids produced
+ * by the placement (§4.2) — the enumerating reading of {@link userParticipates},
+ * arm for arm, and the text every VIEWER-scoped read face is built on
+ * (#task:2035).
+ *
+ * Why the human rule needed a second reading too. The viewer faces asked
+ * `conversation_users` DIRECTLY — no placement, no authority — so for the two
+ * rosterless placements they returned the empty set, and a viewer-scoped frame
+ * for a `direct_pair` was published to NOBODY while the row was durable. That is
+ * the human-side twin of the recipient defect {@link PARTICIPANT_AGENT_IDS_SQL}
+ * exists to remove, and it is why the fix is one arm per placement here rather
+ * than a `LEFT JOIN` or a per-placement branch at each call site.
+ *
+ * Shape mirrors the agent set exactly — one arm per placement anchored on
+ * `c_p.id = @conv`, `UNION` because it is a SET, `@conv` bound ONCE by name — with
+ * ONE structural difference: there is NO `agent_inbox` arm, because a human is
+ * never a participant of an inbox (the predicate's own docblock states why). The
+ * enumeration is therefore EMPTY for an inbox, which is the correct answer and not
+ * a missing arm.
+ *
+ * CANDIDATES, not viewers: EXISTENCE IS NOT HERE, for the same reason liveness is
+ * not in the agent set. A caller that needs a real person joins `users` over this
+ * set — see `conversation-repo`'s `LIVE_PARTICIPANT_USER_IDS_SQL`, which is the
+ * production statement.
+ */
+export const PARTICIPANT_USER_IDS_SQL = `${workspaceHumanRosterMembers()}
+             UNION
+            SELECT c_p.endpoint_a_id AS user_id
+              FROM conversations c_p
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_a_kind = 'human'
+             UNION
+            SELECT c_p.endpoint_b_id AS user_id
+              FROM conversations c_p
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_b_kind = 'human'`;
+
+/**
+ * The DIRECT PAIRS OF ONE HUMAN, as a set of conversation ids — the TRANSPOSE of
+ * {@link PARTICIPANT_USER_IDS_SQL}'s two endpoint arms (#task:2035).
+ *
+ * The two set constants above fix a CONVERSATION and produce PRINCIPALS; a
+ * viewer's Direct Messages list fixes a PRINCIPAL and produces CONVERSATIONS.
+ * That is a different question, not a different rule — the arms are the same
+ * endpoint arms, read along the other axis — so it belongs in this authority
+ * beside them rather than as a `direct_pair` clause hand-written in a read model,
+ * where the next arm of the placement would be added in one file and not the
+ * other.
+ *
+ * NO WORKSPACE ARM, and the omission is the point. This is not "the viewer's
+ * conversations": channels are enumerated workspace-first (a person reaches them
+ * through a workspace they are a member of, and that face already exists), and
+ * folding them in here would put a `conversation_users` read in a constant whose
+ * whole subject is the ROSTERLESS placement. There is no `agent_inbox` arm for the
+ * same reason the human participant set has none: a human is never a participant
+ * of an inbox.
+ *
+ * HUMAN ONLY, deliberately. The agent transpose ("which pairs does this agent
+ * have") is expressible in one more pair of arms, and it is not here because no
+ * caller asks it: the agent-side surface an agent reads is its own inbox plus the
+ * conversations it was placed in. Adding it now would be a second text to keep in
+ * agreement with nothing.
+ *
+ * `@viewer`, bound ONCE by name for both arms, as `@conv` is above.
+ *
+ * CANDIDATES, not rows to render: EXISTENCE AND LIVENESS ARE NOT HERE. A pair
+ * whose OTHER endpoint's principal was deleted is still the survivor's pair (that
+ * closes the WRITE gate, not participation), so the read model decides what to
+ * show; and the counterpart identity is resolved from the endpoint columns by the
+ * shared `directPairEndpointsOf`, not by a slot `CASE` duplicated in SQL.
+ *
+ * Both arms must SEEK. Slot A has had a prefix since v74; slot B is indexed by
+ * v80, which exists because `canonicalEndpointOrder` sorts by kind and
+ * 'agent' < 'human' — so in every agent<->human pair the person is in slot B and
+ * the human transpose's HOT arm is the one v74 did not cover. The plan contract is
+ * an EXPLAIN falsifier over the production statement.
+ */
+export const DIRECT_PAIR_IDS_FOR_USER_SQL = `SELECT c_p.id AS conversation_id
+              FROM conversations c_p
+             WHERE c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_a_kind = 'human'
+               AND c_p.endpoint_a_id = @viewer
+             UNION
+            SELECT c_p.id AS conversation_id
+              FROM conversations c_p
+             WHERE c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_b_kind = 'human'
+               AND c_p.endpoint_b_id = @viewer`;

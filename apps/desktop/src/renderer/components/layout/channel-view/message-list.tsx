@@ -78,7 +78,10 @@ export function MessageList({
   searchActiveMessageId,
 }: {
   channelId: string;
-  workspaceId: string;
+  /** The conversation's workspace, or `null` for a workspace-less one (a
+   *  `direct_pair`, #task:2035) — forwarded to the render context, whose
+   *  workspace-scoped lookups stay empty for it. */
+  workspaceId: string | null;
   messages: CachedMessage[];
   isLoading: boolean;
   hasMoreBefore: boolean;

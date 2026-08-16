@@ -9,6 +9,7 @@ import {
 } from '../conversation-title.js';
 import {
   ConversationAgentStatusSchema,
+  ConversationEndpointKindSchema,
   ConversationEventKindSchema,
   ConversationPlacementKindSchema,
   ConversationRosterPolicySchema,
@@ -459,6 +460,135 @@ export const WorkspaceChannelListItemSchema = z.discriminatedUnion('roster_polic
   DmChannelDtoSchema.extend({ is_member: z.boolean() }),
 ]);
 export type WorkspaceChannelListItem = z.infer<typeof WorkspaceChannelListItemSchema>;
+
+/**
+ * The OTHER principal of one of the viewer's direct pairs (#task:2035), resolved
+ * server-side.
+ *
+ * WHY THE COUNTERPART AND NOT A TITLE. A `direct_pair` stores no title (a DM's
+ * label is "the other one", which is per-viewer), so the row's name has to be
+ * derived at read time from the endpoint that is not the viewer's own. Deriving it
+ * in the CLIENT would mean shipping both endpoint coordinates to the renderer and
+ * teaching it which slot it occupies — the canonical endpoint order is a storage
+ * rule, and a client that reimplemented it would silently name the wrong side the
+ * moment the order gained a kind.
+ *
+ * A UNION, not a nullable identity, because an endpoint OUTLIVES its principal:
+ * the coordinate is historical and the pair stays the survivor's pair. So the
+ * absence of a person is a STATE of the counterpart rather than a missing field.
+ *  - `active` — the principal exists; `name` / `display_name` / `avatar_url` are its
+ *    CURRENT values, not a send-time snapshot, exactly as `MessageAuthorDto`'s
+ *    active arm defines them. Split by `kind` so an illegal combination is
+ *    unconstructable: an `agent` carries its current `runtime` (the byline glyph),
+ *    a `human` carries `runtime: null`.
+ *  - `deleted` — the principal is gone. It carries ONLY `kind` + `id`, and that is
+ *    a fact about the model rather than a shortcut: nothing about an endpoint is
+ *    snapshotted (unlike a message author, which stores `author_name` at send
+ *    time), so no name can be recovered. The renderer owns the copy for it — UI
+ *    text is never outsourced to the backend.
+ *
+ * `kind` is the ENDPOINT kind (`'human' | 'agent'`), not the message-author
+ * vocabulary (`'user' | 'agent'`): this value object describes a placement
+ * coordinate, and using the coordinate's own spelling is what keeps it comparable
+ * to the columns it came from.
+ */
+export const DirectPairCounterpartSchema = z.union([
+  z.object({
+    status: z.literal('active'),
+    kind: z.literal('agent'),
+    id: z.string(),
+    name: z.string(),
+    display_name: z.string(),
+    avatar_url: z.string().nullable(),
+    runtime: RuntimeKindSchema,
+  }),
+  z.object({
+    status: z.literal('active'),
+    kind: z.literal('human'),
+    id: z.string(),
+    name: z.string(),
+    display_name: z.string(),
+    avatar_url: z.string().nullable(),
+    runtime: z.null(),
+  }),
+  z.object({
+    status: z.literal('deleted'),
+    kind: ConversationEndpointKindSchema,
+    id: z.string(),
+  }),
+]);
+export type DirectPairCounterpart = z.infer<typeof DirectPairCounterpartSchema>;
+
+/**
+ * One row of the viewer's Direct Messages list — `GET /api/direct-pairs`
+ * (#task:2035).
+ *
+ * NOT a `ConversationDto` or a `DmChannelDto`, and the distinction is the whole
+ * reason this type exists. `dm_channel` is a WORKSPACE-placed conversation with a
+ * fixed roster inside an agent-home workspace; a `direct_pair` has no workspace
+ * coordinate at all, so a client that received one as a channel would try to open
+ * it under a workspace it does not belong to (which is precisely why the agent
+ * page's DM seats were inert before this list existed).
+ *
+ * `unread_count` is the same roll-up every channel badge shows (mainline + followed
+ * threads), asked per pair. There is no `latest_unread` pointer beside it: that
+ * powers the close-watermark of an OPEN conversation, and a sidebar row needs a
+ * number.
+ *
+ * `read_only` is the survivor state — the write gate's one placement-specific
+ * narrowing, derived from the endpoints rather than stored (see
+ * `directPairIsReadOnlyForSurvivor`). It is carried here so the row can render its
+ * state without opening the conversation; the authoritative refusal stays on the
+ * send path.
+ *
+ * `created_at` is when the line was opened, and it is the list's ORDER. Not "last
+ * activity": no conversation row carries a last-message timestamp, so an activity
+ * order would be a derivation this list alone had — see
+ * `DIRECT_PAIRS_FOR_VIEWER_SQL`.
+ */
+export const DirectPairListItemSchema = z.object({
+  conversation_id: z.string(),
+  counterpart: DirectPairCounterpartSchema,
+  unread_count: z.number().int().nonnegative(),
+  read_only: z.boolean(),
+  created_at: z.number().int(),
+});
+export type DirectPairListItem = z.infer<typeof DirectPairListItemSchema>;
+
+/** Response for `GET /api/direct-pairs`: every EXISTING pair the viewer is an
+ *  endpoint of, oldest first.
+ *
+ *  EXISTING pairs only — a product ruling, not an optimization (@shiki,
+ *  #task:2035): an agent the viewer has never messaged does NOT appear here. The
+ *  entry point for starting a new DM is the agent's own page, so this list stays a
+ *  list of open lines instead of a directory of everyone who could be messaged. */
+export const DirectPairListResponseSchema = z.object({
+  direct_pairs: z.array(DirectPairListItemSchema),
+});
+export type DirectPairListResponse = z.infer<typeof DirectPairListResponseSchema>;
+
+/**
+ * Viewer-scoped `direct_pairs_changed` payload (#task:2035) — a HINT, never a
+ * value: the consumer invalidates and re-reads `GET /api/direct-pairs`, which
+ * stays the single authority for the list's membership, order and unread.
+ *
+ * That is the same contract `workspace_channels_changed` and
+ * `viewer_workspaces_changed` carry, and it is what makes a STRANGER's first DM
+ * appear with no reload: the row does not exist in any cache yet, so there is
+ * nothing for a patch-style frame to patch — only a re-read can discover it. It
+ * is also why this cannot be the conversation's own `message` frame: a client is
+ * subscribed to a conversation it has open, and this pair has never been open.
+ *
+ * `conversation_id` names the pair that changed, for logs and for a consumer that
+ * wants to know WHICH row moved. A consumer that only invalidates may ignore it —
+ * it must never be treated as "and nothing else changed".
+ */
+export const DirectPairsChangedPayloadSchema = z.object({
+  conversation_id: z.string(),
+});
+export type DirectPairsChangedPayload = z.infer<
+  typeof DirectPairsChangedPayloadSchema
+>;
 
 /** Body for `PATCH /api/channels/:id/archive`. Same toggle shape as the
  *  workspace archive endpoint. Archive is purely organizational — agents

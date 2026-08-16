@@ -49,17 +49,23 @@ import type { MessageSeq } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useJoinChannel } from '@/features/workspaces/hooks';
-import {
-  channelGateFor,
-  type MembershipState,
-} from '@/features/channels/membership';
+import type { ChannelGate } from '@/features/channels/membership';
+import type { WorkspaceUiKind } from '@/features/conversations/pane-descriptor';
 import { classifyTopShift } from '@/components/layout/messageListVirtualization';
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
    *  `thread_root_id = rootMessageId`; the panel reads/sends against it. */
   channelId: string;
+  /** The parent conversation's workspace. NON-NULL by contract: App mounts this
+   *  panel only for a workspace-placed parent, because a `direct_pair` withholds
+   *  threads entirely (#task:2035 — the backend's channel-like index does not
+   *  resolve a pair, so there is no reply cluster to show). Do NOT widen it to
+   *  `string | null` for a pair: that adds null branches with no caller and makes
+   *  a withheld affordance look half-wired. */
   workspaceId: string;
+  /** That workspace's kind, forwarded to the composer's `#` channel query. */
+  workspaceKind?: WorkspaceUiKind | null;
   /** The root (main-line) message whose thread this panel shows. */
   rootMessageId: string;
   /** Parent channel title, shown in the header subtitle. */
@@ -67,16 +73,18 @@ interface ThreadPanelProps {
   /** Parent channel closed → composer disabled. */
   closed?: boolean;
   archived?: boolean;
-  /** The PARENT channel's per-viewer membership, resolved by App
-   *  from the SAME authority `ChannelView` uses (the shared
-   *  `useChannelMembership` three-state — never a collapsed boolean). A thread
-   *  shares its channel's membership: `member` participates fully; `nonmember`
-   *  reads the thread but the composer is replaced by Join and every member
-   *  affordance (follow / react / save / attachment export) hides; `unknown`
-   *  (still resolving) is NEUTRAL — neither composer nor Join — so we never
-   *  flash a Join we might revoke. Required (no default) so a caller can't
-   *  silently fail open. */
-  membership: MembershipState;
+  /** The parent conversation's affordance gate, resolved by App from the SAME
+   *  authority `ChannelView` uses (`useChannelMembership`) and passed in
+   *  ALREADY DERIVED — a thread shares its parent's gate, and re-deriving it
+   *  here from a collapsed state is how the two panes would drift. For a
+   *  channel: `member` participates fully; `nonmember` reads the thread with
+   *  Join in place of the composer and every member affordance hidden;
+   *  `unknown` (still resolving) is NEUTRAL — neither composer nor Join — so we
+   *  never flash a Join we might revoke. For a `direct_pair` it is
+   *  `directPairGate`, whose read-only arm withdraws replies without
+   *  withdrawing mark-read. Required (no default) so a caller can't silently
+   *  fail open. */
+  gate: ChannelGate;
   onClose: () => void;
   /** "View in channel": close this panel and scroll-locate + flash the
    *  root message in the main channel stream. Wired by App to
@@ -143,11 +151,12 @@ interface ThreadPanelProps {
 export function ThreadPanel({
   channelId,
   workspaceId,
+  workspaceKind = null,
   rootMessageId,
   parentTitle,
   closed = false,
   archived = false,
-  membership,
+  gate,
   onClose,
   onViewInChannel,
   conversationRefsById,
@@ -160,11 +169,9 @@ export function ThreadPanel({
   onJumpToMessage,
   onOpenAdvancedSearch,
 }: ThreadPanelProps): JSX.Element {
-  // Derive the member gate from the authoritative parent-channel three-state
-  // membership. `canParticipate` (member effects: follow / react / save /
-  // attachment export + the mark-read effect below) is member-only. The
+  // `canParticipate` (member effects: follow / react / save / attachment export
+  // + the mark-read effect below) rides the gate's member-effect axis; the
   // composer / Join slot uses the full gate so `unknown` shows NEITHER.
-  const gate = channelGateFor(membership);
   const canParticipate = gate.allowMemberEffects;
   const rootCtx = useThreadRoot(channelId, rootMessageId);
   const cluster = useThreadCluster(channelId, rootMessageId, {
@@ -1035,6 +1042,8 @@ export function ThreadPanel({
         <Composer
           key={`${channelId}#cluster#${rootMessageId}`}
           conversationId={channelId}
+          workspaceId={workspaceId}
+          workspaceKind={workspaceKind}
           threadRootId={rootMessageId}
           disabled={closed || rootCtx.isError || !rootCtx.root}
           archived={archived}

@@ -20,6 +20,7 @@ import {
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
+import { DirectMessagesGroup } from './DirectMessagesPanel';
 import { useStarMembership } from '@/features/favorites/hooks';
 import { OUTER_GLYPH_INSET, sidebarRowStateClass } from './sidebar-shared';
 import {
@@ -49,6 +50,11 @@ interface SidebarProps {
   /** Start channel creation scoped to one workspace — the merged tree has no
    *  "current" workspace to imply. */
   onCreateChannel: (workspaceId: string) => void;
+  /** Open a `direct_pair` — a conversation with NO workspace coordinate
+   *  (#task:2035). A separate handler from `onSelectConversation` because the two
+   *  navigations land on different routes: passing a null workspace to the
+   *  workspace-keyed one would either fabricate a coordinate or silently no-op. */
+  onSelectDirectPair: (conversationId: string) => void;
   /** Open a conversation inside a given workspace. STARRED is global, so the
    *  parent workspace is explicit: the handler owns the cross-workspace open
    *  (remembered layout restore included), STARRED never a second nav model. */
@@ -281,10 +287,11 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           watchWorkspaceIds={watchWorkspaceIds}
           onSelectConversation={props.onSelectConversation}
         />
-        {/* Order: STARRED → WORKSPACES → DM (shiki, 2026-08-08). WORKSPACES is the
-          * deep half of the tree — every row can expand into channels — so it takes
-          * the position right under STARRED, and DM (flat, one row per agent) sits
-          * at the bottom where its length doesn't push the workspaces off-screen. */}
+        {/* Order: STARRED → WORKSPACES → DIRECT MESSAGES → AGENT SPACES (shiki,
+          * 2026-08-08 for the first three rungs). WORKSPACES is the deep half of
+          * the tree — every row can expand into channels — so it takes the
+          * position right under STARRED, and the two flat sections sit at the
+          * bottom where their length doesn't push the workspaces off-screen. */}
         <WorkspaceGroup
           label="WORKSPACES"
           kind="regular"
@@ -320,8 +327,25 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           sort={sortConfigFor('regular')}
           persistId="workspaces"
         />
+        {/* DIRECT MESSAGES = `direct_pair` conversations (#task:2035) — the
+          * viewer's person-to-person lines, which have NO container at all. It sits
+          * directly above AGENT SPACES because that is the neighbour it is most
+          * often confused with: an agent home is a WORKSPACE you share with an
+          * agent (channels, tasks, members), a direct pair is a single line between
+          * two principals. Self-contained; renders nothing when the viewer has no
+          * pairs. */}
+        <DirectMessagesGroup
+          selectedChannelId={props.selectedChannelId}
+          onSelectDirectPair={props.onSelectDirectPair}
+        />
         <WorkspaceGroup
-          label="DM"
+          // AGENT SPACES, not "DM" (#task:2035): these rows are agent-home
+          // WORKSPACES — each expands into channels — and the section directly
+          // above now holds the actual direct messages. Two different things had
+          // one name, and the name belonged to the other one. `persistId` stays
+          // `"dm"`: it is this section's STORAGE identity, so renaming it would
+          // silently reset every user's collapse choice.
+          label="AGENT SPACES"
           kind="dm"
           workspaces={orderedDms}
           selected={selected}

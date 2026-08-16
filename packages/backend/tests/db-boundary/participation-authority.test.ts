@@ -49,7 +49,9 @@ import { describe, expect, it } from 'vitest';
 import {
   agentParticipates,
   agentParticipatesCorrelated,
+  DIRECT_PAIR_IDS_FOR_USER_SQL,
   PARTICIPANT_AGENT_IDS_SQL,
+  PARTICIPANT_USER_IDS_SQL,
   userParticipates,
 } from '../../src/repos/conversation-placement-sql.js';
 import { REPO_ROOT } from './sources.js';
@@ -232,11 +234,14 @@ function squash(sql: string): string {
  * correlated second roster read, which is the exact escape this gate counts.
  * Pinned at the parameter, both readings are the same one fragment.
  *
- * The HUMAN pin keeps its literal `?`, because the human rule has ONE reading:
- * only agents are enumerated (a runtime delivery target is an agent), so nothing
- * asks for the human participants of a conversation as a set. If that changes, the
- * fix is to parameterize the human face and this pin with it — not to widen the
- * pin in advance, which would make it match a form no production caller uses.
+ * The HUMAN pin keeps its literal `?` even though the human rule now has TWO
+ * readings too (#task:2035). The asymmetry with the agent pin is not an oversight:
+ * the agent's second reading is a CORRELATED point check that substitutes a column
+ * of the enclosing query for the `?`, so one pin has to match both. The human's
+ * second reading is SET-shaped — it produces the seat's own `user_id` instead of
+ * testing a supplied one — so it shares no text with the predicate and gets its own
+ * pin below. Widening this one to an interpolation would make it match a form no
+ * production caller uses.
  */
 const PINNED_AGENT_ROSTER_FRAGMENT = `(\${conversationAlias}.placement_kind = 'workspace'
             AND EXISTS (
@@ -290,17 +295,46 @@ const PINNED_HUMAN_ROSTER_FRAGMENT = `(\${conversationAlias}.placement_kind = 'w
                  AND wu_p.user_id = ?
             ))`;
 
+/**
+ * The human SET reading (#task:2035), and the pin is where its correctness lives.
+ * The predicate binds ONE supplied user id into both conjuncts; the set has no
+ * supplied id at all, so workspace membership has to be a CORRELATED `EXISTS` on
+ * the candidate the seat produces (`cu_p.user_id`). Written any other way — the
+ * seat alone, or a `workspace_users` test on some other id — the fragment stops
+ * matching and its two roster reads are reported, which is the only reason a
+ * SECOND `conversation_users` mention is allowed in the file at all.
+ *
+ * No `${…}` interpolation, like the agent set and for the same reason: a
+ * self-contained subquery with its own aliases and ONE named parameter has no
+ * caller-supplied alias travelling through it. That this reading AGREES with the
+ * predicate is not checkable from text and is asserted over values in
+ * `tests/read-model/participation-enumeration.test.ts`.
+ */
+const PINNED_HUMAN_ROSTER_MEMBERS_FRAGMENT = `SELECT cu_p.user_id AS user_id
+              FROM conversations c_p
+              JOIN conversation_users cu_p
+                ON cu_p.conversation_id = c_p.id
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'workspace'
+               AND EXISTS (
+                 SELECT 1 FROM workspace_users wu_p
+                  WHERE wu_p.workspace_id = c_p.workspace_id
+                    AND wu_p.user_id = cu_p.user_id
+               )`;
+
 const PINNED_ROSTER_FRAGMENTS = [
   PINNED_AGENT_ROSTER_FRAGMENT,
   PINNED_AGENT_ROSTER_MEMBERS_FRAGMENT,
   PINNED_HUMAN_ROSTER_FRAGMENT,
+  PINNED_HUMAN_ROSTER_MEMBERS_FRAGMENT,
 ];
 
-/** How many roster-table mentions the pinned set accounts for: the agent rule's
- *  TWO readings (`conversation_agents` as a membership test and as a set of
- *  members) plus the human pair (`conversation_users`, `workspace_users`). Derived
- *  from the pins rather than written as a literal, so adding a principal kind — or a
- *  third reading of an existing one — cannot pass by editing a magic number. */
+/** How many roster-table mentions the pinned set accounts for: each principal
+ *  kind's TWO readings — the roster as a membership test and as a set of members —
+ *  and for the human kind each reading carries the v25 PAIR
+ *  (`conversation_users`, `workspace_users`). Derived from the pins rather than
+ *  written as a literal, so adding a principal kind — or a third reading of an
+ *  existing one — cannot pass by editing a magic number. */
 const PINNED_MENTION_COUNT = PINNED_ROSTER_FRAGMENTS.reduce(
   (n, fragment) => n + rosterMentions(squash(fragment)).length,
   0,
@@ -392,8 +426,9 @@ describe('db-boundary: participation authority', () => {
     // form bind a placeholder nobody supplies a parameter for.
     expect(code).toContain('workspaceAgentRosterEdge(conversationAlias, agentIdExpr)');
     expect(code).toContain('workspaceHumanRosterEdge(conversationAlias)');
-    // …the SET reading delegates too, so its roster read stays the pinned one …
+    // …the SET readings delegate too, so their roster reads stay the pinned ones …
     expect(code).toContain('workspaceAgentRosterMembers()');
+    expect(code).toContain('workspaceHumanRosterMembers()');
     // …and the agent face's two PUBLIC readings are two calls on ONE arm text, not
     // two copies of it: the point form is the only place `'?'` is introduced, and
     // the correlated form forwards its caller's expression untouched (P4-5).
@@ -492,6 +527,84 @@ describe('db-boundary: participation authority', () => {
     // inside this text would redefine participation for every future reader of it;
     // the delivery statement adds it (`LIVE_PARTICIPANT_AGENT_IDS_SQL`).
     expect(sql).not.toContain('agents a');
+    expect(sql).not.toContain('deleted_at');
+  });
+
+  /**
+   * The HUMAN set reading's shape (#task:2035). Same claims as the agent one, plus
+   * the one that is unique to this kind and is a RULE rather than a gap: there is no
+   * `agent_inbox` arm, because a human is never a participant of an inbox — not even
+   * the creator of the agent. A future "symmetry" edit that added the arm would hand
+   * every viewer-scoped frame of an agent's private inbox to a person, so the
+   * absence is asserted here and not left to the predicate's docblock.
+   */
+  it('the human set reading covers the human arms, omits the inbox by rule, and binds the conversation once, by name', () => {
+    const sql = PARTICIPANT_USER_IDS_SQL;
+    const arms = sql.split(/\bUNION\b/);
+    expect(arms).toHaveLength(3);
+    expect(sql).not.toContain('UNION ALL');
+    expect(arms.filter(arm => arm.includes('conversation_users'))).toHaveLength(1);
+    expect(arms.filter(arm => arm.includes('endpoint_a_id'))).toHaveLength(1);
+    expect(arms.filter(arm => arm.includes('endpoint_b_id'))).toHaveLength(1);
+    // THE MISSING ARM IS THE RULE — stated over the whole text, since an added arm
+    // would be a fourth `UNION` branch and the length check alone would not say why
+    // it must not exist.
+    expect(sql).not.toContain('agent_inbox');
+    expect(sql).not.toContain('inbox_agent_id');
+    for (const arm of arms) expect(arm).toContain('AS user_id');
+    expect([...sql.matchAll(/c_p\.id = @conv/g)]).toHaveLength(arms.length);
+    expect(sql.split('?')).toHaveLength(1);
+    // The v25 pair is CORRELATED on the candidate, not on a bound id: this is the
+    // one place the set form could silently diverge from the predicate, so the
+    // conjunct's subject is asserted rather than merely its presence.
+    expect(sql).toContain('wu_p.user_id = cu_p.user_id');
+    // EXISTENCE IS NOT HERE, mirroring the agent set: `users` is joined by the
+    // production statement (`LIVE_PARTICIPANT_USER_IDS_SQL`), not by the authority.
+    expect(sql).not.toContain('JOIN users');
+  });
+
+  /**
+   * The TRANSPOSE reading's shape (#task:2035). Same endpoint arms as the human set
+   * above, read along the other axis — fix the PRINCIPAL, produce the
+   * CONVERSATIONS — and the reason it is pinned here is that it is the text a
+   * viewer's Direct Messages list is built on:
+   *
+   *   - BOTH SLOTS, because the canonical endpoint order decides which slot a
+   *     person lands in and no caller may depend on that. A one-armed transpose
+   *     returns a viewer's pairs with agents and silently loses their pairs with
+   *     other humans (or vice versa, if the order ever gains a kind).
+   *   - THE ROSTERLESS PLACEMENT ONLY. A `conversation_users` read here would be a
+   *     third reading of the human roster rule — the count above already reports it,
+   *     and this states the intent that makes the count correct: channels are
+   *     enumerated workspace-first, and an inbox has no human participant at all.
+   *   - ONE BINDING FOR ONE VALUE, by name, for the same reason as `@conv`.
+   */
+  it('the direct-pair transpose covers both endpoint slots, stays rosterless, and binds the viewer once, by name', () => {
+    const sql = DIRECT_PAIR_IDS_FOR_USER_SQL;
+    const arms = sql.split(/\bUNION\b/);
+    expect(arms).toHaveLength(2);
+    expect(sql).not.toContain('UNION ALL');
+    // One arm per slot, named by the column that answers for it, so neither can be
+    // dropped nor both collapsed onto one slot.
+    expect(arms.filter(arm => arm.includes('endpoint_a_id'))).toHaveLength(1);
+    expect(arms.filter(arm => arm.includes('endpoint_b_id'))).toHaveLength(1);
+    // …and each arm tests the KIND of the slot it reads, or a pair whose slot holds
+    // an agent id would match a user id that happened to collide.
+    expect(arms.filter(arm => arm.includes(`endpoint_a_kind = 'human'`))).toHaveLength(1);
+    expect(arms.filter(arm => arm.includes(`endpoint_b_kind = 'human'`))).toHaveLength(1);
+    // Every arm is confined to the placement whose participants ARE its endpoints …
+    expect([...sql.matchAll(/placement_kind = 'direct_pair'/g)]).toHaveLength(arms.length);
+    // … and to no other: the other two placements are answered by other faces.
+    expect(sql).not.toContain(`placement_kind = 'workspace'`);
+    expect(sql).not.toContain('agent_inbox');
+    for (const arm of arms) expect(arm).toContain('AS conversation_id');
+    expect([...sql.matchAll(/= @viewer/g)]).toHaveLength(arms.length);
+    expect(sql.split('?')).toHaveLength(1);
+    // CANDIDATES, not rows to render: a pair whose other endpoint's principal was
+    // deleted is still the survivor's pair, so neither existence nor the read-only
+    // decision belongs in the authority.
+    expect(sql).not.toContain('JOIN users');
+    expect(sql).not.toContain('JOIN agents');
     expect(sql).not.toContain('deleted_at');
   });
 
@@ -620,6 +733,48 @@ describe('db-boundary: participation authority', () => {
       rosterReadsOutside(
         `EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.user_id = ?)
          AND EXISTS (SELECT 1 FROM workspace_users wu WHERE wu.user_id = ?)`,
+        PINNED_ROSTER_FRAGMENTS,
+      ),
+    ).toHaveLength(2);
+
+    // THE HUMAN SET READING'S PIN (#task:2035). The pinned text passes …
+    const humanMembersGated = `const sql = \`${PINNED_HUMAN_ROSTER_MEMBERS_FRAGMENT}\`;`;
+    expect(rosterReadsOutside(humanMembersGated, PINNED_ROSTER_FRAGMENTS)).toEqual([]);
+    // … the version that enumerates seats for EVERY placement does not: it would
+    // publish a DM's viewer frames to whoever holds a stray `conversation_users` row
+    // on it, which is the set-shaped form of handing out someone else's DM …
+    expect(
+      rosterReadsOutside(
+        humanMembersGated.replace(
+          `WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'workspace'`,
+          'WHERE c_p.id = @conv',
+        ),
+        PINNED_ROSTER_FRAGMENTS,
+      ),
+    ).toHaveLength(2);
+    // … the "simplification" that keeps only the seat and drops workspace
+    // membership does not either — the set must reject exactly whom the predicate
+    // rejects, and the seat-only form admits a person removed from the workspace …
+    expect(
+      rosterReadsOutside(
+        `const sql = \`SELECT cu_p.user_id AS user_id
+              FROM conversations c_p
+              JOIN conversation_users cu_p
+                ON cu_p.conversation_id = c_p.id
+             WHERE c_p.id = @conv
+               AND c_p.placement_kind = 'workspace'\`;`,
+        PINNED_ROSTER_FRAGMENTS,
+      ),
+    ).toHaveLength(1);
+    // … and neither does the form whose membership `EXISTS` tests some OTHER id
+    // than the candidate the seat produced. That is the one difference between the
+    // two readings of the human rule — the predicate has a bound id to test, the set
+    // has only the row in hand — so a copy that correlated on the wrong subject
+    // would pass every count while admitting a non-member.
+    expect(
+      rosterReadsOutside(
+        humanMembersGated.replace('AND wu_p.user_id = cu_p.user_id', 'AND wu_p.user_id = ?'),
         PINNED_ROSTER_FRAGMENTS,
       ),
     ).toHaveLength(2);

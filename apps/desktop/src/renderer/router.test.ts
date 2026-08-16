@@ -950,3 +950,62 @@ describe('buildChannelLayoutUrl — restore a channel with its layout', () => {
     expect(layoutMemoryFromRoute(r)).toEqual({ kind: 'side', id: 'c-x' });
   });
 });
+
+/**
+ * The WORKSPACE-LESS conversation route (#task:2035). Pure URL algebra, which is
+ * where the interesting failure lives: the pane and the sidebar are driven off
+ * `directConversationId`, and if the parser ever stops distinguishing "a pair is
+ * open" from "nothing is open", App's workspace auto-select effect silently
+ * bounces the user out of the conversation they just clicked.
+ */
+describe('parseRouteState — the workspace-less /chat/d/:id route', () => {
+  it('populates channelId and marks the pane as having no workspace', () => {
+    const r = parseRouteState('/chat/d/c-pair', '');
+    expect(r).toMatchObject({
+      section: 'chat',
+      chatView: 'channel',
+      workspaceId: null,
+      channelId: 'c-pair',
+      directConversationId: 'c-pair',
+    });
+  });
+
+  it('leaves directConversationId null for every OTHER null-workspace URL', () => {
+    // The whole reason the field exists: these all carry `workspaceId: null`
+    // too, and the auto-select effect must keep treating them as "nowhere".
+    for (const pathname of ['/chat', '/chat/search', '/chat/saved', '/activity']) {
+      expect(parseRouteState(pathname, '').directConversationId).toBeNull();
+    }
+    expect(
+      parseRouteState('/chat/w/w-1/c/c-a', '').directConversationId,
+    ).toBeNull();
+  });
+
+  it('carries the secondary panes unchanged — they resolve against channelId', () => {
+    // The PARSER is placement-blind on purpose: `channelId` is populated the
+    // same way, so every `?`-driven consumer needs no pair branch. It is NOT a
+    // claim that these panes mount on a pair — App withholds the channel-like
+    // indexes there (#task:2035), and no writer ever produces this URL for a
+    // pair (see the deleted `buildChannelLayoutUrl(null, …)` arm). What is
+    // pinned here is only that a hand-typed query does not corrupt the parse.
+    const r = parseRouteState('/chat/d/c-pair', '?thread=m-1&files=1');
+    expect(r).toMatchObject({
+      channelId: 'c-pair',
+      directConversationId: 'c-pair',
+      threadRootId: 'm-1',
+      filesListOpen: true,
+    });
+  });
+
+  it('does not collide with the workspace patterns', () => {
+    // `/chat/d/:id` is one segment where `chatWorkspace` wants `/w/:id`, so a
+    // pair id can never be read as a workspace id.
+    expect(parseRouteState('/chat/d/c-pair', '').workspaceId).toBeNull();
+    expect(parseRouteState('/chat/w/w-1', '').directConversationId).toBeNull();
+  });
+});
+
+// No `buildChannelLayoutUrl` cases for a pair: layout memory is withheld for the
+// workspace-less placement, and the builder's `workspaceId` is non-null by type.
+// A test that drove the removed null arm was asserting the opposite of the
+// ticket's own verdict, which is why it is gone rather than adapted.

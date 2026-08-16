@@ -72,7 +72,7 @@ export interface MessageRenderContext {
 }
 
 export function useMessageRenderContext(
-  workspaceId: string,
+  workspaceId: string | null,
   conversationId: string,
   membersEnabled = true,
 ): MessageRenderContext {
@@ -82,7 +82,10 @@ export function useMessageRenderContext(
   // Resolve `#<channel_name>` against the message's workspace (not the
   // primary-selected one) so cross-workspace panes resolve their own
   // refs. Both queries short-circuit (`enabled: false`) until the
-  // workspace kind is known, so they emit empty arrays in that window.
+  // workspace kind is known, so they emit empty arrays in that window —
+  // which is also the terminal state for a workspace-less conversation
+  // (#task:2035): a `direct_pair` has no channel namespace, so `#name` refs
+  // there render as inert text, exactly as an unresolvable one does.
   const workspaceKind: 'regular' | 'dm' | null =
     workspaces.find(w => w.id === workspaceId)?.kind ?? null;
   const { data: liveChannels = [] } = useChannelsForWorkspace(
@@ -108,6 +111,13 @@ export function useMessageRenderContext(
   // both the query and its WS side-scope interest. Author display names come
   // from the global `useUsers()` (`humansById`), not the roster, so reading the
   // stream is unaffected — only unresolved @human chips degrade to plain text.
+  //
+  // A `direct_pair` DOES issue this read and it is not a mistake: the id is a
+  // conversation, the placement ACL admits an endpoint, and the answer is a 200
+  // with an EMPTY roster (a fixed-roster placement has no `conversation_users`
+  // rows, "rosterless by construction"). So a pair resolves @human chips the
+  // same way a non-member does — it doesn't — and nothing waits on it
+  // (#task:2035).
   const conversationMembers = useConversationMembers(
     membersEnabled ? conversationId : null,
   );

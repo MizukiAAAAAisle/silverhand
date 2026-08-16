@@ -2,7 +2,9 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import {
   agentParticipates,
+  DIRECT_PAIR_IDS_FOR_USER_SQL,
   PARTICIPANT_AGENT_IDS_SQL,
+  PARTICIPANT_USER_IDS_SQL,
   userParticipates,
   WORKSPACE_PLACED,
 } from './conversation-placement-sql.js';
@@ -18,6 +20,7 @@ import type {
   ConversationAgentRow,
   ConversationDto,
   ConversationEndpointIdentity,
+  ConversationEndpointRef,
   ConversationPlacementKind,
   ConversationRosterPolicy,
   ConversationRow,
@@ -200,6 +203,102 @@ export const LIVE_PARTICIPANT_AGENT_IDS_SQL = `SELECT a.id AS agent_id
      FROM (${PARTICIPANT_AGENT_IDS_SQL}) p
      JOIN agents a ON a.id = p.agent_id
     ORDER BY a.created_at ASC, a.id ASC`;
+
+/**
+ * The VIEWER enumeration: the human participants of one conversation that are
+ * real people, in a stable order (#task:2035). The human twin of
+ * {@link LIVE_PARTICIPANT_AGENT_IDS_SQL}, layered the same way — the placement
+ * produces candidate ids ({@link PARTICIPANT_USER_IDS_SQL}) and this statement adds
+ * what a viewer face needs on top — and exported for the same reason: its ACCESS
+ * PATH is a contract, EXPLAINed by
+ * `tests/read-model/participation-enumeration.test.ts` over this exact text.
+ *
+ * `JOIN users u` is an EXISTENCE conjunct, and it is not decoration. An endpoint
+ * column is a typed id with no foreign key — one column serves both principal
+ * kinds — so a `direct_pair` can name a user id whose row is gone, and every
+ * consumer here would then compute a viewer's unread against a person who does not
+ * exist. `users` has no soft-delete axis, so for this kind "live" and "extant" are
+ * the same predicate — which is why the join needs no tombstone conjunct, exactly
+ * as its agent twin needs none (an agent delete is a `DELETE` too).
+ *
+ * The order is `u.created_at ASC, u.id ASC` — the agent statement's rule applied to
+ * the other kind, sorting the PARTICIPANT SET rather than a table, so a per-message
+ * fan-out cannot pay for a sort of every person in the installation.
+ */
+export const LIVE_PARTICIPANT_USER_IDS_SQL = `SELECT u.id AS user_id
+     FROM (${PARTICIPANT_USER_IDS_SQL}) p
+     JOIN users u ON u.id = p.user_id
+    ORDER BY u.created_at ASC, u.id ASC`;
+
+/**
+ * The columns a DirectPair LIST row is built from: identity, the endpoint
+ * coordinates the counterpart is derived from, and `created_at` as the order.
+ *
+ * A projection rather than `IDENTITY_COLUMNS` because the two answer different
+ * questions and a list pays per row: identity carries `visibility` /
+ * `roster_policy` / `workspace_id` — three constants for this placement (`private`,
+ * `fixed`, `NULL`) — and `pair_key`, which is the aggregate's name for the TASK
+ * board, not for a sidebar row. What this face needs beyond the coordinates is a
+ * stable order, and that is `created_at`.
+ */
+const DIRECT_PAIR_LIST_COLUMNS = `c.id AS id,
+       c.placement_kind AS placement_kind,
+       c.endpoint_a_kind AS endpoint_a_kind, c.endpoint_a_id AS endpoint_a_id,
+       c.endpoint_b_kind AS endpoint_b_kind, c.endpoint_b_id AS endpoint_b_id,
+       c.endpoint_a_deleted_at AS endpoint_a_deleted_at,
+       c.endpoint_b_deleted_at AS endpoint_b_deleted_at,
+       c.created_at AS created_at`;
+
+/**
+ * ONE VIEWER'S DIRECT PAIRS, as list rows (#task:2035). Exported because its
+ * ACCESS PATH is a contract, EXPLAINed by
+ * `tests/read-model/participation-enumeration.test.ts` over this exact text.
+ *
+ * Layered exactly like the two participant statements above: the placement
+ * authority produces candidate ids ({@link DIRECT_PAIR_IDS_FOR_USER_SQL}, the
+ * transpose reading) and this statement adds what a LIST needs on top — the
+ * endpoint columns and an order. What it deliberately does NOT add is the
+ * COUNTERPART: resolving "the other one" is `directPairEndpointsOf` plus a
+ * principal lookup, and a slot `CASE` in SQL would be a second answer to a
+ * question shared code already answers for the ACL and the write gate.
+ *
+ * NO EXISTENCE CONJUNCT, and here that is a product decision rather than the
+ * layering rule: a pair whose counterpart was deleted is still the survivor's
+ * pair, and it is exactly the row the survivor must keep seeing (read-only) rather
+ * than have vanish from their sidebar. So the join that
+ * {@link LIVE_PARTICIPANT_USER_IDS_SQL} adds for a DELIVERY face is absent from
+ * this READ face on purpose; the read model asks
+ * `directPairIsReadOnlyForSurvivor` instead.
+ *
+ * `ORDER BY c.created_at ASC, c.id ASC` — when the line was opened, oldest first,
+ * which is the same base order `listActiveChannelsForViewer` gives a workspace's
+ * channels. NOT "most recent activity": no conversation carries a last-message
+ * timestamp (`updated_at` is not bumped by a send, and `latest_message_seq` is a
+ * per-conversation counter that does not compare across rows), so an activity order
+ * would be a new derivation for the DM list alone while every sibling list ordered
+ * by creation. `id` breaks ties so the list is deterministic within a millisecond —
+ * a random tiebreak that reorders between two fetches reads as movement in the
+ * sidebar.
+ */
+export const DIRECT_PAIRS_FOR_VIEWER_SQL = `SELECT ${DIRECT_PAIR_LIST_COLUMNS}
+     FROM (${DIRECT_PAIR_IDS_FOR_USER_SQL}) p
+     JOIN conversations c ON c.id = p.conversation_id
+    ORDER BY c.created_at ASC, c.id ASC`;
+
+/**
+ * One row of {@link DIRECT_PAIRS_FOR_VIEWER_SQL}: a pair's identity, its endpoint
+ * coordinates and when it was opened.
+ *
+ * EXTENDS the shared {@link ConversationEndpointRef} rather than restating the six
+ * endpoint columns, so this row is accepted unchanged by `directPairEndpointsOf`
+ * and `directPairIsReadOnlyForSurvivor` — the two functions that own "which slot is
+ * the other one" and "may the survivor still write". A hand-rolled twin of those
+ * columns would compile and then need its own copy of both rules.
+ */
+export interface DirectPairListRow extends ConversationEndpointRef {
+  id: string;
+  created_at: number;
+}
 
 // `pinned_at` is a vestigial column (#task:1209): pin/star became per-viewer
 // state in `user_sort_entry`, so the shared column is no longer read or written
@@ -1372,6 +1471,60 @@ export class ConversationRepo {
       .prepare<{ conv: string }, { agent_id: string }>(LIVE_PARTICIPANT_AGENT_IDS_SQL)
       .all({ conv: conversationId })
       .map(r => r.agent_id);
+  }
+
+  /**
+   * The conversation's HUMAN PARTICIPANTS, as ids and nothing else — the viewer
+   * enumeration every `viewer:<id>`-scoped read face fans out over (#task:2035).
+   *
+   * Why not {@link listUsers}: that returns `conversation_users` rows, so on a
+   * `direct_pair` — rosterless by construction (§4.2) — it returns the empty set,
+   * and every viewer frame for a DM was published to NOBODY while the message row
+   * was durable. That is the human-side twin of the delivery defect
+   * {@link listParticipantAgentIds} fixed, and it is the reported bug behind this
+   * ticket: an agent DMs a person, the message commits, and their sidebar never
+   * hears about it.
+   *
+   * It is also STRICTLY NARROWER than `listUsers` on the workspace arm, which is a
+   * fix in the same direction: a `conversation_users` seat that outlived its
+   * `workspace_users` membership is not a participant (the v25 pair), so it no
+   * longer receives that channel's viewer frames. The predicate face
+   * ({@link isUserParticipant}) has always answered `false` for that person — this
+   * face used to answer `true`, and one of the two had to be wrong.
+   *
+   * IDS ONLY, for {@link listParticipantAgentIds}'s reason: the membership DTO
+   * carries `joined_at`, which a DM endpoint does not have, and fabricating one
+   * would put a membership fact into a placement that has none.
+   */
+  listParticipantUserIds(conversationId: string): string[] {
+    return this.db
+      .prepare<{ conv: string }, { user_id: string }>(LIVE_PARTICIPANT_USER_IDS_SQL)
+      .all({ conv: conversationId })
+      .map(r => r.user_id);
+  }
+
+  /**
+   * The viewer's DIRECT PAIRS, as list rows (#task:2035) — the transpose of
+   * {@link listParticipantUserIds}: that one asks who is in a conversation, this
+   * one asks which conversations a person is in, for the placement that has no
+   * workspace to enumerate them under.
+   *
+   * A SEPARATE FACE from every channel list, not an arm of one. A `direct_pair`
+   * carries no workspace coordinate, so it cannot ride
+   * `GET /api/workspaces/:id/channels` — there is no `:id` it belongs to — and
+   * widening that route to "and also the viewer's DMs" would make a
+   * workspace-scoped response depend on which workspace the client happened to ask
+   * about first.
+   *
+   * ROWS, NOT A DTO. The counterpart's display identity is a lookup in another
+   * aggregate (an agent or a user), so composing it here would put a second
+   * principal read inside the conversation repo. The read model does that
+   * composition; this face's job ends at the placement.
+   */
+  listDirectPairsForViewer(viewerUserId: string): DirectPairListRow[] {
+    return this.db
+      .prepare<{ viewer: string }, DirectPairListRow>(DIRECT_PAIRS_FOR_VIEWER_SQL)
+      .all({ viewer: viewerUserId });
   }
 
   // ── Human (user) membership — `conversation_users` (v25) ─────────

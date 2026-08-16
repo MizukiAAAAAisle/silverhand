@@ -71,6 +71,12 @@ interface Fixture {
    *  at a time by `expectRefusal`: the actor's object cannot answer "which
    *  branch", so this queue is the only place a test can read it. */
   readonly observed: DeliveryTargetRefusalReport[];
+  /** Every pair this fixture's resolutions ANNOUNCED, in order — the conversation
+   *  ids passed to the required allocation port. Since #task:2035 (@Cindy B4) the
+   *  announcement is the second half of the mint rather than a `created` flag on
+   *  the answer, so this queue, not a field, is where a test reads "this call
+   *  opened the line". */
+  readonly announced: string[];
   readonly conversations: ConversationRepo;
   readonly messages: MessageRepo;
   /** The authenticated principal of every resolution below. */
@@ -125,6 +131,7 @@ function setup(): Fixture {
   conversations.addAgent(secret, bob.id);
 
   const observed: DeliveryTargetRefusalReport[] = [];
+  const announced: string[] = [];
 
   return {
     t,
@@ -139,8 +146,14 @@ function setup(): Fixture {
           observed.push(report);
         },
       },
+      allocations: {
+        directPairOpened: (conversationId) => {
+          announced.push(conversationId);
+        },
+      },
     },
     observed,
+    announced,
     conversations,
     messages,
     alice,
@@ -249,6 +262,12 @@ describe('the grammar decides first, before any lookup', () => {
         refused: (report) => {
           observed.push(report);
         },
+      },
+      allocations: {
+        // A malformed address must not reach the effect either: the announcement
+        // is the mint's second half, so "no lookup happened" now also means
+        // "nothing was announced".
+        directPairOpened: forbidden('directPairOpened'),
       },
     };
     for (const address of [
@@ -405,12 +424,11 @@ describe('unknown and unauthorized are one outcome', () => {
       expect(expectResolved(resolveAs(f, `#conv:${f.room}`, 'write'))).toEqual({
         stream: { conversationId: f.room, threadRootId: null },
         placementKind: 'workspace',
-        created: false,
       });
       const pair = expectResolved(resolveAs(f, `dm:@${f.bob.handle}`, 'write'));
       expect(pair.placementKind).toBe('direct_pair');
       expect(expectResolved(resolveAs(f, `#conv:${pair.stream.conversationId}`, 'read')))
-        .toEqual({ ...pair, created: false });
+        .toEqual(pair);
     } finally {
       f.t.cleanup();
     }
@@ -597,14 +615,20 @@ describe('a readable head resolves through two authorities', () => {
 });
 
 describe('a write may open a direct pair; a read never allocates', () => {
-  it('opens the pair once, for either principal kind, and says so exactly once', () => {
+  it('opens the pair once, for either principal kind, and announces it exactly once', () => {
     const f = setup();
     try {
       for (const handle of [f.bob.handle, f.viewer.handle]) {
         const opened = expectResolved(resolveAs(f, `dm:@${handle}`, 'write'));
-        expect(opened.created, handle).toBe(true);
+        // The mint announced itself. `created` is deliberately NOT on the answer
+        // any more: an obligation a caller could forget is what let a second door
+        // mint a pair in silence (#task:2035 @Cindy B4).
+        expect(f.announced, handle).toEqual([opened.stream.conversationId]);
+        f.announced.length = 0;
         const again = expectResolved(resolveAs(f, `dm:@${handle}`, 'write'));
-        expect(again.created, handle).toBe(false);
+        // The get-or-create loser announces NOTHING: the row did not come into
+        // existence on this call, so no list changed.
+        expect(f.announced, handle).toEqual([]);
         expect(again.stream, handle).toEqual(opened.stream);
         // One aggregate for `agent↔agent` and `agent↔human` alike: the endpoint
         // kind is data, not a second mechanism.
@@ -665,11 +689,14 @@ describe('a write may open a direct pair; a read never allocates', () => {
       // …and one that does resolves exactly as it would have, so forbidding
       // allocation changes no outcome that was going to be permitted.
       const opened = expectResolved(resolveAs(f, `dm:@${f.bob.handle}`, 'write'));
-      expect(opened.created).toBe(true);
+      expect(f.announced).toEqual([opened.stream.conversationId]);
+      f.announced.length = 0;
       const found = expectResolved(
         resolveAs(f, `dm:@${f.bob.handle}`, 'write', undefined, 'forbidden'),
       );
-      expect(found).toEqual({ ...opened, created: false });
+      expect(found).toEqual(opened);
+      // A find allocates nothing, so it announces nothing.
+      expect(f.announced).toEqual([]);
       // It is NOT a downgrade to `intent: 'read'`: the write's own rules still
       // apply, which is why it is a second axis and not a third intent.
       expect(
@@ -709,7 +736,6 @@ describe('an inbox is a read face, not a write destination', () => {
       expect(expectResolved(resolveAs(f, `#conv:${f.aliceInbox}`, 'read'))).toEqual({
         stream: { conversationId: f.aliceInbox, threadRootId: null },
         placementKind: 'agent_inbox',
-        created: false,
       });
       const before = conversationCount(f);
       expect(expectRefusal(f, resolveAs(f, `#conv:${f.aliceInbox}`, 'write'))).toEqual({
@@ -750,7 +776,6 @@ describe('a thread suffix names a root of the resolved conversation', () => {
       expect(expectResolved(resolveAs(f, `#conv:${f.room}/thread:${rootId}`, 'write'))).toEqual({
         stream: { conversationId: f.room, threadRootId: rootId },
         placementKind: 'workspace',
-        created: false,
       });
     } finally {
       f.t.cleanup();
