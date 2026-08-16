@@ -448,3 +448,95 @@ export const DIRECT_PAIR_IDS_FOR_USER_SQL = `SELECT c_p.id AS conversation_id
              WHERE c_p.placement_kind = 'direct_pair'
                AND c_p.endpoint_b_kind = 'human'
                AND c_p.endpoint_b_id = @viewer`;
+
+/**
+ * The HUMAN ENDPOINTS PAIRED WITH ONE AGENT, as a set of user ids — the AGENT
+ * TRANSPOSE that {@link DIRECT_PAIR_IDS_FOR_USER_SQL}'s docblock deferred "until
+ * a caller asks" (#task:2043). The caller now exists: `canViewAgent`'s
+ * `direct_pair` endpoint arm — a human who shares an existing human↔agent
+ * DirectPair with this agent may VIEW its page, even with NO shared workspace,
+ * because the workspace-less DM is that human's entry to an agent-scoped agent.
+ *
+ * Both slot orders are read, but the OTHER slot is GATED to `human`, and that
+ * gate is what makes the four no-extend constraints fall out of the SQL text
+ * rather than a caller-side afterthought:
+ *   - agent↔agent pair — the non-agent slot is not `human`, so it produces NO
+ *     row: a human gains nothing from an agent's agent-to-agent pairs;
+ *   - `agent_inbox` — not a `direct_pair`, so no arm matches it;
+ *   - third party / owner-audit reader — there is no arm that produces a user
+ *     who is not THIS pair's own human endpoint, so neither can appear here.
+ * `canonicalEndpointOrder` puts the agent in slot A ('agent' < 'human') for
+ * every agent↔human pair today, so the first arm is the hot one; the second
+ * exists so the authority does not silently depend on the ordering.
+ *
+ * `@agent`, bound ONCE by name for both arms (as `@viewer` / `@conv` above).
+ * CANDIDATES, not a grant: this is the set the page-visibility ACL tests the
+ * viewer against — existence/liveness are not here and are not this face's job.
+ */
+export const DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL = `SELECT c_p.endpoint_b_id AS user_id
+              FROM conversations c_p
+             WHERE c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_a_kind = 'agent'
+               AND c_p.endpoint_a_id = @agent
+               AND c_p.endpoint_b_kind = 'human'
+             UNION
+            SELECT c_p.endpoint_a_id AS user_id
+              FROM conversations c_p
+             WHERE c_p.placement_kind = 'direct_pair'
+               AND c_p.endpoint_b_kind = 'agent'
+               AND c_p.endpoint_b_id = @agent
+               AND c_p.endpoint_a_kind = 'human'`;
+
+/**
+ * The human-facing CONTAINER of a conversation, as a semi-join predicate keyed
+ * on a caller-supplied conversation-id SQL expression (e.g. `t.conversation_id`
+ * on the task board, which reads `FROM tasks t` with no conversation join) —
+ * the ONE authority for the four-state top-level task-board axis
+ * `All | Workspace | Agent Space | Direct Messages` (#task:2041). A conversation
+ * is in EXACTLY ONE container:
+ *   - `workspace`       — `placement_kind='workspace'` on a REGULAR workspace;
+ *   - `agent_space`     — `placement_kind='workspace'` on an AGENT_HOME workspace;
+ *   - `direct_messages` — `placement_kind='direct_pair'`.
+ *
+ * Workspace and Agent Space are NOT distinguishable by `placement_kind` alone —
+ * both are `'workspace'` — so the split reads `workspaces.workspace_kind`, the
+ * ONE authority for that distinction (v69 made `workspace_id` nullable, but a
+ * workspace-placed conversation always carries it, so the INNER JOIN never
+ * drops a row of this arm). `agent_inbox` is deliberately in NO container: it
+ * has no human participant, so a human viewer's population never contains one
+ * and there is no fourth bucket for it to fall into. `All` = omit this axis.
+ *
+ * Bind-free by construction: the `workspace_kind` literal comes from a switch
+ * over the CLOSED container enum (never the raw wire value), and the
+ * conversation-id argument is a column reference chosen by the caller, not user
+ * input — so nothing here is interpolated from a request.
+ *
+ * The parameter is an INLINE union rather than an import of the shared
+ * `TaskBoardContainer` type on purpose: this module is the participation
+ * authority and is pinned to be SQL TEXT with NO dependencies (Gate 9). Its
+ * members mirror `TaskBoardContainer`; the call site passes that shared type in,
+ * so if the shared enum ever grows a member this union does not, the call fails
+ * to type-check — drift is caught at compile time, not by keeping an import.
+ */
+export function conversationInContainer(
+  conversationIdSql: string,
+  container: 'workspace' | 'agent_space' | 'direct_messages',
+): string {
+  if (container === 'direct_messages') {
+    return `EXISTS (
+    SELECT 1
+      FROM conversations c_c
+     WHERE c_c.id = ${conversationIdSql}
+       AND c_c.placement_kind = 'direct_pair'
+  )`;
+  }
+  const workspaceKind = container === 'workspace' ? 'regular' : 'agent_home';
+  return `EXISTS (
+    SELECT 1
+      FROM conversations c_c
+      JOIN workspaces w_c ON w_c.id = c_c.workspace_id
+     WHERE c_c.id = ${conversationIdSql}
+       AND c_c.placement_kind = 'workspace'
+       AND w_c.workspace_kind = '${workspaceKind}'
+  )`;
+}

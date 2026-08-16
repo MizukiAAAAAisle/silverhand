@@ -15,10 +15,10 @@
 import type {
   ConversationAgentDto,
   ConversationDto,
-  ConversationUserMemberDto,
   MessageDto,
   TaskAssigneeDto,
   TaskBoardColumnDto,
+  TaskBoardContainer,
   TaskBoardCountsDto,
   TaskBoardFacetsDto,
   TaskDetailDto,
@@ -72,7 +72,7 @@ export interface TaskRepoReadPort {
     authorizedBoardKey?: string,
   ): TaskSummaryDto | null;
   getByNumber(
-    workspaceId: string,
+    boardKey: string,
     taskNumber: number,
     actor: UserActor,
   ): TaskSummaryDto | null;
@@ -150,24 +150,38 @@ export interface TaskRepoWritePort {
 export interface TaskBoardReadModelPort {
   column(req: TaskBoardColumnRequest): TaskBoardColumnDto;
   counts(filters: TaskBoardPopulationFilters): TaskBoardCountsDto;
-  facets(viewerUserId: string): TaskBoardFacetsDto;
+  /** The filter menus over the viewer's population WITHIN a container. The
+   *  container is the board selector (which of `Workspace | Agent Space |
+   *  Direct Messages` you are looking at), so the menus describe that board;
+   *  the within-board axes (workspace_id / channel_id / person) do NOT narrow
+   *  the menus (an option set that shrinks as you pick from it cannot be
+   *  switched away from). Omitted container = the `All` board, menus over the
+   *  whole visible population. */
+  facets(
+    viewerUserId: string,
+    container?: TaskBoardContainer | undefined,
+  ): TaskBoardFacetsDto;
 }
 
 /** Named narrow conversation face the task domain needs — deliberately NOT the
- *  whole ConversationRepo. `userCanAccessConversation` is the human membership
- *  check; agent membership uses `getAgent`; the broadcaster's post-commit
- *  fanout uses `listAgents`/`listUsers`. `isAgentParticipant` is the
- *  placement-aware participation authority (§4.2: roster edge OR own inbox
- *  placement) — the per-task ACL (§4.4: ACL derives from the task's own
- *  conversation, never its board) reads THIS, not the roster-shaped
- *  `getAgent`. */
+ *  whole ConversationRepo. `userCanAccessConversation` is the human per-task
+ *  ACL; agent membership uses `getAgent`; the broadcaster's post-commit fanout
+ *  uses `listParticipantAgentIds` (runtime wake) / `listParticipantUserIds`
+ *  (viewer board frames). `isAgentParticipant` / `userCanAccessConversation`
+ *  are BOTH the placement-aware participation authority (§4.2: roster edge OR
+ *  direct_pair endpoint OR own inbox placement) — the per-task ACL (§4.4: ACL
+ *  derives from the task's own conversation, never its board) reads THESE, not
+ *  the roster-shaped `getAgent` or a bare `conversation_users` seat. The fanout
+ *  faces are the same authority in set form, so a DirectPair's endpoints — which
+ *  a roster read (`listUsers`/`listAgents`) returns as the empty set — receive
+ *  their own board's `task_changed`. */
 export interface TaskConversationAccessPort {
   get(conversationId: string): ConversationDto | null;
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
   isAgentParticipant(conversationId: string, agentId: string): boolean;
   userCanAccessConversation(userId: string, conversationId: string): boolean;
-  listAgents(conversationId: string): ConversationAgentDto[];
-  listUsers(conversationId: string): ConversationUserMemberDto[];
+  listParticipantAgentIds(conversationId: string): string[];
+  listParticipantUserIds(conversationId: string): string[];
 }
 
 /** Canonical conversation WRITE decision injected by the authorization

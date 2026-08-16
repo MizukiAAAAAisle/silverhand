@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import {
   agentParticipates,
+  DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL,
   DIRECT_PAIR_IDS_FOR_USER_SQL,
   PARTICIPANT_AGENT_IDS_SQL,
   PARTICIPANT_USER_IDS_SQL,
@@ -1525,6 +1526,27 @@ export class ConversationRepo {
     return this.db
       .prepare<{ viewer: string }, DirectPairListRow>(DIRECT_PAIRS_FOR_VIEWER_SQL)
       .all({ viewer: viewerUserId });
+  }
+
+  /**
+   * The HUMAN endpoints of every `direct_pair` this agent is the agent endpoint
+   * of (#task:2043 C) — the agent transpose of {@link listDirectPairsForViewer}.
+   * The `canViewAgent` 4th ACL arm reads this: a human who is the human endpoint
+   * of a human↔agent DirectPair can view that agent.
+   *
+   * The SQL (`DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL`) gates BOTH slot
+   * orders on `endpoint_*_kind = 'human'` for the returned slot, so the four
+   * no-extend constraints fall out structurally: an agent↔agent pair yields no
+   * human, owner-audit is a different ACL arm (not an endpoint), and the
+   * agent_inbox placement is not a `direct_pair`, so none of them widen this set.
+   */
+  listDirectPairHumanEndpointsForAgent(agentId: string): string[] {
+    return this.db
+      .prepare<{ agent: string }, { user_id: string }>(
+        DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL,
+      )
+      .all({ agent: agentId })
+      .map(r => r.user_id);
   }
 
   // ── Human (user) membership — `conversation_users` (v25) ─────────

@@ -587,6 +587,99 @@ describe('permission helpers', () => {
     });
   });
 
+  describe('canViewAgent — DirectPair human-endpoint arm (#task:2043 C)', () => {
+    // The 4th `canViewAgent` arm: the HUMAN endpoint of a human↔agent DirectPair
+    // may view the agent at the far end of that DM. It matches the read faces
+    // #2035 already grant this endpoint (its pair board, its liveness). The
+    // authority (`listDirectPairHumanEndpointsForAgent`) gates on
+    // placement_kind='direct_pair' AND the opposite endpoint being human, so the
+    // arm never fires for an agent↔agent pair and never widens through a
+    // non-direct_pair placement (workspace channel, agent_inbox).
+    //
+    // FIXTURE SCOPE (frozen model): Direct Message ↔ `session_scope='agent'`. The
+    // two cells that form a DirectPair therefore mint fresh AGENT-SCOPED agents;
+    // reusing the seed's conversation-scoped `f.alice`/`f.bob` as a DM endpoint
+    // would fossilize an illegal combination. Cell 3 keeps `f.alice` precisely
+    // because it tests the legal conversation-scoped-in-a-regular-workspace shape.
+    it('grants the human endpoint of a human↔agent pair, and no non-endpoint human', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      const dmAgent = f.agents.create(
+        { name: 'dm-agent', runtime: 'claude', session_scope: 'agent' },
+        f.host.id,
+        'local',
+      );
+      const endpoint: UserPrincipal = { kind: 'user', userId: 'teammate' };
+      const stranger: UserPrincipal = { kind: 'user', userId: 'other' };
+
+      // Baseline — teammate has NO tie to the agent: not its creator ('local'),
+      // and an agent-scoped agent has no workspace to co-inhabit. So any grant
+      // below is the DirectPair arm alone.
+      expect(canViewAgent(t.ctx, endpoint, dmAgent.id)).toBe(false);
+
+      f.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: dmAgent.id },
+        { kind: 'human', id: 'teammate' },
+        Date.now(),
+      );
+
+      expect(f.conversations.listDirectPairHumanEndpointsForAgent(dmAgent.id)).toEqual([
+        'teammate',
+      ]);
+      expect(canViewAgent(t.ctx, endpoint, dmAgent.id)).toBe(true); // 4th arm fires
+      expect(canViewAgent(t.ctx, stranger, dmAgent.id)).toBe(false); // non-endpoint stays blind
+      // Viewing the far end of a DM is not managing the agent — edit is owner-only.
+      expect(canEditAgent(t.ctx, endpoint, dmAgent.id)).toBe(false);
+    });
+
+    it('does not extend to any human through an agent↔agent pair', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      const agentA = f.agents.create(
+        { name: 'dm-agent-a', runtime: 'claude', session_scope: 'agent' },
+        f.host.id,
+        'local',
+      );
+      const agentB = f.agents.create(
+        { name: 'dm-agent-b', runtime: 'claude', session_scope: 'agent' },
+        f.host.id,
+        'local',
+      );
+      const someHuman: UserPrincipal = { kind: 'user', userId: 'teammate' };
+
+      f.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: agentA.id },
+        { kind: 'agent', id: agentB.id },
+        Date.now(),
+      );
+      // Both endpoints are agents, so the human-endpoint authority names no one —
+      // the arm cannot fire for any human.
+      expect(f.conversations.listDirectPairHumanEndpointsForAgent(agentA.id)).toEqual([]);
+      expect(canViewAgent(t.ctx, someHuman, agentA.id)).toBe(false);
+      // Nor does the agent partner gain a cross-view: a distinct agent principal
+      // only ever self-views (arm 1), and agentB ≠ agentA.
+      const partnerPrincipal: AgentPrincipal = {
+        kind: 'agent',
+        agentId: agentB.id,
+        conversationId: f.channel.id,
+      };
+      expect(canViewAgent(t.ctx, partnerPrincipal, agentA.id)).toBe(false);
+    });
+
+    it('is direct_pair-only: a non-DirectPair placement shared with a human names no endpoint (same gate that excludes agent_inbox)', () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const f = seed(t);
+      // alice already lives in a WORKSPACE channel; seat a human (not her creator,
+      // not a workspace member) there too. This co-inhabited, non-direct_pair arc
+      // is exactly what the placement_kind filter must exclude — the same clause
+      // that excludes an agent_inbox arc.
+      f.conversations.addUser(f.channel.id, 'teammate');
+      expect(f.conversations.listDirectPairHumanEndpointsForAgent(f.alice.id)).toEqual([]);
+      // With no DirectPair in play, the arm grants that human nothing.
+      expect(canViewAgent(t.ctx, { kind: 'user', userId: 'teammate' }, f.alice.id)).toBe(false);
+    });
+  });
+
   describe('canGovernWorkspace / workspaceRole (v40 human role spine)', () => {
     // Helper: add a human to the workspace with an explicit role,
     // bypassing the route layer (these are helper-level unit tests).

@@ -287,6 +287,32 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     expect(seedListAfter.tasks.map((row: any) => row.id).sort()).toEqual(seedIds.sort());
   });
 
+  it('agent-slot create narrates plain `created`, never "from another conversation": the cross_conversation bit is UNDEFINED for an AgentSlot (#task:2037 B6)', async () => {
+    t = buildTestApp();
+    const { twin, w1, auth } = await fixture();
+    // An AgentSlot has NO origin conversation (`conversationId` is null), so the
+    // cross_conversation comparison — "did this actor file against a stream
+    // OTHER than the one it is anchored to?" — is UNDEFINED for it. Its correct
+    // rendering is ABSENT: a plain `created` narration, never "here from another
+    // conversation". This is the exact dogfood defect — an agent-scoped agent
+    // files a task on a conversation it is a party to, and the old
+    // `kind==='agent' && conversationId !== dest` test (always true when the
+    // origin is null) made the system message CLAIM the task came from somewhere
+    // else, which is a falsehood to the reader.
+    const task = await createTask(t, w1.channelId, twin, 'filed as myself', auth);
+
+    const sys = t.persistence.repos.messages
+      .listForConversation(w1.channelId)
+      .filter(m => m.from_kind === 'system')
+      .at(-1)!;
+
+    expect(sys.content).toMatch(
+      new RegExp(` created task #${task.task_number} "filed as myself"$`),
+    );
+    expect(sys.content.includes('from another conversation')).toBe(false);
+    expect(sys.metadata?.cross_conversation).toBeUndefined();
+  });
+
   it('P1 custody applies to the task lane: a stale agent-slot bearer is 401', async () => {
     t = buildTestApp();
     const { twin, w1, auth } = await fixture();

@@ -56,6 +56,13 @@ import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 /** The fixture's registered users (`tests/utils/db.ts`). */
 const OWNER_ID = 'local'; // the default viewer — creates (and so owns) the agent
 const TEAMMATE_ID = 'teammate'; // a different human; the agent's DM counterpart
+// A seeded fixture human (so session issuance has its `users` row) who shares
+// NEITHER a workspace NOR a DM with the agent — the only principal
+// `canViewAgent` still hides behind the anti-enum 404. TEAMMATE no longer
+// qualifies: since #task:2043 C the human endpoint of a DM with the agent CAN
+// view it (they talk to it — its existence is not a secret from them), so
+// TEAMMATE now trips the audit gate (403), not the existence 404.
+const STRANGER_ID = 'someone';
 
 interface Frame {
   scope: string;
@@ -281,14 +288,26 @@ describe('GET /api/agents/:id/chats (owner-audit list)', () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const f = await seedFixture(t);
 
-    // The teammate shares no workspace with the agent, so `canViewAgent` fails and
-    // the id is indistinguishable from a bogus one: 404, not 403.
-    const r = await http(t, asUser(TEAMMATE_ID)).get(apiPaths.agentChats(f.agentId));
+    // The stranger shares neither a workspace nor a DM with the agent, so
+    // `canViewAgent` fails and the id is indistinguishable from a bogus one:
+    // 404, not 403.
+    const r = await http(t, asUser(STRANGER_ID)).get(apiPaths.agentChats(f.agentId));
     expect(r.status).toBe(404);
 
     // A genuinely non-existent id is the SAME 404 — no existence oracle.
     const bogus = await http(t).get(apiPaths.agentChats('agent_does_not_exist'));
     expect(bogus.status).toBe(404);
+  });
+
+  it('refuses the agent\'s DM counterpart at the audit list — 403, not 404 (#task:2043 C)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const f = await seedFixture(t);
+    // TEAMMATE is the human endpoint of a DM with the agent, so since #2043 C
+    // `canViewAgent` ADMITS them — the anti-enum 404 would lie about an existence
+    // they already know. The NAMED audit gate is what refuses them (403): a DM
+    // partner may see the agent, never audit its other chats.
+    const r = await http(t, asUser(TEAMMATE_ID)).get(apiPaths.agentChats(f.agentId));
+    expect(r.status).toBe(403);
   });
 
   it('refuses a viewer who CAN view the agent but does not own it — 403, boundary 1', async () => {
@@ -441,7 +460,7 @@ describe('GET /api/agents/:id/chats/:conversationId/messages (owner-audit transc
   it('refuses a non-owner at the transcript face too — 404 anti-enum', async () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const f = await seedFixture(t);
-    const r = await getTranscript(t, f.agentId, f.pairId, TEAMMATE_ID);
+    const r = await getTranscript(t, f.agentId, f.pairId, STRANGER_ID);
     expect(r.status).toBe(404);
   });
 });
@@ -589,7 +608,7 @@ describe('GET /api/agents/:id/chats/:conversationId/attachments/:attachmentId (o
     const f = await seedFixture(t);
     const att = await seedAttachment(t, f.pairId, { kind: 'user', id: TEAMMATE_ID }, SECRET);
 
-    const r = await http(t, asUser(TEAMMATE_ID)).get(
+    const r = await http(t, asUser(STRANGER_ID)).get(
       apiPaths.agentChatAttachment(f.agentId, f.pairId, att.id),
     );
     expect(r.status).toBe(404);

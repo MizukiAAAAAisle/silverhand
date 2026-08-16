@@ -1446,13 +1446,15 @@ describe('Task create/edit/detail routes', () => {
     expect(detail.task.content).toBe('orig body');
   });
 
-  // ── GET /api/tasks/by-number (#task:1891) ──────────────────────────
+  // ── GET /api/tasks/by-number (#task:1891, #task:2037 B5) ───────────
   //
-  // The human point lookup by the workspace-scoped BUSINESS key, which the
-  // inline `#task:<n>` sigil is the caller for. It is the only human face that
-  // can answer `(workspace_id, task_number)`: the board columns are
-  // status-partitioned and carry no number axis, and `GET /api/tasks/:taskId`
-  // needs an id the sigil does not have.
+  // The human point lookup by the board-scoped BUSINESS key, which the inline
+  // `#task:<n>` sigil is the caller for. It is the only human face that can
+  // answer `(board, task_number)`: the board columns are status-partitioned and
+  // carry no number axis, and `GET /api/tasks/:taskId` needs an id the sigil
+  // does not have. The board is named indirectly by a `conversation_id` on it —
+  // the server derives the board from placement — so a workspace-less DirectPair
+  // task (whose `workspace_id` is NULL) is reachable too.
   describe('GET /api/tasks/by-number', () => {
     /** Create one workspace + one agent task in it, and return the ids/numbers
      *  the assertions need. `member` / `workspaceName` are parameters because
@@ -1483,7 +1485,7 @@ describe('Task create/edit/detail routes', () => {
       const { workspaceId, conversationId, taskId, taskNumber } = await seedTask(t, 'sigil target');
 
       const res = await http(t).get(
-        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber}`,
+        `/api/tasks/by-number?conversation_id=${conversationId}&task_number=${taskNumber}`,
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as any;
@@ -1501,10 +1503,11 @@ describe('Task create/edit/detail routes', () => {
       expect(body.task.nav).toBeUndefined();
     });
 
-    it('is keyed by workspace, not by number alone: the same number in two workspaces resolves separately', async () => {
-      // task_number is a PER-WORKSPACE sequence, so #1 exists in both places.
-      // This is the falsifier for a lookup that ignores the workspace half of
-      // the key and happens to pass the single-workspace case above.
+    it('is keyed by board, not by number alone: the same number on two boards resolves separately', async () => {
+      // task_number is a PER-BOARD sequence, so #1 exists in both places. This
+      // is the falsifier for a lookup that ignores the board half of the key and
+      // happens to pass the single-board case above. Each board is named by a
+      // conversation on it (here, the two workspaces' channels).
       t = buildTestApp();
       const a = await seedTask(t, 'task in A', 'alice', 'eng');
       const b = await seedTask(t, 'task in B', 'bob', 'design');
@@ -1513,12 +1516,12 @@ describe('Task create/edit/detail routes', () => {
 
       const inA = (await (
         await http(t).get(
-          `/api/tasks/by-number?workspace_id=${a.workspaceId}&task_number=${a.taskNumber}`,
+          `/api/tasks/by-number?conversation_id=${a.conversationId}&task_number=${a.taskNumber}`,
         )
       ).json()) as any;
       const inB = (await (
         await http(t).get(
-          `/api/tasks/by-number?workspace_id=${b.workspaceId}&task_number=${b.taskNumber}`,
+          `/api/tasks/by-number?conversation_id=${b.conversationId}&task_number=${b.taskNumber}`,
         )
       ).json()) as any;
       expect(inA.task.id).toBe(a.taskId);
@@ -1527,22 +1530,23 @@ describe('Task create/edit/detail routes', () => {
 
     it('is fail-closed and leaks no existence: an unallocated number and a task the viewer cannot see are the SAME 404', async () => {
       t = buildTestApp();
-      const { workspaceId, conversationId, taskNumber } = await seedTask(t, 'hidden');
+      const { conversationId, taskNumber } = await seedTask(t, 'hidden');
 
       const unallocated = await http(t).get(
-        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber + 999}`,
+        `/api/tasks/by-number?conversation_id=${conversationId}&task_number=${taskNumber + 999}`,
       );
 
-      // A REAL task, in the workspace the caller correctly names, whose
-      // conversation the viewer is no longer a member of. Naming the right
-      // workspace must not confirm that the number exists in it — the gate is
-      // the viewer's visibility of the task's own conversation, and the query's
-      // `workspace_id` is never taken as an authorized scope.
+      // A REAL task, on the board the caller correctly names, whose conversation
+      // the viewer is no longer a member of. Naming the right board must not
+      // confirm that the number exists on it — the gate is the viewer's
+      // visibility of the task's own conversation, and the query's
+      // `conversation_id` is never taken as an authorized scope (board derivation
+      // is pure placement, no ACL).
       t.ctx.db
         .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
         .run(conversationId, t.viewerUserId);
       const invisible = await http(t).get(
-        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber}`,
+        `/api/tasks/by-number?conversation_id=${conversationId}&task_number=${taskNumber}`,
       );
 
       expect(unallocated.status).toBe(404);
@@ -1550,22 +1554,39 @@ describe('Task create/edit/detail routes', () => {
       expect(await unallocated.json()).toEqual(await invisible.json());
     });
 
+    it('folds a conversation with no board to the same 404: naming a boardless conversation is not an existence oracle', async () => {
+      // A conversation whose placement yields no board (an unknown/garbage id
+      // here) cannot name any board, so the derivation returns null and the read
+      // is the SAME 404 as an unallocated number — never a distinct "bad
+      // conversation" signal that would confirm the id does or does not exist.
+      t = buildTestApp();
+      const { taskNumber } = await seedTask(t, 'real');
+      const boardless = await http(t).get(
+        `/api/tasks/by-number?conversation_id=zzzzzzzzzzzzzzzz&task_number=${taskNumber}`,
+      );
+      const unallocated = await http(t).get(
+        `/api/tasks/by-number?conversation_id=zzzzzzzzzzzzzzzz&task_number=999999`,
+      );
+      expect(boardless.status).toBe(404);
+      expect(await boardless.json()).toEqual(await unallocated.json());
+    });
+
     it('400s a query missing or malformed on either axis — not a 404', async () => {
       // A question this face cannot answer is NOT "no such task": the renderer
       // resolves 404 to a cached `null` (inert sigil), so a bad request that
       // returned 404 would be cached as a definitive miss.
       t = buildTestApp();
-      const { workspaceId, taskNumber } = await seedTask(t, 'anything');
+      const { conversationId, taskNumber } = await seedTask(t, 'anything');
       const h = http(t);
 
       for (const qs of [
         `task_number=${taskNumber}`,
-        `workspace_id=${workspaceId}`,
-        `workspace_id=${workspaceId}&task_number=0`,
-        `workspace_id=${workspaceId}&task_number=-1`,
-        `workspace_id=${workspaceId}&task_number=1.5`,
-        `workspace_id=${workspaceId}&task_number=abc`,
-        `workspace_id=&task_number=${taskNumber}`,
+        `conversation_id=${conversationId}`,
+        `conversation_id=${conversationId}&task_number=0`,
+        `conversation_id=${conversationId}&task_number=-1`,
+        `conversation_id=${conversationId}&task_number=1.5`,
+        `conversation_id=${conversationId}&task_number=abc`,
+        `conversation_id=&task_number=${taskNumber}`,
       ]) {
         const res = await h.get(`/api/tasks/by-number?${qs}`);
         expect(res.status, qs).toBe(400);
@@ -1582,22 +1603,27 @@ describe('Task create/edit/detail routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('answers with ONE summary read and never through the resolved/detail read path', async () => {
+    it('answers with two BOUNDED reads and never through the resolved/detail read path', async () => {
       // The mechanical criterion behind "bounded" (#task:1891). The wire shape
       // cannot carry this fact: a face that resolves the number through the
       // mutation-path column set (which selects `t.content`) and then re-reads
       // the row to project a summary returns a byte-identical body while paying
-      // two queries and one unwanted body PER PILL — and a message can carry
-      // many sigils. So assert what actually executed.
+      // an extra query and one unwanted body PER PILL — and a message can carry
+      // many sigils. So assert what actually executed: exactly the board
+      // derivation (a PK point-read on `conversations`) then the single summary
+      // read — never the resolved/detail path.
       t = buildTestApp();
-      const { workspaceId, taskNumber } = await seedTask(t, 'observed');
+      const { conversationId, taskNumber } = await seedTask(t, 'observed');
 
       // `slowStatementMs: 0` makes every observed statement log, which turns the
       // observability layer into an executed-query recorder. Filtering on the
-      // `tasks.` prefix is sound because the task repo owns that prefix; the
-      // viewer-visibility membership gate runs through the observed narrow port
-      // (`tasks.conversation_user_access`), so it appears once alongside the
-      // single summary read.
+      // `tasks.` prefix isolates the task repo's own reads: since #task:2037 the
+      // viewer-visibility gate runs through the placement-participation authority
+      // in ConversationRepo (a `conversations.`-prefixed query, so a rosterless
+      // DirectPair endpoint sees its own board), NOT a `tasks.`-owned membership
+      // read — so the task-repo trace is exactly the board derivation + the
+      // summary read, and any regression that fell back to the resolved/detail
+      // path would add a third `tasks.` query here.
       const executed: string[] = [];
       configureDatabaseObservation(t.ctx.db, {
         slowStatementMs: 0,
@@ -1612,11 +1638,11 @@ describe('Task create/edit/detail routes', () => {
       });
 
       const res = await http(t).get(
-        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber}`,
+        `/api/tasks/by-number?conversation_id=${conversationId}&task_number=${taskNumber}`,
       );
 
       expect(res.status).toBe(200);
-      expect(executed).toEqual(['tasks.get_joined_by_number', 'tasks.conversation_user_access']);
+      expect(executed).toEqual(['tasks.board_of_conversation', 'tasks.get_joined_by_number']);
     });
   });
 });

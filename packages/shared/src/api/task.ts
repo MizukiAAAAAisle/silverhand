@@ -262,6 +262,29 @@ export type TaskBoardCreatorFilterType = z.infer<
   typeof TaskBoardCreatorFilterTypeSchema
 >;
 
+/** The board's TOP-LEVEL container axis (#task:2041). A task's owning
+ *  conversation sits in exactly ONE human container, and the four-state tab
+ *  `All | Workspace | Agent Space | Direct Messages` selects one (or, when
+ *  omitted, their union):
+ *    - `workspace`       — a conversation on a REGULAR workspace;
+ *    - `agent_space`     — a conversation on an AGENT_HOME workspace;
+ *    - `direct_messages` — a DirectPair (all of the viewer's pairs at once; a
+ *                          single pair leaf is `channel_id`).
+ *  Workspace and Agent Space are NOT distinguishable by placement alone — both
+ *  are `placement_kind='workspace'` — so the split is a `workspace_kind`
+ *  distinction, resolved authoritatively backend-side. `agent_inbox` is in NO
+ *  container: it has no human participant, so the viewer gate already excludes
+ *  it and it is absent from `All`. Omitted = no container narrowing. This axis
+ *  and `workspace_id` / `channel_id` stack as an intersection: choosing
+ *  `agent_space` then a specific `workspace_id` narrows to that one Agent Space
+ *  workspace. */
+export const TaskBoardContainerSchema = z.enum([
+  'workspace',
+  'agent_space',
+  'direct_messages',
+]);
+export type TaskBoardContainer = z.infer<typeof TaskBoardContainerSchema>;
+
 /** The filter axes every board face shares. Kept as a raw field map (not a
  *  refined schema) so the three query schemas compose from ONE definition —
  *  a refined schema cannot be `.extend()`ed. */
@@ -272,6 +295,12 @@ const taskBoardFilterFields = {
    *  a task's `channel_id` is its owning conversation (a thread task's
    *  conversation IS its channel; the reply cluster is `thread_root_id`). */
   channel_id: z.string().min(1).optional(),
+  /** The board's TOP-LEVEL container axis (#task:2041):
+   *  `workspace | agent_space | direct_messages`. See
+   *  {@link TaskBoardContainerSchema}. Omitted = no container narrowing (the
+   *  `All` tab spans every container the viewer can see). Stacks with
+   *  `workspace_id` / `channel_id` as an intersection. */
+  container: TaskBoardContainerSchema.optional(),
   assignee_type: TaskBoardAssigneeFilterTypeSchema.optional(),
   assignee_id: z.string().min(1).optional(),
   creator_type: TaskBoardCreatorFilterTypeSchema.optional(),
@@ -354,18 +383,25 @@ export const TaskBoardCountsQuerySchema = z
 export type TaskBoardCountsQuery = z.infer<typeof TaskBoardCountsQuerySchema>;
 
 /**
- * GET /api/tasks/by-number — human point lookup by the workspace-scoped
- * business key. Both axes are REQUIRED: `task_number` is only unique per
- * workspace, so a lookup missing either half is not a point lookup and must be
- * rejected rather than widened into a scan.
+ * GET /api/tasks/by-number — human point lookup by the board-scoped business
+ * key. Both axes are REQUIRED: a task number is only unique per BOARD (the
+ * allocation namespace is `board_key`, not the workspace — a workspace-less
+ * DirectPair has its own `pair:…` board), so a lookup missing either half is
+ * not a point lookup and must be rejected rather than widened into a scan.
  *
- * The response is a single task or 404. `workspace_id` is the LOOKUP key only,
- * never an authorization claim — the server gates on the viewer's visibility of
- * the task's own conversation, and a task the viewer cannot see is reported the
- * same way as one that does not exist.
+ * The board is named indirectly, by ANY `conversation_id` on it: the server
+ * derives the board from the conversation's placement, then reads
+ * `(board_key, task_number)`. That is why a DirectPair task — whose
+ * `workspace_id` is NULL and so could never be named by a workspace key —
+ * resolves here: its conversation maps to the `pair:…` board.
+ *
+ * The response is a single task or 404. `conversation_id` is the LOOKUP key
+ * only, never an authorization claim — the server gates on the viewer's
+ * visibility of the task's OWN conversation, and a task the viewer cannot see
+ * is reported the same way as one that does not exist.
  */
 export const TaskByNumberQuerySchema = z.object({
-  workspace_id: z.string().min(1),
+  conversation_id: z.string().min(1),
   task_number: z.coerce.number().int().positive(),
 });
 export type TaskByNumberQuery = z.infer<typeof TaskByNumberQuerySchema>;
