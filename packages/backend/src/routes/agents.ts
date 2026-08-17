@@ -80,6 +80,8 @@ import {
   UpdateAgentInputSchema,
   apiPaths,
   type AgentDto,
+  type AgentAvailability,
+  type AgentAvailabilityDto,
   type AgentLiveness,
   type AgentLivenessDto,
   type AgentMaterializationStatus,
@@ -1041,6 +1043,51 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     return c.json({
       liveness: resolveAgentLiveness(agent.host_id, agent.id),
     } satisfies AgentLivenessDto);
+  });
+
+  // ── GET /api/agents/:id/availability (#task:2043) ─────────────────────────
+  // The orthogonal axis to liveness: is this agent REACHABLE right now, not is
+  // a process live. Same `canViewAgent` gate (incl. the DirectPair-endpoint
+  // arm). Availability = "would an inbound message be accepted at the transport
+  // layer this instant" = the first two gates of the real delivery path
+  // (host exists & not revoked; an outbound attachment is connected) MINUS the
+  // runtime-hydrate wait. It reads ONLY the attachment-present boundary; it
+  // deliberately never touches the active-runtime snapshot the way liveness
+  // does, so an idle-reaped or not-yet-hydrated agent on a connected host stays
+  // `online` (the next message re-spawns it). That decoupling is the fix for a
+  // DM partner seeing `offline` after every turn.
+  //
+  // TWO values, total. `read()` distinguishes `disconnected`
+  // (`connectionIdForHost === null`, no live attachment ⇒ offline) from both
+  // `unreachable` (attachment present, snapshot not yet hydrated) and `ok`
+  // (present + hydrated) — the latter two both mean the host is connected ⇒
+  // online. There is no success `unknown` arm: a read that cannot be answered
+  // is an infrastructure fault, so `read()` throwing propagates to 5xx rather
+  // than being laundered into a domain value. A missing read model is not a
+  // fault but a deployment without a daemon runtime ⇒ a determinate offline.
+  const resolveAgentAvailability = (agent: AgentDto): AgentAvailability => {
+    // Agent validity: an agent mid hard-delete can no longer accept work.
+    if (agent.deletion_started_at !== null) return 'offline';
+    const readModel = ctx.hostStatusReadModel?.();
+    // No daemon runtime in this deployment: no attachment is ever possible.
+    if (!readModel) return 'offline';
+    const host = hosts.get(agent.host_id);
+    // Missing host row (integrity) or a revoked host ⇒ no usable attachment.
+    if (!host || host.revoked_at !== null) return 'offline';
+    return readModel.read(agent.host_id).kind === 'disconnected'
+      ? 'offline'
+      : 'online';
+  };
+
+  app.get('/api/agents/:id/availability', c => {
+    const agent = agents.get(c.req.param('id'));
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    return c.json({
+      availability: resolveAgentAvailability(agent),
+    } satisfies AgentAvailabilityDto);
   });
 
   // ── Owner-audit chats (#task:2036 part ②) ────────────────────────────────

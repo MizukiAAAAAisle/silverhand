@@ -21,6 +21,8 @@
   "AgentAuditChatListResponseSchema",
   "AgentAuditChatSummarySchema",
   "AgentAuditTranscriptResponseSchema",
+  "AgentAvailabilityDtoSchema",
+  "AgentAvailabilitySchema",
   "AgentCapabilitiesDtoSchema",
   "AgentCapabilitySchema",
   "AgentChangedEventSchema",

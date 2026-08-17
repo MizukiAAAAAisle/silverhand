@@ -422,6 +422,33 @@ export const AgentLivenessDtoSchema = z.object({
 });
 export type AgentLivenessDto = z.infer<typeof AgentLivenessDtoSchema>;
 
+// GET /api/agents/:id/availability (#task:2043) — the ONE reachability bit a
+// viewer authorized on the agent may read. This is the SECOND, orthogonal axis
+// to liveness above: liveness projects whether a live *process* exists right
+// now; availability projects whether the agent's host is *reachable* right now
+// (an authenticated outbound attachment is connected and the host is not
+// revoked), which is a total function of transport + agent validity —
+// independent of any runtime snapshot, hydration, or active-agent set. An
+// idle-reaped or not-yet-hydrated agent on a connected host is AVAILABLE (the
+// next inbound message re-spawns it), which is why availability must not be
+// derived from the active-runtime snapshot the way liveness is.
+//
+// Deliberately TWO values, not three. The source is a total in-process fact:
+// the attachment is either present or absent; "the authority could not read"
+// is an infrastructure FAULT (HTTP 5xx), never a successful `{availability}`.
+// Folding a fault into a domain value would license callers to disguise a
+// backend failure as a normal answer. "We cannot tell right now" is a RENDERER
+// query-projection state (pending / error / cached-stale ⇒ its own `unknown`),
+// not a backend value. The UI composes THIS axis with liveness into the
+// user-facing Online / Away / Offline / no-status projection.
+export const AgentAvailabilitySchema = z.enum(['online', 'offline']);
+export type AgentAvailability = z.infer<typeof AgentAvailabilitySchema>;
+
+export const AgentAvailabilityDtoSchema = z.object({
+  availability: AgentAvailabilitySchema,
+});
+export type AgentAvailabilityDto = z.infer<typeof AgentAvailabilityDtoSchema>;
+
 export const DeleteAgentInputSchema = z.object({
   confirm: z.literal(true),
 });
