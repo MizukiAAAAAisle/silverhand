@@ -13,7 +13,6 @@ import {
   Check,
   ChevronDown,
   Layers,
-  MessageSquare,
   PenLine,
   RotateCcw,
   Search,
@@ -916,7 +915,23 @@ function BoardScopeFilter({
       size={TRIGGER_GLYPH_PX}
     />
   ) : selectedPair ? (
-    <MessageSquare className="size-3.5" />
+    // A selected direct line wears its COUNTERPART'S avatar — the same identity
+    // the dropdown row paints — not a generic chat glyph, so the trigger reads as
+    // "this person's tasks" (shiki #task:2041). `chip` sizes it to the shared
+    // 14px control-glyph box; a deleted endpoint (no person) falls back to the
+    // neutral person glyph, matching the row.
+    selectedPair.pair.person ? (
+      <PersonAvatar
+        person={selectedPair.pair.person}
+        name={selectedPair.pair.label}
+        size="chip"
+        agentsById={agentsById}
+        agentAvatarUrls={agentAvatarUrls}
+        userAvatarUrls={userAvatarUrls}
+      />
+    ) : (
+      <User className="size-3.5" />
+    )
   ) : (
     <Layers className="size-3.5" />
   );
