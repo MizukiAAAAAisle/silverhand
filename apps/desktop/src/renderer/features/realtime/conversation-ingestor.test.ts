@@ -34,7 +34,7 @@ import {
   __resetAttachmentBlobCacheForTest,
   readAttachmentToken,
 } from '@/lib/attachment-blob-cache';
-import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
+import { taskBoardCacheScope, taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { taskDetailKey } from '@/features/tasks/taskDetail';
 import { channelThreadsKey, channelThreadsUnreadKey } from '@/features/channels/useChannelThreads';
 import {
@@ -1951,7 +1951,10 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
   // refresh is not what triggers markSatisfied.)
   describe('task-by-number detail projection rides OUTSIDE the floor seam (Alice)', () => {
     const taskSummary = (): TaskSummaryDto => ({
-      id: 't1',
+      // Resolved by-number entries are patched by task IDENTITY, not by
+      // (workspace, task_number) — so the seeded id must be the task_id the
+      // event names ('task-7'), else the identity match skips it.
+      id: 'task-7',
       task_number: 7,
       channel_id: 'c1',
       board: {
@@ -1971,12 +1974,12 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
 
     it('refreshes the detail cache when the mainline is CLOSED (decoupled from the floor)', () => {
       const qc = new QueryClient();
-      qc.setQueryData(taskByNumberKey('w1', 7), taskSummary());
+      qc.setQueryData(taskByNumberKey(taskBoardCacheScope({ workspaceId: 'w1', conversationId: null }), 7), taskSummary());
       // No mainline / cluster / thread-root reader → the row seam applies nothing.
 
       ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6));
 
-      const detail = qc.getQueryData<TaskSummaryDto>(taskByNumberKey('w1', 7));
+      const detail = qc.getQueryData<TaskSummaryDto>(taskByNumberKey(taskBoardCacheScope({ workspaceId: 'w1', conversationId: null }), 7));
       expect(detail?.status).toBe('in_progress');
       expect(detail?.title).toBe('do the thing');
       // The floor advance here is the SOURCE-ROW disposition (source 't1' is in no
@@ -1990,7 +1993,7 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
 
       ingestConversationFrame(qc, taskChangedFrame('c1', 't1', 6));
 
-      expect(qc.getQueryData(taskByNumberKey('w1', 7))).toBeUndefined();
+      expect(qc.getQueryData(taskByNumberKey(taskBoardCacheScope({ workspaceId: 'w1', conversationId: null }), 7))).toBeUndefined();
       // No detail bootstrap, but the source-row disposition (source 't1' in no
       // message cache → off-window vacuous-satisfy) still advances the floor once.
       expect(markSatisfied).toHaveBeenCalledTimes(1);

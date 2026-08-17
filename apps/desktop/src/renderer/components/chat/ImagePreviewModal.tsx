@@ -11,7 +11,11 @@ import type {
   UserDto,
 } from '@silverhand/shared';
 import { loadAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
-import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
+import {
+  taskBoardCacheScope,
+  taskByNumberKey,
+  type TaskRefCoord,
+} from '@/features/tasks/useTaskByNumber';
 import { MessageScreenshotView } from './MessageScreenshotView';
 import {
   extractMermaidSources,
@@ -196,6 +200,7 @@ export function ImagePreviewModal({
   onExportComplete,
   messages,
   workspaceId,
+  conversationId,
   channelTitle,
   agentsByName,
   humansByName,
@@ -216,7 +221,19 @@ export function ImagePreviewModal({
    *  retrying stays cheap. */
   onExportComplete?: () => void;
   messages: readonly MessageDto[];
-  workspaceId?: string | null;
+  /** The workspace the exported messages belong to, or `null` for a DirectPair
+   *  (which has no workspace). Required — not optional — so the sole production
+   *  chain always names the placement and the snapshot can never silently fall
+   *  back to a wrong cache scope. */
+  workspaceId: string | null;
+  /** The conversation the exported messages belong to (all share one). `string`,
+   *  not `string | null`: every pane that can open this modal is looking at a
+   *  conversation, so "no conversation" is not a production state and must not
+   *  survive in the type (@Cindy, #task:2041 B3). With `workspaceId` — the only
+   *  legitimately nullable half — it projects the by-number cache scope so the
+   *  static snapshot reads the SAME cell the live chip did; a DM (workspaceId
+   *  null) keys on the pair conversation instead of dropping every task title. */
+  conversationId: string;
   channelTitle: string | null;
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
@@ -333,7 +350,7 @@ export function ImagePreviewModal({
     const rafs: number[] = [];
     const taskRefs = snapshotStaticTaskRefs(
       messages,
-      workspaceId ?? null,
+      { workspaceId, conversationId },
       queryClient,
     );
     void Promise.all([
@@ -510,18 +527,42 @@ function extractTaskNumbers(messages: readonly MessageDto[]): number[] {
   return [...numbers].sort((a, b) => a - b);
 }
 
-function snapshotStaticTaskRefs(
+/**
+ * The pure snapshot seam behind the image export: freeze the CURRENT resolved
+ * title of every `#task:<n>` in the selected messages, read from the by-number
+ * cache under the conversation's own board scope.
+ *
+ * Exported so the scope decision is falsifiable WITHOUT a DOM capture: the
+ * `MessageScreenshotView` render test only proves how a given title draws, not
+ * which cache cell the title came from. The bug this guards is silent — a wrong
+ * scope reads an empty cell and every task ref exports as a bare number with no
+ * title, which no pixel test would flag.
+ *
+ * Scope is projected by `taskBoardCacheScope`, exactly as the live `TaskRef`
+ * does: a workspace-placed conversation keys on `workspace:<workspaceId>` (NOT
+ * on its conversation id), a DirectPair — with no workspace — keys on
+ * `direct_pair:<conversationId>`.
+ *
+ * It takes the whole `TaskRefCoord`, whose `conversationId` is nullable, because
+ * this is the general seam over that shared coordinate type and a coordinate that
+ * names no board has exactly one right answer: snapshot nothing. That is a
+ * property OF THE SEAM, not a state the modal above can be in — its own prop is
+ * `string`, so a caller cannot reach the empty-scope arm from production
+ * (@Cindy, #task:2041 B3).
+ */
+export function snapshotStaticTaskRefs(
   messages: readonly MessageDto[],
-  workspaceId: string | null,
+  coord: TaskRefCoord,
   queryClient: QueryClient,
 ): ReadonlyMap<number, StaticTaskRefSummary> {
-  if (!workspaceId) return new Map();
+  const scope = taskBoardCacheScope(coord);
+  if (!scope) return new Map();
   const taskNumbers = extractTaskNumbers(messages);
   if (taskNumbers.length === 0) return new Map();
   const out = new Map<number, StaticTaskRefSummary>();
   for (const taskNumber of taskNumbers) {
     const task = queryClient.getQueryData<TaskSummaryDto | null>(
-      taskByNumberKey(workspaceId, taskNumber),
+      taskByNumberKey(scope, taskNumber),
     );
     if (!task) continue;
     out.set(taskNumber, {

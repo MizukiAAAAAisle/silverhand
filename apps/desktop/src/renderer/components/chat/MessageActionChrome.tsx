@@ -32,11 +32,19 @@ export function MessageActionChrome({
   surface,
   renderCtx,
   workspaceId,
+  conversationId,
   channelTitle,
 }: {
   surface: MessageActionSurface;
   renderCtx: MessageActionChromeRenderContext;
   workspaceId: string | null;
+  /** The conversation these messages belong to — REQUIRED, because every pane that
+   *  renders this chrome is looking at one (#task:2041 B3). With `workspaceId`,
+   *  which is the only legitimately nullable half of the coordinate, it projects
+   *  the by-number cache scope so the static export reads the SAME cell the live
+   *  chip resolved — including a DM (workspaceId null) whose board is the pair
+   *  conversation. */
+  conversationId: string;
   channelTitle: string | null;
 }): ReactElement {
   // The screenshot byline resolves each selected author's avatar bytes STRICTLY
@@ -68,6 +76,7 @@ export function MessageActionChrome({
         onExportComplete={surface.selection.exit}
         messages={surface.previewSnapshots}
         workspaceId={workspaceId}
+        conversationId={conversationId}
         channelTitle={channelTitle}
         agentsByName={renderCtx.agentsByName}
         humansByName={renderCtx.humansByName}

@@ -11,7 +11,7 @@ import type {
 } from '@silverhand/shared';
 import { boardColumnKey, boardCountsKey, boardFacetsKey } from './boardQuery';
 import { taskDetailKey } from './taskDetail';
-import { taskByNumberKey } from './useTaskByNumber';
+import { taskBoardCacheScope, taskByNumberKey } from './useTaskByNumber';
 import {
   applyTaskChangedToProjections,
   beginOptimisticStatusWrite,
@@ -46,6 +46,12 @@ import {
  */
 
 const WS = 'ws-1';
+// The by-number chip cache is keyed by BOARD scope, not by conversation
+// (#task:2041 / B4): every conversation on one workspace board collapses to
+// `workspace:<workspace_id>`, so a `task_changed` event reaches that single
+// cell no matter which sibling conversation rendered the chip. `eventOf()`'s
+// task sits on the `ws-1` board, so a chip keyed by this scope is its cell.
+const SCOPE = taskBoardCacheScope({ workspaceId: WS, conversationId: 'chan-1' })!;
 const FILTER = `${WS}|*|any|any`;
 const OTHER_FILTER = `${WS}|chan-2|any|any`;
 
@@ -304,16 +310,16 @@ describe('patchTaskPointCaches', () => {
   it('patches the detail and every chip entry that holds this task, by content', () => {
     const qc = new QueryClient();
     qc.setQueryData(taskDetailKey('task-a'), detailOf());
-    qc.setQueryData(taskByNumberKey(WS, 100), row());
-    qc.setQueryData(taskByNumberKey(WS, 7), row({ id: 'other', task_number: 7 }));
+    qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
+    qc.setQueryData(taskByNumberKey(SCOPE, 7), row({ id: 'other', task_number: 7 }));
 
     patchTaskPointCaches(qc, { taskId: 'task-a', patch: { status: 'done' } });
 
     expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe('done');
     // The body is untouched: a status patch never claims to know the definition.
     expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.content).toBe('body');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe('done');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 7))?.status).toBe('todo');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 7))?.status).toBe('todo');
   });
 });
 
@@ -448,7 +454,7 @@ function board(): Board {
   const counts = observe(qc, boardCountsKey(FILTER), { counts: {} });
   const facets = observe(qc, boardFacetsKey(), { assignees: [] });
   const detail = observe(qc, taskDetailKey('task-a'), detailOf());
-  const chip = observe(qc, taskByNumberKey(WS, 100), row());
+  const chip = observe(qc, taskByNumberKey(SCOPE, 100), row());
   stops.push(counts.stop, facets.stop, detail.stop, chip.stop);
   return {
     qc,
@@ -488,7 +494,7 @@ describe('request budget for one status change', () => {
     expect(b.qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe(
       'in_progress',
     );
-    expect(b.qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe(
+    expect(b.qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
       'in_progress',
     );
     expect(b.columns.todo?.fetches()).toBe(0);
@@ -672,9 +678,9 @@ describe('request budget for one status change', () => {
     const qc = new QueryClient();
     const resolvers: Array<(value: TaskSummaryDto) => void> = [];
     let chipFetches = 0;
-    qc.setQueryData(taskByNumberKey(WS, 100), row());
+    qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
     const observer = new QueryObserver(qc, {
-      queryKey: [...taskByNumberKey(WS, 100)],
+      queryKey: [...taskByNumberKey(SCOPE, 100)],
       queryFn: () =>
         new Promise<TaskSummaryDto>(resolve => {
           chipFetches += 1;
@@ -694,7 +700,7 @@ describe('request budget for one status change', () => {
     // the user has already seen move does not flip back.
     resolvers[0]?.(row({ status: 'todo' }));
     await settled();
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe(
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
       'in_progress',
     );
     stop();
@@ -705,10 +711,10 @@ describe('request budget for one status change', () => {
     // A `TaskRef` popover in a message row: no board, no detail modal. The chip is
     // the only projection there is — and therefore the only evidence about the
     // task's current value.
-    const chip = observe(qc, taskByNumberKey(WS, 100), row());
+    const chip = observe(qc, taskByNumberKey(SCOPE, 100), row());
 
     const write = localWrite(qc, 'in_progress');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe(
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
       'in_progress',
     );
     restartRacingTaskReads(qc, write.taskId);
@@ -728,7 +734,7 @@ describe('request budget for one status change', () => {
 
   it('settles a chip-only FAILURE with exactly one authoritative read', async () => {
     const qc = new QueryClient();
-    const chip = observe(qc, taskByNumberKey(WS, 100), row());
+    const chip = observe(qc, taskByNumberKey(SCOPE, 100), row());
     const write = localWrite(qc, 'done');
 
     revertOptimisticStatusWrite(qc, write);
@@ -738,7 +744,7 @@ describe('request budget for one status change', () => {
     // The local rollback answers immediately; `points` is what makes the failure
     // path TOTAL — the cases the rollback deliberately declines (a superseded
     // write, a baseline no cache carried) still end on a server value.
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe('todo');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('todo');
     expect(chip.fetches()).toBe(1);
     chip.stop();
   });
@@ -874,7 +880,7 @@ describe('single refetch owner', () => {
 
   it('keeps a chip read issued before the event from committing over it', async () => {
     const qc = new QueryClient();
-    const chip = observeInFlight(qc, taskByNumberKey(WS, 100), row());
+    const chip = observeInFlight(qc, taskByNumberKey(SCOPE, 100), row());
     await vi.waitFor(() => expect(chip.fetches()).toBe(1));
 
     applyTaskChangedToProjections(qc, eventOf({ status: 'in_review' }));
@@ -884,7 +890,7 @@ describe('single refetch owner', () => {
     // restart, so `todo` has nowhere to commit and the pill keeps the snapshot.
     chip.answer(0, row({ status: 'todo' }));
     await settled();
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe(
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
       'in_review',
     );
     chip.stop();
@@ -893,21 +899,21 @@ describe('single refetch owner', () => {
   it('writes nothing and restarts nothing when the chip already reads the snapshot', async () => {
     const qc = new QueryClient();
     const seeded = row({ status: 'in_progress' });
-    const chip = observe(qc, taskByNumberKey(WS, 100), seeded);
+    const chip = observe(qc, taskByNumberKey(SCOPE, 100), seeded);
 
     applyTaskChangedToProjections(qc, eventOf());
     await settled();
 
     // Object identity: a duplicate delivery (engineered by the applied-floor
     // replay) must cost neither a write nor a request on this key either.
-    expect(qc.getQueryData(taskByNumberKey(WS, 100))).toBe(seeded);
+    expect(qc.getQueryData(taskByNumberKey(SCOPE, 100))).toBe(seeded);
     expect(chip.fetches()).toBe(0);
     chip.stop();
   });
 
   it('restarts a COLD chip read the event overtook, so the FIRST paint is not pre-event', async () => {
     const qc = new QueryClient();
-    const chip = observeInFlight(qc, taskByNumberKey(WS, 100));
+    const chip = observeInFlight(qc, taskByNumberKey(SCOPE, 100));
     await vi.waitFor(() => expect(chip.fetches()).toBe(1));
 
     // There is nothing to patch — no DTO yet, and the event cannot synthesize one
@@ -920,11 +926,11 @@ describe('single refetch owner', () => {
     // nothing would re-read it afterwards.
     chip.answer(0, row({ status: 'todo' }));
     await settled();
-    expect(qc.getQueryData(taskByNumberKey(WS, 100))).toBeUndefined();
+    expect(qc.getQueryData(taskByNumberKey(SCOPE, 100))).toBeUndefined();
 
     chip.answer(1, row({ status: 'in_review' }));
     await settled();
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe(
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
       'in_review',
     );
     chip.stop();
@@ -1037,11 +1043,11 @@ describe('rollback context', () => {
       done: pages(page([], null, 'done')),
     });
     qc.setQueryData(taskDetailKey('task-a'), detailOf({ status: 'closed', closed_at: 5000 }));
-    qc.setQueryData(taskByNumberKey(WS, 100), closedRow);
+    qc.setQueryData(taskByNumberKey(SCOPE, 100), closedRow);
 
     const write = localWrite(qc, 'done');
     expect(write.previousClosedAt).toBe(5000);
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.closed_at).toBeNull();
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.closed_at).toBeNull();
 
     revertOptimisticStatusWrite(qc, write);
 
@@ -1049,7 +1055,7 @@ describe('rollback context', () => {
     // `closed` with no `closed_at` — a pair the server never produces, and one
     // the failure path's re-read does not reach on the chip.
     for (const held of [
-      qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100)),
+      qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100)),
       qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a')),
       qc.getQueryData<BoardColumnPages>(boardColumnKey('closed', FILTER))?.pages[0]?.items[0],
     ]) {
@@ -1059,16 +1065,16 @@ describe('rollback context', () => {
 
   it('rolls back a write whose ONLY cache is an inline chip', () => {
     const qc = new QueryClient();
-    qc.setQueryData(taskByNumberKey(WS, 100), row());
+    qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
 
     // A `TaskRef` popover drives this mutation with no board and no detail
     // mounted. The by-number entry is then the only baseline there is.
     const write = localWrite(qc, 'done');
     expect(write.previousStatus).toBe('todo');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe('done');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
 
     revertOptimisticStatusWrite(qc, write);
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe('todo');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('todo');
   });
 
   it('puts the board row back when the destination column was never cached', () => {
@@ -1114,7 +1120,7 @@ describe('rollback context', () => {
       todo: pages(page([row()])),
       done: pages(page([], null, 'done')),
     });
-    qc.setQueryData(taskByNumberKey(WS, 100), row());
+    qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
 
     // Two clicks on the same target. B commits and echoes; A fails afterwards.
     const a = localWrite(qc, 'done');
@@ -1127,7 +1133,7 @@ describe('rollback context', () => {
     // what A wrote — so only the LOCAL write order can refuse this rollback.
     // Without it the task reverts to `todo` and stays there: the failure path
     // re-reads the board, but B's committed `done` is what the server holds.
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe('done');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
     expect(locateTaskInBoardColumns(qc, 'task-a').map(h => h.status)).toEqual(['done']);
   });
 
@@ -1138,7 +1144,7 @@ describe('rollback context', () => {
       done: pages(page([], null, 'done')),
     });
     qc.setQueryData(taskDetailKey('task-a'), detailOf());
-    qc.setQueryData(taskByNumberKey(WS, 100), row());
+    qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
 
     // ONE click, and the server COMMITTED it: the echo arrives with the real
     // stamp, only the HTTP answer is lost. `onError` then runs over caches the
@@ -1157,8 +1163,8 @@ describe('rollback context', () => {
     expect(locateTaskInBoardColumns(qc, 'task-a').map(h => h.status)).toEqual(['done']);
     expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe('done');
     expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.closed_at).toBe(4000);
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.status).toBe('done');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(WS, 100))?.closed_at).toBe(4000);
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.closed_at).toBe(4000);
   });
 });
 

@@ -15,7 +15,6 @@ import { restartRacingRead } from './racingRead';
 import { taskDetailKey } from './taskDetail';
 import {
   applyTaskChangedToTaskByNumberCache,
-  taskByNumberKey,
 } from './useTaskByNumber';
 
 /**
@@ -443,19 +442,21 @@ export function patchTaskDetailCache(
 /**
  * Apply the same fields to the two SINGLE-OBJECT task caches — the open detail
  * modal (`['task-detail', id]`) and every inline `#task:<n>` entry
- * (`['task-by-number', ws, n]`) — addressed BY CONTENT.
+ * (`['task-by-number', boardCacheScope, n]`) — addressed BY CONTENT.
  *
- * By content because a local writer holds only a `taskId` while the by-number key
- * needs `(workspace_id, task_number)`. Scanning for the entry that already holds
- * this task is what lets a status write patch the very chip that triggered it
- * (`TaskRef`'s popover drives this mutation and is often the only surface
- * mounted) without first reading the task to learn its own coordinates. An entry
- * that is not cached is simply not there — the correct zero-request answer.
+ * By content because a local writer holds only a `taskId` while the by-number
+ * key needs the board's `TaskBoardCacheScope` and `task_number`. Scanning for
+ * the entry that already holds this task is what lets a status write patch the
+ * very chip that triggered it (`TaskRef`'s popover drives this mutation and is
+ * often the only surface mounted) without first reading the task to learn its
+ * own coordinates. An entry that is not cached is simply not there — the correct
+ * zero-request answer.
  *
- * The EVENT path does not come through here: it carries both axes, so it patches
- * the by-number entry by exact key (`applyTaskChangedToTaskByNumberCache`), which
- * also handles the one case a content scan structurally cannot — a cached MISS
- * (`data === null`) that has since become a real task.
+ * The EVENT path does not come through here: it projects the board scope from
+ * its own placement coords, so it patches the by-number cell by scope
+ * (`applyTaskChangedToTaskByNumberCache`), which also handles the one case a
+ * content scan structurally cannot — a cached MISS (`data === null`) that has
+ * since become a real task.
  */
 export function patchTaskPointCaches(
   qc: QueryClient,
@@ -876,13 +877,13 @@ export function applyTaskChangedToProjections(
 ): TaskEventOutcome {
   const held = locateTaskInBoardColumns(qc, event.task_id);
   const detail = qc.getQueryData<TaskDetailDto>(taskDetailKey(event.task_id));
-  // The chip is EVIDENCE, not a side cache: the event names both of its axes, so
-  // it is read by exact key. A cached MISS (`null`) is not evidence — it says
-  // this client has never held the task.
-  const chip =
-    qc.getQueryData<TaskSummaryDto | null>(
-      taskByNumberKey(event.workspace_id, event.task_number),
-    ) ?? null;
+  // The chip is EVIDENCE, not a side cache. It is matched by task IDENTITY, not
+  // by an exact key: the by-number cache is keyed by board scope now (every
+  // conversation on a task's board collapses to one `TaskBoardCacheScope`), so
+  // a task holds a single cell and identity finds it regardless of scope. A
+  // cached MISS (`null`) holds nothing and is excluded — it says this client has
+  // never resolved the task.
+  const chip = locateTaskInPointCaches(qc, event.task_id);
   const known = held[0]?.row ?? detail ?? chip ?? null;
 
   const fields: TaskFieldPatch = {

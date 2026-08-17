@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useEffect,
   useId,
   useMemo,
   useState,
@@ -11,6 +12,8 @@ import * as Popover from '@radix-ui/react-popover';
 import {
   Check,
   ChevronDown,
+  Layers,
+  MessageSquare,
   PenLine,
   RotateCcw,
   Search,
@@ -27,6 +30,12 @@ import {
 } from '@/components/tasks/PersonAvatar';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useDirectPairsList } from '@/features/direct-pairs/hooks';
+import {
+  projectDirectPairFilterLeaf,
+  type DirectPairFilterLeafStatus,
+} from '@/features/direct-pairs/hooks';
+import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
 import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
 import {
   mapBoardAuthority,
@@ -35,11 +44,18 @@ import {
   type BoardFacets,
 } from '@/features/tasks/boardAuthority';
 import {
+  applyContainerSwitch,
   applyWorkspaceCascade,
+  channelGroupContainer,
+  containerScope,
   personFilterKey,
   taskFiltersEqual,
+  workspaceKindContainer,
+  type ContainerMembership,
   type PersonFilter,
   type PersonOption,
+  type PersonRef,
+  type TaskBoardContainerAxis,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
 
@@ -95,6 +111,19 @@ export interface WorkspaceOption {
   /** The bound agent for a DM workspace (icon renders that agent's avatar);
    *  null for a regular workspace. */
   dmAgentId: string | null;
+}
+
+/** One direct line offered by the DM 对端 leaf (#task:2041). A DirectPair has
+ *  NO workspace/channel coordinate — its `id` is the pair conversation id, which
+ *  is exactly what the board read narrows on (`channel_id` = `t.conversation_id`),
+ *  so selecting one writes `filters.channelId` and invents no workspace. */
+export interface DirectPairOption {
+  id: string;
+  /** The counterpart's presented name (the pair has no title of its own). */
+  label: string;
+  /** The counterpart as a person ref for the avatar, or null for a deleted
+   *  endpoint (renders the neutral person glyph, like an assignee row). */
+  person: PersonRef | null;
 }
 
 /** A conversation considered for the channel-filter dropdown, normalized
@@ -204,16 +233,106 @@ export function TaskFilterBar({
   // re-resolve the directory.
   const personDirectory = usePersonDirectory();
 
+  // The DM 对端 leaf's population (#task:2041). Read the LIST query (not the
+  // `[]`-collapsing `useDirectPairs`) so the leaf can separate loading / failure
+  // / answered — a cold or failed read must not read as "you have no lines", and
+  // an answered list that no longer holds the selected pair must self-heal rather
+  // than show ALL over a dead `channel_id` (Cindy B2). Read here — not per
+  // surface — so the board and drawer share ONE source; it is the viewer-global
+  // cached read (`['direct-pairs']`, the sidebar already holds it), so this costs
+  // no extra fetch. Each pair projects its counterpart through the one
+  // presentation rule (`presentCounterpart`) so the leaf's face matches the DM
+  // list and the byline.
+  const directPairsQuery = useDirectPairsList();
+  const directPairs = directPairsQuery.data?.direct_pairs;
+  const directPairOptions = useMemo<DirectPairOption[]>(
+    () =>
+      (directPairs ?? []).map(p => {
+        const c = presentCounterpart(p.counterpart);
+        return {
+          id: p.conversation_id,
+          label: c.label,
+          person:
+            c.navigableId !== null
+              ? { type: c.kind === 'agent' ? 'agent' : 'user', id: c.navigableId }
+              : null,
+        };
+      }),
+    [directPairs],
+  );
+  // The pair filter narrows on `filters.channelId`, but ONLY under the DM
+  // container — elsewhere that field is a real channel id the pair list would
+  // never contain, so guard `selectedId` to null off the DM tab or the leaf would
+  // wrongly judge a legitimate channel filter "stale".
+  const directPairSelected =
+    filters.container === 'direct_messages' ? filters.channelId : null;
+  const directPairLeaf = projectDirectPairFilterLeaf(
+    {
+      rows: directPairs,
+      isPending: directPairsQuery.isPending,
+      isFetching: directPairsQuery.isFetching,
+      isError: directPairsQuery.isError,
+    },
+    directPairSelected,
+  );
+  // Self-heal a stale DM narrowing: once the authoritative list has ANSWERED
+  // (never while loading/failed) and the selected pair is not in it, the line is
+  // gone — clear it so the board resets to all DM tasks and the trigger stops
+  // reading ALL while the request still carried a dead `channel_id`. Same
+  // invariant as the workspace→channel cascade dropping an orphan channel, here
+  // triggered by authoritative data arriving rather than a user switch.
+  useEffect(() => {
+    if (directPairLeaf.staleSelection) {
+      onChange({ ...filters, channelId: null });
+    }
+  }, [directPairLeaf.staleSelection, filters, onChange]);
+
+
+  // The four-state container axis, resolved through the ONE pure model
+  // (#task:2041): `containerScope` decides which secondary controls describe the
+  // current container and over which option population; `applyContainerSwitch`
+  // drops a workspace/channel coordinate the new container cannot hold.
+  const scope = useMemo(
+    () =>
+      containerScope(filters.container, {
+        workspaceOptions,
+        channelOptions,
+        directPairOptions,
+      }),
+    [filters.container, workspaceOptions, channelOptions, directPairOptions],
+  );
+  // Membership resolver for the transition — maps a selected coordinate to its
+  // container using the SAME tags the option domain reads (workspace `kind`,
+  // channel `group`, or a viewer DirectPair id). Built from the full option sets,
+  // not the scoped ones, so it can still classify the coordinate we are switching
+  // AWAY from.
+  const membership = useMemo<ContainerMembership>(() => {
+    const wsKind = new Map(workspaceOptions.map(o => [o.id, o.kind]));
+    const chGroup = new Map(channelOptions.map(o => [o.id, o.group]));
+    const pairIds = new Set(directPairOptions.map(o => o.id));
+    return {
+      workspaceContainer: id => {
+        const kind = wsKind.get(id);
+        return kind ? workspaceKindContainer(kind) : null;
+      },
+      channelContainer: id => {
+        const group = chGroup.get(id);
+        if (group) return channelGroupContainer(group);
+        return pairIds.has(id) ? 'direct_messages' : null;
+      },
+    };
+  }, [workspaceOptions, channelOptions, directPairOptions]);
+
   // Cascade (#task:1387): the channel filter shows only channels of the
-  // selected workspace; at "All workspaces" it shows the full grouped set
-  // (current behaviour). Selecting a workspace also drops a channel that no
-  // longer belongs to it — never an orphan channel that yields an empty board.
+  // selected workspace; at "All workspaces" it shows the container-scoped set.
+  // Selecting a workspace also drops a channel that no longer belongs to it —
+  // never an orphan channel that yields an empty board.
   const visibleChannelOptions = useMemo(
     () =>
       filters.workspaceId
-        ? channelOptions.filter(o => o.workspaceId === filters.workspaceId)
-        : channelOptions,
-    [channelOptions, filters.workspaceId],
+        ? scope.channelOptions.filter(o => o.workspaceId === filters.workspaceId)
+        : scope.channelOptions,
+    [scope.channelOptions, filters.workspaceId],
   );
   const channelWorkspaceId = useMemo(() => {
     const byId = new Map(channelOptions.map(o => [o.id, o.workspaceId]));
@@ -225,9 +344,22 @@ export function TaskFilterBar({
       data-task-filter-bar
       className={cn('flex flex-wrap items-center gap-1.5', className)}
     >
-      {workspaceOptions.length > 0 ? (
+      {/* Coarsest axis first: WHICH KIND of container a task lives in. It leads
+          the row because it reshapes what the downstream menus even describe
+          (the facet population is scoped to it), and because All → a specific
+          container reads left-to-right as narrowing. Always rendered — All is
+          always a valid answer, so unlike the workspace/channel controls this
+          one never has to hide (#task:2041). Switching it runs the pure
+          transition so a stranded workspace/channel coordinate is cleared. */}
+      <ContainerFilter
+        value={filters.container}
+        onChange={container =>
+          onChange(applyContainerSwitch(filters, container, membership))
+        }
+      />
+      {scope.showWorkspace && scope.workspaceOptions.length > 0 ? (
         <WorkspaceFilter
-          options={workspaceOptions}
+          options={scope.workspaceOptions}
           value={filters.workspaceId}
           onChange={workspaceId =>
             onChange(applyWorkspaceCascade(filters, workspaceId, channelWorkspaceId))
@@ -237,15 +369,26 @@ export function TaskFilterBar({
       {/* Same rule as the workspace control above, for the same reason: with no
           option to pick, the trigger can only report "ALL" — which is a false
           statement whenever the board IS narrowed on a conversation the option
-          set doesn't contain. A drawer opened on a `direct_pair` is exactly
-          that: the pair is its whole coordinate and no workspace channel list
-          holds it (#task:2041 Phase B). */}
-      {visibleChannelOptions.length > 0 ? (
+          set doesn't contain. */}
+      {scope.showChannel && visibleChannelOptions.length > 0 ? (
         <ChannelFilter
           options={visibleChannelOptions}
           allChannelsLabel={allChannelsLabel}
           value={filters.channelId}
           onChange={channelId => onChange({ ...filters, channelId })}
+        />
+      ) : null}
+      {/* DM container: the 对端 leaf REPLACES the workspace/channel controls
+          (both hidden above by the scope). It writes `channelId` = the pair
+          conversation id — the existing `channel_id` wire param — so no
+          pseudo-workspace coordinate is minted for a placement that has none. */}
+      {scope.showDirectPair ? (
+        <DirectPairFilter
+          options={scope.directPairOptions}
+          status={directPairLeaf.status}
+          value={filters.channelId}
+          onChange={channelId => onChange({ ...filters, channelId })}
+          {...personDirectory}
         />
       ) : null}
       <PersonFilterControl
@@ -667,6 +810,214 @@ function ChannelFilter({
           </div>
         </Popover.Content>
       </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+// ── Direct pair (DM 对端 leaf) ──────────────────────────────────────
+
+/**
+ * The Direct Messages leaf — shown ONLY under the `direct_messages` container,
+ * where it replaces the workspace + channel controls (#task:2041). Picking a
+ * counterpart writes `filters.channelId` = that pair's conversation id (the
+ * existing `channel_id` wire param), so a DM narrows on the same axis a single
+ * direct line IS on the read, with no invented workspace coordinate. Each row
+ * wears the counterpart's own avatar (the shared `PersonAvatar`, resolved from
+ * the directory the person menus already loaded) so a line reads as the person,
+ * exactly like the DM list and the assignee menus.
+ */
+function DirectPairFilter({
+  options,
+  status,
+  value,
+  onChange,
+  agentsById,
+  agentAvatarUrls,
+  userAvatarUrls,
+}: {
+  options: DirectPairOption[];
+  /** The list read's state — separates a cold/failed read from an answered
+   *  empty set, so the panel says which non-answer it is instead of an empty
+   *  list reading as "no direct lines" (#task:2041 B2). */
+  status: DirectPairFilterLeafStatus;
+  value: string | null;
+  onChange: (id: string | null) => void;
+} & PersonDirectory): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const selected = value ? options.find(o => o.id === value) ?? null : null;
+  const listId = useId();
+  const optionId = (index: number): string => `${listId}-opt-${index}`;
+  const roving = useRovingList({
+    count: options.length + 1,
+    open,
+    onSelect: index => {
+      if (index === 0) onChange(null);
+      else {
+        const o = options[index - 1];
+        if (o) onChange(o.id);
+      }
+      setOpen(false);
+    },
+  });
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <FilterTrigger
+          icon={<MessageSquare className="size-3.5" />}
+          active={value !== null}
+          aria-label="Direct line"
+        >
+          {selected?.label ?? 'ALL'}
+        </FilterTrigger>
+      </Popover.Trigger>
+      <FilterPanel
+        id={listId}
+        activeDescendant={optionId(roving.activeIndex)}
+        onKeyDown={roving.onKeyDown}
+      >
+        <OptionRow
+          selected={value === null}
+          neutral
+          active={roving.activeIndex === 0}
+          id={optionId(0)}
+          optionRef={el => roving.registerItem(0, el)}
+          onHover={() => roving.setActiveIndex(0)}
+          onSelect={() => {
+            onChange(null);
+            setOpen(false);
+          }}
+        >
+          ALL
+        </OptionRow>
+        {options.map((o, i) => {
+          const index = i + 1;
+          return (
+            <OptionRow
+              key={o.id}
+              selected={value === o.id}
+              active={roving.activeIndex === index}
+              id={optionId(index)}
+              optionRef={el => roving.registerItem(index, el)}
+              onHover={() => roving.setActiveIndex(index)}
+              onSelect={() => {
+                onChange(o.id);
+                setOpen(false);
+              }}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0">
+                  {o.person ? (
+                    <PersonAvatar
+                      person={o.person}
+                      name={o.label}
+                      agentsById={agentsById}
+                      agentAvatarUrls={agentAvatarUrls}
+                      userAvatarUrls={userAvatarUrls}
+                    />
+                  ) : (
+                    <span className="text-text-muted">
+                      <User className="size-3.5" />
+                    </span>
+                  )}
+                </span>
+                <span className="truncate">{o.label}</span>
+              </span>
+            </OptionRow>
+          );
+        })}
+        {status === 'ready' ? null : (
+          <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
+            {status === 'loading'
+              ? 'Loading…'
+              : status === 'failed'
+                ? 'Couldn’t load direct lines'
+                : 'No direct lines yet'}
+          </p>
+        )}
+      </FilterPanel>
+    </Popover.Root>
+  );
+}
+
+// ── Container (top-level board axis) ───────────────────────────────
+
+/** The four container-axis rows, in narrowing order. `null` is the ALL default
+ *  (the neutral row — no lime fill, matching the other "no filter" rows). The
+ *  labels are the product vocabulary shiki + Cindy fixed for the tab
+ *  (#task:2041 / #task:2044): "Agent Space" reads the agent's own home, and
+ *  "Direct Messages" the viewer's pairs. */
+const CONTAINER_OPTIONS: ReadonlyArray<{
+  value: TaskBoardContainerAxis | null;
+  label: string;
+}> = [
+  { value: null, label: 'All' },
+  { value: 'workspace', label: 'Workspace' },
+  { value: 'agent_space', label: 'Agent Space' },
+  { value: 'direct_messages', label: 'Direct Messages' },
+];
+
+function ContainerFilter({
+  value,
+  onChange,
+}: {
+  value: TaskBoardContainerAxis | null;
+  onChange: (next: TaskBoardContainerAxis | null) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const selectedLabel =
+    CONTAINER_OPTIONS.find(o => o.value === value)?.label ?? 'All';
+  const listId = useId();
+  const optionId = (index: number): string => `${listId}-opt-${index}`;
+  const roving = useRovingList({
+    count: CONTAINER_OPTIONS.length,
+    open,
+    onSelect: index => {
+      const o = CONTAINER_OPTIONS[index];
+      if (o) onChange(o.value);
+      setOpen(false);
+    },
+  });
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <FilterTrigger
+          icon={<Layers className="size-3.5" />}
+          // Active = a container is chosen (not All): the lime chip signals the
+          // board is narrowed to one container, same vocabulary as the other
+          // filter triggers.
+          active={value !== null}
+          aria-label="Container"
+        >
+          {selectedLabel}
+        </FilterTrigger>
+      </Popover.Trigger>
+      <FilterPanel
+        id={listId}
+        activeDescendant={optionId(roving.activeIndex)}
+        onKeyDown={roving.onKeyDown}
+      >
+        {CONTAINER_OPTIONS.map((o, index) => (
+          <OptionRow
+            key={o.value ?? 'all'}
+            selected={value === o.value}
+            // The ALL row is the "no filter" default → muted check, no lime,
+            // like the other bars' neutral rows.
+            neutral={o.value === null}
+            active={roving.activeIndex === index}
+            id={optionId(index)}
+            optionRef={el => roving.registerItem(index, el)}
+            onHover={() => roving.setActiveIndex(index)}
+            onSelect={() => {
+              onChange(o.value);
+              setOpen(false);
+            }}
+          >
+            {o.label}
+          </OptionRow>
+        ))}
+      </FilterPanel>
     </Popover.Root>
   );
 }

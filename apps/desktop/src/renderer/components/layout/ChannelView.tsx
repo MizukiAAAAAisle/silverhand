@@ -606,15 +606,21 @@ function ActiveChannelView({
   // threads query anymore.
 
 
-  // Bind a TaskRefContext to this conversation's workspace. Inline
-  // `#task:<n>` chips inside this pane resolve their numeric reference
-  // against `conversation.workspace_id` — the message's workspace, not
-  // the primary-selected workspace. Cross-workspace `?side` panes
-  // therefore look up tasks in the foreign workspace transparently, and
-  // the click hands up the resolved id, which needs no workspace.
+  // Bind a TaskRefContext to this pane's conversation. Inline `#task:<n>`
+  // chips inside this pane resolve their numeric reference against
+  // `conversation.id` — the message's conversation, not the primary-selected
+  // one. The server derives that conversation's board (workspace OR DirectPair)
+  // and point-reads by number, so cross-workspace `?side` panes and DM panes
+  // both resolve transparently; the click hands up the resolved id, which
+  // needs no scope. `workspace_id` (null for a DM) is the CACHE-scope coord —
+  // it collapses this channel and its siblings onto one by-number cell.
   const taskRefContext = useMemo(
-    () => ({ workspaceId: paneCaps.workspaceScope, onOpenTask }),
-    [paneCaps.workspaceScope, onOpenTask],
+    () => ({
+      conversationId: conversation.id,
+      workspaceId: conversation.workspace_id,
+      onOpenTask,
+    }),
+    [conversation.id, conversation.workspace_id, onOpenTask],
   );
   const handleOpenChannelRef = useCallback(
     (channelId: string) => {

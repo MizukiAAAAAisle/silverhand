@@ -7,7 +7,7 @@ import type { MessageDto, TaskSummaryDto } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import { SystemActivityCluster } from './SystemActivityCluster';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
-import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
+import { taskBoardCacheScope, taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 
 /** Minimal MessageDto factory — same shape as Markdown.test's helper,
  *  duplicated locally so the cluster tests don't reach into another
@@ -63,7 +63,13 @@ function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = [
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const t of seededTasks) {
     if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
-    qc.setQueryData(taskByNumberKey(t.board.workspace_id, t.task_number), t);
+    qc.setQueryData(
+      taskByNumberKey(
+        taskBoardCacheScope({ workspaceId: t.board.workspace_id, conversationId: 'conv-1' }),
+        t.task_number,
+      ),
+      t,
+    );
   }
   return renderToStaticMarkup(
     React.createElement(
@@ -74,7 +80,7 @@ function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = [
         { client: qc },
         React.createElement(
           TaskRefContextProvider,
-          { value: { workspaceId: 'ws-1', onOpenTask: () => undefined } },
+          { value: { workspaceId: 'ws-1', conversationId: 'conv-1', onOpenTask: () => undefined } },
           React.createElement(SystemActivityCluster, {
             messages,
             channelsByName: new Map(),

@@ -100,9 +100,9 @@ interface ThreadPanelProps {
    *  it to this thread's workspace before handing it to the renderer. */
   onOpenChannelRef?: (workspaceId: string, channelId: string) => void;
   /** `(taskId)` — App-level handler; wrapped into a
-   *  `TaskRefContextProvider` scoped to this thread's workspace so inline
-   *  `#task:<n>` chips resolve against it, then hand up the resolved id
-   *  (which is workspace-free) to open the detail modal. */
+   *  `TaskRefContextProvider` scoped to this thread's parent channel so inline
+   *  `#task:<n>` chips resolve against its board, then hand up the resolved id
+   *  (which is scope-free) to open the detail modal. */
   onOpenTask?: (taskId: string) => void;
   /** A reply inside this cluster to scroll-locate + flash. Set by App when
    *  a jump (task/saved/search/notification) targets a message whose
@@ -316,8 +316,12 @@ export function ThreadPanel({
     [onOpenChannelRef, workspaceId],
   );
   const taskRefContext = useMemo(
-    () => ({ workspaceId, onOpenTask }),
-    [workspaceId, onOpenTask],
+    // The thread's conversation for by-number resolution is its parent channel
+    // — a thread shares the channel's board (its own conversation IS the
+    // channel; the reply cluster is `thread_root_id`). `workspaceId` is the
+    // cache-scope coord, so the thread and its channel share one by-number cell.
+    () => ({ conversationId: channelId, workspaceId, onOpenTask }),
+    [channelId, workspaceId, onOpenTask],
   );
 
   // In-conversation header find (#task:1335) is set up below, after the scroll
@@ -935,6 +939,7 @@ export function ThreadPanel({
               viewerAvatarObjectUrl,
             }}
             workspaceId={workspaceId}
+            conversationId={channelId}
             channelTitle={channelMeta.title}
           />
           <div

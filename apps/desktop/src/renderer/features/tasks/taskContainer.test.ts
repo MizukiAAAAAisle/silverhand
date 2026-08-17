@@ -95,17 +95,24 @@ describe('taskContainerForPosition', () => {
 });
 
 describe('taskContainerBaseline', () => {
-  it('narrows a pair on the conversation axis alone', () => {
+  it('narrows a pair on the conversation axis alone, on the direct_messages container', () => {
     // No workspace coordinate is minted: `t.workspace_id = ?` never matches the
     // NULL a DM task carries, so a claimed workspace would exclude the very
-    // tasks the board opened for.
+    // tasks the board opened for. The `direct_messages` container axis is set so
+    // the drawer opens on the DM 对端 leaf (this pair selected) rather than
+    // showing the workspace/channel controls under an orphan channelId
+    // (#task:2041).
     expect(
       taskContainerBaseline({
         kind: 'direct_pair',
         conversationId: 'c-pair',
         label: 'Cindy',
       }),
-    ).toEqual({ ...DEFAULT_TASK_FILTERS, channelId: 'c-pair' });
+    ).toEqual({
+      ...DEFAULT_TASK_FILTERS,
+      container: 'direct_messages',
+      channelId: 'c-pair',
+    });
   });
 
   it('narrows a channel on workspace + conversation', () => {

@@ -268,6 +268,81 @@ export function useDirectPairPane(
   });
 }
 
+/**
+ * What the TASK-FILTER DM leaf may claim about the viewer's pair list — the
+ * filter-bar analogue of {@link DirectPairPaneState}, distinguishing the four
+ * things "no matching row" can mean so the leaf never presents a cold/failed
+ * read as an authoritative empty set (#task:2041, Cindy B2). The board's DM tab
+ * narrows on a pair's conversation id via `channel_id`; if the leaf compresses
+ * loading/error to `[]` it (a) can't tell "still loading" from "you have no
+ * lines", and (b) after the list answers, a selected pair that is NOT in it
+ * reads as ALL on the trigger while the request still carries the dead
+ * `channel_id` — the same invisible narrowing B2 kills on the container axis.
+ *
+ *  - `loading` — no rows in hand yet and a read is in flight (cold first read).
+ *  - `failed` — no rows in hand and the read settled in failure.
+ *  - `empty` — the authority answered with zero pairs (a real claim).
+ *  - `ready` — the authority answered with at least one pair.
+ *
+ * `staleSelection` rides alongside: `true` only once the CURRENT read has
+ * answered SUCCESSFULLY and the selected pair id is not among the rows it
+ * answered with — a narrowing whose line is gone, to be cleared/surfaced rather
+ * than shown as ALL. It is never `true` while a read is in flight or after a
+ * failure, and RETAINED rows are not an answer (@Cindy, #task:2041 Round-3): on
+ * invalidation React Query keeps the previous `data` and raises `isFetching`
+ * while `isPending` stays false, so a cached list that predates the selected
+ * pair — a line opened from the agent's side, or one minted by our own first
+ * send — would otherwise be judged stale from rows nobody re-read, and the
+ * self-healing consumer would drop a selection that is about to be valid.
+ * Same for an error over retained rows: a failed read proves nothing about
+ * membership. Only `rows` from a settled, successful fetch may condemn a
+ * selection — the precedence {@link projectDirectPairPane} rests on, applied to
+ * the selection instead of the pane. */
+export type DirectPairFilterLeafStatus = 'loading' | 'failed' | 'empty' | 'ready';
+
+export interface DirectPairFilterLeafView {
+  status: DirectPairFilterLeafStatus;
+  staleSelection: boolean;
+}
+
+/** Pure projection of (list query facts, selected pair id) → the DM leaf view.
+ *  `selectedId` must already be null unless the DM container is active, so a real
+ *  channel filter on another container is never mistaken for a stale pair. */
+export function projectDirectPairFilterLeaf(
+  facts: DirectPairListQueryFacts,
+  selectedId: string | null,
+): DirectPairFilterLeafView {
+  const rows = facts.rows;
+  // Do the rows we already hold ANSWER the question this leaf is being asked? With
+  // a pair selected the question is "is that line still mine" (only that row
+  // answers it); with nothing selected it is "which lines are mine" (any non-empty
+  // list answers it). Either way a held answer renders as `ready` and no refetch
+  // on top of it downgrades that — same `ready > resolving` precedence as
+  // {@link projectDirectPairPane}, so the panel does not blink a wait message
+  // under rows it is already showing.
+  const held = rows !== undefined;
+  const answered =
+    selectedId !== null
+      ? held && rows.some(p => p.conversation_id === selectedId)
+      : held && rows.length > 0;
+  if (answered) return { status: 'ready', staleSelection: false };
+  // Nothing in hand answers it. Anything short of a settled, successful read may
+  // not condemn the selection — retained rows are not an answer, a failure proves
+  // nothing, and `isPending` catches a cold read that is not currently fetching
+  // (paused/disabled) which `isFetching` alone would call settled.
+  if (facts.isPending || facts.isFetching) {
+    return { status: 'loading', staleSelection: false };
+  }
+  if (facts.isError) return { status: 'failed', staleSelection: false };
+  // Settled and successful. `rows === undefined` here is a query that answered
+  // nothing without fetching or failing; treat it as an empty answer.
+  const settled = rows ?? [];
+  return {
+    status: settled.length === 0 ? 'empty' : 'ready',
+    staleSelection: selectedId !== null,
+  };
+}
+
 /** Minimal WS frame shape {@link decideDirectPairsInvalidation} consumes, so the
  *  decision can be exercised without React or a socket (mirrors `ViewerSyncFrame`
  *  in `features/workspaces/hooks`). */

@@ -295,28 +295,35 @@ export function useBoardCounts(
 }
 
 /**
- * The filter menus' option sets.
+ * The filter menus' option sets, over the population of ONE container (or all
+ * containers when none is selected).
  *
- * Deliberately unfiltered and unpaginated at the source: option sets must not
- * shrink to the current selection (else picking one person collapses the menu to
- * that person), and they must not shrink to "whoever appeared in the pages we
- * happened to load" — which is exactly what aggregating them from the rendered
- * rows would now do.
+ * Deliberately unfiltered by the within-board axes and unpaginated at the
+ * source: option sets must not shrink to the current selection (else picking one
+ * person collapses the menu to that person), and they must not shrink to
+ * "whoever appeared in the pages we happened to load". The ONE axis they DO
+ * honor is `filters.container` — the menus describe the container tab you are on
+ * (`workspace` / `agent_space` / `direct_messages`), so switching tabs reshapes
+ * them, and each container keeps its own cache entry.
  *
  * Returns the AUTHORITY for the same reason as the counts face, with the sharper
  * edge that here the empty answer is meaningful: a viewer whose visible
  * population really is empty is answered `[]`, so a failed cold read must not be
  * able to present itself as that (#task:1885).
  */
-export function useBoardFacets(opts?: {
-  enabled?: boolean;
-}): BoardAuthority<BoardFacets> {
+export function useBoardFacets(
+  filters: TaskFilters,
+  opts?: {
+    enabled?: boolean;
+  },
+): BoardAuthority<BoardFacets> {
   const enabled = opts?.enabled ?? true;
+  const container = filters.container;
   const query = useQuery({
-    queryKey: boardFacetsKey(),
+    queryKey: boardFacetsKey(container),
     enabled,
     queryFn: ({ signal }) =>
-      api<TaskBoardFacetsDto>(boardFacetsPath(), { signal }),
+      api<TaskBoardFacetsDto>(boardFacetsPath(container), { signal }),
     select: (dto): BoardFacets => {
       const toOptions = (
         people: TaskBoardFacetsDto['assignees'],
@@ -397,7 +404,11 @@ export function useTaskBoardRealtime(): void {
         payload.kind === 'claim' ||
         payload.kind === 'unclaim'
       ) {
-        void qc.invalidateQueries({ queryKey: boardFacetsKey() });
+        // Facets are keyed per container, so refresh EVERY container's menus:
+        // the changed task belongs to exactly one, but this listener does not
+        // resolve which, and the prefix match covers them all (including the
+        // All entry) in one call.
+        void qc.invalidateQueries({ queryKey: ['tasks', 'board', 'facets'] });
       }
       if (!outcome.needsReconcile) return;
       reconcileTaskStatusWrite(qc, outcome.projection, {

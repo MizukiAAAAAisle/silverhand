@@ -87,19 +87,19 @@ export function TaskRefStaticChip({
  * Inline chip rendering of a `#task:<n>` reference.
  *
  * Mirrors the structural choices of `ConversationRef` but addresses
- * tasks by their workspace-scoped numeric id. Resolution context
- * (current workspace + click handler) flows through `TaskRefContext`
- * — no prop drilling from the many Markdown call sites.
+ * tasks by their board-scoped numeric id. Resolution context
+ * (the conversation the sigil sits in + click handler) flows through
+ * `TaskRefContext` — no prop drilling from the many Markdown call sites.
  *
  * Rendering rules:
  *  - No context → inert `#task:<n>` text. Saved/preview surfaces that
- *    don't sit inside a conversation can't answer "which workspace?".
+ *    don't sit inside a conversation can't answer "which board?".
  *  - Lookup loading → inert (no spinner / placeholder shimmer) on the
  *    chip itself. The hover popover shows a skeleton if the user
  *    hovers ≥500ms while the fetch is still in flight.
  *  - Resolved + missing → inert (the task was deleted or doesn't
- *    exist in this workspace). Surfacing a broken chip would be
- *    worse than a silent demote.
+ *    exist on this conversation's board). Surfacing a broken chip would
+ *    be worse than a silent demote.
  *  - Resolved + present → clickable borderless accent link, label
  *    `#<n> title` (number and title read as one link, no `·` separator;
  *    no leading glyph — the `#` is the task's inline identity marker,
@@ -118,8 +118,13 @@ export function TaskRefStaticChip({
  */
 export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element {
   const ctx = useTaskRefContext();
-  const workspaceId = ctx?.workspaceId ?? null;
-  const result = useTaskByNumber(workspaceId, taskNumber);
+  const conversationId = ctx?.conversationId ?? null;
+  const result = useTaskByNumber(
+    ctx
+      ? { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId }
+      : null,
+    taskNumber,
+  );
   const task = result.data ?? null;
   const onOpenTask = ctx?.onOpenTask;
   const inertLabel = `#task:${taskNumber}`;
@@ -141,14 +146,14 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   }
 
   // No-context (saved/preview surfaces) and resolved-missing (task
-  // deleted or never existed in this workspace) render a tooltip-only
-  // pill with no popover — there's nothing meaningful to surface on
-  // hover for either case. Loading WITH workspace context goes through
-  // HoverPopover with `isContentReady=false` so a hover ≥500ms while
-  // the fetch is still in flight gets a skeleton (Cindy review of
-  // commit 3 — previously the loading branch returned a bare span,
-  // missing the 500ms→skeleton spec entirely).
-  if (!workspaceId) {
+  // deleted or never existed on this conversation's board) render a
+  // tooltip-only pill with no popover — there's nothing meaningful to
+  // surface on hover for either case. Loading WITH conversation context
+  // goes through HoverPopover with `isContentReady=false` so a hover
+  // ≥500ms while the fetch is still in flight gets a skeleton (Cindy
+  // review of commit 3 — previously the loading branch returned a bare
+  // span, missing the 500ms→skeleton spec entirely).
+  if (!conversationId) {
     return (
       <span
         className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"

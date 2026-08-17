@@ -8,22 +8,31 @@ import { createContext, useContext, type ReactNode } from 'react';
  * SystemMessage, SavedListView, AgentWorkspaceCard…) and prop-drilling
  * the workspace + open handler everywhere bloats the API surface.
  *
- * Consumers (the inline `TaskRef` chip) read `workspaceId` to scope
- * their `useTaskByNumber` lookup, and `onOpenTask` to open the task's
- * detail modal when the chip is clicked.
+ * Consumers (the inline `TaskRef` chip) read the conversation-placement coords
+ * (`workspaceId` + `conversationId`) to scope their `useTaskByNumber` lookup,
+ * and `onOpenTask` to open the task's detail modal when the chip is clicked.
  *
  * Missing context → `TaskRef` renders inert text. That's deliberate:
  * Saved/Search list views render messages outside any conversation
- * context and have no obvious "open which workspace's task?" answer.
+ * context and have no obvious "open which conversation's task?" answer.
  */
 export interface TaskRefContextValue {
-  /** Workspace whose task numbers should resolve. Null disables
-   *  resolution for the subtree (chips render inert). */
+  /** The conversation the sigil is rendered inside — the HTTP lookup anchor.
+   *  The server derives its board and point-reads `(board_key, task_number)`,
+   *  so a DirectPair task (no workspace) resolves through the pair conversation.
+   *  Null disables resolution for the subtree (chips render inert). */
+  conversationId: string | null;
+  /** The board's workspace, when this conversation is workspace-placed; null for
+   *  a DirectPair. Together with `conversationId` it projects the
+   *  `TaskBoardCacheScope`, so sibling channels of one workspace board share a
+   *  single by-number cache cell (a `task_changed` event reaches all of them).
+   *  It is a CACHE coordinate only — the human read gate is conversation access
+   *  alone, so no workspace scope travels to the server or to `onOpenTask`. */
   workspaceId: string | null;
   /** Click handler — writes `?task=<task_id>`, which opens the task's
    *  detail modal (#task:1715). Takes the RESOLVED task id, so no
-   *  workspace axis travels with it: a task id is globally unique and
-   *  the human read gate is conversation access alone. `workspaceId`
+   *  scope axis travels with it: a task id is globally unique and the
+   *  human read gate is conversation access alone. `conversationId`
    *  above is only for resolving the chip's `#<n>` to that id. */
   onOpenTask?: (taskId: string) => void;
 }

@@ -350,10 +350,6 @@ export function WorkspaceTasksDrawer({
   // pre-focused on the current workspace + channel via the baseline above
   // (#task:1432); both filters stay switchable to All.
   const { workspaceOptions, channelOptions } = useTaskFilterOptions();
-  /** Whether the workspace / channel controls can describe THIS container. Both
-   *  are workspace-derived, so only the workspace arm can be described by them
-   *  — see the filter bar below. */
-  const containerAxesAvailable = container.kind === 'workspace_channel';
 
   // The bound the columns actually render against. A CLOSED drawer is pinned to
   // the first page: the shell stays mounted (translated off-screen) for the whole
@@ -389,7 +385,7 @@ export function WorkspaceTasksDrawer({
     isCollapsed,
   });
   const counts = useBoardCounts(filters, { enabled: open });
-  const people = useBoardFacets({ enabled: open });
+  const people = useBoardFacets(filters, { enabled: open });
   const updateStatus = useUpdateTaskStatus();
 
   // Make a reveal target renderable: the row may live in another
@@ -566,18 +562,14 @@ export function WorkspaceTasksDrawer({
               filters={filters}
               onChange={applyFilters}
               baselineFilters={baselineFilters}
-              // The pair arm withholds the two CONTAINER axes (#task:2041 Phase
-              // B). Not cosmetic: a `direct_pair` task carries `workspace_id`
-              // NULL, so every non-default value of the workspace control empties
-              // this board, and the pair is in no workspace's channel list, so the
-              // channel control cannot even name the narrowing already in force.
-              // The person axes are unaffected and stay. The three-arm
-              // `All | Workspace | Direct Messages` scope control that replaces
-              // both here is Phase B's filter half — it needs a placement axis on
-              // the board read that does not exist yet, so this withholds rather
-              // than fakes.
-              workspaceOptions={containerAxesAvailable ? workspaceOptions : []}
-              channelOptions={containerAxesAvailable ? channelOptions : []}
+              // Full option sets, same as the pane (#task:1165). The container
+              // axis inside the bar decides which secondary controls describe the
+              // current container: a DM baseline opens on the `direct_messages`
+              // axis, which hides the workspace/channel controls and shows the
+              // 对端 leaf instead — no drawer-local withholding, one model
+              // (#task:2041).
+              workspaceOptions={workspaceOptions}
+              channelOptions={channelOptions}
               allChannelsLabel="ALL"
               people={people}
             />

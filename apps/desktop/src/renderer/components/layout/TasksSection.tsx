@@ -140,7 +140,7 @@ export const TasksSection = memo(function TasksSection({
     isCollapsed,
   });
   const counts = useBoardCounts(filters);
-  const people = useBoardFacets();
+  const people = useBoardFacets(filters);
 
   // ── Reveal: this board is a delivery TARGET, not only a source ──────
   //

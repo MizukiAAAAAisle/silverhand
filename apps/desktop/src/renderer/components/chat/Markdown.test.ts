@@ -12,7 +12,7 @@ import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { PLUGIN_LINK_PROP } from './reference-href';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
-import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
+import { taskBoardCacheScope, taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { setCurrentUserId } from '@/lib/current-user';
 
 // Tests pass actor ids through SystemMessage rendering and assert the
@@ -80,7 +80,7 @@ function renderWithHumans(
  */
 function renderWithTaskCtx(
   content: string,
-  workspaceId: string | null,
+  conversationId: string | null,
   onOpenTask?: (taskId: string) => void,
 ): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -90,7 +90,7 @@ function renderWithTaskCtx(
       { client: qc },
       React.createElement(
         TaskRefContextProvider,
-        { value: { workspaceId, onOpenTask } },
+        { value: { workspaceId: null, conversationId, onOpenTask } },
         React.createElement(Markdown, { content }),
       ),
     ),
@@ -744,7 +744,13 @@ describe('SystemMessage task event rows (PR-2)', () => {
     // TaskRef's own `useTaskByNumber` query, so tests must seed it.
     for (const t of seededTasks) {
       if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
-      qc.setQueryData(taskByNumberKey(t.board.workspace_id, t.task_number), t);
+      qc.setQueryData(
+        taskByNumberKey(
+          taskBoardCacheScope({ workspaceId: t.board.workspace_id, conversationId: 'conv-1' }),
+          t.task_number,
+        ),
+        t,
+      );
     }
     return renderToStaticMarkup(
       React.createElement(
@@ -755,7 +761,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
           { client: qc },
           React.createElement(
             TaskRefContextProvider,
-            { value: { workspaceId: 'ws-1', onOpenTask } },
+            { value: { workspaceId: 'ws-1', conversationId: 'conv-1', onOpenTask } },
             React.createElement(SystemMessage, {
               message: msg,
               channelsByName: new Map(),
@@ -1663,6 +1669,11 @@ describe('Markdown bare task refs (#task:1430)', () => {
 
   function renderBare(
     content: string,
+    // The single board id these bare-task fixtures live on. It is BOTH the
+    // scope discriminator (a workspace board keys by `workspace:<id>`) and the
+    // conversation the chip is anchored in for the HTTP-lookup gate — the same
+    // one value played both roles before B4 keyed the cache by board scope
+    // (#task:2041). `null` renders an unresolved/inert chip.
     workspaceId: string | null,
     seeded: TaskSummaryDto[] = [],
     onOpenTask?: (taskId: string) => void,
@@ -1670,7 +1681,13 @@ describe('Markdown bare task refs (#task:1430)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     for (const t of seeded) {
       if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
-      qc.setQueryData(taskByNumberKey(t.board.workspace_id, t.task_number), t);
+      qc.setQueryData(
+        taskByNumberKey(
+          taskBoardCacheScope({ workspaceId: t.board.workspace_id, conversationId: null }),
+          t.task_number,
+        ),
+        t,
+      );
     }
     return renderToStaticMarkup(
       React.createElement(
@@ -1678,7 +1695,7 @@ describe('Markdown bare task refs (#task:1430)', () => {
         { client: qc },
         React.createElement(
           TaskRefContextProvider,
-          { value: { workspaceId, onOpenTask } },
+          { value: { workspaceId, conversationId: workspaceId, onOpenTask } },
           React.createElement(Markdown, { content }),
         ),
       ),

@@ -1,6 +1,7 @@
 import {
   apiPaths,
   type TaskBoardAssigneeFilterType,
+  type TaskBoardContainer,
   type TaskBoardCreatorFilterType,
   type TaskStatus,
 } from '@silverhand/shared';
@@ -27,6 +28,7 @@ import { type TaskFilters } from './taskFilters';
  */
 
 export interface BoardFilterParams {
+  container?: TaskBoardContainer;
   workspace_id?: string;
   channel_id?: string;
   assignee_type?: TaskBoardAssigneeFilterType;
@@ -50,6 +52,7 @@ export interface BoardFilterParams {
  */
 export function boardFilterParams(filters: TaskFilters): BoardFilterParams {
   const params: BoardFilterParams = {};
+  if (filters.container) params.container = filters.container;
   if (filters.workspaceId) params.workspace_id = filters.workspaceId;
   if (filters.channelId) params.channel_id = filters.channelId;
   if (filters.assignee.kind === 'unassigned') {
@@ -89,9 +92,16 @@ export function boardFilterKey(filters: TaskFilters): string {
   // a half-specified axis), so one branch covers both.
   const creator =
     p.creator_type === undefined ? 'any' : `${p.creator_type}:${p.creator_id}`;
-  return [p.workspace_id ?? '*', p.channel_id ?? '*', assignee, creator].join(
-    '|',
-  );
+  // Container is APPENDED, not prepended: `filterKeyConstrainsAssignee` reads
+  // segment [2], and every other positional reader is anchored the same way, so
+  // a new axis must land past the existing ones.
+  return [
+    p.workspace_id ?? '*',
+    p.channel_id ?? '*',
+    assignee,
+    creator,
+    p.container ?? '*',
+  ].join('|');
 }
 
 /**
@@ -120,9 +130,13 @@ export const boardColumnKey = (status: TaskStatus, filterKey: string) =>
 export const boardCountsKey = (filterKey: string) =>
   ['tasks', 'board', 'counts', filterKey] as const;
 
-/** Facets take no filters (the option sets must not shrink to the current
- *  selection), so there is exactly ONE facets cache entry. */
-export const boardFacetsKey = () => ['tasks', 'board', 'facets'] as const;
+/** Facets take EXACTLY ONE axis — the container that selects the board — and no
+ *  within-board filters (the option sets must not shrink to the current
+ *  assignee/creator/channel selection). So there is one facets cache entry PER
+ *  container, and the `create/claim/unclaim` invalidation walks the whole
+ *  `['tasks','board','facets']` prefix to refresh every one. */
+export const boardFacetsKey = (container?: TaskBoardContainer | null) =>
+  ['tasks', 'board', 'facets', container ?? '*'] as const;
 
 function toSearchParams(params: BoardFilterParams): URLSearchParams {
   const qs = new URLSearchParams();
@@ -157,8 +171,14 @@ export function boardCountsPath(params: BoardFilterParams): string {
   return qs ? `${apiPaths.taskBoardCounts}?${qs}` : apiPaths.taskBoardCounts;
 }
 
-export function boardFacetsPath(): string {
-  return apiPaths.taskBoardFacets;
+/** The facets face honors ONLY the container axis (see `boardFacetsKey`): the
+ *  within-board params are never sent, so the menus describe the whole
+ *  container population rather than the current selection. An invalid container
+ *  is the server's 400, never a silent fall back to the All menus. */
+export function boardFacetsPath(container?: TaskBoardContainer | null): string {
+  if (!container) return apiPaths.taskBoardFacets;
+  const qs = new URLSearchParams({ container });
+  return `${apiPaths.taskBoardFacets}?${qs.toString()}`;
 }
 
 /**
