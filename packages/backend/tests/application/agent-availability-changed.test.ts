@@ -167,10 +167,13 @@ describe('publishAgentAvailabilityChangedForHost (#task:2043 B)', () => {
     // breaks the moment a future edit teaches `canViewAgent` to admit a user the
     // audience does not enumerate (under-send — the leak the contract forbids)
     // or the reverse — a drift a single arm list, filtered post-hoc, would hide.
-    t = buildTestApp({ seedAllFixtureMemberships: false });
-    const hostId = new HostRepo(t.ctx.db).ensureLocal().id;
-    const agents = new AgentRepo(t.ctx.db);
-    const workspaces = new WorkspaceRepo(t.ctx.db);
+    // Bind a non-null handle: the module-level `let t` is narrowed to TestApp
+    // here, but that narrowing does NOT flow into the `.filter()` callbacks
+    // below (nested closures), so read `app.ctx` — not `t.ctx` — inside them.
+    const app = (t = buildTestApp({ seedAllFixtureMemberships: false }));
+    const hostId = new HostRepo(app.ctx.db).ensureLocal().id;
+    const agents = new AgentRepo(app.ctx.db);
+    const workspaces = new WorkspaceRepo(app.ctx.db);
     // Creator = `local`.
     const agentId = agents.create(
       { name: 'all-arms-agent', runtime: 'claude' },
@@ -185,7 +188,7 @@ describe('publishAgentAvailabilityChangedForHost (#task:2043 B)', () => {
     workspaces.insertMembership(workspace.id, agentId);
     workspaces.addUserMember(workspace.id, 'other');
     // DirectPair arm: `teammate` is the human endpoint of a human↔agent pair.
-    new ConversationRepo(t.ctx.db).getOrCreateDirectPair(
+    new ConversationRepo(app.ctx.db).getOrCreateDirectPair(
       { kind: 'agent', id: agentId },
       { kind: 'human', id: 'teammate' },
       Date.now(),
@@ -193,13 +196,13 @@ describe('publishAgentAvailabilityChangedForHost (#task:2043 B)', () => {
 
     // `someone` hits no arm — the stranger.
     const population = ['local', 'teammate', 'other', 'someone'];
-    const cap = capture(t, population);
-    publishAgentAvailabilityChangedForHost(t.ctx, depsFor(t), hostId);
+    const cap = capture(app, population);
+    publishAgentAvailabilityChangedForHost(app.ctx, depsFor(app), hostId);
     cap.stop();
 
     const received = population.filter(u => cap.of(u).length > 0).sort();
     const canView = population
-      .filter(u => canViewAgent(t.ctx, { kind: 'user', userId: u }, agentId))
+      .filter(u => canViewAgent(app.ctx, { kind: 'user', userId: u }, agentId))
       .sort();
     // The audience IS the predicate's positive set — no more, no less.
     expect(received).toEqual(canView);

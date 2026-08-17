@@ -65,6 +65,7 @@ import { DeletionAwareOutboundFrameAdapter } from './runtime/deletion-aware-outb
 import { AgentDeletionResumer } from './application/agent-deletion-resumer.js';
 import {
   type AgentAvailabilityChangedDeps,
+  publishAgentAvailabilityChangedForAgent,
   publishAgentAvailabilityChangedForHost,
 } from './application/agent-availability-changed.js';
 import { sweepStoredBlobs } from './application/delete-agent.js';
@@ -872,11 +873,14 @@ export async function startBackend(
       listAgentIdsByHost: hostId =>
         persistence.repos.agents.listByHost(hostId).map(agent => agent.id),
     };
-    // Bind the availability-invalidation effect edge ONCE. Both transport attach
-    // seams AND the host-revoke authority (`revoke-host.ts`, post-commit) drive
-    // it through this single closure, so the fan-out is identical regardless of
-    // which fact transition fired it.
-    ctx.publishAgentAvailabilityChanged = hostId =>
+    // Bind the availability-invalidation effect edges ONCE. The per-agent
+    // primitive is the base; the per-host edge enumerates the host's agents and
+    // fans through it. Transport attach seams AND the host-revoke authority
+    // drive the per-host edge; the agent-validity edge (`deleteAgent`'s `begin`,
+    // `deletion_started_at` null→ts) drives the per-agent edge directly.
+    ctx.publishAgentAvailabilityChangedForAgent = agentId =>
+      publishAgentAvailabilityChangedForAgent(ctx, agentId);
+    ctx.publishAgentAvailabilityChangedForHost = hostId =>
       publishAgentAvailabilityChangedForHost(ctx, availabilityChangedDeps, hostId);
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       hostTokenVerifier: new HostTokenService(persistence.hostTokens),
@@ -885,7 +889,7 @@ export async function startBackend(
         ? opts.testHooks.wrapHostWsEventSink(hostWsEventSink)
         : hostWsEventSink,
       onHostAttachmentChanged: hostId =>
-        ctx.publishAgentAvailabilityChanged?.(hostId),
+        ctx.publishAgentAvailabilityChangedForHost?.(hostId),
     });
     // Construct the deployment-specific outbound transport. This runs
     // synchronously before the listen callback fires, so `outboundAdapter`
@@ -917,7 +921,7 @@ export async function startBackend(
         // as the WSS attach edge above, so an embedded connect/disconnect
         // invalidates `/availability` exactly like a WSS one.
         onHostAttachmentChanged: hostId =>
-          ctx.publishAgentAvailabilityChanged?.(hostId),
+          ctx.publishAgentAvailabilityChangedForHost?.(hostId),
         logger,
       });
       embeddedOutboundAdapter = adapter;

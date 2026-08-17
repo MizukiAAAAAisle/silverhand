@@ -106,7 +106,7 @@ export function revokeHost(
   // publish failure must not fail the revoke.
   if (wasNewlyRevoked) {
     try {
-      ctx.publishAgentAvailabilityChanged?.(cmd.hostId);
+      ctx.publishAgentAvailabilityChangedForHost?.(cmd.hostId);
     } catch (err) {
       ctx.logger.warn(
         { err, hostId: cmd.hostId, action: 'host_revoke_availability' },

@@ -168,6 +168,34 @@ export async function deleteAgent(
   if (begun.kind === 'alreadyPending' && !cmd.retry) {
     return { kind: 'deletionInProgress' };
   }
+  // #task:2043 B — availability invalidation at the AGENT-VALIDITY edge. The
+  // `begin` transaction has committed, and ONLY the `started` arm is the real
+  // null→timestamp transition of `deletion_started_at` — from this instant the
+  // availability read face returns Offline (`routes/agents.ts` short-circuits
+  // on `deletion_started_at !== null`), yet teardown neither disconnects the
+  // transport nor revokes the host, so no per-host edge fires. Without this the
+  // only later signal is the hard-delete's `agent_changed`, seconds-to-minutes
+  // (or indefinitely) away on the resumer's [1s,5s,30s] schedule — the whole
+  // window a cached `online` would persist. The agent row + ACL are still
+  // present here (status stays `active`; `begin` sets only `deletion_started_at`),
+  // so `agentViewerUserIds` resolves the audience. An `alreadyPending` retry
+  // changed no fact — it must stay silent, which is why this is gated on
+  // `started`, not on reaching this line. Best-effort: a publish failure must
+  // not fail the delete.
+  if (begun.kind === 'started') {
+    try {
+      ctx.publishAgentAvailabilityChangedForAgent?.(begun.attempt.agentId);
+    } catch (err) {
+      ctx.logger.warn(
+        {
+          err,
+          agentId: begun.attempt.agentId,
+          action: 'agent_delete_begin_availability',
+        },
+        'agent deletion begin availability invalidation failed (non-blocking)',
+      );
+    }
+  }
   const run = await deps.deletionRunner.tryNow(begun.attempt);
   if (run.kind === 'alreadyRunning') return { kind: 'deletionInProgress' };
   if (run.kind === 'pending') {
