@@ -303,9 +303,11 @@ export type TaskBoardContainer = z.infer<typeof TaskBoardContainerSchema>;
 const taskBoardFilterFields = {
   /** Optional workspace narrowing. Absent = the default All-workspaces board. */
   workspace_id: z.string().min(1).optional(),
-  /** A channel conversation id. Matches that channel AND its threads, because
-   *  a task's `channel_id` is its owning conversation (a thread task's
-   *  conversation IS its channel; the reply cluster is `thread_root_id`). */
+  /** Query-filter narrowing by a task's owning conversation id. Despite the
+   *  name, its value is the owning conversation id — the DTO no longer carries
+   *  a `channel_id` field (the coordinate is `place.conversation_id`). Matches
+   *  that conversation AND its threads: a thread task's conversation IS its
+   *  channel; the reply cluster is `thread_root_id`. */
   channel_id: z.string().min(1).optional(),
   /** The board's TOP-LEVEL container axis (#task:2041):
    *  `workspace | agent_space | direct_messages`. See

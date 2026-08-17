@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  TaskPlaceSchema,
   TaskSummaryDtoSchema,
   type TaskSummaryDto,
 } from '../src/api/task.js';
@@ -85,5 +86,21 @@ describe('TaskSummaryDto placement projection', () => {
       conversation_id: 'conversation-1',
       pair_key: 'pair-key',
     });
+  });
+
+  it('rejects the physical agent_home workspace_kind — only the domain projection reaches the wire', () => {
+    // Contract §2 rule 5: the physical `agent_home` workspace_kind is projected
+    // to the domain `agent_space` at the SQL boundary and never appears on the
+    // wire. The schema's workspace_kind enum is the last static gate proving
+    // that: `agent_home` must fail to parse. If the enum ever readmits it, this
+    // reddens.
+    const result = TaskPlaceSchema.safeParse({
+      kind: 'workspace',
+      conversation_id: 'conversation-1',
+      workspace_id: 'workspace-1',
+      workspace_kind: 'agent_home',
+      channel_name: 'home',
+    });
+    expect(result.success).toBe(false);
   });
 });

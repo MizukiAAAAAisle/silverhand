@@ -171,6 +171,10 @@ describe('Tasks (PR-T1)', () => {
       kind: 'workspace',
       workspace_id: workspaceId,
       conversation_id: conversationId,
+      // Regular counterpart to the agent_home case in task-identity.test.ts: a
+      // regular workspace projects to `regular`, not `agent_space`. Pins the
+      // other CASE branch so miswiring the SQL projection cannot stay green.
+      workspace_kind: 'regular',
     });
     expect(detail.source_message_id).toBeNull();
     expect(detail.nav.kind).toBe('created_event');
