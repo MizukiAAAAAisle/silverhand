@@ -1048,35 +1048,41 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   // ── GET /api/agents/:id/availability (#task:2043) ─────────────────────────
   // The orthogonal axis to liveness: is this agent REACHABLE right now, not is
   // a process live. Same `canViewAgent` gate (incl. the DirectPair-endpoint
-  // arm). Availability = "would an inbound message be accepted at the transport
-  // layer this instant" = the first two gates of the real delivery path
-  // (host exists & not revoked; an outbound attachment is connected) MINUS the
-  // runtime-hydrate wait. It reads ONLY the attachment-present boundary; it
-  // deliberately never touches the active-runtime snapshot the way liveness
-  // does, so an idle-reaped or not-yet-hydrated agent on a connected host stays
-  // `online` (the next message re-spawns it). That decoupling is the fix for a
-  // DM partner seeing `offline` after every turn.
+  // arm). Availability reuses the EXACT authority the delivery path reads for
+  // its transport gate: `ctx.outboundFrameAdapter().connectionIdForHost(hostId)`
+  // — the first two gates of real delivery (host exists & not revoked; an
+  // outbound attachment is connected) MINUS the runtime-hydrate wait. Reading
+  // the same port the delivery gate reads is load-bearing: the (B)
+  // `agent_availability_changed` producer fires on this adapter's attach/detach
+  // edges, so the read face and the event face observe ONE fact and cannot
+  // drift into two middle layers.
   //
-  // TWO values, total. `read()` distinguishes `disconnected`
-  // (`connectionIdForHost === null`, no live attachment ⇒ offline) from both
-  // `unreachable` (attachment present, snapshot not yet hydrated) and `ok`
-  // (present + hydrated) — the latter two both mean the host is connected ⇒
-  // online. There is no success `unknown` arm: a read that cannot be answered
-  // is an infrastructure fault, so `read()` throwing propagates to 5xx rather
-  // than being laundered into a domain value. A missing read model is not a
-  // fault but a deployment without a daemon runtime ⇒ a determinate offline.
+  // It deliberately does NOT consult `hostStatusReadModel`: that is a SEPARATE
+  // optional port carrying seed / snapshot / hydrate / retry semantics that are
+  // irrelevant to reachability. Gating on ITS presence (as an earlier cut did)
+  // reports Offline on a deployment that wired the delivery transport without
+  // the snapshot projection — an attachment the delivery gate would happily
+  // accept. So an idle-reaped or not-yet-hydrated agent on a connected host
+  // stays `online` (the next message re-spawns it), hydration never enters the
+  // dependency graph, and that decoupling is the fix for a DM partner seeing
+  // `offline` after every turn.
+  //
+  // TWO values, total. The attachment fact is total (present or absent); there
+  // is no success `unknown` arm — a read that cannot be answered is an infra
+  // fault (let it throw ⇒ 5xx), and "we cannot tell" is a RENDERER query
+  // projection, not a backend value.
   const resolveAgentAvailability = (agent: AgentDto): AgentAvailability => {
     // Agent validity: an agent mid hard-delete can no longer accept work.
     if (agent.deletion_started_at !== null) return 'offline';
-    const readModel = ctx.hostStatusReadModel?.();
-    // No daemon runtime in this deployment: no attachment is ever possible.
-    if (!readModel) return 'offline';
+    // Host validity. The revoke check is load-bearing on its own: a bare DB
+    // revoke may race ahead of the socket teardown, so a still-attached but
+    // revoked host must not read `online` off a lingering connection.
     const host = hosts.get(agent.host_id);
-    // Missing host row (integrity) or a revoked host ⇒ no usable attachment.
     if (!host || host.revoked_at !== null) return 'offline';
-    return readModel.read(agent.host_id).kind === 'disconnected'
-      ? 'offline'
-      : 'online';
+    // Attachment presence — the SAME port the delivery transport gate reads.
+    const connectionId =
+      ctx.outboundFrameAdapter?.()?.connectionIdForHost(agent.host_id) ?? null;
+    return connectionId !== null ? 'online' : 'offline';
   };
 
   app.get('/api/agents/:id/availability', c => {

@@ -2189,11 +2189,13 @@ describe('GET /api/agents/:id/liveness (#task:2043 B)', () => {
 // connected, so a read that cannot be answered is an infra fault (5xx), never a
 // laundered domain value. `unknown` lives in the renderer's query projection.
 //
-// It reads ONLY the attachment boundary from `read()`: `disconnected` ⇒ offline;
-// both `unreachable` (attachment present, snapshot not yet hydrated) and `ok`
-// (present + hydrated) ⇒ online. Hydration is deliberately irrelevant — keying
-// availability on hydration would sneak the process axis back in through the
-// side door.
+// It reads the SAME attachment authority the delivery transport gate reads —
+// `ctx.outboundFrameAdapter().connectionIdForHost(hostId)` — so the read face
+// and the (B) event producer observe one fact and cannot drift. A connected
+// adapter ⇒ online regardless of hydration or of whether the separate
+// host-status snapshot projection is even installed; a null connection ⇒
+// offline. Hydration and the runtime snapshot are deliberately out of the
+// dependency graph — keying on them would sneak the process axis back in.
 describe('GET /api/agents/:id/availability (#task:2043)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -2250,9 +2252,27 @@ describe('GET /api/agents/:id/availability (#task:2043)', () => {
 
   it('reads `online` when the host is connected but its snapshot is NOT yet hydrated (hydration is irrelevant to reachability)', async () => {
     const { agentId } = await setup();
-    // No seedEagerly: the attachment is present (controller live) but `read()`
-    // returns `unreachable` (snapshot unseeded). Availability must NOT wait on
-    // hydration — an inbound message would still be accepted at the transport.
+    // No seedEagerly: the outbound attachment is present (controller live) so
+    // the delivery gate would accept a message. Availability reads that adapter
+    // directly and must NOT wait on hydration — the snapshot projection is not
+    // even in its dependency graph.
+    const res = await readAvailability(agentId);
+    expect(res.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('online');
+  });
+
+  it('reads `online` from the outbound attachment even when NO host-status read model is installed (availability tracks the delivery adapter, not the snapshot projection)', async () => {
+    const { agentId, controller } = await setup();
+    controller.activeAgentIds = [];
+    // A deployment may wire the delivery transport WITHOUT the host-status
+    // snapshot projection. The two are distinct optional ports. The delivery
+    // gate still accepts messages (adapter connected) ⇒ availability MUST read
+    // online. An earlier cut that gated on `hostStatusReadModel` presence read
+    // offline here — this is the falsifier that pins availability to the
+    // delivery adapter, not to the snapshot read model.
+    (t as unknown as { ctx: { hostStatusReadModel?: unknown } }).ctx.hostStatusReadModel =
+      undefined;
+
     const res = await readAvailability(agentId);
     expect(res.status).toBe(200);
     expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('online');
