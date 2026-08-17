@@ -101,10 +101,10 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     expect(detail.status).toBe(200);
     const detailBody = (await detail.json()) as any;
     expect(detailBody.task.id).toBe(task.id);
-    expect(detailBody.task.channel_id).toBe(w2.channelId);
-    expect(detailBody.task.board).toMatchObject({
+    expect(detailBody.task.place).toMatchObject({
       kind: 'workspace',
       workspace_id: w2.workspaceId,
+      conversation_id: w2.channelId,
     });
 
     const claim = (await (
@@ -216,10 +216,10 @@ describe('P0-g agent-slot lane + two-scope coexistence (#task:2018 phase 2)', ()
     expect(ids).toContain(t2.id);
     expect(ids).not.toContain(t3.id);
     for (const row of union.tasks) {
-      expect(row.board.kind).toBe('workspace');
-      expect(typeof row.board.workspace_id).toBe('string');
+      expect(row.place.kind).toBe('workspace');
+      expect(typeof row.place.workspace_id).toBe('string');
       expect(typeof row.task_number).toBe('number');
-      expect(row.channel_id).toBeTruthy();
+      expect(row.place.conversation_id).toBeTruthy();
     }
     // Explicit workspace filter narrows to a subset of the union.
     const narrowed = (await (

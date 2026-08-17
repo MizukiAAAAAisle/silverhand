@@ -22,9 +22,13 @@ export interface TaskJoinedRow {
   status: TaskStatus;
   title: string;
   closed_at: number | null;
-  /** NULL for DirectPair-board tasks (P0-f); the LEFT-JOINed name is null with it. */
+  /** NULL for DirectPair-board tasks (P0-f); the LEFT-JOINed workspace columns
+   *  are null with it. */
   workspace_id: string | null;
-  workspace_name: string | null;
+  /** Domain projection of the workspace kind (`regular | agent_space`),
+   *  workspace-arm-only. SQL maps physical `agent_home`→`agent_space` and
+   *  projects NULL for DirectPair, so the wire never sees `agent_home`. */
+  workspace_kind: 'regular' | 'agent_space' | null;
   conversation_pair_key: string | null;
   /** Workspace-arm-only. SQL projects NULL for DirectPair so its sentinel
    *  storage title never enters this read model. */
@@ -42,33 +46,40 @@ export interface TaskJoinedRow {
   creator_user_name: string | null;
 }
 
-/** Row → the place union (P0-f §4.4, review B4). Values come from STORED
- *  columns only — the pair arm carries EXACTLY the immutable `pair_key`
- *  (v74 generated column, byte format lives in the migration; TS never
- *  re-derives it) and deliberately NOT the stored sentinel title: a DM has no
- *  display title, and projecting the placeholder would fake one (the
- *  per-viewer label is #task:2021's formatter). The workspace arm carries the
- *  board plus its display coordinates. A row matching neither arm is an
+/** Row → the `TaskPlace` union (contract §3). Values come from STORED columns
+ *  only — the canonical `conversation_id` is folded into each arm, the pair arm
+ *  carries EXACTLY the immutable `pair_key` (v74 generated column, byte format
+ *  lives in the migration; TS never re-derives it) and deliberately NOT the
+ *  stored sentinel title: a DM has no display title, and projecting the
+ *  placeholder would fake one (the per-viewer label is #task:2021's formatter).
+ *  The workspace arm carries the board namespace (`workspace_id` +
+ *  `workspace_kind`) plus the channel display title; `workspace_name` is not
+ *  projected (zero readers, contract §3). A row matching neither arm is an
  *  invariant breach (the v76 full-coordinate trigger + arc CHECKs make it
  *  unrepresentable), so this fails loud rather than inventing a place. */
-function boardFrom(row: TaskJoinedRow): TaskSummaryDto['board'] {
+function placeFrom(row: TaskJoinedRow): TaskSummaryDto['place'] {
   if (
     row.workspace_id !== null &&
-    row.workspace_name !== null &&
+    row.workspace_kind !== null &&
     row.channel_name !== null
   ) {
     return {
       kind: 'workspace',
+      conversation_id: row.conversation_id,
       workspace_id: row.workspace_id,
-      workspace_name: row.workspace_name,
+      workspace_kind: row.workspace_kind,
       channel_name: row.channel_name,
     };
   }
   if (row.conversation_pair_key !== null) {
-    return { kind: 'direct_pair', pair_key: row.conversation_pair_key };
+    return {
+      kind: 'direct_pair',
+      conversation_id: row.conversation_id,
+      pair_key: row.conversation_pair_key,
+    };
   }
   throw new Error(
-    `task ${row.id}: no board coordinate (workspace and pair_key both absent)`,
+    `task ${row.id}: no place coordinate (workspace and pair_key both absent)`,
   );
 }
 
@@ -79,8 +90,7 @@ export function taskJoinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
   return {
     id: row.id,
     task_number: row.task_number,
-    channel_id: row.conversation_id,
-    board: boardFrom(row),
+    place: placeFrom(row),
     thread_root_id: row.thread_root_id,
     status: row.status,
     title: row.title,

@@ -125,8 +125,8 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     // Same task through both coordinate systems — byte-for-byte.
     expect(byId.body).toEqual(byNumber);
     expect((byId.body as any).task.id).toBe(created.id);
-    // The row self-carries its full coordinates, including the derived board.
-    expect((byId.body as any).task.board).toMatchObject({
+    // The row self-carries its full coordinates, including the derived place.
+    expect((byId.body as any).task.place).toMatchObject({
       kind: 'workspace',
       workspace_id: workspaceId,
     });
@@ -254,10 +254,10 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     expect(ids).not.toContain(theirPrivate.id);
     expect(ids).not.toContain(theirPublic.id);
     for (const row of listed.tasks) {
-      expect(row.board).toMatchObject({ kind: 'workspace', workspace_id: workspaceId });
+      expect(row.place).toMatchObject({ kind: 'workspace', workspace_id: workspaceId });
       expect(typeof row.id).toBe('string');
       expect(typeof row.task_number).toBe('number');
-      expect(row.channel_id).toBeTruthy();
+      expect(row.place.conversation_id).toBeTruthy();
     }
     // bob still sees his own rows (the narrowing is per-viewer, not global).
     const bobListed = (await (

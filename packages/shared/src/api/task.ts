@@ -91,45 +91,57 @@ export const TaskCreatorDtoSchema = z.object({
 });
 export type TaskCreatorDto = z.infer<typeof TaskCreatorDtoSchema>;
 
-/** The task's PLACE — board identity AND every placement-specific display
- *  coordinate, in ONE discriminated union (P0-f, review B4: no parallel
- *  nullable fields outside the union).
+/** The task's PLACE — the routing coordinate AND every placement-specific
+ *  display coordinate, in ONE discriminated union. The canonical core
+ *  (`conversation_id`) is FOLDED into each arm, so a `TaskPlace` is the task's
+ *  complete location with no parallel top-level coordinate (contract §3).
  *
- *  - workspace arm: the numbering namespace ('ws:'||workspace_id) plus the
- *    workspace/channel display coordinates that exist only there.
- *  - direct_pair arm: ONLY the immutable `pair_key` (the v74 generated
- *    column's value read verbatim — its byte format is defined in the
- *    migration and never re-implemented in TS). NO title and NO display
- *    name: a DM stores no display title, and the per-viewer `dm:@other`
- *    label belongs to the DeliveryTarget formatter (#task:2021), never
- *    smuggled in here.
+ *  - workspace arm: `conversation_id` (the routing coord) plus the workspace
+ *    board namespace (`workspace_id` + the `regular | agent_space` domain
+ *    `workspace_kind`; physical `agent_home` stays behind the repo boundary)
+ *    and the channel's display title. `workspace_name` is deliberately ABSENT:
+ *    it has zero production readers (the card renders `channel_name`; the
+ *    container header resolves the workspace name from the live directory), so
+ *    freezing it would be over-projection (contract §3).
+ *  - direct_pair arm: `conversation_id` plus ONLY the immutable `pair_key` (the
+ *    v74 generated column's value read verbatim — its byte format is defined in
+ *    the migration and never re-implemented in TS). NO title and NO display
+ *    name: a DM stores no display title, and the per-viewer `dm:@other` label
+ *    belongs to the DeliveryTarget formatter (#task:2021), never smuggled here.
  *
- *  Display/namespace ONLY — access control never reads it (ACL derives per
- *  task from the task's own conversation, §4.4: Board is not an ACL unit). */
-export const TaskBoardRefSchema = z.discriminatedUnion('kind', [
+ *  Display/namespace ONLY — access control NEVER reads it (ACL always recomputes
+ *  from `conversation_id` back to the canonical placement-participation
+ *  authority; contract §4a: a Place DTO is not an authorization source). */
+export const TaskPlaceSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('workspace'),
+    conversation_id: z.string(),
     workspace_id: z.string(),
-    workspace_name: z.string(),
+    /** Domain projection of the workspace kind; physical `agent_home` never
+     *  reaches the wire (contract §2 rule 5). */
+    workspace_kind: z.enum(['regular', 'agent_space']),
     /** The conversation's display title (a channel has one; a DM does not). */
     channel_name: z.string(),
   }),
-  z.object({ kind: z.literal('direct_pair'), pair_key: z.string() }),
+  z.object({
+    kind: z.literal('direct_pair'),
+    conversation_id: z.string(),
+    pair_key: z.string(),
+  }),
 ]);
-export type TaskBoardRef = z.infer<typeof TaskBoardRefSchema>;
+export type TaskPlace = z.infer<typeof TaskPlaceSchema>;
 
 export const TaskSummaryDtoSchema = z.object({
   /** The task identity (`tasks.id`) — canonical key for REST paths, events,
    *  and mutations. */
   id: z.string(),
   task_number: z.number(),
-  /** Placement-NEUTRAL conversation identity (the task's home conversation
-   *  id). Every display coordinate lives in `board` (review B4). */
-  channel_id: z.string(),
-  /** The task's place: board identity + placement-specific display
-   *  coordinates (see TaskBoardRefSchema). Narrow on `board.kind` —
-   *  workspace fields are structurally ABSENT on the pair arm. */
-  board: TaskBoardRefSchema,
+  /** The task's place: the routing coordinate (`place.conversation_id`) folded
+   *  together with the placement-specific display coordinates (see
+   *  TaskPlaceSchema). Narrow on `place.kind` — workspace fields are
+   *  structurally ABSENT on the pair arm. This is THE conversation coordinate;
+   *  there is no separate top-level `channel_id` (contract §3). */
+  place: TaskPlaceSchema,
   /** Reply-cluster root message id when the task's conversational footprint
    *  (its lifecycle system events) sits inside a thread cluster. NULL =
    *  main-line task. */
@@ -936,7 +948,6 @@ export const TaskChangedEventSchema = z.object({
   /** Null for DirectPair-board tasks (P0-f): the event's routing keys are the
    *  conversation scopes below; workspace is a workspace-board-only fact. */
   workspace_id: z.string().nullable(),
-  channel_id: z.string(),
   /** Reply-cluster root message id when the task's lifecycle events are
    *  placed inside a thread cluster. NULL = main-line. */
   thread_root_id: z.string().nullable(),

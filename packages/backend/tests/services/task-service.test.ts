@@ -433,7 +433,7 @@ describe('TaskService.claimTask — agent actor', () => {
       // Task now assigned to alice.
       const fresh = refetch(t, id);
       expect(fresh?.assignee?.id).toBe(t.alice.id);
-      expect(fresh?.channel_id).toBe(other.id);
+      expect(fresh?.place.conversation_id).toBe(other.id);
     } finally {
       t.cleanup();
     }
@@ -1357,7 +1357,7 @@ describe('TaskService agent-actor validation', () => {
       expect('tasks' in result).toBe(true);
       const listed = t.service.list({ actor: { kind: 'user', userId: 'local' } });
       expect(listed.map(x => x.title)).toContain('filed cross-channel');
-      expect(listed.every(x => x.channel_id === t.channel.id)).toBe(true);
+      expect(listed.every(x => x.place.conversation_id === t.channel.id)).toBe(true);
     } finally {
       t.cleanup();
     }

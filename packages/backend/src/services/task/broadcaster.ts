@@ -189,12 +189,9 @@ export class TaskBroadcaster {
     // nullable since #task:2022) — clients place pair frames by
     // conversation/channel id.
     const workspaceId = args.conversation.workspace_id;
-    // A task-bearing conversation is always a channel-like top-level
-    // conversation (#task:1303), so channel_id is its own id.
     const event: TaskChangedEvent = {
       kind: args.kind,
       workspace_id: workspaceId,
-      channel_id: conversationId,
       thread_root_id: args.threadRootId,
       conversation_id: conversationId,
       task_number: args.taskNumber,

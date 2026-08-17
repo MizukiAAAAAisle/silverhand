@@ -246,9 +246,14 @@ describe('GET /api/tasks/board/column', () => {
     // and a `tk-000N` literal shift when any earlier case seeds one more row.
     const item = page.items.find(i => i.id === id);
     expect(item, `column items: ${JSON.stringify(page.ids)}`).toBeDefined();
-    // B4 (P0-f): placement coordinates live in the board union arm.
-    expect(item!.board).toMatchObject({ kind: 'workspace', workspace_id: place.workspaceId });
-    expect(item!.channel_id).toBe(place.conversationId);
+    // B4 (P0-f): placement coordinates live in the place union arm; the routing
+    // coordinate is folded into place (no separate top-level channel_id).
+    expect(item!.place).toMatchObject({
+      kind: 'workspace',
+      workspace_id: place.workspaceId,
+      conversation_id: place.conversationId,
+    });
+    expect(item!).not.toHaveProperty('channel_id');
     expect(item!.status).toBe('todo');
     expect(item!.assignee).toBeNull();
   });

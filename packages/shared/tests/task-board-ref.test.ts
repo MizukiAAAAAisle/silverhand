@@ -7,7 +7,6 @@ import {
 const base = {
   id: 'task-1',
   task_number: 1,
-  channel_id: 'conversation-1',
   thread_root_id: null,
   status: 'todo' as const,
   title: 'task',
@@ -18,60 +17,73 @@ const base = {
 };
 
 describe('TaskSummaryDto placement projection', () => {
-  it('narrows placement coordinates exclusively through board.kind', () => {
+  it('narrows placement coordinates exclusively through place.kind', () => {
     const workspace: TaskSummaryDto = {
       ...base,
-      board: {
+      place: {
         kind: 'workspace',
+        conversation_id: 'conversation-1',
         workspace_id: 'workspace-1',
-        workspace_name: 'Workspace',
+        workspace_kind: 'regular',
         channel_name: 'general',
       },
     };
-    if (workspace.board.kind === 'workspace') {
-      expect(workspace.board.workspace_id).toBe('workspace-1');
+    if (workspace.place.kind === 'workspace') {
+      expect(workspace.place.workspace_id).toBe('workspace-1');
+      expect(workspace.place.conversation_id).toBe('conversation-1');
       // @ts-expect-error pair identity is structurally absent on workspace.
-      void workspace.board.pair_key;
+      void workspace.place.pair_key;
     }
 
     const pair: TaskSummaryDto = {
       ...base,
-      board: { kind: 'direct_pair', pair_key: 'pair-key' },
+      place: {
+        kind: 'direct_pair',
+        conversation_id: 'conversation-1',
+        pair_key: 'pair-key',
+      },
     };
-    if (pair.board.kind === 'direct_pair') {
-      expect(pair.board.pair_key).toBe('pair-key');
+    if (pair.place.kind === 'direct_pair') {
+      expect(pair.place.pair_key).toBe('pair-key');
+      expect(pair.place.conversation_id).toBe('conversation-1');
       // @ts-expect-error workspace coordinates are structurally absent on pair.
-      void pair.board.workspace_id;
+      void pair.place.workspace_id;
       // @ts-expect-error display title is structurally absent on pair.
-      void pair.board.channel_name;
+      void pair.place.channel_name;
     }
   });
 
-  it('serializes no parallel placement/title keys outside the union', () => {
+  it('folds the routing coordinate into place, with no parallel top-level channel_id', () => {
     const parsed = TaskSummaryDtoSchema.parse({
       ...base,
-      board: { kind: 'direct_pair', pair_key: 'pair-key' },
-      // Zod's object projection strips unknown legacy keys. They cannot leak a
-      // stored DM sentinel title back into the wire during mixed-version input.
+      place: {
+        kind: 'direct_pair',
+        conversation_id: 'conversation-1',
+        pair_key: 'pair-key',
+      },
+      // Zod's object projection strips unknown legacy keys. A stale top-level
+      // channel_id cannot survive into the wire during mixed-version input.
+      channel_id: 'conversation-1',
       workspace_id: null,
       workspace_name: null,
-      channel_name: '',
-      conversation: { id: 'conversation-1', title: '' },
     });
 
     expect(Object.keys(parsed).sort()).toEqual([
       'assignee',
-      'board',
-      'channel_id',
       'closed_at',
       'created_at',
       'creator',
       'id',
+      'place',
       'status',
       'task_number',
       'thread_root_id',
       'title',
     ]);
-    expect(parsed.board).toEqual({ kind: 'direct_pair', pair_key: 'pair-key' });
+    expect(parsed.place).toEqual({
+      kind: 'direct_pair',
+      conversation_id: 'conversation-1',
+      pair_key: 'pair-key',
+    });
   });
 });

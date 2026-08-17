@@ -167,8 +167,11 @@ describe('Tasks (PR-T1)', () => {
     expect(detail.content).toBe('from the task panel');
     expect(detail.status).toBe('todo');
     expect(detail.assignee).toBeNull();
-    expect(detail.board).toMatchObject({ kind: 'workspace', workspace_id: workspaceId });
-    expect(detail.channel_id).toBe(conversationId);
+    expect(detail.place).toMatchObject({
+      kind: 'workspace',
+      workspace_id: workspaceId,
+      conversation_id: conversationId,
+    });
     expect(detail.source_message_id).toBeNull();
     expect(detail.nav.kind).toBe('created_event');
     expect(detail.creator.type).toBe('user');
@@ -356,7 +359,7 @@ describe('Tasks (PR-T1)', () => {
       )
     ).json() as any;
     expect(listed.tasks).toHaveLength(1);
-    expect(listed.tasks[0].channel_id).toBe(s1.sessionId);
+    expect(listed.tasks[0].place.conversation_id).toBe(s1.sessionId);
     expect(listed.tasks[0].assignee?.id).toBe(s1.agentIds.bob);
   });
 
@@ -455,7 +458,8 @@ describe('Tasks (PR-T1)', () => {
     // Each mutation publishes BOTH `message` (system msg) and `task_changed`.
     expect(kinds.filter(k => k === 'task_changed')).toHaveLength(2);
     const ev = received.find(e => e.kind === 'task_changed')!.payload as any;
-    expect(ev.channel_id).toBeTruthy();
+    expect(ev.conversation_id).toBeTruthy();
+    expect(ev).not.toHaveProperty('channel_id');
     expect(ev.task_number).toBe(1);
   });
 
@@ -950,8 +954,11 @@ describe('Task create/edit/detail routes', () => {
     ).json()) as any;
     const row = listedB.tasks.find((x: any) => x.title === 'file me in B');
     expect(row).toBeTruthy();
-    expect(row.channel_id).toBe(convB);
-    expect(row.board).toMatchObject({ kind: 'workspace', workspace_id: workspaceId });
+    expect(row.place).toMatchObject({
+      kind: 'workspace',
+      workspace_id: workspaceId,
+      conversation_id: convB,
+    });
 
     // The `task_create` system event lands in B; the origin A sees nothing.
     expect(countByKind(convB, 'system') - sysBBefore).toBe(1);
@@ -993,7 +1000,7 @@ describe('Task create/edit/detail routes', () => {
     const listedB = (await (
       await h.get(`/internal/agents/${agentIds.alice}/tasks`)
     ).json()) as any;
-    expect(listedB.tasks.find((x: any) => x.title === 'cross-ws').board).toMatchObject({
+    expect(listedB.tasks.find((x: any) => x.title === 'cross-ws').place).toMatchObject({
       kind: 'workspace',
       workspace_id: ws2.workspace.id,
     });
@@ -1493,8 +1500,11 @@ describe('Task create/edit/detail routes', () => {
         id: taskId,
         task_number: taskNumber,
         title: 'sigil target',
-        board: { kind: 'workspace', workspace_id: workspaceId },
-        channel_id: conversationId,
+        place: {
+          kind: 'workspace',
+          workspace_id: workspaceId,
+          conversation_id: conversationId,
+        },
         status: 'todo',
       });
       // A summary, not a detail: one message can carry many sigils, so the face
