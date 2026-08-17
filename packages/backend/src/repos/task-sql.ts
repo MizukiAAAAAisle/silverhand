@@ -32,7 +32,10 @@ export const SELECT_TASK_JOINED = `
     t.creator_agent_id         AS creator_agent_id,
     t.creator_user_id          AS creator_user_id,
     t.created_at               AS created_at,
-    w.name                     AS workspace_name,
+    CASE WHEN w.workspace_kind = 'agent_home' THEN 'agent_space'
+         WHEN w.workspace_kind = 'regular'    THEN 'regular'
+         ELSE NULL
+     END                       AS workspace_kind,
     aa.display_name            AS assignee_agent_name,
     au.display_name            AS assignee_user_name,
     ca.display_name            AS creator_agent_name,

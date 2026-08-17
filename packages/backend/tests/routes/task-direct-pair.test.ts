@@ -165,12 +165,16 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     ).json()) as any;
     expect(listed.tasks).toHaveLength(2);
     for (const row of listed.tasks) {
-      expect(row.board).toEqual({ kind: 'direct_pair', pair_key: pair.pairKey });
-      expect(row.channel_id).toBe(pair.id);
+      expect(row.place).toEqual({
+        kind: 'direct_pair',
+        conversation_id: pair.id,
+        pair_key: pair.pairKey,
+      });
       expect(row).not.toHaveProperty('workspace_id');
       expect(row).not.toHaveProperty('workspace_name');
       expect(row).not.toHaveProperty('channel_name');
       expect(row).not.toHaveProperty('conversation');
+      expect(row).not.toHaveProperty('channel_id');
     }
 
     // by-number detail from the DM frame (ambient board = the pair board).
@@ -178,7 +182,11 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
       await h.get(agentBase(pair.id, agentIds.alice!) + '/detail?task_number=1')
     ).json()) as any;
     expect(byNumber.task.id).toBe(created.tasks[0].id);
-    expect(byNumber.task.board).toEqual({ kind: 'direct_pair', pair_key: pair.pairKey });
+    expect(byNumber.task.place).toEqual({
+      kind: 'direct_pair',
+      conversation_id: pair.id,
+      pair_key: pair.pairKey,
+    });
 
     // by-id detail from the DM frame.
     const byId = (await (
@@ -208,7 +216,11 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
       })
     ).json()) as any;
     expect(edit.success).toBe(true);
-    expect(edit.task.board).toEqual({ kind: 'direct_pair', pair_key: pair.pairKey });
+    expect(edit.task.place).toEqual({
+      kind: 'direct_pair',
+      conversation_id: pair.id,
+      pair_key: pair.pairKey,
+    });
     const unclaim = (await (
       await h.post(agentBase(pair.id, agentIds.bob!) + '/unclaim', { task_number: 1 })
     ).json()) as any;
@@ -289,7 +301,11 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
       await h.get(agentBase(existing.id, agentIds.alice!))
     ).json()) as any;
     expect(onPair.tasks.map((r: any) => r.title)).toEqual(['dm-addressed']);
-    expect(onPair.tasks[0].board).toEqual({ kind: 'direct_pair', pair_key: existing.pairKey });
+    expect(onPair.tasks[0].place).toEqual({
+      kind: 'direct_pair',
+      conversation_id: existing.id,
+      pair_key: existing.pairKey,
+    });
 
     // No pair with carol yet. `dm:@handle` is the one arm that ALLOCATES for a
     // write intent, so the create opens the pair and files there — the board is
@@ -310,7 +326,11 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
       await h.get(agentBase(opened.id, agentIds.alice!))
     ).json()) as any;
     expect(onOpened.tasks.map((r: any) => r.title)).toEqual(['opened by addressing']);
-    expect(onOpened.tasks[0].board).toEqual({ kind: 'direct_pair', pair_key: opened.pairKey });
+    expect(onOpened.tasks[0].place).toEqual({
+      kind: 'direct_pair',
+      conversation_id: opened.id,
+      pair_key: opened.pairKey,
+    });
     // Per-pair numbering, so both boards start at 1 — the workspace channel the
     // caller was framed in got neither row.
     expect(onPair.tasks[0].task_number).toBe(1);
@@ -319,7 +339,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
       await h.get(agentBase(chan, agentIds.alice!))
     ).json()) as any;
     expect(
-      inFrame.tasks.filter((r: any) => r.board?.kind !== 'direct_pair'),
+      inFrame.tasks.filter((r: any) => r.place?.kind !== 'direct_pair'),
     ).toEqual([]);
   });
 
@@ -407,7 +427,11 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     ).json()) as any;
     const row = union.tasks.find((r: any) => r.id === task.id);
     expect(row).toBeDefined();
-    expect(row.board).toEqual({ kind: 'direct_pair', pair_key: pair.pairKey });
+    expect(row.place).toEqual({
+      kind: 'direct_pair',
+      conversation_id: pair.id,
+      pair_key: pair.pairKey,
+    });
 
     // Global id dereferences the pair task from the workspace frame.
     const detail = await h.get(
@@ -603,12 +627,16 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     ).json()) as any;
     const row = listed.tasks.find((r: any) => r.id === task.id);
     expect(row).toBeDefined();
-    expect(row.board).toEqual({ kind: 'direct_pair', pair_key: pair.pairKey });
-    expect(row.channel_id).toBe(pair.id);
+    expect(row.place).toEqual({
+      kind: 'direct_pair',
+      conversation_id: pair.id,
+      pair_key: pair.pairKey,
+    });
     expect(row).not.toHaveProperty('workspace_id');
     expect(row).not.toHaveProperty('workspace_name');
     expect(row).not.toHaveProperty('channel_name');
     expect(row).not.toHaveProperty('conversation');
+    expect(row).not.toHaveProperty('channel_id');
     const detail = (await (
       await h.get(agentBase(pair.id, agentIds.alice!) + `/detail?task_id=${task.id}`)
     ).json()) as any;
