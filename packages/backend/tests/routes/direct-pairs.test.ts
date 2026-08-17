@@ -42,7 +42,7 @@ import {
   type TestApp,
 } from '../utils/app.js';
 import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationRepo, DIRECT_PAIRS_FOR_VIEWER_SQL } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
@@ -956,5 +956,97 @@ describe('POST /api/agents/:id/direct-messages (human first-send door)', () => {
     const rows = await listDirectPairs(t);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.conversation_id).toBe(opened);
+  });
+});
+
+/**
+ * THE COMPLETE-SET CONTRACT (#task:2038, ruling A).
+ *
+ * `GET /api/direct-pairs` is the ONLY face that can resolve a private line's
+ * identity: `ConversationRef` names a workspace, so `GET /api/conversations/:id/ref`
+ * 404s every `direct_pair` by contract (pinned in `conversation-ref.test.ts`).
+ * Ruling A is only correct because this list is the viewer's WHOLE set rather than a
+ * sample — that is what lets a `#conv:<pair>` chip / `?side=<pair>` pane read
+ * "absent from the list" as "the viewer is not an endpoint" and degrade to inert
+ * text, with no third "maybe resolvable, just not fetched" state.
+ *
+ * So the falsifier this block exists for is a FUTURE pagination/cap/activity-window
+ * added to this face: without these assertions, old lines' chips would silently go
+ * inert and nothing would fail. Three angles, because each catches a different way
+ * of introducing it:
+ *   - behavioural — a viewer with far more pairs than any conventional page size
+ *     still gets all of them, in order;
+ *   - structural (SQL) — the enumeration statement carries no LIMIT/OFFSET, so a
+ *     repo-level cap reddens even if the route stays untouched;
+ *   - shape — the response has exactly one key, so there is nowhere to put a cursor
+ *     without an explicit contract change, and paging-looking query params cannot
+ *     truncate the answer.
+ */
+describe('GET /api/direct-pairs — complete set, no pagination', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  /** Comfortably past every conventional page size (20 / 25 / 50 / 100 would each
+   *  redden the assertion below). */
+  const PAIR_COUNT = 120;
+
+  it('returns EVERY pair the viewer is an endpoint of, well past any page size', async () => {
+    t = buildTestApp();
+    const parent = await makeAgent(t, 'parent');
+    const conversations = new ConversationRepo(t.ctx.db);
+    // Explicit, increasing `created_at`s: the list's order is creation order, so the
+    // assertion must pin the full sequence rather than a set.
+    const expected: string[] = [];
+    for (let i = 0; i < PAIR_COUNT; i += 1) {
+      const agentId = insertAgentScopedAgent(t, parent, `line-${i}`);
+      expected.push(
+        conversations.getOrCreateDirectPair(
+          { kind: 'agent', id: agentId },
+          { kind: 'human', id: t.viewerUserId },
+          1_000 + i,
+        ).conversation.id,
+      );
+    }
+
+    const rows = await listDirectPairs(t);
+    expect(rows).toHaveLength(PAIR_COUNT);
+    expect(rows.map(r => r.conversation_id)).toEqual(expected);
+  });
+
+  it('carries no pagination surface: no LIMIT/OFFSET in the SQL, no cursor in the shape, paging params cannot truncate', async () => {
+    t = buildTestApp();
+    const parent = await makeAgent(t, 'parent');
+    const conversations = new ConversationRepo(t.ctx.db);
+    for (let i = 0; i < 3; i += 1) {
+      const agentId = insertAgentScopedAgent(t, parent, `few-${i}`);
+      conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: agentId },
+        { kind: 'human', id: t.viewerUserId },
+        1_000 + i,
+      );
+    }
+
+    // Structural: the enumeration's text is a contract (the same reason
+    // `participation-enumeration.test.ts` EXPLAINs this exact string). A cap
+    // introduced in the repo reddens here before any route test notices.
+    expect(DIRECT_PAIRS_FOR_VIEWER_SQL).not.toMatch(/\b(LIMIT|OFFSET)\b/i);
+
+    // Shape: exactly one key. A `next_cursor` / `has_more` / `total` would have to
+    // be added deliberately, and the DTO's contract comment is the place to argue
+    // for it.
+    const plain = await http(t).get(apiPaths.directPairs);
+    expect(plain.status).toBe(200);
+    expect(Object.keys((await plain.json()) as object)).toEqual(['direct_pairs']);
+
+    // Behavioural: paging-shaped query params are not a hidden dialect — the face
+    // takes none, so they change nothing.
+    const withParams = await http(t).get(
+      `${apiPaths.directPairs}?limit=1&offset=1&cursor=x&page_size=1`,
+    );
+    expect(withParams.status).toBe(200);
+    expect(((await withParams.json()) as DirectPairListResponse).direct_pairs).toHaveLength(3);
   });
 });

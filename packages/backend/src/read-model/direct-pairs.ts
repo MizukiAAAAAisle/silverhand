@@ -22,6 +22,16 @@
 // the viewer to a pair is the same placement authority the enumeration came from,
 // and the authoritative refusal to post lives on the send path. This projection
 // only says what the viewer's open lines are and how they should be drawn.
+//
+// COMPLETE SET (#task:2038): this projection returns EVERY pair the viewer is an
+// endpoint of — it takes no limit/offset/cursor and the enumeration SQL carries
+// none. That is a named contract of the read face
+// (`DirectPairListResponseSchema`), not an implementation detail, because it is
+// the only face that can resolve a private line's identity: `ConversationRef` is
+// the workspace arm only, so a `#conv:<pair>` miss is read as "not an endpoint".
+// Do not add pagination here — a truncating list would make that inference
+// silently wrong. `tests/routes/direct-pairs.test.ts` asserts it both
+// behaviourally and against the SQL text.
 import type { Database as Db } from 'better-sqlite3';
 import {
   directPairIsReadOnlyForSurvivor,

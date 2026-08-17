@@ -81,6 +81,15 @@ export function createDirectPairsApp(deps: DirectPairsRouteDeps): Hono<AppEnv> {
   // is an ENDPOINT of, through the single placement authority. There is no
   // per-entity membership check to add on top — for a `direct_pair` the endpoint
   // coordinates ARE the membership.
+  //
+  // TAKES NO QUERY PARAMETERS, and the response is the viewer's COMPLETE set of
+  // pairs (#task:2038 ruling A, contract on `DirectPairListResponseSchema`). This
+  // is the only face that can resolve a private line's identity — a
+  // `#conv:<pair>` chip / `?side=<pair>` pane treats "absent from this list" as
+  // "the viewer is not an endpoint" and degrades to inert on purpose — so a page
+  // or a cap added here would silently turn old lines inert. If truncation ever
+  // becomes a product requirement, that is the first genuine argument for
+  // generalising `ConversationRef` (option B) rather than a change to this route.
   app.get(apiPaths.directPairs, c => {
     const viewerUserId = requireViewerUserId(c);
     if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
