@@ -778,7 +778,17 @@ export function createConversationMessagingApp(
     if (!canViewConversation(ctx, getUserPrincipal(c), conversation.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    if (!conversations.getAgent(conversation.id, agentId)) {
+    // #task:2048 — authorize the TARGET AGENT through the canonical
+    // placement-participation authority, NOT the roster. `getAgent` is a
+    // `conversation_agents` row lookup, but `direct_pair` (and `agent_inbox`)
+    // deliberately have no roster row — the placement's typed endpoints name the
+    // participants — so a real DirectPair endpoint agent would 404 on a face it
+    // participates in. `isAgentParticipant` is the boolean form of
+    // `agentParticipates` (roster ∪ inbox arc ∪ direct_pair arc), the ONE
+    // definition of participation; an unrelated agent stays indistinguishable
+    // from not-participant (same 404). Workspace behavior is unchanged: there the
+    // predicate coincides with the roster row.
+    if (!conversations.isAgentParticipant(conversation.id, agentId)) {
       return c.json({ error: 'agent is not a member of this conversation' }, 404);
     }
 
