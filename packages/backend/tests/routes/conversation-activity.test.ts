@@ -5,6 +5,7 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { ConversationEventRepo } from '../../src/repos/conversation-event-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 async function createAgent(t: TestApp, name: string): Promise<{
@@ -108,5 +109,86 @@ describe('GET /api/conversations/:id/agents/:aid/activity', () => {
     );
     expect(badBefore.status).toBe(400);
     expect(await badBefore.json()).toMatchObject({ code: 'invalid_before_id' });
+  });
+
+  // #task:2048 — a workspace-less human↔agent DirectPair has NO conversation_agents
+  // roster row (its two typed endpoints ARE the participants), so the activity face
+  // must authorize the target agent through placement participation, not the roster.
+  it('authorizes a rosterless DirectPair endpoint agent through placement participation', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { agentId } = await createAgent(t, 'activity-dp-endpoint');
+    const conversations = new ConversationRepo(t.ctx.db);
+    const pair = conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: agentId },
+      { kind: 'human', id: t.viewerUserId },
+      1_700_000_000_000,
+    ).conversation;
+    // Proof this is the rosterless surface: no roster row exists, so the old
+    // `getAgent` check would have 404'd this real participant.
+    expect(conversations.listAgents(pair.id)).toEqual([]);
+
+    const events = new ConversationEventRepo(t.ctx.db);
+    for (let i = 1; i <= 2; i += 1) {
+      events.recordParsedEvent({
+        conversationId: pair.id,
+        agentId,
+        event: { kind: 'text', text: `dp-event-${i}` },
+        createdAt: 1_700_000_000_000 + i,
+      });
+    }
+
+    // Authenticated as the human endpoint (default viewer) — canViewConversation
+    // passes on the DirectPair endpoint arc, not on any workspace membership.
+    const res = await http(t).get(
+      apiPaths.conversationAgentActivity(pair.id, agentId),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.events.map((e: any) => e.payload)).toEqual([
+      { text: 'dp-event-1' },
+      { text: 'dp-event-2' },
+    ]);
+  });
+
+  it('still 404s an agent that is not a DirectPair endpoint (indistinguishable from unknown)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const endpoint = await createAgent(t, 'activity-dp-endpoint-2');
+    const stranger = await createAgent(t, 'activity-dp-stranger');
+    const conversations = new ConversationRepo(t.ctx.db);
+    const pair = conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: endpoint.agentId },
+      { kind: 'human', id: t.viewerUserId },
+      1_700_000_000_000,
+    ).conversation;
+
+    const res = await http(t).get(
+      apiPaths.conversationAgentActivity(pair.id, stranger.agentId),
+    );
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      error: 'agent is not a member of this conversation',
+    });
+  });
+
+  it('applies the visibility gate to a DirectPair before the participation check (anti-enumeration)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { agentId } = await createAgent(t, 'activity-dp-private');
+    const conversations = new ConversationRepo(t.ctx.db);
+    const pair = conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: agentId },
+      { kind: 'human', id: t.viewerUserId },
+      1_700_000_000_000,
+    ).conversation;
+
+    // A user who is neither endpoint cannot even confirm the pair exists.
+    const res = await http(t).get(
+      apiPaths.conversationAgentActivity(pair.id, agentId),
+      {
+        headers: {
+          [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('other'),
+        },
+      },
+    );
+    expect(res.status).toBe(403);
   });
 });
