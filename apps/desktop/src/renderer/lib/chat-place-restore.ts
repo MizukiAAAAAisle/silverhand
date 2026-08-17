@@ -44,8 +44,18 @@ import type { ChatPlace } from '@/lib/place-memory';
 export type DirectPairAuthority =
   /** Not answered yet (cold query, or refetching with nothing cached). */
   | { status: 'pending' }
-  /** Answered: these are the viewer's lines. */
+  /** Answered and settled: these are the viewer's lines. */
   | { status: 'ready'; conversationIds: ReadonlySet<string> }
+  /** Answered before, and a fresher read is in flight now — carries the last
+   *  answer. The two consumers read it differently ON PURPOSE (#task:2052): a
+   *  one-shot gesture (`resolveJumpNav`) may act on a HIT, because the viewer's
+   *  pair list only ever grows (no pagination, a removed counterpart still
+   *  returns as a `read_only` row), so a cached membership cannot be revoked by
+   *  the read in flight; a MISS still fails closed, since it may be exactly the
+   *  freshly minted pair this refetch will bring back. A render-driven restore
+   *  (`resolveChatPlaceRestore`) instead keeps WAITING — it can afford a frame,
+   *  and the fresher read may change reachability. */
+  | { status: 'refetching'; conversationIds: ReadonlySet<string> }
   /** The read failed. Reachability is unknown and no answer is coming. */
   | { status: 'failed' };
 
@@ -61,10 +71,12 @@ export type DirectPairAuthority =
  *
  * The rule is about the CURRENT read, not about the presence of rows:
  *
- *  - a fetch in flight ⇒ `pending`, even over cached rows, and even after a
- *    previous failure: an answer is on its way, and `failed` means precisely
- *    "nothing more is coming" (that is what licenses it to route instead of
- *    wait). Cached rows are the last answer, not the current one;
+ *  - a fetch in flight ⇒ it depends on whether a read has ever answered: with a
+ *    cached answer it is `refetching` (the last answer is in hand, a fresher one
+ *    on the way) so a one-shot caller can still act on a HIT; with nothing
+ *    cached it is `pending`. Either way the held rows are NOT promoted to the
+ *    settled `ready` answer — `failed` still means precisely "nothing more is
+ *    coming" (that is what licenses it to route instead of wait);
  *  - otherwise a failed read ⇒ `failed`, cached rows or not;
  *  - otherwise an answered list ⇒ `ready`, including the empty list — "you have
  *    no pairs" is an answer;
@@ -86,7 +98,18 @@ export function directPairAuthorityFromQuery(query: {
   /** The most recent read settled in failure — initial load or refetch. */
   isError: boolean;
 }): DirectPairAuthority {
-  if (query.isFetching) return { status: 'pending' };
+  if (query.isFetching) {
+    // A read in flight qualifies the pending decision but never fabricates an
+    // answer. With a cached answer this is `refetching`: the last answer is in
+    // hand, so a one-shot caller (the jump seam) may act on a HIT, while restore
+    // keeps waiting. With nothing cached it is plain `pending`. Splitting here —
+    // rather than collapsing both to `pending` — is what keeps the jump seam
+    // alive through the refetch storm every incoming DM opens (#task:2052),
+    // and it changes nothing for restore (both map to `wait` there).
+    return query.answered !== undefined
+      ? { status: 'refetching', conversationIds: query.answered }
+      : { status: 'pending' };
+  }
   if (query.isError) return { status: 'failed' };
   if (query.answered !== undefined) {
     return { status: 'ready', conversationIds: query.answered };
@@ -151,6 +174,13 @@ export function resolveChatPlaceRestore(inputs: {
   }
   switch (pairs.status) {
     case 'pending':
+    case 'refetching':
+      // A read in flight — held rows or not — is not the settled answer here.
+      // Restore is render-driven, so it can afford a frame, and the fresher read
+      // may change reachability; it must NOT re-open the line from rows that
+      // predate the question. `refetching` carries the held rows only so the
+      // one-shot jump seam can act on a HIT; restore's behavior is unchanged
+      // (both still `wait`), which #task:2052 keeps intact.
       return { kind: 'wait' };
     case 'failed':
       return { kind: 'workspace' };

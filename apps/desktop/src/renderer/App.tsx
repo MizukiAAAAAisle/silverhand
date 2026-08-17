@@ -171,6 +171,7 @@ import {
   resolveChatPlaceRestore,
   type DirectPairAuthority,
 } from '@/lib/chat-place-restore';
+import { resolveJumpNav } from '@/lib/message-jump-nav';
 export {
   LAST_CHANNEL_KEY,
   clearPlaceMemory,
@@ -1551,6 +1552,39 @@ function RegisteredAppShell({
    * already-open channel, and an unresolvable workspace.
    */
   const handleJumpToMessage = (params: MessageJumpTarget): boolean => {
+    // Classify the jump BEFORE any side effect. `requestJump` below is NOT free:
+    // it POSTs `markRead` (an irreversible server write that clears the
+    // conversation's unread) and stashes a `jumpTarget` that later scroll-locates
+    // whichever conversation next opens. So a target we are going to REFUSE must
+    // do none of that (@Paul P1) — the fail-closed branch returns ABOVE
+    // `requestJump`, not below it.
+    //
+    // Inline channel find (#task:1335) is the ONE exemption: it never navigates,
+    // priming IS its whole function, and it must NOT consult the pair list —
+    // `ChannelView` passes a DM's own `workspace_id ?? undefined`, so a DM inline
+    // find is workspace-less and would otherwise fail-closed during any pair-list
+    // refetch. It is identified here and left UNCLASSIFIED so it still primes.
+    const isInlineFind = !!params.preserveSidePanel && !params.threadRootId;
+    // A jump target carries no placement — only ids — so a workspace-less
+    // conversation is classified against the one carrier that knows: the viewer's
+    // direct-pair AUTHORITY (#task:2052). It rides `directPairAuthority`, not the
+    // raw `directPairIds` set, because a cold/failed pair read holds an EMPTY set
+    // that a bare `.has()` cannot tell apart from "answered, not a pair"; guessing
+    // the selected workspace for a pair id builds a channel URL under a workspace
+    // the conversation isn't in. Only a workspace-LESS target consults the list; a
+    // target with its own workspace id is a channel jump, never gated on the list.
+    // Notification and Activity DM clicks land here.
+    const jumpNav = isInlineFind
+      ? null
+      : resolveJumpNav({
+          hasWorkspaceCoordinate: !!params.workspaceId,
+          channelId: params.channelId,
+          pairs: directPairAuthority,
+        });
+    // Not answered for a workspace-less target: refuse WITHOUT touching anything —
+    // above `requestJump`, so no unread is cleared and no jumpTarget is stashed.
+    if (jumpNav === 'fail-closed') return false;
+
     requestJump(params);
     // Inline channel find (#task:1335): a main-stream ensure-visible on the
     // ALREADY-open channel. `requestJump` above primes + scroll-locates; running
@@ -1559,14 +1593,8 @@ function RegisteredAppShell({
     // find bar lives in it), so no nav is needed. Fail-closed on `!threadRootId`
     // so the flag can ONLY skip nav for a main-channel target — a thread target
     // that mistakenly carries it still runs `withThreadQuery` below (Cindy).
-    if (params.preserveSidePanel && !params.threadRootId) return false;
-    // A jump target carries no placement — only ids — so a workspace-less
-    // conversation is resolved against the one carrier that knows: the viewer's
-    // pair list (#task:2035). This runs BEFORE `resolveNavWorkspaceId`, whose
-    // fallback for a missing workspace is "the selected one", which for a pair id
-    // would build a channel URL under a workspace the conversation isn't in.
-    // Notification and Activity clicks on a DM land here.
-    if (directPairIds.has(params.channelId)) {
+    if (isInlineFind) return false;
+    if (jumpNav === 'to-direct') {
       // Reply clusters don't exist in a pair yet (no thread pane mounts on the
       // workspace-less route), so a stray `threadRootId` is deliberately
       // ignored rather than written into a URL that resolves to nothing —

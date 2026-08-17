@@ -12,6 +12,10 @@ const ready = (...ids: string[]): DirectPairAuthority => ({
   status: 'ready',
   conversationIds: new Set(ids),
 });
+const refetching = (...ids: string[]): DirectPairAuthority => ({
+  status: 'refetching',
+  conversationIds: new Set(ids),
+});
 
 describe('chatPlaceForRoute', () => {
   const base = {
@@ -107,12 +111,18 @@ describe('directPairAuthorityFromQuery', () => {
     ).toEqual({ status: 'ready', conversationIds: new Set() });
   });
 
-  it('does not treat cached rows as the answer while a refetch is in flight', () => {
-    // React Query keeps the previous `data` through an invalidation. Whether the
-    // viewer is still an endpoint has not been re-answered, so the rail waits
-    // instead of re-opening the line from rows that predate the question.
+  it('carries cached rows as `refetching` while a refetch is in flight, and restore still waits', () => {
+    // React Query keeps the previous `data` through an invalidation. The
+    // authority now EXPOSES those rows as `refetching` (so the one-shot jump seam
+    // can act on a hit — see message-jump-nav.test.ts), but restore is
+    // render-driven: whether the viewer is still an endpoint has not been
+    // re-answered, so it waits rather than re-opening from rows that predate the
+    // question. The `refetching` state must not be folded back to `pending`.
     const q = { answered: new Set(['c-dm']), isFetching: true, isError: false };
-    expect(directPairAuthorityFromQuery(q)).toEqual({ status: 'pending' });
+    expect(directPairAuthorityFromQuery(q)).toEqual({
+      status: 'refetching',
+      conversationIds: new Set(['c-dm']),
+    });
     expect(restoreFor(q)).toEqual({ kind: 'wait' });
   });
 
@@ -131,10 +141,15 @@ describe('directPairAuthorityFromQuery', () => {
   });
 
   it('prefers a read in flight over the previous failure', () => {
-    // A retry is running: `failed` means "nothing more is coming", which is what
-    // licenses it to route instead of wait — so it must not be claimed here.
+    // A retry is running with rows still held: `failed` means "nothing more is
+    // coming", which is what licenses it to route instead of wait — so it must
+    // not be claimed here. With cached rows in hand this is `refetching`, and
+    // restore still waits for the retry to settle.
     const q = { answered: new Set(['c-dm']), isFetching: true, isError: true };
-    expect(directPairAuthorityFromQuery(q)).toEqual({ status: 'pending' });
+    expect(directPairAuthorityFromQuery(q)).toEqual({
+      status: 'refetching',
+      conversationIds: new Set(['c-dm']),
+    });
     expect(restoreFor(q)).toEqual({ kind: 'wait' });
   });
 });
@@ -173,6 +188,20 @@ describe('resolveChatPlaceRestore', () => {
       resolveChatPlaceRestore({
         place: { kind: 'direct_pair', conversationId: 'c-dm' },
         pairs: pending,
+      }),
+    ).toEqual({ kind: 'wait' });
+  });
+
+  it('waits on a refetching list too, even when it holds the remembered line', () => {
+    // A background refetch (every incoming DM opens one) is not the settled
+    // answer: restore behaves exactly as it does for `pending` and holds the
+    // bare route for a frame. The held rows exist only so the one-shot jump seam
+    // can act on a hit — restore must not re-open the line from them, or #2052's
+    // "restore is unchanged" guarantee breaks.
+    expect(
+      resolveChatPlaceRestore({
+        place: { kind: 'direct_pair', conversationId: 'c-dm' },
+        pairs: refetching('c-dm'),
       }),
     ).toEqual({ kind: 'wait' });
   });
