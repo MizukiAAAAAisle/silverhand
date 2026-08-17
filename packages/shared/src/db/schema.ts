@@ -821,7 +821,6 @@ export interface SavedMessageRow {
   user_id: string | null;
   message_id: string;
   conversation_id: string;
-  workspace_id: string;
   saved_at: number;
 }
 

@@ -579,16 +579,57 @@ export type SearchDto = z.infer<typeof SearchDtoSchema>;
 
 //
 // One global flat list — no per-channel grouping, no tags. Each entry
-// joins back to the source message + its workspace/conversation so the Saved
-// view can render content + jump back to the conversation.
+// joins back to the source message + its place (workspace channel or DM) so the
+// Saved view can render content + jump back to the conversation.
+
+/** Where a saved message lives, as a discriminated union on the canonical
+ *  human-conversation-place `kind` (`workspace_channel` / `direct_pair`, the
+ *  same vocabulary Search reuses — NOT a private `place_kind`). The routing
+ *  coordinate `conversation_id` is folded into each arm, so a `SavedPlace` is
+ *  the message's complete location with no parallel top-level coordinate.
+ *
+ *  - workspace_channel arm: `conversation_id` plus the workspace board namespace
+ *    (`workspace_id` + the `regular | agent_space` DOMAIN `workspace_kind`;
+ *    physical `agent_home` never reaches the wire, contract §2 rule 5) and the
+ *    Saved-specific presentation (`workspace_name`, `channel_name`). The names
+ *    are a LIVE projection kept fresh by `viewer_workspaces_changed` /
+ *    `workspace_channels_changed`, never a frozen store.
+ *  - direct_pair arm: ONLY `conversation_id`. No title (a DM stores none) and no
+ *    peer name/avatar — the per-viewer `dm:@other` label and the peer identity
+ *    are resolved live via the DirectPair carrier (contract §4-C), never frozen
+ *    into a saved row.
+ *
+ *  Display/namespace ONLY — access control NEVER reads it (the ACL always
+ *  recomputes from `conversation_id` back to the canonical participation
+ *  authority; contract §4a: a Place DTO is not an authorization source). */
+export const SavedPlaceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('workspace_channel'),
+    conversation_id: z.string(),
+    workspace_id: z.string(),
+    /** Domain projection of the workspace kind; physical `agent_home` never
+     *  reaches the wire (contract §2 rule 5). */
+    workspace_kind: z.enum(['regular', 'agent_space']),
+    workspace_name: z.string(),
+    /** The channel's display title (a channel has one; a DM does not). */
+    channel_name: z.string(),
+  }),
+  z.object({
+    kind: z.literal('direct_pair'),
+    conversation_id: z.string(),
+  }),
+]);
+export type SavedPlace = z.infer<typeof SavedPlaceSchema>;
+
 export const SavedMessageDtoSchema = z.object({
   id: z.string(),
   message: MessageDtoSchema,
-  workspace_id: z.string(),
-  workspace_name: z.string(),
-  conversation_id: z.string(),
-  conversation_title: z.string(),
-  channel_id: z.string(),
+  /** The saved message's place: the routing coordinate
+   *  (`place.conversation_id`) folded with the placement-specific display
+   *  coordinates (see SavedPlaceSchema). Narrow on `place.kind` — workspace
+   *  fields are structurally ABSENT on the pair arm. This is THE conversation
+   *  coordinate; there is no separate top-level `conversation_id`/`channel_id`. */
+  place: SavedPlaceSchema,
   /**
    * The author agent's immutable `@handle` (`agents.name`), or `null` for
    * user messages. NOT a display-name snapshot: `name` is decided at agent

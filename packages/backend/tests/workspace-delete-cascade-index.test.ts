@@ -127,8 +127,8 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
        VALUES ('local', ?, ?, ?, ?)`,
     );
     const insertSaved = db.prepare(
-      `INSERT INTO saved_messages (id, message_id, conversation_id, workspace_id, saved_at, user_id)
-       VALUES (?, ?, ?, ?, ?, 'local')`,
+      `INSERT INTO saved_messages (id, message_id, conversation_id, saved_at, user_id)
+       VALUES (?, ?, ?, ?, 'local')`,
     );
     const insertFollower = db.prepare(
       `INSERT INTO thread_followers (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
@@ -172,7 +172,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
       insertRead.run('conv-bulk', null, BULK_MESSAGES, now);
       for (let i = 0; i < 2_000; i += 1) {
         insertRead.run('conv-bulk', `m-bulk-${i}`, i, now);
-        insertSaved.run(`s-bulk-${i}`, `m-bulk-${i}`, 'conv-bulk', 'ws-bulk', now);
+        insertSaved.run(`s-bulk-${i}`, `m-bulk-${i}`, 'conv-bulk', now);
         insertFollower.run(`m-bulk-${i}`, 'conv-bulk', now + i);
       }
 
@@ -192,7 +192,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
         insertStreamHead.run(conv, `${conv}-m0`, 30);
         insertRead.run(conv, null, 30, now);
         insertRead.run(conv, `${conv}-m0`, 30, now);
-        insertSaved.run(`s-${conv}`, `${conv}-m0`, conv, 'ws-target', now);
+        insertSaved.run(`s-${conv}`, `${conv}-m0`, conv, now);
         insertFollower.run(`${conv}-m0`, conv, now);
         insertNotification.run(
           `n-${conv}`, 'ws-target', conv, `${conv}-m0`, 'ws-target', conv, `${conv}-m1`, now,
@@ -228,7 +228,10 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
       ['notifications', `workspace_id = 'ws-target'`],
       ['conversation_stream_heads', `conversation_id IN ('conv-t1','conv-t2')`],
       ['conversation_reads', `conversation_id IN ('conv-t1','conv-t2')`],
-      ['saved_messages', `workspace_id = 'ws-target'`],
+      // saved_messages no longer carries workspace_id (v81): the cascade now
+      // reaches it transitively via workspaces → conversations →
+      // saved_messages.conversation_id, so assert by conversation.
+      ['saved_messages', `conversation_id IN ('conv-t1','conv-t2')`],
       ['thread_followers', `conversation_id IN ('conv-t1','conv-t2')`],
     ] as const) {
       const row = db.prepare(`SELECT COUNT(*) c FROM ${table} WHERE ${where}`).get() as { c: number };

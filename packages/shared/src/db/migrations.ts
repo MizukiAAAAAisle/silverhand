@@ -3347,6 +3347,89 @@ export const migrations: Migration[] = [
         WHERE placement_kind = 'direct_pair';
     `,
   },
+  {
+    version: 81,
+    name: 'saved_messages_drop_workspace_id',
+    // #task:2050 (M2 delta 2) — DROP the denormalized `saved_messages.workspace_id`.
+    //
+    // The column was a NOT NULL copy of `conversations.workspace_id`, kept only
+    // for the `?workspace_id=` list filter. It forced Saved to be a
+    // workspace-only artifact (a `direct_pair` conversation has NULL
+    // `workspace_id`, so a DM save was not even expressible) and — worse — it was
+    // an UNCONSTRAINABLE duplicate: SQLite has no cross-table CHECK, so nothing
+    // could prove `sm.workspace_id` stayed in step with `conv.workspace_id`, and
+    // "NULL means direct_pair" would have been a second, un-falsifiable encoding
+    // of placement. The canonical routing coordinate `conversation_id` is already
+    // stored NOT NULL; the read model derives `workspace_id` from
+    // `conversations.workspace_id` via a join it already performs, and the filter
+    // becomes `conv.workspace_id = ?`. (Contrast `tasks`, which safely keeps a
+    // nullable `workspace_id` because its `board_key` CHECK makes the
+    // contradiction unconstructable — Saved has no equivalent guard.)
+    //
+    // SQLite cannot DROP a column that carries an index in place, so this is a
+    // full table rebuild → foreignKeyEscape so the runner toggles foreign_keys
+    // OFF + legacy_alter_table ON and runs foreign_key_check afterward. Dropping
+    // the old table drops ALL its indexes; every index EXCEPT
+    // `idx_saved_messages_workspace` is recreated verbatim. That index is not
+    // recreated: it was already dead for reads (`listForUser` always filters
+    // `user_id` and is driven by `idx_saved_messages_user_saved_at`), and its only
+    // remaining job — the workspace-delete FK cascade probe — is served by
+    // `idx_saved_messages_conversation`, which the cascade now traverses
+    // (`workspaces → conversations → saved_messages.conversation_id`).
+    foreignKeyEscape: true,
+    // Losslessness proof (#task:2050 falsifier 4): the drop discards nothing only
+    // if every existing row's `workspace_id` equals its conversation's — i.e. the
+    // duplicate never drifted and every saved row is workspace-placed (DM saves
+    // could not exist under the old constraint). Fail LOUDLY inside the migration
+    // transaction if that invariant is violated, rather than silently discard a
+    // column that had diverged.
+    precondition: db => {
+      const handle = db as {
+        prepare: (sql: string) => { get: () => { n: number } };
+      };
+      const drift = handle
+        .prepare(
+          `SELECT COUNT(*) AS n
+             FROM saved_messages sm
+             JOIN conversations c ON c.id = sm.conversation_id
+            WHERE sm.workspace_id IS NOT c.workspace_id`,
+        )
+        .get();
+      if (drift.n > 0) {
+        throw new Error(
+          `migration v81: ${drift.n} saved_messages row(s) have a workspace_id ` +
+            `that disagrees with their conversation's workspace_id; the column ` +
+            `is not a safe-to-drop duplicate. Investigate before dropping.`,
+        );
+      }
+    },
+    up: `
+      CREATE TABLE saved_messages_new (
+        id               TEXT PRIMARY KEY,
+        message_id       TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        saved_at         INTEGER NOT NULL,
+        user_id          TEXT REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO saved_messages_new (id, message_id, conversation_id, saved_at, user_id)
+        SELECT id, message_id, conversation_id, saved_at, user_id FROM saved_messages;
+
+      DROP TABLE saved_messages;
+      ALTER TABLE saved_messages_new RENAME TO saved_messages;
+
+      CREATE UNIQUE INDEX uniq_saved_messages_user_message
+        ON saved_messages(user_id, message_id)
+        WHERE user_id IS NOT NULL;
+      CREATE INDEX idx_saved_messages_user_saved_at
+        ON saved_messages(user_id, saved_at DESC)
+        WHERE user_id IS NOT NULL;
+      CREATE INDEX idx_saved_messages_conversation
+        ON saved_messages(conversation_id);
+      CREATE INDEX idx_saved_messages_message
+        ON saved_messages(message_id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

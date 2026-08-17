@@ -146,8 +146,11 @@ export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
   // canonical title/key pairs because SQLite cannot apply the shipped Unicode
   // normalizer/case-fold. v78 contributes the same three-call shape for regular
   // workspace display names; each migration's semantic suite proves the staged
-  // rows are total before its static rebuild SQL consumes them.
-  {file: 'packages/shared/src/db/migrations.ts',zone: 'schema',count: 14},
+  // rows are total before its static rebuild SQL consumes them. v81 contributes
+  // one `prepare` — the losslessness precondition that COUNTs saved_messages
+  // rows whose workspace_id disagrees with their conversation's before dropping
+  // the denormalized column (#task:2050).
+  {file: 'packages/shared/src/db/migrations.ts',zone: 'schema',count: 15},
   {file: 'packages/backend/src/repos/task-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/task-board-read-model.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/activity.ts',zone: 'repository'},

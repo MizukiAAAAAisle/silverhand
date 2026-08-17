@@ -1,11 +1,12 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { decodeMessageSeq, requireWorkspacePlacement } from '@silverhand/shared';
+import { decodeMessageSeq } from '@silverhand/shared';
 import type {
   ConversationPlacementKind,
   MessageRow,
   SavedMessageRow,
   SavedMessageDto,
+  SavedPlace,
   MessageAuthorDto,
   MessageAuthorRow,
 } from '@silverhand/shared';
@@ -15,10 +16,32 @@ import {
   linkedTaskFromRow,
   type LinkedTaskProjectionRow,
 } from './message-repo.js';
+import { userParticipates } from './conversation-placement-sql.js';
 import { loadMessageAuthors } from './message-author.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
+}
+
+/** A saved artifact can only exist for a placement a HUMAN participates in:
+ *  a workspace channel or a direct_pair. `agent_inbox` has no human participant
+ *  (contract §1), so a saved row there is impossible — this is the fail-closed
+ *  third arm. It deliberately does NOT reuse `ConversationPlacementError`
+ *  ("not workspace-placed"), which is now wrong: `direct_pair` IS saveable, so
+ *  the refusal is specifically "non-participatory placement", not "no workspace".
+ */
+export class SavedPlacementError extends Error {
+  constructor(
+    readonly conversationId: string,
+    readonly placementKind: ConversationPlacementKind,
+  ) {
+    super(
+      `conversation ${conversationId} has placement_kind=${placementKind}, ` +
+        `which is not a saveable placement: only workspace | direct_pair carry a ` +
+        `human saved message (a human is never a participant of an agent_inbox)`,
+    );
+    this.name = 'SavedPlacementError';
+  }
 }
 
 interface JoinedRow extends SavedMessageRow, LinkedTaskProjectionRow {
@@ -36,21 +59,62 @@ interface JoinedRow extends SavedMessageRow, LinkedTaskProjectionRow {
   m_seq: number;
   m_created_at: number;
   m_thread_root_id: string | null;
-  workspace_name: string;
-  conversation_title: string;
-  channel_id: string;
+  // Place-projection columns. `workspace_*` and `channel_name` are NULL on the
+  // pair arm by construction (LEFT JOIN workspaces + a placement-guarded CASE);
+  // `placeFromRow` narrows on `placement_kind` and never reads them off the
+  // pair arm.
+  placement_kind: ConversationPlacementKind;
+  workspace_id: string | null;
+  workspace_kind: 'regular' | 'agent_space' | null;
+  workspace_name: string | null;
+  channel_name: string | null;
   agent_name: string | null;
+}
+
+/** Build the `SavedPlace` union from a joined row, narrowing on the canonical
+ *  `placement_kind` — NOT on `workspace_id` presence, which would mislabel an
+ *  `agent_inbox` (whose `workspace_id IS NULL`) as a `direct_pair`. */
+function placeFromRow(row: JoinedRow): SavedPlace {
+  switch (row.placement_kind) {
+    case 'workspace': {
+      // The arc CHECK guarantees a workspace-placed conversation has a workspace
+      // row (hence a name + kind) and a title. After the LEFT JOIN a NULL here
+      // can therefore only be a query mistake — fail loud, never fake-fill.
+      if (
+        row.workspace_id === null ||
+        row.workspace_kind === null ||
+        row.workspace_name === null ||
+        row.channel_name === null
+      ) {
+        throw new Error(
+          `saved place: workspace-placed conversation ${row.conversation_id} ` +
+            `is missing workspace projection columns (workspace_id/kind/name/channel_name)`,
+        );
+      }
+      return {
+        kind: 'workspace_channel',
+        conversation_id: row.conversation_id,
+        workspace_id: row.workspace_id,
+        workspace_kind: row.workspace_kind,
+        workspace_name: row.workspace_name,
+        channel_name: row.channel_name,
+      };
+    }
+    case 'direct_pair':
+      return { kind: 'direct_pair', conversation_id: row.conversation_id };
+    default:
+      // agent_inbox (or any future non-participatory placement): save() refuses
+      // it at the write gate, so a row reaching this projection is a routing/query
+      // bug, not an outcome to render.
+      throw new SavedPlacementError(row.conversation_id, row.placement_kind);
+  }
 }
 
 function rowToDto(row: JoinedRow, author: MessageAuthorDto | null): SavedMessageDto {
   return {
     id: row.id,
     saved_at: row.saved_at,
-    workspace_id: row.workspace_id!,
-    workspace_name: row.workspace_name,
-    conversation_id: row.conversation_id!,
-    conversation_title: row.conversation_title,
-    channel_id: row.channel_id,
+    place: placeFromRow(row),
     agent_name: row.agent_name,
     message: {
       id: row.m_id,
@@ -110,19 +174,20 @@ function extractAttachmentSnapshots(
 
 /** The joined saved-message projection.
  *
- *  Placement (§4.1/§6): Saved is a HUMAN artifact of a workspace-placed
- *  conversation, and the exclusion is enforced on the WRITE side, not by the
- *  `JOIN workspaces` here: `save()` asserts the workspace arm before inserting,
- *  so a message from a placement without a workspace is refused loudly instead
- *  of producing a row this projection would then silently drop. (The route's ACL
- *  refuses first: a human is never a participant of such a placement, §4.2.) */
+ *  Placement (§4.1/§6): `workspaces` is a LEFT JOIN — a `direct_pair` save has
+ *  no workspace, and an INNER JOIN would silently drop the whole row (the §1
+ *  "INNER JOIN row vanishes" failure family). The row carries the placement
+ *  columns `placeFromRow` narrows on; `workspace_*`/`channel_name` are NULL on
+ *  the pair arm by construction. The write side (`save()`) is the fail-closed
+ *  gate that keeps a non-participatory `agent_inbox` from ever producing a row
+ *  here, and the read side (`listForUser`) re-derives live human participation
+ *  from the canonical authority — this projection is display/namespace only. */
 const SELECT_JOINED = `
   SELECT
     sm.id              AS id,
     sm.user_id         AS user_id,
     sm.message_id      AS message_id,
     sm.conversation_id AS conversation_id,
-    sm.workspace_id    AS workspace_id,
     sm.saved_at        AS saved_at,
     m.id               AS m_id,
     m.conversation_id  AS m_conversation_id,
@@ -138,14 +203,22 @@ const SELECT_JOINED = `
     m.created_at       AS m_created_at,
     m.thread_root_id   AS m_thread_root_id,
     ${LINKED_TASK_SELECT},
+    conv.placement_kind AS placement_kind,
+    conv.workspace_id   AS workspace_id,
+    CASE WHEN w.workspace_kind = 'agent_home' THEN 'agent_space'
+         WHEN w.workspace_kind = 'regular'    THEN 'regular'
+         ELSE NULL
+     END                AS workspace_kind,
     w.name             AS workspace_name,
-    conv.title         AS conversation_title,
-    conv.id            AS channel_id,
+    CASE WHEN conv.placement_kind = 'workspace'
+         THEN conv.title
+         ELSE NULL
+     END                AS channel_name,
     a.name             AS agent_name
   FROM saved_messages sm
   JOIN messages m ON m.id = sm.message_id
   JOIN conversations conv ON conv.id = sm.conversation_id
-  JOIN workspaces w ON w.id = conv.workspace_id
+  LEFT JOIN workspaces w ON w.id = conv.workspace_id
   LEFT JOIN agents a  ON a.id  = m.from_agent_id
   ${LINKED_TASK_JOINS}
 `;
@@ -169,44 +242,36 @@ export class SavedMessageRepo {
     return authorRows.map(ar => map.get(ar) ?? null);
   }
 
-  list(limit = 200): SavedMessageDto[] {
-    const rows = this.db
-      .prepare<[number], JoinedRow>(
-        `${SELECT_JOINED}
-         ORDER BY sm.saved_at DESC
-         LIMIT ?`,
-      )
-      .all(limit);
-    const authors = this.resolveAuthors(rows);
-    return rows.map((r, i) => rowToDto(r, authors[i] ?? null));
-  }
-
   /**
    * The viewer's saved messages, newest-saved first. Filters (`workspaceId` /
    * `since`) are applied in the WHERE clause — BEFORE `ORDER BY saved_at DESC
    * LIMIT` — so they narrow the whole saved history, not just the capped window
    * a client would otherwise filter (#task:1258, mirrors archived-channels).
-   * `since` is `saved_at >= since` (save-time window, epoch ms). Membership is
-   * always enforced (`sm.user_id` + `conversation_users`), so an unknown/hidden
-   * `workspaceId` simply yields no rows on top of that gate.
+   * `since` is `saved_at >= since` (save-time window, epoch ms).
+   *
+   * Visibility is re-derived from LIVE participation via the canonical authority
+   * (`userParticipates`), NOT a hand-written `EXISTS(conversation_users)`: a
+   * roster seat is inert on a non-workspace conversation, so an EXISTS-on-seat
+   * gate returns false for every `direct_pair` and would silently drop DM saves
+   * from the list even though they persist and read by id (contract §6b/§7).
+   * The workspace arm of `userParticipates` is STRICTER than a bare seat — it
+   * additionally requires live `workspace_users` membership (v25) — so a user
+   * removed from a workspace but holding a stale seat no longer sees their saved
+   * rows there. That is the intended fail-closed semantics, not a regression.
+   * The `workspaceId` filter runs on the derived `conv.workspace_id` (the row no
+   * longer carries its own copy), so an unknown/hidden id simply yields no rows
+   * on top of the participation gate.
    */
   listForUser(
     userId: string,
     opts: { workspaceId?: string; since?: number; limit?: number } = {},
   ): SavedMessageDto[] {
     const { workspaceId, since, limit = 200 } = opts;
-    const conds = [
-      'sm.user_id = ?',
-      `EXISTS (
-         SELECT 1
-           FROM conversation_users cu
-          WHERE cu.conversation_id = sm.conversation_id
-            AND cu.user_id = ?
-       )`,
-    ];
-    const params: (string | number)[] = [userId, userId];
+    const participation = userParticipates('conv', userId);
+    const conds = ['sm.user_id = ?', participation.sql];
+    const params: (string | number)[] = [userId, ...participation.params];
     if (workspaceId !== undefined) {
-      conds.push('sm.workspace_id = ?');
+      conds.push('conv.workspace_id = ?');
       params.push(workspaceId);
     }
     if (since !== undefined) {
@@ -230,20 +295,20 @@ export class SavedMessageRepo {
   /** Returns the existing row when the message was already saved
    *  (UNIQUE(user_id, message_id) makes this idempotent on the client). */
   save(messageId: string, userId: string): SavedMessageDto | null {
-    // Resolve canonical conversation/workspace from the message; INSERT OR
-    // IGNORE makes save() idempotent (returns the existing row on duplicate).
+    // Resolve the canonical conversation + placement from the message; workspace
+    // is no longer copied onto the saved row (v81 dropped `workspace_id` — it is
+    // derived from `conv.workspace_id` at read). INSERT OR IGNORE keeps save()
+    // idempotent (returns the existing row on duplicate).
     const ctx = this.db
       .prepare<
         [string],
         {
           conversation_id: string;
-          workspace_id: string | null;
           placement_kind: ConversationPlacementKind;
         }
       >(
         `SELECT
            m.conversation_id AS conversation_id,
-           conv.workspace_id AS workspace_id,
            conv.placement_kind AS placement_kind
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id
@@ -251,40 +316,44 @@ export class SavedMessageRepo {
       )
       .get(messageId);
     if (!ctx) return null;
-    // Placement (§4.1): `saved_messages.workspace_id` is NOT NULL, but the
-    // constraint CANNOT be the guard here — `INSERT OR IGNORE` suppresses a
-    // NOT NULL violation exactly like it suppresses the duplicate it is there
-    // for, so a workspace-less placement would skip the row silently and this
-    // method would report "not saved" as `null`, indistinguishable from
-    // "message not found". Assert instead: Saved is a workspace-scoped human
-    // artifact, and a human is never a participant of a non-workspace
-    // placement (§4.2), so the route's ACL has already refused — reaching this
-    // line means the ACL was bypassed, which is a routing bug and not an
-    // outcome to encode in the return type.
-    const workspaceId = requireWorkspacePlacement({
-      id: ctx.conversation_id,
-      workspace_id: ctx.workspace_id,
-      placement_kind: ctx.placement_kind,
-    });
+    // Placement (§4.1): Saved is a HUMAN artifact, so it can only exist for a
+    // placement a human participates in — a `workspace` channel or a
+    // `direct_pair`. `agent_inbox` (or any future non-participatory placement)
+    // has no human participant, so the route's ACL (`canViewConversation`) has
+    // already refused; reaching this line means the ACL was bypassed, a routing
+    // bug. Assert loudly rather than lean on a storage constraint: `INSERT OR
+    // IGNORE` would suppress a violation exactly as it suppresses the duplicate
+    // it is there for, silently returning `null` (indistinguishable from
+    // "message not found"). This is the fail-closed write gate the read
+    // projection relies on to never see a non-saveable placement.
+    if (ctx.placement_kind !== 'workspace' && ctx.placement_kind !== 'direct_pair') {
+      throw new SavedPlacementError(ctx.conversation_id, ctx.placement_kind);
+    }
     const id = newId();
     const now = Date.now();
     this.db
       .prepare(
         `INSERT OR IGNORE INTO saved_messages
-         (id, user_id, message_id, conversation_id, workspace_id, saved_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+         (id, user_id, message_id, conversation_id, saved_at)
+         VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         userId,
         messageId,
         ctx.conversation_id,
-        workspaceId,
         now,
       );
     return this.getByMessageIdForUser(messageId, userId);
   }
 
+  /** Fetch-by-(message,user) used ONLY as `save()`'s post-write echo, behind the
+   *  route's `canViewConversation` ACL. It self-limits on `sm.user_id` but does
+   *  NOT re-derive live participation the way `listForUser` does — deliberately:
+   *  the sole caller has already been ACL'd and is reading back the row it just
+   *  wrote, so there is no reachable path where a no-longer-participant reads a
+   *  stale row here (contract §4-B, decision ②). Any FUTURE standalone reader of
+   *  saved rows MUST add the `userParticipates` gate before relying on this. */
   getByMessageIdForUser(messageId: string, userId: string): SavedMessageDto | null {
     const row = this.db
       .prepare<[string, string], JoinedRow>(

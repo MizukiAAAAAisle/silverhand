@@ -254,11 +254,10 @@ delete, no bridge.
 Classes: **WOD** workspace-only by domain · **HPB** human-place bug · **IAO**
 internal/agent-only · **LFR** latent forbidden reuse.
 
-### `requireWorkspacePlacement(...)` — universe = **17 production calls** (excl. the `:62` shared definition) = **16 WOD + 1 HPB**, zero omitted
+### `requireWorkspacePlacement(...)` — universe = **16 production calls** (excl. the `:62` shared definition) = **16 WOD**, zero omitted
 
 | Site | Class | Reason / guard-falsifier |
 |---|---|---|
-| `saved-message-repo.ts:264` | **HPB** | DM save must persist; #2050 branches on `place.kind`; falsifier: save+list a DM message returns it |
 | `viewer-scope.ts:171` | **WOD** | DM handled by the parallel `publishUnreadUpdated` direct_pair branch (comment `:160`) |
 | `observe.ts:336` | **WOD** | `direct_pair` intercepted at `:329` (`publishDirectPairsChangedToViewer`); only workspace/agent_inbox fall through |
 | `conversation-repo.ts:848` | **WOD** | inside the `WORKSPACE_PLACED` predicate; the assert ties the SQL filter to the non-null DTO field |
@@ -266,21 +265,46 @@ internal/agent-only · **LFR** latent forbidden reuse.
 | `channel-service.ts:713/869/932` (×3) | **WOD** | channels are a workspace-only aggregate (invariant #3) |
 | `conversation-member.ts:260/541/622/667/905/963/1101/1208/1477` (×9) | **WOD** | membership/roster is a workspace concept; DirectPair has endpoints, not members; M2 asserts these paths reject a direct_pair |
 
-**16 WOD + 1 HPB = 17.** (R3 correction: my prior "18 production / 17 WOD" wrongly
-counted the `:62` definition line into the total.)
+**16 WOD = 16.** (R3 correction: my prior "18 production / 17 WOD" wrongly
+counted the `:62` definition line into the total. #2050 RESOLVED the one HPB by
+REMOVAL: `saved-message-repo.ts` `save()` no longer calls
+`requireWorkspacePlacement` at all — it asserts a three-arm `SavedPlacementError`
+on `placement_kind` instead, so `direct_pair` is saveable while `agent_inbox`
+still fails closed. The universe therefore shrank 17→16 and is now purely WOD.)
 
 **M2 mechanical completeness gate:** a test enumerates every
-`requireWorkspacePlacement` call site and fails if any is absent from this
-disposition table — a new call that skips classification reddens CI.
+`requireWorkspacePlacement` call site AND every hand-written roster read outside
+the participation authority (§6b-roster below), failing if any is absent from a
+disposition table — a new call that skips classification reddens CI. (The
+enumeration was widened from "requireWorkspacePlacement call sites" alone
+because #2050 showed a roster gate can be wrong WITHOUT ever touching
+`requireWorkspacePlacement`: saved's DM gap was a hand-written
+`EXISTS(conversation_users)`, not a workspace-require call.)
 
-### `JOIN workspaces` — universe = 20 hits / 8 files, by surface
+### §6b-roster. Hand-written roster reads outside the participation authority
+
+The participation authority (`conversation-placement-sql.ts`
+`userParticipates` / `agentParticipates` / the `*_USER_IDS_SQL` set forms) is
+the ONLY place that may decide participation. Any OTHER surface that hand-writes
+`EXISTS(conversation_users …)` (or the agent/workspace equivalents) as a
+visibility gate is **LFR** — latent because it happens to agree with the
+authority on the workspace arm, forbidden because it silently disagrees on the
+`direct_pair` arm (a DM has no roster seat) and cannot see the v25 membership
+conjunct.
+
+| Site | Class | Disposition |
+|---|---|---|
+| `conversation-read-repo.ts:402` (`unreadCountsByConversation`) | **LFR→HPB** | roster-joins `conversation_users`; must include the DM arm via participation (§7, folded into #2045 Favorites) |
+| `saved-message-repo.ts` `listForUser` | **LFR→HPB, FIXED (#2050)** | was a hand-written `EXISTS(conversation_users)` that returned false for every `direct_pair` ⇒ DM saves persisted (201) and read by id but were silently dropped from the list. Now delegates to `userParticipates('conv', userId)`. Falsifier: `tests/repos/saved-message-repo.test.ts` — save+list a `direct_pair` message returns it; a stale seat without `workspace_users` membership does NOT list |
+
+### `JOIN workspaces` — universe = 19 hits / 8 files, by surface (was 20; #2050 dropped saved's inner join to a single LEFT JOIN)
 
 | File | hits | Surface / disposition |
 |---|---|---|
 | `conversation-repo.ts` | 6 | workspace channel-list reads — **WOD** (WORKSPACE_PLACED-scoped) |
 | `search-repo.ts` | 4 | search read model — **HPB** on the DM arm (#2051): drop `workspacePlaced` for `direct_pair` |
 | `favorites.ts` | 2 | Favorites — **HPB** (§7: DM star-able ⇒ pair arm via participation) |
-| `saved-message-repo.ts` | 2 | saved — **HPB** (#2050) |
+| `saved-message-repo.ts` | 1 | saved — **HPB, FIXED (#2050)**: `JOIN workspaces` → **LEFT JOIN**, `workspace_id` derived from `conv.workspace_id`, place narrowed on `placement_kind` (v81 dropped the denormalized `saved_messages.workspace_id`) |
 | `agent-repo.ts` | 2 | agent↔agent_home ownership — **IAO** |
 | `conversation-placement-sql.ts` | 2 | the participation **authority itself** — WOD by construction |
 | `task-sql.ts` | 1 | task board read — folds into `TaskPlace`; pair arm needs no workspace join |

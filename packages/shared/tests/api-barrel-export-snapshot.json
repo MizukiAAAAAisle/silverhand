@@ -251,6 +251,7 @@
   "SCHEDULE_TITLE_MAX_LEN",
   "SavedMessageDtoSchema",
   "SavedMessagesQueryInputSchema",
+  "SavedPlaceSchema",
   "ScheduleCancelInputSchema",
   "ScheduleCancelOutputSchema",
   "ScheduleCreateInputSchema",

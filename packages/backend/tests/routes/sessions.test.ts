@@ -619,7 +619,7 @@ describe('canonical channel/thread routes', () => {
     const listed = await (await local.get('/api/saved')).json() as any;
     expect(listed.saved).toHaveLength(1);
     expect(listed.saved[0]).toMatchObject({
-      channel_id: channelId,
+      place: { kind: 'workspace_channel', conversation_id: channelId },
       message: {
         id: reply.message.id,
         thread_root_id: root.message.id,
@@ -674,7 +674,10 @@ describe('canonical channel/thread routes', () => {
     ).json() as any;
     expect(onlyA.saved).toHaveLength(1);
     expect(onlyA.saved[0].message.id).toBe(msgA.message.id);
-    expect(onlyA.saved[0].workspace_id).toBe(a.workspace.id);
+    expect(onlyA.saved[0].place).toMatchObject({
+      kind: 'workspace_channel',
+      workspace_id: a.workspace.id,
+    });
 
     // Unknown workspace id → 404 (mirrors archived-channels not-found semantics).
     const unknown = await local.get('/api/saved?workspace_id=does-not-exist');
