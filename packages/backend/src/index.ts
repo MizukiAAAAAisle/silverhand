@@ -863,14 +863,14 @@ export async function startBackend(
       ctx.readiness.outboundEventFanoutInstalled = true;
     }
     const hostWsEventSink = outboundFanout ?? undefined;
-    // #task:2043 (B) — availability invalidation readers. BackendContext holds
-    // no db handle, so the agent→host and workspace→member-userIds enumerations
-    // the fan-out needs beyond `ctx.authorizationReads` are injected here.
+    // #task:2043 (B) — availability invalidation reader. WHO to notify is an
+    // access decision resolved inside the authorization surface
+    // (`permissions.agentViewerUserIds`); the fan-out needs only the host→agents
+    // binding, and BackendContext holds no db handle, so that one enumeration is
+    // injected here.
     const availabilityChangedDeps: AgentAvailabilityChangedDeps = {
       listAgentIdsByHost: hostId =>
         persistence.repos.agents.listByHost(hostId).map(agent => agent.id),
-      workspaceMemberUserIds: workspaceId =>
-        persistence.repos.workspaces.listUserMemberIds(workspaceId),
     };
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       hostTokenVerifier: new HostTokenService(persistence.hostTokens),
@@ -906,6 +906,12 @@ export async function startBackend(
           outboundFanout?.onEvent(hostId, event, connectionId),
         onDisconnect: (hostId, connectionId) =>
           outboundFanout?.onDisconnect(hostId, connectionId),
+        // #task:2043 (B) — the embedded transport (the desktop local agent's
+        // host — sea's most common shape) feeds the SAME availability publisher
+        // as the WSS attach edge above, so an embedded connect/disconnect
+        // invalidates `/availability` exactly like a WSS one.
+        onHostAttachmentChanged: hostId =>
+          publishAgentAvailabilityChangedForHost(ctx, availabilityChangedDeps, hostId),
         logger,
       });
       embeddedOutboundAdapter = adapter;

@@ -819,6 +819,49 @@ export function canViewAgent(
 const ACTIVE_ONLY: ReadonlyArray<AgentMaterializationStatus> = ['active'];
 
 /**
+ * The user ids who may currently VIEW an agent — the audience DUAL of
+ * {@link canViewAgent} for human principals. Lives here, beside the predicate it
+ * mirrors, because "who may see this agent" is an access decision: a fan-out
+ * that reads availability/liveness invalidations must reach exactly the humans
+ * the read route would serve, and no other module may read the authorization
+ * port to answer it (W6 Gate 8).
+ *
+ * Built as the union of `canViewAgent`'s human ACL arms (creator ∪ human
+ * DirectPair endpoints ∪ shared-workspace members) and then filtered through
+ * `canViewAgent` per candidate. The union only has to be a SUPERSET of the true
+ * audience — over-inclusive candidates are fine — and the filter narrows it to
+ * exactly the route's audience. That is load-bearing, not belt-and-suspenders:
+ * it keeps enumeration EXACT against future changes to the predicate's arms or
+ * its active-only status widener, so a viewer who cannot read the route never
+ * receives its invalidation and one who can is never missed. A non-`active`
+ * agent (404 for everyone) yields an empty audience, with no special-case here.
+ *
+ * Agent principals are excluded by construction: the arms unioned are the human
+ * ones, and the invalidation scopes these feed (`viewer:<userId>`) carry only
+ * user ids.
+ */
+export function agentViewerUserIds(ctx: BackendContext, agentId: string): string[] {
+  const reads = ctx.authorizationReads;
+  const candidates = new Set<string>();
+
+  const agent = reads.agent(agentId);
+  if (agent?.created_by_user_id) candidates.add(agent.created_by_user_id);
+  for (const userId of reads.agentDirectPairHumanEndpointIds(agentId)) {
+    candidates.add(userId);
+  }
+  for (const workspaceId of reads.agentWorkspaceIds(agentId)) {
+    for (const userId of reads.workspaceMemberUserIds(workspaceId)) {
+      candidates.add(userId);
+    }
+  }
+
+  return [...candidates].filter(userId => {
+    const principal: UserPrincipal = { kind: 'user', userId };
+    return canViewAgent(ctx, principal, agentId);
+  });
+}
+
+/**
  * May this principal OPEN a direct-message line to this agent (#task:2036)?
  *
  * The ONE home of the initiation policy, and a function of its own on purpose
