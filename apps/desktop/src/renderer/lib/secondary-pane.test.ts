@@ -39,9 +39,15 @@ const foreignChannelRef: ConversationRef = {
   archived_at: null,
 };
 
+// An agent's own `dm_channel`: workspace-PLACED (in that agent's agent_home,
+// projected to the external `workspace_kind: 'dm'`) with a fixed roster. This is
+// the only kind of DM this DTO can name — a workspace-less `direct_pair` is not
+// expressible here at all (#task:2038, ruling A: `ConversationRef.placement_kind`
+// is `z.literal('workspace')`), and is modelled by its own carrier resolved from
+// `GET /api/direct-pairs`.
 const foreignDmRef: ConversationRef = {
   id: 'dm-foreign',
-  placement_kind: 'direct_pair',
+  placement_kind: 'workspace',
   roster_policy: 'fixed',
   title: 'dm-bob',
   workspace_id: 'w-bob-home',
@@ -99,7 +105,9 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     expect(out).toMatchObject({
       source: 'side',
       status: 'resolved',
-      placementKind: 'direct_pair',
+      // `'workspace'` + `workspaceKind: 'dm'` is what a DM looks like on this
+      // face; the fixed roster is what distinguishes it from a channel.
+      placementKind: 'workspace',
       rosterPolicy: 'fixed',
       workspaceKind: 'dm',
     });

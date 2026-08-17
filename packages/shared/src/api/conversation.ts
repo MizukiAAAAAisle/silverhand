@@ -144,18 +144,26 @@ export type CreateConversationChannelInput = z.input<
 // secondary-pane resolution and the `#conv:<id>` sigil renderer (PR-3).
 //
 // Hard contract:
-//   - THE WORKSPACE ARM ONLY (#task:2038, ruling A). `workspace_id` is
-//     non-nullable on purpose: this DTO is the identity of a conversation
-//     that HAS a workspace coordinate. A `direct_pair` has none — that is
-//     the placement's definition, not a gap — so it cannot be named here,
-//     and the route answers 404 for it even when the caller may read it.
-//     The narrowing is the contract; the 404 is not an authorization
-//     answer. A private line's identity lives on its own face,
+//   - THE WORKSPACE ARM ONLY (#task:2038, ruling A), and TYPE-ENFORCED:
+//     `placement_kind` is the literal `'workspace'` and `workspace_id` is
+//     non-nullable, so this DTO cannot even EXPRESS a workspace-less
+//     placement. That is the point — a `direct_pair` has no workspace
+//     coordinate (the placement's definition, not a gap), so it cannot be
+//     named here and the route answers 404 for it even when the caller may
+//     read it. The narrowing is the contract; the 404 is not an
+//     authorization answer. A private line's identity lives on its own face,
 //     `GET /api/direct-pairs`, whose complete-set guarantee (see
 //     `DirectPairListResponseSchema`) is what makes resolving `#conv:` /
-//     `?side` there decisive rather than best-effort. Do NOT relax
-//     `workspace_id` to nullable to "support DMs": that reintroduces the
-//     pseudo-coordinate #task:2035 removed, for every consumer of this DTO.
+//     `?side` there decisive rather than best-effort.
+//     `placement_kind` is kept as a FIELD rather than dropped because it is
+//     the discriminator a consumer needs the moment a second, non-workspace
+//     identity DTO exists beside this one — a `direct_pair` descriptor is
+//     modelled by its own carrier, and the two form a discriminated union.
+//     Generalising instead (nullable `workspace_id` / a third
+//     `workspace_kind`) reintroduces the pseudo-coordinate #task:2035
+//     removed, for every consumer of this DTO; it is option B, and it has to
+//     be reopened as an explicit contract change — which these two literals
+//     now force.
 //   - `workspace_kind` is the *external* projection — `agent_home` is
 //     mapped to `'dm'` here so the renderer never sees a third kind.
 //   - Does NOT include unread count, last_seq, message previews, or
@@ -174,7 +182,11 @@ export type ConversationRefWorkspaceKind = z.infer<
 
 export const ConversationRefSchema = z.object({
   id: z.string(),
-  placement_kind: ConversationPlacementKindSchema,
+  // The narrowing above, as a type: NOT `ConversationPlacementKindSchema`.
+  // Widening this back to the full enum makes `direct_pair + non-null
+  // workspace_id` expressible again, which is the impossible state this face
+  // exists to exclude.
+  placement_kind: z.literal('workspace'),
   roster_policy: ConversationRosterPolicySchema,
   title: z.string(),
   workspace_id: z.string(),
