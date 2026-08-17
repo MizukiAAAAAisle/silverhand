@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type {
   AgentDto,
+  AgentLiveness,
+  AgentLivenessDto,
   AgentRuntimeStateDto,
   AgentWorkspaceFileRead,
   AgentWorkspaceTree,
@@ -89,6 +91,135 @@ export function useAgent(agentId: string | null) {
       return res.agent;
     },
   });
+}
+
+const agentLivenessKey = (id: string) => ['agents', id, 'liveness'] as const;
+
+/**
+ * The liveness query's refresh + retry policy, as ONE falsifiable config apart
+ * from the fold. The endpoint has NO push invalidation (Alice, #task:2043): the
+ * server recomputes the bit per GET from its host snapshot and never emits a
+ * change event. So freshness is the client's responsibility — a mounted surface
+ * (a DM popover, the profile hero) must refresh on a bounded timer, or a value
+ * read once at mount would silently age past `staleMs`, fold to `unknown`, and
+ * the hero that just showed "online" would disappear ~15s later (shiki, dogfood
+ * 2026-08-17). `staleTime` alone does NOT do this: it only expires the value, it
+ * never refetches — so without an interval the stale value is never replaced.
+ *
+ * INVARIANT `refetchIntervalMs < staleMs` (asserted in the unit test): each
+ * mounted poll writes a fresh `dataUpdatedAt`, resetting the stale countdown
+ * BEFORE the value can age out. A reachable host therefore keeps reading its
+ * last state for as long as the surface is mounted — the fold never sees a
+ * fresh value flip to `unknown` between polls (no per-poll flicker; see
+ * `projectAgentLiveness`, which by design does not read `isFetching`). The value
+ * only ages into `unknown` when the polls themselves FAIL past `staleMs` — an
+ * unreachable host, which is the honest outcome.
+ *
+ * `refetchIntervalInBackground: false` — an unmounted / backgrounded surface has
+ * no viewer, so it stops polling and refetches on the next mount instead.
+ */
+export const AGENT_LIVENESS_QUERY_POLICY = {
+  staleMs: 15 * 1000,
+  refetchIntervalMs: 10 * 1000,
+  refetchIntervalInBackground: false,
+  /** Transport / 5xx retries are BOUNDED — a persistently-failing read has
+   *  nothing to eventually deliver by retrying forever, so after this many it
+   *  settles into the honest `unknown` rather than hammering an unreachable
+   *  host. A 4xx is terminal before this count even applies (see below). */
+  maxRetries: 2,
+} as const;
+
+/**
+ * Retry predicate for the liveness read, pulled out so its ceiling is a unit
+ * assertion rather than behavior buried in the query config:
+ *  - a 4xx is TERMINAL — a 404 is the endpoint's anti-enumeration answer for a
+ *    non-viewer, which retrying can never turn into a liveness bit;
+ *  - transport failures and 5xx retry up to `maxRetries`, then stop so the read
+ *    folds to `unknown` instead of retrying forever against a host with no
+ *    pending answer to give.
+ */
+export function agentLivenessRetry(failureCount: number, err: unknown): boolean {
+  if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+    return false;
+  }
+  return failureCount < AGENT_LIVENESS_QUERY_POLICY.maxRetries;
+}
+
+/**
+ * Pure projection of the liveness query state onto the tri-state a consumer
+ * draws. The endpoint has NO invalidation channel (Alice, #task:2043): the
+ * server recomputes the bit per GET from its host snapshot and never pushes a
+ * change, so a value the client holds is trustworthy ONLY while it is a FRESH
+ * successful read. Every other state folds to `unknown` — the honest "we don't
+ * know", NEVER to `offline` (an unreachable/disconnected host is not a dead
+ * process, #task:2039):
+ *  - `data === undefined` — first load in flight, disabled, or a read that
+ *    failed with no prior value (incl. the 404 anti-enum for a non-viewer);
+ *  - `isStale` — a value aged past `staleTime`. With nothing to invalidate it, a
+ *    stale bit has no authority; it also covers a value stranded behind a failing
+ *    background refetch (React Query retains the old `data` and keeps `status`
+ *    `'success'`, but never refreshes `dataUpdatedAt`, so it ages into stale).
+ *
+ * A FRESH value with a poll in flight (`isFetching`, mounted refresh not yet
+ * resolved) intentionally reads as its last state, NOT `unknown`: the input is
+ * `{ data, isStale }` and deliberately omits `isFetching`. Folding an in-flight
+ * poll to `unknown` would flicker a mounted `online` hero to nothing on every
+ * `refetchInterval` tick. A fresh value is still authoritative until it either
+ * goes stale or a poll replaces it (see `AGENT_LIVENESS_QUERY_POLICY`).
+ *
+ * Splitting this out makes the fold falsifiable in isolation: the query config
+ * (retry/refetch policy) can move without touching the online/offline/unknown
+ * decision, and each fold case is a one-line unit assertion.
+ */
+export function projectAgentLiveness(state: {
+  data: AgentLiveness | undefined;
+  isStale: boolean;
+}): AgentLiveness {
+  if (state.data === undefined || state.isStale) return 'unknown';
+  return state.data;
+}
+
+/**
+ * The agent's process liveness — the ONE viewer-authorized bit
+ * `GET /api/agents/:id/liveness` answers (#task:2043 B). Tri-state:
+ *  - `online`  — the runtime is live on its computer;
+ *  - `offline` — the computer answered and the process is not running;
+ *  - `unknown` — the host hasn't answered / the computer is unreachable, OR the
+ *    client's own read is loading / stale / failing. This is NOT the same as
+ *    offline (a revoked or disconnected host is not a dead process), so a
+ *    consumer renders unknown as unknown — usually nothing — never as Offline.
+ *
+ * `canViewAgent`-gated, so the HUMAN endpoint of a human↔agent DirectPair can
+ * read its counterpart's liveness — the bit the old owner-only host-status path
+ * could not give a non-owner, which is why a DM popover showed no status at all
+ * (#task:2039). A point read, not a realtime subscription: the endpoint has no
+ * push channel, so a mounted surface polls on a BOUNDED interval
+ * (`AGENT_LIVENESS_QUERY_POLICY`, interval < staleTime) to keep a resident value
+ * fresh; an unmounted surface stops. The tri-state is projected by
+ * `projectAgentLiveness`, so a cached-old / cold / failing read reads as
+ * `unknown` rather than asserting a possibly-wrong online/offline forever.
+ */
+export function useAgentLiveness(
+  agentId: string | null | undefined,
+): AgentLiveness {
+  const query = useQuery({
+    queryKey: agentId ? agentLivenessKey(agentId) : ['agents', 'none', 'liveness'],
+    enabled: !!agentId,
+    staleTime: AGENT_LIVENESS_QUERY_POLICY.staleMs,
+    // Bounded mounted refresh: the endpoint never pushes, so poll to keep a
+    // resident value fresh. Interval < staleTime, so a reachable host stays
+    // fresh between polls (no flicker); only failing polls let it age to
+    // `unknown`. Stops when the surface unmounts / backgrounds.
+    refetchInterval: AGENT_LIVENESS_QUERY_POLICY.refetchIntervalMs,
+    refetchIntervalInBackground:
+      AGENT_LIVENESS_QUERY_POLICY.refetchIntervalInBackground,
+    retry: agentLivenessRetry,
+    queryFn: async () => {
+      const res = await api<AgentLivenessDto>(apiPaths.agentLiveness(agentId!));
+      return res.liveness;
+    },
+  });
+  return projectAgentLiveness({ data: query.data, isStale: query.isStale });
 }
 
 const agentProfileMcpKey = (id: string) => ['agents', id, 'profile-mcp'] as const;

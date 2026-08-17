@@ -17,7 +17,7 @@ import {
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
 import type { AgentPresenceSource } from '@/features/conversations/pane-mode';
-import { useAgentOnlineByHost } from '@/features/hosts/hooks';
+import { useAgentLiveness } from '@/features/agents/hooks';
 import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import {
@@ -304,9 +304,10 @@ function PresenceLine({ dot, label }: { dot: string; label: string }): JSX.Eleme
  *    their DM counterpart was `Not here` while it was answering them
  *    (shiki, #task:2039).
  *
- * The global arm renders NOTHING when the liveness map has no entry for this
- * agent: an absent entry means the host status hasn't answered (or the computer
- * is unknown), and `Offline` would be a claim rather than an answer.
+ * The global arm renders NOTHING unless liveness is a definite `online` /
+ * `offline`. `unknown` (the host hasn't answered / the computer is unreachable)
+ * and the loading window both mean "no answer yet", and `Offline` there would be
+ * a claim rather than an answer — a disconnected host is not a dead process.
  */
 function PresenceInline({
   agent,
@@ -324,9 +325,13 @@ function PresenceInline({
 }
 
 function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | null {
-  const onlineByAgent = useAgentOnlineByHost([agent.host_id]);
-  const online = onlineByAgent.get(agent.id);
-  if (online === undefined) return null;
+  const liveness = useAgentLiveness(agent.id);
+  // Tri-state → binary line only when the answer is definite. `unknown` and the
+  // loading window draw nothing (see the block comment above); this is the
+  // `canViewAgent`-gated bit a DM human can read about its counterpart, the
+  // status the old owner-only host path could not supply (#task:2039).
+  if (liveness !== 'online' && liveness !== 'offline') return null;
+  const online = liveness === 'online';
   return (
     <PresenceLine
       dot={online ? 'bg-success' : 'bg-text-muted/40'}

@@ -14,8 +14,7 @@ import {
   PersonHero,
   PresencePill,
 } from '@/features/common/PersonHero';
-import { useAgentOnlineByHost } from '@/features/hosts/hooks';
-import { useStopAgent } from './hooks';
+import { useAgentLiveness, useStopAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { DeleteAgentDialog } from './DeleteAgentDialog';
 
@@ -32,7 +31,7 @@ interface AgentHeaderProps {
 /**
  * Agent panel header. Thin adapter over the shared {@link PersonHero}
  * primitive — owns the agent-specific data wiring (Message draft + Stop button +
- * mutation, Delete dialog, runtime presence aggregation, avatar
+ * mutation, Delete dialog, agent-on-computer liveness, avatar
  * object URL) and forwards presentation to the Hero. Keeps `AgentView`
  * unchanged at the call site.
  */
@@ -46,12 +45,13 @@ export function AgentHeader({
   const stopAgent = useStopAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
   // Hero status = agent-on-computer liveness (is the agent's runtime live on
-  // its computer), read from the same host-status source as the members rail
-  // (#task:1362). The Agent page is the agent's global profile, not a
+  // its computer). The Agent page is the agent's global profile, not a
   // conversation — a resident-but-idle agent must read as Online here, else
-  // users mistake a live runtime for "no runtime".
-  const onlineByAgent = useAgentOnlineByHost([agent.host_id]);
-  const online = onlineByAgent.get(agent.id) ?? false;
+  // users mistake a live runtime for "no runtime". Read from the
+  // `canViewAgent`-gated liveness endpoint, tri-state: `unknown` (host hasn't
+  // answered / computer unreachable) draws no pill at all, never Offline — a
+  // disconnected host is not a dead process (#task:2043 B / #task:2039).
+  const liveness = useAgentLiveness(agent.id);
   // Stop targets conversation-running work, so it keeps the conversation
   // runtime-state predicate: count both `starting` and `active` so an agent
   // mid-spawn doesn't slip past the Stop button between exec and first message.
@@ -89,8 +89,17 @@ export function AgentHeader({
                 <span>{agent.model}</span>
               </>
             ) : null}
-            <HeroDot />
-            <PresencePill online={online} />
+            {/* Draw presence only when liveness is a definite online/offline.
+                `unknown` (host unreachable / not yet answered) draws no dot and
+                no pill — the meta row simply ends at runtime/model, rather than
+                asserting Offline for an agent whose computer we merely can't
+                reach right now. */}
+            {liveness === 'online' || liveness === 'offline' ? (
+              <>
+                <HeroDot />
+                <PresencePill online={liveness === 'online'} />
+              </>
+            ) : null}
           </>
         }
         bio={agent.description}
