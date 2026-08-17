@@ -172,7 +172,8 @@ in:
 - **M2 producer obligation (backend, Alice) — FROZEN, no implementer choice:**
   extend the existing viewer-scoped carrier `viewer_workspaces_changed`
   (`viewer-workspaces.ts:15`) with a new `change` value **`'metadata_changed'`**.
-  Today `ViewerWorkspaceChange = 'added' | 'role_changed' | 'removed'`; the rename
+  `ViewerWorkspaceChange = 'added' | 'role_changed' | 'removed' | 'metadata_changed'`
+  (the fourth member landed in `0e54c09e`, consumer-side whitelist in `3be6ca86`); the rename
   path (`workspaces.ts:210`) publishes `publishViewerWorkspacesChanged(ctx,
   userId, { change: 'metadata_changed', workspace_id })` to **each human viewer of
   the workspace**. This reuses the existing contract: the renderer treats the
