@@ -253,6 +253,55 @@ export function applyBoardScopeSelection(
   }
 }
 
+/** One section of the board-scope dropdown: the workspaces OR the direct pairs
+ *  it lists, plus an optional note (only the Direct Messages section reports a
+ *  cold/failed read). Generic over the concrete option shapes — those live in the
+ *  filter bar — so the classification stays in this model module. */
+export interface BoardScopeGroup<W, P> {
+  key: 'workspaces' | 'agent-spaces' | 'direct-messages';
+  label: string;
+  note: string | null;
+  workspaces: readonly W[];
+  pairs: readonly P[];
+}
+
+/**
+ * Classify the board-scope dropdown's three sections (#task:2041) — the third
+ * pure face of the container model, so "which KIND of workspace goes in which
+ * section, and when does a section show" is falsifiable without a DOM (the whole
+ * classification used to be inlined in the filter bar's `useMemo`, where deleting
+ * a section or mis-routing a kind stayed green — @Cindy).
+ *
+ * The regular vs agent-home split reuses `workspaceKindContainer`, the SAME
+ * taxonomy the wire axis uses, so a workspace can never land in a section that
+ * disagrees with the container its pick stamps. A section shows iff it has objects
+ * OR a note: an answered-empty section is simply absent (like an empty workspace
+ * group), but the Direct Messages section keeps its loading/failed `note` so an
+ * empty list is never mistaken for "no direct lines". `directMessagesNote` is
+ * passed in already resolved to copy — the caller owns the localized string.
+ */
+export function boardScopeGroups<W extends { kind: 'regular' | 'dm' }, P>(input: {
+  workspaces: readonly W[];
+  directPairs: readonly P[];
+  directMessagesNote: string | null;
+}): Array<BoardScopeGroup<W, P>> {
+  const inContainer = (
+    container: Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'>,
+  ): readonly W[] => input.workspaces.filter(w => workspaceKindContainer(w.kind) === container);
+  const defs: Array<BoardScopeGroup<W, P>> = [
+    { key: 'workspaces', label: 'Workspaces', note: null, workspaces: inContainer('workspace'), pairs: [] },
+    { key: 'agent-spaces', label: 'Agent Spaces', note: null, workspaces: inContainer('agent_space'), pairs: [] },
+    {
+      key: 'direct-messages',
+      label: 'Direct Messages',
+      note: input.directMessagesNote,
+      workspaces: [],
+      pairs: input.directPairs,
+    },
+  ];
+  return defs.filter(g => g.workspaces.length > 0 || g.pairs.length > 0 || g.note !== null);
+}
+
 /** One selectable person in the assignee / creator menus. The `name` is the
  *  denormalized snapshot the server already put on the row (no profile lookup —
  *  Cindy boundary); the option SETS themselves are a server facet read

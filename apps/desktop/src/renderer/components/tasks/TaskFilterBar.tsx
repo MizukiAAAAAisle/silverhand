@@ -43,6 +43,7 @@ import {
 import {
   applyBoardScopeSelection,
   applyWorkspaceCascade,
+  boardScopeGroups,
   channelAxisScope,
   personFilterKey,
   taskFiltersEqual,
@@ -826,10 +827,10 @@ function BoardScopeFilter({
 } & PersonDirectory): JSX.Element {
   const [open, setOpen] = useState(false);
 
-  // The three sections, each over its concrete objects. A workspace row carries
-  // its `kind` so the pick can stamp the matching container; a pair row carries
-  // its DirectPairOption for the avatar. Only the Direct Messages section can
-  // show a note (a non-answer); the workspace sections just hide when empty.
+  // The three sections come from the pure `boardScopeGroups` seam (kind → section
+  // and the show-iff-rows-or-note rule live there, tested without a DOM); this
+  // memo only resolves the DM note copy and projects each section's objects into
+  // the ScopeRow shape the list renders and roves over.
   const groups = useMemo(() => {
     const dmNote =
       directPairStatus === 'loading'
@@ -837,43 +838,23 @@ function BoardScopeFilter({
         : directPairStatus === 'failed'
           ? 'Couldn’t load direct lines'
           : null;
-    const defs: ReadonlyArray<{
-      key: string;
-      label: string;
-      note: string | null;
-      rows: ScopeRow[];
-    }> = [
-      {
-        key: 'workspaces',
-        label: 'Workspaces',
-        note: null,
-        rows: workspaceOptions
-          .filter(o => o.kind === 'regular')
-          .map(ws => ({ id: ws.id, label: ws.label, render: 'workspace', ws })),
-      },
-      {
-        key: 'agent-spaces',
-        label: 'Agent Spaces',
-        note: null,
-        rows: workspaceOptions
-          .filter(o => o.kind === 'dm')
-          .map(ws => ({ id: ws.id, label: ws.label, render: 'workspace', ws })),
-      },
-      {
-        key: 'direct-messages',
-        label: 'Direct Messages',
-        note: dmNote,
-        rows: directPairOptions.map(pair => ({
-          id: pair.id,
-          label: pair.label,
-          render: 'pair',
-          pair,
-        })),
-      },
-    ];
-    // Show a section iff it has objects OR a note to report — an answered-empty
-    // section (no rows, no note) is simply absent, like an empty workspace group.
-    return defs.filter(g => g.rows.length > 0 || g.note !== null);
+    return boardScopeGroups<WorkspaceOption, DirectPairOption>({
+      workspaces: workspaceOptions,
+      directPairs: directPairOptions,
+      directMessagesNote: dmNote,
+    }).map(g => ({
+      key: g.key,
+      label: g.label,
+      note: g.note,
+      rows: [
+        ...g.workspaces.map(
+          (ws): ScopeRow => ({ id: ws.id, label: ws.label, render: 'workspace', ws }),
+        ),
+        ...g.pairs.map(
+          (pair): ScopeRow => ({ id: pair.id, label: pair.label, render: 'pair', pair }),
+        ),
+      ],
+    }));
   }, [workspaceOptions, directPairOptions, directPairStatus]);
 
   // Flatten for roving focus: index 0 is the All row, then every selectable row

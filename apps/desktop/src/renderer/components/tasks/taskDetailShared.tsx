@@ -2,7 +2,7 @@ import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import dayjs from 'dayjs';
-import { Loader2, X } from 'lucide-react';
+import { Check, Loader2, X } from 'lucide-react';
 import {
   TASK_CONTENT_MAX_LEN,
   type TaskDetailDto,
@@ -24,7 +24,7 @@ import {
 } from '@/features/tasks/hooks';
 import type { TaskDetailFailure } from '@/features/tasks/taskDetail';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
-import { useDirectPairPane } from '@/features/direct-pairs/hooks';
+import { useDirectPairPane, projectDirectPairAssignee } from '@/features/direct-pairs/hooks';
 import { cn } from '@/lib/cn';
 
 /**
@@ -382,9 +382,13 @@ function AssigneePicker({
   children: ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const handlePick = (agentId: string) => {
+  // Picking closes the menu always; it writes only for a DIFFERENT agent. The
+  // current assignee sits in the domain as a selected / no-op row (so a DM whose
+  // one counterpart already holds the task still SHOWS that agent — @Cindy,
+  // #task:2041) and re-choosing it must not fire a redundant assign.
+  const handleChoose = (candidate: AssigneeCandidate) => {
     setOpen(false);
-    onPick(agentId);
+    if (!candidate.isCurrent) onPick(candidate.id);
   };
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -418,14 +422,14 @@ function AssigneePicker({
               conversationId={conversationId}
               currentAgentId={currentAgentId}
               directory={directory}
-              onPick={handlePick}
+              onChoose={handleChoose}
             />
           ) : (
             <WorkspacePickerBody
               conversationId={conversationId}
               currentAgentId={currentAgentId}
               directory={directory}
-              onPick={handlePick}
+              onChoose={handleChoose}
             />
           )}
         </Popover.Content>
@@ -442,22 +446,26 @@ interface AssigneeCandidate {
   name: string;
   /** The display name on the avatar. */
   displayName: string;
+  /** Already this task's assignee → shown selected, picking it is a no-op. */
+  isCurrent: boolean;
 }
 
 /** The picker's list, shared by both placement bodies so the row markup and the
  *  empty/loading copy live in one place. `placeholder` is what shows when there
  *  are no candidates — the caller distinguishes loading / load-failed / genuinely
- *  empty, so a cold or failed read is never rendered as "nobody to assign". */
+ *  empty, so a cold or failed read is never rendered as "nobody to assign".
+ *  `onChoose` closes the menu for every row but writes only for a non-current
+ *  one; the already-assigned row is a selected no-op (@Cindy, #task:2041). */
 function CandidateList({
   candidates,
   placeholder,
   directory,
-  onPick,
+  onChoose,
 }: {
   candidates: readonly AssigneeCandidate[];
   placeholder: string;
   directory: PersonDirectory;
-  onPick: (agentId: string) => void;
+  onChoose: (candidate: AssigneeCandidate) => void;
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-1">
@@ -473,7 +481,8 @@ function CandidateList({
           <button
             key={c.id}
             type="button"
-            onClick={() => onPick(c.id)}
+            aria-current={c.isCurrent ? 'true' : undefined}
+            onClick={() => onChoose(c)}
             className="flex w-full min-w-0 items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1 text-left text-xs transition-colors hover:bg-bg-hover"
           >
             <PersonAvatar
@@ -488,9 +497,14 @@ function CandidateList({
                 assignee/creator (rows above, board cards, filter, TaskRef
                 popover) shows the plain display name with no `@` (#task:1768,
                 shiki 2026-08-01). */}
-            <span className="truncate" title={c.displayName}>
+            <span className="min-w-0 flex-1 truncate" title={c.displayName}>
               @{c.name}
             </span>
+            {/* The current assignee stays in the domain (so a DM always shows its
+                agent) but reads as selected — a check, not a removed row. */}
+            {c.isCurrent ? (
+              <Check className="size-3.5 shrink-0 text-text-muted" aria-label="Current assignee" />
+            ) : null}
           </button>
         ))
       )}
@@ -499,26 +513,28 @@ function CandidateList({
 }
 
 /** Workspace placement: candidates are the conversation's other AGENT members.
- *  Split into its own component so `useConversationMembers` (and its `/members`
- *  read) only mounts once Radix opens the popover AND only for a workspace task —
- *  a DirectPair never fires it. */
+ *  The current assignee is excluded here (unlike the DM body): a workspace board
+ *  has several members, the picker reads as "reassign to someone else", and the
+ *  current holder already shows in the field above. Split into its own component
+ *  so `useConversationMembers` (and its `/members` read) only mounts once Radix
+ *  opens the popover AND only for a workspace task — a DirectPair never fires it. */
 function WorkspacePickerBody({
   conversationId,
   currentAgentId,
   directory,
-  onPick,
+  onChoose,
 }: {
   conversationId: string;
   currentAgentId: string | null;
   directory: PersonDirectory;
-  onPick: (agentId: string) => void;
+  onChoose: (candidate: AssigneeCandidate) => void;
 }): JSX.Element {
   const roster = useConversationMembers(conversationId);
   const candidates = useMemo<AssigneeCandidate[]>(() => {
     if (roster.status !== 'resolved') return [];
     return roster.members.flatMap((m) =>
       m.kind === 'agent' && m.agent_id !== currentAgentId
-        ? [{ id: m.agent_id, name: m.name, displayName: m.display_name || m.name }]
+        ? [{ id: m.agent_id, name: m.name, displayName: m.display_name || m.name, isCurrent: false }]
         : [],
     );
   }, [roster, currentAgentId]);
@@ -527,50 +543,48 @@ function WorkspacePickerBody({
       candidates={candidates}
       placeholder={roster.status === 'loading' ? 'Loading…' : 'No other agents here.'}
       directory={directory}
-      onPick={onPick}
+      onChoose={onChoose}
     />
   );
 }
 
-/** DirectPair placement: the sole candidate is the pair's counterpart agent,
- *  read from the pair-participation carrier — a DirectPair has no roster
- *  (@Cindy, #task:2041). `useDirectPairPane` carries the readiness precedence
- *  (`ready > resolving > error > absent`, and retained rows are not an answer):
- *  a cold or failed read is surfaced as loading / load-failed, NEVER folded into
- *  an authoritative "no candidate". A human or `deleted` counterpart, or the
- *  agent already holding the task, yields no candidate — but the row's historical
- *  assignee still displays from the task DTO, independent of this set. */
+/** DirectPair placement: the sole candidate is the pair's counterpart agent, read
+ *  from the pair-participation carrier — a DirectPair has no roster (@Cindy,
+ *  #task:2041). The candidate domain + readiness are the pure `projectDirectPairAssignee`
+ *  seam: the active counterpart is ALWAYS offered, INCLUDING when it is the task's
+ *  current assignee (then it reads as a selected no-op, never dropped — the empty-
+ *  dropdown bug), and a cold/failed read is surfaced as loading / load-failed, never
+ *  folded into an authoritative "no candidate". `useDirectPairPane`'s precedence is
+ *  `ready > resolving > error > absent`: a retained MATCHING row IS an answer (the
+ *  projection reads it even while a refetch runs); only a retained MISSING row is
+ *  left unproven and waits as `resolving`. A human or `deleted` counterpart yields
+ *  no candidate — the row's historical assignee still displays from the task DTO,
+ *  independent of this set. */
 function DirectPairPickerBody({
   conversationId,
   currentAgentId,
   directory,
-  onPick,
+  onChoose,
 }: {
   conversationId: string;
   currentAgentId: string | null;
   directory: PersonDirectory;
-  onPick: (agentId: string) => void;
+  onChoose: (candidate: AssigneeCandidate) => void;
 }): JSX.Element {
   const paneState = useDirectPairPane(conversationId);
-  const candidates = useMemo<AssigneeCandidate[]>(() => {
-    if (paneState.kind !== 'ready') return [];
-    const cp = paneState.pair.counterpart;
-    return cp.status === 'active' && cp.kind === 'agent' && cp.id !== currentAgentId
-      ? [{ id: cp.id, name: cp.name, displayName: cp.display_name || cp.name }]
-      : [];
-  }, [paneState, currentAgentId]);
+  const view = projectDirectPairAssignee(paneState, currentAgentId);
   const placeholder =
-    paneState.kind === 'resolving'
+    view.status === 'loading'
       ? 'Loading…'
-      : paneState.kind === 'error'
+      : view.status === 'error'
         ? 'Couldn’t load.'
         : 'No agent to assign.';
   return (
     <CandidateList
-      candidates={candidates}
+      candidates={view.candidates}
       placeholder={placeholder}
       directory={directory}
-      onPick={onPick}
+      onChoose={onChoose}
     />
   );
 }

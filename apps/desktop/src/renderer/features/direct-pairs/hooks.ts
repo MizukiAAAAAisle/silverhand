@@ -315,6 +315,75 @@ export function useDirectPairPane(
   });
 }
 
+/** One agent the DM task-assignee picker can offer. `isCurrent` marks the
+ *  counterpart when it is ALREADY this task's assignee: it stays in the domain
+ *  (so the picker always shows the DM's agent — shiki 2026-08-17) and is rendered
+ *  selected / no-op, rather than being dropped, which was the empty-dropdown bug
+ *  (a DM assigned to its one counterpart had its only candidate filtered out). */
+export interface DirectPairAssigneeCandidate {
+  id: string;
+  /** The `@`-handle shown on the row. */
+  name: string;
+  /** The display name on the avatar. */
+  displayName: string;
+  /** Already the task's assignee → selected, picking it is a no-op. */
+  isCurrent: boolean;
+}
+
+/** The DM assignee picker's view over the pair pane. `loading` / `error` are the
+ *  non-answers that must NOT read as "no agent to assign"; only `ready` with an
+ *  empty list is an authoritative "nobody assignable here". */
+export type DirectPairAssigneeView =
+  | { status: 'loading'; candidates: readonly DirectPairAssigneeCandidate[] }
+  | { status: 'error'; candidates: readonly DirectPairAssigneeCandidate[] }
+  | { status: 'ready'; candidates: readonly DirectPairAssigneeCandidate[] };
+
+/**
+ * Pure projection (pair pane × current assignee) → the DM assignee domain
+ * (#task:2041, @Cindy). The active counterpart agent is ALWAYS a candidate,
+ * INCLUDING when it is the task's current assignee — that case is carried by
+ * `isCurrent` (selected / no-op), never by erasing the only agent a DM has, which
+ * was the reported empty-dropdown regression. It yields NO candidate only when the
+ * counterpart genuinely cannot hold the task: a `human` (the write path takes
+ * `agent_id` only) or a `deleted` principal, or a settled-absent pair. A cold or
+ * failed read is surfaced as `loading` / `error`, never folded into an empty
+ * `ready` (the same `ready > resolving > error > absent` precedence
+ * {@link projectDirectPairPane} enforces: a retained MATCHING row is already an
+ * answer, so this reads it; only a retained MISSING row is left unproven).
+ */
+export function projectDirectPairAssignee(
+  pane: DirectPairPaneState,
+  currentAgentId: string | null,
+): DirectPairAssigneeView {
+  switch (pane.kind) {
+    case 'idle':
+    case 'resolving':
+      return { status: 'loading', candidates: [] };
+    case 'error':
+      return { status: 'error', candidates: [] };
+    case 'absent':
+      return { status: 'ready', candidates: [] };
+    case 'ready': {
+      const cp = pane.pair.counterpart;
+      if (cp.status !== 'active' || cp.kind !== 'agent') {
+        // A human counterpart is never assignable; a `deleted` one is gone.
+        return { status: 'ready', candidates: [] };
+      }
+      return {
+        status: 'ready',
+        candidates: [
+          {
+            id: cp.id,
+            name: cp.name,
+            displayName: cp.display_name || cp.name,
+            isCurrent: cp.id === currentAgentId,
+          },
+        ],
+      };
+    }
+  }
+}
+
 /**
  * What the TASK-FILTER DM leaf may claim about the viewer's pair list — the
  * filter-bar analogue of {@link DirectPairPaneState}, distinguishing the four

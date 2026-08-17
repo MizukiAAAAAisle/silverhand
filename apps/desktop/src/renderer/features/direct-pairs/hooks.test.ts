@@ -12,6 +12,7 @@ import {
   directPairsKey,
   directPairsQueryOptions,
   findAgentDirectPair,
+  projectDirectPairAssignee,
   projectDirectPairFilterLeaf,
   projectDirectPairPane,
   type DirectPairListQueryFacts,
@@ -313,6 +314,114 @@ describe('projectDirectPairPane — what the pane may claim about the pair', () 
         isError: true,
       }),
     ).toEqual({ kind: 'resolving' });
+  });
+});
+
+describe('projectDirectPairAssignee — the DM task-assignee domain (#task:2041, @Cindy)', () => {
+  // The counterpart the picker offers, over the five pane states × the counterpart
+  // kinds. The load-bearing property is P1: the active counterpart is in the domain
+  // even when it IS the current assignee (`isCurrent`), never dropped — dropping it
+  // was the reported empty-dropdown bug for a DM assigned to its one agent.
+  const activeAgentPane = (id: string, name = id, displayName = ''): DirectPairPaneState => ({
+    kind: 'ready',
+    pair: {
+      conversation_id: 'c-pair',
+      counterpart: {
+        status: 'active',
+        kind: 'agent',
+        id,
+        name,
+        display_name: displayName,
+        avatar_url: null,
+        runtime: 'claude',
+      },
+      unread_count: 0,
+      read_only: false,
+      created_at: 1,
+    },
+  });
+
+  it('offers the active counterpart when it is NOT the current assignee', () => {
+    expect(projectDirectPairAssignee(activeAgentPane('a-1', 'alice', 'Alice'), 'someone-else')).toEqual({
+      status: 'ready',
+      candidates: [{ id: 'a-1', name: 'alice', displayName: 'Alice', isCurrent: false }],
+    });
+  });
+
+  it('P1: STILL offers the counterpart when it is already the assignee, marked isCurrent', () => {
+    // The empty-dropdown regression: excluding the current agent left a DM assigned
+    // to its one counterpart with no candidate at all.
+    expect(projectDirectPairAssignee(activeAgentPane('a-1', 'alice', 'Alice'), 'a-1')).toEqual({
+      status: 'ready',
+      candidates: [{ id: 'a-1', name: 'alice', displayName: 'Alice', isCurrent: true }],
+    });
+  });
+
+  it('falls back to the handle when the counterpart has no display name', () => {
+    expect(
+      projectDirectPairAssignee(activeAgentPane('a-1', 'alice', ''), null).candidates[0],
+    ).toMatchObject({ displayName: 'alice' });
+  });
+
+  it('offers nothing for a HUMAN counterpart (the write path takes agent_id only)', () => {
+    const humanPane: DirectPairPaneState = {
+      kind: 'ready',
+      pair: {
+        conversation_id: 'c-pair',
+        counterpart: {
+          status: 'active',
+          kind: 'human',
+          id: 'u-1',
+          name: 'shiki',
+          display_name: 'shiki',
+          avatar_url: null,
+          runtime: null,
+        },
+        unread_count: 0,
+        read_only: false,
+        created_at: 1,
+      },
+    };
+    expect(projectDirectPairAssignee(humanPane, null)).toEqual({ status: 'ready', candidates: [] });
+  });
+
+  it('offers nothing for a DELETED counterpart', () => {
+    const deletedPane: DirectPairPaneState = {
+      kind: 'ready',
+      pair: {
+        conversation_id: 'c-pair',
+        counterpart: { status: 'deleted', kind: 'agent', id: 'a-1' },
+        unread_count: 0,
+        read_only: false,
+        created_at: 1,
+      },
+    };
+    expect(projectDirectPairAssignee(deletedPane, null)).toEqual({ status: 'ready', candidates: [] });
+  });
+
+  it('reports loading for the non-answers (resolving / idle), never "no agent"', () => {
+    expect(projectDirectPairAssignee({ kind: 'resolving' }, null)).toEqual({
+      status: 'loading',
+      candidates: [],
+    });
+    expect(projectDirectPairAssignee({ kind: 'idle' }, null)).toEqual({
+      status: 'loading',
+      candidates: [],
+    });
+  });
+
+  it('reports error for a failed read, never "no agent"', () => {
+    expect(projectDirectPairAssignee({ kind: 'error' }, null)).toEqual({
+      status: 'error',
+      candidates: [],
+    });
+  });
+
+  it('reports a settled-absent pair as ready-empty (an authoritative "nobody here")', () => {
+    expect(projectDirectPairAssignee({ kind: 'absent' }, null)).toEqual({
+      status: 'ready',
+      candidates: [],
+    });
   });
 });
 
