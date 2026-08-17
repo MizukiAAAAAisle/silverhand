@@ -49,6 +49,7 @@ import {
 import { createWorkspace } from '../application/create-workspace.js';
 import { deleteWorkspace } from '../application/delete-workspace.js';
 import { isWorkspaceNameAvailable } from '../application/name-availability.js';
+import { publishViewerWorkspacesChanged } from '../application/viewer-workspaces.js';
 import { AgentHomeChannelError } from '../services/channel-service.js';
 import { channelServiceErrorResponse } from './responses.js';
 
@@ -249,6 +250,21 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         ctx.events.publish(channel.id, {
           kind: 'message',
           payload: { message: announce },
+        });
+      }
+
+      // §4-B liveness (#task:2050): the channel-announcement loop above tells
+      // members INSIDE a channel; it does not reach human read models that
+      // render the workspace label from OUTSIDE any one channel (Saved's
+      // `place.workspace_name`, Search, the workspace list). Those subscribe
+      // per-viewer, so fan a `metadata_changed` hint to every human member —
+      // each refetches `['workspaces']` as the authority. Agents are not
+      // notified here: they already received the in-channel system message and
+      // have no viewer-scoped workspace read model.
+      for (const userId of workspaces.listUserMemberIds(workspace.id)) {
+        publishViewerWorkspacesChanged(ctx, userId, {
+          change: 'metadata_changed',
+          workspace_id: workspace.id,
         });
       }
     }
