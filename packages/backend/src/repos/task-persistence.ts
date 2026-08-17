@@ -33,7 +33,6 @@ export function taskConversationAccessPort(db: Db): TaskConversationAccessPort {
   const conversations = new ConversationRepo(db);
   return {
     get: id => conversations.get(id),
-    getAgent: (conversationId, agentId) => conversations.getAgent(conversationId, agentId),
     isAgentParticipant: (conversationId, agentId) =>
       conversations.isAgentParticipant(conversationId, agentId),
     // The human per-task ACL, answered by the SAME placement authority the agent

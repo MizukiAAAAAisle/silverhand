@@ -311,8 +311,9 @@ export class TaskService {
     // and the human route takes from its explicit selector. C″ deliberately
     // permits established cross-stream task create, so it need not equal a
     // ConversationSlot actor's coordinate. The
-    // membership floor below (agent :getAgent / human :userCanAccessConversation,
-    // both against the destination) is the authorization boundary; the route has
+    // membership floor below (agent :isAgentParticipant / human
+    // :userCanAccessConversation, both against the destination) is the
+    // authorization boundary; the route has
     // already run a create-specific narrow check against the destination.
     const conversation = this.conversations.get(input.conversationId);
     if (!conversation) return { error: 'conversation_not_found' };
@@ -328,7 +329,7 @@ export class TaskService {
         return { error: 'agent_not_found' };
       }
       // Placement-aware participation (P0-f): a DirectPair endpoint has no
-      // roster row, so the roster-shaped getAgent would wrongly refuse the
+      // roster row, so a roster-row lookup would wrongly refuse the
       // pair's own endpoints — the canonical port carries all arms.
       if (!this.conversations.isAgentParticipant(input.conversationId, input.actor.agentId)) {
         return { error: 'not_conversation_member' };
@@ -552,7 +553,7 @@ export class TaskService {
     const accessible =
       actor.kind === 'agent'
         ? // Placement-aware participation (review B3): a DirectPair endpoint
-          // has no roster row, so the roster-shaped getAgent would refuse a
+          // has no roster row, so a roster-row lookup would refuse a
           // DM's own message as a task source.
           this.conversations.isAgentParticipant(src.conversation_id, actor.agentId)
         : this.conversations.userCanAccessConversation(actor.userId, src.conversation_id);
@@ -815,7 +816,16 @@ export class TaskService {
           taskNumber: row.task_number,
         }) };
       }
-      if (!tx.conversationAccess.getAgent(row.conversation_id, assignee.agentId)) {
+      // #task:2037 write gate — the ASSIGNEE-membership check must ask placement
+      // participation, NOT the roster. A `conversation_agents` row lookup
+      // finds nothing for a workspace-less human↔agent DirectPair, which has no
+      // roster row (its typed endpoints ARE the participants), so a human endpoint
+      // dispatching to the pair's own agent would fail `assignee_not_conversation_member`.
+      // This is the same authority the read faces and `claimTaskAgent`
+      // already use: `isAgentParticipant` (roster ∪ agent_inbox ∪ direct_pair arc)
+      // coincides with the roster row on the workspace arm, so channel behavior is
+      // unchanged, and a non-participant agent is still refused here.
+      if (!tx.conversationAccess.isAgentParticipant(row.conversation_id, assignee.agentId)) {
         return { failure: failClaim({
           code: 'assignee_not_conversation_member',
           reason: "agent is not a member of this task's conversation",

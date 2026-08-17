@@ -45,8 +45,8 @@ export class TaskAccessControl {
     if (!this.agents.get(actor.agentId)) {
       return failClaim({ code: 'agent_not_found', reason: 'agent not found' });
     }
-    // Placement-aware participation (the canonical port, NOT the roster-shaped
-    // getAgent): identical for workspace placements, and the agent's own inbox
+    // Placement-aware participation (the canonical port, NOT a roster-row
+    // lookup): identical for workspace placements, and the agent's own inbox
     // frame — which deliberately has no roster row — is a legal frame.
     if (
       actor.runtimeScope === 'conversation'

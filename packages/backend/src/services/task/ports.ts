@@ -13,7 +13,6 @@
  *  - the conversation access is a named narrow port, never a concrete repo.
  */
 import type {
-  ConversationAgentDto,
   ConversationDto,
   MessageDto,
   TaskAssigneeDto,
@@ -165,19 +164,18 @@ export interface TaskBoardReadModelPort {
 
 /** Named narrow conversation face the task domain needs — deliberately NOT the
  *  whole ConversationRepo. `userCanAccessConversation` is the human per-task
- *  ACL; agent membership uses `getAgent`; the broadcaster's post-commit fanout
- *  uses `listParticipantAgentIds` (runtime wake) / `listParticipantUserIds`
+ *  ACL; agent membership uses `isAgentParticipant`; the broadcaster's post-commit
+ *  fanout uses `listParticipantAgentIds` (runtime wake) / `listParticipantUserIds`
  *  (viewer board frames). `isAgentParticipant` / `userCanAccessConversation`
  *  are BOTH the placement-aware participation authority (§4.2: roster edge OR
  *  direct_pair endpoint OR own inbox placement) — the per-task ACL (§4.4: ACL
- *  derives from the task's own conversation, never its board) reads THESE, not
- *  the roster-shaped `getAgent` or a bare `conversation_users` seat. The fanout
- *  faces are the same authority in set form, so a DirectPair's endpoints — which
- *  a roster read (`listUsers`/`listAgents`) returns as the empty set — receive
- *  their own board's `task_changed`. */
+ *  derives from the task's own conversation, never its board) reads THESE, never
+ *  a roster-shaped seat lookup. The fanout faces are the same authority in set
+ *  form, so a DirectPair's endpoints — which a roster read
+ *  (`listUsers`/`listAgents`) returns as the empty set — receive their own
+ *  board's `task_changed`. */
 export interface TaskConversationAccessPort {
   get(conversationId: string): ConversationDto | null;
-  getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
   isAgentParticipant(conversationId: string, agentId: string): boolean;
   userCanAccessConversation(userId: string, conversationId: string): boolean;
   listParticipantAgentIds(conversationId: string): string[];

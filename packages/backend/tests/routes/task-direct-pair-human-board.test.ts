@@ -412,4 +412,121 @@ describe('#task:2037 — human↔agent DirectPair task on the human read faces',
     expect((await counts(t, t.viewerUserId, { container: 'workspace' })).todo).toBe(1);
     expect((await counts(t, t.viewerUserId)).todo).toBe(2);
   });
+
+  // #task:2037 WRITE gate — the human read faces above see the agent-filed pair
+  // task, but the dogfood's last gap was the human SUBMITTING a claim/reassign on
+  // it. `claimTaskUser`'s assignee-membership check asked a `conversation_agents`
+  // row lookup, which is empty for a rosterless pair, so the DM's own human
+  // endpoint could not dispatch the pair task to the pair's own agent. The check
+  // now reads placement participation. Four cells (@Cindy's review):
+  //   1. the DM endpoint dispatches the pair task to the pair's agent (200);
+  //   2. a stranger cannot write, byte-identical to an unknown id (no oracle);
+  //   3. a non-participant agent still cannot be assigned (floor NOT widened);
+  //   4. the workspace roster arm — where participation coincides with the
+  //      roster row — is unchanged.
+  it('a DM endpoint dispatches its pair task to the pair agent; a stranger cannot; a non-participant agent cannot be assigned', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const conversations = new ConversationRepo(t.ctx.db);
+
+    const agentId = await makeAgent(t, 'dm-write-agent', 'agent');
+    const pair = conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: agentId },
+      { kind: 'human', id: ENDPOINT_ID },
+      Date.now(),
+    ).conversation;
+    // The rosterless surface, stated through the very shape the write gate used:
+    // the pair's own agent is NOT a `conversation_agents` row, so the old
+    // roster-shaped assignee check refused it.
+    expect(conversations.getAgent(pair.id, agentId)).toBeNull();
+
+    // The endpoint files a task on its own pair (the human create arm already
+    // resolves through placement participation), then dispatches it to the pair's
+    // agent — the exact dogfood action the write gate blocked.
+    const created = (await (
+      await http(t, asUser(ENDPOINT_ID)).post('/api/tasks', {
+        conversation_id: pair.id,
+        title: 'reassign me',
+      })
+    ).json()) as any;
+    expect(created.task?.id, JSON.stringify(created)).toBeTruthy();
+    const taskId: string = created.task.id;
+
+    // CELL 1 — the endpoint dispatches to the pair agent. Placement participation
+    // (the direct_pair arc) authorizes the assignee; handing a `todo` task to an
+    // agent starts it, so the read-back is in_progress assigned to the agent.
+    const claim = await http(t, asUser(ENDPOINT_ID)).post(`/api/tasks/${taskId}/claim`, {
+      agent_id: agentId,
+    });
+    const claimBody = (await claim.json()) as any;
+    expect(claim.status, JSON.stringify(claimBody)).toBe(200);
+    expect(claimBody.success).toBe(true);
+
+    const afterClaim = (await (
+      await http(t, asUser(ENDPOINT_ID)).get(`/api/tasks/${taskId}`)
+    ).json()) as any;
+    expect(afterClaim.task.assignee).toMatchObject({ type: 'agent', id: agentId });
+    expect(afterClaim.task.status).toBe('in_progress');
+
+    // CELL 3 — the floor is NOT widened. The endpoint (a legitimate writer) tries
+    // to reassign to an agent that is not a participant of the pair; the SAME
+    // check that now admits the pair's own agent still refuses a stranger agent.
+    const strangerAgentId = await makeAgent(t, 'not-on-the-pair', 'agent');
+    const badAssign = await http(t, asUser(ENDPOINT_ID)).post(`/api/tasks/${taskId}/claim`, {
+      agent_id: strangerAgentId,
+    });
+    expect(badAssign.status).toBe(409);
+    expect(await badAssign.json()).toMatchObject({
+      success: false,
+      code: 'assignee_not_conversation_member',
+    });
+
+    // CELL 2 — a stranger human cannot write, and cannot even tell the task
+    // exists: the per-task ACL rejects before the assignee check, byte-identical
+    // to claiming an unallocated id.
+    const strangerClaim = await http(t, asUser(STRANGER_ID)).post(`/api/tasks/${taskId}/claim`, {
+      agent_id: agentId,
+    });
+    const strangerUnknown = await http(t, asUser(STRANGER_ID)).post(
+      '/api/tasks/zzzzzzzzzzzzzzzz/claim',
+      { agent_id: agentId },
+    );
+    expect(strangerClaim.status).toBe(409);
+    expect(strangerUnknown.status).toBe(409);
+    expect(await strangerClaim.text()).toBe(await strangerUnknown.text());
+  });
+
+  it('the workspace roster arm is unchanged: an owner dispatches a channel task to a seated agent', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const conversations = new ConversationRepo(t.ctx.db);
+
+    // A regular workspace owned by the default viewer (creation seats the owner as
+    // the v25 pair), with an agent seated into its channel roster — the arm where
+    // placement participation coincides with the `conversation_agents` row the old
+    // check read, so the swap must leave it byte-for-byte the same.
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'roster-ws' })
+    ).json()) as any;
+    const wsChannel: string = ws.onboarding_channel_id;
+    const agentId = await makeAgent(t, 'seated-agent');
+    conversations.addAgent(wsChannel, agentId);
+    // Roster row EXISTS here — the contrast with the rosterless pair above.
+    expect(conversations.getAgent(wsChannel, agentId)).not.toBeNull();
+
+    const created = (await (
+      await http(t).post('/api/tasks', { conversation_id: wsChannel, title: 'channel task' })
+    ).json()) as any;
+    expect(created.task?.id, JSON.stringify(created)).toBeTruthy();
+    const taskId: string = created.task.id;
+
+    const claim = await http(t).post(`/api/tasks/${taskId}/claim`, { agent_id: agentId });
+    const claimBody = (await claim.json()) as any;
+    expect(claim.status, JSON.stringify(claimBody)).toBe(200);
+    expect(claimBody.success).toBe(true);
+
+    const afterClaim = (await (
+      await http(t).get(`/api/tasks/${taskId}`)
+    ).json()) as any;
+    expect(afterClaim.task.assignee).toMatchObject({ type: 'agent', id: agentId });
+    expect(afterClaim.task.status).toBe('in_progress');
+  });
 });

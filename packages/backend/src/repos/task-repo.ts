@@ -364,7 +364,7 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
    *  member of that conversation; user = member row). */
   private viewerCanAccessConversation(actor: TaskActor, conversationId: string): boolean {
     if (actor.kind === 'agent') {
-      // Placement-aware participation (review B3): the roster-shaped getAgent
+      // Placement-aware participation (review B3): a roster-row lookup
       // has no row for a DirectPair endpoint, which would degrade every
       // source/created-event nav on a pair task to 'unavailable'.
       return this.conversations.isAgentParticipant(conversationId, actor.agentId);
