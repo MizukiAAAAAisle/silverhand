@@ -24,6 +24,7 @@ import {
 } from '@/features/tasks/hooks';
 import type { TaskDetailFailure } from '@/features/tasks/taskDetail';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
+import { useDirectPairPane } from '@/features/direct-pairs/hooks';
 import { cn } from '@/lib/cn';
 
 /**
@@ -201,6 +202,7 @@ export function useTaskMetaRows({
           {canAssign && !busy ? (
             <AssigneePicker
               conversationId={view.channel_id}
+              placement={view.board.kind}
               currentAgentId={
                 view.assignee?.type === 'agent' ? view.assignee.id : null
               }
@@ -244,18 +246,25 @@ export function useTaskMetaRows({
         </span>
       ),
     },
-    {
-      key: 'channel',
-      label: 'Channel',
-      value: (
-        <span className="flex min-w-0 items-center gap-1.5">
-          <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
-          <span className="truncate" title={taskChannelLabel(view)}>
-            {taskChannelLabel(view)}
-          </span>
-        </span>
-      ),
-    },
+    // Only a workspace placement has a channel coordinate. A DirectPair task's
+    // "channel" is the pair itself — there is nothing to name — so the row is
+    // omitted rather than shown with a stand-in label (shiki dogfood, #2041).
+    ...(view.board.kind === 'workspace'
+      ? [
+          {
+            key: 'channel',
+            label: 'Channel',
+            value: (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
+                <span className="truncate" title={taskChannelLabel(view)}>
+                  {taskChannelLabel(view)}
+                </span>
+              </span>
+            ),
+          } satisfies TaskMetaRowSpec,
+        ]
+      : []),
     {
       key: 'created',
       label: 'Created',
@@ -343,20 +352,29 @@ function AssigneeValue({
 // ── Assignee picker ────────────────────────────────────────────────
 
 /**
- * Assign / re-assign to an agent of this task's conversation. Candidates are
- * the conversation's AGENT members — the same set `/claim` validates against —
- * so no row here is one the server would refuse. Humans can hold an assignee
- * and are displayed, but the write path only takes `agent_id`, so they are
- * never offered. Clearing is the inline ✕ beside the value, not a row here.
+ * Assign / re-assign to an agent of this task's PLACEMENT. The candidate source
+ * is placement-specific so no row here is one the server would refuse:
+ *   - workspace   → the conversation's AGENT members (the set `/claim` validates
+ *                   against), from `useConversationMembers`;
+ *   - direct_pair → the pair's counterpart agent, from the pair-participation
+ *                   carrier (`useDirectPairsList()`). A DirectPair has no roster,
+ *                   so `/members` there answers empty; the pair list is the
+ *                   authority (@Cindy, #task:2041 / #task:2037).
+ *
+ * Humans can hold an assignee and are displayed, but the write path only takes
+ * `agent_id`, so they are never offered. Clearing is the inline ✕ beside the
+ * value, not a row here.
  */
 function AssigneePicker({
   conversationId,
+  placement,
   currentAgentId,
   directory,
   onPick,
   children,
 }: {
   conversationId: string;
+  placement: 'workspace' | 'direct_pair';
   currentAgentId: string | null;
   directory: PersonDirectory;
   /** Candidates only — `null` (clearing) belongs to the inline ✕. */
@@ -364,6 +382,10 @@ function AssigneePicker({
   children: ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const handlePick = (agentId: string) => {
+    setOpen(false);
+    onPick(agentId);
+  };
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
@@ -391,44 +413,52 @@ function AssigneePicker({
           className="z-[var(--z-popover-nested)] min-w-[180px] max-w-[240px] bg-bg-floating p-1 shadow-popover outline-none"
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
-          <PickerBody
-            conversationId={conversationId}
-            currentAgentId={currentAgentId}
-            directory={directory}
-            onPick={(agentId) => {
-              setOpen(false);
-              onPick(agentId);
-            }}
-          />
+          {placement === 'direct_pair' ? (
+            <DirectPairPickerBody
+              conversationId={conversationId}
+              currentAgentId={currentAgentId}
+              directory={directory}
+              onPick={handlePick}
+            />
+          ) : (
+            <WorkspacePickerBody
+              conversationId={conversationId}
+              currentAgentId={currentAgentId}
+              directory={directory}
+              onPick={handlePick}
+            />
+          )}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
   );
 }
 
-/** Split out so the roster query only mounts once Radix opens the popover
- *  (Content isn't rendered while closed) — a closed picker issues no request. */
-function PickerBody({
-  conversationId,
-  currentAgentId,
+/** One assignable agent — the shape both placement sources project into, so the
+ *  list markup (avatar + `@handle`) is written once. */
+interface AssigneeCandidate {
+  id: string;
+  /** The `@`-handle shown on the row. */
+  name: string;
+  /** The display name on the avatar. */
+  displayName: string;
+}
+
+/** The picker's list, shared by both placement bodies so the row markup and the
+ *  empty/loading copy live in one place. `placeholder` is what shows when there
+ *  are no candidates — the caller distinguishes loading / load-failed / genuinely
+ *  empty, so a cold or failed read is never rendered as "nobody to assign". */
+function CandidateList({
+  candidates,
+  placeholder,
   directory,
   onPick,
 }: {
-  conversationId: string;
-  currentAgentId: string | null;
+  candidates: readonly AssigneeCandidate[];
+  placeholder: string;
   directory: PersonDirectory;
   onPick: (agentId: string) => void;
 }): JSX.Element {
-  const roster = useConversationMembers(conversationId);
-  const candidates = useMemo(() => {
-    if (roster.status !== 'resolved') return [];
-    return roster.members.flatMap((m) =>
-      m.kind === 'agent' && m.agent_id !== currentAgentId
-        ? [{ id: m.agent_id, name: m.name, displayName: m.display_name || m.name }]
-        : [],
-    );
-  }, [roster, currentAgentId]);
-
   return (
     <div className="flex flex-col gap-1">
       <p className="chrome-label px-2 pt-1 text-[length:var(--text-badge)] font-medium text-text-muted">
@@ -436,7 +466,7 @@ function PickerBody({
       </p>
       {candidates.length === 0 ? (
         <p className="px-2 py-1.5 text-[length:var(--text-meta)] italic text-text-muted">
-          {roster.status === 'loading' ? 'Loading…' : 'No other agents here.'}
+          {placeholder}
         </p>
       ) : (
         candidates.map((c) => (
@@ -452,7 +482,7 @@ function PickerBody({
               {...directory}
             />
             {/* Handle-pick surface: this is the one task place that shows a
-                genuine `@`-handle (`c.name` = roster handle, distinct from the
+                genuine `@`-handle (`c.name` = handle, distinct from the
                 `c.displayName` on the avatar) — you're choosing who to assign,
                 the same moment as typing a mention. Every DISPLAY of an
                 assignee/creator (rows above, board cards, filter, TaskRef
@@ -465,6 +495,83 @@ function PickerBody({
         ))
       )}
     </div>
+  );
+}
+
+/** Workspace placement: candidates are the conversation's other AGENT members.
+ *  Split into its own component so `useConversationMembers` (and its `/members`
+ *  read) only mounts once Radix opens the popover AND only for a workspace task —
+ *  a DirectPair never fires it. */
+function WorkspacePickerBody({
+  conversationId,
+  currentAgentId,
+  directory,
+  onPick,
+}: {
+  conversationId: string;
+  currentAgentId: string | null;
+  directory: PersonDirectory;
+  onPick: (agentId: string) => void;
+}): JSX.Element {
+  const roster = useConversationMembers(conversationId);
+  const candidates = useMemo<AssigneeCandidate[]>(() => {
+    if (roster.status !== 'resolved') return [];
+    return roster.members.flatMap((m) =>
+      m.kind === 'agent' && m.agent_id !== currentAgentId
+        ? [{ id: m.agent_id, name: m.name, displayName: m.display_name || m.name }]
+        : [],
+    );
+  }, [roster, currentAgentId]);
+  return (
+    <CandidateList
+      candidates={candidates}
+      placeholder={roster.status === 'loading' ? 'Loading…' : 'No other agents here.'}
+      directory={directory}
+      onPick={onPick}
+    />
+  );
+}
+
+/** DirectPair placement: the sole candidate is the pair's counterpart agent,
+ *  read from the pair-participation carrier — a DirectPair has no roster
+ *  (@Cindy, #task:2041). `useDirectPairPane` carries the readiness precedence
+ *  (`ready > resolving > error > absent`, and retained rows are not an answer):
+ *  a cold or failed read is surfaced as loading / load-failed, NEVER folded into
+ *  an authoritative "no candidate". A human or `deleted` counterpart, or the
+ *  agent already holding the task, yields no candidate — but the row's historical
+ *  assignee still displays from the task DTO, independent of this set. */
+function DirectPairPickerBody({
+  conversationId,
+  currentAgentId,
+  directory,
+  onPick,
+}: {
+  conversationId: string;
+  currentAgentId: string | null;
+  directory: PersonDirectory;
+  onPick: (agentId: string) => void;
+}): JSX.Element {
+  const paneState = useDirectPairPane(conversationId);
+  const candidates = useMemo<AssigneeCandidate[]>(() => {
+    if (paneState.kind !== 'ready') return [];
+    const cp = paneState.pair.counterpart;
+    return cp.status === 'active' && cp.kind === 'agent' && cp.id !== currentAgentId
+      ? [{ id: cp.id, name: cp.name, displayName: cp.display_name || cp.name }]
+      : [];
+  }, [paneState, currentAgentId]);
+  const placeholder =
+    paneState.kind === 'resolving'
+      ? 'Loading…'
+      : paneState.kind === 'error'
+        ? 'Couldn’t load.'
+        : 'No agent to assign.';
+  return (
+    <CandidateList
+      candidates={candidates}
+      placeholder={placeholder}
+      directory={directory}
+      onPick={onPick}
+    />
   );
 }
 

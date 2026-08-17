@@ -19,7 +19,6 @@ import {
   Search,
   User,
 } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { ChannelIcon } from '@/components/ChannelIcon';
@@ -28,8 +27,6 @@ import {
   usePersonDirectory,
   type PersonDirectory,
 } from '@/components/tasks/PersonAvatar';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useDirectPairsList } from '@/features/direct-pairs/hooks';
 import {
   projectDirectPairFilterLeaf,
@@ -44,14 +41,13 @@ import {
   type BoardFacets,
 } from '@/features/tasks/boardAuthority';
 import {
-  applyContainerSwitch,
+  applyBoardScopeSelection,
   applyWorkspaceCascade,
-  channelGroupContainer,
-  containerScope,
+  channelAxisScope,
   personFilterKey,
   taskFiltersEqual,
   workspaceKindContainer,
-  type ContainerMembership,
+  type BoardScopeSelection,
   type PersonFilter,
   type PersonOption,
   type PersonRef,
@@ -288,40 +284,17 @@ export function TaskFilterBar({
   }, [directPairLeaf.staleSelection, filters, onChange]);
 
 
-  // The four-state container axis, resolved through the ONE pure model
-  // (#task:2041): `containerScope` decides which secondary controls describe the
-  // current container and over which option population; `applyContainerSwitch`
-  // drops a workspace/channel coordinate the new container cannot hold.
+  // The channel axis under the current container, resolved through the pure
+  // model (#task:2041): `channelAxisScope` decides whether the channel picker
+  // shows (hidden under DM, where the pair conversation is the coordinate) and
+  // over which channel population. The board scope itself (container + coordinate
+  // together) is applied by `applyBoardScopeSelection` at BoardScopeFilter's
+  // onSelect; the workspace / direct-line objects are listed by that dropdown
+  // directly, not by this model.
   const scope = useMemo(
-    () =>
-      containerScope(filters.container, {
-        workspaceOptions,
-        channelOptions,
-        directPairOptions,
-      }),
-    [filters.container, workspaceOptions, channelOptions, directPairOptions],
+    () => channelAxisScope(filters.container, channelOptions),
+    [filters.container, channelOptions],
   );
-  // Membership resolver for the transition — maps a selected coordinate to its
-  // container using the SAME tags the option domain reads (workspace `kind`,
-  // channel `group`, or a viewer DirectPair id). Built from the full option sets,
-  // not the scoped ones, so it can still classify the coordinate we are switching
-  // AWAY from.
-  const membership = useMemo<ContainerMembership>(() => {
-    const wsKind = new Map(workspaceOptions.map(o => [o.id, o.kind]));
-    const chGroup = new Map(channelOptions.map(o => [o.id, o.group]));
-    const pairIds = new Set(directPairOptions.map(o => o.id));
-    return {
-      workspaceContainer: id => {
-        const kind = wsKind.get(id);
-        return kind ? workspaceKindContainer(kind) : null;
-      },
-      channelContainer: id => {
-        const group = chGroup.get(id);
-        if (group) return channelGroupContainer(group);
-        return pairIds.has(id) ? 'direct_messages' : null;
-      },
-    };
-  }, [workspaceOptions, channelOptions, directPairOptions]);
 
   // Cascade (#task:1387): the channel filter shows only channels of the
   // selected workspace; at "All workspaces" it shows the container-scoped set.
@@ -344,51 +317,38 @@ export function TaskFilterBar({
       data-task-filter-bar
       className={cn('flex flex-wrap items-center gap-1.5', className)}
     >
-      {/* Coarsest axis first: WHICH KIND of container a task lives in. It leads
-          the row because it reshapes what the downstream menus even describe
-          (the facet population is scoped to it), and because All → a specific
-          container reads left-to-right as narrowing. Always rendered — All is
-          always a valid answer, so unlike the workspace/channel controls this
-          one never has to hide (#task:2041). Switching it runs the pure
-          transition so a stranded workspace/channel coordinate is cleared. */}
-      <ContainerFilter
-        value={filters.container}
-        onChange={container =>
-          onChange(applyContainerSwitch(filters, container, membership))
+      {/* Coarsest axis first: WHICH container a task lives in. One grouped
+          dropdown (#task:2041, shiki 2026-08-17) — an "All" row over three
+          sections (Workspaces / Agent Spaces / Direct Messages), each listing
+          the concrete objects — so a pick names the container KIND and the
+          object together instead of the old pick-kind-then-object two-step. It
+          leads the row because it reshapes what the downstream channel menu even
+          describes, and reads left-to-right as narrowing. Every pick runs the
+          pure transition, so a stranded workspace/channel coordinate is
+          cleared. */}
+      <BoardScopeFilter
+        workspaceOptions={workspaceOptions}
+        directPairOptions={directPairOptions}
+        directPairStatus={directPairLeaf.status}
+        containerValue={filters.container}
+        workspaceValue={filters.workspaceId}
+        directPairValue={directPairSelected}
+        onSelect={selection =>
+          onChange(applyBoardScopeSelection(filters, selection, channelWorkspaceId))
         }
+        {...personDirectory}
       />
-      {scope.showWorkspace && scope.workspaceOptions.length > 0 ? (
-        <WorkspaceFilter
-          options={scope.workspaceOptions}
-          value={filters.workspaceId}
-          onChange={workspaceId =>
-            onChange(applyWorkspaceCascade(filters, workspaceId, channelWorkspaceId))
-          }
-        />
-      ) : null}
-      {/* Same rule as the workspace control above, for the same reason: with no
-          option to pick, the trigger can only report "ALL" — which is a false
+      {/* Channel stays the within-workspace secondary axis. Same rule as before:
+          with no option to pick, the trigger can only report "ALL" — a false
           statement whenever the board IS narrowed on a conversation the option
-          set doesn't contain. */}
-      {scope.showChannel && visibleChannelOptions.length > 0 ? (
+          set doesn't contain — so it hides rather than lie. Hidden under the DM
+          scope, where a pair conversation (not a channel) is the coordinate. */}
+      {scope.show && visibleChannelOptions.length > 0 ? (
         <ChannelFilter
           options={visibleChannelOptions}
           allChannelsLabel={allChannelsLabel}
           value={filters.channelId}
           onChange={channelId => onChange({ ...filters, channelId })}
-        />
-      ) : null}
-      {/* DM container: the 对端 leaf REPLACES the workspace/channel controls
-          (both hidden above by the scope). It writes `channelId` = the pair
-          conversation id — the existing `channel_id` wire param — so no
-          pseudo-workspace coordinate is minted for a placement that has none. */}
-      {scope.showDirectPair ? (
-        <DirectPairFilter
-          options={scope.directPairOptions}
-          status={directPairLeaf.status}
-          value={filters.channelId}
-          onChange={channelId => onChange({ ...filters, channelId })}
-          {...personDirectory}
         />
       ) : null}
       <PersonFilterControl
@@ -814,306 +774,184 @@ function ChannelFilter({
   );
 }
 
-// ── Direct pair (DM 对端 leaf) ──────────────────────────────────────
+// ── Board scope (container × concrete object) ─────────────────────
+
+/** One selectable row in the board-scope dropdown — either a workspace (its
+ *  pick stamps the container matching its `kind`) or a viewer direct line (→
+ *  `direct_messages`). The discriminant carries the source option so the row can
+ *  paint the right identity (workspace icon vs. counterpart avatar) and build its
+ *  own `BoardScopeSelection`. */
+type ScopeRow =
+  | { id: string; label: string; render: 'workspace'; ws: WorkspaceOption }
+  | { id: string; label: string; render: 'pair'; pair: DirectPairOption };
 
 /**
- * The Direct Messages leaf — shown ONLY under the `direct_messages` container,
- * where it replaces the workspace + channel controls (#task:2041). Picking a
- * counterpart writes `filters.channelId` = that pair's conversation id (the
- * existing `channel_id` wire param), so a DM narrows on the same axis a single
- * direct line IS on the read, with no invented workspace coordinate. Each row
- * wears the counterpart's own avatar (the shared `PersonAvatar`, resolved from
- * the directory the person menus already loaded) so a line reads as the person,
- * exactly like the DM list and the assignee menus.
+ * The board-scope filter — the coarsest axis, as ONE grouped dropdown
+ * (#task:2041, shiki 2026-08-17). An "All" row (the union of every container the
+ * viewer can see) sits above three sections that list the CONCRETE objects the
+ * viewer can narrow to: Workspaces (regular), Agent Spaces (agent homes), and
+ * Direct Messages (the viewer's direct lines). Picking a leaf names the container
+ * KIND and the object together — `applyBoardScopeSelection` stamps both — so the
+ * old pick-container-then-object two-step is gone, and with it the bare
+ * "all agent spaces" / "all DMs" picks (a container KIND with no object): the
+ * "All" row covers the union, and every listed row is a concrete scope. A
+ * workspace row wears its own icon (a DM workspace = its agent's avatar); a direct
+ * line wears the counterpart's avatar, resolved from the directory the person
+ * menus already loaded (no extra fetch — the DM leaf's own `useAgents` is gone).
+ * The Direct Messages section reports a cold / failed read as its own note
+ * instead of vanishing — an empty list would read as "no direct lines", a
+ * different (false) claim than "still loading" (#task:2041 B2).
  */
-function DirectPairFilter({
-  options,
-  status,
-  value,
-  onChange,
+function BoardScopeFilter({
+  workspaceOptions,
+  directPairOptions,
+  directPairStatus,
+  containerValue,
+  workspaceValue,
+  directPairValue,
+  onSelect,
   agentsById,
   agentAvatarUrls,
   userAvatarUrls,
 }: {
-  options: DirectPairOption[];
-  /** The list read's state — separates a cold/failed read from an answered
-   *  empty set, so the panel says which non-answer it is instead of an empty
-   *  list reading as "no direct lines" (#task:2041 B2). */
-  status: DirectPairFilterLeafStatus;
-  value: string | null;
-  onChange: (id: string | null) => void;
+  workspaceOptions: WorkspaceOption[];
+  directPairOptions: DirectPairOption[];
+  /** The DM list read's state, so a cold/failed read shows a note instead of an
+   *  empty Direct Messages section reading as "no direct lines" (#task:2041). */
+  directPairStatus: DirectPairFilterLeafStatus;
+  containerValue: TaskBoardContainerAxis | null;
+  workspaceValue: string | null;
+  directPairValue: string | null;
+  onSelect: (selection: BoardScopeSelection) => void;
 } & PersonDirectory): JSX.Element {
   const [open, setOpen] = useState(false);
-  const selected = value ? options.find(o => o.id === value) ?? null : null;
-  const listId = useId();
-  const optionId = (index: number): string => `${listId}-opt-${index}`;
-  const roving = useRovingList({
-    count: options.length + 1,
-    open,
-    onSelect: index => {
-      if (index === 0) onChange(null);
-      else {
-        const o = options[index - 1];
-        if (o) onChange(o.id);
-      }
-      setOpen(false);
-    },
-  });
 
-  return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <FilterTrigger
-          icon={<MessageSquare className="size-3.5" />}
-          active={value !== null}
-          aria-label="Direct line"
-        >
-          {selected?.label ?? 'ALL'}
-        </FilterTrigger>
-      </Popover.Trigger>
-      <FilterPanel
-        id={listId}
-        activeDescendant={optionId(roving.activeIndex)}
-        onKeyDown={roving.onKeyDown}
-      >
-        <OptionRow
-          selected={value === null}
-          neutral
-          active={roving.activeIndex === 0}
-          id={optionId(0)}
-          optionRef={el => roving.registerItem(0, el)}
-          onHover={() => roving.setActiveIndex(0)}
-          onSelect={() => {
-            onChange(null);
-            setOpen(false);
-          }}
-        >
-          ALL
-        </OptionRow>
-        {options.map((o, i) => {
-          const index = i + 1;
-          return (
-            <OptionRow
-              key={o.id}
-              selected={value === o.id}
-              active={roving.activeIndex === index}
-              id={optionId(index)}
-              optionRef={el => roving.registerItem(index, el)}
-              onHover={() => roving.setActiveIndex(index)}
-              onSelect={() => {
-                onChange(o.id);
-                setOpen(false);
-              }}
-            >
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className="shrink-0">
-                  {o.person ? (
-                    <PersonAvatar
-                      person={o.person}
-                      name={o.label}
-                      agentsById={agentsById}
-                      agentAvatarUrls={agentAvatarUrls}
-                      userAvatarUrls={userAvatarUrls}
-                    />
-                  ) : (
-                    <span className="text-text-muted">
-                      <User className="size-3.5" />
-                    </span>
-                  )}
-                </span>
-                <span className="truncate">{o.label}</span>
-              </span>
-            </OptionRow>
-          );
-        })}
-        {status === 'ready' ? null : (
-          <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
-            {status === 'loading'
-              ? 'Loading…'
-              : status === 'failed'
-                ? 'Couldn’t load direct lines'
-                : 'No direct lines yet'}
-          </p>
-        )}
-      </FilterPanel>
-    </Popover.Root>
-  );
-}
+  // The three sections, each over its concrete objects. A workspace row carries
+  // its `kind` so the pick can stamp the matching container; a pair row carries
+  // its DirectPairOption for the avatar. Only the Direct Messages section can
+  // show a note (a non-answer); the workspace sections just hide when empty.
+  const groups = useMemo(() => {
+    const dmNote =
+      directPairStatus === 'loading'
+        ? 'Loading…'
+        : directPairStatus === 'failed'
+          ? 'Couldn’t load direct lines'
+          : null;
+    const defs: ReadonlyArray<{
+      key: string;
+      label: string;
+      note: string | null;
+      rows: ScopeRow[];
+    }> = [
+      {
+        key: 'workspaces',
+        label: 'Workspaces',
+        note: null,
+        rows: workspaceOptions
+          .filter(o => o.kind === 'regular')
+          .map(ws => ({ id: ws.id, label: ws.label, render: 'workspace', ws })),
+      },
+      {
+        key: 'agent-spaces',
+        label: 'Agent Spaces',
+        note: null,
+        rows: workspaceOptions
+          .filter(o => o.kind === 'dm')
+          .map(ws => ({ id: ws.id, label: ws.label, render: 'workspace', ws })),
+      },
+      {
+        key: 'direct-messages',
+        label: 'Direct Messages',
+        note: dmNote,
+        rows: directPairOptions.map(pair => ({
+          id: pair.id,
+          label: pair.label,
+          render: 'pair',
+          pair,
+        })),
+      },
+    ];
+    // Show a section iff it has objects OR a note to report — an answered-empty
+    // section (no rows, no note) is simply absent, like an empty workspace group.
+    return defs.filter(g => g.rows.length > 0 || g.note !== null);
+  }, [workspaceOptions, directPairOptions, directPairStatus]);
 
-// ── Container (top-level board axis) ───────────────────────────────
-
-/** The four container-axis rows, in narrowing order. `null` is the ALL default
- *  (the neutral row — no lime fill, matching the other "no filter" rows). The
- *  labels are the product vocabulary shiki + Cindy fixed for the tab
- *  (#task:2041 / #task:2044): "Agent Space" reads the agent's own home, and
- *  "Direct Messages" the viewer's pairs. */
-const CONTAINER_OPTIONS: ReadonlyArray<{
-  value: TaskBoardContainerAxis | null;
-  label: string;
-}> = [
-  { value: null, label: 'All' },
-  { value: 'workspace', label: 'Workspace' },
-  { value: 'agent_space', label: 'Agent Space' },
-  { value: 'direct_messages', label: 'Direct Messages' },
-];
-
-function ContainerFilter({
-  value,
-  onChange,
-}: {
-  value: TaskBoardContainerAxis | null;
-  onChange: (next: TaskBoardContainerAxis | null) => void;
-}): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const selectedLabel =
-    CONTAINER_OPTIONS.find(o => o.value === value)?.label ?? 'All';
-  const listId = useId();
-  const optionId = (index: number): string => `${listId}-opt-${index}`;
-  const roving = useRovingList({
-    count: CONTAINER_OPTIONS.length,
-    open,
-    onSelect: index => {
-      const o = CONTAINER_OPTIONS[index];
-      if (o) onChange(o.value);
-      setOpen(false);
-    },
-  });
-
-  return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <FilterTrigger
-          icon={<Layers className="size-3.5" />}
-          // Active = a container is chosen (not All): the lime chip signals the
-          // board is narrowed to one container, same vocabulary as the other
-          // filter triggers.
-          active={value !== null}
-          aria-label="Container"
-        >
-          {selectedLabel}
-        </FilterTrigger>
-      </Popover.Trigger>
-      <FilterPanel
-        id={listId}
-        activeDescendant={optionId(roving.activeIndex)}
-        onKeyDown={roving.onKeyDown}
-      >
-        {CONTAINER_OPTIONS.map((o, index) => (
-          <OptionRow
-            key={o.value ?? 'all'}
-            selected={value === o.value}
-            // The ALL row is the "no filter" default → muted check, no lime,
-            // like the other bars' neutral rows.
-            neutral={o.value === null}
-            active={roving.activeIndex === index}
-            id={optionId(index)}
-            optionRef={el => roving.registerItem(index, el)}
-            onHover={() => roving.setActiveIndex(index)}
-            onSelect={() => {
-              onChange(o.value);
-              setOpen(false);
-            }}
-          >
-            {o.label}
-          </OptionRow>
-        ))}
-      </FilterPanel>
-    </Popover.Root>
-  );
-}
-
-// ── Workspace (upstream cascade axis) ──────────────────────────────
-
-function WorkspaceFilter({
-  options,
-  value,
-  onChange,
-}: {
-  options: WorkspaceOption[];
-  value: string | null;
-  onChange: (id: string | null) => void;
-}): JSX.Element {
-  const [open, setOpen] = useState(false);
-  // Agent context for the DM branch of WorkspaceIcon — a DM workspace reads as
-  // its bound agent's avatar (same as the message-search workspace filter and
-  // the rail, #task:1192). Fetched here in the leaf so neither task surface has
-  // to plumb agent data through.
-  const { data: agents = [] } = useAgents();
-  const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(
-    () => new Map(agents.map(a => [a.id, a])),
-    [agents],
-  );
-  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-
-  // Grouped like the search workspace filter (#task:1387 shiki review):
-  // regular Workspaces first, then Agent Spaces. Both kinds are selectable — the
-  // cascade matches on `task.board.workspace_id`, so an agent space filters
-  // exactly like a regular workspace.
-  const sections = useMemo(
-    () =>
-      [
-        { key: 'regular' as const, label: 'Workspaces' },
-        { key: 'dm' as const, label: 'Agent Spaces' },
-      ]
-        .map(s => ({ ...s, items: options.filter(o => o.kind === s.key) }))
-        .filter(s => s.items.length > 0),
-    [options],
-  );
-  const flatOptions = useMemo(() => sections.flatMap(s => s.items), [sections]);
+  // Flatten for roving focus: index 0 is the All row, then every selectable row
+  // in section order (notes are not selectable, so they take no index).
+  const flatRows = useMemo(() => groups.flatMap(g => g.rows), [groups]);
   const optionIndex = useMemo(() => {
     const m = new Map<string, number>();
-    flatOptions.forEach((o, i) => m.set(o.id, i + 1)); // +1: ALL occupies 0
+    flatRows.forEach((r, i) => m.set(r.id, i + 1)); // +1: All occupies 0
     return m;
-  }, [flatOptions]);
+  }, [flatRows]);
+
+  const selectionFor = (row: ScopeRow): BoardScopeSelection =>
+    row.render === 'workspace'
+      ? {
+          kind: 'workspace',
+          workspaceId: row.ws.id,
+          container: workspaceKindContainer(row.ws.kind),
+        }
+      : { kind: 'direct_pair', conversationId: row.id };
+
+  const isSelected = (row: ScopeRow): boolean =>
+    row.render === 'workspace'
+      ? row.ws.id === workspaceValue
+      : row.id === directPairValue;
 
   const listId = useId();
   const optionId = (index: number): string => `${listId}-opt-${index}`;
   const roving = useRovingList({
-    count: flatOptions.length + 1,
+    count: flatRows.length + 1,
     open,
     onSelect: index => {
-      if (index === 0) onChange(null);
+      if (index === 0) onSelect({ kind: 'all' });
       else {
-        const o = flatOptions[index - 1];
-        if (o) onChange(o.id);
+        const row = flatRows[index - 1];
+        if (row) onSelect(selectionFor(row));
       }
       setOpen(false);
     },
   });
 
-  const selected = value ? flatOptions.find(o => o.id === value) ?? null : null;
-  // `triggerSize` scales the trigger icon down to the shared control-glyph
-  // box (#task:1437); the dropdown rows keep the default 16px so they read at
-  // the same workspace-identity size as the rail.
-  const iconFor = (o: WorkspaceOption, triggerSize?: number): JSX.Element => (
+  // Trigger identity mirrors the selection: a workspace's own icon, a direct
+  // line's MessageSquare, or the generic Layers for All — all sized to the shared
+  // 14px control-glyph box so the trigger never drifts taller than the row
+  // (#task:1437).
+  const selectedWs = flatRows.find(
+    (r): r is Extract<ScopeRow, { render: 'workspace' }> =>
+      r.render === 'workspace' && r.ws.id === workspaceValue,
+  );
+  const selectedPair = flatRows.find(
+    (r): r is Extract<ScopeRow, { render: 'pair' }> =>
+      r.render === 'pair' && r.id === directPairValue,
+  );
+  const triggerIcon = selectedWs ? (
     <WorkspaceIcon
-      kind={o.kind}
-      dmAgentId={o.dmAgentId}
+      kind={selectedWs.ws.kind}
+      dmAgentId={selectedWs.ws.dmAgentId}
       agentsById={agentsById}
       dmAgentAvatarUrls={agentAvatarUrls}
-      {...(triggerSize !== undefined ? { size: triggerSize } : {})}
+      size={TRIGGER_GLYPH_PX}
     />
+  ) : selectedPair ? (
+    <MessageSquare className="size-3.5" />
+  ) : (
+    <Layers className="size-3.5" />
   );
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
         <FilterTrigger
-          // Resting/ALL: the generic workspace glyph (serif "W"); a selection:
-          // that workspace's own icon (avatar for a DM). Both sized to the
-          // shared trigger-glyph box so this trigger matches its siblings'
-          // height (#task:1437).
-          icon={
-            selected ? (
-              iconFor(selected, TRIGGER_GLYPH_PX)
-            ) : (
-              <WorkspaceIcon kind="regular" dmAgentId={null} size={TRIGGER_GLYPH_PX} />
-            )
-          }
-          active={value !== null}
-          aria-label="Workspace"
+          icon={triggerIcon}
+          // Active = a concrete scope is chosen (container ≠ null): the lime chip
+          // signals the board is narrowed, same vocabulary as the sibling
+          // triggers. All is the neutral default.
+          active={containerValue !== null}
+          aria-label="Board scope"
         >
-          {selected?.label ?? 'ALL'}
+          {selectedWs?.label ?? selectedPair?.label ?? 'All'}
         </FilterTrigger>
       </Popover.Trigger>
       <FilterPanel
@@ -1122,46 +960,72 @@ function WorkspaceFilter({
         onKeyDown={roving.onKeyDown}
       >
         <OptionRow
-          selected={value === null}
+          selected={containerValue === null}
           neutral
           active={roving.activeIndex === 0}
           id={optionId(0)}
           optionRef={el => roving.registerItem(0, el)}
           onHover={() => roving.setActiveIndex(0)}
           onSelect={() => {
-            onChange(null);
+            onSelect({ kind: 'all' });
             setOpen(false);
           }}
         >
-          ALL
+          All
         </OptionRow>
-        {sections.map(section => (
-          <div key={section.key}>
+        {groups.map(group => (
+          <div key={group.key}>
             <div className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
-              {section.label}
+              {group.label}
             </div>
-            {section.items.map(o => {
-              const index = optionIndex.get(o.id) ?? -1;
+            {group.rows.map(row => {
+              const index = optionIndex.get(row.id) ?? -1;
               return (
                 <OptionRow
-                  key={o.id}
-                  selected={value === o.id}
+                  key={row.id}
+                  selected={isSelected(row)}
                   active={roving.activeIndex === index}
                   id={optionId(index)}
                   optionRef={el => roving.registerItem(index, el)}
                   onHover={() => roving.setActiveIndex(index)}
                   onSelect={() => {
-                    onChange(o.id);
+                    onSelect(selectionFor(row));
                     setOpen(false);
                   }}
                 >
                   <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="shrink-0">{iconFor(o)}</span>
-                    <span className="truncate">{o.label}</span>
+                    <span className="shrink-0">
+                      {row.render === 'workspace' ? (
+                        <WorkspaceIcon
+                          kind={row.ws.kind}
+                          dmAgentId={row.ws.dmAgentId}
+                          agentsById={agentsById}
+                          dmAgentAvatarUrls={agentAvatarUrls}
+                        />
+                      ) : row.pair.person ? (
+                        <PersonAvatar
+                          person={row.pair.person}
+                          name={row.pair.label}
+                          agentsById={agentsById}
+                          agentAvatarUrls={agentAvatarUrls}
+                          userAvatarUrls={userAvatarUrls}
+                        />
+                      ) : (
+                        <span className="text-text-muted">
+                          <User className="size-3.5" />
+                        </span>
+                      )}
+                    </span>
+                    <span className="truncate">{row.label}</span>
                   </span>
                 </OptionRow>
               );
             })}
+            {group.note !== null ? (
+              <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
+                {group.note}
+              </p>
+            ) : null}
           </div>
         ))}
       </FilterPanel>

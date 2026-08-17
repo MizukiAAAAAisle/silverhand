@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyContainerSwitch,
+  applyBoardScopeSelection,
   applyWorkspaceCascade,
-  containerScope,
+  channelAxisScope,
   DEFAULT_TASK_FILTERS,
   personFilterKey,
   taskFiltersEqual,
-  type ContainerMembership,
-  type TaskBoardContainerAxis,
+  type BoardScopeSelection,
   type TaskFilters,
 } from './taskFilters';
 
@@ -107,181 +106,129 @@ describe('applyWorkspaceCascade (#task:1387 workspace→channel)', () => {
 });
 
 /**
- * The four-state container axis (#task:2041) as ONE falsifiable matrix: the
- * per-container OPTION DOMAIN (`containerScope`) and the container TRANSITION
- * (`applyContainerSwitch`) are the two faces of one model, so they are proven
- * together over the same fixture — not as separate "controls" and "params"
- * proofs. The fixture mixes both container kinds so every arm of the domain and
- * every drop rule of the transition is exercised.
+ * The container axis (#task:2041) as ONE falsifiable matrix: the channel axis
+ * (`channelAxisScope`) and the board-scope SELECTION (`applyBoardScopeSelection`)
+ * are the two faces of one model, proven together over the same fixture.
+ * Selection collapses the old pick-container-then-object two-step into one
+ * grouped-dropdown choice (shiki 2026-08-17), so every pick lands on a
+ * fully-resolved scope and the cascade drops any coordinate the pick leaves
+ * stranded.
  *
- *   workspaces: ws-reg (regular → `workspace`), ws-home (dm → `agent_space`)
  *   channels:   c-reg  (workspace group), c-agent (dm group)
+ *   workspaces: ws-reg (regular → `workspace`), ws-home (dm → `agent_space`)
  *   directPair: dp-1   (a viewer direct line → `direct_messages`)
  */
 describe('container axis model (#task:2041)', () => {
-  const workspaceOptions = [
-    { id: 'ws-reg', kind: 'regular' as const },
-    { id: 'ws-home', kind: 'dm' as const },
-  ];
   const channelOptions = [
     { id: 'c-reg', group: 'workspace' as const },
     { id: 'c-agent', group: 'dm' as const },
   ];
-  const directPairOptions = [{ id: 'dp-1' }];
-  const source = { workspaceOptions, channelOptions, directPairOptions };
 
-  const membership: ContainerMembership = {
-    workspaceContainer: id =>
-      id === 'ws-reg' ? 'workspace' : id === 'ws-home' ? 'agent_space' : null,
-    channelContainer: id =>
-      id === 'c-reg'
-        ? 'workspace'
-        : id === 'c-agent'
-          ? 'agent_space'
-          : id === 'dp-1'
-            ? 'direct_messages'
-            : null,
-  };
-
-  describe('containerScope — per-container option domain', () => {
-    it('All (null): full union of ws + channels, no DM leaf', () => {
-      const s = containerScope(null, source);
-      expect(s).toMatchObject({
-        showWorkspace: true,
-        showChannel: true,
-        showDirectPair: false,
-      });
-      expect(s.workspaceOptions.map(o => o.id)).toEqual(['ws-reg', 'ws-home']);
+  describe('channelAxisScope — the channel picker under a container', () => {
+    it('All (null): every channel, picker shown', () => {
+      const s = channelAxisScope(null, channelOptions);
+      expect(s.show).toBe(true);
       expect(s.channelOptions.map(o => o.id)).toEqual(['c-reg', 'c-agent']);
-      expect(s.directPairOptions).toEqual([]);
     });
 
-    it('workspace: only regular ws + workspace-group channels', () => {
-      const s = containerScope('workspace', source);
-      expect(s).toMatchObject({
-        showWorkspace: true,
-        showChannel: true,
-        showDirectPair: false,
-      });
-      expect(s.workspaceOptions.map(o => o.id)).toEqual(['ws-reg']);
+    it('workspace: only workspace-group channels', () => {
+      const s = channelAxisScope('workspace', channelOptions);
+      expect(s.show).toBe(true);
       expect(s.channelOptions.map(o => o.id)).toEqual(['c-reg']);
     });
 
-    it('agent_space: only dm ws (agent homes) + dm-group channels', () => {
-      const s = containerScope('agent_space', source);
-      expect(s.workspaceOptions.map(o => o.id)).toEqual(['ws-home']);
+    it('agent_space: only dm-group channels', () => {
+      const s = channelAxisScope('agent_space', channelOptions);
+      expect(s.show).toBe(true);
       expect(s.channelOptions.map(o => o.id)).toEqual(['c-agent']);
-      expect(s.showDirectPair).toBe(false);
     });
 
-    it('direct_messages: ws/channel HIDDEN (not fed empty), DM leaf shown', () => {
-      const s = containerScope('direct_messages', source);
+    it('direct_messages: picker HIDDEN (not fed empty), no channels', () => {
+      const s = channelAxisScope('direct_messages', channelOptions);
       // Hidden, not an empty option set: an empty channel list would read as
       // "no channels", a different (false) claim than "this axis does not apply".
-      expect(s).toMatchObject({
-        showWorkspace: false,
-        showChannel: false,
-        showDirectPair: true,
-      });
-      expect(s.workspaceOptions).toEqual([]);
+      expect(s.show).toBe(false);
       expect(s.channelOptions).toEqual([]);
-      expect(s.directPairOptions.map(o => o.id)).toEqual(['dp-1']);
     });
   });
 
-  describe('applyContainerSwitch — transition drops coordinates the target cannot hold', () => {
-    const on = (
-      container: TaskBoardContainerAxis | null,
-      coords: Partial<Pick<TaskFilters, 'workspaceId' | 'channelId'>>,
-    ): TaskFilters => ({ ...DEFAULT_TASK_FILTERS, container, ...coords });
+  describe('applyBoardScopeSelection — one pick sets container + coordinate together', () => {
+    // c-reg belongs to ws-reg; c-agent to ws-home. Same resolver shape the
+    // workspace cascade takes, so a channel/pair id a pick strands is dropped.
+    const channelWorkspaceId = (id: string): string | null =>
+      ({ 'c-reg': 'ws-reg', 'c-agent': 'ws-home' })[id] ?? null;
 
-    it('workspace → agent_space drops a regular-ws + workspace-channel selection', () => {
-      const after = applyContainerSwitch(
-        on('workspace', { workspaceId: 'ws-reg', channelId: 'c-reg' }),
-        'agent_space',
-        membership,
-      );
-      expect(after).toMatchObject({
-        container: 'agent_space',
-        workspaceId: null,
-        channelId: null,
-      });
-    });
+    const sel = (
+      selection: BoardScopeSelection,
+      filters: TaskFilters = DEFAULT_TASK_FILTERS,
+    ): TaskFilters => applyBoardScopeSelection(filters, selection, channelWorkspaceId);
 
-    it('agent_space → workspace keeps nothing agent-scoped', () => {
-      const after = applyContainerSwitch(
-        on('agent_space', { workspaceId: 'ws-home', channelId: 'c-agent' }),
-        'workspace',
-        membership,
-      );
-      expect(after).toMatchObject({ workspaceId: null, channelId: null });
-    });
-
-    it('→ direct_messages drops every ws/channel coordinate (a DM holds none)', () => {
-      const after = applyContainerSwitch(
-        on('workspace', { workspaceId: 'ws-reg', channelId: 'c-reg' }),
-        'direct_messages',
-        membership,
-      );
-      expect(after).toMatchObject({
-        container: 'direct_messages',
-        workspaceId: null,
-        channelId: null,
-      });
-    });
-
-    it('direct_messages → All DROPS the pair — All renders no control to show or clear it', () => {
-      const after = applyContainerSwitch(
-        on('direct_messages', { channelId: 'dp-1' }),
-        null,
-        membership,
-      );
-      // All holds a DirectPair semantically, but its UI has no control for one:
-      // the channel picker lists workspace/agent_space channels and the DM leaf is
-      // hidden (`containerScope(null).showDirectPair === false`). Keeping dp-1 would
-      // show "All" while the request still carried `channel_id=dp-1` — an invisible
-      // narrowing the user can neither see nor clear. So it is dropped.
-      expect(containerScope(null, source).showDirectPair).toBe(false);
-      expect(after).toMatchObject({ container: null, channelId: null });
-    });
-
-    it('→ All keeps a workspace/channel coordinate — All still renders those controls', () => {
-      const after = applyContainerSwitch(
-        on('workspace', { workspaceId: 'ws-reg', channelId: 'c-reg' }),
-        null,
-        membership,
-      );
-      // Both coordinates ARE visible+clearable under All (the workspace cascade
-      // lists every workspace, the channel picker every workspace/agent_space
-      // channel), so retaining them is honest — unlike a DM pair.
-      expect(after).toMatchObject({
-        container: null,
+    it('All clears the container and every coordinate', () => {
+      const before: TaskFilters = {
+        ...DEFAULT_TASK_FILTERS,
+        container: 'workspace',
         workspaceId: 'ws-reg',
         channelId: 'c-reg',
+      };
+      expect(sel({ kind: 'all' }, before)).toMatchObject({
+        container: null,
+        workspaceId: null,
+        channelId: null,
       });
     });
 
-    it('a concrete container KEEPS a coordinate of its own kind', () => {
-      const after = applyContainerSwitch(
-        on(null, { workspaceId: 'ws-reg', channelId: 'c-reg' }),
-        'workspace',
-        membership,
-      );
-      expect(after).toMatchObject({ workspaceId: 'ws-reg', channelId: 'c-reg' });
+    it('a regular workspace pick stamps `workspace` + its id', () => {
+      expect(
+        sel({ kind: 'workspace', workspaceId: 'ws-reg', container: 'workspace' }),
+      ).toMatchObject({ container: 'workspace', workspaceId: 'ws-reg', channelId: null });
     });
 
-    it('drops an unresolvable coordinate (membership → null) under EVERY target, All included', () => {
-      // A coordinate the option source can no longer classify has no control that
-      // shows it as selected anywhere — not under a concrete container, and not
-      // under All. It is never retained.
-      for (const target of [null, 'workspace', 'agent_space', 'direct_messages'] as const) {
-        const after = applyContainerSwitch(
-          on(null, { workspaceId: 'ws-gone', channelId: 'c-gone' }),
-          target,
-          membership,
-        );
-        expect(after).toMatchObject({ workspaceId: null, channelId: null });
-      }
+    it('an agent-home pick stamps `agent_space` + its id', () => {
+      expect(
+        sel({ kind: 'workspace', workspaceId: 'ws-home', container: 'agent_space' }),
+      ).toMatchObject({ container: 'agent_space', workspaceId: 'ws-home' });
+    });
+
+    it('keeps a channel that belongs to the picked workspace (cascade)', () => {
+      const before: TaskFilters = { ...DEFAULT_TASK_FILTERS, channelId: 'c-reg' };
+      expect(
+        sel({ kind: 'workspace', workspaceId: 'ws-reg', container: 'workspace' }, before),
+      ).toMatchObject({ container: 'workspace', workspaceId: 'ws-reg', channelId: 'c-reg' });
+    });
+
+    it('drops a channel of another workspace when picking a workspace', () => {
+      const before: TaskFilters = { ...DEFAULT_TASK_FILTERS, channelId: 'c-agent' };
+      expect(
+        sel({ kind: 'workspace', workspaceId: 'ws-reg', container: 'workspace' }, before),
+      ).toMatchObject({ workspaceId: 'ws-reg', channelId: null });
+    });
+
+    it('switching from a DM to a workspace drops the stale pair id in channelId', () => {
+      // Under `direct_messages` the pair conversation id lives in `channelId`; it
+      // belongs to no workspace, so the cascade clears it rather than carry a dead
+      // `channel_id` into a workspace board.
+      const before: TaskFilters = {
+        ...DEFAULT_TASK_FILTERS,
+        container: 'direct_messages',
+        channelId: 'dp-1',
+      };
+      expect(
+        sel({ kind: 'workspace', workspaceId: 'ws-reg', container: 'workspace' }, before),
+      ).toMatchObject({ container: 'workspace', workspaceId: 'ws-reg', channelId: null });
+    });
+
+    it('a direct-pair pick is `direct_messages` with the pair id and no workspace', () => {
+      const before: TaskFilters = {
+        ...DEFAULT_TASK_FILTERS,
+        container: 'workspace',
+        workspaceId: 'ws-reg',
+        channelId: 'c-reg',
+      };
+      expect(sel({ kind: 'direct_pair', conversationId: 'dp-1' }, before)).toMatchObject({
+        container: 'direct_messages',
+        workspaceId: null,
+        channelId: 'dp-1',
+      });
     });
   });
 });

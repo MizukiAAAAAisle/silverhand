@@ -119,21 +119,25 @@ export function applyWorkspaceCascade(
 }
 
 /**
- * The four-state container axis (#task:2041), closed as ONE pure model shared by
- * the board and the drawer. `null` = All (the union of every container the
- * viewer can see); the three concrete values narrow to one KIND of container.
- * Two pure faces, so the whole "container × option domain × transition" matrix
- * is falsifiable without a DOM:
- *   - `containerScope` — which secondary controls a container offers and over
- *     which option population (the per-container option DOMAIN);
- *   - `applyContainerSwitch` — the transition that drops a workspace/channel
- *     coordinate the new container cannot hold.
+ * The container axis (#task:2041), closed as ONE pure model shared by the board
+ * and the drawer. `null` = All (the union of every container the viewer can see);
+ * the three concrete values narrow to one KIND of container. Two pure faces, so
+ * the whole "container × channel axis × selection" matrix is falsifiable without
+ * a DOM:
+ *   - `applyBoardScopeSelection` — the transition that sets the container AND its
+ *     concrete coordinate together from one grouped-dropdown pick (shiki
+ *     2026-08-17: the container kind and the object it narrows to are one choice,
+ *     not a pick-kind-then-object two-step). The grouped dropdown lists the
+ *     workspace / agent-space / direct-line OBJECTS directly, so the only
+ *     within-board axis the container still reshapes is the channel picker;
+ *   - `channelAxisScope` — whether that channel picker applies under a container,
+ *     and over which channel population.
  *
- * The membership rule is single-sourced here and read by BOTH faces: a workspace
- * of `kind:'regular'` lives under `workspace`, `kind:'dm'` (an agent home) under
- * `agent_space`; a channel's data-source `group` mirrors that; a viewer
- * DirectPair conversation lives under `direct_messages` and carries no workspace
- * coordinate at all (its board is the pair, matched by the `channel_id` param).
+ * The membership rule is single-sourced here: a workspace of `kind:'regular'`
+ * lives under `workspace`, `kind:'dm'` (an agent home) under `agent_space`; a
+ * channel's data-source `group` mirrors that; a viewer DirectPair conversation
+ * lives under `direct_messages` and carries no workspace coordinate at all (its
+ * board is the pair, matched by the `channel_id` param).
  */
 
 /** The container a workspace of this kind belongs to. */
@@ -150,164 +154,103 @@ export function channelGroupContainer(
   return group === 'dm' ? 'agent_space' : 'workspace';
 }
 
-/** Is a coordinate whose own container is `member` offerable / holdable under
- *  the board's current `container` axis? All (`null`) holds every container; a
- *  concrete container holds only coordinates of its own kind. `member === null`
- *  (an unresolved coordinate whose container we can't name) is held only by All,
- *  so a concrete container never keeps a coordinate it can't vouch for. */
-export function containerHolds(
-  container: TaskBoardContainerAxis | null,
-  member: TaskBoardContainerAxis | null,
-): boolean {
-  return container === null || member === container;
-}
-
-/** The secondary controls a container offers, over the option population it
- *  scopes them to. Generic over the option shapes (the concrete types live in
- *  the filter bar) so this model module stays dependency-free and unit-testable
- *  on plain literals. */
-export interface ContainerScope<W, C, P> {
-  /** Show the upstream workspace cascade control. */
-  showWorkspace: boolean;
-  /** Show the channel picker. */
-  showChannel: boolean;
-  /** Show the DirectPair 对端 leaf — it REPLACES the channel picker under DM. */
-  showDirectPair: boolean;
-  workspaceOptions: W[];
+/** Whether the within-workspace channel axis applies under a container, and over
+ *  which channel population. Generic over the channel option shape (the concrete
+ *  type lives in the filter bar) so this model module stays dependency-free and
+ *  unit-testable on plain literals. */
+export interface ChannelAxisScope<C> {
+  /** Show the channel picker (false under `direct_messages`). */
+  show: boolean;
+  /** The channels this container offers (empty under `direct_messages`). */
   channelOptions: C[];
-  directPairOptions: P[];
 }
 
 /**
- * The per-container option DOMAIN + which controls describe it. One of the two
- * pure faces of the container model (see the block above).
+ * The channel axis under a container — one of the two pure faces of the container
+ * model (see the block above). After the board-scope collapse (#task:2041) the
+ * workspace + direct-line OBJECTS are listed directly by the grouped dropdown from
+ * the full option sets, so the container model's only remaining projection is the
+ * channel picker:
  *
- *  - `direct_messages` — a DM has no workspace/channel coordinate, so the 对端
- *    leaf (→ `channel_id` = the pair conversation) is the ONLY narrowing. The
- *    workspace + channel controls are HIDDEN, not fed an empty set: an empty
- *    option list reads as "no channels", a different (false) claim than "this
- *    axis does not apply here";
- *  - `workspace` / `agent_space` — narrow the workspace + channel populations to
- *    that KIND (a regular workspace vs. an agent home); the DM leaf is never
- *    offered here (you pick the container first, then the pair);
- *  - `null` (All) — the full union of both, and still no DM leaf: All is the
- *    union of every container, narrowed by picking one.
+ *  - `direct_messages` — a DM's coordinate is the pair conversation (→ the
+ *    `channel_id` param), not a channel, so the channel picker is HIDDEN, not fed
+ *    an empty set: an empty option list reads as "no channels", a different
+ *    (false) claim than "this axis does not apply here";
+ *  - `workspace` / `agent_space` — narrow the channel population to that KIND (a
+ *    regular workspace's channels vs. an agent home's);
+ *  - `null` (All) — every channel the viewer can see.
  */
-export function containerScope<
-  W extends { kind: 'regular' | 'dm' },
-  C extends { group: 'dm' | 'workspace' },
-  P,
->(
+export function channelAxisScope<C extends { group: 'dm' | 'workspace' }>(
   container: TaskBoardContainerAxis | null,
-  source: { workspaceOptions: W[]; channelOptions: C[]; directPairOptions: P[] },
-): ContainerScope<W, C, P> {
+  channelOptions: C[],
+): ChannelAxisScope<C> {
   if (container === 'direct_messages') {
-    return {
-      showWorkspace: false,
-      showChannel: false,
-      showDirectPair: true,
-      workspaceOptions: [],
-      channelOptions: [],
-      directPairOptions: source.directPairOptions,
-    };
+    return { show: false, channelOptions: [] };
   }
-  const workspaceOptions =
-    container === null
-      ? source.workspaceOptions
-      : source.workspaceOptions.filter(
-          o => workspaceKindContainer(o.kind) === container,
-        );
-  const channelOptions =
-    container === null
-      ? source.channelOptions
-      : source.channelOptions.filter(
-          o => channelGroupContainer(o.group) === container,
-        );
   return {
-    showWorkspace: true,
-    showChannel: true,
-    showDirectPair: false,
-    workspaceOptions,
-    channelOptions,
-    directPairOptions: [],
+    show: true,
+    channelOptions:
+      container === null
+        ? channelOptions
+        : channelOptions.filter(o => channelGroupContainer(o.group) === container),
   };
 }
 
-/** Resolve a selected coordinate to the container it belongs to (null when the
- *  option source no longer holds it). Injected so `applyContainerSwitch` is pure
- *  and unit-testable without the option source — the same shape
- *  `applyWorkspaceCascade` uses for `channelWorkspaceId`. */
-export interface ContainerMembership {
-  workspaceContainer: (workspaceId: string) => TaskBoardContainerAxis | null;
-  channelContainer: (channelId: string) => TaskBoardContainerAxis | null;
-}
+/**
+ * The board-scope selection — one grouped-dropdown pick that names both the
+ * container KIND and the concrete object inside it, collapsing the old
+ * pick-container-then-object two-step into a single choice (#task:2041, shiki
+ * 2026-08-17). A workspace / agent-space pick carries its own container so the
+ * two are set together; a direct-pair pick is `direct_messages` by construction.
+ */
+export type BoardScopeSelection =
+  | { kind: 'all' }
+  | {
+      kind: 'workspace';
+      workspaceId: string;
+      container: Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'>;
+    }
+  | { kind: 'direct_pair'; conversationId: string };
 
 /**
- * Does the target container render a VISIBLE, clearable control for a coordinate
- * whose own container is `member`? Retention on a container switch must answer
- * THIS, not merely "does the axis semantically belong": the board may carry only
- * coordinates the current container's UI can both show as selected AND let the
- * user clear. A coordinate the target holds semantically but renders no control
- * for is worse than useless — it silently narrows the wire request (`channel_id`)
- * while the UI shows a different, wider container.
+ * Apply a board-scope pick — the second pure face of the model — setting the
+ * container axis AND its concrete coordinate together. Every pick lands on a
+ * fully-resolved scope, so there is no orphan-coordinate transition to repair
+ * afterward; the only cleanup is the workspace cascade dropping a coordinate the
+ * pick strands:
+ *   - `all` — clear the container and every coordinate (the union tab);
+ *   - `workspace` — run the workspace→channel cascade (so a channel that no
+ *     longer belongs to the picked workspace, or a stale direct-pair id parked in
+ *     `channelId`, is dropped) and stamp the workspace's own container;
+ *   - `direct_pair` — `direct_messages` with the pair conversation id in
+ *     `channelId` (the existing `channel_id` wire param) and no workspace
+ *     coordinate, since a DirectPair has none.
  *
- *  - `member === null` — unresolvable against the current option source; no
- *    control can display a coordinate we cannot even name, so it is never kept
- *    (not even by All);
- *  - `member === 'direct_messages'` — a pair id is shown ONLY by the DM 对端 leaf,
- *    which exists solely under `direct_messages`. Kept there and NOWHERE else:
- *    under All the channel picker lists workspace/agent_space channels and the DM
- *    leaf is hidden (`containerScope(null).showDirectPair === false`), so a
- *    retained pair id would be an invisible narrowing — the All-shows-a-DM bug;
- *  - `workspace` / `agent_space` — shown by the workspace cascade + channel
- *    picker, which All and the matching concrete container render, so
- *    `containerHolds` (All ∪ own-kind) is exactly the right test.
+ * `channelWorkspaceId` resolves a channel id to its owning workspace (null if
+ * unknown) — the same injected resolver `applyWorkspaceCascade` takes, so this
+ * stays pure and unit-testable without the option source.
  */
-function containerShowsCoordinateOf(
-  nextContainer: TaskBoardContainerAxis | null,
-  member: TaskBoardContainerAxis | null,
-): boolean {
-  if (member === null) return false;
-  if (member === 'direct_messages') return nextContainer === 'direct_messages';
-  return containerHolds(nextContainer, member);
-}
-
-/**
- * The container-axis transition — the second pure face of the model. Switching
- * container DROPS a workspace/channel coordinate the new container has no VISIBLE
- * control for, so the board never carries an orphan narrowing the user can
- * neither see selected nor clear (which silently narrows the wire request while
- * the UI shows a wider container, and usually empties the board).
- *
- * Retention is decided by `containerShowsCoordinateOf`, NOT by "All holds
- * everything": All holds a DirectPair semantically but renders no control for it
- * (the channel picker lists workspace/agent_space channels; the DM leaf is
- * hidden), so a pair id is dropped on the way to All. The ws↔channel consistency
- * the cascade guarantees is preserved because both coordinates are filtered
- * against the SAME target container.
- */
-export function applyContainerSwitch(
+export function applyBoardScopeSelection(
   filters: TaskFilters,
-  nextContainer: TaskBoardContainerAxis | null,
-  membership: ContainerMembership,
+  selection: BoardScopeSelection,
+  channelWorkspaceId: (channelId: string) => string | null,
 ): TaskFilters {
-  const workspaceId =
-    filters.workspaceId !== null &&
-    containerShowsCoordinateOf(
-      nextContainer,
-      membership.workspaceContainer(filters.workspaceId),
-    )
-      ? filters.workspaceId
-      : null;
-  const channelId =
-    filters.channelId !== null &&
-    containerShowsCoordinateOf(
-      nextContainer,
-      membership.channelContainer(filters.channelId),
-    )
-      ? filters.channelId
-      : null;
-  return { ...filters, container: nextContainer, workspaceId, channelId };
+  switch (selection.kind) {
+    case 'all':
+      return { ...filters, container: null, workspaceId: null, channelId: null };
+    case 'workspace':
+      return {
+        ...applyWorkspaceCascade(filters, selection.workspaceId, channelWorkspaceId),
+        container: selection.container,
+      };
+    case 'direct_pair':
+      return {
+        ...filters,
+        container: 'direct_messages',
+        workspaceId: null,
+        channelId: selection.conversationId,
+      };
+  }
 }
 
 /** One selectable person in the assignee / creator menus. The `name` is the
