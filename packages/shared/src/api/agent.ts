@@ -449,6 +449,32 @@ export const AgentAvailabilityDtoSchema = z.object({
 });
 export type AgentAvailabilityDto = z.infer<typeof AgentAvailabilityDtoSchema>;
 
+// Invalidation event for GET /api/agents/:id/availability (#task:2043). A pure
+// CACHE-INVALIDATION frame, NOT a state patch: it carries only the agent id, so
+// a subscriber's sole reaction is to refetch `/availability` for that id — the
+// route stays the single source of the value. This mirrors `agent_changed`
+// (identity) and `direct_pairs_changed` (list): the wire never ships the new
+// value, only the id whose derived read is now stale.
+//
+// Fan-out is per-VIEWER, not global: unlike `agent_changed` (safe on `app`
+// because the id alone leaks nothing), availability is a `canViewAgent`-gated
+// read, so the backend publishes to `viewer:{userId}` for exactly the users who
+// can currently see the agent (creator ∪ DirectPair human endpoints ∪
+// shared-workspace members, each filtered through `canViewAgent`). The renderer
+// composes the refetched availability with liveness into Online / Away /
+// Offline / no-status. Emitted only on transport-reachability transitions
+// (attachment connect / disconnect, host revoke) — never on runtime-liveness
+// changes, which drive liveness, not this axis.
+export const AGENT_AVAILABILITY_CHANGED_EVENT = 'agent_availability_changed';
+export const AgentAvailabilityChangedEventSchema = z
+  .object({
+    agent_id: z.string(),
+  })
+  .strict();
+export type AgentAvailabilityChangedEvent = z.infer<
+  typeof AgentAvailabilityChangedEventSchema
+>;
+
 export const DeleteAgentInputSchema = z.object({
   confirm: z.literal(true),
 });

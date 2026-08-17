@@ -64,6 +64,13 @@ export interface HostWsServerOptions {
   pongTimeoutMs?: number;
   commandTimeoutMs?: number;
   eventSink?: HostWsEventSink;
+  /** Fired on transport-reachability transitions — an attachment is CREATED
+   *  (compatible `ready`) or REMOVED (socket close, incl. revoke) — the two
+   *  edges that also announce `host_connection_changed`. NOT fired on the
+   *  admission-failure refusal (no attachment edge) or on hydration. The
+   *  composition root uses it to fan `agent_availability_changed` to each
+   *  on-host agent's viewer audience (#task:2043 B). */
+  onHostAttachmentChanged?: (hostId: string) => void;
 }
 
 export interface HostWsAttachment {
@@ -442,6 +449,8 @@ export function installHostWebSocketServer(
           publishHostConnectionChanged(ctx, auth.host.userId, {
             host_id: auth.host.hostId,
           });
+          // Availability moved: the host just became reachable (#task:2043 B).
+          opts.onHostAttachmentChanged?.(auth.host.hostId);
         },
         recordAdmissionFailure: failure => {
           // #task:1966 — the refusal no longer rides on an attachment edge (a
@@ -514,6 +523,9 @@ export function installHostWebSocketServer(
           publishHostConnectionChanged(ctx, auth.host.userId, {
             host_id: auth.host.hostId,
           });
+          // Availability moved: the host is no longer reachable (#task:2043 B).
+          // This close edge also carries revoke (revoke kicks the socket).
+          opts.onHostAttachmentChanged?.(auth.host.hostId);
         }
       });
       wss.emit('connection', ws, req);

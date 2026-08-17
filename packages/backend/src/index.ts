@@ -63,6 +63,10 @@ import {
 import { EmbeddedUnixOutboundFrameAdapter } from './runtime/embedded-unix-outbound-frame-adapter.js';
 import { DeletionAwareOutboundFrameAdapter } from './runtime/deletion-aware-outbound-frame-adapter.js';
 import { AgentDeletionResumer } from './application/agent-deletion-resumer.js';
+import {
+  type AgentAvailabilityChangedDeps,
+  publishAgentAvailabilityChangedForHost,
+} from './application/agent-availability-changed.js';
 import { sweepStoredBlobs } from './application/delete-agent.js';
 import { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.js';
@@ -859,12 +863,23 @@ export async function startBackend(
       ctx.readiness.outboundEventFanoutInstalled = true;
     }
     const hostWsEventSink = outboundFanout ?? undefined;
+    // #task:2043 (B) — availability invalidation readers. BackendContext holds
+    // no db handle, so the agent→host and workspace→member-userIds enumerations
+    // the fan-out needs beyond `ctx.authorizationReads` are injected here.
+    const availabilityChangedDeps: AgentAvailabilityChangedDeps = {
+      listAgentIdsByHost: hostId =>
+        persistence.repos.agents.listByHost(hostId).map(agent => agent.id),
+      workspaceMemberUserIds: workspaceId =>
+        persistence.repos.workspaces.listUserMemberIds(workspaceId),
+    };
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       hostTokenVerifier: new HostTokenService(persistence.hostTokens),
       hosts: persistence.repos.hosts,
       eventSink: opts.testHooks?.wrapHostWsEventSink
         ? opts.testHooks.wrapHostWsEventSink(hostWsEventSink)
         : hostWsEventSink,
+      onHostAttachmentChanged: hostId =>
+        publishAgentAvailabilityChangedForHost(ctx, availabilityChangedDeps, hostId),
     });
     // Construct the deployment-specific outbound transport. This runs
     // synchronously before the listen callback fires, so `outboundAdapter`
