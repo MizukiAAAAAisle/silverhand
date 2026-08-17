@@ -117,9 +117,10 @@ interface ColumnPage {
   next_cursor: string | null;
   /** The page's items, UN-projected. `ids` is derived from this same array, so
    *  ordering assertions and per-item VALUE assertions read one response: a
-   *  field-level claim (e.g. `channel_id` is fed by `tasks.conversation_id`)
-   *  belongs here, because the DTO schema only pins types and two same-typed
-   *  fields can be cross-wired without it noticing. */
+   *  field-level claim (e.g. `place.conversation_id` is fed by
+   *  `tasks.conversation_id`, or `place.channel_name` by the joined workspace
+   *  channel) belongs here, because the DTO schema only pins types and two
+   *  same-typed fields can be cross-wired without it noticing. */
   items: TaskSummaryDto[];
 }
 
@@ -230,11 +231,13 @@ describe('GET /api/tasks/board/column', () => {
   it('wires each item\'s workspace / channel / conversation refs from its own row', async () => {
     // The per-item VALUE contract of `taskJoinedToSummary` — the ONE projection
     // shared by this column, the single-task detail read and the agent list. Its
-    // risky fields are same-typed re-namings of one column
-    // (`channel_id` and `conversation.id` both come from `tasks.conversation_id`),
-    // so `TaskBoardColumnDtoSchema.parse` cannot catch a cross-wiring: only a
-    // value assertion can. Kept at route level so the JOIN feeding the projection
-    // is exercised too, which a hand-built-row unit test would not reach.
+    // risky fields are same-typed strings within the place arm
+    // (`place.conversation_id`, `place.workspace_id` and `place.channel_name`
+    // are all strings, and conversation_id / workspace_id derive from distinct
+    // columns of the same row), so `TaskBoardColumnDtoSchema.parse` cannot catch
+    // a cross-wiring: only a value assertion can. Kept at route level so the
+    // JOIN feeding the projection is exercised too, which a hand-built-row unit
+    // test would not reach.
     // `assignee === null` for an unassigned row is also the upstream fact behind
     // the facets' `has_unassigned`.
     t = buildTestApp({ seedAllFixtureMemberships: false });
