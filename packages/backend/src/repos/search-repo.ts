@@ -11,7 +11,7 @@ import type {
 import { messageRowToDto } from './message-repo.js';
 import { loadMessageAuthors } from './message-author.js';
 import { likeNeedle } from './sql-like.js';
-import { workspacePlaced } from './conversation-placement-sql.js';
+import { workspacePlaced, userParticipates } from './conversation-placement-sql.js';
 import {
   streamScopePredicate,
   streamScopeParams,
@@ -30,9 +30,12 @@ interface ConversationSearchRow {
   channel_id: string;
   closed_at: number | null;
   conversation_created_at: number;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_kind: SearchWorkspaceKind;
+  // NULLABLE since #task:2053: a `direct_pair` conversation has no workspace, so
+  // the LEFT JOIN yields NULL workspace columns. The DTO carries this through as
+  // a null `workspace` ref (welded to `placement_kind` in the shared schema).
+  workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_kind: SearchWorkspaceKind | null;
 }
 
 interface WorkspaceSearchRow {
@@ -52,21 +55,27 @@ type MessageSearchRow = MessageRow & {
   channel_id: string;
   closed_at: number | null;
   conversation_created_at: number;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_kind: SearchWorkspaceKind;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_kind: SearchWorkspaceKind | null;
   agent_name: string | null;
 };
 
-function workspaceRef(row: {
-  workspace_id: string;
-  workspace_name: string;
-  workspace_kind: SearchWorkspaceKind;
-}): SearchWorkspaceRef {
+/** The workspace ref for a result row, or `null` when the conversation is
+ *  workspace-less (a `direct_pair`). Null is keyed on `workspace_id` — the LEFT
+ *  JOIN's only NULL-producing column — so the ref exists exactly when a
+ *  workspace coordinate resolved. The shared schema's superRefine then welds
+ *  this to `placement_kind` (#task:2053-C). */
+function workspaceRefOrNull(row: {
+  workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_kind: SearchWorkspaceKind | null;
+}): SearchWorkspaceRef | null {
+  if (row.workspace_id === null) return null;
   return {
     id: row.workspace_id,
-    name: row.workspace_name,
-    kind: row.workspace_kind,
+    name: row.workspace_name as string,
+    kind: row.workspace_kind as SearchWorkspaceKind,
   };
 }
 
@@ -78,16 +87,35 @@ function conversationRef(row: {
   channel_id: string;
   closed_at: number | null;
   conversation_created_at: number;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_kind: SearchWorkspaceKind | null;
 }): SearchConversationRef {
-  return {
+  const base = {
     id: row.conversation_id,
     title: row.conversation_title,
-    placement_kind: row.conversation_placement_kind,
     roster_policy: row.conversation_roster_policy,
     channel_id: row.channel_id,
     closed_at: row.closed_at,
     created_at: row.conversation_created_at,
   };
+  if (row.conversation_placement_kind === 'direct_pair') {
+    return { ...base, placement_kind: 'direct_pair' };
+  }
+  // #task:2053-C — fail closed, NO `else → workspace`. The producer whitelist
+  // (`applyConversationScopeFilters`) admits only `workspace` | `direct_pair`,
+  // and a workspace-placed row always resolves its workspace coordinate through
+  // the LEFT JOIN. A row that is neither a pair nor a workspace-with-workspace
+  // is a projection bug, not a renderable result — refuse it loudly rather than
+  // mislabel it as workspace-placed and emit a ref the discriminated schema
+  // cannot describe.
+  const workspace = workspaceRefOrNull(row);
+  if (row.conversation_placement_kind !== 'workspace' || workspace === null) {
+    throw new Error(
+      `search: unrenderable placement '${row.conversation_placement_kind}' (workspace ${workspace === null ? 'missing' : 'present'})`,
+    );
+  }
+  return { ...base, placement_kind: 'workspace', workspace };
 }
 
 export interface SearchOptions {
@@ -96,8 +124,6 @@ export interface SearchOptions {
    *  filter id matches the resolved viewer; pre-PR1 NULL-authored
    *  legacy messages are surfaced as "from current viewer". */
   includeNullAuthor?: boolean;
-  /** User visibility bottom guard for public search routes. */
-  visibleUserId?: string;
 }
 
 export class SearchRepo {
@@ -107,9 +133,19 @@ export class SearchRepo {
    *  result cap) and whether the returned message list was `truncated`.
    *  `total` / `truncated` describe MESSAGE matches only — the named-entity
    *  (workspace / conversation) results are discovery sugar and excluded from
-   *  the count that drives the inline "N / M" counter. */
+   *  the count that drives the inline "N / M" counter.
+   *
+   *  `viewerUserId` is REQUIRED (#task:2053-B①): search is a content read face,
+   *  and every population arm rests on it (workspace discovery on
+   *  `workspace_users`, conversation/message arms on `userParticipates`). It was
+   *  previously an OPTIONAL `SearchOptions.visibleUserId` that defaulted to
+   *  "no filter", which put the exclusion of workspace-less placements on a
+   *  coordinate-lookup side effect a caller could silently drop. As a required
+   *  parameter, under-supplying the viewer fails to compile rather than opening
+   *  the face at runtime. */
   search(
     input: SearchQueryInput,
+    viewerUserId: string,
     opts: SearchOptions = {},
   ): { results: SearchResultDto[]; total: number; truncated: boolean } {
     const query = input.q.trim();
@@ -136,12 +172,17 @@ export class SearchRepo {
 
     if (includeNamedEntities) {
       results.push(
-        ...this.searchWorkspaces(input, query, Math.min(20, limit), opts),
-        ...this.searchConversations(input, query, Math.min(30, limit), opts),
+        ...this.searchWorkspaces(input, query, Math.min(20, limit), viewerUserId),
+        ...this.searchConversations(
+          input,
+          query,
+          Math.min(30, limit),
+          viewerUserId,
+        ),
       );
     }
 
-    const messages = this.searchMessages(input, query, limit, opts);
+    const messages = this.searchMessages(input, query, limit, viewerUserId, opts);
     results.push(...messages.results);
     return {
       results: results.slice(0, limit),
@@ -154,7 +195,7 @@ export class SearchRepo {
     input: SearchQueryInput,
     query: string,
     limit: number,
-    opts: SearchOptions,
+    viewerUserId: string,
   ): SearchResultDto[] {
     const where: string[] = [
       `(workspace_name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`,
@@ -162,17 +203,19 @@ export class SearchRepo {
     const params: SqlValue[] = [likeNeedle(query), likeNeedle(query)];
     applyNamedScopeFilters(where, params, input);
     applyTimeFilters(where, params, input, 'created_at');
-    if (opts.visibleUserId) {
-      where.push(
-        `EXISTS (
-           SELECT 1
-            FROM workspace_users wu
-            WHERE wu.workspace_id = search_ws.workspace_id
-              AND wu.user_id = ?
-         )`,
-      );
-      params.push(opts.visibleUserId);
-    }
+    // The workspace-DISCOVERY gate is workspace MEMBERSHIP, not conversation
+    // participation (#task:2053, Paul boundary-1): `userParticipates` is
+    // meaningless for a workspace row. Always applied now that the viewer is
+    // required.
+    where.push(
+      `EXISTS (
+         SELECT 1
+          FROM workspace_users wu
+          WHERE wu.workspace_id = search_ws.workspace_id
+            AND wu.user_id = ?
+       )`,
+    );
+    params.push(viewerUserId);
     params.push(limit);
 
     const rows = this.db
@@ -215,13 +258,13 @@ export class SearchRepo {
     input: SearchQueryInput,
     query: string,
     limit: number,
-    opts: SearchOptions,
+    viewerUserId: string,
   ): SearchResultDto[] {
     const where: string[] = [`conv.title LIKE ? ESCAPE '\\'`];
     const params: SqlValue[] = [likeNeedle(query)];
     applyConversationScopeFilters(where, params, input, 'conv', 'w');
     applyTimeFilters(where, params, input, 'conv.created_at');
-    applyConversationUserVisibility(where, params, opts, 'conv');
+    applyUserParticipation(where, params, viewerUserId, 'conv');
     params.push(limit);
 
     const rows = this.db
@@ -236,9 +279,13 @@ export class SearchRepo {
             conv.created_at AS conversation_created_at,
             w.id AS workspace_id,
             w.name AS workspace_name,
-            CASE WHEN w.workspace_kind = 'agent_home' THEN 'dm' ELSE 'regular' END AS workspace_kind
+            CASE
+              WHEN w.id IS NULL THEN NULL
+              WHEN w.workspace_kind = 'agent_home' THEN 'dm'
+              ELSE 'regular'
+            END AS workspace_kind
            FROM conversations conv
-           JOIN workspaces w ON w.id = conv.workspace_id
+           LEFT JOIN workspaces w ON w.id = conv.workspace_id
           WHERE ${where.join(' AND ')}
           ORDER BY conv.updated_at DESC
           LIMIT ?`,
@@ -247,7 +294,6 @@ export class SearchRepo {
 
     return rows.map(row => ({
       type: 'conversation',
-      workspace: workspaceRef(row),
       conversation: conversationRef(row),
     }));
   }
@@ -256,6 +302,7 @@ export class SearchRepo {
     input: SearchQueryInput,
     query: string,
     limit: number,
+    viewerUserId: string,
     opts: SearchOptions,
   ): { results: SearchResultDto[]; total: number; truncated: boolean } {
     const where: string[] = [];
@@ -282,7 +329,7 @@ export class SearchRepo {
       params.push(...streamScopeParams(streamScope));
     }
     applyTimeFilters(where, params, input, 'm.created_at');
-    applyConversationUserVisibility(where, params, opts, 'conv');
+    applyUserParticipation(where, params, viewerUserId, 'conv');
     if (input.user_id) {
       where.push(`m.from_kind = 'user'`);
       // Legacy NULL-authored messages are surfaced as "from current
@@ -305,15 +352,17 @@ export class SearchRepo {
     // and `truncated` (total > limit) means "there are matches past the cap".
     // The COUNT is a deliberate second query: this is a user-initiated search,
     // not a hot path, and an honest count that matches the field name beats
-    // saving one scan. (The agents LEFT JOIN never filters, so COUNT omits it.)
+    // saving one scan. It is built from the SAME `messageSearchFrom` FROM/WHERE
+    // constructor as the row query (#task:2053-D): a future filter added to one
+    // cannot silently skip the other, and the workspaces join is a LEFT join
+    // (not INNER) in BOTH, so a `direct_pair` hit is counted, not dropped —
+    // otherwise `total`/`truncated` would undercount pairs and the "N / M"
+    // counter would lie. (The agents join is additive/LEFT and never filters,
+    // so only the row query carries it, for `agent_name`.)
     const total = (
       this.db
         .prepare(
-          `SELECT COUNT(*) AS n
-             FROM messages m
-             JOIN conversations conv ON conv.id = m.conversation_id
-             JOIN workspaces w ON w.id = conv.workspace_id
-            WHERE ${whereSql}`,
+          `SELECT COUNT(*) AS n ${messageSearchFrom(whereSql, false)}`,
         )
         .get(...params) as { n: number }
     ).n;
@@ -336,13 +385,13 @@ export class SearchRepo {
             conv.created_at AS conversation_created_at,
             w.id AS workspace_id,
             w.name AS workspace_name,
-            CASE WHEN w.workspace_kind = 'agent_home' THEN 'dm' ELSE 'regular' END AS workspace_kind,
+            CASE
+              WHEN w.id IS NULL THEN NULL
+              WHEN w.workspace_kind = 'agent_home' THEN 'dm'
+              ELSE 'regular'
+            END AS workspace_kind,
             a.name AS agent_name
-           FROM messages m
-           JOIN conversations conv ON conv.id = m.conversation_id
-           JOIN workspaces w ON w.id = conv.workspace_id
-           LEFT JOIN agents a ON a.id = m.from_agent_id
-          WHERE ${whereSql}
+           ${messageSearchFrom(whereSql, true)}
           ${orderSql}
           LIMIT ?`,
       )
@@ -352,7 +401,6 @@ export class SearchRepo {
     return {
       results: rows.map(row => ({
         type: 'message',
-        workspace: workspaceRef(row),
         conversation: conversationRef(row),
         message: messageRowToDto(row, { author: authors.get(row) ?? null }),
         agent_name: row.agent_name,
@@ -363,22 +411,36 @@ export class SearchRepo {
   }
 }
 
-function applyConversationUserVisibility(
+/** THE single FROM/WHERE construction path for message search (#task:2053-D):
+ *  the row query and the `total` COUNT both build on this, so a filter added to
+ *  one is added to both and cannot drift. The `workspaces` join is LEFT (not
+ *  INNER) — a `direct_pair` message has no workspace, and an INNER join here
+ *  would silently drop it from BOTH the page and the count. `agent_name` is the
+ *  only reason the row query needs `agents`; that join is additive and never
+ *  filters, so the COUNT omits it via `withAgentJoin=false`. */
+function messageSearchFrom(whereSql: string, withAgentJoin: boolean): string {
+  return `FROM messages m
+           JOIN conversations conv ON conv.id = m.conversation_id
+           LEFT JOIN workspaces w ON w.id = conv.workspace_id
+           ${withAgentJoin ? 'LEFT JOIN agents a ON a.id = m.from_agent_id' : ''}
+          WHERE ${whereSql}`;
+}
+
+/** The viewer-participation bottom guard for the conversation/message arms
+ *  (#task:2053-A/B①): the ONE participation authority (`userParticipates`)
+ *  rather than a search-local bare `EXISTS(conversation_users)`. Its workspace
+ *  arm is `seat ∧ workspace membership` (stricter than a bare seat), and its
+ *  `direct_pair` arm admits a human endpoint — which is how a workspace-less DM
+ *  becomes searchable. Always applied (viewer is required). */
+function applyUserParticipation(
   where: string[],
   params: SqlValue[],
-  opts: SearchOptions,
+  viewerUserId: string,
   conversationAlias: string,
 ): void {
-  if (!opts.visibleUserId) return;
-  where.push(
-    `EXISTS (
-       SELECT 1
-         FROM conversation_users cu
-        WHERE cu.conversation_id = ${conversationAlias}.id
-          AND cu.user_id = ?
-     )`,
-  );
-  params.push(opts.visibleUserId);
+  const fragment = userParticipates(conversationAlias, viewerUserId);
+  where.push(fragment.sql);
+  params.push(...fragment.params);
 }
 
 function applyNamedScopeFilters(
@@ -403,23 +465,35 @@ function applyConversationScopeFilters(
   conversationAlias: string,
   workspaceAlias: string,
 ): void {
-  // Placement (§4.1/§6): search is a WORKSPACE-scoped read model — every
-  // `SearchResultDto` carries a `workspace` ref (id + name + kind), and `scope`
-  // itself is a workspace-kind filter, so a conversation with no workspace has
-  // no describable result shape here. Stated ONCE in the shared scope helper
-  // because all three statements that need it (conversation search, message
-  // search, and the message `total` COUNT over the same WHERE) come through
-  // here — and stated as a predicate rather than left to each query's
-  // `JOIN workspaces`, so the exclusion is a decision in the query text instead
-  // of a coordinate lookup quietly dropping rows. The human-visibility EXISTS is
-  // a SECOND, independent reason (a human is never a participant of a
-  // workspace-less placement, §4.2), but it is optional on `SearchOptions`, so
-  // it cannot be the thing this rule rests on.
-  where.push(workspacePlaced(conversationAlias));
+  // #task:2053-B② — POSITIVE WHITELIST, not a `workspacePlaced` hard predicate.
+  // Search's domain is workspace channels PLUS workspace-less human↔agent
+  // DirectPairs; both placements are named here as a DECISION IN THE QUERY TEXT.
+  // `agent_inbox` (no human participant) and any FUTURE placement kind default
+  // OUT — so widening search to a new placement is a deliberate edit here, never
+  // an accident of `userParticipates` happening to grow a matching arm. The
+  // visibility bottom guard (`userParticipates`) is a SECOND, independent gate;
+  // this one bounds the SET OF PLACEMENTS search covers at all.
+  where.push(
+    `${conversationAlias}.placement_kind IN ('workspace', 'direct_pair')`,
+  );
+  // #task:2053-E — scope tokens `regular`/`dm` are WORKSPACE-KIND filters, and
+  // `dm` STILL MEANS the agent_home workspace kind, NOT a DirectPair. Each
+  // carries an EXPLICIT `placement_kind = 'workspace'` conjunct (via
+  // `workspacePlaced`) so a `direct_pair` leaves these two tokens by a WRITTEN
+  // decision, not by the incidental fact that its NULL `workspace_kind` compares
+  // unequal to both literals after the LEFT join. A pair therefore appears only
+  // under `scope = 'all'`. Re-partitioning this wire enum into
+  // `workspace | agent_space | direct_messages` is a shiki-level decision (it
+  // needs a token→population truth table + renderer copy) and is deliberately
+  // NOT in this ticket.
   if (input.scope === 'regular') {
-    where.push(`${workspaceAlias}.workspace_kind = 'regular'`);
+    where.push(
+      `${workspacePlaced(conversationAlias)} AND ${workspaceAlias}.workspace_kind = 'regular'`,
+    );
   } else if (input.scope === 'dm') {
-    where.push(`${workspaceAlias}.workspace_kind = 'agent_home'`);
+    where.push(
+      `${workspacePlaced(conversationAlias)} AND ${workspaceAlias}.workspace_kind = 'agent_home'`,
+    );
   }
   if (input.workspace_id) {
     where.push(`${workspaceAlias}.id = ?`);

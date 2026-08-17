@@ -2,7 +2,6 @@
 // Bounded context: message. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import {
-  ConversationPlacementKindSchema,
   ConversationRosterPolicySchema,
   FromKindSchema,
 } from '../db/schema.js';
@@ -524,20 +523,54 @@ export const SearchWorkspaceRefSchema = z.object({
 });
 export type SearchWorkspaceRef = z.infer<typeof SearchWorkspaceRefSchema>;
 
-export const SearchConversationRefSchema = z.object({
+/** Fields of a search conversation ref that do not depend on placement. */
+const searchConversationRefBase = {
   id: z.string(),
   title: z.string(),
-  placement_kind: ConversationPlacementKindSchema,
   roster_policy: ConversationRosterPolicySchema,
   channel_id: z.string(),
   closed_at: z.number().nullable(),
   created_at: z.number(),
-});
+};
+
+// #task:2053-C — the conversation ref is a DISCRIMINATED UNION on
+// `placement_kind`, the SINGLE authority for "where is this conversation". The
+// workspace ref lives INSIDE the workspace arm — workspace is a property of the
+// conversation's PLACEMENT, not of the search result — so the discriminator and
+// the field it governs sit at the SAME level: `conv.placement_kind ===
+// 'workspace'` narrows the type, and the `direct_pair` arm has no `workspace`
+// field to read at all. The "workspace present iff workspace-placed" invariant
+// is therefore a TYPE FACT the compiler enforces on the consumer, not a
+// cross-layer superRefine that only holds at runtime (which would leave the
+// consumer free to branch on `workspace === null` — the same field-absence-as-
+// discriminator failure mode as the `resolveNavWorkspaceId` finding).
+//
+// Only the two placements search's producer whitelist admits appear here.
+// `agent_inbox` has NO arm on purpose: a mis-projected inbox row fails to
+// parse, so exhaustive/fail-closed is enforced at the type layer independently
+// of the SQL whitelist (#task:2053-B②) — both guards, same direction.
+export const SearchConversationRefSchema = z.discriminatedUnion(
+  'placement_kind',
+  [
+    z.object({
+      ...searchConversationRefBase,
+      placement_kind: z.literal('workspace'),
+      workspace: SearchWorkspaceRefSchema,
+    }),
+    z.object({
+      ...searchConversationRefBase,
+      placement_kind: z.literal('direct_pair'),
+    }),
+  ],
+);
 export type SearchConversationRef = z.infer<typeof SearchConversationRefSchema>;
 
 export const SearchResultDtoSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('workspace'),
+    // The workspace-DISCOVERY arm: the matched entity IS a workspace, so this
+    // is the workspace itself, not a placement container. Unaffected by
+    // #task:2053 — it always carries a real workspace.
     workspace: SearchWorkspaceRefSchema.extend({
       description: z.string().nullable(),
       archived_at: z.number().nullable(),
@@ -547,12 +580,18 @@ export const SearchResultDtoSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('conversation'),
-    workspace: SearchWorkspaceRefSchema,
+    // No result-level `workspace`: the container now lives inside the
+    // placement-discriminated `conversation` ref (#task:2053-C). This arm's
+    // `direct_pair` case is structurally unreached today — a pair's stored
+    // title is `''` (`DIRECT_PAIR_STORED_TITLE`) and discovery requires a
+    // non-empty query — but the ref shape is uniform with the message arm.
     conversation: SearchConversationRefSchema,
   }),
   z.object({
     type: z.literal('message'),
-    workspace: SearchWorkspaceRefSchema,
+    // The container is `conversation.<workspace arm>.workspace`; this is the
+    // arm where the `direct_pair` case is actually REACHED (a message in a
+    // workspace-less human↔agent DM).
     conversation: SearchConversationRefSchema,
     message: MessageDtoSchema,
     /** The author agent's immutable `@handle` (`agents.name`), or `null` for

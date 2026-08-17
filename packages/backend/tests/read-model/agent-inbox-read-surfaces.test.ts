@@ -180,7 +180,7 @@ describe('agent inbox — workspace-scoped read faces exclude it by decision', (
     const t = bootstrap();
     const found = new SearchRepo(t.db).search(
       SearchQueryInputSchema.parse({ q: NEEDLE, limit: 50 }),
-      { visibleUserId: t.viewerUserId },
+      t.viewerUserId,
     );
     const messageIds = found.results
       .filter(r => r.type === 'message')

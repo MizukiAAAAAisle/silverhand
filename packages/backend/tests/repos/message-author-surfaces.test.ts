@@ -178,7 +178,7 @@ describe('MessageAuthorDto surface contract (#task:1791)', () => {
     const query = SearchQueryInputSchema.parse({ q: 'zqvq' });
     const findHit = () =>
       search
-        .search(query, { visibleUserId: 'local' })
+        .search(query, 'local')
         .results.find(r => r.type === 'message' && r.message.id === msg.id) as
         | { type: 'message'; message: { author: unknown } }
         | undefined;

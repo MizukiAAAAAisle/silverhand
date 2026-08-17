@@ -1248,9 +1248,8 @@ export function createConversationRuntimeApp(
     const viewerUserId = requireViewerUserId(c);
     const includeNullAuthor =
       parsed.data.user_id !== undefined && parsed.data.user_id === viewerUserId;
-    const { results, total, truncated } = search.search(parsed.data, {
+    const { results, total, truncated } = search.search(parsed.data, viewerUserId, {
       includeNullAuthor,
-      visibleUserId: viewerUserId,
     });
     return c.json({ query: parsed.data, results, total, truncated });
   });
