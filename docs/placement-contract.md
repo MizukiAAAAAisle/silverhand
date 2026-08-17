@@ -175,26 +175,36 @@ in:
   Today `ViewerWorkspaceChange = 'added' | 'role_changed' | 'removed'`; the rename
   path (`workspaces.ts:210`) publishes `publishViewerWorkspacesChanged(ctx,
   userId, { change: 'metadata_changed', workspace_id })` to **each human viewer of
-  the workspace**. This reuses the existing contract exactly: the renderer already
-  treats the payload as a hint and refetches `['workspaces']` as the authority
-  (`docs/viewer-visibility-sync-v1.md`), so the workspace-list authority refresh
-  falls out for free. A dedicated `workspace_metadata_changed` event is
+  the workspace**. This reuses the existing contract: the renderer treats the
+  payload as a hint and refetches `['workspaces']` as the authority
+  (`docs/viewer-visibility-sync-v1.md`). It does **not** fall out for free — the
+  consumer guard `isViewerWorkspacesChangedPayload` (`features/workspaces/hooks.ts`)
+  fail-closes any `change` it does not recognize, so `'metadata_changed'` had to be
+  added to that whitelist (F3, #task:2050); otherwise the producer edge is a dead
+  letter and the F1 join is as stale as the embed it replaced. Pinned by
+  `decideViewerSyncInvalidations`' branch test ("invalidates the workspace list on
+  metadata_changed"). A dedicated `workspace_metadata_changed` event is
   **rejected**: the payload shape does not diverge, the scope
   (`viewer:${userId}`) is identical, and a second carrier for the same fact
   would fork the "one owner for the event" invariant this module exists to hold.
 - Subscribers (M2): **Search results only** invalidate a *frozen* `workspace_name`
   on `change: 'metadata_changed'` (distinct from the 4-A channel-name
-  registration). **Task and Saved do not** — both deleted `workspace_name` (§3,
+  registration) — that is a SEPARATE query key `decideViewerSyncInvalidations` does
+  not touch, so it is the **#task:2051 consumer's** obligation, reviewed on the same
+  yardstick as F3. **Task and Saved do not** — both deleted `workspace_name` (§3,
   and F1 for Saved) and resolve the workspace name from the live `['workspaces']`
   directory, so neither has a frozen copy to invalidate. For them §4-B is the
   authority-layer edge that keeps `['workspaces']` itself fresh on rename — the
   join they read from — so liveness is proven ONCE at the authority rather than
   re-proven per read model. (The #2045 endgame retires the Search frozen copy too;
   see §3.)
-- Falsifier: rename a **workspace** with no task/message/membership change → the
-  workspace-list authority `['workspaces']` refreshes (so Task/Saved joined names
-  follow) and any Search row's frozen `workspace_name` refreshes (fails today; the
-  producing edge is what this blocker requires M2 to add).
+- Falsifier: rename a **workspace** with no task/message/membership change →
+  - the workspace-list authority `['workspaces']` refreshes so Task/Saved joined
+    names follow — **live as of F3** (producer `routes/workspaces.ts` + consumer
+    whitelist + branch test);
+  - any Search row's *frozen* `workspace_name` refreshes — **still fails today**;
+    the producing edge exists, but the Search consumer key is unwired until #2051.
+
 
 ### 4-C. peer-identity fact edge — presentation + subject lifecycle ONLY, never presence
 

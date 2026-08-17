@@ -262,8 +262,13 @@ describe('Favorites sort cache wiring (#task:1254)', () => {
 });
 
 describe('isViewerWorkspacesChangedPayload', () => {
-  it('accepts the three documented change variants with a workspace_id', () => {
-    for (const change of ['added', 'removed', 'role_changed'] as const) {
+  it('accepts the four documented change variants with a workspace_id', () => {
+    for (const change of [
+      'added',
+      'removed',
+      'role_changed',
+      'metadata_changed',
+    ] as const) {
       expect(
         isViewerWorkspacesChangedPayload({ change, workspace_id: 'w-1' }),
       ).toBe(true);
@@ -339,6 +344,23 @@ describe('decideViewerSyncInvalidations', () => {
     ).toEqual([['workspaces']]);
   });
 
+  it('invalidates the workspace list on metadata_changed so the joined label refreshes (§4-B, #task:2050)', () => {
+    // The producer (`routes/workspaces.ts` rename) fans this to every member;
+    // F1 replaced Saved/Task's frozen `workspace_name` with a live join off
+    // `['workspaces']`, so this frame MUST refetch the list or the joined label
+    // stays stale for every NON-actor member — the exact liveness the embed
+    // lacked, moved to the join. If a future edit folds `metadata_changed` back
+    // into the guard's reject (→ `[]`), this reddens.
+    expect(
+      decideViewerSyncInvalidations(
+        frame({
+          kind: 'viewer_workspaces_changed',
+          payload: { change: 'metadata_changed', workspace_id: 'w-1' },
+        }),
+      ),
+    ).toEqual([['workspaces']]);
+  });
+
   it('also invalidates the members query on role_changed (governance viewerRole source)', () => {
     expect(
       decideViewerSyncInvalidations(
@@ -399,8 +421,8 @@ describe('viewerRemovedWorkspaceId (#task:1404)', () => {
     ).toBe('w-1');
   });
 
-  it('returns null for added / role_changed (nothing removed)', () => {
-    for (const change of ['added', 'role_changed'] as const) {
+  it('returns null for added / role_changed / metadata_changed (nothing removed)', () => {
+    for (const change of ['added', 'role_changed', 'metadata_changed'] as const) {
       expect(
         viewerRemovedWorkspaceId(
           frame({

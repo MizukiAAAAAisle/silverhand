@@ -255,12 +255,14 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
 
       // §4-B liveness (#task:2050): the channel-announcement loop above tells
       // members INSIDE a channel; it does not reach human read models that
-      // render the workspace label from OUTSIDE any one channel (Saved's
-      // `place.workspace_name`, Search, the workspace list). Those subscribe
-      // per-viewer, so fan a `metadata_changed` hint to every human member —
-      // each refetches `['workspaces']` as the authority. Agents are not
-      // notified here: they already received the in-channel system message and
-      // have no viewer-scoped workspace read model.
+      // render the workspace label from OUTSIDE any one channel (the workspace
+      // name Saved/Task join off `['workspaces']` per F1, Search's frozen copy,
+      // the workspace list). Those subscribe per-viewer, so fan a
+      // `metadata_changed` hint to every human member — each refetches
+      // `['workspaces']` as the authority (the consumer guard whitelists this
+      // change; see `features/workspaces/hooks.ts`). Agents are not notified
+      // here: they already received the in-channel system message and have no
+      // viewer-scoped workspace read model.
       for (const userId of workspaces.listUserMemberIds(workspace.id)) {
         publishViewerWorkspacesChanged(ctx, userId, {
           change: 'metadata_changed',
