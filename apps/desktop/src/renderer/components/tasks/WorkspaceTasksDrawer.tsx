@@ -67,6 +67,7 @@ import {
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
+  type CreateTaskTarget,
 } from '@/components/tasks/CreateTaskDialog';
 import { Button } from '@/components/ui/button';
 import { primaryAction } from '@/features/common/PrimaryAction';
@@ -414,19 +415,25 @@ export function WorkspaceTasksDrawer({
     onOpenTask?.(t.id);
   };
 
-  // Create entrance. Seed the picker from the current channel FILTER only when
-  // it resolves to a real member-channel option — the drawer opens focused on
-  // its entry channel, so that is usually the default, but an ALL / thread
-  // filter leaves it unseeded (the actor picks one). On success the dialog
-  // closes and the list refreshes in place; the new task is NOT opened in a
-  // detail modal (shiki 2026-07-30). (`createOpen` state lives above the Escape
+  // Create entrance. A direct line's drawer creates ONTO the pair conversation —
+  // there is no channel to pick (contract §5), so the target is locked. A
+  // workspace drawer offers the channel picker, seeded from the current channel
+  // FILTER only when it resolves to a real member-channel option — the drawer
+  // opens focused on its entry channel, so that is usually the default, but an
+  // ALL / thread filter leaves it unseeded (the actor picks one). On success the
+  // dialog closes and the list refreshes in place; the new task is NOT opened in
+  // a detail modal (shiki 2026-07-30). (`createOpen` state lives above the Escape
   // effect, which must defer to the dialog.)
   const submitCreate = useCreateTaskSubmit();
-  const createDefaultChannelId = channelOptions.some(
-    o => o.id === filters.channelId,
-  )
-    ? filters.channelId
-    : null;
+  const createTarget = useMemo<CreateTaskTarget>(() => {
+    if (container.kind === 'direct_pair') {
+      return { kind: 'locked', conversationId: container.conversationId };
+    }
+    const defaultChannelId = channelOptions.some(o => o.id === filters.channelId)
+      ? filters.channelId
+      : null;
+    return { kind: 'pick', channelOptions, defaultChannelId };
+  }, [container, channelOptions, filters.channelId]);
 
   // Focus trap: keep focus inside drawer while open.
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -624,8 +631,7 @@ export function WorkspaceTasksDrawer({
       <CreateTaskDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        channelOptions={channelOptions}
-        defaultChannelId={createDefaultChannelId}
+        target={createTarget}
         onSubmit={submitCreate}
       />
     </>
@@ -855,6 +861,7 @@ function TaskCard({
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
   const [dragging, setDragging] = useState(false);
+  const channelLabel = taskChannelLabel(task);
   return (
     <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
@@ -941,13 +948,15 @@ function TaskCard({
               <span className="italic">unassigned</span>
             )}
           </span>
-          <span
-            className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
-            title={taskChannelLabel(task)}
-          >
-            <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
-            <span className="min-w-0 truncate">{taskChannelLabel(task)}</span>
-          </span>
+          {channelLabel !== null ? (
+            <span
+              className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
+              title={channelLabel}
+            >
+              <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
+              <span className="min-w-0 truncate">{channelLabel}</span>
+            </span>
+          ) : null}
           {/* Time pinned to the row's right edge (`ml-auto`), single line. */}
           <span className="ml-auto inline-flex shrink-0 items-center gap-0.5" title={absolute}>
             <Clock className="size-3 shrink-0" />

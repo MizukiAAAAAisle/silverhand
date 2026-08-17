@@ -1,5 +1,5 @@
 import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   CheckSquare,
   ChevronDown,
@@ -52,6 +52,7 @@ import {
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
+  type CreateTaskTarget,
 } from '@/components/tasks/CreateTaskDialog';
 import { Button } from '@/components/ui/button';
 import { primaryAction } from '@/features/common/PrimaryAction';
@@ -193,12 +194,15 @@ export const TasksSection = memo(function TasksSection({
   // FILTER only when it resolves to a real member-channel option (a thread-scoped
   // or ALL filter has no channel to pre-select — the actor picks one). On success
   // the dialog closes and the list refreshes in place; the new task is NOT opened
-  // in a detail modal (shiki 2026-07-30).
-  const createDefaultChannelId = channelOptions.some(
-    o => o.id === filters.channelId,
-  )
-    ? filters.channelId
-    : null;
+  // in a detail modal (shiki 2026-07-30). The global board always PICKS a channel
+  // — it never guesses a DM as the target (contract §5); a DM task is created only
+  // from that direct line's own drawer.
+  const createTarget = useMemo<CreateTaskTarget>(() => {
+    const defaultChannelId = channelOptions.some(o => o.id === filters.channelId)
+      ? filters.channelId
+      : null;
+    return { kind: 'pick', channelOptions, defaultChannelId };
+  }, [channelOptions, filters.channelId]);
   const submitCreate = useCreateTaskSubmit();
 
   return (
@@ -293,8 +297,7 @@ export const TasksSection = memo(function TasksSection({
       <CreateTaskDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        channelOptions={channelOptions}
-        defaultChannelId={createDefaultChannelId}
+        target={createTarget}
         onSubmit={submitCreate}
       />
     </main>
@@ -546,6 +549,7 @@ function TaskCard({
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
   const [dragging, setDragging] = useState(false);
+  const channelLabel = taskChannelLabel(task);
   return (
     <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
@@ -616,13 +620,15 @@ function TaskCard({
               <span className="italic">unassigned</span>
             )}
           </span>
-          <span
-            className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
-            title={taskChannelLabel(task)}
-          >
-            <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
-            <span className="min-w-0 truncate">{taskChannelLabel(task)}</span>
-          </span>
+          {channelLabel !== null ? (
+            <span
+              className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
+              title={channelLabel}
+            >
+              <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
+              <span className="min-w-0 truncate">{channelLabel}</span>
+            </span>
+          ) : null}
           {/* Time pinned to the row's right edge (`ml-auto`), single line. */}
           <span className="ml-auto inline-flex shrink-0 items-center gap-0.5" title={absolute}>
             <Clock className="size-3 shrink-0" />

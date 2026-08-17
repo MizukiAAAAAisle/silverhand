@@ -1,18 +1,18 @@
 import type { TaskSummaryDto } from '@silverhand/shared';
 
 /**
- * The display name of a task's home conversation, from the board union
- * (P0-f review B4: placement coordinates live ONLY in the union). Human
- * faces receive workspace rows today (pair tasks are human-invisible until
- * the DM read-surface ticket), so the pair arm renders its stable identity
- * label rather than faking a title.
+ * The channel name of a task that lives on a workspace board; `null` on the
+ * DirectPair arm, which has no channel to name — its place is the pair itself.
+ * Callers render the channel affordance ONLY when this is non-null: a pair task
+ * omits the segment rather than showing a stand-in label (shiki dogfood #2041),
+ * because a `#channel` glyph on a DM would be the wrong identity primitive.
  */
-export function taskChannelLabel(task: Pick<TaskSummaryDto, 'board'>): string {
-  return task.board.kind === 'workspace' ? task.board.channel_name : 'direct message';
+export function taskChannelLabel(task: Pick<TaskSummaryDto, 'place'>): string | null {
+  return task.place.kind === 'workspace' ? task.place.channel_name : null;
 }
 
-/** The workspace id when the task sits on a workspace board; null on a pair
- *  board (no faked coordinate — callers must branch). */
-export function taskWorkspaceId(task: Pick<TaskSummaryDto, 'board'>): string | null {
-  return task.board.kind === 'workspace' ? task.board.workspace_id : null;
+/** The workspace id when the task sits on a workspace board; null on the pair
+ *  arm (no faked coordinate — callers must branch). */
+export function taskWorkspaceId(task: Pick<TaskSummaryDto, 'place'>): string | null {
+  return task.place.kind === 'workspace' ? task.place.workspace_id : null;
 }

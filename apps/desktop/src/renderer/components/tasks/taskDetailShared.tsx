@@ -1,4 +1,3 @@
-import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import dayjs from 'dayjs';
@@ -201,8 +200,8 @@ export function useTaskMetaRows({
         <span className="group/assignee flex items-center gap-1">
           {canAssign && !busy ? (
             <AssigneePicker
-              conversationId={view.channel_id}
-              placement={view.board.kind}
+              conversationId={view.place.conversation_id}
+              placement={view.place.kind}
               currentAgentId={
                 view.assignee?.type === 'agent' ? view.assignee.id : null
               }
@@ -249,7 +248,7 @@ export function useTaskMetaRows({
     // Only a workspace placement has a channel coordinate. A DirectPair task's
     // "channel" is the pair itself — there is nothing to name — so the row is
     // omitted rather than shown with a stand-in label (shiki dogfood, #2041).
-    ...(view.board.kind === 'workspace'
+    ...(view.place.kind === 'workspace'
       ? [
           {
             key: 'channel',
@@ -257,8 +256,8 @@ export function useTaskMetaRows({
             value: (
               <span className="flex min-w-0 items-center gap-1.5">
                 <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
-                <span className="truncate" title={taskChannelLabel(view)}>
-                  {taskChannelLabel(view)}
+                <span className="truncate" title={view.place.channel_name}>
+                  {view.place.channel_name}
                 </span>
               </span>
             ),

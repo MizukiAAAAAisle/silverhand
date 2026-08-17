@@ -25,25 +25,50 @@ export interface CreateTaskFormValues {
   title: string;
   /** Empty string when the optional description is left blank. */
   body: string;
-  /** The channel the task belongs to — always a member channel id. */
+  /** The conversation the task belongs to — a member channel id in the `pick`
+   *  target, or the pair conversation in the `locked` target. */
   conversationId: string;
 }
+
+/**
+ * WHERE a new task will be created. Two shapes, because the two placements the
+ * product has admit different target choices (contract §5):
+ *
+ *  - `pick` — a workspace-like surface (the global board or a workspace drawer):
+ *    the actor chooses a member channel from `channelOptions`, pre-focused on
+ *    `defaultChannelId` when the surface opened on one. The global "All" board
+ *    leaves it unseeded (`defaultChannelId: null`) — it never GUESSES a DM as the
+ *    target; a DM task is created only from that direct line's own drawer.
+ *  - `locked` — a direct line's own Tasks drawer: the target IS the pair
+ *    conversation, so there is nothing to pick — no channel picker shows and the
+ *    task is created straight onto `conversationId`.
+ *
+ * The server's create route is the final admission gate for either shape; this
+ * union only decides whether the actor is offered a choice.
+ */
+export type CreateTaskTarget =
+  | {
+      kind: 'pick';
+      /** Candidate channels to create in (same member-scoped projection as the
+       *  filter bar). This is a picker source, NOT the create-admission gate: the
+       *  server is the final authority and can still reject a listed channel with
+       *  a typed code. The projection filters `archived_at IS NULL` but NOT
+       *  `closed_at`, so a member CLOSED channel stably appears here (an accepted
+       *  v1 residue) and is rejected server-side with `conversation_closed`; a
+       *  typed `conversation_archived` only covers a race / stale client, since
+       *  archived is normally filtered out upstream. */
+      channelOptions: ChannelOption[];
+      /** Channel pre-selected when opened from a conversation; null on the global
+       *  board (the actor picks one). */
+      defaultChannelId: string | null;
+    }
+  | { kind: 'locked'; conversationId: string };
 
 export interface CreateTaskDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Candidate channels to create in (same member-scoped projection as the
-   *  filter bar). This is a picker source, NOT the create-admission gate: the
-   *  server is the final authority and can still reject a listed channel with a
-   *  typed code. The projection filters `archived_at IS NULL` but NOT
-   *  `closed_at`, so a member CLOSED channel stably appears here (an accepted v1
-   *  residue) and is rejected server-side with `conversation_closed`; a typed
-   *  `conversation_archived` only covers a race / stale client, since archived
-   *  is normally filtered out upstream. */
-  channelOptions: ChannelOption[];
-  /** Channel pre-selected when opened from a conversation; null on the global
-   *  board (the actor picks one). */
-  defaultChannelId: string | null;
+  /** Where the task will be created — see {@link CreateTaskTarget}. */
+  target: CreateTaskTarget;
   /** Owner performs the create and any post-success navigation. Resolve to let
    *  the dialog close + reset; reject to keep it open and surface the message. */
   onSubmit: (values: CreateTaskFormValues) => Promise<void>;
@@ -56,6 +81,11 @@ export interface CreateTaskDialogProps {
  * explanatory prose; the required marks and labels do the work (shiki: no
  * conversational helper text stealing the information budget).
  *
+ * In a locked (direct line) target there is no channel to choose, so the picker
+ * is omitted entirely and the pair conversation is the target — the drawer's own
+ * header already names the direct line, so a read-only channel field would only
+ * repeat it.
+ *
  * The dialog owns only presentation and local form state. The create call and
  * what happens after (open the new task) belong to the owner via `onSubmit`, so
  * this stays independent of the human create contract.
@@ -63,8 +93,7 @@ export interface CreateTaskDialogProps {
 export function CreateTaskDialog({
   open,
   onOpenChange,
-  channelOptions,
-  defaultChannelId,
+  target,
   onSubmit,
 }: CreateTaskDialogProps): JSX.Element {
   const [title, setTitle] = useState('');
@@ -72,6 +101,14 @@ export function CreateTaskDialog({
   const [channelId, setChannelId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // In a locked target the pair conversation IS the destination — the local
+  // channelId state and its picker exist only in the `pick` target.
+  const locked = target.kind === 'locked';
+  const defaultChannelId = target.kind === 'pick' ? target.defaultChannelId : null;
+  // The conversation the create will target: fixed to the pair in a locked
+  // context, the actor's channel pick otherwise.
+  const conversationId = target.kind === 'locked' ? target.conversationId : channelId;
 
   // Reset ONLY on the closed→open transition — never while the dialog is up.
   // `defaultChannelId` (and the option list behind it) can settle asynchronously
@@ -91,21 +128,22 @@ export function CreateTaskDialog({
 
   // Backfill the default channel if it arrives AFTER open and the actor hasn't
   // picked one yet. Only ever fills an empty selection — it never overwrites a
-  // channel the actor already chose.
+  // channel the actor already chose. Inert in a locked target (no picker,
+  // `defaultChannelId` is null).
   useEffect(() => {
     if (open && channelId === '' && defaultChannelId) {
       setChannelId(defaultChannelId);
     }
   }, [open, channelId, defaultChannelId]);
 
-  const canSubmit = title.trim().length > 0 && channelId !== '';
+  const canSubmit = title.trim().length > 0 && conversationId !== '';
 
   const submit = async (): Promise<void> => {
     if (!canSubmit || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      await onSubmit({ title: title.trim(), body, conversationId: channelId });
+      await onSubmit({ title: title.trim(), body, conversationId });
     } catch (e) {
       // Failure PRESERVES the draft: show the error and stay open, never reset
       // or close. A rejected create is an expected path here — the picker lists
@@ -155,14 +193,16 @@ export function CreateTaskDialog({
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label required>Channel</Label>
-            <CreateTaskChannelPicker
-              channelOptions={channelOptions}
-              value={channelId}
-              onChange={setChannelId}
-            />
-          </div>
+          {locked ? null : (
+            <div className="flex flex-col gap-1.5">
+              <Label required>Channel</Label>
+              <CreateTaskChannelPicker
+                channelOptions={target.channelOptions}
+                value={channelId}
+                onChange={setChannelId}
+              />
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="create-task-body">Description</Label>

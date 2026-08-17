@@ -273,7 +273,6 @@ describe('task-by-number cache realtime patching', () => {
         task_number: 42,
         workspace_id: 'workspace-1',
         conversation_id: 'c2',
-        channel_id: 'c2',
       }),
     );
 
@@ -301,11 +300,11 @@ function taskSummary(
   return {
     id: 'task-42',
     task_number: 42,
-    channel_id: 'channel-1',
-    board: {
+    place: {
       kind: 'workspace',
+      conversation_id: 'channel-1',
       workspace_id: 'workspace-1',
-      workspace_name: 'Workspace',
+      workspace_kind: 'regular',
       channel_name: 'version3',
     },
     thread_root_id: null,
@@ -325,7 +324,6 @@ function taskChanged(
   return {
     kind: 'status',
     workspace_id: 'workspace-1',
-    channel_id: 'channel-1',
     thread_root_id: null,
     conversation_id: 'channel-1',
     task_number: 42,

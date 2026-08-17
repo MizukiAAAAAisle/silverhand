@@ -1,6 +1,5 @@
 import {
   forwardRef,
-  useEffect,
   useId,
   useMemo,
   useState,
@@ -26,12 +25,6 @@ import {
   usePersonDirectory,
   type PersonDirectory,
 } from '@/components/tasks/PersonAvatar';
-import { useDirectPairsList } from '@/features/direct-pairs/hooks';
-import {
-  projectDirectPairFilterLeaf,
-  type DirectPairFilterLeafStatus,
-} from '@/features/direct-pairs/hooks';
-import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
 import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
 import {
   mapBoardAuthority,
@@ -50,7 +43,6 @@ import {
   type BoardScopeSelection,
   type PersonFilter,
   type PersonOption,
-  type PersonRef,
   type TaskBoardContainerAxis,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
@@ -107,19 +99,6 @@ export interface WorkspaceOption {
   /** The bound agent for a DM workspace (icon renders that agent's avatar);
    *  null for a regular workspace. */
   dmAgentId: string | null;
-}
-
-/** One direct line offered by the DM 对端 leaf (#task:2041). A DirectPair has
- *  NO workspace/channel coordinate — its `id` is the pair conversation id, which
- *  is exactly what the board read narrows on (`channel_id` = `t.conversation_id`),
- *  so selecting one writes `filters.channelId` and invents no workspace. */
-export interface DirectPairOption {
-  id: string;
-  /** The counterpart's presented name (the pair has no title of its own). */
-  label: string;
-  /** The counterpart as a person ref for the avatar, or null for a deleted
-   *  endpoint (renders the neutral person glyph, like an assignee row). */
-  person: PersonRef | null;
 }
 
 /** A conversation considered for the channel-filter dropdown, normalized
@@ -223,73 +202,27 @@ export function TaskFilterBar({
 }: TaskFilterBarProps): JSX.Element {
   const dirty = !taskFiltersEqual(filters, baselineFilters);
 
+  // Consumer mode fork (contract §5). A `direct_messages` container is only ever
+  // the pinned baseline of a direct line's own Tasks drawer — DM is never a
+  // selectable global scope — so it uniquely marks the LOCKED direct_pair context:
+  // the scope trigger is hidden entirely (no scope to switch to, and it must not
+  // double as a placement display) and only the Assignee / From narrowing shows.
+  // Everywhere else (`null` All, `workspace`, `agent_space`) is the selectable
+  // workspace-like mode, where the scope + channel controls apply.
+  const scopeLocked = filters.container === 'direct_messages';
+
   // Person avatars for the Assignee / From dropdowns (shiki #task:1441).
   // Resolved ONCE here (agents + users directories + their avatar object URLs)
   // and shared with both PersonFilterControls, so the two dropdowns don't each
   // re-resolve the directory.
   const personDirectory = usePersonDirectory();
 
-  // The DM 对端 leaf's population (#task:2041). Read the LIST query (not the
-  // `[]`-collapsing `useDirectPairs`) so the leaf can separate loading / failure
-  // / answered — a cold or failed read must not read as "you have no lines", and
-  // an answered list that no longer holds the selected pair must self-heal rather
-  // than show ALL over a dead `channel_id` (Cindy B2). Read here — not per
-  // surface — so the board and drawer share ONE source; it is the viewer-global
-  // cached read (`['direct-pairs']`, the sidebar already holds it), so this costs
-  // no extra fetch. Each pair projects its counterpart through the one
-  // presentation rule (`presentCounterpart`) so the leaf's face matches the DM
-  // list and the byline.
-  const directPairsQuery = useDirectPairsList();
-  const directPairs = directPairsQuery.data?.direct_pairs;
-  const directPairOptions = useMemo<DirectPairOption[]>(
-    () =>
-      (directPairs ?? []).map(p => {
-        const c = presentCounterpart(p.counterpart);
-        return {
-          id: p.conversation_id,
-          label: c.label,
-          person:
-            c.navigableId !== null
-              ? { type: c.kind === 'agent' ? 'agent' : 'user', id: c.navigableId }
-              : null,
-        };
-      }),
-    [directPairs],
-  );
-  // The pair filter narrows on `filters.channelId`, but ONLY under the DM
-  // container — elsewhere that field is a real channel id the pair list would
-  // never contain, so guard `selectedId` to null off the DM tab or the leaf would
-  // wrongly judge a legitimate channel filter "stale".
-  const directPairSelected =
-    filters.container === 'direct_messages' ? filters.channelId : null;
-  const directPairLeaf = projectDirectPairFilterLeaf(
-    {
-      rows: directPairs,
-      isPending: directPairsQuery.isPending,
-      isFetching: directPairsQuery.isFetching,
-      isError: directPairsQuery.isError,
-    },
-    directPairSelected,
-  );
-  // Self-heal a stale DM narrowing: once the authoritative list has ANSWERED
-  // (never while loading/failed) and the selected pair is not in it, the line is
-  // gone — clear it so the board resets to all DM tasks and the trigger stops
-  // reading ALL while the request still carried a dead `channel_id`. Same
-  // invariant as the workspace→channel cascade dropping an orphan channel, here
-  // triggered by authoritative data arriving rather than a user switch.
-  useEffect(() => {
-    if (directPairLeaf.staleSelection) {
-      onChange({ ...filters, channelId: null });
-    }
-  }, [directPairLeaf.staleSelection, filters, onChange]);
-
-
   // The channel axis under the current container, resolved through the pure
   // model (#task:2041): `channelAxisScope` decides whether the channel picker
   // shows (hidden under DM, where the pair conversation is the coordinate) and
   // over which channel population. The board scope itself (container + coordinate
   // together) is applied by `applyBoardScopeSelection` at BoardScopeFilter's
-  // onSelect; the workspace / direct-line objects are listed by that dropdown
+  // onSelect; the workspace / agent-space objects are listed by that dropdown
   // directly, not by this model.
   const scope = useMemo(
     () => channelAxisScope(filters.container, channelOptions),
@@ -318,26 +251,26 @@ export function TaskFilterBar({
       className={cn('flex flex-wrap items-center gap-1.5', className)}
     >
       {/* Coarsest axis first: WHICH container a task lives in. One grouped
-          dropdown (#task:2041, shiki 2026-08-17) — an "All" row over three
-          sections (Workspaces / Agent Spaces / Direct Messages), each listing
-          the concrete objects — so a pick names the container KIND and the
-          object together instead of the old pick-kind-then-object two-step. It
-          leads the row because it reshapes what the downstream channel menu even
-          describes, and reads left-to-right as narrowing. Every pick runs the
-          pure transition, so a stranded workspace/channel coordinate is
-          cleared. */}
-      <BoardScopeFilter
-        workspaceOptions={workspaceOptions}
-        directPairOptions={directPairOptions}
-        directPairStatus={directPairLeaf.status}
-        containerValue={filters.container}
-        workspaceValue={filters.workspaceId}
-        directPairValue={directPairSelected}
-        onSelect={selection =>
-          onChange(applyBoardScopeSelection(filters, selection, channelWorkspaceId))
-        }
-        {...personDirectory}
-      />
+          dropdown (#task:2041, shiki 2026-08-17) — an "All" row over two sections
+          (Workspaces / Agent Spaces), each listing the concrete objects — so a
+          pick names the container KIND and the object together instead of the old
+          pick-kind-then-object two-step. DM is never a selectable scope here
+          (contract §5): its tasks reach the board through "All" or their own
+          locked drawer. It leads the row because it reshapes what the downstream
+          channel menu even describes, and reads left-to-right as narrowing. Hidden
+          entirely in a locked direct_pair context (§5), where there is no scope to
+          switch to. */}
+      {scopeLocked ? null : (
+        <BoardScopeFilter
+          workspaceOptions={workspaceOptions}
+          containerValue={filters.container}
+          workspaceValue={filters.workspaceId}
+          onSelect={selection =>
+            onChange(applyBoardScopeSelection(filters, selection, channelWorkspaceId))
+          }
+          {...personDirectory}
+        />
+      )}
       {/* Channel stays the within-workspace secondary axis. Same rule as before:
           with no option to pick, the trigger can only report "ALL" — a false
           statement whenever the board IS narrowed on a conversation the option
@@ -776,88 +709,62 @@ function ChannelFilter({
 
 // ── Board scope (container × concrete object) ─────────────────────
 
-/** One selectable row in the board-scope dropdown — either a workspace (its
- *  pick stamps the container matching its `kind`) or a viewer direct line (→
- *  `direct_messages`). The discriminant carries the source option so the row can
- *  paint the right identity (workspace icon vs. counterpart avatar) and build its
- *  own `BoardScopeSelection`. */
-type ScopeRow =
-  | { id: string; label: string; render: 'workspace'; ws: WorkspaceOption }
-  | { id: string; label: string; render: 'pair'; pair: DirectPairOption };
+/** One selectable row in the board-scope dropdown — a workspace whose pick stamps
+ *  the container matching its `kind` (regular → `workspace`, agent home →
+ *  `agent_space`). A DM is never a row here (contract §5). */
+interface ScopeRow {
+  id: string;
+  label: string;
+  ws: WorkspaceOption;
+}
 
 /**
  * The board-scope filter — the coarsest axis, as ONE grouped dropdown
  * (#task:2041, shiki 2026-08-17). An "All" row (the union of every container the
- * viewer can see) sits above three sections that list the CONCRETE objects the
- * viewer can narrow to: Workspaces (regular), Agent Spaces (agent homes), and
- * Direct Messages (the viewer's direct lines). Picking a leaf names the container
- * KIND and the object together — `applyBoardScopeSelection` stamps both — so the
- * old pick-container-then-object two-step is gone, and with it the bare
- * "all agent spaces" / "all DMs" picks (a container KIND with no object): the
- * "All" row covers the union, and every listed row is a concrete scope. A
- * workspace row wears its own icon (a DM workspace = its agent's avatar); a direct
- * line wears the counterpart's avatar, resolved from the directory the person
- * menus already loaded (no extra fetch — the DM leaf's own `useAgents` is gone).
- * The Direct Messages section reports a cold / failed read as its own note
- * instead of vanishing — an empty list would read as "no direct lines", a
- * different (false) claim than "still loading" (#task:2041 B2).
+ * viewer can see, DM tasks included) sits above two sections that list the
+ * CONCRETE objects the viewer can narrow to: Workspaces (regular) and Agent Spaces
+ * (agent homes). Picking a leaf names the container KIND and the object together —
+ * `applyBoardScopeSelection` stamps both — so the old pick-container-then-object
+ * two-step is gone, and with it the bare "all agent spaces" pick (a container KIND
+ * with no object): the "All" row covers the union, and every listed row is a
+ * concrete scope. A workspace row wears its own icon (a DM/agent-home workspace =
+ * its agent's avatar), resolved from the directory the person menus already
+ * loaded (no extra fetch). Direct Messages are not a section: a DM is never a
+ * selectable global scope (contract §5) — its tasks reach the board through the
+ * "All" union or the direct line's own locked Tasks drawer, which hides this
+ * trigger entirely.
  */
 function BoardScopeFilter({
   workspaceOptions,
-  directPairOptions,
-  directPairStatus,
   containerValue,
   workspaceValue,
-  directPairValue,
   onSelect,
   agentsById,
   agentAvatarUrls,
-  userAvatarUrls,
 }: {
   workspaceOptions: WorkspaceOption[];
-  directPairOptions: DirectPairOption[];
-  /** The DM list read's state, so a cold/failed read shows a note instead of an
-   *  empty Direct Messages section reading as "no direct lines" (#task:2041). */
-  directPairStatus: DirectPairFilterLeafStatus;
   containerValue: TaskBoardContainerAxis | null;
   workspaceValue: string | null;
-  directPairValue: string | null;
   onSelect: (selection: BoardScopeSelection) => void;
 } & PersonDirectory): JSX.Element {
   const [open, setOpen] = useState(false);
 
-  // The three sections come from the pure `boardScopeGroups` seam (kind → section
-  // and the show-iff-rows-or-note rule live there, tested without a DOM); this
-  // memo only resolves the DM note copy and projects each section's objects into
-  // the ScopeRow shape the list renders and roves over.
-  const groups = useMemo(() => {
-    const dmNote =
-      directPairStatus === 'loading'
-        ? 'Loading…'
-        : directPairStatus === 'failed'
-          ? 'Couldn’t load direct lines'
-          : null;
-    return boardScopeGroups<WorkspaceOption, DirectPairOption>({
-      workspaces: workspaceOptions,
-      directPairs: directPairOptions,
-      directMessagesNote: dmNote,
-    }).map(g => ({
-      key: g.key,
-      label: g.label,
-      note: g.note,
-      rows: [
-        ...g.workspaces.map(
-          (ws): ScopeRow => ({ id: ws.id, label: ws.label, render: 'workspace', ws }),
-        ),
-        ...g.pairs.map(
-          (pair): ScopeRow => ({ id: pair.id, label: pair.label, render: 'pair', pair }),
-        ),
-      ],
-    }));
-  }, [workspaceOptions, directPairOptions, directPairStatus]);
+  // The two sections come from the pure `boardScopeGroups` seam (kind → section
+  // and the show-iff-rows rule live there, tested without a DOM); this memo only
+  // projects each section's workspaces into the ScopeRow shape the list renders
+  // and roves over.
+  const groups = useMemo(
+    () =>
+      boardScopeGroups<WorkspaceOption>({ workspaces: workspaceOptions }).map(g => ({
+        key: g.key,
+        label: g.label,
+        rows: g.workspaces.map((ws): ScopeRow => ({ id: ws.id, label: ws.label, ws })),
+      })),
+    [workspaceOptions],
+  );
 
   // Flatten for roving focus: index 0 is the All row, then every selectable row
-  // in section order (notes are not selectable, so they take no index).
+  // in section order.
   const flatRows = useMemo(() => groups.flatMap(g => g.rows), [groups]);
   const optionIndex = useMemo(() => {
     const m = new Map<string, number>();
@@ -865,19 +772,11 @@ function BoardScopeFilter({
     return m;
   }, [flatRows]);
 
-  const selectionFor = (row: ScopeRow): BoardScopeSelection =>
-    row.render === 'workspace'
-      ? {
-          kind: 'workspace',
-          workspaceId: row.ws.id,
-          container: workspaceKindContainer(row.ws.kind),
-        }
-      : { kind: 'direct_pair', conversationId: row.id };
-
-  const isSelected = (row: ScopeRow): boolean =>
-    row.render === 'workspace'
-      ? row.ws.id === workspaceValue
-      : row.id === directPairValue;
+  const selectionFor = (row: ScopeRow): BoardScopeSelection => ({
+    kind: 'workspace',
+    workspaceId: row.ws.id,
+    container: workspaceKindContainer(row.ws.kind),
+  });
 
   const listId = useId();
   const optionId = (index: number): string => `${listId}-opt-${index}`;
@@ -894,18 +793,10 @@ function BoardScopeFilter({
     },
   });
 
-  // Trigger identity mirrors the selection: a workspace's own icon, a direct
-  // line's MessageSquare, or the generic Layers for All — all sized to the shared
-  // 14px control-glyph box so the trigger never drifts taller than the row
-  // (#task:1437).
-  const selectedWs = flatRows.find(
-    (r): r is Extract<ScopeRow, { render: 'workspace' }> =>
-      r.render === 'workspace' && r.ws.id === workspaceValue,
-  );
-  const selectedPair = flatRows.find(
-    (r): r is Extract<ScopeRow, { render: 'pair' }> =>
-      r.render === 'pair' && r.id === directPairValue,
-  );
+  // Trigger identity mirrors the selection: a workspace's own icon, or the generic
+  // Layers for All — sized to the shared 14px control-glyph box so the trigger
+  // never drifts taller than the row (#task:1437).
+  const selectedWs = flatRows.find(r => r.ws.id === workspaceValue);
   const triggerIcon = selectedWs ? (
     <WorkspaceIcon
       kind={selectedWs.ws.kind}
@@ -914,24 +805,6 @@ function BoardScopeFilter({
       dmAgentAvatarUrls={agentAvatarUrls}
       size={TRIGGER_GLYPH_PX}
     />
-  ) : selectedPair ? (
-    // A selected direct line wears its COUNTERPART'S avatar — the same identity
-    // the dropdown row paints — not a generic chat glyph, so the trigger reads as
-    // "this person's tasks" (shiki #task:2041). `chip` sizes it to the shared
-    // 14px control-glyph box; a deleted endpoint (no person) falls back to the
-    // neutral person glyph, matching the row.
-    selectedPair.pair.person ? (
-      <PersonAvatar
-        person={selectedPair.pair.person}
-        name={selectedPair.pair.label}
-        size="chip"
-        agentsById={agentsById}
-        agentAvatarUrls={agentAvatarUrls}
-        userAvatarUrls={userAvatarUrls}
-      />
-    ) : (
-      <User className="size-3.5" />
-    )
   ) : (
     <Layers className="size-3.5" />
   );
@@ -947,7 +820,7 @@ function BoardScopeFilter({
           active={containerValue !== null}
           aria-label="Board scope"
         >
-          {selectedWs?.label ?? selectedPair?.label ?? 'All'}
+          {selectedWs?.label ?? 'All'}
         </FilterTrigger>
       </Popover.Trigger>
       <FilterPanel
@@ -979,7 +852,7 @@ function BoardScopeFilter({
               return (
                 <OptionRow
                   key={row.id}
-                  selected={isSelected(row)}
+                  selected={row.ws.id === workspaceValue}
                   active={roving.activeIndex === index}
                   id={optionId(index)}
                   optionRef={el => roving.registerItem(index, el)}
@@ -991,37 +864,18 @@ function BoardScopeFilter({
                 >
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="shrink-0">
-                      {row.render === 'workspace' ? (
-                        <WorkspaceIcon
-                          kind={row.ws.kind}
-                          dmAgentId={row.ws.dmAgentId}
-                          agentsById={agentsById}
-                          dmAgentAvatarUrls={agentAvatarUrls}
-                        />
-                      ) : row.pair.person ? (
-                        <PersonAvatar
-                          person={row.pair.person}
-                          name={row.pair.label}
-                          agentsById={agentsById}
-                          agentAvatarUrls={agentAvatarUrls}
-                          userAvatarUrls={userAvatarUrls}
-                        />
-                      ) : (
-                        <span className="text-text-muted">
-                          <User className="size-3.5" />
-                        </span>
-                      )}
+                      <WorkspaceIcon
+                        kind={row.ws.kind}
+                        dmAgentId={row.ws.dmAgentId}
+                        agentsById={agentsById}
+                        dmAgentAvatarUrls={agentAvatarUrls}
+                      />
                     </span>
                     <span className="truncate">{row.label}</span>
                   </span>
                 </OptionRow>
               );
             })}
-            {group.note !== null ? (
-              <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
-                {group.note}
-              </p>
-            ) : null}
           </div>
         ))}
       </FilterPanel>

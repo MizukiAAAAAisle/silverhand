@@ -330,6 +330,7 @@ function TaskPopoverBody({
   onPickerOpenChange: (open: boolean) => void;
 }): JSX.Element {
   const { relative, absolute } = useRelativeTime(task.created_at);
+  const channelLabel = taskChannelLabel(task);
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -355,13 +356,17 @@ function TaskPopoverBody({
         <span className="shrink-0 text-text-secondary">
           {task.assignee ? task.assignee.name : <em>unassigned</em>}
         </span>
-        <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
-        <span
-          className="min-w-0 truncate text-text-secondary"
-          title={taskChannelLabel(task)}
-        >
-          in {taskChannelLabel(task)}
-        </span>
+        {channelLabel !== null ? (
+          <>
+            <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
+            <span
+              className="min-w-0 truncate text-text-secondary"
+              title={channelLabel}
+            >
+              in {channelLabel}
+            </span>
+          </>
+        ) : null}
         <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
         <span className="shrink-0" title={absolute}>{relative}</span>
       </p>

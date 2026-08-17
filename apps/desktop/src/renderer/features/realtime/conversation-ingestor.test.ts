@@ -1956,11 +1956,11 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
       // event names ('task-7'), else the identity match skips it.
       id: 'task-7',
       task_number: 7,
-      channel_id: 'c1',
-      board: {
+      place: {
         kind: 'workspace',
+        conversation_id: 'c1',
         workspace_id: 'w1',
-        workspace_name: 'WS',
+        workspace_kind: 'regular',
         channel_name: 'general',
       },
       thread_root_id: null,

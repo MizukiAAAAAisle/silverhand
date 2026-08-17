@@ -17,11 +17,11 @@ function summary(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
     id: 'task-1',
     task_number: 7,
-    channel_id: 'anchor-chan',
-    board: {
+    place: {
       kind: 'workspace',
+      conversation_id: 'anchor-chan',
       workspace_id: 'ws1',
-      workspace_name: 'ws',
+      workspace_kind: 'regular',
       channel_name: 'chan',
     },
     thread_root_id: null,
@@ -84,6 +84,31 @@ describe('resolveTaskJumpTarget', () => {
       channelId: 'evt-chan',
       threadRootId: null,
       messageId: 'evt-msg',
+    });
+  });
+
+  it('navigates a direct_pair task to its pair conversation, without a workspaceId', () => {
+    // A pair-placed task has no workspace coordinate, but its ref channel_id IS
+    // the pair conversation id — the caller routes that through the viewer's
+    // pair carrier (`directPairIds` → `nav.toDirect`). Suppressing the jump for
+    // a non-workspace placement would be a shape side-effect, not a real
+    // fail-closed: the ref is resolvable.
+    const d = detail({
+      place: { kind: 'direct_pair', conversation_id: 'pair-conv', pair_key: 'u1:u2' },
+      nav: {
+        kind: 'source',
+        ref: {
+          channel_id: 'pair-conv',
+          thread_root_id: null,
+          message_id: 'pair-msg',
+        },
+      },
+    });
+    expect(resolveTaskJumpTarget(d)).toEqual({
+      workspaceId: undefined,
+      channelId: 'pair-conv',
+      threadRootId: null,
+      messageId: 'pair-msg',
     });
   });
 

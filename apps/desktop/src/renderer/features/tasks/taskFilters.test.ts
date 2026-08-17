@@ -205,7 +205,8 @@ describe('container axis model (#task:2041)', () => {
     });
 
     it('switching from a DM to a workspace drops the stale pair id in channelId', () => {
-      // Under `direct_messages` the pair conversation id lives in `channelId`; it
+      // The locked DM drawer's baseline sets `direct_messages` + the pair id in
+      // `channelId`; if that state is ever fed a workspace pick, the pair id
       // belongs to no workspace, so the cascade clears it rather than carry a dead
       // `channel_id` into a workspace board.
       const before: TaskFilters = {
@@ -217,20 +218,6 @@ describe('container axis model (#task:2041)', () => {
         sel({ kind: 'workspace', workspaceId: 'ws-reg', container: 'workspace' }, before),
       ).toMatchObject({ container: 'workspace', workspaceId: 'ws-reg', channelId: null });
     });
-
-    it('a direct-pair pick is `direct_messages` with the pair id and no workspace', () => {
-      const before: TaskFilters = {
-        ...DEFAULT_TASK_FILTERS,
-        container: 'workspace',
-        workspaceId: 'ws-reg',
-        channelId: 'c-reg',
-      };
-      expect(sel({ kind: 'direct_pair', conversationId: 'dp-1' }, before)).toMatchObject({
-        container: 'direct_messages',
-        workspaceId: null,
-        channelId: 'dp-1',
-      });
-    });
   });
 
   describe('boardScopeGroups — the dropdown sections (kind → section, show rule)', () => {
@@ -238,12 +225,11 @@ describe('container axis model (#task:2041)', () => {
       { id: 'ws-reg', kind: 'regular' as const, label: 'Engineering' },
       { id: 'ws-home', kind: 'dm' as const, label: 'Agent Home' },
     ];
-    const pairs = [{ id: 'dp-1', label: 'alice' }];
 
     it('routes a regular workspace to Workspaces and an agent home to Agent Spaces', () => {
-      const groups = boardScopeGroups({ workspaces, directPairs: [], directMessagesNote: null });
-      // Order is fixed: Workspaces, then Agent Spaces (Direct Messages hidden — no
-      // pairs, no note). The kind→section mapping must not be swapped.
+      const groups = boardScopeGroups({ workspaces });
+      // Order is fixed: Workspaces, then Agent Spaces. The kind→section mapping
+      // must not be swapped. DM is never a section (contract §5).
       expect(groups.map(g => g.key)).toEqual(['workspaces', 'agent-spaces']);
       expect(groups.find(g => g.key === 'workspaces')?.workspaces.map(w => w.id)).toEqual(['ws-reg']);
       expect(groups.find(g => g.key === 'agent-spaces')?.workspaces.map(w => w.id)).toEqual([
@@ -251,39 +237,20 @@ describe('container axis model (#task:2041)', () => {
       ]);
     });
 
-    it('lists the pairs under Direct Messages, in order', () => {
-      const groups = boardScopeGroups({ workspaces: [], directPairs: pairs, directMessagesNote: null });
-      expect(groups.map(g => g.key)).toEqual(['direct-messages']);
-      expect(groups.find(g => g.key === 'direct-messages')?.pairs.map(p => p.id)).toEqual(['dp-1']);
+    it('drops an answered-empty section (no workspaces of that kind)', () => {
+      expect(boardScopeGroups({ workspaces: [] })).toEqual([]);
     });
 
-    it('shows Direct Messages with its note even when the pair list is empty', () => {
-      // A loading/failed read must not vanish — an empty section would read as
-      // "no direct lines", a different (false) claim than "still loading".
+    it('shows only Workspaces when there are no agent homes', () => {
       const groups = boardScopeGroups({
-        workspaces: [],
-        directPairs: [],
-        directMessagesNote: 'Loading…',
+        workspaces: [{ id: 'ws-reg', kind: 'regular' as const, label: 'Engineering' }],
       });
-      expect(groups.map(g => g.key)).toEqual(['direct-messages']);
-      const dm = groups.find(g => g.key === 'direct-messages');
-      expect(dm?.note).toBe('Loading…');
-      expect(dm?.pairs).toEqual([]);
+      expect(groups.map(g => g.key)).toEqual(['workspaces']);
     });
 
-    it('drops an answered-empty section (no objects, no note)', () => {
-      expect(
-        boardScopeGroups({ workspaces: [], directPairs: [], directMessagesNote: null }),
-      ).toEqual([]);
-    });
-
-    it('keeps all three sections in order when each has content', () => {
-      const groups = boardScopeGroups({
-        workspaces,
-        directPairs: pairs,
-        directMessagesNote: null,
-      });
-      expect(groups.map(g => g.key)).toEqual(['workspaces', 'agent-spaces', 'direct-messages']);
+    it('keeps both sections in order when each has content', () => {
+      const groups = boardScopeGroups({ workspaces });
+      expect(groups.map(g => g.key)).toEqual(['workspaces', 'agent-spaces']);
     });
   });
 });

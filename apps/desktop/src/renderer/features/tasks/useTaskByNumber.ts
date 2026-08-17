@@ -146,7 +146,7 @@ function sameTaskChangedFields(
   return (
     row.id === task.task_id
     && taskWorkspaceId(row) === task.workspace_id
-    && row.channel_id === task.channel_id
+    && row.place.conversation_id === task.conversation_id
     && row.thread_root_id === task.thread_root_id
     && row.status === task.status
     && row.title === task.title
@@ -157,7 +157,7 @@ function sameTaskChangedFields(
 }
 
 /** The mutable slice a `task_changed` event writes over a by-number DTO.
- *  Immutable context (creator/created_at/board) stays from the original
+ *  Immutable context (creator/created_at/place) stays from the original
  *  fetch — the event does not carry it. */
 function patchTaskByNumberEntry(
   qc: QueryClient,
@@ -169,7 +169,6 @@ function patchTaskByNumberEntry(
   qc.setQueryData<TaskSummaryDto | null>(key, {
     ...prev,
     id: task.task_id,
-    channel_id: task.channel_id,
     // Keep the navigation anchor fresh from the realtime event so an inline
     // `#task:<n>` jump resolves to the right reply cluster instead of relying
     // on stale by-number fetch values.

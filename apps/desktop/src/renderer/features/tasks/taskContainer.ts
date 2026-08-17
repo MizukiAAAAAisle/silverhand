@@ -93,10 +93,15 @@ export function taskContainerForPosition(position: {
  * a workspace the viewer did not open.
  *
  * The pair arm also sets the `direct_messages` container axis, so the drawer
- * opens ON the container it belongs to: the filter bar then shows the DM 对端
- * leaf (with this pair selected) instead of the workspace/channel controls, and
- * the `channelId` narrowing reads back as a selected leaf rather than an orphan
- * channel coordinate under the All axis (#task:2041).
+ * opens ON the container it belongs to. That value is never produced by the
+ * global scope dropdown — DM is not a selectable scope (contract §5) — so it
+ * uniquely marks the LOCKED direct_pair context: the filter bar hides the scope
+ * trigger and the channel picker entirely (there is no other scope to switch to,
+ * and the trigger must not double as a placement display) and keeps only the
+ * Assignee / From narrowing. The `channelId` is still set to the pair
+ * conversation because that is the wire coordinate the board narrows on
+ * (`channel_id` = `t.conversation_id`); it is not read back into a selectable
+ * channel control here (#task:2041).
  */
 export function taskContainerBaseline(
   container: TaskBoardContainer,

@@ -31,7 +31,7 @@ import {
  *
  * The channel picker is a CHANNEL picker, not an agent picker (shiki
  * #task:1165): the filter value is a single channel id
- * (`task.channel_id === channelId`), so every row's primary label is the
+ * (`place.conversation_id === channelId`), so every row's primary label is the
  * channel TITLE and the SUBTITLE carries the source — the workspace name for a
  * regular channel, the agent's name for an agent-space channel. That's why an
  * agent with multiple channels in its space (e.g. `Mentions` + `Onboarding`)
@@ -96,7 +96,7 @@ export function useTaskFilterOptions(): TaskFilterOptions {
   // workspace filter, which lists them too). Each option carries `kind` +
   // `dmAgentId` so the dropdown can render the canonical WorkspaceIcon (serif "W"
   // for regular, the bound agent's avatar for an agent space). The cascade matches
-  // on `task.board.workspace_id`, so an agent space filters exactly like a regular
+  // on `task.place.workspace_id`, so an agent space filters exactly like a regular
   // workspace.
   const workspaceOptions = useMemo<WorkspaceOption[]>(
     () =>

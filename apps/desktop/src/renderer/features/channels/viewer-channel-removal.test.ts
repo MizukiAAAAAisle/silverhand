@@ -129,11 +129,11 @@ function taskRow(id: string, channelId: string, workspaceId = WS): TaskSummaryDt
   return {
     id,
     task_number: 7,
-    channel_id: channelId,
-    board: {
+    place: {
       kind: 'workspace',
+      conversation_id: channelId,
       workspace_id: workspaceId,
-      workspace_name: 'Workspace',
+      workspace_kind: 'regular',
       channel_name: 'channel',
     },
     thread_root_id: null,

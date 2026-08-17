@@ -191,7 +191,6 @@ describe('applyTaskChangedToMessage (the one task-chip merge helper)', () => {
       {
         kind: 'status',
         workspace_id: 'w1',
-        channel_id: 'c1',
         thread_root_id: null,
         conversation_id: 'c1',
         task_number: 7,

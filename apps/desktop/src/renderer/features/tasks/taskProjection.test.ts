@@ -59,11 +59,11 @@ function row(over: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
     id: 'task-a',
     task_number: 100,
-    channel_id: 'chan-1',
-    board: {
+    place: {
       kind: 'workspace',
+      conversation_id: 'chan-1',
       workspace_id: WS,
-      workspace_name: 'ws',
+      workspace_kind: 'regular',
       channel_name: 'chan',
     },
     thread_root_id: null,
@@ -108,7 +108,6 @@ function eventOf(over: Partial<TaskChangedEvent> = {}): TaskChangedEvent {
   return {
     kind: 'status',
     workspace_id: WS,
-    channel_id: 'chan-1',
     thread_root_id: null,
     conversation_id: 'chan-1',
     task_number: 100,
@@ -256,12 +255,12 @@ describe('moveTaskStatusInBoardColumns', () => {
     const to = qc.getQueryData<BoardColumnPages>(boardColumnKey('in_progress', FILTER));
     expect(from?.pages[0]?.items.map(t => t.id)).toEqual(['task-b']);
     // Ordered placement, and the row carried over WHOLE — the fields the event
-    // does not have (`board.workspace_name`, `creator`, `created_at`) come from the row
+    // does not have (`place.channel_name`, `creator`, `created_at`) come from the row
     // itself, so the moved card renders identically.
     expect(to?.pages[0]?.items.map(t => t.id)).toEqual(['task-c', 'task-a']);
     expect(to?.pages[0]?.items[1]).toMatchObject({
       status: 'in_progress',
-      board: { kind: 'workspace', workspace_name: 'ws' },
+      place: { kind: 'workspace', channel_name: 'chan' },
       creator: { name: 'Shiki' },
     });
   });

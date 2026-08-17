@@ -743,10 +743,10 @@ describe('SystemMessage task event rows (PR-2)', () => {
     // TaskEventChip onto TaskRef — title rendering is now driven by
     // TaskRef's own `useTaskByNumber` query, so tests must seed it.
     for (const t of seededTasks) {
-      if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
+      if (t.place.kind !== 'workspace') throw new Error('workspace fixture expected');
       qc.setQueryData(
         taskByNumberKey(
-          taskBoardCacheScope({ workspaceId: t.board.workspace_id, conversationId: 'conv-1' }),
+          taskBoardCacheScope({ workspaceId: t.place.workspace_id, conversationId: 'conv-1' }),
           t.task_number,
         ),
         t,
@@ -777,11 +777,11 @@ describe('SystemMessage task event rows (PR-2)', () => {
     return {
       id: 'task-42',
       task_number: 42,
-      channel_id: 'chan-1',
-      board: {
+      place: {
         kind: 'workspace',
+        conversation_id: 'chan-1',
         workspace_id: 'ws-1',
-        workspace_name: 'silverhand',
+        workspace_kind: 'regular',
         channel_name: 'general',
       },
       thread_root_id: null,
@@ -1649,11 +1649,11 @@ describe('Markdown bare task refs (#task:1430)', () => {
     return {
       id: 'task-bare',
       task_number: 42,
-      channel_id: 'chan-1',
-      board: {
+      place: {
         kind: 'workspace',
+        conversation_id: 'chan-1',
         workspace_id: 'w-eng',
-        workspace_name: 'silverhand',
+        workspace_kind: 'regular',
         channel_name: 'general',
       },
       thread_root_id: null,
@@ -1680,10 +1680,10 @@ describe('Markdown bare task refs (#task:1430)', () => {
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     for (const t of seeded) {
-      if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
+      if (t.place.kind !== 'workspace') throw new Error('workspace fixture expected');
       qc.setQueryData(
         taskByNumberKey(
-          taskBoardCacheScope({ workspaceId: t.board.workspace_id, conversationId: null }),
+          taskBoardCacheScope({ workspaceId: t.place.workspace_id, conversationId: null }),
           t.task_number,
         ),
         t,

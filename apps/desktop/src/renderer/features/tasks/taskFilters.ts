@@ -54,7 +54,7 @@ export interface TaskFilters {
    *  filter's option set is scoped to this workspace, and switching workspace
    *  drops a channel selection that no longer belongs to it (see
    *  `applyWorkspaceCascade`). Matched by the workspace arm's
-   *  `task.board.workspace_id` — no
+   *  `task.place.workspace_id` — no
    *  surface predicate needed, workspace identity isn't thread-aware. */
   workspaceId: string | null;
   /** Conversation id to narrow to — a channel id (matches that channel and
@@ -128,16 +128,18 @@ export function applyWorkspaceCascade(
  *     concrete coordinate together from one grouped-dropdown pick (shiki
  *     2026-08-17: the container kind and the object it narrows to are one choice,
  *     not a pick-kind-then-object two-step). The grouped dropdown lists the
- *     workspace / agent-space / direct-line OBJECTS directly, so the only
- *     within-board axis the container still reshapes is the channel picker;
+ *     workspace / agent-space OBJECTS directly (never a direct line — DM is not a
+ *     selectable global scope, contract §5), so the only within-board axis the
+ *     container still reshapes is the channel picker;
  *   - `channelAxisScope` — whether that channel picker applies under a container,
  *     and over which channel population.
  *
  * The membership rule is single-sourced here: a workspace of `kind:'regular'`
  * lives under `workspace`, `kind:'dm'` (an agent home) under `agent_space`; a
- * channel's data-source `group` mirrors that; a viewer DirectPair conversation
- * lives under `direct_messages` and carries no workspace coordinate at all (its
- * board is the pair, matched by the `channel_id` param).
+ * channel's data-source `group` mirrors that. The `direct_messages` container is
+ * never picked from the scope dropdown — it exists only as the pinned baseline of
+ * a direct line's own (locked) Tasks drawer, where its coordinate is the pair
+ * conversation (matched by the `channel_id` param) and no workspace is minted.
  */
 
 /** The container a workspace of this kind belongs to. */
@@ -168,14 +170,17 @@ export interface ChannelAxisScope<C> {
 /**
  * The channel axis under a container — one of the two pure faces of the container
  * model (see the block above). After the board-scope collapse (#task:2041) the
- * workspace + direct-line OBJECTS are listed directly by the grouped dropdown from
+ * workspace + agent-space OBJECTS are listed directly by the grouped dropdown from
  * the full option sets, so the container model's only remaining projection is the
  * channel picker:
  *
  *  - `direct_messages` — a DM's coordinate is the pair conversation (→ the
  *    `channel_id` param), not a channel, so the channel picker is HIDDEN, not fed
  *    an empty set: an empty option list reads as "no channels", a different
- *    (false) claim than "this axis does not apply here";
+ *    (false) claim than "this axis does not apply here". (In practice a
+ *    direct_messages board is only ever the locked DM drawer, which hides the
+ *    whole scope + channel row anyway; this keeps the pure model honest for the
+ *    one value that reaches it.)
  *  - `workspace` / `agent_space` — narrow the channel population to that KIND (a
  *    regular workspace's channels vs. an agent home's);
  *  - `null` (All) — every channel the viewer can see.
@@ -201,7 +206,10 @@ export function channelAxisScope<C extends { group: 'dm' | 'workspace' }>(
  * container KIND and the concrete object inside it, collapsing the old
  * pick-container-then-object two-step into a single choice (#task:2041, shiki
  * 2026-08-17). A workspace / agent-space pick carries its own container so the
- * two are set together; a direct-pair pick is `direct_messages` by construction.
+ * two are set together. There is no `direct_pair` pick: a DM is never a selectable
+ * scope in the global board (contract §5) — the "All" tab already covers DM tasks
+ * in its union, and a specific direct line is narrowed to only from inside its own
+ * (locked) Tasks drawer, where the scope trigger is hidden entirely.
  */
 export type BoardScopeSelection =
   | { kind: 'all' }
@@ -209,8 +217,7 @@ export type BoardScopeSelection =
       kind: 'workspace';
       workspaceId: string;
       container: Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'>;
-    }
-  | { kind: 'direct_pair'; conversationId: string };
+    };
 
 /**
  * Apply a board-scope pick — the second pure face of the model — setting the
@@ -218,13 +225,11 @@ export type BoardScopeSelection =
  * fully-resolved scope, so there is no orphan-coordinate transition to repair
  * afterward; the only cleanup is the workspace cascade dropping a coordinate the
  * pick strands:
- *   - `all` — clear the container and every coordinate (the union tab);
+ *   - `all` — clear the container and every coordinate (the union tab, DM tasks
+ *     included);
  *   - `workspace` — run the workspace→channel cascade (so a channel that no
- *     longer belongs to the picked workspace, or a stale direct-pair id parked in
- *     `channelId`, is dropped) and stamp the workspace's own container;
- *   - `direct_pair` — `direct_messages` with the pair conversation id in
- *     `channelId` (the existing `channel_id` wire param) and no workspace
- *     coordinate, since a DirectPair has none.
+ *     longer belongs to the picked workspace is dropped) and stamp the
+ *     workspace's own container.
  *
  * `channelWorkspaceId` resolves a channel id to its owning workspace (null if
  * unknown) — the same injected resolver `applyWorkspaceCascade` takes, so this
@@ -243,63 +248,46 @@ export function applyBoardScopeSelection(
         ...applyWorkspaceCascade(filters, selection.workspaceId, channelWorkspaceId),
         container: selection.container,
       };
-    case 'direct_pair':
-      return {
-        ...filters,
-        container: 'direct_messages',
-        workspaceId: null,
-        channelId: selection.conversationId,
-      };
   }
 }
 
-/** One section of the board-scope dropdown: the workspaces OR the direct pairs
- *  it lists, plus an optional note (only the Direct Messages section reports a
- *  cold/failed read). Generic over the concrete option shapes — those live in the
- *  filter bar — so the classification stays in this model module. */
-export interface BoardScopeGroup<W, P> {
-  key: 'workspaces' | 'agent-spaces' | 'direct-messages';
+/** One section of the board-scope dropdown: the workspaces it lists (regular
+ *  workspaces under "Workspaces", agent homes under "Agent Spaces"). Generic over
+ *  the concrete option shape — that lives in the filter bar — so the
+ *  classification stays in this model module. Direct Messages are not a section:
+ *  a DM is never a selectable global scope (contract §5). */
+export interface BoardScopeGroup<W> {
+  key: 'workspaces' | 'agent-spaces';
   label: string;
-  note: string | null;
   workspaces: readonly W[];
-  pairs: readonly P[];
 }
 
 /**
- * Classify the board-scope dropdown's three sections (#task:2041) — the third
- * pure face of the container model, so "which KIND of workspace goes in which
- * section, and when does a section show" is falsifiable without a DOM (the whole
- * classification used to be inlined in the filter bar's `useMemo`, where deleting
- * a section or mis-routing a kind stayed green — @Cindy).
+ * Classify the board-scope dropdown's sections (#task:2041) — the third pure face
+ * of the container model, so "which KIND of workspace goes in which section, and
+ * when does a section show" is falsifiable without a DOM (the whole classification
+ * used to be inlined in the filter bar's `useMemo`, where deleting a section or
+ * mis-routing a kind stayed green — @Cindy).
  *
  * The regular vs agent-home split reuses `workspaceKindContainer`, the SAME
  * taxonomy the wire axis uses, so a workspace can never land in a section that
- * disagrees with the container its pick stamps. A section shows iff it has objects
- * OR a note: an answered-empty section is simply absent (like an empty workspace
- * group), but the Direct Messages section keeps its loading/failed `note` so an
- * empty list is never mistaken for "no direct lines". `directMessagesNote` is
- * passed in already resolved to copy — the caller owns the localized string.
+ * disagrees with the container its pick stamps. A section shows iff it has
+ * objects: an answered-empty section is simply absent. Direct Messages are not
+ * offered here (contract §5) — the coarsest axis's only selectable objects are
+ * workspaces and agent spaces; DM tasks reach the board through the "All" union or
+ * their own locked drawer.
  */
-export function boardScopeGroups<W extends { kind: 'regular' | 'dm' }, P>(input: {
+export function boardScopeGroups<W extends { kind: 'regular' | 'dm' }>(input: {
   workspaces: readonly W[];
-  directPairs: readonly P[];
-  directMessagesNote: string | null;
-}): Array<BoardScopeGroup<W, P>> {
+}): Array<BoardScopeGroup<W>> {
   const inContainer = (
     container: Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'>,
   ): readonly W[] => input.workspaces.filter(w => workspaceKindContainer(w.kind) === container);
-  const defs: Array<BoardScopeGroup<W, P>> = [
-    { key: 'workspaces', label: 'Workspaces', note: null, workspaces: inContainer('workspace'), pairs: [] },
-    { key: 'agent-spaces', label: 'Agent Spaces', note: null, workspaces: inContainer('agent_space'), pairs: [] },
-    {
-      key: 'direct-messages',
-      label: 'Direct Messages',
-      note: input.directMessagesNote,
-      workspaces: [],
-      pairs: input.directPairs,
-    },
+  const defs: Array<BoardScopeGroup<W>> = [
+    { key: 'workspaces', label: 'Workspaces', workspaces: inContainer('workspace') },
+    { key: 'agent-spaces', label: 'Agent Spaces', workspaces: inContainer('agent_space') },
   ];
-  return defs.filter(g => g.workspaces.length > 0 || g.pairs.length > 0 || g.note !== null);
+  return defs.filter(g => g.workspaces.length > 0);
 }
 
 /** One selectable person in the assignee / creator menus. The `name` is the

@@ -115,16 +115,16 @@ export type ConversationScopedListData = { items: ConversationAttributed[] };
  *  {@link attributedRowFamily}. */
 export type ChannelAttributedRow =
   | { workspace_id: string; channel_id: string }
-  /** P0-f (#task:2022): task rows moved their workspace attribution into the
-   *  board union — the proof accepts the arm-attributed shape, and
-   *  {@link heldChannelIdsInWorkspace}-style enumerators derive the workspace
-   *  by narrowing `board.kind === 'workspace'` (a DirectPair row belongs to no
-   *  workspace and is never held by one). */
+  /** #2045 (#task:2041): task rows fold their attribution into `place` — the
+   *  proof accepts the arm-attributed shape, and
+   *  {@link heldChannelIdsInWorkspace}-style enumerators derive the workspace by
+   *  narrowing `place.kind === 'workspace'` and read `place.conversation_id` as
+   *  the channel coordinate (a DirectPair row belongs to no workspace and is
+   *  never held by one). */
   | {
-      channel_id: string;
-      board:
-        | { kind: 'workspace'; workspace_id: string }
-        | { kind: 'direct_pair'; pair_key: string };
+      place:
+        | { kind: 'workspace'; conversation_id: string; workspace_id: string }
+        | { kind: 'direct_pair'; conversation_id: string };
     };
 
 /** How a viewer-local cache carries a channel — each settles differently.

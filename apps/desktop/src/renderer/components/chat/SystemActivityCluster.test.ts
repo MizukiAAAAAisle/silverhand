@@ -41,11 +41,11 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
     id: 'task-42',
     task_number: 42,
-    channel_id: 'chan-1',
-    board: {
+    place: {
       kind: 'workspace',
+      conversation_id: 'chan-1',
       workspace_id: 'ws-1',
-      workspace_name: 'silverhand',
+      workspace_kind: 'regular',
       channel_name: 'general',
     },
     thread_root_id: null,
@@ -62,10 +62,10 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
 function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = []): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const t of seededTasks) {
-    if (t.board.kind !== 'workspace') throw new Error('workspace fixture expected');
+    if (t.place.kind !== 'workspace') throw new Error('workspace fixture expected');
     qc.setQueryData(
       taskByNumberKey(
-        taskBoardCacheScope({ workspaceId: t.board.workspace_id, conversationId: 'conv-1' }),
+        taskBoardCacheScope({ workspaceId: t.place.workspace_id, conversationId: 'conv-1' }),
         t.task_number,
       ),
       t,

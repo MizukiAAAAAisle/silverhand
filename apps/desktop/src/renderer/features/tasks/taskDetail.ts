@@ -30,14 +30,21 @@ export interface TaskJumpTarget {
  *
  * `nav` is per-viewer and only present on the resolved detail, so the caller
  * passes `detail` once the read succeeds; `null` here means "render no button".
+ *
+ * `workspaceId` rides ONLY on the workspace arm — a pair-placed task carries no
+ * workspace coordinate. That is not a reason to suppress the jump: the caller
+ * resolves a workspace-less `channelId` through the viewer's pair carrier
+ * (`directPairIds` → `nav.toDirect`), and `nav.ref.channel_id` already holds the
+ * pair conversation id for a DM task. So both placements navigate whenever the
+ * server resolved a ref; only `unavailable` returns `null`.
  */
 export function resolveTaskJumpTarget(
   detail: TaskDetailDto,
 ): TaskJumpTarget | null {
   if (detail.nav.kind === 'unavailable') return null;
-  if (detail.board.kind !== 'workspace') return null;
   return {
-    workspaceId: detail.board.workspace_id,
+    workspaceId:
+      detail.place.kind === 'workspace' ? detail.place.workspace_id : undefined,
     channelId: detail.nav.ref.channel_id,
     threadRootId: detail.nav.ref.thread_root_id,
     messageId: detail.nav.ref.message_id,

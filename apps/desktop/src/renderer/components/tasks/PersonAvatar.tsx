@@ -3,7 +3,7 @@ import { User } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX, type AvatarSize } from '@/components/avatar-scale';
+import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUsersById } from '@/features/users/hooks';
@@ -33,37 +33,30 @@ export interface PersonDirectory {
 export function PersonAvatar({
   person,
   name,
-  size = 'xs',
   agentsById,
   agentAvatarUrls,
   userAvatarUrls,
 }: {
   person: PersonRef;
   name: string;
-  /** Surface density tier (default `xs`, the meta-row scale). The board-scope
-   *  filter TRIGGER passes `chip` (14px) so a selected direct line's counterpart
-   *  avatar sits height-uniform with the sibling filter glyphs and never drifts
-   *  taller than the control row (#task:1437 / #task:2041). */
-  size?: AvatarSize;
 } & PersonDirectory): JSX.Element {
-  const px = AVATAR_PX[size];
   if (person.type === 'agent') {
     const runtime = agentsById.get(person.id)?.runtime;
     if (runtime) {
       return (
         <AgentAvatar
           runtime={runtime}
-          size={px}
+          size={AVATAR_PX.xs}
           avatarObjectUrl={agentAvatarUrls.get(person.id) ?? null}
           alt={name}
         />
       );
     }
-    return <User size={px} className="shrink-0 text-text-muted" />;
+    return <User className="size-4 shrink-0 text-text-muted" />;
   }
   return (
     <UserAvatar
-      size={px}
+      size={AVATAR_PX.xs}
       avatarObjectUrl={userAvatarUrls.get(person.id) ?? null}
       alt={name}
     />

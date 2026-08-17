@@ -18,7 +18,9 @@ import {
   isCurrentViewerScope,
   onWsFrame,
   subscribeViewerScope,
+  subscribeWsScope,
 } from '@/lib/ws-client';
+import { useWorkspaces } from '@/features/workspaces/hooks';
 import {
   boardAuthority,
   type BoardAuthority,
@@ -423,4 +425,43 @@ export function useTaskBoardRealtime(): void {
       unsub();
     };
   }, [qc]);
+
+  // §4-A channel-name fact edge (#task:2041). A board card's `channel_name` is a
+  // LIVE projection of the channel title, not a value frozen onto the task at
+  // create time — a channel rename/archive must move it. That edit fires
+  // `workspace_channels_changed` on the channel's `workspace:<id>` scope with NO
+  // `task_changed` (nothing about the task changed), so the viewer-scope listener
+  // above never sees it. The board is cross-workspace, so subscribe on EVERY
+  // workspace the viewer belongs to and, on that event, re-read only the columns
+  // face: the cards carry the name, while counts and facets do not, and no row
+  // moves — the rename changes a label, not a placement.
+  const { data: workspaces = [] } = useWorkspaces();
+  // A stable, order-independent key over the id set, so the effect re-subscribes
+  // only when the membership actually changes (not on every list refetch that
+  // returns equal ids in a fresh array).
+  const workspaceScopeKey = useMemo(
+    () => [...workspaces.map(w => w.id)].sort().join(','),
+    [workspaces],
+  );
+  useEffect(() => {
+    const ids = workspaceScopeKey ? workspaceScopeKey.split(',') : [];
+    if (ids.length === 0) return;
+    const scopes = new Set(ids.map(id => `workspace:${id}`));
+    const subs = ids.map(id => subscribeWsScope(`workspace:${id}`));
+    const unsub = onWsFrame(frame => {
+      // Both the live event and a post-reconnect `snapshot_required` on one of
+      // these scopes can carry a missed rename, so both re-read.
+      const hit =
+        (frame.type === 'event' &&
+          frame.kind === 'workspace_channels_changed' &&
+          scopes.has(frame.scope)) ||
+        (frame.type === 'snapshot_required' && scopes.has(frame.scope));
+      if (!hit) return;
+      void qc.invalidateQueries({ queryKey: ['tasks', 'board', 'column'] });
+    });
+    return () => {
+      for (const s of subs) s.unsubscribe();
+      unsub();
+    };
+  }, [qc, workspaceScopeKey]);
 }

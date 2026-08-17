@@ -77,7 +77,7 @@ export function removeChannelFromTasks(qc: QueryClient, channelId: string): void
         if (!prev) break;
         let changed = false;
         const pages = prev.pages.map(page => {
-          const items = page.items.filter(t => t.channel_id !== channelId);
+          const items = page.items.filter(t => t.place.conversation_id !== channelId);
           if (items.length === page.items.length) return page;
           changed = true;
           return { ...page, items };
@@ -97,7 +97,7 @@ export function removeChannelFromTasks(qc: QueryClient, channelId: string): void
   for (const root of [['task-detail'], ['task-by-number']] as const) {
     for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
       const data = qc.getQueryData<TaskSummaryDto | TaskDetailDto | null>(q.queryKey);
-      if (!data || data.channel_id !== channelId) continue;
+      if (!data || data.place.conversation_id !== channelId) continue;
       qc.removeQueries({ queryKey: q.queryKey, exact: true });
     }
   }
@@ -114,7 +114,7 @@ export function tasksHeldChannelIds(
   const ids = new Set<string>();
   const hold = (rows: readonly TaskSummaryDto[]) => {
     for (const t of rows) {
-      if (taskWorkspaceId(t) === workspaceId) ids.add(t.channel_id);
+      if (taskWorkspaceId(t) === workspaceId) ids.add(t.place.conversation_id);
     }
   };
   for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
@@ -132,7 +132,7 @@ export function tasksHeldChannelIds(
   for (const root of [['task-detail'], ['task-by-number']] as const) {
     for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
       const data = qc.getQueryData<TaskSummaryDto | TaskDetailDto | null>(q.queryKey);
-      if (data && taskWorkspaceId(data) === workspaceId) ids.add(data.channel_id);
+      if (data && taskWorkspaceId(data) === workspaceId) ids.add(data.place.conversation_id);
     }
   }
   return [...ids];
