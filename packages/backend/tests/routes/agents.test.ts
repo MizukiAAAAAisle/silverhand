@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   AgentAvailabilityDtoSchema,
   AgentLivenessDtoSchema,
+  AGENT_AVAILABILITY_CHANGED_EVENT,
   encodeUserPrincipalHeader,
   fixedConversationTitle,
   RUNTIME_CATALOG,
@@ -21,6 +22,8 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { switchAgentRuntime } from '../../src/application/switch-agent-runtime.js';
+import { revokeHost } from '../../src/application/revoke-host.js';
+import { createSqliteHostUnitOfWork } from '../../src/repos/host-uow.js';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -2319,6 +2322,61 @@ describe('GET /api/agents/:id/availability (#task:2043)', () => {
     expect(res.status).toBe(200);
     // A revoked host is no longer a usable transport ⇒ offline (determinate).
     expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('offline');
+  });
+
+  it('a committed host revoke fires ONE availability invalidation per viewer even though the outbound attachment is UNCHANGED — the frame comes from the post-commit fact edge, not a socket teardown (#task:2043 B, Cindy)', async () => {
+    const { agentId, hostId, controller } = await setup();
+    controller.activeAgentIds = [agentId];
+    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
+
+    // Connected + reachable before revoke — the creator (default viewer) is the
+    // agent's owner, so this host is theirs to revoke and theirs to be told about.
+    expect(
+      AgentAvailabilityDtoSchema.parse(
+        await (await readAvailability(agentId)).json(),
+      ).availability,
+    ).toBe('online');
+
+    const frames: Array<{ kind: string; payload: unknown }> = [];
+    const off = t!.ctx.events.subscribeScope(`viewer:${t!.viewerUserId}`, e => {
+      if (e.kind === AGENT_AVAILABILITY_CHANGED_EVENT) {
+        frames.push({ kind: e.kind, payload: e.payload });
+      }
+    });
+
+    // Revoke through the AUTHORITY (use case), not `HostRepo.revoke` — the
+    // post-commit edge is what must fan the invalidation. An embedded/local host
+    // has no host-WS connection to close, so `disconnectHost` is a no-op and
+    // could never have produced this frame: the ONLY source is the commit edge.
+    const result = revokeHost(
+      {
+        ctx: t!.ctx,
+        hosts: new HostRepo(t!.ctx.db),
+        uow: createSqliteHostUnitOfWork(t!.ctx.db),
+      },
+      { hostId, requesterUserId: t!.viewerUserId },
+    );
+    off();
+    expect(result.kind).toBe('revoked');
+
+    // The outbound attachment is UNCHANGED — `connectionIdForHost` still resolves
+    // — so nothing was torn down; the availability flip is read purely off the
+    // `revoked_at` fact, and the frame purely off the commit edge.
+    expect(
+      t!.ctx.outboundFrameAdapter?.()?.connectionIdForHost(hostId) ?? null,
+    ).not.toBeNull();
+    // Exactly one pure invalidation carrying only the agent id.
+    expect(frames).toEqual([
+      { kind: AGENT_AVAILABILITY_CHANGED_EVENT, payload: { agent_id: agentId } },
+    ]);
+
+    // …and the subsequent read is Offline (the value the invalidation tells the
+    // viewer to refetch).
+    const after = await readAvailability(agentId);
+    expect(after.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await after.json()).availability).toBe(
+      'offline',
+    );
   });
 
   it('hides the agent from a stranger (404) but serves the human DM endpoint via the DirectPair arm', async () => {

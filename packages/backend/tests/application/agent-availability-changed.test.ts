@@ -10,6 +10,7 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { canViewAgent } from '../../src/permissions.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 // The `agent_availability_changed` producer (#task:2043 B). It fans a pure
@@ -92,8 +93,9 @@ describe('publishAgentAvailabilityChangedForHost (#task:2043 B)', () => {
     // hold a non-`active` row (there is no active→pending transition; that is a
     // deliberate lifecycle invariant). `listByHost` is status-agnostic, so the
     // producer still ENUMERATES this agent — the audience empties only because
-    // `canViewAgent` (default `includeStatuses: ['active']`) rejects it, which
-    // is precisely the filter under test. A raw-SQL demotion would trip the
+    // `canViewAgent` (default `includeStatuses: ['active']`) rejects it, and
+    // `agentViewerUserIds` applies that SAME active-only widener, which is
+    // precisely the status gate under test. A raw-SQL demotion would trip the
     // db-boundary ledger AND fake a transition production cannot make.
     const agentId = new AgentRepo(t.ctx.db).reserveForMaterialize(
       { name: 'pending-agent', runtime: 'claude', session_scope: 'agent' },
@@ -111,10 +113,9 @@ describe('publishAgentAvailabilityChangedForHost (#task:2043 B)', () => {
     publishAgentAvailabilityChangedForHost(t.ctx, depsFor(t), hostId);
     cap.stop();
 
-    // Creator and the DirectPair human endpoint both raw-qualify (arm union),
-    // yet a non-`active` agent is a 404 for everyone, so the audience collapses
-    // to empty. This is why the producer filters candidates through
-    // `canViewAgent` rather than trusting the union of ACL arms.
+    // Creator and the DirectPair human endpoint both hit an ACL arm, yet a
+    // non-`active` agent is a 404 for everyone, so the audience collapses to
+    // empty via the status gate. The arm union is never trusted on its own.
     expect(cap.of('local')).toEqual([]);
     expect(cap.of('teammate')).toEqual([]);
   });
@@ -155,5 +156,54 @@ describe('publishAgentAvailabilityChangedForHost (#task:2043 B)', () => {
     // ONE frame — pins the `Set`-based candidate dedupe.
     expect(cap.of('local')).toEqual(one);
     expect(cap.of('other')).toEqual([]);
+  });
+
+  it('the fan-out audience is EXACTLY the canViewAgent-true set over a population spanning every arm (dual by construction — no arm can drift)', async () => {
+    // Seed one agent reachable through ALL THREE human ACL arms plus a stranger,
+    // then assert the set of users who RECEIVE the invalidation equals the set
+    // `canViewAgent` admits — the structural/sensitivity proof (#task:2043 B,
+    // Cindy `oOQkk0fQfYxuSW_U`). Both directions read the ONE shared arm builder
+    // (`agentHumanViewerUserIds`), so this equality holds by construction: it
+    // breaks the moment a future edit teaches `canViewAgent` to admit a user the
+    // audience does not enumerate (under-send — the leak the contract forbids)
+    // or the reverse — a drift a single arm list, filtered post-hoc, would hide.
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const hostId = new HostRepo(t.ctx.db).ensureLocal().id;
+    const agents = new AgentRepo(t.ctx.db);
+    const workspaces = new WorkspaceRepo(t.ctx.db);
+    // Creator = `local`.
+    const agentId = agents.create(
+      { name: 'all-arms-agent', runtime: 'claude' },
+      hostId,
+      'local',
+    ).id;
+    // Workspace arm: `other` is a co-member of a workspace the agent is in.
+    const workspace = workspaces.insert({
+      name: fixedWorkspaceName(`ws-${randomUUID().slice(0, 8)}`),
+      description: null,
+    });
+    workspaces.insertMembership(workspace.id, agentId);
+    workspaces.addUserMember(workspace.id, 'other');
+    // DirectPair arm: `teammate` is the human endpoint of a human↔agent pair.
+    new ConversationRepo(t.ctx.db).getOrCreateDirectPair(
+      { kind: 'agent', id: agentId },
+      { kind: 'human', id: 'teammate' },
+      Date.now(),
+    );
+
+    // `someone` hits no arm — the stranger.
+    const population = ['local', 'teammate', 'other', 'someone'];
+    const cap = capture(t, population);
+    publishAgentAvailabilityChangedForHost(t.ctx, depsFor(t), hostId);
+    cap.stop();
+
+    const received = population.filter(u => cap.of(u).length > 0).sort();
+    const canView = population
+      .filter(u => canViewAgent(t.ctx, { kind: 'user', userId: u }, agentId))
+      .sort();
+    // The audience IS the predicate's positive set — no more, no less.
+    expect(received).toEqual(canView);
+    // And concretely: all three arms in, the stranger out.
+    expect(received).toEqual(['local', 'other', 'teammate']);
   });
 });

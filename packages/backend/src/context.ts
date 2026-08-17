@@ -223,6 +223,20 @@ export interface BackendContext {
    */
   outboundFrameAdapter?: () => OutboundFrameAdapter | null;
   /**
+   * #task:2043 B — the availability-invalidation effect edge. Fires
+   * `agent_availability_changed` to the viewer audience of every agent on a
+   * host whenever that host crosses an edge the availability read face observes
+   * (`GET /api/agents/:id/availability` = host reachability × agent validity).
+   * Bound once by the composition root to
+   * `publishAgentAvailabilityChangedForHost`; called by BOTH transport attach
+   * seams (WSS + embedded Unix) AND by the host-revoke authority at its
+   * post-commit edge — so the invalidation is driven by the fact transition,
+   * never inferred from socket teardown (embedded local hosts have no host-WS
+   * connection to tear down). Optional: a harness without a fanout leaves it
+   * absent and the transitions simply publish nothing.
+   */
+  publishAgentAvailabilityChanged?: (hostId: string) => void;
+  /**
    * #task:1588 — late-bound per-host liveness view from the outbound
    * event fanout (event-maintained, generation-bound). The host-status
    * read model consumes it so `GET /api/hosts/:id/status` serves the

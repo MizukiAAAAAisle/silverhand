@@ -872,6 +872,12 @@ export async function startBackend(
       listAgentIdsByHost: hostId =>
         persistence.repos.agents.listByHost(hostId).map(agent => agent.id),
     };
+    // Bind the availability-invalidation effect edge ONCE. Both transport attach
+    // seams AND the host-revoke authority (`revoke-host.ts`, post-commit) drive
+    // it through this single closure, so the fan-out is identical regardless of
+    // which fact transition fired it.
+    ctx.publishAgentAvailabilityChanged = hostId =>
+      publishAgentAvailabilityChangedForHost(ctx, availabilityChangedDeps, hostId);
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       hostTokenVerifier: new HostTokenService(persistence.hostTokens),
       hosts: persistence.repos.hosts,
@@ -879,7 +885,7 @@ export async function startBackend(
         ? opts.testHooks.wrapHostWsEventSink(hostWsEventSink)
         : hostWsEventSink,
       onHostAttachmentChanged: hostId =>
-        publishAgentAvailabilityChangedForHost(ctx, availabilityChangedDeps, hostId),
+        ctx.publishAgentAvailabilityChanged?.(hostId),
     });
     // Construct the deployment-specific outbound transport. This runs
     // synchronously before the listen callback fires, so `outboundAdapter`
@@ -911,7 +917,7 @@ export async function startBackend(
         // as the WSS attach edge above, so an embedded connect/disconnect
         // invalidates `/availability` exactly like a WSS one.
         onHostAttachmentChanged: hostId =>
-          publishAgentAvailabilityChangedForHost(ctx, availabilityChangedDeps, hostId),
+          ctx.publishAgentAvailabilityChanged?.(hostId),
         logger,
       });
       embeddedOutboundAdapter = adapter;

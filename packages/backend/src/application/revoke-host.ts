@@ -11,7 +11,8 @@ import type { HostRepo } from '../repos/host-repo.js';
  * `notFound` to defeat host-id enumeration), the SINGLE transaction that
  * soft-deletes the host row (only when not already revoked, so a re-revoke does
  * not advance the tombstone) and ALWAYS sweeps the host's active credentials
- * (reconciling a half-failed prior run), a post-commit refetch, and the
+ * (reconciling a half-failed prior run), a post-commit refetch, a post-commit
+ * availability invalidation (agents on the host just went Offline), and the
  * post-commit best-effort daemon disconnect when the host is on the WS
  * transport. It does NOT cascade-delete agents /
  * workspaces / conversations — runtime placement is the boundary that fails
@@ -72,6 +73,12 @@ export function revokeHost(
   }
 
   const now = Date.now();
+  // A revoke flips every agent on this host to Offline on the availability read
+  // face (`host.revoked_at !== null` ⇒ offline). Capture whether THIS call is
+  // the real state transition (null → tombstone) so the post-commit
+  // invalidation fires exactly once, on the edge that changes the value — an
+  // idempotent re-revoke changes nothing and must stay silent.
+  const wasNewlyRevoked = host.revoked_at === null;
   // Single transaction: soft-delete the host row (only when not already
   // revoked, so a re-revoke does not advance the tombstone) and ALWAYS sweep
   // active credentials (covers idempotent re-revoke and reconciles a
@@ -89,6 +96,23 @@ export function revokeHost(
     // Defensive: a SELECT immediately after a committed soft-delete (an UPDATE)
     // must find the row. Surface as a loud throw (→ 500) if it ever happens.
     throw new Error(`HostRepo.get returned null for revoked host ${cmd.hostId}`);
+  }
+
+  // #task:2043 B — availability invalidation at the AUTHORITATIVE post-commit
+  // edge, not inferred from socket teardown. A co-located embedded host has no
+  // host-WS connection to close (the disconnect below is a no-op for it), yet
+  // its agents just went Offline; driving the fan-out from the committed fact
+  // transition is the only signal that reaches those viewers. Best-effort: a
+  // publish failure must not fail the revoke.
+  if (wasNewlyRevoked) {
+    try {
+      ctx.publishAgentAvailabilityChanged?.(cmd.hostId);
+    } catch (err) {
+      ctx.logger.warn(
+        { err, hostId: cmd.hostId, action: 'host_revoke_availability' },
+        'host_revoke availability invalidation failed (non-blocking)',
+      );
+    }
   }
 
   // Post-commit best-effort daemon disconnect (spec §2.1): runs AFTER the commit so
