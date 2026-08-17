@@ -361,9 +361,11 @@ export function createConversationReadApp(
   /**
    * GET /api/conversations/:id/ref
    *
-   * Identity + routing metadata for any conversation (channel /
-   * dm_channel) by id. Designed to back cross-workspace
-   * secondary-pane resolution and the `#conv:<id>` sigil renderer (PR-3).
+   * Identity + routing metadata for a WORKSPACE-PLACED conversation by id
+   * (a regular channel or an agent-home `dm_channel`). Designed to back
+   * cross-workspace secondary-pane resolution and the `#conv:<id>` sigil
+   * renderer (PR-3). The face is deliberately narrower than "any
+   * conversation" — see the workspace-placement branch below.
    *
    * Permission: `canReadConversation` — the SAME public-aware read gate as
    * channel detail + message history, deliberately not the stricter
@@ -372,8 +374,8 @@ export function createConversationReadApp(
    * serves made every `#conv:` chip and `?side` pane answer
    * "unauthorized" for an active public channel whose full history the
    * main pane happily renders. Net widening is exactly "active + public +
-   * same workspace + not a channel member" — private, ARCHIVED public,
-   * non-workspace and non-participant `dm_channel` all stay 403 (see
+   * same workspace + not a channel member" — private, ARCHIVED public and
+   * non-participant `dm_channel` all stay 403 (see
    * `isPublicChannelBranch`). The route is user-facing only (no
    * `/internal` twin), so agent principals never reach it — and the
    * public branch is user-only anyway. Do NOT generalise to agents
@@ -392,15 +394,31 @@ export function createConversationReadApp(
     if (!canReadConversation(ctx, getUserPrincipal(c), conversation.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    // `ConversationRef` names a workspace in its contract (`workspace_id` +
-    // the projected `workspace_kind`), so this face can only describe the
-    // workspace arm. A user principal can never READ a workspace-less
-    // placement anyway (`canViewNonWorkspaceConversation`: an agent inbox has
-    // exactly one participant and it is never a human), so the branch is the
-    // same "cannot be named on this surface" answer as the deleted-workspace
-    // arm below — deliberately a 404, not an assertion: the ref endpoint is
-    // reached with arbitrary caller-supplied ids (`#conv:` chips, `?side`
-    // panes), so an unnameable id is bad input, not a routing bug.
+    // CONTRACT-FACE NARROWING, not an authorization answer (#task:2038, ruling
+    // A). `ConversationRef` names a workspace in its contract (`workspace_id` +
+    // the projected `workspace_kind`, both non-null), so this face can only
+    // describe the WORKSPACE arm. A workspace-less placement is therefore
+    // unnameable here even for a caller who legitimately reads it: a human
+    // endpoint of their own `direct_pair` passes the ACL above (#task:2035 made
+    // that arm real), and still gets this 404 — the 404 says "not a thing this
+    // face can name", exactly like the deleted-workspace arm below, and NOT
+    // "you may not read it". An earlier version of this comment claimed a user
+    // principal could never read a workspace-less placement; #task:2035
+    // falsified it, so the branch went from unreachable defence to a live
+    // behavioural answer. It is pinned by a test (`conversation-ref.test.ts`:
+    // readable via message history, 404 here) rather than left to a comment.
+    //
+    // A 404 (not a 4xx that means "wrong face") because the endpoint is reached
+    // with arbitrary caller-supplied ids from `#conv:` chips and `?side` panes:
+    // an unnameable id is bad input, not a routing bug.
+    //
+    // The private line's identity is NOT missing from the wire — it is on its
+    // own face, `GET /api/direct-pairs`, which returns the viewer's COMPLETE set
+    // of pairs (see `DirectPairListResponseSchema`). That completeness is what
+    // makes a miss there decisive ("you are not an endpoint") instead of
+    // "not loaded yet", and it is the whole reason this face may stay narrow.
+    // Widening `ConversationRef` to carry a nullable workspace would put the
+    // pseudo-coordinate #task:2035 deleted back on the wire.
     if (!isWorkspacePlaced(conversation)) {
       return c.json({ error: 'conversation not found' }, 404);
     }

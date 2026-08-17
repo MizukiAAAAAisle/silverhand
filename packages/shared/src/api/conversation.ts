@@ -144,15 +144,37 @@ export type CreateConversationChannelInput = z.input<
 // secondary-pane resolution and the `#conv:<id>` sigil renderer (PR-3).
 //
 // Hard contract:
+//   - THE WORKSPACE ARM ONLY (#task:2038, ruling A), and TYPE-ENFORCED:
+//     `placement_kind` is the literal `'workspace'` and `workspace_id` is
+//     non-nullable, so this DTO cannot even EXPRESS a workspace-less
+//     placement. That is the point — a `direct_pair` has no workspace
+//     coordinate (the placement's definition, not a gap), so it cannot be
+//     named here and the route answers 404 for it even when the caller may
+//     read it. The narrowing is the contract; the 404 is not an
+//     authorization answer. A private line's identity lives on its own face,
+//     `GET /api/direct-pairs`, whose complete-set guarantee (see
+//     `DirectPairListResponseSchema`) is what makes resolving `#conv:` /
+//     `?side` there decisive rather than best-effort.
+//     `placement_kind` is kept as a FIELD rather than dropped because it is
+//     the discriminator a consumer needs the moment a second, non-workspace
+//     identity DTO exists beside this one — a `direct_pair` descriptor is
+//     modelled by its own carrier, and the two form a discriminated union.
+//     Generalising instead (nullable `workspace_id` / a third
+//     `workspace_kind`) reintroduces the pseudo-coordinate #task:2035
+//     removed, for every consumer of this DTO; it is option B, and it has to
+//     be reopened as an explicit contract change — which these two literals
+//     now force.
 //   - `workspace_kind` is the *external* projection — `agent_home` is
 //     mapped to `'dm'` here so the renderer never sees a third kind.
 //   - Does NOT include unread count, last_seq, message previews, or
 //     any per-user state — those go through the existing read-cursor
 //     and message-window endpoints. Keep this endpoint identity-only.
-//   - Permission: `canViewWorkspace(user, workspace_id)` only. This
-//     route is mounted on the user-facing surface only — agents do
-//     NOT get a path to call it. If we ever expose to agents, write a
-//     dedicated ACL helper; do not relax this one.
+//   - Permission: `canReadConversation` — the same public-aware read gate
+//     as channel detail and message history (NOT `canViewWorkspace`; the
+//     route's own doc block carries the reasoning). This route is mounted
+//     on the user-facing surface only — agents do NOT get a path to call
+//     it. If we ever expose it to agents, write a dedicated ACL helper;
+//     do not relax that one.
 export const ConversationRefWorkspaceKindSchema = z.enum(['regular', 'dm']);
 export type ConversationRefWorkspaceKind = z.infer<
   typeof ConversationRefWorkspaceKindSchema
@@ -160,7 +182,11 @@ export type ConversationRefWorkspaceKind = z.infer<
 
 export const ConversationRefSchema = z.object({
   id: z.string(),
-  placement_kind: ConversationPlacementKindSchema,
+  // The narrowing above, as a type: NOT `ConversationPlacementKindSchema`.
+  // Widening this back to the full enum makes `direct_pair + non-null
+  // workspace_id` expressible again, which is the impossible state this face
+  // exists to exclude.
+  placement_kind: z.literal('workspace'),
   roster_policy: ConversationRosterPolicySchema,
   title: z.string(),
   workspace_id: z.string(),
@@ -557,6 +583,22 @@ export type DirectPairListItem = z.infer<typeof DirectPairListItemSchema>;
 
 /** Response for `GET /api/direct-pairs`: every EXISTING pair the viewer is an
  *  endpoint of, oldest first.
+ *
+ *  COMPLETE SET, and that is a load-bearing CONTRACT rather than today's
+ *  implementation (#task:2038, ruling A). The response carries EVERY pair the
+ *  viewer is an endpoint of: no pagination, no cursor, no server-side cap, no
+ *  activity-based truncation — which is why the shape has exactly one key and no
+ *  place to put a page token. Consequence, and the reason the contract is named:
+ *  this list is the ONLY face that can resolve a private line's identity
+ *  (`ConversationRef` is the workspace arm only), so an id's ABSENCE here is
+ *  DECISIVE — "the viewer is not an endpoint of it" — and a `#conv:<pair>` chip
+ *  or `?side=<pair>` pane may degrade to inert text on a miss. Introduce a page
+ *  or a limit and that inference silently becomes false: old lines' chips would
+ *  go inert with nothing failing. So a truncating variant is not an additive
+ *  change to this face — it is the first real argument for generalising
+ *  `ConversationRef` instead (option B, deliberately rejected today), and it has
+ *  to be reopened there. `tests/routes/direct-pairs.test.ts` holds the assertions
+ *  that go red if this is ever weakened.
  *
  *  EXISTING pairs only — a product ruling, not an optimization (@shiki,
  *  #task:2035): an agent the viewer has never messaged does NOT appear here. The

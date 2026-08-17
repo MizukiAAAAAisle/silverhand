@@ -280,6 +280,13 @@ const DIRECT_PAIR_LIST_COLUMNS = `c.id AS id,
  * by creation. `id` breaks ties so the list is deterministic within a millisecond —
  * a random tiebreak that reorders between two fetches reads as movement in the
  * sidebar.
+ *
+ * NO `LIMIT` / `OFFSET`, deliberately and contractually (#task:2038): the read face
+ * this statement feeds promises the viewer's COMPLETE set of pairs, because it is
+ * the only face that can resolve a private line's identity, so "absent" has to mean
+ * "not an endpoint" rather than "on a later page". `direct-pairs.test.ts` asserts
+ * over this exact text, the same way `participation-enumeration.test.ts` pins the
+ * access path.
  */
 export const DIRECT_PAIRS_FOR_VIEWER_SQL = `SELECT ${DIRECT_PAIR_LIST_COLUMNS}
      FROM (${DIRECT_PAIR_IDS_FOR_USER_SQL}) p

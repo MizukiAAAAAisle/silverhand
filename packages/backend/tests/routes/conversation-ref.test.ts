@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  apiPaths,
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
+  type DirectPairListResponse,
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { insertAgentScopedAgent } from '../utils/agent-scope.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { canReadConversation } from '../../src/permissions.js';
 
 async function makeAgent(t: TestApp, name: string): Promise<{
   agentId: string;
@@ -312,5 +317,64 @@ describe('GET /api/conversations/:id/ref — public-aware read gate boundary', (
     // The participant (`local`, the DM's human side) still resolves it.
     expect((await http(t).get(refPath(alice.dmChannelId))).status).toBe(200);
     expect((await asTeammate(t).get(refPath(alice.dmChannelId))).status).toBe(403);
+  });
+});
+
+// The WORKSPACE-ARM NARROWING (#task:2038, ruling A). `ConversationRef` names a
+// workspace in its contract, so a workspace-less placement is unnameable on this
+// face — and since #task:2035 that is a LIVE branch rather than an unreachable
+// defence: a human endpoint of their own `direct_pair` genuinely reads the
+// conversation and still gets 404 here. Before this block the branch had zero
+// coverage, which is exactly how its justification ("a user can never read a
+// workspace-less placement") went stale without anything failing.
+//
+// The 404 is only ACCEPTABLE because the identity is available elsewhere in full,
+// so the test asserts the substitute in the same breath: the pair appears on
+// `GET /api/direct-pairs`, whose complete-set contract is pinned by
+// `direct-pairs.test.ts`.
+describe('GET /api/conversations/:id/ref — workspace-arm narrowing', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('404s a direct_pair the viewer can READ (contract-face narrowing, not an ACL answer)', async () => {
+    t = buildTestApp();
+    const parent = await makeAgent(t, 'parent');
+    const confidant = insertAgentScopedAgent(t, parent.agentId, 'confidant');
+    const pairId = new ConversationRepo(t.ctx.db).getOrCreateDirectPair(
+      { kind: 'agent', id: confidant },
+      { kind: 'human', id: t.viewerUserId },
+      1_000,
+    ).conversation.id;
+
+    // 1. The ACL admits the viewer — the placement authority's human-endpoint arm.
+    expect(
+      canReadConversation(
+        t.ctx,
+        { kind: 'user', userId: t.viewerUserId },
+        pairId,
+      ),
+    ).toBe(true);
+    // 2. Not a theoretical `true`: the SAME gate serves message history, and that
+    //    face answers 200 for this exact conversation.
+    expect(
+      (await http(t).get(apiPaths.conversationChannelMessages(pairId))).status,
+    ).toBe(200);
+    // 3. The ref face nonetheless 404s. If someone "fixes" this by making
+    //    `ConversationRef.workspace_id` nullable, this assertion is the one that
+    //    has to be deleted deliberately — the pseudo-coordinate cannot come back
+    //    by accident.
+    expect((await http(t).get(refPath(pairId))).status).toBe(404);
+
+    // 4. And the identity the chip/pane needs is on the private line's own face.
+    const list = await http(t).get(apiPaths.directPairs);
+    expect(list.status).toBe(200);
+    expect(
+      ((await list.json()) as DirectPairListResponse).direct_pairs.map(
+        p => p.conversation_id,
+      ),
+    ).toContain(pairId);
   });
 });
