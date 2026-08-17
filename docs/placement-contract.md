@@ -331,6 +331,20 @@ conjunct.
 | `saved-message-repo.ts` `listForUser` | **LFR→HPB, FIXED (#2050)** | was a hand-written `EXISTS(conversation_users)` that returned false for every `direct_pair` ⇒ DM saves persisted (201) and read by id but were silently dropped from the list. Now delegates to `userParticipates('conv', userId)`. Falsifiers in `tests/repos/saved-message-repo.test.ts`: save+list a `direct_pair` message returns it; a stale seat without `workspace_users` membership does NOT list (membership conjunct); a workspace member with NO channel seat does NOT list (seat conjunct — see name-join guardrail below) |
 | `saved-message-repo.ts` `getByMessageIdForUser` | **OPEN, non-blocking (#2050)** | does NOT re-derive participation — it self-limits on `sm.user_id` and is called ONLY as `save()`'s post-write echo, behind the route's `canViewConversation` ACL, reading back the row the caller just wrote (no reachable stale-reader path). A docblock states the invariant. If it EVER gains a second, standalone caller, that caller must add the `userParticipates` gate first. Recorded here (not only in the comment) so a future reader is enumerated, not rediscovered |
 
+**Agent-side roster reads (`conversations.getAgent` — a `conversation_agents`
+row query, the agent twin of `EXISTS(conversation_users)`).** Same rule, same
+failure mode: `getAgent` agrees with `agentParticipates` only on the workspace
+arm and returns `null` for every rosterless `direct_pair` / `agent_inbox`
+placement, so any surface that gates on it silently excludes real endpoint/inbox
+agents. Enumerated here alongside the human-side reads so the disposition is
+recorded once, not re-derived per site:
+
+| Site | Class | Disposition |
+|---|---|---|
+| `runtime/event-perimeter.ts` step 4, wired at `adapters/runtime-fanout.ts` | **LFR→FIXED (#2048)** | the runtime ingress perimeter fed `getAgent` as its admission predicate ⇒ every DirectPair / agent-inbox agent's parsed-event frame (activity, `runtime_delivery_consumed`, run-state) was dropped with `reason:'agent_not_in_conversation'` ⇒ the DM Activity feed was **permanently empty** (read face returns 200 + `events:[]`, worse to diagnose than the 404 it replaced). Now delegates to `isAgentParticipant`; the perimeter's `RuntimePerimeterConversationReadPort.hasAgent` port method was renamed `isAgentParticipant` so the port name states the authority. Falsifier walks the REAL wiring (not the fake-port guard test): `tests/runtime/outbound-event-fanout.test.ts` "rosterless DirectPair endpoint agent parsed-event frame through the REAL ingress perimeter". The `agent_not_in_conversation` drop-log reason is retained — it is the only runtime signal for this class of hole |
+| `routes/conversations.ts` activity GET (`…/agents/:aid/activity`) | **LFR→FIXED (#2048, read face)** | authorized the target agent via `getAgent` ⇒ 404 for a real DirectPair endpoint. Now `isAgentParticipant`. Falsifiers in `tests/routes/conversation-activity.test.ts` (endpoint 200, non-endpoint 404 = unknown, non-viewer 403) |
+| `routes/conversations.ts` `start` / `stop` / `clear-session` control plane | **WOD by consumer** | each reads `getAgent` before acting on an agent-in-conversation. For `direct_pair` this is **unreachable today** because the renderer collapses the roster surfaces that would issue these calls (`ChannelView` `rosterTarget===null`; `AgentInfoPopover` `if (!row) return null`). Classified WOD, not FIXED — the conclusion depends on a consumer-side fact, so it is recorded here rather than re-derived. If a renderer ever exposes per-agent control on a pair, these must move to `isAgentParticipant` first |
+
 **Name-join guardrail (F1, #2050 — the participation-only invariant, made
 executable).** The renderer joins mutable names (`workspace_name` today;
 `channel_name` at the #2045 endgame) from live authorities keyed by

@@ -370,8 +370,16 @@ export function createRuntimeFanoutDbDeps(deps: {
       agents: { ownerHostIdOf: agentId => agents.get(agentId)?.host_id ?? null },
       conversations: {
         exists: conversationId => conversations.get(conversationId) !== null,
-        hasAgent: (conversationId, agentId) =>
-          conversations.getAgent(conversationId, agentId) !== null,
+        // #task:2048 — the ingress admission question is placement participation,
+        // NOT roster membership. Converge onto the one authority: its workspace
+        // arm already gates the `conversation_agents` EXISTS behind
+        // `placement_kind = 'workspace'`, so a stray roster row on a DirectPair
+        // stays inert here for free (no hand-written `participation OR roster`
+        // fallback, which Gate 9 forbids). This is what lets a rosterless
+        // DirectPair / agent-inbox agent's parsed-event frames past the
+        // perimeter so their activity feed is not permanently empty.
+        isAgentParticipant: (conversationId, agentId) =>
+          conversations.isAgentParticipant(conversationId, agentId),
       },
       logger: deps.logger,
     }),

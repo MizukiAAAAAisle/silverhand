@@ -115,6 +115,53 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  it('admits a rosterless DirectPair endpoint agent parsed-event frame through the REAL ingress perimeter, so the DM activity feed is not permanently empty (#task:2048)', () => {
+    // Real DB + real repos + the production `createRuntimeFanoutDbDeps`
+    // perimeter (NOT the fake-port guard test): the fix lives at
+    // `runtime-fanout.ts` where the perimeter's participation predicate is
+    // wired to `ConversationRepo.isAgentParticipant`. Revert that wiring to the
+    // old roster `getAgent` and this test reddens — the frame is dropped at the
+    // perimeter and no row lands. Route-layer HTTP authorization (200 for the
+    // endpoint viewer, 404 otherwise) is pinned separately in
+    // `tests/routes/conversation-activity.test.ts`; here we prove the ingress
+    // → persistence edge the read face was silently reading an empty feed off.
+    const fix = makeFixture({ sessionScope: 'agent' });
+    try {
+      const pair = fix.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: fix.agentId },
+        { kind: 'human', id: fix.viewerUserId },
+        1_700_000_000_000,
+      ).conversation;
+      // The pair is rosterless (its two typed endpoints ARE the participants):
+      // the OLD roster perimeter would have dropped this real participant's
+      // frame; the placement-participation authority admits it.
+      expect(fix.conversations.listAgents(pair.id)).toEqual([]);
+      expect(fix.conversations.getAgent(pair.id, fix.agentId)).toBeNull();
+      expect(fix.conversations.isAgentParticipant(pair.id, fix.agentId)).toBe(true);
+
+      fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: 1,
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_parsed_event',
+        runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+        conversation_id: pair.id,
+        agent_id: fix.agentId,
+        parsed: { kind: 'session_init', sessionId: 'sess-dp-1' },
+        ts: 1_700_000_000_100,
+      }, 'conn-1');
+
+      const page = new ConversationEventRepo(fix.db).listForConversationAgent({
+        conversationId: pair.id,
+        agentId: fix.agentId,
+        limit: 10,
+      });
+      expect(page.events.map(e => e.kind)).toEqual(['session_init']);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('builds one AgentSlot spawn authority for deliveries from different conversations', async () => {
     const fix = makeFixture({ sessionScope: 'agent' });
     try {
