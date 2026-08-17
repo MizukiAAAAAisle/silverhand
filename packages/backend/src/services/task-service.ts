@@ -6,6 +6,7 @@ import {
   type MessageDto,
   type TaskAssigneeDto,
   type TaskBoardColumnDto,
+  type TaskBoardContainer,
   type TaskBoardCountsDto,
   type TaskBoardFacetsDto,
   type TaskDetailDto,
@@ -276,12 +277,16 @@ export class TaskService {
     return this.read.boardOfConversation(conversationId);
   }
 
-  // ── Human board reads (#task:1884) ──────────────────────────────
+  // ── Human board reads (#task:1884, #task:2037) ──────────────────
   //
-  // Three bounded faces replacing the board's fetch-all. They are HUMAN-only
-  // (the viewer gate is a `conversation_users` membership semi-join, not the
-  // agent lane's workspace equality) and carry no lifecycle policy — hence a
-  // straight delegation to the injected read-model port.
+  // Three bounded faces replacing the board's fetch-all. They are HUMAN-only,
+  // and their viewer gate is the ONE placement-participation authority
+  // (`conversation-placement-sql.ts`): a task is visible to a human exactly
+  // when they participate in its conversation's placement — a workspace-member
+  // arm AND a direct-pair-endpoint arm, so a rosterless human↔agent DM resolves
+  // too (never a bare `conversation_users` semi-join, which was blind to the
+  // pair). They carry no lifecycle policy — hence a straight delegation to the
+  // injected read-model port.
 
   boardColumn(req: TaskBoardColumnRequest): TaskBoardColumnDto {
     return this.board.column(req);
@@ -291,8 +296,11 @@ export class TaskService {
     return this.board.counts(filters);
   }
 
-  boardFacets(viewerUserId: string): TaskBoardFacetsDto {
-    return this.board.facets(viewerUserId);
+  boardFacets(
+    viewerUserId: string,
+    container?: TaskBoardContainer | undefined,
+  ): TaskBoardFacetsDto {
+    return this.board.facets(viewerUserId, container);
   }
 
   // ── Create ──────────────────────────────────────────────────────
@@ -385,16 +393,23 @@ export class TaskService {
     const creatorKind = input.actor.kind;
     const creatorAgentId = input.actor.kind === 'agent' ? input.actor.agentId : null;
     const creatorUserId = input.actor.kind === 'user' ? input.actor.userId : null;
-    // Cross-conversation create: a ConversationSlot filed against another
-    // stream, or an AgentSlot (which has no origin stream) filed by explicit
-    // target. This drives the single-source `cross_conversation`
-    // metadata bit AND the agent-facing narration below; it carries no origin
-    // id/title (privacy invariant). A cross-conversation create can never be
-    // claimed (the route rejects `--claim` + cross with `cross_conversation_claim`),
-    // so it has no "and claimed it" variant. Humans have no origin conversation,
-    // mirroring the cross-op audit.
+    // Cross-conversation create: a ConversationSlot (an actor ANCHORED to an
+    // origin stream) filed against a different stream. The bit is DEFINED ONLY
+    // for `runtimeScope === 'conversation'` — it compares that anchor with the
+    // destination. An AgentSlot has NO origin stream (`conversationId` is null),
+    // so the comparison is undefined for it, and its correct rendering is
+    // ABSENT: a plain `created` narration, never "from another conversation"
+    // (an AgentSlot filing on its own DM has no other conversation to have come
+    // from — writing "from another conversation" would state a falsehood).
+    // Humans likewise have no origin. This drives the single-source
+    // `cross_conversation` metadata bit AND the agent-facing narration below;
+    // it carries no origin id/title (privacy invariant). A cross-conversation
+    // create can never be claimed (the route rejects `--claim` + cross with
+    // `cross_conversation_claim`), so it has no "and claimed it" variant.
     const crossConversation =
-      input.actor.kind === 'agent' && input.actor.conversationId !== input.conversationId;
+      input.actor.kind === 'agent' &&
+      input.actor.runtimeScope === 'conversation' &&
+      input.actor.conversationId !== input.conversationId;
     const now = Date.now();
     // Event actor resolution is DB-backed (agents lookup) — precomputed as a
     // PURE VALUE before the transaction; the callback never captures a repo.
@@ -1645,24 +1660,31 @@ export class TaskService {
   }
 
   /**
-   * Human point lookup by the workspace-scoped BUSINESS key
-   * `(workspace_id, task_number)` — the identity an inline `#task:<n>` sigil
-   * carries. Returns null when no such task exists OR when the viewer cannot see
-   * the task's conversation.
+   * Human point lookup by the board-scoped BUSINESS key `(board, task_number)`
+   * — the identity an inline `#task:<n>` sigil carries. The board is named
+   * indirectly by a `conversation_id` on it: we derive the board from the
+   * conversation's placement, then read `(board_key, task_number)`. Returns null
+   * when the conversation has no board, when no such task exists on it, OR when
+   * the viewer cannot see the task's conversation.
    *
-   * The workspace id is the LOOKUP key, never an authorization claim: it is not
-   * passed on as `authorizedWorkspaceId`, so the gate is the store's per-viewer
-   * conversation visibility. A caller naming a workspace it has no part in
-   * therefore gets the SAME null as a caller naming a task number that was never
-   * allocated — the two are indistinguishable by construction, not by a
-   * remembered convention at the route.
+   * `conversationId` is the LOOKUP key, never an authorization claim: it is not
+   * passed on as an authorized scope, so the gate is the store's per-viewer
+   * conversation visibility of the TASK's own conversation. A caller naming a
+   * conversation it has no part in therefore gets the SAME null as a caller
+   * naming a task number that was never allocated — the two are
+   * indistinguishable by construction, not by a remembered convention at the
+   * route. Deriving the board (not equating on `workspace_id`) is what lets a
+   * workspace-less DirectPair task — `workspace_id` NULL, board `pair:…` —
+   * resolve here at all.
    */
   getTaskSummaryByNumber(
-    workspaceId: string,
+    conversationId: string,
     taskNumber: number,
     actor: UserActor,
   ): TaskSummaryDto | null {
-    return this.read.getByNumber(workspaceId, taskNumber, actor);
+    const board = this.read.boardOfConversation(conversationId);
+    if (!board) return null;
+    return this.read.getByNumber(board.boardKey, taskNumber, actor);
   }
 
   // ── Workflow tx finishing (shared) ─────────────────────────────

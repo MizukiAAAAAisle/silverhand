@@ -106,6 +106,13 @@ export const apiPaths = {
    *  (Test connection / List tools buttons) calls this. */
   agentProfileMcpProbe: (id: string) => `/api/agents/${id}/profile/mcp/probe`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
+  /** One-bit VIEWER-authorized liveness (#task:2043 B): is this agent's process
+   *  live right now? `canViewAgent`-gated (incl. #2043 C's DirectPair-endpoint
+   *  arm), so a human who DMs the agent may read it — distinct from the
+   *  owner-only `hostStatus` snapshot, which projects a whole host and stays
+   *  owner-only. Returns `{ liveness: 'online' | 'offline' | 'unknown' }`;
+   *  `unknown` (no live host snapshot) MUST NOT be read as offline. */
+  agentLiveness: (id: string) => `/api/agents/${id}/liveness`,
   agentRuntime: (id: string) => `/api/agents/${id}/runtime`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   /** "Message this agent" — a human opens (or reuses) their DirectPair with an
@@ -497,13 +504,18 @@ export const apiPaths = {
   taskBoardColumn: '/api/tasks/board/column',
   taskBoardCounts: '/api/tasks/board/counts',
   taskBoardFacets: '/api/tasks/board/facets',
-  // Human POINT LOOKUP by the workspace-scoped BUSINESS key
-  // `(workspace_id, task_number)` — the identity an inline `#task:<n>` sigil
+  // Human POINT LOOKUP by the board-scoped BUSINESS key
+  // `(board_key, task_number)` — the identity an inline `#task:<n>` sigil
   // carries, which no other human face can express: the board faces are
   // status-partitioned and carry no `task_number` axis, and `GET /api/tasks/:id`
-  // needs an id the sigil doesn't have. Symmetric with the agent CLI's
-  // by-number detail read, so a business-key lookup is a face on both sides
-  // rather than a filtered list-of-one (#task:1891).
+  // needs an id the sigil doesn't have. The board is named INDIRECTLY, by any
+  // conversation on it (`?conversation_id=`): numbers are allocated per board
+  // (`uniq_tasks_board_number`), and a DirectPair board has no workspace at all,
+  // so a `workspace_id` axis could never name it (#task:2037 B5). The
+  // `conversation_id` is a lookup key, never an authorization claim — the
+  // viewer gate is the same one every other human face uses. Symmetric with the
+  // agent CLI's by-number detail read, so a business-key lookup is a face on
+  // both sides rather than a filtered list-of-one (#task:1891).
   taskByNumber: '/api/tasks/by-number',
   taskClaim: (taskId: string) => `/api/tasks/${taskId}/claim`,
   taskUnclaim: (taskId: string) => `/api/tasks/${taskId}/unclaim`,

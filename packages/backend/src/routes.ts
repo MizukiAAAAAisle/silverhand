@@ -633,6 +633,7 @@ export function createApiRouter(
       workspaces,
       conversations,
       messages,
+      hosts,
       agentAuditChats: readModels.agentAuditChats,
       conversationInboxes,
       runtimeSlots,

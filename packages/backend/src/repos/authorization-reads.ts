@@ -58,6 +58,8 @@ export function createSqliteAuthorizationReads(
       workspaces.getUserRole(workspaceId, userId),
     agentWorkspaceIds: agentId =>
       workspaces.listForAgent(agentId).map(workspace => workspace.id),
+    agentDirectPairHumanEndpointIds: agentId =>
+      conversations.listDirectPairHumanEndpointsForAgent(agentId),
     conversation: (conversationId): AuthorizationConversationFacts | null => {
       // The PLACEMENT-aware identity read: the participant rule branches on
       // `placement_kind` / `inbox_agent_id` (§4.2), which the wire DTO

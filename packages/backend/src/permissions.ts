@@ -793,6 +793,17 @@ export function canViewAgent(
     aclPass = principal.agentId === agentId;
   } else if (agent.created_by_user_id === principal.userId) {
     aclPass = true;
+  } else if (
+    reads.agentDirectPairHumanEndpointIds(agentId).includes(principal.userId)
+  ) {
+    // 4th arm (#task:2043 C): the human endpoint of a human↔agent DirectPair
+    // can view the agent at the far end of that DM — the ACL now matches the
+    // read faces #2035 already grant this endpoint (its pair board, its
+    // liveness). The authority's SQL gates the returned slot on
+    // `endpoint_*_kind = 'human'`, so this arm never fires for an agent↔agent
+    // pair, never reads through owner-audit (a distinct arm), and never widens
+    // via `agent_inbox` (not a `direct_pair`).
+    aclPass = true;
   } else {
     aclPass = reads
       .agentWorkspaceIds(agentId)

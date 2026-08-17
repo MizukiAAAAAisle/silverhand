@@ -129,22 +129,25 @@ export class TaskBroadcaster {
   }
 
   /** Best-effort runtime wake: deliver an already-inserted system message to
-   *  every agent member of the conversation, optionally skipping one agent (the
-   *  editor, to avoid a self-wake). `listAgents` yields each member once, so
-   *  every recipient is delivered at most once; a failure is logged, never
-   *  thrown (fan-out is best-effort side-effect, not part of the mutation). */
+   *  every agent PARTICIPANT of the conversation, optionally skipping one agent
+   *  (the editor, to avoid a self-wake). Participant enumeration is placement-
+   *  aware (§4.2): a DirectPair's agent endpoint is a participant with no roster
+   *  row, so a roster read (`listAgents`) would wake NOBODY on a pair board.
+   *  `listParticipantAgentIds` yields each live participant once, so every
+   *  recipient is delivered at most once; a failure is logged, never thrown
+   *  (fan-out is best-effort side-effect, not part of the mutation). */
   private deliverToConversationAgents(
     conversationId: string,
     sysMsgId: string,
     excludeAgentId: string | null = null,
   ): void {
-    for (const ca of this.conversations.listAgents(conversationId)) {
-      if (ca.agent_id === excludeAgentId) continue;
+    for (const agentId of this.conversations.listParticipantAgentIds(conversationId)) {
+      if (agentId === excludeAgentId) continue;
       void this.runtimeHost
-        .deliverMessage(conversationId, ca.agent_id, sysMsgId)
+        .deliverMessage(conversationId, agentId, sysMsgId)
         .catch(err => {
           this.logger.warn(
-            { err, conversationId, agentId: ca.agent_id, messageId: sysMsgId },
+            { err, conversationId, agentId, messageId: sysMsgId },
             'task-service: deliverMessage failed',
           );
         });
@@ -208,11 +211,13 @@ export class TaskBroadcaster {
     // `workspace:<id>` would leak a PRIVATE channel's task snapshot (title/status
     // /assignee + source_message_id) to every workspace member, contradicting the
     // `task list` conversation-membership gate. Fan out per-viewer to the task
-    // conversation's HUMAN members instead. The public-read axis is served
-    // separately by `conversation:<id>` above + the HTTP `linked_task` projection
-    // — both channel-read-scoped.
-    for (const member of this.conversations.listUsers(conversationId)) {
-      this.events.publishToScope(`viewer:${member.user_id}`, 'task_changed', event);
+    // conversation's HUMAN PARTICIPANTS instead — placement-aware (§4.2), so a
+    // DirectPair's human endpoint (rosterless, invisible to `listUsers`) receives
+    // its own pair board's frame. The public-read axis is served separately by
+    // `conversation:<id>` above + the HTTP `linked_task` projection — both
+    // channel-read-scoped.
+    for (const userId of this.conversations.listParticipantUserIds(conversationId)) {
+      this.events.publishToScope(`viewer:${userId}`, 'task_changed', event);
     }
   }
 }

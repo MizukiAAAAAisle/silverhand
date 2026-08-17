@@ -15,6 +15,7 @@
 // inside their OWN population.
 import type {
   TaskBoardAssigneeFilterType,
+  TaskBoardContainer,
   TaskBoardCreatorFilterType,
   TaskStatus,
 } from '@silverhand/shared';
@@ -33,6 +34,18 @@ export interface TaskBoardPopulationFilters {
    *  a task's conversation IS its channel (the reply cluster is
    *  `thread_root_id`, a separate column). */
   channelId?: string | undefined;
+  /** The board's TOP-LEVEL container axis (#task:2041) —
+   *  `workspace | agent_space | direct_messages`. A task's owning conversation
+   *  sits in exactly ONE human container; this selects the bare state (ALL of
+   *  that container at once), which is why it cannot be expressed by
+   *  `workspaceId` (that names ONE workspace) or `channelId` (ONE conversation).
+   *  Workspace vs Agent Space is a `workspace_kind` split of the SAME
+   *  `placement_kind='workspace'`; Direct Messages is `placement_kind='direct_pair'`.
+   *  `agent_inbox` is in no container (no human participant → excluded by the
+   *  viewer gate). Absent = no container narrowing (the `All` board spans every
+   *  container the viewer can see). Stacks with `workspaceId` / `channelId` as
+   *  an intersection, never a contradiction the caller must pre-resolve. */
+  container?: TaskBoardContainer | undefined;
   /** `unassigned` names BOTH assignee columns being NULL — the aggregate
    *  splits one concept across `assignee_agent_id` / `assignee_user_id`, so a
    *  predicate that mentions only one of them is half a rule. */

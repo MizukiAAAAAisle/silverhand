@@ -42,7 +42,7 @@ import type {
   TaskRepoWritePort,
 } from '../services/task/ports.js';
 import { TaskSourceConflictError } from '../services/task/ports.js';
-import { USER_VISIBLE_TASK_PREDICATE } from './task-board-population.js';
+import { userVisibleTaskPredicate } from './task-board-population.js';
 import { SELECT_TASK_JOINED } from './task-sql.js';
 import { prepareObserved } from '../observability/observed-statement.js';
 
@@ -105,12 +105,15 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
       clauses.push(participation.sql);
       args.push(...participation.params);
     } else {
-      // The human visibility gate is the SHARED constant (also interpolated by
+      // The human visibility gate is the SHARED builder (also interpolated by
       // every board read face) — "which tasks may this viewer see" has one
       // definition, so the CLI/list face and the paginated board can never
-      // disagree about it.
-      clauses.push(USER_VISIBLE_TASK_PREDICATE);
-      args.push(filters.actor.userId);
+      // disagree about it. It carries its own bind args (placement
+      // participation is four viewer-id binds), so the count is never
+      // hand-tracked here.
+      const visible = userVisibleTaskPredicate(filters.actor.userId);
+      clauses.push(visible.sql);
+      args.push(...visible.args);
       if (filters.workspaceId) {
         clauses.push('t.workspace_id = ?');
         args.push(filters.workspaceId);
@@ -236,25 +239,26 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
   }
 
   /**
-   * Read a task summary by the workspace-scoped business key `(workspace_id,
-   * task_number)` — the key an inline `#task:<n>` sigil carries. A SINGLE
-   * bounded read on `uniq_tasks_workspace_number`: same projection and same gate
-   * as `getById`, so a pill never pays for the mutation-path column set (which
+   * Read a task summary by the board-scoped business key `(board_key,
+   * task_number)` — the key an inline `#task:<n>` sigil carries, after the
+   * service has derived `board_key` from a conversation on the board. A SINGLE
+   * bounded read on `uniq_tasks_board_number`: same projection and same gate as
+   * `getById`, so a pill never pays for the mutation-path column set (which
    * reads `t.content`) nor for a second query to reach the summary it renders.
    *
    * User actor only — the sigil face is human-facing, so the gate is always the
-   * viewer's access to the task's OWN conversation and `workspaceId` is a lookup
+   * viewer's access to the task's OWN conversation and `boardKey` is a lookup
    * key, never an authorization claim.
    */
   getByNumber(
-    workspaceId: string,
+    boardKey: string,
     taskNumber: number,
     actor: UserActor,
   ): TaskSummaryDto | null {
     return this.readGatedSummary(
       'tasks.get_joined_by_number',
-      'WHERE t.workspace_id = ? AND t.task_number = ?',
-      [workspaceId, taskNumber],
+      'WHERE t.board_key = ? AND t.task_number = ?',
+      [boardKey, taskNumber],
       actor,
     );
   }
@@ -368,10 +372,10 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     return this.conversations.userCanAccessConversation(actor.userId, conversationId);
   }
 
-  /** Next per-workspace monotonic task number (1-based). PRIVATE allocator —
+  /** Next per-board monotonic task number (1-based). PRIVATE allocator —
    *  never exposed on the port surface: `createTaskRow` is the single atomic
    *  create capability, so application code cannot split allocate/insert into
-   *  a TOCTOU (#task:1980). The `uniq_tasks_workspace_number` unique index is
+   *  a TOCTOU (#task:1980). The `uniq_tasks_board_number` unique index is
    *  the backstop; SQLite's single-writer transaction makes the MAX+1 read +
    *  INSERT atomic in this adapter. */
   private allocateTaskNumber(boardKey: string): number {
@@ -428,7 +432,7 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
   }
 
   /**
-   * The single task-aggregate creator: allocate the next workspace-scoped task
+   * The single task-aggregate creator: allocate the next board-scoped task
    * number and insert the `tasks` row. Transaction-agnostic — runs inside the
    * caller's transaction (the create txn also emits the task_create event and
    * backfills `created_event_message_id`). Returns the new task id + number.

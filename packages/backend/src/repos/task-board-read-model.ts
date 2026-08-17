@@ -19,6 +19,7 @@ import type { Database as Db } from 'better-sqlite3';
 import {
   TaskStatusSchema,
   type TaskBoardColumnDto,
+  type TaskBoardContainer,
   type TaskBoardCountsDto,
   type TaskBoardFacetsDto,
   type TaskBoardPersonOption,
@@ -142,14 +143,26 @@ export class SqliteTaskBoardReadModel implements TaskBoardReadModelPort {
   }
 
   /**
-   * The filter menus' option sets over the viewer's ENTIRE visible population —
-   * intentionally NOT narrowed by the board filters (an option set that shrinks
-   * when you select from it cannot be switched away from, and the shipped
-   * behavior aggregates from the unfiltered cross-workspace directory).
+   * The filter menus' option sets over the viewer's visible population WITHIN
+   * the selected container. `container` is the board SELECTOR (which of
+   * `Workspace | Agent Space | Direct Messages` — omitted = the `All` board), so
+   * the menus describe the board you are on; a DM board's creator menu lists DM
+   * creators, not workspace-channel people who select nothing there. It is the
+   * ONLY axis honored here: the WITHIN-board filters (`workspaceId` /
+   * `channelId` / assignee / creator) are intentionally NOT applied — an option
+   * set that shrinks when you select from it cannot be switched away from, and
+   * the shipped behavior aggregates from the unfiltered cross-workspace
+   * directory within the board.
    */
-  facets(viewerUserId: string): TaskBoardFacetsDto {
-    const visible = taskBoardPopulation({ viewerUserId });
-    const assignees = prepareObserved<[string, string], PersonRow>(
+  facets(
+    viewerUserId: string,
+    container?: TaskBoardContainer | undefined,
+  ): TaskBoardFacetsDto {
+    const visible = taskBoardPopulation({
+      viewerUserId,
+      ...(container !== undefined ? { container } : {}),
+    });
+    const assignees = prepareObserved<typeof visible.args, PersonRow>(
       this.db,
       'tasks.board_facet_assignees',
       `SELECT DISTINCT 'agent' AS type,
@@ -167,12 +180,12 @@ export class SqliteTaskBoardReadModel implements TaskBoardReadModelPort {
          LEFT JOIN users au ON au.id = t.assignee_user_id
         WHERE ${visible.sql}
           AND t.assignee_user_id IS NOT NULL`,
-    ).all(viewerUserId, viewerUserId);
+    ).all(...visible.args, ...visible.args);
 
     // `system` creators are excluded: they have no id and are not a selectable
     // person (a task always HAS a creator, but 'system' is a property of the
     // data, not a menu entry).
-    const creators = prepareObserved<[string, string], PersonRow>(
+    const creators = prepareObserved<typeof visible.args, PersonRow>(
       this.db,
       'tasks.board_facet_creators',
       `SELECT DISTINCT 'agent' AS type,
@@ -192,9 +205,9 @@ export class SqliteTaskBoardReadModel implements TaskBoardReadModelPort {
         WHERE ${visible.sql}
           AND t.creator_kind = 'user'
           AND t.creator_user_id IS NOT NULL`,
-    ).all(viewerUserId, viewerUserId);
+    ).all(...visible.args, ...visible.args);
 
-    const unassigned = prepareObserved<[string], { present: number }>(
+    const unassigned = prepareObserved<typeof visible.args, { present: number }>(
       this.db,
       'tasks.board_facet_unassigned',
       `SELECT EXISTS (
@@ -204,7 +217,7 @@ export class SqliteTaskBoardReadModel implements TaskBoardReadModelPort {
                    AND t.assignee_agent_id IS NULL
                    AND t.assignee_user_id IS NULL
               ) AS present`,
-    ).get(viewerUserId);
+    ).get(...visible.args);
 
     return {
       assignees: sortByName(assignees),

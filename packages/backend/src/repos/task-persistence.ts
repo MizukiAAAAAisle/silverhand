@@ -6,7 +6,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from './conversation-repo.js';
 import { MessageRepo } from './message-repo.js';
-import { prepareObserved } from '../observability/observed-statement.js';
 import type {
   TaskBoardReadModelPort,
   TaskConversationAccessPort,
@@ -28,8 +27,8 @@ export interface SqliteTaskPersistence {
 
 /** The named narrow conversation face the task domain needs (agent membership,
  *  human membership, conversation row, and the broadcaster's post-commit
- *  member lists) — backed by ConversationRepo, deliberately NOT the whole repo
- *  surface. */
+ *  participant lists) — backed by ConversationRepo, deliberately NOT the whole
+ *  repo surface. */
 export function taskConversationAccessPort(db: Db): TaskConversationAccessPort {
   const conversations = new ConversationRepo(db);
   return {
@@ -37,18 +36,19 @@ export function taskConversationAccessPort(db: Db): TaskConversationAccessPort {
     getAgent: (conversationId, agentId) => conversations.getAgent(conversationId, agentId),
     isAgentParticipant: (conversationId, agentId) =>
       conversations.isAgentParticipant(conversationId, agentId),
+    // The human per-task ACL, answered by the SAME placement authority the agent
+    // arm uses (§4.2 `userParticipates` / `isUserParticipant`) rather than a bare
+    // `conversation_users` read. A rosterless DirectPair has no seat, so the bare
+    // read judged the DM's OWN human endpoint no-access to its own pair board —
+    // the reported bug (`filed #task:N from another conversation`, taskRef raw).
+    // Delegating here folds the human arm into the participation authority (the
+    // agent arm already reads `isAgentParticipant`); on the workspace arm it is
+    // also correctly narrower — a seat that outlived its `workspace_users`
+    // membership (the v25 pair) is not a participant and no longer passes.
     userCanAccessConversation: (userId, conversationId) =>
-      prepareObserved<[string, string], { ok: 1 }>(
-        db,
-        'tasks.conversation_user_access',
-        `SELECT 1 AS ok
-           FROM conversation_users
-          WHERE conversation_id = ?
-            AND user_id = ?
-          LIMIT 1`,
-      ).get(conversationId, userId) !== undefined,
-    listAgents: id => conversations.listAgents(id),
-    listUsers: id => conversations.listUsers(id),
+      conversations.isUserParticipant(conversationId, userId),
+    listParticipantAgentIds: id => conversations.listParticipantAgentIds(id),
+    listParticipantUserIds: id => conversations.listParticipantUserIds(id),
   };
 }
 

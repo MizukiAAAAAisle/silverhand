@@ -19,10 +19,12 @@ import {
   HumanUpdateTaskStatusInputSchema,
   TASK_BOARD_DEFAULT_LIMIT,
   TaskBoardColumnQuerySchema,
+  TaskBoardContainerSchema,
   TaskBoardCountsQuerySchema,
   TaskByNumberQuerySchema,
 } from '@silverhand/shared';
 import type { Context } from 'hono';
+import type { TaskBoardContainer } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { TaskBoardPopulationFilters } from '../services/task/board.js';
@@ -36,6 +38,7 @@ function boardFilterQuery(c: Context<AppEnv>): Record<string, string | undefined
   return {
     workspace_id: c.req.query('workspace_id') || undefined,
     channel_id: c.req.query('channel_id') || undefined,
+    container: c.req.query('container') || undefined,
     assignee_type: c.req.query('assignee_type') || undefined,
     assignee_id: c.req.query('assignee_id') || undefined,
     creator_type: c.req.query('creator_type') || undefined,
@@ -51,6 +54,7 @@ function boardPopulationFilters(
   q: {
     workspace_id?: string | undefined;
     channel_id?: string | undefined;
+    container?: TaskBoardContainer | undefined;
     assignee_type?: 'agent' | 'user' | 'unassigned' | undefined;
     assignee_id?: string | undefined;
     creator_type?: 'agent' | 'user' | undefined;
@@ -61,6 +65,7 @@ function boardPopulationFilters(
     viewerUserId: getUserPrincipal(c).userId,
     ...(q.workspace_id !== undefined ? { workspaceId: q.workspace_id } : {}),
     ...(q.channel_id !== undefined ? { channelId: q.channel_id } : {}),
+    ...(q.container !== undefined ? { container: q.container } : {}),
     ...(q.assignee_type === 'unassigned'
       ? { assignee: { type: 'unassigned' as const } }
       : q.assignee_type !== undefined && q.assignee_id !== undefined
@@ -250,26 +255,35 @@ export function createTasksApp(deps: TasksRouteDeps): Hono<AppEnv> {
     );
   });
 
-  // No filter params by design: an option set that shrinks when you select from
-  // it cannot be switched away from, so the menus are always computed over the
-  // viewer's whole visible population (see TaskBoardFacetsDtoSchema).
-  app.get(apiPaths.taskBoardFacets, c =>
-    c.json(ctx.taskService.boardFacets(getUserPrincipal(c).userId)),
-  );
+  // Filtered by exactly ONE axis: the container that selects the board (the
+  // menus describe the board you are on). The within-board axes are NOT honored
+  // here by design — see TaskBoardFacetsDtoSchema. An invalid container is a
+  // 400, never a silent fall back to the All menus.
+  app.get(apiPaths.taskBoardFacets, c => {
+    const parsed = TaskBoardContainerSchema.optional().safeParse(
+      c.req.query('container') || undefined,
+    );
+    if (!parsed.success) {
+      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
+    }
+    return c.json(
+      ctx.taskService.boardFacets(getUserPrincipal(c).userId, parsed.data),
+    );
+  });
 
-  // Point lookup by the workspace-scoped business key. Registered BEFORE
+  // Point lookup by the board-scoped business key. Registered BEFORE
   // `/api/tasks/:taskId` for the same reason the board faces are: otherwise
   // `by-number` is read as a task id.
   //
   // FAIL-CLOSED, ONE OUTCOME FOR TWO CAUSES: a task number that was never
   // allocated and a task the viewer cannot see both return 404 with the same
-  // body. The service does not receive the query's `workspace_id` as an
-  // authorized scope — it gates on the viewer's visibility of the task's own
-  // conversation — so naming someone else's workspace cannot confirm that a
-  // task number exists in it.
+  // body. The service does not receive the query's `conversation_id` as an
+  // authorized scope — it derives the board from the conversation's placement
+  // and gates on the viewer's visibility of the task's OWN conversation — so
+  // naming a conversation cannot confirm that a task number exists on its board.
   app.get(apiPaths.taskByNumber, c => {
     const parsed = TaskByNumberQuerySchema.safeParse({
-      workspace_id: c.req.query('workspace_id'),
+      conversation_id: c.req.query('conversation_id'),
       task_number: c.req.query('task_number'),
     });
     // A malformed/absent axis is a 400, not a 404: the client asked a question
@@ -279,7 +293,7 @@ export function createTasksApp(deps: TasksRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
     }
     const task = ctx.taskService.getTaskSummaryByNumber(
-      parsed.data.workspace_id,
+      parsed.data.conversation_id,
       parsed.data.task_number,
       getUserPrincipal(c),
     );

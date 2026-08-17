@@ -150,7 +150,6 @@ export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
   {file: 'packages/shared/src/db/migrations.ts',zone: 'schema',count: 14},
   {file: 'packages/backend/src/repos/task-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/task-board-read-model.ts',zone: 'repository'},
-  {file: 'packages/backend/src/repos/task-persistence.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/activity.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/agent-read.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/conversation-title-audit.ts',zone: 'repository'},

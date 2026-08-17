@@ -107,6 +107,13 @@ export interface AuthorizationReadPort {
    * `agent_home`). Ids only: both callers compare or re-gate by id.
    */
   agentWorkspaceIds(agentId: string): readonly string[];
+  /**
+   * The HUMAN endpoints of every human↔agent `direct_pair` this agent is the
+   * agent endpoint of (#task:2043 C). THE authority for the `canViewAgent` 4th
+   * ACL arm: a human at the far end of a DM with this agent can view it. Ids
+   * only — the caller re-gates by membership on `principal.userId`.
+   */
+  agentDirectPairHumanEndpointIds(agentId: string): readonly string[];
   conversation(conversationId: string): AuthorizationConversationFacts | null;
   /**
    * Does the principal a `direct_pair` endpoint names still exist? THE

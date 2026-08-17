@@ -401,6 +401,27 @@ export const AgentRuntimeStateDtoSchema = z.object({
 });
 export type AgentRuntimeStateDto = z.infer<typeof AgentRuntimeStateDtoSchema>;
 
+// GET /api/agents/:id/liveness (#task:2043 B) — the ONE process bit a viewer
+// authorized on the agent may read, deliberately a value object of its own and
+// NOT a field on the runtime-state DTO above. Both faces share the SAME
+// `canViewAgent` gate; they differ in what they project. Runtime-state projects
+// the agent's seats/participations and filters those per-conversation
+// (`canViewConversation`), so its payload is viewer-dependent; this face
+// projects a single tri-state derived from the host's authoritative
+// active-runtime snapshot, which needs no such narrowing. (The genuinely
+// owner-only face is `GET /api/hosts/:id/status` — a whole-host snapshot.)
+// Three values, not a boolean: `unknown` means there is no live host snapshot to
+// answer from (no read model / host revoked / disconnected / unreachable) and
+// MUST NOT be folded to `offline` — "we cannot tell" is not "the process is
+// down".
+export const AgentLivenessSchema = z.enum(['online', 'offline', 'unknown']);
+export type AgentLiveness = z.infer<typeof AgentLivenessSchema>;
+
+export const AgentLivenessDtoSchema = z.object({
+  liveness: AgentLivenessSchema,
+});
+export type AgentLivenessDto = z.infer<typeof AgentLivenessDtoSchema>;
+
 export const DeleteAgentInputSchema = z.object({
   confirm: z.literal(true),
 });
