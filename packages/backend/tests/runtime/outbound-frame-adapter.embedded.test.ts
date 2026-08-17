@@ -332,6 +332,94 @@ describe('EmbeddedUnixOutboundFrameAdapter capability recording', () => {
   });
 });
 
+// #task:2043 (B) — availability invalidation must fire on the embedded
+// transport too (the desktop local agent's host — sea's most common shape).
+// Availability reads `connectionIdForHost` on THIS adapter, so the invalidation
+// seam must fire on exactly the edges where that value flips: a `connect()`
+// that mints a connection id (attach), and every `onSocketClosed` that clears
+// it (detach — covering socket drop, error, heartbeat timeout, and reconnect).
+describe('EmbeddedUnixOutboundFrameAdapter availability seam (#task:2043 B)', () => {
+  it('fires onHostAttachmentChanged on connect, disconnect, and reconnect', async () => {
+    const socketPath = join(
+      tmpdir(),
+      `sh-d5a-avail-${process.pid}-${++socketSeq}.sock`,
+    );
+    if (existsSync(socketPath)) unlinkSync(socketPath);
+
+    const accepted: Socket[] = [];
+    let pendingAccept: ((s: Socket) => void) | null = null;
+    const acceptQueue: Socket[] = [];
+    const server: NetServer = createServer(sock => {
+      accepted.push(sock);
+      if (pendingAccept) {
+        const resolve = pendingAccept;
+        pendingAccept = null;
+        resolve(sock);
+      } else {
+        acceptQueue.push(sock);
+      }
+    });
+    const nextAccepted = (): Promise<Socket> => {
+      const queued = acceptQueue.shift();
+      if (queued) return Promise.resolve(queued);
+      return new Promise(resolve => {
+        pendingAccept = resolve;
+      });
+    };
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, () => {
+        server.off('error', reject);
+        resolve();
+      });
+    });
+
+    const hostId = 'local';
+    const attachmentEvents: string[] = [];
+    const adapter = new EmbeddedUnixOutboundFrameAdapter({
+      socketPath,
+      hostId,
+      onHostAttachmentChanged: id => attachmentEvents.push(id),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    try {
+      // Nothing before the first dial: an adapter that never attached
+      // announces no reachability change.
+      expect(attachmentEvents).toEqual([]);
+
+      const firstAccept = nextAccepted();
+      await adapter.connect();
+      await firstAccept;
+      // Attach edge: exactly one fire, carrying the host id.
+      await waitFor(() => attachmentEvents.length === 1);
+      expect(attachmentEvents).toEqual([hostId]);
+
+      // Drop the socket → detach edge fires; the auto-reconnect re-enters
+      // `connect()` → attach edge fires again. Three fires total proves the
+      // detach edge is real (without it a drop+reconnect would only yield 2).
+      accepted[0]?.destroy();
+      await nextAccepted();
+      await waitFor(() => attachmentEvents.length === 3);
+      expect(attachmentEvents).toEqual([hostId, hostId, hostId]);
+      expect(adapter.connectionIdForHost(hostId)).toMatch(
+        /^embedded-unix-local-conn-/,
+      );
+    } finally {
+      await adapter.close();
+      for (const s of accepted) {
+        if (!s.destroyed) s.destroy();
+      }
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      try {
+        if (existsSync(socketPath)) unlinkSync(socketPath);
+      } catch {
+        /* best-effort */
+      }
+    }
+  });
+});
+
 class EmbeddedFakeDaemon implements FakeDaemonConnection {
   readonly connectionId: string;
   private buffer = '';

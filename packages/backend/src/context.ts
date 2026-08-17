@@ -223,6 +223,28 @@ export interface BackendContext {
    */
   outboundFrameAdapter?: () => OutboundFrameAdapter | null;
   /**
+   * #task:2043 B — the availability-invalidation effect edges. Availability
+   * (`GET /api/agents/:id/availability` = host reachability × agent validity)
+   * moves on a transition of EITHER fact, so there are two edges over ONE
+   * per-agent primitive; both are optional (a harness without a fanout leaves
+   * them absent and the transitions simply publish nothing):
+   *
+   *  - {@link publishAgentAvailabilityChangedForAgent}: the per-agent primitive,
+   *    fired at the AGENT-VALIDITY edge — `deletion_started_at` flips
+   *    null→timestamp at `deleteAgent`'s `begin`. Teardown neither disconnects
+   *    the transport nor revokes the host, so the host edge below would never
+   *    announce it; without this edge a viewer that cached `online` gets no
+   *    invalidation until the eventual hard-delete's `agent_changed`.
+   *  - {@link publishAgentAvailabilityChangedForHost}: the HOST-REACHABILITY
+   *    edge — enumerates the host's agents and fires the per-agent primitive for
+   *    each. Called by BOTH transport attach seams (WSS + embedded Unix) AND the
+   *    host-revoke authority at its post-commit edge, so the invalidation is
+   *    driven by the fact transition, never inferred from socket teardown
+   *    (embedded local hosts have no host-WS connection to tear down).
+   */
+  publishAgentAvailabilityChangedForAgent?: (agentId: string) => void;
+  publishAgentAvailabilityChangedForHost?: (hostId: string) => void;
+  /**
    * #task:1588 — late-bound per-host liveness view from the outbound
    * event fanout (event-maintained, generation-bound). The host-status
    * read model consumes it so `GET /api/hosts/:id/status` serves the

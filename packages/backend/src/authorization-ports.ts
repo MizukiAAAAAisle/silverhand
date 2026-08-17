@@ -12,8 +12,9 @@
  * of facts — derived by reading every predicate, not by mirroring the repos:
  *
  *   - workspace existence + `{workspace_kind, owner_agent_id}` (the agent_home
- *     exemption), human membership, the human's `workspace_users.role`, and the
- *     workspace ids an agent reaches;
+ *     exemption), human membership, the human's `workspace_users.role`, the
+ *     workspace ids an agent reaches, and a workspace's human member ids (the
+ *     view-audience arm);
  *   - conversation identity `{id, workspace_id, kind, visibility, archived_at}`
  *     (the public-channel branch) + "is this principal a member" for both
  *     principal kinds, as a BOOLEAN — no membership row escapes;
@@ -114,6 +115,15 @@ export interface AuthorizationReadPort {
    * only — the caller re-gates by membership on `principal.userId`.
    */
   agentDirectPairHumanEndpointIds(agentId: string): readonly string[];
+  /**
+   * The human members of a workspace. Ids only — the workspace arm of the
+   * agent-viewer audience (the dual of {@link permissions.canViewAgent}) walks
+   * an agent's workspaces and unions their human members into the candidate set,
+   * then re-gates each through `canViewAgent`. Collapsed to ids like the
+   * membership reads above: the audience needs WHO is a member, never a member's
+   * `role` / `joined_at`.
+   */
+  workspaceMemberUserIds(workspaceId: string): readonly string[];
   conversation(conversationId: string): AuthorizationConversationFacts | null;
   /**
    * Does the principal a `direct_pair` endpoint names still exist? THE

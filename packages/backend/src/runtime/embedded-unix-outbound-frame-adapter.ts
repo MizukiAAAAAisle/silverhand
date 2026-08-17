@@ -40,6 +40,20 @@ export interface EmbeddedUnixOutboundFrameAdapterOptions {
   ) => void;
   /** Notify the backend that the live connection dropped. */
   onDisconnect?: (hostId: string, connectionId: string) => void;
+  /**
+   * #task:2043 (B) — availability-invalidation seam, the embedded twin of
+   * `HostWsServerOptions.onHostAttachmentChanged`. Fired when this host's
+   * transport REACHABILITY flips — i.e. exactly when `connectionIdForHost`
+   * changes: once after a `connect()` mints a connection id, and once after
+   * `onSocketClosed` clears it (which funnels socket close, socket error,
+   * heartbeat timeout, protocol violation, and every reconnect). The
+   * composition root points BOTH transports at the same
+   * `publishAgentAvailabilityChangedForHost`, so the `/availability` read
+   * face — which reads `connectionIdForHost` on THIS adapter — can never move
+   * without its cache being invalidated. This is a distinct concern from
+   * `onDisconnect` (runtime fanout teardown), hence its own callback.
+   */
+  onHostAttachmentChanged?: (hostId: string) => void;
   /** Per-command response timeout. */
   commandTimeoutMs?: number;
   /**
@@ -106,6 +120,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
   private readonly pongTimeoutMs: number;
   private readonly onEvent?: EmbeddedUnixOutboundFrameAdapterOptions['onEvent'];
   private readonly onDisconnect?: EmbeddedUnixOutboundFrameAdapterOptions['onDisconnect'];
+  private readonly onHostAttachmentChanged?: EmbeddedUnixOutboundFrameAdapterOptions['onHostAttachmentChanged'];
   private readonly logger?: EmbeddedUnixOutboundFrameAdapterOptions['logger'];
 
   private socket: Socket | null = null;
@@ -134,6 +149,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     this.pongTimeoutMs = opts.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS;
     this.onEvent = opts.onEvent;
     this.onDisconnect = opts.onDisconnect;
+    this.onHostAttachmentChanged = opts.onHostAttachmentChanged;
     this.logger = opts.logger;
   }
 
@@ -195,6 +211,11 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
       this.onSocketClosed('socket_error');
     });
     this.startHeartbeat(socket);
+    // #task:2043 (B) — transport reachability just flipped ON: `connectionId`
+    // (hence `connectionIdForHost`) is now non-null, so the `/availability`
+    // read face has moved. Announce it on the same seam the WSS attach edge
+    // uses. A reconnect re-enters `connect()`, so this covers that edge too.
+    this.onHostAttachmentChanged?.(this.hostId);
   }
 
   /**
@@ -575,6 +596,10 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     this.rejectAllPending(`host ${this.hostId} outbound socket disconnected (${reason})`);
     if (connectionId) {
       this.onDisconnect?.(this.hostId, connectionId);
+      // #task:2043 (B) — reachability flipped OFF: `connectionIdForHost` is
+      // null again. Same guard as `onDisconnect` (a live attachment actually
+      // existed), so a torn-down/never-attached socket announces nothing.
+      this.onHostAttachmentChanged?.(this.hostId);
     }
     this.scheduleReconnect(reason);
   }

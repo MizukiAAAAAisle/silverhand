@@ -110,6 +110,10 @@ import {
   type AgentDeletionRunner,
 } from '../../src/application/agent-deletion-resumer.js';
 import { sweepStoredBlobs } from '../../src/application/delete-agent.js';
+import {
+  publishAgentAvailabilityChangedForAgent,
+  publishAgentAvailabilityChangedForHost,
+} from '../../src/application/agent-availability-changed.js';
 
 /**
  * Records every call routes / provision make into the runtime host.
@@ -1134,6 +1138,21 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeView: hostId => ctx.hostRuntimeView?.(hostId) ?? null,
   });
   ctx.hostStatusReadModel = () => hostStatusReadModel;
+  // #task:2043 B — mirror the composition root's availability-invalidation edges
+  // (index.ts) so use-case/route tests that revoke a host, drive an attach seam,
+  // or begin an agent deletion observe the SAME viewer fan-out production does.
+  // Both edges route through the per-agent primitive, exactly as boot binds them.
+  ctx.publishAgentAvailabilityChangedForAgent = agentId =>
+    publishAgentAvailabilityChangedForAgent(ctx, agentId);
+  ctx.publishAgentAvailabilityChangedForHost = hostId =>
+    publishAgentAvailabilityChangedForHost(
+      ctx,
+      {
+        listAgentIdsByHost: id =>
+          persistence.repos.agents.listByHost(id).map(agent => agent.id),
+      },
+      hostId,
+    );
   const conversationPersistence = createSqliteConversationPersistence(db);
   const unreadPublish = createUnreadPublishAdapter({ db, events: ctx.events });
   ctx.channelService = new ChannelService({

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AGENT_AVAILABILITY_CHANGED_EVENT } from '@silverhand/shared';
 import {
   commitAgentTeardown,
   deleteAgent,
@@ -289,6 +290,69 @@ describe('deleteAgent use case', () => {
     });
     expect(retried.status).toBe(204);
     expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
+  });
+
+  // #task:2043 B (Cindy) — the AGENT-VALIDITY availability edge. `begin` flips
+  // `deletion_started_at` null→ts on its `started` arm, so the availability read
+  // face returns Offline while the transport stays connected and the host stays
+  // un-revoked — NO per-host edge fires, and the terminal `agent_changed` is
+  // seconds-to-minutes away on the resumer's [1s,5s,30s] schedule. `deleteAgent`
+  // must publish exactly ONE per-agent `agent_availability_changed` per viewer on
+  // that committed transition, and an `alreadyPending` retry (a fact-free repeat)
+  // must NOT re-fire. This is the falsifier: without the begin-edge publish the
+  // frame count is 0 and a cached `online` viewer never learns to refetch.
+  it('teardown-begin fires ONE availability invalidation per viewer (row/ACL still present); the read face flips Offline; an alreadyPending retry does not re-fire', async () => {
+    t = buildTestApp();
+    const agentId = await makeActiveAgent(t, 'avail-teardown');
+    // The creator (default viewer `local`) is a viewer of the agent; count only
+    // its availability frames on the private viewer scope.
+    let frames = 0;
+    t.ctx.events.subscribeScope(`viewer:${t.viewerUserId}`, e => {
+      if (e.kind === AGENT_AVAILABILITY_CHANGED_EVENT) frames += 1;
+    });
+
+    // Pre-state: connected local host, un-revoked, not-deleted agent ⇒ Online.
+    const before = await http(t).get(`/api/agents/${agentId}/availability`);
+    expect(await before.json()).toMatchObject({ availability: 'online' });
+
+    // Stall the worker: the purge ack throws, so `tryNow` returns pending, the
+    // agent row + `deletion_started_at` marker persist, and the transport is
+    // never disconnected. `deletion_started_at` is the ONLY fact that moved.
+    t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
+      throw new HostWsCommandResponseError(
+        'partial_purge' as never,
+        'filesystem still busy',
+        { hostId: 'local', commandKind: 'agent_files_purge', requestId: 'r' },
+      );
+    };
+    const begun = await deleteAgent(depsFor(t), {
+      agentId,
+      requesterUserId: t.viewerUserId,
+      body: { confirm: true },
+    });
+    expect(begun.kind).toBe('deletionPendingRetry');
+
+    // Row + ACL still present (status stays `active`; `begin` sets only the
+    // marker), so the audience resolved and the viewer got EXACTLY ONE frame.
+    expect(
+      new AgentRepo(t.ctx.db).get(agentId)?.deletion_started_at,
+    ).not.toBeNull();
+    expect(frames).toBe(1);
+
+    // The read face already answers Offline off the marker alone.
+    const after = await http(t).get(`/api/agents/${agentId}/availability`);
+    expect(await after.json()).toMatchObject({ availability: 'offline' });
+
+    // An explicit retry re-enters `begin` → `alreadyPending`: a fact-free repeat.
+    // The purge still stalls (still pending), but NO new frame is emitted.
+    const retried = await deleteAgent(depsFor(t), {
+      agentId,
+      requesterUserId: t.viewerUserId,
+      body: { confirm: true },
+      retry: true,
+    });
+    expect(retried.kind).toBe('deletionPendingRetry');
+    expect(frames).toBe(1);
   });
 
   // #task:1791 — the post-commit freshness signal. `deleteAgent` publishes the

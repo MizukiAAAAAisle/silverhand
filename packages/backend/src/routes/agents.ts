@@ -80,6 +80,8 @@ import {
   UpdateAgentInputSchema,
   apiPaths,
   type AgentDto,
+  type AgentAvailability,
+  type AgentAvailabilityDto,
   type AgentLiveness,
   type AgentLivenessDto,
   type AgentMaterializationStatus,
@@ -1041,6 +1043,57 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     return c.json({
       liveness: resolveAgentLiveness(agent.host_id, agent.id),
     } satisfies AgentLivenessDto);
+  });
+
+  // ── GET /api/agents/:id/availability (#task:2043) ─────────────────────────
+  // The orthogonal axis to liveness: is this agent REACHABLE right now, not is
+  // a process live. Same `canViewAgent` gate (incl. the DirectPair-endpoint
+  // arm). Availability reuses the EXACT authority the delivery path reads for
+  // its transport gate: `ctx.outboundFrameAdapter().connectionIdForHost(hostId)`
+  // — the first two gates of real delivery (host exists & not revoked; an
+  // outbound attachment is connected) MINUS the runtime-hydrate wait. Reading
+  // the same port the delivery gate reads is load-bearing: the (B)
+  // `agent_availability_changed` producer fires on this adapter's attach/detach
+  // edges, so the read face and the event face observe ONE fact and cannot
+  // drift into two middle layers.
+  //
+  // It deliberately does NOT consult `hostStatusReadModel`: that is a SEPARATE
+  // optional port carrying seed / snapshot / hydrate / retry semantics that are
+  // irrelevant to reachability. Gating on ITS presence (as an earlier cut did)
+  // reports Offline on a deployment that wired the delivery transport without
+  // the snapshot projection — an attachment the delivery gate would happily
+  // accept. So an idle-reaped or not-yet-hydrated agent on a connected host
+  // stays `online` (the next message re-spawns it), hydration never enters the
+  // dependency graph, and that decoupling is the fix for a DM partner seeing
+  // `offline` after every turn.
+  //
+  // TWO values, total. The attachment fact is total (present or absent); there
+  // is no success `unknown` arm — a read that cannot be answered is an infra
+  // fault (let it throw ⇒ 5xx), and "we cannot tell" is a RENDERER query
+  // projection, not a backend value.
+  const resolveAgentAvailability = (agent: AgentDto): AgentAvailability => {
+    // Agent validity: an agent mid hard-delete can no longer accept work.
+    if (agent.deletion_started_at !== null) return 'offline';
+    // Host validity. The revoke check is load-bearing on its own: a bare DB
+    // revoke may race ahead of the socket teardown, so a still-attached but
+    // revoked host must not read `online` off a lingering connection.
+    const host = hosts.get(agent.host_id);
+    if (!host || host.revoked_at !== null) return 'offline';
+    // Attachment presence — the SAME port the delivery transport gate reads.
+    const connectionId =
+      ctx.outboundFrameAdapter?.()?.connectionIdForHost(agent.host_id) ?? null;
+    return connectionId !== null ? 'online' : 'offline';
+  };
+
+  app.get('/api/agents/:id/availability', c => {
+    const agent = agents.get(c.req.param('id'));
+    if (!agent) return c.json({ error: 'agent not found' }, 404);
+    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    return c.json({
+      availability: resolveAgentAvailability(agent),
+    } satisfies AgentAvailabilityDto);
   });
 
   // ── Owner-audit chats (#task:2036 part ②) ────────────────────────────────

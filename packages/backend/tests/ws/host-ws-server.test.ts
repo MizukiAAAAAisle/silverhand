@@ -700,6 +700,64 @@ describe('host outbound WebSocket server', () => {
     }
   });
 
+  it('fires onHostAttachmentChanged on attach and detach — the availability transitions (#task:2043 B)', async () => {
+    t = buildTestApp();
+    const attachmentEdges: string[] = [];
+    server = await openServer(t, {
+      onHostAttachmentChanged: hostId => attachmentEdges.push(hostId),
+    });
+    const hosts = new HostRepo(t.ctx.db);
+    const remote = hosts.createUserInvite({ userId: t.viewerUserId });
+    const issued = new HostTokenService(
+      createSqliteHostPersistence(t.ctx.db),
+    ).issueHostToken({ hostId: remote.id });
+
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    // The raw upgrade proves only the credential — no attachment, no edge.
+    await expect(noMessageWithin(ws, 25)).resolves.toBeUndefined();
+    expect(attachmentEdges).toEqual([]);
+
+    // Compatible `ready` CREATES the attachment ⇒ the host became reachable.
+    ws.send(JSON.stringify(readyFrame({ hostName: 'Studio Mac' })));
+    await waitFor(() => attachmentEdges.length === 1);
+    expect(attachmentEdges[0]).toBe(remote.id);
+
+    // Socket close REMOVES the attachment ⇒ no longer reachable (this same edge
+    // also carries revoke, which kicks the socket).
+    ws.close();
+    await waitForClose(ws);
+    await waitFor(() => attachmentEdges.length === 2);
+    expect(attachmentEdges[1]).toBe(remote.id);
+  });
+
+  it('does NOT fire onHostAttachmentChanged on a refused (incompatible) ready — admission failure is not an attachment transition (#task:2043 B)', async () => {
+    t = buildTestApp();
+    const attachmentEdges: string[] = [];
+    server = await openServer(t, {
+      onHostAttachmentChanged: hostId => attachmentEdges.push(hostId),
+    });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(
+      createSqliteHostPersistence(t.ctx.db),
+    ).issueHostToken({ hostId: host.id });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    // An incompatible `ready` is refused before any attachment forms. It DOES
+    // announce a `host_connection_changed` (the non-self-healing transition),
+    // but availability did not move — no attachment ⇒ no edge here.
+    ws.send(
+      JSON.stringify({
+        ...(readyFrame({ hostName: 'Old Mac' }) as Record<string, unknown>),
+        protocol_version: OUTBOUND_PROTOCOL_VERSION + 1,
+      }),
+    );
+    await waitForClose(ws);
+    expect(attachmentEdges).toEqual([]);
+  });
+
   it('gates daemon-to-server frame shape after authentication', async () => {
     t = buildTestApp();
     server = await openServer(t);

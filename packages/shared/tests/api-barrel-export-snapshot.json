@@ -1,6 +1,7 @@
 [
   "ACTIVITY_ITEM_KINDS",
   "ACTIVITY_SALIENCES",
+  "AGENT_AVAILABILITY_CHANGED_EVENT",
   "ATTACHMENT_CHANGED_EVENT",
   "ATTACHMENT_LABEL_PATTERN",
   "AUTH_HANDLE_TAKEN_CODE",
@@ -21,6 +22,9 @@
   "AgentAuditChatListResponseSchema",
   "AgentAuditChatSummarySchema",
   "AgentAuditTranscriptResponseSchema",
+  "AgentAvailabilityChangedEventSchema",
+  "AgentAvailabilityDtoSchema",
+  "AgentAvailabilitySchema",
   "AgentCapabilitiesDtoSchema",
   "AgentCapabilitySchema",
   "AgentChangedEventSchema",

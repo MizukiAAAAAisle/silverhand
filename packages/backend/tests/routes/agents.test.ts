@@ -1,7 +1,9 @@
 import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  AgentAvailabilityDtoSchema,
   AgentLivenessDtoSchema,
+  AGENT_AVAILABILITY_CHANGED_EVENT,
   encodeUserPrincipalHeader,
   fixedConversationTitle,
   RUNTIME_CATALOG,
@@ -20,6 +22,8 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { switchAgentRuntime } from '../../src/application/switch-agent-runtime.js';
+import { revokeHost } from '../../src/application/revoke-host.js';
+import { createSqliteHostUnitOfWork } from '../../src/repos/host-uow.js';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -2167,6 +2171,235 @@ describe('GET /api/agents/:id/liveness (#task:2043 B)', () => {
     const stranger = await readLiveness(agentId, 'someone');
     const unknownId = await http(t!, asUser('someone')).get(
       '/api/agents/zzzzzzzzzzzzzzzz/liveness',
+    );
+    expect(stranger.status).toBe(404);
+    expect(await stranger.text()).toBe(await unknownId.text());
+  });
+});
+
+// ── GET /api/agents/:id/availability (#task:2043) ───────────────────────────
+//
+// The axis ORTHOGONAL to liveness: is the agent's host REACHABLE right now, not
+// is a process live. This is the fix for the DM "Offline after every turn" bug —
+// the renderer was reading a process bit (idle-reaped ⇒ offline) where it wanted
+// reachability. The load-bearing property is the CONTRAST test below: on one and
+// the same seeded-but-empty-active-set state, liveness reads `offline` while
+// availability reads `online`. If those two ever collapse to the same value the
+// bug is back.
+//
+// Two values, total — NOT three. Unlike liveness there is no `unknown`: the
+// source (`read()`) is a total in-process fact about whether an attachment is
+// connected, so a read that cannot be answered is an infra fault (5xx), never a
+// laundered domain value. `unknown` lives in the renderer's query projection.
+//
+// It reads the SAME attachment authority the delivery transport gate reads —
+// `ctx.outboundFrameAdapter().connectionIdForHost(hostId)` — so the read face
+// and the (B) event producer observe one fact and cannot drift. A connected
+// adapter ⇒ online regardless of hydration or of whether the separate
+// host-status snapshot projection is even installed; a null connection ⇒
+// offline. Hydration and the runtime snapshot are deliberately out of the
+// dependency graph — keying on them would sneak the process axis back in.
+describe('GET /api/agents/:id/availability (#task:2043)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const asUser = (id: string) => ({
+    [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(id),
+  });
+
+  async function setup(): Promise<{
+    agentId: string;
+    hostId: string;
+    controller: LivenessFakeHostWs;
+  }> {
+    let controller: LivenessFakeHostWs | null = null;
+    t = buildTestApp({
+      seedAllFixtureMemberships: false,
+      hostWsController: () => controller,
+    });
+    controller = new LivenessFakeHostWs(t.silverhandDir);
+    const created = (await (
+      await http(t).post('/api/agents', {
+        name: 'reach-agent',
+        runtime: 'claude',
+        session_scope: 'agent',
+      })
+    ).json()) as any;
+    expect(created.agent?.id, JSON.stringify(created)).toBeTruthy();
+    return { agentId: created.agent.id, hostId: created.agent.host_id, controller };
+  }
+
+  const readAvailability = (agentId: string, userId?: string): Promise<Response> =>
+    userId === undefined
+      ? http(t!).get(`/api/agents/${agentId}/availability`)
+      : http(t!, asUser(userId)).get(`/api/agents/${agentId}/availability`);
+
+  it('reads `online` on a connected host whose active set is EMPTY — the same state on which liveness reads `offline` (the two-axis contrast; sea-bug regression)', async () => {
+    const { agentId, hostId, controller } = await setup();
+    controller.activeAgentIds = []; // host connected + seeded; no live process
+    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
+
+    // Liveness (process axis) sees no process → offline …
+    const liveness = await http(t!).get(`/api/agents/${agentId}/liveness`);
+    expect(AgentLivenessDtoSchema.parse(await liveness.json()).liveness).toBe('offline');
+
+    // … availability (reachability axis), on the identical state, sees a
+    // connected host → online. Collapsing these two is exactly the bug.
+    const res = await readAvailability(agentId);
+    expect(res.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('online');
+  });
+
+  it('reads `online` when the host is connected but its snapshot is NOT yet hydrated (hydration is irrelevant to reachability)', async () => {
+    const { agentId } = await setup();
+    // No seedEagerly: the outbound attachment is present (controller live) so
+    // the delivery gate would accept a message. Availability reads that adapter
+    // directly and must NOT wait on hydration — the snapshot projection is not
+    // even in its dependency graph.
+    const res = await readAvailability(agentId);
+    expect(res.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('online');
+  });
+
+  it('reads `online` from the outbound attachment even when NO host-status read model is installed (availability tracks the delivery adapter, not the snapshot projection)', async () => {
+    const { agentId, controller } = await setup();
+    controller.activeAgentIds = [];
+    // A deployment may wire the delivery transport WITHOUT the host-status
+    // snapshot projection. The two are distinct optional ports. The delivery
+    // gate still accepts messages (adapter connected) ⇒ availability MUST read
+    // online. An earlier cut that gated on `hostStatusReadModel` presence read
+    // offline here — this is the falsifier that pins availability to the
+    // delivery adapter, not to the snapshot read model.
+    (t as unknown as { ctx: { hostStatusReadModel?: unknown } }).ctx.hostStatusReadModel =
+      undefined;
+
+    const res = await readAvailability(agentId);
+    expect(res.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('online');
+  });
+
+  it('reads `offline` when no daemon is attached (disconnected ⇒ offline, never unknown)', async () => {
+    let controller: LivenessFakeHostWs | null = null;
+    t = buildTestApp({
+      seedAllFixtureMemberships: false,
+      hostWsController: () => controller,
+    });
+    controller = new LivenessFakeHostWs(t.silverhandDir);
+    const created = (await (
+      await http(t).post('/api/agents', {
+        name: 'reach-agent',
+        runtime: 'claude',
+        session_scope: 'agent',
+      })
+    ).json()) as any;
+    const agentId: string = created.agent.id;
+
+    // Drop the attachment: `connectionIdForHost === null` ⇒ `disconnected`. No
+    // transport can accept a message ⇒ a determinate offline, not `unknown`.
+    controller = null;
+    const res = await readAvailability(agentId);
+    expect(res.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('offline');
+  });
+
+  it('reads `offline` for a revoked host even though its live snapshot would read reachable (revoked ⇒ offline)', async () => {
+    const { agentId, hostId, controller } = await setup();
+    controller.activeAgentIds = [agentId];
+    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
+
+    // Before revoke the same attachment reads reachable → online, so the
+    // transition below is purely the revoke.
+    expect(
+      AgentAvailabilityDtoSchema.parse(await (await readAvailability(agentId)).json())
+        .availability,
+    ).toBe('online');
+
+    expect(new HostRepo(t!.ctx.db).revoke(hostId)).toBe(true);
+    const res = await readAvailability(agentId);
+    expect(res.status).toBe(200);
+    // A revoked host is no longer a usable transport ⇒ offline (determinate).
+    expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('offline');
+  });
+
+  it('a committed host revoke fires ONE availability invalidation per viewer even though the outbound attachment is UNCHANGED — the frame comes from the post-commit fact edge, not a socket teardown (#task:2043 B, Cindy)', async () => {
+    const { agentId, hostId, controller } = await setup();
+    controller.activeAgentIds = [agentId];
+    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
+
+    // Connected + reachable before revoke — the creator (default viewer) is the
+    // agent's owner, so this host is theirs to revoke and theirs to be told about.
+    expect(
+      AgentAvailabilityDtoSchema.parse(
+        await (await readAvailability(agentId)).json(),
+      ).availability,
+    ).toBe('online');
+
+    const frames: Array<{ kind: string; payload: unknown }> = [];
+    const off = t!.ctx.events.subscribeScope(`viewer:${t!.viewerUserId}`, e => {
+      if (e.kind === AGENT_AVAILABILITY_CHANGED_EVENT) {
+        frames.push({ kind: e.kind, payload: e.payload });
+      }
+    });
+
+    // Revoke through the AUTHORITY (use case), not `HostRepo.revoke` — the
+    // post-commit edge is what must fan the invalidation. An embedded/local host
+    // has no host-WS connection to close, so `disconnectHost` is a no-op and
+    // could never have produced this frame: the ONLY source is the commit edge.
+    const result = revokeHost(
+      {
+        ctx: t!.ctx,
+        hosts: new HostRepo(t!.ctx.db),
+        uow: createSqliteHostUnitOfWork(t!.ctx.db),
+      },
+      { hostId, requesterUserId: t!.viewerUserId },
+    );
+    off();
+    expect(result.kind).toBe('revoked');
+
+    // The outbound attachment is UNCHANGED — `connectionIdForHost` still resolves
+    // — so nothing was torn down; the availability flip is read purely off the
+    // `revoked_at` fact, and the frame purely off the commit edge.
+    expect(
+      t!.ctx.outboundFrameAdapter?.()?.connectionIdForHost(hostId) ?? null,
+    ).not.toBeNull();
+    // Exactly one pure invalidation carrying only the agent id.
+    expect(frames).toEqual([
+      { kind: AGENT_AVAILABILITY_CHANGED_EVENT, payload: { agent_id: agentId } },
+    ]);
+
+    // …and the subsequent read is Offline (the value the invalidation tells the
+    // viewer to refetch).
+    const after = await readAvailability(agentId);
+    expect(after.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await after.json()).availability).toBe(
+      'offline',
+    );
+  });
+
+  it('hides the agent from a stranger (404) but serves the human DM endpoint via the DirectPair arm', async () => {
+    const { agentId, hostId, controller } = await setup();
+    controller.activeAgentIds = [];
+    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
+
+    new ConversationRepo(t!.ctx.db).getOrCreateDirectPair(
+      { kind: 'agent', id: agentId },
+      { kind: 'human', id: 'teammate' },
+      Date.now(),
+    );
+
+    // The DM endpoint reads the same reachability the #2035 read faces already
+    // expose to it, and sees the real value.
+    const endpoint = await readAvailability(agentId, 'teammate');
+    expect(endpoint.status).toBe(200);
+    expect(AgentAvailabilityDtoSchema.parse(await endpoint.json()).availability).toBe('online');
+
+    // A stranger to the pair is 404, byte-identical to an unknown id — no oracle.
+    const stranger = await readAvailability(agentId, 'someone');
+    const unknownId = await http(t!, asUser('someone')).get(
+      '/api/agents/zzzzzzzzzzzzzzzz/availability',
     );
     expect(stranger.status).toBe(404);
     expect(await stranger.text()).toBe(await unknownId.text());

@@ -113,6 +113,14 @@ export const apiPaths = {
    *  owner-only. Returns `{ liveness: 'online' | 'offline' | 'unknown' }`;
    *  `unknown` (no live host snapshot) MUST NOT be read as offline. */
   agentLiveness: (id: string) => `/api/agents/${id}/liveness`,
+  /** One-bit VIEWER-authorized availability (#task:2043): is this agent's host
+   *  REACHABLE right now (outbound attachment connected + host not revoked +
+   *  agent valid)? The orthogonal axis to `agentLiveness` (live process) — an
+   *  idle-reaped / not-yet-hydrated agent on a connected host is available.
+   *  Same `canViewAgent` gate. Returns `{ availability: 'online' | 'offline' }`
+   *  — two values only; a backend read fault is 5xx, and "cannot tell" is a
+   *  renderer query-projection state, never a backend value. */
+  agentAvailability: (id: string) => `/api/agents/${id}/availability`,
   agentRuntime: (id: string) => `/api/agents/${id}/runtime`,
   agentStop: (id: string) => `/api/agents/${id}/stop`,
   /** "Message this agent" — a human opens (or reuses) their DirectPair with an

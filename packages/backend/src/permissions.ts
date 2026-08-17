@@ -15,7 +15,7 @@ import {
   resolveParticipation,
 } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
-import type { AuthorizationConversationFacts } from './authorization-ports.js';
+import type { AuthorizationAgentFacts, AuthorizationConversationFacts } from './authorization-ports.js';
 import type { AgentPrincipal, Principal, UserPrincipal } from './auth/principal.js';
 import { workspaceRoleMeetsFloor } from './auth/workspace-role.js';
 
@@ -790,24 +790,18 @@ export function canViewAgent(
   // `includeStatuses` as an ACL-relaxing knob, which it is NOT.
   let aclPass: boolean;
   if (principal.kind === 'agent') {
+    // Self arm: an agent views only itself.
     aclPass = principal.agentId === agentId;
-  } else if (agent.created_by_user_id === principal.userId) {
-    aclPass = true;
-  } else if (
-    reads.agentDirectPairHumanEndpointIds(agentId).includes(principal.userId)
-  ) {
-    // 4th arm (#task:2043 C): the human endpoint of a human↔agent DirectPair
-    // can view the agent at the far end of that DM — the ACL now matches the
-    // read faces #2035 already grant this endpoint (its pair board, its
-    // liveness). The authority's SQL gates the returned slot on
-    // `endpoint_*_kind = 'human'`, so this arm never fires for an agent↔agent
-    // pair, never reads through owner-audit (a distinct arm), and never widens
-    // via `agent_inbox` (not a `direct_pair`).
-    aclPass = true;
   } else {
-    aclPass = reads
-      .agentWorkspaceIds(agentId)
-      .some(workspaceId => canViewWorkspace(ctx, principal, workspaceId));
+    // Human arms (creator ∪ human DirectPair endpoints ∪ shared-workspace
+    // members) are defined EXACTLY ONCE, in `agentHumanViewerUserIds`, and
+    // consumed both here (membership test) and by `agentViewerUserIds`
+    // (enumeration). Because the predicate and its audience dual read the SAME
+    // set, they cannot drift: adding or removing an arm edits that one function
+    // and moves both directions together, so a viewer this route would serve is
+    // never missed by the availability fan-out (#task:2043 B, Cindy
+    // `oOQkk0fQfYxuSW_U`).
+    aclPass = agentHumanViewerUserIds(ctx, agentId, agent).has(principal.userId);
   }
   if (!aclPass) return false;
 
@@ -817,6 +811,70 @@ export function canViewAgent(
 }
 
 const ACTIVE_ONLY: ReadonlyArray<AgentMaterializationStatus> = ['active'];
+
+/**
+ * The human user ids admitted by `canViewAgent`'s ACL arms for `agent` — the
+ * SINGLE definition of those arms. `canViewAgent`'s human branch tests
+ * membership in this set; {@link agentViewerUserIds} returns it (status-gated).
+ * Because both consume THIS function, the predicate and its audience dual are
+ * exact by construction (#task:2043 B, Cindy `oOQkk0fQfYxuSW_U`): a new or
+ * removed arm changes the set once and moves both directions together, so the
+ * fan-out can never under-send (miss a viewer the route would serve) nor
+ * over-send (leak to a stranger) relative to the predicate.
+ *
+ * The three arms:
+ *   - creator (`created_by_user_id`);
+ *   - the human endpoint of every human↔agent `direct_pair` this agent is in —
+ *     the authority's SQL gates the slot on `endpoint_*_kind = 'human'`, so this
+ *     never fires for an agent↔agent pair nor widens via `agent_inbox`;
+ *   - members of every workspace the agent reaches. For a HUMAN principal
+ *     `canViewWorkspace` IS `isWorkspaceMember`, so enumerating members is the
+ *     exact dual of the predicate's workspace arm, not an over-approximation —
+ *     which is why no trailing `canViewAgent` re-filter is needed or wanted.
+ *
+ * `agent` is passed in (already read by both callers) to avoid a second lookup.
+ * Agent principals are excluded by construction: only human arms are unioned,
+ * and the scopes these feed (`viewer:<userId>`) carry only user ids.
+ */
+function agentHumanViewerUserIds(
+  ctx: BackendContext,
+  agentId: string,
+  agent: AuthorizationAgentFacts,
+): Set<string> {
+  const reads = ctx.authorizationReads;
+  const ids = new Set<string>();
+  if (agent.created_by_user_id) ids.add(agent.created_by_user_id);
+  for (const userId of reads.agentDirectPairHumanEndpointIds(agentId)) {
+    ids.add(userId);
+  }
+  for (const workspaceId of reads.agentWorkspaceIds(agentId)) {
+    for (const userId of reads.workspaceMemberUserIds(workspaceId)) {
+      ids.add(userId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The user ids who may currently VIEW an agent — the audience DUAL of
+ * {@link canViewAgent} for human principals. Lives here, beside the predicate it
+ * mirrors, because "who may see this agent" is an access decision: a fan-out
+ * that reaches availability/liveness invalidations must reach exactly the humans
+ * the read route would serve, and no other module may read the authorization
+ * port to answer it (W6 Gate 8).
+ *
+ * The arms come from {@link agentHumanViewerUserIds} — the SAME set the
+ * predicate tests — so this is the predicate's exact dual by construction, not a
+ * superset narrowed by a re-filter. The only additional gate is the predicate's
+ * active-only status widener: a non-`active` agent is a 404 for everyone, so its
+ * viewer audience is empty.
+ */
+export function agentViewerUserIds(ctx: BackendContext, agentId: string): string[] {
+  const agent = ctx.authorizationReads.agent(agentId);
+  if (!agent) return [];
+  if (!ACTIVE_ONLY.includes(agent.materialization_status)) return [];
+  return [...agentHumanViewerUserIds(ctx, agentId, agent)];
+}
 
 /**
  * May this principal OPEN a direct-message line to this agent (#task:2036)?
