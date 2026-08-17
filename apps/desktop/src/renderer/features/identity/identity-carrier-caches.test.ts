@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
+import type { ServerFrame } from '@silverhand/shared';
+import { api } from '@/lib/api';
+import { decideAgentSyncAction } from '@/features/agents/agent-sync';
 import {
   agentsKey,
   clusterFetchEpochKey,
@@ -14,12 +17,25 @@ import {
   channelThreadsUnreadKey,
 } from '@/features/channels/useChannelThreads';
 import { channelAttachmentsKey } from '@/features/channels/useChannelAttachments';
+import {
+  directPairsKey,
+  directPairsQueryOptions,
+} from '@/features/direct-pairs/hooks';
 import { savedKey } from '@/features/saved/hooks';
 import { searchKey } from '@/features/search/hooks';
+import { decideUserSyncAction } from '@/features/users/user-sync';
 import {
+  carrierIdsWithFacet,
   identityCarrierIdsFor,
   invalidateIdentityCarrierCaches,
 } from './identity-carrier-caches';
+
+// Only `api` is replaced, so the pair list's re-read can be COUNTED.
+vi.mock('@/lib/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/api')>();
+  return { ...actual, api: vi.fn() };
+});
+const mockApi = vi.mocked(api);
 
 /**
  * The registry's value is its SCOPING, not its inventory: one shared
@@ -62,6 +78,11 @@ describe('identity-carrier caches', () => {
       channelAttachmentsKey('c1'),
       savedKey,
       searchKey,
+      // #task:2046 — the DM list resolves its whole label at read time, so it
+      // carries the counterpart's CURRENT identity plus the lifecycle half (the
+      // `deleted` arm + the derived `read_only`). Built from the real factory,
+      // same discipline as the channel families above.
+      directPairsKey,
       // Non-author channel caches that share the `['channels', cid, …]` prefix
       // (and, for the cluster arm, the `'cluster'` segment) — they must NOT be
       // reseated by an identity change.
@@ -83,6 +104,7 @@ describe('identity-carrier caches', () => {
     const shared = [
       '["activity","all"]',
       '["conversation-members","c1"]',
+      '["direct-pairs"]',
       '["message-reactions","m1"]',
       '["task-by-number","w1",7]',
       '["task-detail","t1"]',
@@ -172,8 +194,136 @@ describe('identity-carrier caches', () => {
           'channel-author-projections',
           'saved',
           'search',
+          // Either endpoint of a pair can be the counterpart (#task:2046).
+          'direct-pairs',
         ]),
       );
     }
+  });
+
+  it('splits the identity facets, and the DM list is the only lifecycle carrier (#task:2046)', () => {
+    // The registry was presentation-flavored until the DM list arrived: its
+    // `deleted` arm + derived `read_only` are the first LIFECYCLE identity, and
+    // they fail toward "looks writable". These pins make the split enforced —
+    // narrowing `direct-pairs` to presentation-only, or dropping it, reddens
+    // here rather than shipping a composer that accepts input the send path
+    // refuses.
+    expect(carrierIdsWithFacet('lifecycle')).toEqual(['direct-pairs']);
+    expect(carrierIdsWithFacet('presentation')).toContain('direct-pairs');
+    // Every carrier carries presentation identity; lifecycle is the exception,
+    // so the two sets differ by exactly the entries that earned lifecycle.
+    for (const kind of ['agent', 'human'] as const) {
+      for (const id of identityCarrierIdsFor(kind)) {
+        expect(carrierIdsWithFacet('presentation')).toContain(id);
+      }
+    }
+  });
+});
+
+/**
+ * The DM list is an identity carrier, and the two axes' REAL decision seams have
+ * to reach it (#task:2046).
+ *
+ * Why this is not covered by the registry cases above: those seed a key and read
+ * the `stale` flag. What #2038 B2 changed is the COST model — the list is
+ * cache-until-invalidated (`DIRECT_PAIRS_QUERY_POLICY.staleMs = Infinity`), so
+ * "marked stale" is only half an answer. Under Infinity a mount never re-reads on
+ * its own, which is exactly why the missing registration would have been
+ * permanent for the session rather than "briefly old": the accidental
+ * observer-mount refetch that used to paper over it is gone. So these count real
+ * `/api/direct-pairs` reads, on both sides of the active/inactive split, driven by
+ * the frames the backend actually publishes.
+ *
+ * The seams composed here are the bodies of `useAgentSync` / `useUserSync`
+ * verbatim (decide → `invalidateIdentityCarrierCaches(qc, kind)`); the hook
+ * wiring itself is pinned by `agent-sync.test.ts` / `user-sync.test.ts` and the
+ * shell-link cases in `direct-pairs/hooks.test.ts`, and desktop's test env is
+ * `node` (no RTL to mount them here).
+ *
+ * FIRST PROOF POINT (#2046's own acceptance): delete the `['direct-pairs']` entry
+ * from `IDENTITY_CARRIERS` and every case in this describe goes red.
+ */
+describe('direct-pairs identity carrier — both axes, active and inactive', () => {
+  const evt = (kind: string, payload: unknown): ServerFrame =>
+    ({ type: 'event', scope: 'app', seq: 1, epoch: 'e', kind, payload }) as ServerFrame;
+
+  const client = () =>
+    new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const mountReader = (qc: QueryClient): (() => void) =>
+    new QueryObserver(qc, directPairsQueryOptions()).subscribe(() => {});
+
+  beforeEach(() => {
+    mockApi.mockReset();
+    mockApi.mockResolvedValue({ direct_pairs: [] });
+  });
+
+  it('an agent_changed frame re-reads the list while a reader is mounted', async () => {
+    // The counterpart's `display_name` / `avatar_url` / `runtime` are CURRENT
+    // values, so an agent rename must reach an open DM list.
+    const qc = client();
+    const off = mountReader(qc);
+    await qc.fetchQuery(directPairsQueryOptions());
+    expect(mockApi).toHaveBeenCalledTimes(1);
+
+    const action = decideAgentSyncAction(evt('agent_changed', { agent_id: 'a1' }));
+    expect(action).toEqual({ kind: 'invalidate' });
+    invalidateIdentityCarrierCaches(qc, 'agent');
+
+    await vi.waitFor(() => expect(mockApi).toHaveBeenCalledTimes(2));
+    off();
+  });
+
+  it('a user_changed frame re-reads it too — a human can be the counterpart', async () => {
+    const qc = client();
+    const off = mountReader(qc);
+    await qc.fetchQuery(directPairsQueryOptions());
+    expect(mockApi).toHaveBeenCalledTimes(1);
+
+    const action = decideUserSyncAction(evt('user_changed', { user_id: 'u1' }));
+    expect(action).toEqual({ kind: 'invalidate', userId: 'u1' });
+    invalidateIdentityCarrierCaches(qc, 'human');
+
+    await vi.waitFor(() => expect(mockApi).toHaveBeenCalledTimes(2));
+    off();
+  });
+
+  it('a frame that lands while the list is unread is paid for on the next mount', async () => {
+    // The inactive axis, and the one that matters most for a sidebar list: an
+    // identity change arriving while DIRECT MESSAGES is closed (it renders
+    // nothing when the viewer has no pairs, and the pane can be shut) must not
+    // be a silent no-op. `invalidateQueries` ignores `staleTime`, so the entry is
+    // marked without fetching and the next reader pays for it.
+    const qc = client();
+    await qc.fetchQuery(directPairsQueryOptions());
+    expect(mockApi).toHaveBeenCalledTimes(1);
+
+    invalidateIdentityCarrierCaches(qc, 'agent');
+    await Promise.resolve();
+    expect(mockApi).toHaveBeenCalledTimes(1); // nothing mounted ⇒ marked, not fetched
+
+    const off = mountReader(qc);
+    await vi.waitFor(() => expect(mockApi).toHaveBeenCalledTimes(2));
+    off();
+  });
+
+  it('a snapshot_required recovery on the app scope reaches it as well', async () => {
+    // The identity axes' replay path: a dropped app-scope delta may have been
+    // the `agent_changed` for this counterpart, so the recovery frame has to
+    // reseat the same carriers. Distinct from `useDirectPairsSync`'s own
+    // viewer-scope recovery, which converges the pair SET rather than identity.
+    const qc = client();
+    const off = mountReader(qc);
+    await qc.fetchQuery(directPairsQueryOptions());
+
+    const frame = {
+      type: 'snapshot_required',
+      scope: 'app',
+      reason: 'epoch_mismatch',
+    } as unknown as ServerFrame;
+    expect(decideAgentSyncAction(frame)).toEqual({ kind: 'invalidate' });
+    invalidateIdentityCarrierCaches(qc, 'agent');
+
+    await vi.waitFor(() => expect(mockApi).toHaveBeenCalledTimes(2));
+    off();
   });
 });
