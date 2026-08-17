@@ -1,7 +1,7 @@
 import { Monitor, Plus, User, Users } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
 import type { AgentDto, HostDto } from '@silverhand/shared';
-import { useAgents } from '@/features/agents/hooks';
+import { useAgents, projectGlobalPresence, useAgentAvailability } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
 import { useAgentOnlineByHost, useHostsQuery } from '@/features/hosts/hooks';
@@ -61,10 +61,16 @@ export function MembersPanel({
     () => new Map((hostsQuery.data?.hosts ?? []).map(h => [h.id, h] as const)),
     [hostsQuery.data],
   );
-  // Rail dot = whether the agent's daemon runtime is live on its computer,
-  // read from that computer's `/status.agents[].online` (host live status) —
-  // NOT the conversation `/runtime-state`, which only reports mid-turn
-  // activity and shows a chattable daemon agent as offline (#task:1361).
+  // The host live-status batch supplies ONLY the liveness axis of each rail
+  // dot — whether the agent's daemon runtime is live on its computer, read from
+  // that computer's `/status.agents[].online` (NOT the conversation
+  // `/runtime-state`, which only reports mid-turn activity and shows a chattable
+  // daemon agent as offline, #task:1361). It is composed per row with the
+  // agent's Availability into the SAME presence the DM popover / agent hero show
+  // (#task:2039); the host active-set alone is never read as availability, so an
+  // idle-reaped-but-reachable agent reads Away, not Offline. One batched query
+  // per host covers all its agents, so this stays a single read regardless of
+  // how many agents a computer runs.
   const agentHostIds = useMemo(
     () => [...new Set(agents.map(a => a.host_id).filter(id => hostsById.has(id)))],
     [agents, hostsById],
@@ -96,22 +102,13 @@ export function MembersPanel({
   const showGroups = agentGroups.length >= 2;
 
   const renderAgentRow = (a: AgentDto): JSX.Element => (
-    <SidebarRow
+    <AgentRow
       key={a.id}
-      className="h-[32px]"
-      icon={
-        <AgentAvatar
-          runtime={a.runtime}
-          size={AVATAR_PX.xs}
-          avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
-          alt={a.display_name || a.name}
-        />
-      }
-      title={a.display_name || a.name}
-      subtitle={<span data-agent-runtime>{a.runtime}</span>}
-      status={agentOnline.get(a.id) ? 'active' : 'idle'}
+      agent={a}
+      avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
+      hostOnline={agentOnline.get(a.id) ?? false}
       selected={selectedAgentId === a.id}
-      onClick={onSelectAgent ? () => onSelectAgent(a.id) : undefined}
+      onSelect={onSelectAgent}
     />
   );
   const viewerQuery = useViewerUser();
@@ -229,6 +226,53 @@ export function MembersPanel({
 
       <CreateAgentDialog open={open} onOpenChange={setOpen} />
     </>
+  );
+}
+
+/**
+ * One AGENTS-rail row. Presence is the SAME two-axis composition the DM popover
+ * and the agent-page hero use (#task:2039): the agent's Availability
+ * (event-invalidated, "can it work for me now") is primary and the host
+ * live-status batch supplies the liveness axis — WITHOUT a per-agent poll, since
+ * `hostOnline` comes from the parent's one-query-per-host batch. Reading the host
+ * active-set alone as presence was the shipped bug: an agent whose process had
+ * been idle-reaped after replying read Offline. `projectGlobalPresence` reads
+ * Offline from availability only, so idle-reap reads Away; Away and Offline both
+ * map to the muted `idle` dot (green is earned only by a live, available agent),
+ * and an undefined availability draws no dot rather than a speculative one.
+ */
+function AgentRow({
+  agent,
+  avatarObjectUrl,
+  hostOnline,
+  selected,
+  onSelect,
+}: {
+  agent: AgentDto;
+  avatarObjectUrl: string | null;
+  hostOnline: boolean;
+  selected: boolean;
+  onSelect?: (id: string) => void;
+}): JSX.Element {
+  const availability = useAgentAvailability(agent.id);
+  const presence = projectGlobalPresence(availability, hostOnline ? 'online' : 'offline');
+  return (
+    <SidebarRow
+      className="h-[32px]"
+      icon={
+        <AgentAvatar
+          runtime={agent.runtime}
+          size={AVATAR_PX.xs}
+          avatarObjectUrl={avatarObjectUrl}
+          alt={agent.display_name || agent.name}
+        />
+      }
+      title={agent.display_name || agent.name}
+      subtitle={<span data-agent-runtime>{agent.runtime}</span>}
+      status={presence === 'online' ? 'active' : presence === null ? null : 'idle'}
+      selected={selected}
+      onClick={onSelect ? () => onSelect(agent.id) : undefined}
+    />
   );
 }
 

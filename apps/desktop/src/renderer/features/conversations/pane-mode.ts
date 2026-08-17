@@ -8,8 +8,10 @@
  *  - `workspace_channel` — a workspace container: roster, member management,
  *    channel identity (`#`), workspace-scoped refs and candidate searches;
  *  - `direct_message` — a `direct_pair`: two endpoints, no roster and no
- *    container, the counterpart IS the identity, and an agent's state comes from
- *    the GLOBAL runtime authority rather than this conversation's roster.
+ *    container, the counterpart IS the identity. Presence is NOT placement-keyed:
+ *    both shapes read a member's Online/Offline from the agent's Availability
+ *    (#task:2043) — a channel's only presence-specific power is the `Not here`
+ *    membership answer a roster gives, which is {@link ConversationPaneCapabilities.hasRoster}.
  *
  * — and the four dogfood findings behind this ticket were four different
  * components each guessing which one they were in (`workspaceId === null`, the
@@ -32,20 +34,6 @@ import type {
   DirectPairCounterpart,
 } from '@silverhand/shared';
 import type { ConversationPaneDescriptor } from './pane-descriptor';
-
-/**
- * Where an agent's presence line in this pane comes from.
- *
- * - `conversation_roster` — the agent's status IN this conversation
- *   (`conversation_agents` + its runtime projection). Meaningful only where a
- *   roster exists.
- * - `global_runtime` — the agent's liveness on its computer, the authority the
- *   agent page's hero pill already reads. An agent-scoped agent acts across
- *   conversations, so this is the only honest answer for a placement with no
- *   roster: a pair has no `conversation_agents` row and never will, and reading
- *   one there projects membership onto presence (shiki's `Not here`, #task:2039).
- */
-export type AgentPresenceSource = 'conversation_roster' | 'global_runtime';
 
 export type ConversationPaneMode =
   /** A conversation inside a workspace container. `workspaceId` stays nullable
@@ -96,30 +84,18 @@ export function placementOfPaneMode(
 }
 
 /**
- * Which authority a placement's agent presence comes from. Keyed by PLACEMENT
- * rather than by pane mode because surfaces outside a pane consume it too (the
- * agent page's Activity timeline knows its row's
- * `conversation_placement_kind` and nothing else) — one table, no second rule.
+ * What the pane may show, and what it may READ. Every field is a UI capability,
+ * never a permission.
+ *
+ * Presence is deliberately NOT a field here. Both placements now read a member's
+ * Online/Offline from the SAME authority — the agent's Availability
+ * (`agent_availability_changed`, #task:2043), composed with liveness by
+ * `projectGlobalPresence` — so "which authority answers presence" is no longer a
+ * placement-specific capability (frozen contract, @Cindy #task:2039). The one
+ * remaining placement difference is MEMBERSHIP: a roster-bearing placement can say
+ * `Not here` for a non-member, which is exactly {@link hasRoster}. A runtime state
+ * (`starting` / `crashed`) is orthogonal and never decides Offline.
  */
-const AGENT_PRESENCE_BY_PLACEMENT: Record<
-  ConversationPlacementKind,
-  AgentPresenceSource
-> = {
-  workspace: 'conversation_roster',
-  direct_pair: 'global_runtime',
-  // A single-participant notification face: there is no roster to be present in
-  // either, so the agent's own liveness is the only fact available.
-  agent_inbox: 'global_runtime',
-};
-
-export function agentPresenceSourceForPlacement(
-  placement: ConversationPlacementKind,
-): AgentPresenceSource {
-  return AGENT_PRESENCE_BY_PLACEMENT[placement];
-}
-
-/** What the pane may show, and what it may READ. Every field is a UI capability,
- *  never a permission. */
 export interface ConversationPaneCapabilities {
   /** The identity primitive the header wears: the channel `#`, the counterpart's
    *  face, or the title alone when the placement has neither. */
@@ -130,13 +106,15 @@ export interface ConversationPaneCapabilities {
    *  them. A pair's two endpoints are not a roster, so it has none of it (shiki,
    *  #task:2039).
    *
+   *  It also gates the presence line's MEMBERSHIP question: a roster-bearing
+   *  placement answers `Not here` for an agent not on it, a pair never does.
+   *
    *  It gates the READS, not just the painting (@Cindy, #task:2039 review): a
    *  surface that starts the query and then renders nothing because the response
    *  happens to be empty has moved its capability into the data, where the next
    *  placement with a non-empty roster silently inherits it. See
    *  {@link rosterQueryTarget}. */
   hasRoster: boolean;
-  agentPresence: AgentPresenceSource;
   /** The workspace that workspace-scoped affordances resolve in — `#channel`
    *  refs, `#task:<n>` refs, in-workspace jumps — or `null` when there is none. */
   workspaceScope: string | null;
@@ -145,27 +123,23 @@ export interface ConversationPaneCapabilities {
 export function paneCapabilities(
   mode: ConversationPaneMode,
 ): ConversationPaneCapabilities {
-  const agentPresence = agentPresenceSourceForPlacement(placementOfPaneMode(mode));
   switch (mode.kind) {
     case 'workspace_channel':
       return {
         headerIdentity: 'channel_hash',
         hasRoster: true,
-        agentPresence,
         workspaceScope: mode.workspaceId,
       };
     case 'direct_message':
       return {
         headerIdentity: 'counterpart',
         hasRoster: false,
-        agentPresence,
         workspaceScope: null,
       };
     case 'unsupported':
       return {
         headerIdentity: 'title_only',
         hasRoster: false,
-        agentPresence,
         workspaceScope: null,
       };
   }

@@ -251,25 +251,35 @@ export function agentAvailabilityRetry(failureCount: number, err: unknown): bool
 
 /**
  * Pure projection of the availability query state onto the tri-state a consumer
- * composes. Unlike liveness, this axis is EVENT-invalidated, not timer-polled
- * (#task:2043): the route is the single source of the value and
- * `agent_availability_changed` drives every refresh, so a successful value stays
- * authoritative until an event invalidates it — there is no `staleTime` timer to
- * age it out, hence no `isStale` input here.
+ * composes. This axis is EVENT-invalidated, not timer-polled (#task:2043): the
+ * route is the single source of the value and `agent_availability_changed` drives
+ * every refresh, so with `staleTime: Infinity` a value only becomes `isStale` when
+ * an event (or a `snapshot_required` recovery) explicitly invalidates it — never
+ * on a timer. A value the client holds is therefore authoritative ONLY while it is
+ * a fresh successful read; every other state folds to `unknown` (which composes to
+ * no-status), NEVER continues to assert a possibly-wrong online/offline:
  *  - `data === undefined` — first load in flight, disabled, or a read that failed
- *    with no prior value (incl. the 404 anti-enum for a non-viewer) → `unknown`,
- *    the renderer's "we cannot tell", which composes to no-status.
- *  - otherwise the last successful value. A refetch triggered by an event (or a
- *    transient 5xx during one) retains the prior `data` while it re-reads; reading
- *    that last value rather than flickering to `unknown` matches the liveness fold
- *    and keeps a mounted line from blinking between the invalidation and its
- *    replacement. The next event (or its `snapshot_required` recovery) corrects a
- *    stale-after-fault value.
+ *    with no prior value (incl. the 404 anti-enum for a non-viewer).
+ *  - `isStale` — an INVALIDATED value not yet replaced by a successful refetch.
+ *    React Query retains the prior `data` (status can stay `'success'`, or go
+ *    `'error'` after a failed refetch) but keeps the query invalidated, so the old
+ *    value must not be re-asserted. This is the case @Cindy's #task:2039 review
+ *    pinned: after a disconnect/revoke frame invalidates and the refetch then 5xx's,
+ *    the retained `online` would otherwise paint Online indefinitely under
+ *    `staleTime: Infinity` with no guaranteed next frame. From invalidation until a
+ *    successful replacement the projection reads `unknown`; the brief no-status
+ *    blink on a genuine change is acceptable because availability changes are rare
+ *    events, not a 10s poll (contrast `projectAgentLiveness`, whose poll would
+ *    flicker if it folded in-flight — that fold deliberately omits `isFetching`;
+ *    THIS fold keys on `isStale`, which an in-flight-but-not-invalidated poll never
+ *    sets, so a rare event's replacement is the only thing that clears it).
  */
 export function projectAgentAvailability(state: {
   data: AgentAvailability | undefined;
+  isStale: boolean;
 }): AgentAvailability | 'unknown' {
-  return state.data === undefined ? 'unknown' : state.data;
+  if (state.data === undefined || state.isStale) return 'unknown';
+  return state.data;
 }
 
 /** Minimal WS frame shape {@link decideAgentAvailabilityInvalidation} consumes,
@@ -359,7 +369,7 @@ export function useAgentAvailability(
       unsub();
     };
   }, [agentId, qc]);
-  return projectAgentAvailability({ data: query.data });
+  return projectAgentAvailability({ data: query.data, isStale: query.isStale });
 }
 
 /** The user-facing presence a consumer draws once both axes are composed. */

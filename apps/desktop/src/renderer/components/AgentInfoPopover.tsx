@@ -1,7 +1,7 @@
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eraser, Power, RefreshCw, UserMinus } from 'lucide-react';
-import type { AgentDto, ConversationAgentStatus } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import {
   useChannelAgents,
   useChannelAgentRuntime,
@@ -16,7 +16,6 @@ import {
 } from '@/features/agents/permissions';
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
-import type { AgentPresenceSource } from '@/features/conversations/pane-mode';
 import {
   projectGlobalPresence,
   useAgentAvailability,
@@ -53,9 +52,9 @@ interface AgentInfoPopoverProps {
   side?: 'top' | 'bottom' | 'left' | 'right';
   align?: 'start' | 'center' | 'end';
   /** When set, the card carries a presence line + (when crashed) a retry
-   *  action. WHICH authority answers presence is the surface's, not this prop's:
-   *  a roster-bearing conversation reports the agent's status in it, a
-   *  workspace-less one reports the agent's own liveness (#task:2039). */
+   *  action. Online/Offline is read from the agent's Availability regardless of
+   *  placement; a roster-bearing conversation additionally answers the
+   *  MEMBERSHIP question (`Not here`) for an agent not on it (#task:2039). */
   conversationId?: string | null;
   /** `'click'` (default) opens on click for standalone controls.
    *  `'hover'` opens on pointer-enter and
@@ -88,7 +87,8 @@ const HOVER_CLOSE_DELAY_MS = 120;
 
 /**
  * Compact agent info card. Shows avatar, display name + handle,
- * runtime/model, presence (from the authority the pane's placement names), and an
+ * runtime/model, presence (Online/Away/Offline from the agent's Availability, plus
+ * a roster's `Not here` membership answer), and an
  * optional retry affordance when the agent has crashed in this conversation.
  *
  * Two trigger modes: click (standalone controls) and hover
@@ -207,9 +207,10 @@ export function AgentInfoPopover({
             <div className="min-w-0 flex-1">
               {/* Name + inline presence dot. Presence sits as the
                   semantic state next to the name, and is only shown
-                  when the card was opened FROM a conversation — which
-                  authority then answers it is the surface's
-                  (`useConversationPaneCapabilities`), not this gate's. */}
+                  when the card was opened FROM a conversation. Online/Offline
+                  comes from the agent's Availability on every placement; a
+                  roster placement additionally answers `Not here`
+                  (`paneCaps.hasRoster`). */}
               <div className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 truncate text-sm font-semibold text-text-primary">
                   {agent.display_name || agent.name}
@@ -218,7 +219,7 @@ export function AgentInfoPopover({
                   <PresenceInline
                     agent={agent}
                     conversationId={conversationId}
-                    source={paneCaps.agentPresence}
+                    hasRoster={paneCaps.hasRoster}
                   />
                 ) : null}
               </div>
@@ -262,23 +263,6 @@ export function AgentInfoPopover({
   );
 }
 
-// IM-style presence labels — keep the underlying ConversationAgentStatus
-// terminology out of the chat UI. `idle` (no live process) maps to
-// "Away" since the runtime spawns lazily on the next message instead
-// of requiring user action.
-const PRESENCE_LABEL: Record<ConversationAgentStatus, string> = {
-  active: 'Online',
-  starting: 'Connecting',
-  idle: 'Away',
-  crashed: 'Offline',
-};
-const PRESENCE_DOT: Record<ConversationAgentStatus, string> = {
-  active: 'bg-success',
-  starting: 'bg-warning',
-  idle: 'bg-text-muted/40',
-  crashed: 'bg-error',
-};
-
 /** One visual contract for every presence line, whichever authority answered:
  *  the same pip + the same caption slot next to the name. */
 function PresenceLine({ dot, label }: { dot: string; label: string }): JSX.Element {
@@ -294,40 +278,34 @@ function PresenceLine({ dot, label }: { dot: string; label: string }): JSX.Eleme
 }
 
 /**
- * The agent's presence, from the authority this SURFACE has (#task:2039).
+ * The agent's presence next to its name (#task:2039).
  *
- * Which one that is comes from the pane's mode projection via context, never from
- * a guess here — the two answer different questions and only one of them exists
- * per placement:
+ * Online/Away/Offline is read from the SAME two-axis composition on every
+ * placement — the agent's Availability × process Liveness (`projectGlobalPresence`,
+ * see `GlobalPresenceInline`). A placement never supplies the online/offline word
+ * itself; the only thing a roster adds is the MEMBERSHIP answer:
  *
- *  - `conversation_roster` — the agent's status IN this conversation. "Not here"
- *    is a real fact there: a channel has a roster and the agent is not on it.
- *  - `global_runtime` — the agent's presence on its computer, the authority the
- *    agent page's hero pill reads. A `direct_pair` has no roster row and never
- *    will, so reading one there turned membership into presence and told the user
- *    their DM counterpart was `Not here` while it was answering them
- *    (shiki, #task:2039).
- *
- * The global arm composes TWO axes (availability × liveness → Online / Away /
- * Offline / no-status; see `projectGlobalPresence`) and renders nothing until
- * availability is a definite answer. `Offline` there is read from availability
- * alone — an unreachable host / invalid agent — never from a reaped process on a
- * reachable host, which reads `Away`: a disconnected host is not a dead process,
- * and an idle agent still answers on the next message.
+ *  - `hasRoster` (a channel) — the agent may not be a member, which is a real
+ *    fact only a roster can state (`Not here`). A member falls through to the
+ *    same availability-driven presence as everywhere else.
+ *  - no roster (a `direct_pair`) — the counterpart is the identity; there is no
+ *    membership question, so the availability presence renders directly. Reading a
+ *    roster row here once turned membership into presence and told the user their
+ *    DM counterpart was `Not here` while it was answering them (shiki, #task:2039).
  */
 function PresenceInline({
   agent,
   conversationId,
-  source,
+  hasRoster,
 }: {
   agent: AgentDto;
   conversationId: string;
-  source: AgentPresenceSource;
+  hasRoster: boolean;
 }): JSX.Element | null {
-  if (source === 'global_runtime') {
-    return <GlobalPresenceInline agent={agent} />;
+  if (hasRoster) {
+    return <RosterMemberPresence agent={agent} conversationId={conversationId} />;
   }
-  return <RosterPresenceInline agentId={agent.id} conversationId={conversationId} />;
+  return <GlobalPresenceInline agent={agent} />;
 }
 
 function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | null {
@@ -355,25 +333,26 @@ function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | nul
   );
 }
 
-function RosterPresenceInline({
-  agentId,
+/**
+ * A roster-bearing placement adds exactly ONE thing to the presence line that
+ * Availability already answers: MEMBERSHIP (@Cindy, #task:2039). An agent not on
+ * this conversation's roster reads `Not here`; a member's Online/Away/Offline
+ * then comes from the same availability × liveness composition every placement
+ * uses. The roster no longer supplies the online/offline word — only the "is it
+ * here" gate — so a retained `active` roster row can never re-assert Online.
+ */
+function RosterMemberPresence({
+  agent,
   conversationId,
 }: {
-  agentId: string;
+  agent: AgentDto;
   conversationId: string;
-}): JSX.Element {
+}): JSX.Element | null {
   const { data: members = [] } = useChannelAgents(conversationId);
-  const { data: runtime = [] } = useChannelAgentRuntime(conversationId);
-  const member = members.find(s => s.agent_id === agentId);
-  const row = runtime.find(s => s.agent_id === agentId);
-  // Rendered inline next to the display name (#task:912 review round 7
-  // — was a standalone row below; the user noted it took a band of
-  // vertical space without earning it). When the agent isn't in this
-  // conversation we still want a faint hint, so we render the muted
-  // dot + "Not here" rather than collapse silently.
-  if (!member) return <PresenceLine dot="bg-text-muted/40" label="Not here" />;
-  const status = row?.status ?? 'idle';
-  return <PresenceLine dot={PRESENCE_DOT[status]} label={PRESENCE_LABEL[status]} />;
+  if (!members.some(s => s.agent_id === agent.id)) {
+    return <PresenceLine dot="bg-text-muted/40" label="Not here" />;
+  }
+  return <GlobalPresenceInline agent={agent} />;
 }
 
 function AgentManagementActions({

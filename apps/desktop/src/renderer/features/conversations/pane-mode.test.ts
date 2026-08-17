@@ -5,7 +5,6 @@ import { ConversationPlacementKindSchema } from '@silverhand/shared';
 import type { ConversationPlacementKind } from '@silverhand/shared';
 import type { ConversationPaneDescriptor } from './pane-descriptor';
 import {
-  agentPresenceSourceForPlacement,
   paneCapabilities,
   placementOfPaneMode,
   projectConversationPaneMode,
@@ -21,8 +20,8 @@ import {
 //   1. TOTAL over the stored placement union — a placement with no pane mode must
 //      land in `unsupported`, never fall through into channel chrome;
 //   2. BIDIRECTIONAL — mode → placement inverts the projection, so a rule keyed
-//      by placement (presence authority) and a rule keyed by mode (capabilities)
-//      cannot drift into two different answers for the same conversation;
+//      by placement and a rule keyed by mode (capabilities) cannot drift into two
+//      different answers for the same conversation;
 //   3. EXHAUSTIVE per capability — every capability is asserted in both
 //      directions: what a mode grants, and which modes grant it. A new mode that
 //      quietly inherits `hasRoster` fails the second half.
@@ -137,19 +136,16 @@ describe('paneCapabilities — every affordance, both directions', () => {
     expect(paneCapabilities(MODE_SAMPLES.workspace_channel)).toEqual({
       headerIdentity: 'channel_hash',
       hasRoster: true,
-      agentPresence: 'conversation_roster',
       workspaceScope: 'w-1',
     });
     expect(paneCapabilities(MODE_SAMPLES.direct_message)).toEqual({
       headerIdentity: 'counterpart',
       hasRoster: false,
-      agentPresence: 'global_runtime',
       workspaceScope: null,
     });
     expect(paneCapabilities(MODE_SAMPLES.unsupported)).toEqual({
       headerIdentity: 'title_only',
       hasRoster: false,
-      agentPresence: 'global_runtime',
       workspaceScope: null,
     });
   });
@@ -178,34 +174,6 @@ describe('paneCapabilities — every affordance, both directions', () => {
     expect(
       paneCapabilities({ kind: 'workspace_channel', workspaceId: null }).workspaceScope,
     ).toBeNull();
-  });
-});
-
-describe('agentPresenceSourceForPlacement — one table for panes and non-panes', () => {
-  it('answers for every placement kind', () => {
-    expect(PLACEMENTS.map(p => [p, agentPresenceSourceForPlacement(p)])).toEqual([
-      ['workspace', 'conversation_roster'],
-      ['direct_pair', 'global_runtime'],
-      ['agent_inbox', 'global_runtime'],
-    ]);
-  });
-
-  it('reads a conversation roster for EXACTLY the placement that has one', () => {
-    // A pair has no `conversation_agents` row and never will, so a roster read
-    // there answers "not a member" and paints it as "not present" — the finding
-    // this mapping closes.
-    expect(
-      PLACEMENTS.filter(p => agentPresenceSourceForPlacement(p) === 'conversation_roster'),
-    ).toEqual(['workspace']);
-  });
-
-  it('agrees with the capability derived from the same conversation', () => {
-    for (const placement of PLACEMENTS) {
-      const mode = projectConversationPaneMode(descriptor({ placement_kind: placement }));
-      expect(paneCapabilities(mode).agentPresence).toBe(
-        agentPresenceSourceForPlacement(placement),
-      );
-    }
   });
 });
 
@@ -253,7 +221,6 @@ describe('DEFAULT_PANE_CAPABILITIES — a surface with no pane is unchanged', ()
     expect(DEFAULT_PANE_CAPABILITIES).toEqual({
       headerIdentity: 'channel_hash',
       hasRoster: true,
-      agentPresence: 'conversation_roster',
       workspaceScope: null,
     });
   });
@@ -302,6 +269,13 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // workspace-member reads; it used to hide itself because a pair's roster
     // response came back without a row.
     expect(popoverSource).toContain('conversationId && paneCaps.hasRoster ?');
-    expect(popoverSource).toContain('source={paneCaps.agentPresence}');
+  });
+
+  it('feeds the presence line the roster capability, not a presence-source enum', () => {
+    // Presence reads Online/Offline from Availability on EVERY placement; the
+    // roster only adds the `Not here` membership answer, so the popover is handed
+    // `hasRoster`, never the obsolete `agentPresence` source (#task:2039).
+    expect(popoverSource).toContain('hasRoster={paneCaps.hasRoster}');
+    expect(popoverSource).not.toContain('paneCaps.agentPresence');
   });
 });

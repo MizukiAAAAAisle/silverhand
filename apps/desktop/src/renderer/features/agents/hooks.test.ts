@@ -134,18 +134,32 @@ describe('agentLivenessRetry', () => {
 
 /**
  * Availability is the SECOND presence axis (#task:2043), event-invalidated
- * rather than polled. Its projection folds only the query's own no-answer state
- * (`data === undefined`) to `unknown`; a successful value stays authoritative
- * until an event replaces it (no `staleTime` timer, so no `isStale` input).
+ * rather than polled. With `staleTime: Infinity` a value only becomes `isStale`
+ * when an event explicitly invalidates it, so the fold keys on `isStale`: a fresh
+ * successful value passes through, and a value that has been invalidated but not
+ * yet replaced by a successful refetch folds to `unknown` — never keeps asserting
+ * the stale bit. #task:2039's review pinned the failure this closes: after a
+ * disconnect/revoke frame invalidates and the refetch then 5xx's, React Query
+ * retains the prior `data`, so reading `data` alone painted a stale `online`
+ * indefinitely with no guaranteed next frame.
  */
 describe('projectAgentAvailability', () => {
-  it('passes a definite value through unchanged', () => {
-    expect(projectAgentAvailability({ data: 'online' })).toBe('online');
-    expect(projectAgentAvailability({ data: 'offline' })).toBe('offline');
+  it('passes a fresh (not-stale) definite value through unchanged', () => {
+    expect(projectAgentAvailability({ data: 'online', isStale: false })).toBe('online');
+    expect(projectAgentAvailability({ data: 'offline', isStale: false })).toBe('offline');
   });
 
   it('folds the no-answer state (pending / errored-cold) to unknown', () => {
-    expect(projectAgentAvailability({ data: undefined })).toBe('unknown');
+    expect(projectAgentAvailability({ data: undefined, isStale: false })).toBe('unknown');
+    expect(projectAgentAvailability({ data: undefined, isStale: true })).toBe('unknown');
+  });
+
+  it('folds a retained value that has been invalidated (stale) to unknown', () => {
+    // The #task:2039 review pin: an `online` retained behind a failed refetch after
+    // a disconnect/revoke invalidation must NOT keep asserting Online — it reads
+    // `unknown` (→ no-status) until a successful refetch replaces it.
+    expect(projectAgentAvailability({ data: 'online', isStale: true })).toBe('unknown');
+    expect(projectAgentAvailability({ data: 'offline', isStale: true })).toBe('unknown');
   });
 });
 
