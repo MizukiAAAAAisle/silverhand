@@ -1,20 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import type { ConversationByIdResult } from '@/features/conversations/useConversationById';
-import type { ConversationRef } from '@silverhand/shared';
+import type { ConversationRef, DirectPairListItem } from '@silverhand/shared';
+import type { ConversationIdentityResolution } from '@/features/conversations/conversation-identity';
 import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
   selectSecondaryViewInputs,
+  selectSidebarSelectedConversationId,
   selectVisibleConversations,
   shouldSecondaryFullscreen,
   type SecondaryDescriptor,
 } from './secondary-pane';
 
-function makeRefResult(
-  status: ConversationByIdResult['status'],
-  ref?: ConversationRef,
-): ConversationByIdResult {
-  return { status, ref: ref ?? null };
+/** The two resolved arms of the identity the selector consumes (#task:2038). The
+ *  non-resolved statuses need no builder — they carry nothing but the status. */
+function workspaceIdentity(ref: ConversationRef): ConversationIdentityResolution {
+  return { status: 'resolved', identity: { placement: 'workspace', ref } };
+}
+function pairIdentity(pair: DirectPairListItem): ConversationIdentityResolution {
+  return { status: 'resolved', identity: { placement: 'direct_pair', pair } };
 }
 
 const localChannelRef: ConversationRef = {
@@ -44,7 +47,7 @@ const foreignChannelRef: ConversationRef = {
 // the only kind of DM this DTO can name — a workspace-less `direct_pair` is not
 // expressible here at all (#task:2038, ruling A: `ConversationRef.placement_kind`
 // is `z.literal('workspace')`), and is modelled by its own carrier resolved from
-// `GET /api/direct-pairs`.
+// `GET /api/direct-pairs` (the `agentPair` fixture below).
 const foreignDmRef: ConversationRef = {
   id: 'dm-foreign',
   placement_kind: 'workspace',
@@ -56,28 +59,49 @@ const foreignDmRef: ConversationRef = {
   archived_at: null,
 };
 
-describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
+// A private line — the placement the workspace face cannot express, resolved from
+// the viewer's own complete direct-pair list.
+const agentPair: DirectPairListItem = {
+  conversation_id: 'dp-alice',
+  counterpart: {
+    status: 'active',
+    kind: 'agent',
+    id: 'a-alice',
+    name: 'alice',
+    display_name: 'Alice',
+    avatar_url: null,
+    runtime: 'claude',
+  },
+  unread_count: 3,
+  read_only: false,
+  created_at: 1_700_000_000_000,
+};
+
+describe('selectSecondaryDescriptor — URL × identity matrix', () => {
   it('returns null when ?side is not set', () => {
     const out = selectSecondaryDescriptor({ sideConversationId: null }, null);
     expect(out).toBeNull();
   });
 
-  it('?side resolved (same workspace) carries full ref metadata', () => {
+  it('?side resolved (same workspace) carries the pane descriptor + workspace kind', () => {
     const out = selectSecondaryDescriptor(
       { sideConversationId: 'c-other' },
-      makeRefResult('resolved', localChannelRef),
+      workspaceIdentity(localChannelRef),
     );
     expect(out).toEqual({
       source: 'side',
       status: 'resolved',
       id: 'c-other',
-      placementKind: 'workspace',
-      rosterPolicy: 'open',
-      title: 'planning',
-      workspaceId: 'w-1',
+      descriptor: {
+        id: 'c-other',
+        title: 'planning',
+        placement_kind: 'workspace',
+        roster_policy: 'open',
+        closed_at: null,
+        archived_at: null,
+        workspace_id: 'w-1',
+      },
       workspaceKind: 'regular',
-      closedAt: null,
-      archivedAt: null,
     });
   });
 
@@ -86,44 +110,76 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
     // other than the one currently in the primary pane.
     const out = selectSecondaryDescriptor(
       { sideConversationId: 'c-foreign' },
-      makeRefResult('resolved', foreignChannelRef),
+      workspaceIdentity(foreignChannelRef),
     );
     expect(out).toMatchObject({
       source: 'side',
       status: 'resolved',
       id: 'c-foreign',
-      workspaceId: 'w-2',
+      descriptor: { workspace_id: 'w-2' },
       workspaceKind: 'regular',
     });
   });
 
-  it("?side resolved to a dm projects workspace_kind='dm' through to the descriptor", () => {
+  it("?side resolved to a dm_channel projects workspace_kind='dm' through to the descriptor", () => {
     const out = selectSecondaryDescriptor(
       { sideConversationId: 'dm-foreign' },
-      makeRefResult('resolved', foreignDmRef),
+      workspaceIdentity(foreignDmRef),
     );
     expect(out).toMatchObject({
       source: 'side',
       status: 'resolved',
-      // `'workspace'` + `workspaceKind: 'dm'` is what a DM looks like on this
-      // face; the fixed roster is what distinguishes it from a channel.
-      placementKind: 'workspace',
-      rosterPolicy: 'fixed',
+      // `'workspace'` + `workspaceKind: 'dm'` is what an agent-home DM channel
+      // looks like on this face; the fixed roster is what distinguishes it from
+      // a channel, and it still HAS a workspace (unlike a private line).
+      descriptor: { placement_kind: 'workspace', roster_policy: 'fixed' },
       workspaceKind: 'dm',
+    });
+  });
+
+  it('?side resolved to a private line carries a workspace-LESS descriptor (#task:2038)', () => {
+    // The regression this ticket exists for: before the pair face was composed
+    // in, this id 404'd on the workspace arm and the pane read "deleted or never
+    // existed" while the line sat in the viewer's own DIRECT MESSAGES list.
+    const out = selectSecondaryDescriptor(
+      { sideConversationId: 'dp-alice' },
+      pairIdentity(agentPair),
+    );
+    expect(out).toEqual({
+      source: 'side',
+      status: 'resolved',
+      id: 'dp-alice',
+      descriptor: {
+        id: 'dp-alice',
+        // The counterpart IS the pair's title — resolved by the one rule every
+        // DM surface uses, so the side pane's header matches the sidebar row.
+        title: 'Alice',
+        placement_kind: 'direct_pair',
+        roster_policy: 'fixed',
+        closed_at: null,
+        archived_at: null,
+        // A positive fact, not "unresolved": there is no workspace to scope a
+        // member list / archive door / workspace search to.
+        workspace_id: null,
+        read_only: false,
+        counterpart: agentPair.counterpart,
+      },
+      // Not 'dm': there is no workspace whose kind this could be. Downstream
+      // this withholds every top-level channel affordance.
+      workspaceKind: null,
     });
   });
 
   it('?side loading produces a loading descriptor that still carries the id', () => {
     // Placeholder/skeleton needs the id to render `#conv:<id>` and offer
-    // a Close button while the ref hook is in-flight.
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign' },
-      makeRefResult('loading'),
-    );
+    // a Close button while the identity is in-flight.
+    const out = selectSecondaryDescriptor({ sideConversationId: 'c-foreign' }, {
+      status: 'loading',
+    });
     expect(out).toEqual({ source: 'side', status: 'loading', id: 'c-foreign' });
   });
 
-  it("?side null sideRef defaults to loading (component hasn't emitted yet)", () => {
+  it("?side null sideIdentity defaults to loading (component hasn't emitted yet)", () => {
     const out = selectSecondaryDescriptor(
       { sideConversationId: 'c-foreign' },
       null,
@@ -132,10 +188,9 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
   });
 
   it('?side unauthorized surfaces the placeholder status (not silently stripped)', () => {
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign' },
-      makeRefResult('unauthorized'),
-    );
+    const out = selectSecondaryDescriptor({ sideConversationId: 'c-foreign' }, {
+      status: 'unauthorized',
+    });
     expect(out).toEqual({
       source: 'side',
       status: 'unauthorized',
@@ -144,14 +199,26 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
   });
 
   it('?side not_found surfaces the placeholder status (not silently stripped)', () => {
-    const out = selectSecondaryDescriptor(
-      { sideConversationId: 'c-foreign' },
-      makeRefResult('not_found'),
-    );
+    const out = selectSecondaryDescriptor({ sideConversationId: 'c-foreign' }, {
+      status: 'not_found',
+    });
     expect(out).toEqual({
       source: 'side',
       status: 'not_found',
       id: 'c-foreign',
+    });
+  });
+
+  it('?side unresolved is its own status — never collapsed into not_found', () => {
+    // #task:2038: the pair read FAILED with the workspace face at 404. Claiming
+    // deletion would be a false statement, and a skeleton would never end.
+    const out = selectSecondaryDescriptor({ sideConversationId: 'dp-alice' }, {
+      status: 'unresolved',
+    });
+    expect(out).toEqual({
+      source: 'side',
+      status: 'unresolved',
+      id: 'dp-alice',
     });
   });
 });
@@ -161,13 +228,16 @@ const sideChannelDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
   id: 'c-other',
-  placementKind: 'workspace',
-  rosterPolicy: 'open',
-  title: 'planning',
-  workspaceId: 'w-1',
+  descriptor: {
+    id: 'c-other',
+    title: 'planning',
+    placement_kind: 'workspace',
+    roster_policy: 'open',
+    closed_at: null,
+    archived_at: null,
+    workspace_id: 'w-1',
+  },
   workspaceKind: 'regular',
-  closedAt: null,
-  archivedAt: null,
 };
 // A second resolved channel-kind side (distinct id from primary) to
 // exercise the downstream pure selectors on a resolved secondary.
@@ -175,25 +245,48 @@ const sideSecondDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
   id: 't-of-primary',
-  placementKind: 'workspace',
-  rosterPolicy: 'open',
-  title: 'investigations',
-  workspaceId: 'w-1',
+  descriptor: {
+    id: 't-of-primary',
+    title: 'investigations',
+    placement_kind: 'workspace',
+    roster_policy: 'open',
+    closed_at: null,
+    archived_at: null,
+    workspace_id: 'w-1',
+  },
   workspaceKind: 'regular',
-  closedAt: null,
-  archivedAt: null,
 };
 const foreignSideDescriptor: SecondaryDescriptor = {
   source: 'side',
   status: 'resolved',
   id: 'c-foreign',
-  placementKind: 'workspace',
-  rosterPolicy: 'open',
-  title: 'team-y planning',
-  workspaceId: 'w-2',
+  descriptor: {
+    id: 'c-foreign',
+    title: 'team-y planning',
+    placement_kind: 'workspace',
+    roster_policy: 'open',
+    closed_at: null,
+    archived_at: null,
+    workspace_id: 'w-2',
+  },
   workspaceKind: 'regular',
-  closedAt: null,
-  archivedAt: null,
+};
+const pairSideDescriptor: SecondaryDescriptor = {
+  source: 'side',
+  status: 'resolved',
+  id: 'dp-alice',
+  descriptor: {
+    id: 'dp-alice',
+    title: 'Alice',
+    placement_kind: 'direct_pair',
+    roster_policy: 'fixed',
+    closed_at: null,
+    archived_at: null,
+    workspace_id: null,
+    read_only: false,
+    counterpart: agentPair.counterpart,
+  },
+  workspaceKind: null,
 };
 const loadingSide: SecondaryDescriptor = {
   source: 'side',
@@ -209,6 +302,11 @@ const notFoundSide: SecondaryDescriptor = {
   source: 'side',
   status: 'not_found',
   id: 'c-foreign',
+};
+const unresolvedSide: SecondaryDescriptor = {
+  source: 'side',
+  status: 'unresolved',
+  id: 'dp-alice',
 };
 
 describe('selectVisibleConversations — read-cursor visibility matrix', () => {
@@ -230,6 +328,21 @@ describe('selectVisibleConversations — read-cursor visibility matrix', () => {
     expect(out).toEqual({
       primary,
       secondary: { id: 'c-other', rosterPolicy: 'open' },
+    });
+  });
+
+  it('a resolved private line advances its own read cursor like any other pane', () => {
+    // The placement with no workspace is still a real conversation on screen —
+    // this is the second half of the #task:2035 bug (a pane that advanced no
+    // cursor), now reachable through `?side` too.
+    const out = selectVisibleConversations({
+      primary,
+      secondary: pairSideDescriptor,
+      fullscreen: false,
+    });
+    expect(out).toEqual({
+      primary,
+      secondary: { id: 'dp-alice', rosterPolicy: 'fixed' },
     });
   });
 
@@ -267,6 +380,15 @@ describe('selectVisibleConversations — read-cursor visibility matrix', () => {
     const out = selectVisibleConversations({
       primary,
       secondary: notFoundSide,
+      fullscreen: false,
+    });
+    expect(out).toEqual({ primary, secondary: null });
+  });
+
+  it('only primary visible when secondary is unresolved', () => {
+    const out = selectVisibleConversations({
+      primary,
+      secondary: unresolvedSide,
       fullscreen: false,
     });
     expect(out).toEqual({ primary, secondary: null });
@@ -336,6 +458,24 @@ describe('selectFocusedConversation — single-id focus rule', () => {
     });
   });
 
+  it('a resolved private line focuses with workspaceId null — NOT the primary workspace', () => {
+    // Same rule as the cross-workspace case, one step further: focus reports
+    // the focused conversation's OWN coordinate, and a private line's is
+    // "no workspace". Falling back to the primary's id here would attribute
+    // the DM to a workspace it is not in.
+    const out = selectFocusedConversation({
+      primary,
+      primaryWorkspaceId: 'w-1',
+      secondary: pairSideDescriptor,
+      fullscreen: false,
+    });
+    expect(out).toEqual({
+      id: 'dp-alice',
+      rosterPolicy: 'fixed',
+      workspaceId: null,
+    });
+  });
+
   it('fullscreen + secondary keeps secondary focused (the only visible pane)', () => {
     const out = selectFocusedConversation({
       primary,
@@ -348,9 +488,9 @@ describe('selectFocusedConversation — single-id focus rule', () => {
 
   it('non-resolved secondary does NOT take focus — primary keeps it', () => {
     // Toast suppression / notification-badge clearing should target a
-    // real conversation, never the placeholder. Same rule for the
-    // three non-resolved statuses.
-    for (const ph of [loadingSide, unauthorizedSide, notFoundSide]) {
+    // real conversation, never the placeholder. Same rule for all four
+    // non-resolved statuses.
+    for (const ph of [loadingSide, unauthorizedSide, notFoundSide, unresolvedSide]) {
       const out = selectFocusedConversation({
         primary,
         primaryWorkspaceId: 'w-1',
@@ -387,8 +527,7 @@ describe('selectFocusedConversation — single-id focus rule', () => {
   });
 });
 
-describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {
-  it('false when there is no secondary at all', () => {
+describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {  it('false when there is no secondary at all', () => {
     expect(shouldSecondaryFullscreen(null, true)).toBe(false);
     expect(shouldSecondaryFullscreen(null, false)).toBe(false);
   });
@@ -403,6 +542,9 @@ describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {
     expect(shouldSecondaryFullscreen(sideChannelDescriptor, true)).toBe(true);
     expect(shouldSecondaryFullscreen(sideSecondDescriptor, true)).toBe(true);
     expect(shouldSecondaryFullscreen(foreignSideDescriptor, true)).toBe(true);
+    // A private line is as resolved as any channel — the gate is about the
+    // resolution status, never about having a workspace.
+    expect(shouldSecondaryFullscreen(pairSideDescriptor, true)).toBe(true);
   });
 
   it('false for any non-resolved status + fullscreen — DOM falls back to split', () => {
@@ -412,15 +554,15 @@ describe('shouldSecondaryFullscreen — render-time fullscreen gate', () => {
     // `selectFocusedConversation` kept primary in the visible/focused
     // set — primary's read cursor and notification badge advanced
     // even though the user never saw it. The same rule applies to all
-    // three non-resolved statuses introduced by PR-2.
+    // four non-resolved statuses.
     expect(shouldSecondaryFullscreen(loadingSide, true)).toBe(false);
     expect(shouldSecondaryFullscreen(unauthorizedSide, true)).toBe(false);
     expect(shouldSecondaryFullscreen(notFoundSide, true)).toBe(false);
+    expect(shouldSecondaryFullscreen(unresolvedSide, true)).toBe(false);
   });
 });
 
 // ── PR-2 cross-workspace integration: end-to-end descriptor → ChannelView prop chain ──
-
 describe('selectSecondaryViewInputs — full descriptor → ChannelView prop chain', () => {
   it('returns null/primary fallbacks when there is no secondary', () => {
     const out = selectSecondaryViewInputs({
@@ -442,20 +584,8 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     // id." This locks the descriptor → ChannelView prop chain so a
     // future refactor can't quietly fall back to the primary's
     // workspace metadata.
-    const foreignSide: SecondaryDescriptor = {
-      source: 'side',
-      status: 'resolved',
-      id: 'c-foreign',
-      placementKind: 'workspace',
-      rosterPolicy: 'open',
-      title: 'team-y planning',
-      workspaceId: 'w-2',
-      workspaceKind: 'regular',
-      closedAt: null,
-      archivedAt: null,
-    };
     const out = selectSecondaryViewInputs({
-      secondary: foreignSide,
+      secondary: foreignSideDescriptor,
       // Primary is on a different workspace, with a different kind.
       // The foreign side must IGNORE these primary fallbacks.
       primaryChannelKind: 'dm',
@@ -480,26 +610,18 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     expect(out.archiveWorkspaceId).toBe('w-2');
   });
 
-  it('cross-workspace ?side resolved DM: workspace_kind projects to "dm" (not agent_home)', () => {
+  it('cross-workspace ?side resolved dm_channel: workspace_kind projects to "dm" (not agent_home)', () => {
     // Forward-compatibility check: the renderer only knows
     // `regular | dm`. The ref endpoint is responsible for projecting
     // `agent_home → dm` server-side; this test locks that the
     // selector pipes that projection through to ChannelView's
-    // `channelKind` prop unchanged.
-    const foreignDmSide: SecondaryDescriptor = {
-      source: 'side',
-      status: 'resolved',
-      id: 'dm-bob',
-      placementKind: 'direct_pair',
-      rosterPolicy: 'fixed',
-      title: 'dm-bob',
-      workspaceId: 'w-bob-home',
-      workspaceKind: 'dm',
-      closedAt: null,
-      archivedAt: null,
-    };
+    // `channelKind` prop unchanged. Note this is the workspace-PLACED
+    // DM channel, which still has a workspace to invalidate.
     const out = selectSecondaryViewInputs({
-      secondary: foreignDmSide,
+      secondary: selectSecondaryDescriptor(
+        { sideConversationId: 'dm-foreign' },
+        workspaceIdentity(foreignDmRef),
+      ),
       primaryChannelKind: 'regular',
       primaryWorkspaceId: 'w-1',
     });
@@ -509,23 +631,37 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     expect(out.archiveWorkspaceId).toBe('w-bob-home');
   });
 
-  it('same-workspace ?side resolved channel: still routes through the ref descriptor', () => {
-    // Even when the side conversation lives in the same workspace as
-    // primary, PR-2 routes through the ref hook for consistency.
-    const localSide: SecondaryDescriptor = {
-      source: 'side',
-      status: 'resolved',
-      id: 'c-other',
-      placementKind: 'workspace',
-      rosterPolicy: 'open',
-      title: 'planning',
-      workspaceId: 'w-1',
-      workspaceKind: 'regular',
-      closedAt: null,
-      archivedAt: null,
-    };
+  it('?side resolved private line: ChannelView gets the DM descriptor and NO workspace', () => {
+    // The #task:2038 prop chain. `channelKind: null` is what withholds every
+    // top-level channel affordance (rename / archive / visibility / member
+    // management), and `archiveWorkspaceId: null` must NOT fall back to the
+    // primary's workspace — invalidating `['workspaces', w-1, 'channels']` for a
+    // conversation that is not in w-1 would be a wrong cache write.
     const out = selectSecondaryViewInputs({
-      secondary: localSide,
+      secondary: pairSideDescriptor,
+      primaryChannelKind: 'regular',
+      primaryWorkspaceId: 'w-1',
+    });
+    expect(out.conversationDescriptor).toEqual({
+      id: 'dp-alice',
+      title: 'Alice',
+      placement_kind: 'direct_pair',
+      roster_policy: 'fixed',
+      closed_at: null,
+      archived_at: null,
+      workspace_id: null,
+      read_only: false,
+      counterpart: agentPair.counterpart,
+    });
+    expect(out.channelKind).toBeNull();
+    expect(out.archiveWorkspaceId).toBeNull();
+  });
+
+  it('same-workspace ?side resolved channel: still routes through the identity descriptor', () => {
+    // Even when the side conversation lives in the same workspace as
+    // primary, the pane routes through the identity resolution for consistency.
+    const out = selectSecondaryViewInputs({
+      secondary: sideChannelDescriptor,
       primaryChannelKind: 'regular',
       primaryWorkspaceId: 'w-1',
     });
@@ -534,20 +670,76 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
   });
 
   it('non-resolved ?side: descriptor null, primary fallbacks (placeholder pane handles render)', () => {
-    const loadingDesc: SecondaryDescriptor = {
-      source: 'side',
-      status: 'loading',
-      id: 'c-foreign',
-    };
-    const out = selectSecondaryViewInputs({
-      secondary: loadingDesc,
-      primaryChannelKind: 'regular',
-      primaryWorkspaceId: 'w-1',
-    });
-    expect(out).toEqual({
-      conversationDescriptor: null,
-      channelKind: 'regular',
-      archiveWorkspaceId: 'w-1',
-    });
+    for (const ph of [loadingSide, unauthorizedSide, notFoundSide, unresolvedSide]) {
+      const out = selectSecondaryViewInputs({
+        secondary: ph,
+        primaryChannelKind: 'regular',
+        primaryWorkspaceId: 'w-1',
+      });
+      expect(out).toEqual({
+        conversationDescriptor: null,
+        channelKind: 'regular',
+        archiveWorkspaceId: 'w-1',
+      });
+    }
+  });
+});
+
+describe('selectSidebarSelectedConversationId — which row the sidebar fills', () => {
+  it('primary selection when there is no secondary', () => {
+    expect(
+      selectSidebarSelectedConversationId({
+        primarySelectedChannelId: 'c-primary',
+        secondary: null,
+        primaryWorkspaceId: 'w-1',
+      }),
+    ).toBe('c-primary');
+  });
+
+  it('a same-workspace resolved secondary takes the highlight', () => {
+    expect(
+      selectSidebarSelectedConversationId({
+        primarySelectedChannelId: 'c-primary',
+        secondary: sideChannelDescriptor,
+        primaryWorkspaceId: 'w-1',
+      }),
+    ).toBe('c-other');
+  });
+
+  it('a cross-workspace resolved secondary does NOT (its row is under another parent)', () => {
+    expect(
+      selectSidebarSelectedConversationId({
+        primarySelectedChannelId: 'c-primary',
+        secondary: foreignSideDescriptor,
+        primaryWorkspaceId: 'w-1',
+      }),
+    ).toBe('c-primary');
+  });
+
+  it('a resolved private line takes the highlight whatever workspace is expanded', () => {
+    // Its row lives in the workspace-independent DIRECT MESSAGES section, so it
+    // is on screen either way — and comparing its null workspace against the
+    // selected one would answer for the wrong reason (#task:2038).
+    for (const wid of ['w-1', 'w-2', null]) {
+      expect(
+        selectSidebarSelectedConversationId({
+          primarySelectedChannelId: 'c-primary',
+          secondary: pairSideDescriptor,
+          primaryWorkspaceId: wid,
+        }),
+      ).toBe('dp-alice');
+    }
+  });
+
+  it('a non-resolved secondary never takes the highlight', () => {
+    for (const ph of [loadingSide, unauthorizedSide, notFoundSide, unresolvedSide]) {
+      expect(
+        selectSidebarSelectedConversationId({
+          primarySelectedChannelId: 'c-primary',
+          secondary: ph,
+          primaryWorkspaceId: 'w-1',
+        }),
+      ).toBe('c-primary');
+    }
   });
 });

@@ -122,6 +122,7 @@ import {
 
 import {
   selectSecondaryViewInputs,
+  selectSidebarSelectedConversationId,
   shouldSecondaryFullscreen,
   type ConversationPointer,
 } from '@/lib/secondary-pane';
@@ -1884,6 +1885,14 @@ function RegisteredAppShell({
     [secondaryDescriptor, channelKindForView, selectedWorkspaceId],
   );
   const secondaryConversationDescriptor = secondaryViewInputs.conversationDescriptor;
+  // Which row the sidebar paints as selected. A resolved secondary holds focus, so
+  // it owns the highlight — but only when its row is in this sidebar, which the two
+  // placements answer differently (see the selector).
+  const sidebarSelectedConversationId = selectSidebarSelectedConversationId({
+    primarySelectedChannelId: selectedChannelId,
+    secondary: secondaryDescriptor,
+    primaryWorkspaceId: selectedWorkspaceId,
+  });
 
   // PR-2: secondary pane's archive callback. When the secondary pane
   // is a cross-workspace `?side` resolved descriptor, the mutation's
@@ -2073,13 +2082,14 @@ function RegisteredAppShell({
   );
 
   // Secondary pane render shapes:
-  //   - Resolved channel/dm `?side` (same- or cross-workspace) → real
-  //     ChannelView. The conversation descriptor's `workspace_id` carries
-  //     the *foreign* workspace for cross-workspace `?side`, so
-  //     ChannelView's workspace-scoped hooks auto-target the right cache
-  //     without a separate prop.
-  //   - Loading / unauthorized / not_found (`?side` ref hook didn't
-  //     return a usable conversation) → SideUnresolvedPlaceholder.
+  //   - Resolved `?side` — a channel/dm_channel in ANY workspace, or a private
+  //     line (#task:2038) → real ChannelView. The conversation descriptor's
+  //     `workspace_id` carries the *foreign* workspace for cross-workspace
+  //     `?side`, so ChannelView's workspace-scoped hooks auto-target the right
+  //     cache without a separate prop; for a private line it is null, which
+  //     withholds those hooks entirely.
+  //   - Loading / unauthorized / not_found / unresolved (the identity
+  //     resolution named no conversation) → SideUnresolvedPlaceholder.
   //   - null → no secondary, render only `parentView`.
   let secondaryView: JSX.Element | null = null;
   if (agentPanelId) {
@@ -2620,17 +2630,12 @@ function RegisteredAppShell({
                       agentsById={agentsById}
                       selectedWorkspaceId={selectedWorkspaceId}
                       // The tree's ONE selection object. Carries forward the
-                      // secondary-pane preference the retired channel column owned:
-                      // highlight the secondary's row ONLY when it lives in the
-                      // workspace the primary is in — a cross-workspace `?side` id
-                      // leaves the primary's row filled instead of ghost-filling a
-                      // same-id row under a different parent.
-                      selectedChannelId={
-                        secondaryDescriptor?.status === 'resolved' &&
-                        secondaryDescriptor.workspaceId === selectedWorkspaceId
-                          ? secondaryDescriptor.id
-                          : selectedChannelId
-                      }
+                      // secondary-pane preference the retired channel column owned;
+                      // `selectSidebarSelectedConversationId` holds the rule (a
+                      // resolved secondary owns the highlight only when its row is
+                      // in this sidebar — always true for a private line, which
+                      // lives in the workspace-independent DIRECT MESSAGES list).
+                      selectedChannelId={sidebarSelectedConversationId}
                       onSelectChannel={handleSelectChannel}
                       // A pair has no workspace to open it in, so it takes the
                       // workspace-less route directly. No remembered-layout

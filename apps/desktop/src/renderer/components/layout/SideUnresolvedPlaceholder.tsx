@@ -1,15 +1,19 @@
 import { Loader2, X } from 'lucide-react';
 import { paneChrome } from './pane-chrome';
 
-export type SidePlaceholderStatus = 'loading' | 'unauthorized' | 'not_found';
+export type SidePlaceholderStatus =
+  | 'loading'
+  | 'unauthorized'
+  | 'not_found'
+  | 'unresolved';
 
 interface SidePlaceholderProps {
   /** The conversation id that came in via `?side=<id>`. Shown verbatim
    *  (truncated) so the user can correlate the reference with whatever
    *  they clicked. */
   conversationId: string;
-  /** PR-2: distinguishes the three non-resolved states surfaced by
-   *  `useConversationById`. The render branches per status to give the
+  /** PR-2: distinguishes the non-resolved states surfaced by the
+   *  identity resolution. The render branches per status to give the
    *  user actionable feedback rather than the original PR-1 single
    *  "unresolved" message. */
   status: SidePlaceholderStatus;
@@ -42,6 +46,14 @@ const STATUS_COPY: Record<
     body: 'This reference points to a conversation that was deleted or never existed.',
     hint: 'Close the reference, or check where it came from.',
   },
+  // Distinct from `not_found` on purpose (#task:2038): a private line can only be
+  // named by the viewer's direct-pair list, so when THAT read fails nothing has
+  // been proven about the reference. Claiming deletion here would be a false
+  // statement, and a loader would never end — nothing is in flight.
+  unresolved: {
+    header: 'Reference unavailable',
+    body: 'Couldn’t resolve this conversation.',
+  },
 };
 
 /**
@@ -50,9 +62,9 @@ const STATUS_COPY: Record<
  * should see that the reference can't be loaded right now and have an
  * explicit Close affordance.
  *
- * PR-2: unified placeholder for the three non-resolved statuses
- * surfaced by `useConversationById` (loading / unauthorized /
- * not_found). The component is intentionally state-only — it doesn't
+ * PR-2: unified placeholder for the non-resolved statuses surfaced by
+ * the `?side` identity resolution (loading / unauthorized / not_found /
+ * unresolved). The component is intentionally state-only — it doesn't
  * read the route or the descriptor; the parent passes the status
  * derived from the secondary descriptor.
  */

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useConversationById } from '@/features/conversations/useConversationById';
+import { useConversationIdentity } from '@/features/conversations/conversation-identity';
 import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
@@ -21,8 +21,8 @@ import {
  *     setActiveConversation / notification badge clearing. A resolved secondary
  *     wins over primary for focus.
  *
- * `primaryPointer` and `sideRef` are internal — no consumer outside this cluster
- * reads them, so they aren't returned.
+ * `primaryPointer` and `sideIdentity` are internal — no consumer outside this
+ * cluster reads them, so they aren't returned.
  *
  * The PRIMARY pointer arrives already resolved (#task:2035). This model used to
  * look the selection up in the workspace channel list itself, which silently
@@ -49,15 +49,16 @@ export function useSecondaryPaneModel(params: {
   } = params;
 
 
-  // PR-2: cross-workspace `?side=<id>` resolution. The ref hook is the single
-  // source of truth for the right pane's identity & workspace — same-workspace
-  // and cross-workspace ids both flow through it. The fetch is React-Query–
-  // cached (30s stale, 5min gc) so navigating back to a recently-opened side
-  // hits the cache without a round-trip.
-  const sideRef = useConversationById(sideConversationId);
+  // `?side=<id>` resolution (#task:2038). `useConversationIdentity` is the single
+  // source of truth for the right pane's identity: the workspace face for a
+  // channel in ANY workspace, plus the viewer's own direct-pair list — the only
+  // face that can name a private line, whose 404 from `/ref` is the correct
+  // answer rather than a gap. Both faces are React-Query–cached, and an id the
+  // pair list already names costs no request at all.
+  const sideIdentity = useConversationIdentity(sideConversationId);
   const secondaryDescriptor = useMemo<SecondaryDescriptor | null>(
-    () => selectSecondaryDescriptor({ sideConversationId }, sideRef),
-    [sideConversationId, sideRef],
+    () => selectSecondaryDescriptor({ sideConversationId }, sideIdentity),
+    [sideConversationId, sideIdentity],
   );
   // Workspace metadata for a `?side` resolved descriptor flows through
   // `secondaryViewInputs` (built in the shell) — no separate memo needed.

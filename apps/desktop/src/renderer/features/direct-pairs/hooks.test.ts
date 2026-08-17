@@ -1,11 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import type { DirectPairListItem } from '@silverhand/shared';
+import { api } from '@/lib/api';
 import {
+  DIRECT_PAIRS_QUERY_POLICY,
   decideDirectPairsInvalidation,
   decideDraftHandoff,
   directPairPaneProps,
+  directPairsKey,
+  directPairsQueryOptions,
   findAgentDirectPair,
   projectDirectPairFilterLeaf,
   projectDirectPairPane,
@@ -13,6 +18,16 @@ import {
   type DirectPairPaneState,
   type DraftHandoffFacts,
 } from './hooks';
+
+// Only `api` is replaced so the query policy's cost can be COUNTED; everything
+// else in `@/lib/api` stays real (nothing here depends on the rest, but a bare
+// `vi.mock` would auto-mock `ApiError` too).
+vi.mock('@/lib/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/api')>();
+  return { ...actual, api: vi.fn() };
+});
+
+const mockApi = vi.mocked(api);
 
 // #task:2035 — the two judgments the DM live-discovery chain rests on, both pure:
 //
@@ -701,5 +716,116 @@ describe('the live-discovery subscription is mounted once, by the session', () =
     expect(read('../../components/layout/ChannelView.tsx')).toContain(
       'props.notFound',
     );
+  });
+});
+
+/**
+ * What one more READER of the list costs (#task:2038 B2, @Cindy).
+ *
+ * The list used to be read by a handful of session-level surfaces; #task:2038
+ * made it the identity authority for `#conv:<id>`, so a message stream mounts an
+ * observer PER CHIP. Under React Query's default `staleTime: 0` every value is
+ * stale on arrival and a stale query refetches WHEN A NEW OBSERVER MOUNTS, so
+ * scrolling a busy conversation would fire `/api/direct-pairs` per chip — deduped
+ * only for mounts that land while a request happens to be in flight. The claim
+ * "adding this to every chip doesn't multiply network calls" was therefore false
+ * as a matter of Query policy, not of intent.
+ *
+ * These cases hold the two halves of the fix together: mounting is free, AND the
+ * invalidation ladder that owns freshness still works (a `staleTime` that also
+ * silenced `invalidateQueries` would have traded a request storm for a list that
+ * never updates).
+ *
+ * FALSIFIER: set `DIRECT_PAIRS_QUERY_POLICY.staleMs` to `0` — the two
+ * observer-mount cases go red and the invalidation case stays green.
+ */
+describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () => {
+  function client(): QueryClient {
+    return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  }
+  /** A live observer on the list, mounted exactly the way a reader hook does. */
+  function mountReader(qc: QueryClient): () => void {
+    const observer = new QueryObserver(qc, directPairsQueryOptions());
+    return observer.subscribe(() => {});
+  }
+
+  beforeEach(() => {
+    mockApi.mockReset();
+    mockApi.mockResolvedValue({ direct_pairs: [] });
+  });
+
+  it('the first read fetches once; two more readers mounting fetch nothing', async () => {
+    const qc = client();
+    await qc.fetchQuery(directPairsQueryOptions());
+    expect(mockApi).toHaveBeenCalledTimes(1);
+
+    const readers = [mountReader(qc), mountReader(qc)];
+    await Promise.resolve();
+
+    expect(mockApi).toHaveBeenCalledTimes(1);
+    for (const off of readers) off();
+  });
+
+  it('a reader that unmounts and mounts again still fetches nothing', async () => {
+    // A virtualized stream does exactly this as chips scroll in and out of the
+    // window, which is why "one observer is already resident in App" does not
+    // bound the cost on its own.
+    const qc = client();
+    await qc.fetchQuery(directPairsQueryOptions());
+    mountReader(qc)();
+    const off = mountReader(qc);
+    await Promise.resolve();
+
+    expect(mockApi).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it('the invalidation owner still re-reads it', async () => {
+    // `invalidateQueries` ignores `staleTime`, so `useDirectPairsSync`
+    // (`direct_pairs_changed` / `snapshot_required`) and the first-send mutation
+    // remain the freshness carriers — this is the half that keeps Infinity honest.
+    const qc = client();
+    const off = mountReader(qc);
+    await qc.fetchQuery(directPairsQueryOptions());
+    expect(mockApi).toHaveBeenCalledTimes(1);
+
+    await qc.invalidateQueries({ queryKey: directPairsKey });
+
+    expect(mockApi).toHaveBeenCalledTimes(2);
+    off();
+  });
+
+  it('an invalidation while NOBODY is reading still re-reads on the next mount', async () => {
+    // The composition that makes cache-until-invalidated safe for a row whose
+    // freshness comes from someone else's event: with `staleTime: Infinity` a
+    // mount never guesses, but an INVALIDATED entry is stale regardless of
+    // `staleTime`, so a carrier that fires while the surface is closed is not
+    // lost — the next reader to mount pays for it. Without this, an invalidation
+    // aimed at an inactive list would be a silent no-op and the row would stay
+    // at its old value for the rest of the session.
+    const qc = client();
+    await qc.fetchQuery(directPairsQueryOptions());
+    expect(mockApi).toHaveBeenCalledTimes(1);
+
+    await qc.invalidateQueries({ queryKey: directPairsKey });
+    expect(mockApi).toHaveBeenCalledTimes(1); // nothing mounted ⇒ marked, not fetched
+
+    const off = mountReader(qc);
+    await vi.waitFor(() => expect(mockApi).toHaveBeenCalledTimes(2));
+    off();
+  });
+
+  it('every reader goes through the one options factory', () => {
+    // A second `useQuery` on this key with its own freshness would restore the
+    // mount refetch invisibly: whichever hook mounts first owns the entry, so
+    // neither call site would look wrong.
+    const hooksSource = read('./hooks.ts');
+    expect(hooksSource).toContain(
+      'useQuery<DirectPairListResponse>(directPairsQueryOptions())',
+    );
+    expect(hooksSource.split('staleTime:').length - 1).toBe(1);
+    expect(hooksSource).toContain('staleTime: DIRECT_PAIRS_QUERY_POLICY.staleMs');
+    // The policy is a value, not a literal buried in the query config.
+    expect(DIRECT_PAIRS_QUERY_POLICY.staleMs).toBe(Infinity);
   });
 });

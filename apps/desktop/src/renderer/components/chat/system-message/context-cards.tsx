@@ -43,7 +43,8 @@ interface ContextCardModel {
   sourcePrefix: string;
   /** Conversation id of the source — rendered as a clickable
    *  `ConversationRef` chip so the reader can jump to the original
-   *  conversation (cross-workspace safe via `useConversationById`). */
+   *  conversation. Resolves through `useConversationIdentity`, so a
+   *  cross-workspace channel AND a private line both name themselves. */
   sourceConversationId: string;
   /** Optional secondary label appended after the chip with a `·`
    *  separator (e.g. "shiki", "by Cindy"). Empty when the source

@@ -2,30 +2,29 @@
  * Pure selectors for the right-hand secondary pane.
  *
  * PR-1 introduced the URL → descriptor → visible/focused matrix.
- * PR-2 extends the `side` source to support cross-workspace
- * conversation ids by routing through `useConversationById(id)` (which
- * hits `GET /api/conversations/:id/ref`). Same-workspace ids fall
- * through the same code path; the ref hook is React Query–cached so
- * the round-trip is one-shot per id.
+ * PR-2 extended the `side` source to cross-workspace conversation ids by
+ * routing through `GET /api/conversations/:id/ref`. #task:2038 widened that
+ * again: the source is now `useConversationIdentity(id)`, which composes the
+ * workspace face with the viewer's own direct-pair list, so a `?side=<private
+ * line>` resolves instead of rendering "deleted or never existed".
  *
  * These functions are deliberately pure so that:
- *   1. App.tsx stays thin — just plumbing route state + channels +
- *      ref hook output into these helpers.
+ *   1. App.tsx stays thin — just plumbing route state + the identity
+ *      resolution into these helpers.
  *   2. Unit tests can exercise the URL → state matrix without
  *      mounting React or React Query.
  *
  * Vocabulary:
  *
  *   - `secondaryDescriptor` — what the right pane shows. The only source
- *     is `?side=<id>` (overlay; cross-workspace capable via the ref
- *     hook). The descriptor's status reflects the ref-hook lifecycle
- *     (loading/resolved/unauthorized/not_found).
+ *     is `?side=<id>` (overlay; resolves any placement the viewer can see).
+ *     The descriptor's status reflects the resolution lifecycle
+ *     (loading/resolved/unauthorized/not_found/unresolved).
  *   - `visibleConversations` — set of conversations whose pane is
  *     currently on screen. Drives message read-cursor advancement.
- *     Fullscreen collapses to just the displayed pane; non-resolved
- *     side (loading/unauthorized/not_found) contributes no read
- *     cursor — placeholder pane has no real conversation to mark
- *     read.
+ *     Fullscreen collapses to just the displayed pane; a non-resolved
+ *     side contributes no read cursor — placeholder pane has no real
+ *     conversation to mark read.
  *   - `focusedConversation` — the *one* conversation the user is
  *     considered to be focused on. Drives toast suppression and the IPC
  *     `setActiveConversation` payload (which only accepts a single id).
@@ -35,24 +34,36 @@
  *     focus.
  */
 
-import type { ConversationByIdResult } from '@/features/conversations/useConversationById';
+import {
+  conversationPaneDescriptorFromIdentity,
+  type ConversationIdentityResolution,
+} from '@/features/conversations/conversation-identity';
+import type {
+  ConversationPaneDescriptor,
+  WorkspaceUiKind,
+} from '@/features/conversations/pane-descriptor';
 
 export type SecondaryDescriptor =
   | {
       source: 'side';
       status: 'resolved';
       id: string;
-      placementKind: 'workspace' | 'direct_pair' | 'agent_inbox';
-      rosterPolicy: 'open' | 'fixed';
-      title: string;
-      workspaceId: string;
-      workspaceKind: 'regular' | 'dm';
-      closedAt: number | null;
-      archivedAt: number | null;
+      /** Everything the pane needs about the conversation, in the ONE shape
+       *  `ChannelView` takes. Built by
+       *  {@link conversationPaneDescriptorFromIdentity} so a private line in the
+       *  side pane is the same descriptor the primary DM pane renders — this used
+       *  to be a second, narrower record declared right here, which could not
+       *  express a workspace-less placement at all. */
+      descriptor: ConversationPaneDescriptor;
+      /** Kind of the workspace the conversation sits in, `null` for a
+       *  workspace-less placement — which is also what the pane reads as "not a
+       *  top-level channel-like conversation" (no rename / archive / visibility). */
+      workspaceKind: WorkspaceUiKind | null;
     }
   | { source: 'side'; status: 'loading'; id: string }
   | { source: 'side'; status: 'unauthorized'; id: string }
-  | { source: 'side'; status: 'not_found'; id: string };
+  | { source: 'side'; status: 'not_found'; id: string }
+  | { source: 'side'; status: 'unresolved'; id: string };
 
 export interface SecondaryRouteInputs {
   /** From `useRouteState().sideConversationId`. */
@@ -61,97 +72,79 @@ export interface SecondaryRouteInputs {
 
 /**
  * Decide what the right-hand pane should show given URL state and the
- * ref-hook result for the `?side` id (when set).
+ * resolution of the `?side` id (when set).
  *
  * The only secondary source is `?side=<id>`. The selector never produces
- * a descriptor that requires "loading + null id" — loading/unauthorized/
- * not_found descriptors always carry the id so the placeholder can render
- * `#conv:<id>` and offer a Close button.
+ * a descriptor that requires "loading + null id" — non-resolved descriptors
+ * always carry the id so the placeholder can render `#conv:<id>` and offer a
+ * Close button.
  *
- * Cross-workspace `?side` ids resolve through the ref hook
- * (`useConversationById`); the resolved branch carries workspace
- * metadata (`workspaceId`, `workspaceKind`) so
- * ChannelView can switch its workspace-scoped hooks via the
- * `workspaceContext` prop without a second round-trip.
+ * `?side` resolves through {@link useConversationIdentity}, which composes BOTH
+ * identity faces: a workspace conversation (any workspace, not just the primary
+ * one) and a `direct_pair` from the viewer's own complete list. The resolved
+ * branch therefore carries a pane descriptor whose `workspace_id` may be null —
+ * a private line has no workspace — so ChannelView switches its workspace-scoped
+ * hooks (or withholds them entirely) without a second round-trip.
  *
- * `sideRef === null` is treated as "ref hook hasn't been read yet"
- * (i.e. the React component hasn't run yet); we surface this as
- * `loading` so the URL state and the descriptor never disagree
- * across renders.
+ * `sideIdentity === null` is treated as "the resolution hook hasn't been read yet"
+ * (i.e. the React component hasn't run yet); we surface this as `loading` so the
+ * URL state and the descriptor never disagree across renders.
  */
 export function selectSecondaryDescriptor(
   route: SecondaryRouteInputs,
-  sideRef: ConversationByIdResult | null,
+  sideIdentity: ConversationIdentityResolution | null,
 ): SecondaryDescriptor | null {
-  if (route.sideConversationId) {
-    const id = route.sideConversationId;
-    const status = sideRef?.status ?? 'loading';
-    if (status === 'loading') {
-      return { source: 'side', status: 'loading', id };
-    }
-    if (status === 'unauthorized') {
-      return { source: 'side', status: 'unauthorized', id };
-    }
-    if (status === 'not_found') {
-      return { source: 'side', status: 'not_found', id };
-    }
-    // resolved — pull all routing metadata out of the ref payload so
-    // the descriptor is the single source of truth for downstream
-    // wiring (no second hop into channels list / workspace store).
-    const ref = sideRef!.ref!;
-    return {
-      source: 'side',
-      status: 'resolved',
-      id: ref.id,
-      placementKind: ref.placement_kind,
-      rosterPolicy: ref.roster_policy,
-      title: ref.title,
-      workspaceId: ref.workspace_id,
-      workspaceKind: ref.workspace_kind,
-      closedAt: ref.closed_at,
-      archivedAt: ref.archived_at,
-    };
+  if (!route.sideConversationId) return null;
+  const id = route.sideConversationId;
+  const resolution = sideIdentity ?? { status: 'loading' as const };
+  if (resolution.status !== 'resolved') {
+    return { source: 'side', status: resolution.status, id };
   }
-  return null;
+  // Resolved — pull all routing metadata out of the identity so the descriptor
+  // is the single source of truth for downstream wiring (no second hop into the
+  // channels list / workspace store).
+  return {
+    source: 'side',
+    status: 'resolved',
+    id: resolution.identity.placement === 'workspace'
+      ? resolution.identity.ref.id
+      : resolution.identity.pair.conversation_id,
+    descriptor: conversationPaneDescriptorFromIdentity(resolution.identity),
+    workspaceKind:
+      resolution.identity.placement === 'workspace'
+        ? resolution.identity.ref.workspace_kind
+        : null,
+  };
 }
 
-/** ChannelView-shaped descriptor for a conversation. Mirrors the
- *  internal shape App.tsx historically built from `ChannelListItem`;
- *  exposed here so the secondary-pane mapping can produce one without
- *  a same-workspace lookup. */
-export interface SecondaryConversationDescriptor {
-  id: string;
-  title: string;
-  placement_kind: 'workspace' | 'direct_pair' | 'agent_inbox';
-  roster_policy: 'open' | 'fixed';
-  closed_at: number | null;
-  archived_at: number | null;
-  workspace_id: string;
-}
+/** ChannelView-shaped descriptor for a conversation. */
+export type SecondaryConversationDescriptor = ConversationPaneDescriptor;
 
 export interface SecondaryViewInputs {
   /** ChannelView `conversation` prop value. Null when the secondary
    *  pane should not render a real ChannelView (no secondary, or a
    *  non-resolved `?side`). */
-  conversationDescriptor: SecondaryConversationDescriptor | null;
-  /** ChannelView `channelKind` prop value. For cross-workspace `?side`
-   *  this comes from the ref's `workspace_kind`; otherwise falls
-   *  through to the primary's kind. */
-  channelKind: 'regular' | 'dm' | null;
+  conversationDescriptor: ConversationPaneDescriptor | null;
+  /** ChannelView `channelKind` prop value. For a resolved `?side` this comes
+   *  from the identity (null for a workspace-less placement); otherwise it
+   *  falls through to the primary's kind. */
+  channelKind: WorkspaceUiKind | null;
   /** Workspace id to bake into the secondary archive mutation
    *  invalidation. Cross-workspace secondary needs the foreign
    *  workspace id so the `['workspaces', wid, 'channels']` cache
    *  invalidation hits the right entry. Falls back to the primary
-   *  workspace id for non-resolved cases. */
+   *  workspace id for non-resolved cases, and is null for a placement that
+   *  has no workspace to invalidate (a `direct_pair`, which no archive door
+   *  accepts anyway — `channelKind: null` withholds the affordance). */
   archiveWorkspaceId: string | null;
 }
 
 export interface SecondaryViewMappingInputs {
   secondary: SecondaryDescriptor | null;
   /** Primary workspace's kind, used as fallback channel kind for
-   *  non-resolved `?side` (same-workspace `?side` carries its own
+   *  non-resolved `?side` (a resolved `?side` carries its own
    *  `workspaceKind` so this is rarely consulted in practice). */
-  primaryChannelKind: 'regular' | 'dm' | null;
+  primaryChannelKind: WorkspaceUiKind | null;
   /** Primary workspace id, used as archive-invalidation target when
    *  there is no resolved secondary. */
   primaryWorkspaceId: string | null;
@@ -180,21 +173,14 @@ export function selectSecondaryViewInputs(
     };
   }
 
-  // `?side` resolved: build the descriptor entirely from the ref
-  // payload so cross-workspace secondaries don't need a lookup hit.
+  // `?side` resolved: the descriptor is already built from the identity, so a
+  // cross-workspace channel needs no lookup hit and a private line needs no
+  // workspace at all.
   if (secondary.source === 'side' && secondary.status === 'resolved') {
     return {
-      conversationDescriptor: {
-        id: secondary.id,
-        title: secondary.title,
-        placement_kind: secondary.placementKind,
-        roster_policy: secondary.rosterPolicy,
-        closed_at: secondary.closedAt,
-        archived_at: secondary.archivedAt,
-        workspace_id: secondary.workspaceId,
-      },
+      conversationDescriptor: secondary.descriptor,
       channelKind: secondary.workspaceKind,
-      archiveWorkspaceId: secondary.workspaceId,
+      archiveWorkspaceId: secondary.descriptor.workspace_id,
     };
   }
 
@@ -258,7 +244,7 @@ export function selectVisibleConversations(
   }
   const secondaryPointer: ConversationPointer = {
     id: secondary.id,
-    rosterPolicy: secondary.rosterPolicy,
+    rosterPolicy: secondary.descriptor.roster_policy,
   };
   if (fullscreen) {
     return { primary: null, secondary: secondaryPointer };
@@ -269,9 +255,9 @@ export function selectVisibleConversations(
 export interface FocusedConversation {
   id: string;
   rosterPolicy: 'open' | 'fixed';
-  /** Workspace id for the focused conversation. PR-2: pulled from
-   *  the resolved secondary's `workspaceId` (cross-workspace capable)
-   *  or from the caller's `primaryWorkspaceId` for the primary case. */
+  /** Workspace id for the focused conversation — the resolved secondary's own
+   *  coordinate (cross-workspace capable, and `null` for a workspace-less
+   *  placement) or the caller's `primaryWorkspaceId` for the primary case. */
   workspaceId: string | null;
 }
 
@@ -304,8 +290,8 @@ export function selectFocusedConversation(
   if (secondary && secondary.status === 'resolved') {
     return {
       id: secondary.id,
-      rosterPolicy: secondary.rosterPolicy,
-      workspaceId: secondary.workspaceId,
+      rosterPolicy: secondary.descriptor.roster_policy,
+      workspaceId: secondary.descriptor.workspace_id,
     };
   }
   // Fullscreen with no resolved secondary collapses to primary; same as
@@ -321,6 +307,42 @@ export function selectFocusedConversation(
     };
   }
   return null;
+}
+
+/**
+ * Which conversation the SIDEBAR paints as selected.
+ *
+ * A resolved secondary holds focus, so it owns the highlight — but only when its
+ * row is actually in the sidebar the viewer is looking at, otherwise the primary's
+ * row would go dark for a row that lights up nowhere. The two placements answer
+ * "is my row on screen?" differently, and that is the whole content of this rule:
+ *
+ *   - a WORKSPACE conversation is listed under its own workspace, so it owns the
+ *     highlight only when that workspace is the one expanded in the tree. A
+ *     cross-workspace `?side` leaves the primary's row filled rather than
+ *     ghost-filling a same-id row under a different parent.
+ *   - a `direct_pair` is listed in DIRECT MESSAGES, which is workspace-independent
+ *     and always rendered — so its row is on screen whatever the tree shows, and it
+ *     takes the highlight. Comparing its null workspace to the selected workspace
+ *     would be an accident either way: null-vs-null (viewer on a DM route) would
+ *     light it up for the wrong reason, and null-vs-`w-1` would hide a row that is
+ *     right there.
+ */
+export function selectSidebarSelectedConversationId(inputs: {
+  /** What the sidebar would paint with no secondary — the primary selection. */
+  primarySelectedChannelId: string | null;
+  secondary: SecondaryDescriptor | null;
+  primaryWorkspaceId: string | null;
+}): string | null {
+  const { primarySelectedChannelId, secondary, primaryWorkspaceId } = inputs;
+  if (!secondary || secondary.status !== 'resolved') {
+    return primarySelectedChannelId;
+  }
+  const workspaceId = secondary.descriptor.workspace_id;
+  if (workspaceId === null) return secondary.id;
+  return workspaceId === primaryWorkspaceId
+    ? secondary.id
+    : primarySelectedChannelId;
 }
 
 /**

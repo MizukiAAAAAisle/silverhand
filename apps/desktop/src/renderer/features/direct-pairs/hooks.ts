@@ -44,19 +44,66 @@ import {
 export const directPairsKey = ['direct-pairs'] as const;
 
 /**
+ * The list's FRESHNESS policy, named because "who may re-read this key" is now a
+ * load-bearing contract rather than a default (@Cindy, #task:2038 B2).
+ *
+ * `staleTime: Infinity` — elapsed time is not evidence about this set. The rows
+ * change only when a pair is minted or its unread moves, and every such change
+ * has a carrier already: `direct_pairs_changed` / `snapshot_required` on the
+ * viewer scope ({@link useDirectPairsSync}, mounted ONCE post-auth and the SOLE
+ * invalidation owner) plus the first-send mutation's own invalidate
+ * ({@link useInitiateDirectMessage}). `invalidateQueries` ignores `staleTime`, so
+ * that ladder keeps working untouched — what Infinity removes is the OTHER
+ * trigger: React Query's default `staleTime: 0` makes every value stale on
+ * arrival, and a stale query refetches when a NEW OBSERVER MOUNTS (and on window
+ * focus / reconnect).
+ *
+ * That default was affordable while the observers were a handful of
+ * session-level surfaces. #task:2038 made this list the identity authority for
+ * `#conv:<id>`, so a message stream now mounts one observer PER CHIP: scrolling
+ * a busy conversation would fire `/api/direct-pairs` per chip, deduped only for
+ * chips whose mounts land while a request is already in flight. With this policy
+ * the cost is one request per session (plus one per real change), and a chip's
+ * resolution is free — which is what the chip's comment claims.
+ *
+ * The trade is explicit: if the socket never delivers and no mutation runs, the
+ * list is never re-read while the app stays open. That is the same bet every
+ * WS-owned read here makes, and it is the reason `snapshot_required` (a gap /
+ * resume, i.e. exactly the case where a frame was missed) counts as an
+ * invalidation — see {@link decideDirectPairsInvalidation}.
+ */
+export const DIRECT_PAIRS_QUERY_POLICY = {
+  staleMs: Infinity,
+} as const;
+
+/**
+ * Key + fetcher + freshness policy for the direct-pair list, as ONE value.
+ *
+ * Every reader spreads this rather than restating the key: a second `useQuery`
+ * with the same key but its own `staleTime` would silently reintroduce the
+ * observer-mount refetch this policy exists to remove (the first hook to mount
+ * inside the stale window wins the entry, so the divergence would be invisible
+ * from either call site).
+ */
+export function directPairsQueryOptions() {
+  return {
+    queryKey: directPairsKey,
+    queryFn: ({ signal }: { signal?: AbortSignal }) =>
+      api<DirectPairListResponse>(apiPaths.directPairs, { signal }),
+    staleTime: DIRECT_PAIRS_QUERY_POLICY.staleMs,
+  };
+}
+
+/**
  * Read the viewer's direct-pair list. A pure OBSERVER — it arms no WS
  * subscription, because the invalidation obligation belongs to the viewer's
  * session and not to whichever surface happens to be reading the list
- * ({@link useDirectPairsSync}). Several surfaces read it (the sidebar section, and
- * App to resolve an open pair into a pane descriptor), and a per-caller
- * subscription would invalidate the same key once per caller for every frame.
+ * ({@link useDirectPairsSync}). MANY surfaces read it (the sidebar section, App's
+ * pane resolution, and — since #task:2038 — every `#conv:` chip and the `?side`
+ * pane), which is why mounting one must be free: {@link DIRECT_PAIRS_QUERY_POLICY}.
  */
 export function useDirectPairsList() {
-  return useQuery<DirectPairListResponse>({
-    queryKey: directPairsKey,
-    queryFn: ({ signal }) =>
-      api<DirectPairListResponse>(apiPaths.directPairs, { signal }),
-  });
+  return useQuery<DirectPairListResponse>(directPairsQueryOptions());
 }
 
 /** The rows, or an empty list while the query is cold — for consumers that render
