@@ -87,19 +87,36 @@ physical `agent_home` stays behind the repo boundary. (6) no `{kind,value}` pair
 
   ```
   SavedPlace =
-    | { kind: 'workspace_channel'; conversation_id; workspace_id; workspace_kind: 'regular'|'agent_space'; workspace_name; channel_name }
+    | { kind: 'workspace_channel'; conversation_id; workspace_id; workspace_kind: 'regular'|'agent_space'; channel_name }
     | { kind: 'direct_pair';       conversation_id }
   ```
 
   `workspace_id` + `workspace_kind` are the canonical core (from §2);
-  `workspace_name` + `channel_name` are the presentation extension, bound to
-  workspace identity **in the same arm** — a `direct_pair` row cannot carry them
-  (impossible to construct), and a `workspace_channel` row cannot carry peer
-  presentation. The pair arm holds only `conversation_id`; peer name/avatar is
+  `channel_name` is the one embedded presentation field, bound to workspace
+  identity **in the same arm** — a `direct_pair` row cannot carry it (impossible
+  to construct), and a `workspace_channel` row cannot carry peer presentation.
+  **`workspace_name` is deleted from this arm** (F1, #task:2050 review — aligns
+  with `TaskPlace`, §3): a workspace's name is its aggregate's mutable field, so
+  the renderer joins it live from `['workspaces']` (kept fresh by §4-B) instead
+  of freezing a per-read-model snapshot. Saved therefore has **no** frozen
+  `workspace_name` to invalidate (§4-B applies to Saved only as the authority-layer
+  refresh of `['workspaces']`, exactly as for Task). `channel_name` stays embedded
+  — aligned with the shipped `TaskPlace` — and is the one presentation field §4-A
+  keeps live. The pair arm holds only `conversation_id`; peer name/avatar is
   resolved by that id through the DirectPair carrier (§4-C), never frozen. Common
   fields (`message`, `agent_name`, `saved_at`) stay outside the discriminant.
   Because the discriminant is the canonical one, the shared constructor and
   exhaustiveness checks are reused — no second spelling of the same `place`.
+
+  > **#task:2045 endgame (coordinate-only, deferred — not #2050/#2051):** the
+  > long-term target strips `channel_name` too, so `SavedPlace`/`SearchConversationPlace`
+  > carry only coordinates and the renderer joins every name. The client
+  > channel-name join authority **already exists** (`useChannelsAcrossWorkspaces`,
+  > board already reads it), so this is a three-consumer convergence + a `TaskPlace`
+  > retrofit, NOT new infrastructure. It is gated on shiki sequencing because the
+  > retrofit touches shipped #2041. Until then Saved embeds `channel_name` + §4-A,
+  > aligned with #2041.
+
 - **Search [#task:2051] — `type` discriminant stays; the place reuses the canonical `kind`.**
   `SearchResultDto` remains `discriminatedUnion('type', …)`:
   - `type: 'conversation'` and `type: 'message'` are the **only** arms that carry a
@@ -165,14 +182,19 @@ in:
   **rejected**: the payload shape does not diverge, the scope
   (`viewer:${userId}`) is identical, and a second carrier for the same fact
   would fork the "one owner for the event" invariant this module exists to hold.
-- Subscribers (M2): **Saved list, Search results only** additionally invalidate
-  their cached `workspace_name` on `change: 'metadata_changed'` (distinct from the
-  4-A channel-name registration). **Task does not** — it deleted `workspace_name`
-  (§3) and resolves its container name from the live workspace directory, so it has
-  no frozen `workspace_name` to invalidate.
+- Subscribers (M2): **Search results only** invalidate a *frozen* `workspace_name`
+  on `change: 'metadata_changed'` (distinct from the 4-A channel-name
+  registration). **Task and Saved do not** — both deleted `workspace_name` (§3,
+  and F1 for Saved) and resolve the workspace name from the live `['workspaces']`
+  directory, so neither has a frozen copy to invalidate. For them §4-B is the
+  authority-layer edge that keeps `['workspaces']` itself fresh on rename — the
+  join they read from — so liveness is proven ONCE at the authority rather than
+  re-proven per read model. (The #2045 endgame retires the Search frozen copy too;
+  see §3.)
 - Falsifier: rename a **workspace** with no task/message/membership change → the
-  Saved/Search rows' `workspace_name` refreshes (fails today; the producing edge
-  is what this blocker requires M2 to add).
+  workspace-list authority `['workspaces']` refreshes (so Task/Saved joined names
+  follow) and any Search row's frozen `workspace_name` refreshes (fails today; the
+  producing edge is what this blocker requires M2 to add).
 
 ### 4-C. peer-identity fact edge — presentation + subject lifecycle ONLY, never presence
 
@@ -295,7 +317,28 @@ conjunct.
 | Site | Class | Disposition |
 |---|---|---|
 | `conversation-read-repo.ts:402` (`unreadCountsByConversation`) | **LFR→HPB** | roster-joins `conversation_users`; must include the DM arm via participation (§7, folded into #2045 Favorites) |
-| `saved-message-repo.ts` `listForUser` | **LFR→HPB, FIXED (#2050)** | was a hand-written `EXISTS(conversation_users)` that returned false for every `direct_pair` ⇒ DM saves persisted (201) and read by id but were silently dropped from the list. Now delegates to `userParticipates('conv', userId)`. Falsifier: `tests/repos/saved-message-repo.test.ts` — save+list a `direct_pair` message returns it; a stale seat without `workspace_users` membership does NOT list |
+| `saved-message-repo.ts` `listForUser` | **LFR→HPB, FIXED (#2050)** | was a hand-written `EXISTS(conversation_users)` that returned false for every `direct_pair` ⇒ DM saves persisted (201) and read by id but were silently dropped from the list. Now delegates to `userParticipates('conv', userId)`. Falsifiers in `tests/repos/saved-message-repo.test.ts`: save+list a `direct_pair` message returns it; a stale seat without `workspace_users` membership does NOT list (membership conjunct); a workspace member with NO channel seat does NOT list (seat conjunct — see name-join guardrail below) |
+| `saved-message-repo.ts` `getByMessageIdForUser` | **OPEN, non-blocking (#2050)** | does NOT re-derive participation — it self-limits on `sm.user_id` and is called ONLY as `save()`'s post-write echo, behind the route's `canViewConversation` ACL, reading back the row the caller just wrote (no reachable stale-reader path). A docblock states the invariant. If it EVER gains a second, standalone caller, that caller must add the `userParticipates` gate first. Recorded here (not only in the comment) so a future reader is enumerated, not rediscovered |
+
+**Name-join guardrail (F1, #2050 — the participation-only invariant, made
+executable).** The renderer joins mutable names (`workspace_name` today;
+`channel_name` at the #2045 endgame) from live authorities keyed by
+`conversation_id` instead of freezing them per read model (§3, §4-B). That model
+is sound ONLY while task/saved visibility stays **participation-only** — a
+conjunction of a conversation seat AND (workspace arm) live `workspace_users`
+membership, per `userParticipates` and `task-repo.ts:100` "public discovery
+grants no task read". If visibility ever widened to "workspace member may read",
+the join would surface names for channels a viewer discovers but never joined,
+which an embedded snapshot would not — that is the exact axis on which the thesis
+fails, and the real falsifier to watch (stronger than "place carries no mutable
+name"). It is pinned by behavior, not prose:
+- **Saved axis:** `tests/repos/saved-message-repo.test.ts` — "hides a channel the
+  workspace-member viewer never joined (public discovery grants no read)".
+- **Task axis (#task:2045 obligation):** the board-population test must carry the
+  mirror — a workspace member with no channel seat sees neither the task nor the
+  saved row. If either test reddens or is deleted, that is the moment the live
+  name-join begins leaking; treat it as a contract change, not a test fix.
+
 
 ### `JOIN workspaces` — universe = 19 hits / 8 files, by surface (was 20; #2050 dropped saved's inner join to a single LEFT JOIN)
 

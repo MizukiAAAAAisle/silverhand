@@ -66,7 +66,6 @@ interface JoinedRow extends SavedMessageRow, LinkedTaskProjectionRow {
   placement_kind: ConversationPlacementKind;
   workspace_id: string | null;
   workspace_kind: 'regular' | 'agent_space' | null;
-  workspace_name: string | null;
   channel_name: string | null;
   agent_name: string | null;
 }
@@ -78,17 +77,18 @@ function placeFromRow(row: JoinedRow): SavedPlace {
   switch (row.placement_kind) {
     case 'workspace': {
       // The arc CHECK guarantees a workspace-placed conversation has a workspace
-      // row (hence a name + kind) and a title. After the LEFT JOIN a NULL here
-      // can therefore only be a query mistake — fail loud, never fake-fill.
+      // row (hence a kind) and a title. After the LEFT JOIN a NULL here can
+      // therefore only be a query mistake — fail loud, never fake-fill. The
+      // workspace NAME is intentionally NOT projected (F1): it is joined live
+      // from `['workspaces']` in the renderer, mirroring the shipped `TaskPlace`.
       if (
         row.workspace_id === null ||
         row.workspace_kind === null ||
-        row.workspace_name === null ||
         row.channel_name === null
       ) {
         throw new Error(
           `saved place: workspace-placed conversation ${row.conversation_id} ` +
-            `is missing workspace projection columns (workspace_id/kind/name/channel_name)`,
+            `is missing workspace projection columns (workspace_id/kind/channel_name)`,
         );
       }
       return {
@@ -96,7 +96,6 @@ function placeFromRow(row: JoinedRow): SavedPlace {
         conversation_id: row.conversation_id,
         workspace_id: row.workspace_id,
         workspace_kind: row.workspace_kind,
-        workspace_name: row.workspace_name,
         channel_name: row.channel_name,
       };
     }
@@ -209,7 +208,6 @@ const SELECT_JOINED = `
          WHEN w.workspace_kind = 'regular'    THEN 'regular'
          ELSE NULL
      END                AS workspace_kind,
-    w.name             AS workspace_name,
     CASE WHEN conv.placement_kind = 'workspace'
          THEN conv.title
          ELSE NULL

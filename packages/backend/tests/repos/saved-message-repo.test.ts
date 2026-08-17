@@ -12,6 +12,10 @@
  *   2. the workspace arm is STRICTER than a bare roster seat — it additionally
  *      requires live `workspace_users` membership (v25), so a stale seat without
  *      membership no longer lists the row (a disclosed behavior change);
+ *   2b. the same arm is a CONJUNCTION the other way too — workspace MEMBERSHIP
+ *      without a channel seat also hides the row (public discovery grants no
+ *      read). This is the participation-only falsifier the `['saved']`
+ *      workspace-name live-join depends on (F1 guardrail);
  *   3. the `workspace_channel` place projects an `agent_home` workspace as
  *      `agent_space` on the wire — the same one-way projection `TaskPlace` makes,
  *      re-derived independently here because it is a distinct SQL site.
@@ -122,11 +126,63 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
     workspaces.addUserMember(ws.id, viewer, 'member');
     const listed = saved.listForUser(viewer);
     expect(listed.map(s => s.message.id)).toContain(msg.id);
-    expect(listed.find(s => s.message.id === msg.id)!.place).toMatchObject({
+    // Exact shape (F1): the workspace NAME is deliberately absent — joined live
+    // from `['workspaces']`, mirroring the shipped `TaskPlace`. A full `toEqual`
+    // (not `toMatchObject`) makes re-adding `workspace_name` redden this.
+    expect(listed.find(s => s.message.id === msg.id)!.place).toEqual({
       kind: 'workspace_channel',
+      conversation_id: channel.id,
       workspace_id: ws.id,
       workspace_kind: 'regular',
+      channel_name: fixedConversationTitle('general').title,
     });
+  });
+
+  it('hides a channel the workspace-member viewer never joined (public discovery grants no read)', () => {
+    // The FALSIFIER for the name-join model (contract §4-B guardrail): Saved's
+    // visibility is participation-only. `userParticipates`'s workspace arm is a
+    // CONJUNCTION — a conversation seat AND live workspace membership. The
+    // sibling test above pins the membership conjunct (seat without membership →
+    // hidden); this pins the SEAT conjunct (membership without seat → hidden), so
+    // a public channel the viewer can discover but never joined never surfaces.
+    // If this reddens or is deleted, that is the moment `['saved']`'s live
+    // workspace-name join would begin leaking names for channels the viewer never
+    // joined — i.e. visibility silently widened to "workspace member may read"
+    // (`task-repo.ts:100` "public discovery grants no task read"; the task board
+    // mirrors this axis in #task:2045's board-population test).
+    const ws = workspaces.insert({
+      name: fixedWorkspaceName('eng'),
+      description: null,
+    });
+    const channel = conversations.insertChannel({
+      workspaceId: ws.id,
+      title: fixedConversationTitle('general'),
+    });
+    // Viewer is a workspace MEMBER but never joined the channel (no seat).
+    workspaces.addUserMember(ws.id, viewer, 'member');
+    const author = agents.create(
+      { name: 'eng-bot', runtime: 'claude' },
+      localHostId,
+      viewer,
+    );
+    const msg = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: author.id,
+      content: 'posted in a channel the viewer never joined',
+    });
+
+    const saved = new SavedMessageRepo(db);
+    // `save()` gates on PLACEMENT, not participation, so the row persists and is
+    // readable by id — isolating the list exclusion below as the seat gate.
+    expect(saved.save(msg.id, viewer)).not.toBeNull();
+    expect(saved.getByMessageIdForUser(msg.id, viewer)).not.toBeNull();
+    expect(saved.listForUser(viewer).map(s => s.message.id)).not.toContain(msg.id);
+
+    // Grant the seat → the row lists. Isolates the exclusion to the seat conjunct
+    // rather than any other filter.
+    conversations.addUser(channel.id, viewer);
+    expect(saved.listForUser(viewer).map(s => s.message.id)).toContain(msg.id);
   });
 
   it('projects an agent_home channel as workspace_kind=agent_space', () => {

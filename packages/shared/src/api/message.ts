@@ -591,9 +591,21 @@ export type SearchDto = z.infer<typeof SearchDtoSchema>;
  *  - workspace_channel arm: `conversation_id` plus the workspace board namespace
  *    (`workspace_id` + the `regular | agent_space` DOMAIN `workspace_kind`;
  *    physical `agent_home` never reaches the wire, contract §2 rule 5) and the
- *    Saved-specific presentation (`workspace_name`, `channel_name`). The names
- *    are a LIVE projection kept fresh by `viewer_workspaces_changed` /
- *    `workspace_channels_changed`, never a frozen store.
+ *    one embedded mutable name, `channel_name`. The workspace NAME is deliberately
+ *    NOT here (F1, mirrors the shipped `TaskPlace` workspace arm): a workspace's
+ *    name is its aggregate's mutable field, so the renderer joins it live from the
+ *    `['workspaces']` directory (kept fresh by `viewer_workspaces_changed`,
+ *    §4-B) rather than freezing a per-read-model snapshot. `channel_name` stays
+ *    embedded, aligned with the shipped #2041 `TaskPlace`, and is a LIVE
+ *    projection: `['saved']` MUST subscribe `workspace_channels_changed` (§4-A)
+ *    and INVALIDATE only — never apply the payload as a snapshot. (The full
+ *    coordinate-only endgame — join `channel_name` too — is deferred to #2045:
+ *    the client channel-name join authority already exists
+ *    (`useChannelsAcrossWorkspaces`), so it is a three-consumer convergence, not
+ *    new infrastructure. The name-join model holds ONLY while task/saved
+ *    visibility stays participation-only; widening to "workspace member may read"
+ *    would make the join miss names that an embed would not — that is the real
+ *    falsifier for this axis. See `docs/placement-contract.md`.)
  *  - direct_pair arm: ONLY `conversation_id`. No title (a DM stores none) and no
  *    peer name/avatar — the per-viewer `dm:@other` label and the peer identity
  *    are resolved live via the DirectPair carrier (contract §4-C), never frozen
@@ -610,8 +622,10 @@ export const SavedPlaceSchema = z.discriminatedUnion('kind', [
     /** Domain projection of the workspace kind; physical `agent_home` never
      *  reaches the wire (contract §2 rule 5). */
     workspace_kind: z.enum(['regular', 'agent_space']),
-    workspace_name: z.string(),
-    /** The channel's display title (a channel has one; a DM does not). */
+    /** The channel's display title (a channel has one; a DM does not). A LIVE
+     *  projection: `['saved']` subscribes `workspace_channels_changed` (§4-A)
+     *  and invalidates on it. The workspace NAME is deliberately absent —
+     *  joined live from `['workspaces']` (F1, mirrors `TaskPlace`). */
     channel_name: z.string(),
   }),
   z.object({
