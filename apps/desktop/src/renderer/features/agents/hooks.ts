@@ -1,5 +1,8 @@
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type {
+  AgentAvailability,
+  AgentAvailabilityDto,
   AgentDto,
   AgentLiveness,
   AgentLivenessDto,
@@ -16,7 +19,12 @@ import type {
   UpdateAgentInput,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
+import {
+  AGENT_AVAILABILITY_CHANGED_EVENT,
+  AgentAvailabilityChangedEventSchema,
+} from '@silverhand/shared';
 import { api, apiUpload, ApiError } from '@/lib/api';
+import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from '@/lib/ws-client';
 
 const agentsKey = ['agents'] as const;
 const agentKey = (id: string) => ['agents', id] as const;
@@ -220,6 +228,172 @@ export function useAgentLiveness(
     },
   });
   return projectAgentLiveness({ data: query.data, isStale: query.isStale });
+}
+
+const agentAvailabilityKey = (id: string) => ['agents', id, 'availability'] as const;
+
+/**
+ * Transport / 5xx retries for the availability read are BOUNDED, and a 4xx is
+ * TERMINAL — the SAME shape as the liveness read: a 404 is the endpoint's
+ * anti-enumeration answer for a non-viewer, which no amount of retrying turns
+ * into an availability bit. A persistently-failing read has nothing to deliver
+ * by hammering an unreachable authority, so it settles into the renderer's
+ * `unknown` (no-status) instead.
+ */
+const AGENT_AVAILABILITY_MAX_RETRIES = 2;
+
+export function agentAvailabilityRetry(failureCount: number, err: unknown): boolean {
+  if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+    return false;
+  }
+  return failureCount < AGENT_AVAILABILITY_MAX_RETRIES;
+}
+
+/**
+ * Pure projection of the availability query state onto the tri-state a consumer
+ * composes. Unlike liveness, this axis is EVENT-invalidated, not timer-polled
+ * (#task:2043): the route is the single source of the value and
+ * `agent_availability_changed` drives every refresh, so a successful value stays
+ * authoritative until an event invalidates it — there is no `staleTime` timer to
+ * age it out, hence no `isStale` input here.
+ *  - `data === undefined` — first load in flight, disabled, or a read that failed
+ *    with no prior value (incl. the 404 anti-enum for a non-viewer) → `unknown`,
+ *    the renderer's "we cannot tell", which composes to no-status.
+ *  - otherwise the last successful value. A refetch triggered by an event (or a
+ *    transient 5xx during one) retains the prior `data` while it re-reads; reading
+ *    that last value rather than flickering to `unknown` matches the liveness fold
+ *    and keeps a mounted line from blinking between the invalidation and its
+ *    replacement. The next event (or its `snapshot_required` recovery) corrects a
+ *    stale-after-fault value.
+ */
+export function projectAgentAvailability(state: {
+  data: AgentAvailability | undefined;
+}): AgentAvailability | 'unknown' {
+  return state.data === undefined ? 'unknown' : state.data;
+}
+
+/** Minimal WS frame shape {@link decideAgentAvailabilityInvalidation} consumes,
+ *  so the decision is exercised without React or a socket (mirrors
+ *  `DirectPairsSyncFrame`). */
+export interface AgentAvailabilitySyncFrame {
+  type: string;
+  kind?: string;
+  payload?: unknown;
+}
+
+/**
+ * Pure decision: does this frame invalidate the given agent's availability?
+ *
+ * `snapshot_required` counts unconditionally (for the one mounted agent): a
+ * replay gap may have swallowed the `agent_availability_changed` frame, and the
+ * only recovery for a dropped viewer-scoped delta is to refetch — same reasoning
+ * as every other viewer-scoped list (see `decideDirectPairsInvalidation`).
+ * An `agent_availability_changed` event counts only when its validated
+ * `agent_id` matches — the event is per-viewer but not per-agent, so a mounted
+ * surface refetches solely its own agent.
+ *
+ * The caller gates `isCurrentViewerScope(frame.scope)` first — kept out of here
+ * so the decision stays dependency-free and unit-testable.
+ */
+export function decideAgentAvailabilityInvalidation(
+  frame: AgentAvailabilitySyncFrame,
+  agentId: string,
+): boolean {
+  if (frame.type === 'snapshot_required') return true;
+  if (frame.type !== 'event' || frame.kind !== AGENT_AVAILABILITY_CHANGED_EVENT) {
+    return false;
+  }
+  const parsed = AgentAvailabilityChangedEventSchema.safeParse(frame.payload);
+  return parsed.success && parsed.data.agent_id === agentId;
+}
+
+/**
+ * The agent's reachability — the ONE viewer-authorized bit
+ * `GET /api/agents/:id/availability` answers (#task:2043). TWO values on the
+ * wire (`online` | `offline`), projected here to a tri-state with the renderer's
+ * own `unknown` (query pending / errored with no prior value). Composes with
+ * liveness via {@link projectGlobalPresence}.
+ *
+ * Unlike liveness, this endpoint HAS a push channel: the viewer-scoped
+ * `agent_availability_changed {agent_id}` frame is a pure invalidation signal, so
+ * the query is `staleTime: Infinity` with NO polling — a mounted surface
+ * subscribes the `viewer:<userId>` scope and refetches only when a matching event
+ * (or a `snapshot_required` replay recovery) arrives. The subscription lives with
+ * the hook, not app-shell-global: availability only matters while a presence line
+ * for that agent is on screen, so there is nothing to keep live for an agent no
+ * view is reading (contrast `useDirectPairsSync`, which must catch a stranger's
+ * first DM while the viewer looks elsewhere).
+ */
+export function useAgentAvailability(
+  agentId: string | null | undefined,
+): AgentAvailability | 'unknown' {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: agentId ? agentAvailabilityKey(agentId) : ['agents', 'none', 'availability'],
+    enabled: !!agentId,
+    // The route is the single source of the value; the event drives every
+    // refresh, so there is no timer-based staleness (no poll, no age-out).
+    staleTime: Infinity,
+    retry: agentAvailabilityRetry,
+    queryFn: async () => {
+      const res = await api<AgentAvailabilityDto>(apiPaths.agentAvailability(agentId!));
+      return res.availability;
+    },
+  });
+  useEffect(() => {
+    if (!agentId) return;
+    const sub = subscribeViewerScope();
+    const unsub = onWsFrame(frame => {
+      if (
+        (frame.type !== 'event' && frame.type !== 'snapshot_required') ||
+        !isCurrentViewerScope(frame.scope)
+      ) {
+        return;
+      }
+      if (decideAgentAvailabilityInvalidation(frame, agentId)) {
+        void qc.invalidateQueries({ queryKey: agentAvailabilityKey(agentId) });
+      }
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [agentId, qc]);
+  return projectAgentAvailability({ data: query.data });
+}
+
+/** The user-facing presence a consumer draws once both axes are composed. */
+export type GlobalPresence = 'online' | 'away' | 'offline';
+
+/**
+ * Compose the two orthogonal presence axes into the one word the UI shows
+ * (shiki 2026-08, frozen): Availability answers "can this agent work for me
+ * right now" (host reachable × agent valid); liveness answers "is a live process
+ * running this instant". Availability is the PRIMARY axis:
+ *  - availability `unknown` (query pending / errored) → `null`: there is no
+ *    presence to claim yet, so the consumer draws no dot and no label — never a
+ *    speculative Offline for an agent we simply haven't read.
+ *  - availability `offline` → `Offline`: the host is unreachable or the agent is
+ *    invalid; this is the honest Offline regardless of any stale liveness bit (a
+ *    reaped process on a reachable host is NOT offline).
+ *  - availability `online` → the agent WILL answer. A live process now
+ *    (`liveness === 'online'`) → `Online`; otherwise reachable-but-idle
+ *    (idle-reaped, waking on the next message, or liveness not yet known) →
+ *    `Away` (shiki: idle-reap → Away, not Offline).
+ *
+ * Reading Offline ONLY from availability — never from liveness — is the whole
+ * point: liveness-alone showed a reachable agent that had just replied as
+ * Offline (#task:2039, "sea"). The transitions this admits as data arrives move
+ * one way only (no-status → Away → Online), never a backward flip to a louder
+ * claim.
+ */
+export function projectGlobalPresence(
+  availability: AgentAvailability | 'unknown',
+  liveness: AgentLiveness,
+): GlobalPresence | null {
+  if (availability === 'unknown') return null;
+  if (availability === 'offline') return 'offline';
+  return liveness === 'online' ? 'online' : 'away';
 }
 
 const agentProfileMcpKey = (id: string) => ['agents', id, 'profile-mcp'] as const;

@@ -17,7 +17,11 @@ import {
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
 import type { AgentPresenceSource } from '@/features/conversations/pane-mode';
-import { useAgentLiveness } from '@/features/agents/hooks';
+import {
+  projectGlobalPresence,
+  useAgentAvailability,
+  useAgentLiveness,
+} from '@/features/agents/hooks';
 import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import {
@@ -298,16 +302,18 @@ function PresenceLine({ dot, label }: { dot: string; label: string }): JSX.Eleme
  *
  *  - `conversation_roster` — the agent's status IN this conversation. "Not here"
  *    is a real fact there: a channel has a roster and the agent is not on it.
- *  - `global_runtime` — the agent's liveness on its computer, the authority the
+ *  - `global_runtime` — the agent's presence on its computer, the authority the
  *    agent page's hero pill reads. A `direct_pair` has no roster row and never
  *    will, so reading one there turned membership into presence and told the user
  *    their DM counterpart was `Not here` while it was answering them
  *    (shiki, #task:2039).
  *
- * The global arm renders NOTHING unless liveness is a definite `online` /
- * `offline`. `unknown` (the host hasn't answered / the computer is unreachable)
- * and the loading window both mean "no answer yet", and `Offline` there would be
- * a claim rather than an answer — a disconnected host is not a dead process.
+ * The global arm composes TWO axes (availability × liveness → Online / Away /
+ * Offline / no-status; see `projectGlobalPresence`) and renders nothing until
+ * availability is a definite answer. `Offline` there is read from availability
+ * alone — an unreachable host / invalid agent — never from a reaped process on a
+ * reachable host, which reads `Away`: a disconnected host is not a dead process,
+ * and an idle agent still answers on the next message.
  */
 function PresenceInline({
   agent,
@@ -325,17 +331,26 @@ function PresenceInline({
 }
 
 function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | null {
+  // Two orthogonal axes composed into one word (#task:2039): availability
+  // (host reachable × agent valid — "can it work for me now") is primary,
+  // liveness (a live process this instant) only distinguishes Online from Away
+  // once available. Reading Offline from liveness ALONE was the bug — a
+  // reachable agent that had just replied showed Offline because its process had
+  // been idle-reaped. `projectGlobalPresence` reads Offline solely from
+  // availability, so idle-reap now reads Away, not Offline.
+  const availability = useAgentAvailability(agent.id);
   const liveness = useAgentLiveness(agent.id);
-  // Tri-state → binary line only when the answer is definite. `unknown` and the
-  // loading window draw nothing (see the block comment above); this is the
-  // `canViewAgent`-gated bit a DM human can read about its counterpart, the
-  // status the old owner-only host path could not supply (#task:2039).
-  if (liveness !== 'online' && liveness !== 'offline') return null;
-  const online = liveness === 'online';
+  const presence = projectGlobalPresence(availability, liveness);
+  // `null` = no definite answer yet (availability pending / errored). Draw
+  // nothing rather than assert a speculative status.
+  if (presence === null) return null;
+  // Away and Offline share the muted pip (Away = reachable-but-idle, Offline =
+  // unreachable); the label carries the distinction, and a grey dot for both
+  // avoids a false red alarm for an agent that will answer on the next message.
   return (
     <PresenceLine
-      dot={online ? 'bg-success' : 'bg-text-muted/40'}
-      label={online ? 'Online' : 'Offline'}
+      dot={presence === 'online' ? 'bg-success' : 'bg-text-muted/40'}
+      label={presence === 'online' ? 'Online' : presence === 'away' ? 'Away' : 'Offline'}
     />
   );
 }
