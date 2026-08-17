@@ -3430,6 +3430,27 @@ export const migrations: Migration[] = [
         ON saved_messages(message_id);
     `,
   },
+  {
+    version: 82,
+    name: 'agent_last_activity_at',
+    // #task:2049 — durable per-agent presence clock feeding the `/presence`
+    // read face's `away_at` deadline.
+    //
+    // NULL is the never-active state; it is intentionally NOT backfilled. There
+    // is no honest activity timestamp to fabricate for an agent that has never
+    // been active, and seeding one would invent a false deadline. NULL projects
+    // to Away (the renderer requires a positive live deadline for Online), so
+    // with no backfill every agent correctly reads Away until its first real
+    // activity — the alternative (a fabricated deadline) would falsely render
+    // every agent Online on deploy day. The
+    // column is written ONLY by the backend at admitted runtime-activity edges
+    // (parsed event / delivery consumed) with the BACKEND clock, and only ever
+    // moved forward (monotonic max). The host-authored frame `ts` is NEVER
+    // written here (the host clock is untrusted for a durable, monotonic value).
+    up: `
+      ALTER TABLE agents ADD COLUMN last_activity_at INTEGER;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

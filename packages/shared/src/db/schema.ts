@@ -299,6 +299,13 @@ export interface AgentRow {
   runtime_transition_started_at: number | null;
   /** Epoch ms durable terminal-deletion intent and attempt CAS token. */
   deletion_started_at: number | null;
+  /** v82 (#task:2049): durable per-agent presence clock. NULL = never active.
+   *  Written ONLY by the backend at admitted runtime-activity edges (parsed
+   *  event / delivery consumed) with the BACKEND clock, moved forward by
+   *  monotonic max. The host-authored frame `ts` is NEVER written here (host
+   *  clock is untrusted for a durable, monotonic value). Feeds the `/presence`
+   *  read face's `away_at`. */
+  last_activity_at: number | null;
   created_at: number;
   updated_at: number;
 }

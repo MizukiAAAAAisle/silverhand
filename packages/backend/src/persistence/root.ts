@@ -171,6 +171,8 @@ export interface BackendPersistenceEffects {
   readonly runtimeFanout: (deps: {
     events: EventPublisher;
     logger: BackendLogger;
+    /** v82 (#task:2049) fired on an Away→Online presence transition. */
+    onAgentAwayToOnline?: (agentId: string) => void;
   }) => RuntimeFanoutDbDeps;
 }
 
@@ -266,8 +268,8 @@ export function createBackendPersistence(db: Db): BackendPersistence {
     readModels: createReadModels(db),
     effects: {
       unreadPublish: ({ events }) => createUnreadPublishAdapter({ db, events }),
-      runtimeFanout: ({ events, logger }) =>
-        createRuntimeFanoutDbDeps({ db, events, logger }),
+      runtimeFanout: ({ events, logger, onAgentAwayToOnline }) =>
+        createRuntimeFanoutDbDeps({ db, events, logger, onAgentAwayToOnline }),
     },
   };
 }

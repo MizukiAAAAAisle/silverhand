@@ -16,6 +16,7 @@ import {
 } from '@silverhand/host';
 import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import type { AgentRunState, RuntimeKind } from '@silverhand/shared';
+import { AGENT_PRESENCE_CHANGED_EVENT } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationEventRepo } from '../../src/repos/conversation-event-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
@@ -40,6 +41,10 @@ import {
   outboundEventToEventFrame,
 } from '../../src/runtime/outbound-event-fanout.js';
 import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
+import { createBackendPersistence } from '../../src/persistence/root.js';
+import { publishAgentPresenceChangedForAgent } from '../../src/application/agent-presence-changed.js';
+import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
+import type { BackendContext } from '../../src/context.js';
 import { AgentL2SeedEnsurer } from '../../src/runtime/agent-l2-seed-ensurer.js';
 import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
@@ -3949,6 +3954,258 @@ describe('OutboundRuntimeEventFanout', () => {
       }
     });
   });
+
+  // v82 (#task:2049) — durable presence-clock write edges + the Away→Online
+  // per-viewer fire. These drive the REAL createRuntimeFanoutDbDeps wiring with
+  // an injected controllable clock, so the stamp, the monotonic-max, and the
+  // discrete `agent_presence_changed` fire are all exercised end to end.
+  describe('presence clock (#task:2049)', () => {
+    const PRESENCE_AWAY_TTL_MS = 30 * 60_000;
+    const BASE = 1_700_000_000_000;
+
+    // A frame the READ face's write edge admits: a non-input_lifecycle parsed
+    // event for a participant. `runtime_scope` is agent-scoped so a rosterless
+    // DirectPair endpoint's frame clears the ingress perimeter.
+    const parsedTextFrame = (
+      fix: Fixture,
+      conversationId: string,
+      ts: number,
+    ) =>
+      ({
+        runtime_generation: 1,
+        direction: 'daemon_to_server' as const,
+        type: 'event' as const,
+        kind: 'runtime_parsed_event' as const,
+        runtime_scope: { kind: 'agent' as const, agent_id: fix.agentId },
+        conversation_id: conversationId,
+        agent_id: fix.agentId,
+        parsed: { kind: 'text' as const, text: 'observable progress' },
+        ts,
+      });
+
+    const captureViewer = (fix: Fixture, userId: string) => {
+      const received: Array<{ kind: string; payload: unknown }> = [];
+      const off = fix.presenceScopeEvents.subscribeScope(`viewer:${userId}`, e =>
+        received.push({ kind: e.kind, payload: e.payload }),
+      );
+      return { received, off };
+    };
+
+    it('fires exactly one agent_presence_changed to a non-owner DirectPair human on an Away→Online crossing (cross-viewer recovery), with an id-only payload; and stays silent within the window (negative discreteness)', () => {
+      let clock = BASE;
+      const fix = makeFixture({ sessionScope: 'agent', now: () => clock });
+      try {
+        // A human↔agent DirectPair whose human endpoint is NOT the agent's host
+        // owner (the fixture creator is `fix.viewerUserId`).
+        expect('teammate').not.toBe(fix.viewerUserId);
+        const pair = fix.conversations.getOrCreateDirectPair(
+          { kind: 'agent', id: fix.agentId },
+          { kind: 'human', id: 'teammate' },
+          BASE,
+        ).conversation;
+        const agents = new AgentRepo(fix.db);
+        const cap = captureViewer(fix, 'teammate');
+
+        // First stamp: prev null → a never-active agent projects Away, so its
+        // first activity IS an Away→Online crossing → FIRE (the dominant
+        // post-deploy transition under v82's no-backfill).
+        fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, pair.id, clock), 'conn-1');
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(cap.received).toEqual([
+          {
+            kind: AGENT_PRESENCE_CHANGED_EVENT,
+            payload: { agent_id: fix.agentId },
+          },
+        ]);
+        // Payload carries no status/away_at value — pure invalidation.
+        expect(Object.keys(cap.received[0]!.payload as object)).toEqual([
+          'agent_id',
+        ]);
+
+        // Negative discreteness: continuous activity WITHIN the window fires
+        // nothing more, even as it advances last_activity_at forward.
+        clock = BASE + PRESENCE_AWAY_TTL_MS - 1;
+        fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, pair.id, clock), 'conn-1');
+        expect(cap.received).toHaveLength(1);
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(clock);
+
+        // Cross the deadline: the next admitted parsed event is again an
+        // Away→Online crossing (atMs >= prev + TTL) → exactly one MORE id-only
+        // frame.
+        const prev = clock;
+        clock = prev + PRESENCE_AWAY_TTL_MS;
+        fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, pair.id, clock), 'conn-1');
+        expect(cap.received).toEqual([
+          {
+            kind: AGENT_PRESENCE_CHANGED_EVENT,
+            payload: { agent_id: fix.agentId },
+          },
+          {
+            kind: AGENT_PRESENCE_CHANGED_EVENT,
+            payload: { agent_id: fix.agentId },
+          },
+        ]);
+
+        cap.off();
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('does NOT stamp or fire on excluded edges: input_lifecycle parsed events, runtime_state, runtime_exit (a stuck runtime that only exits stays at its last real-activity deadline and does not self-revive)', () => {
+      let clock = BASE;
+      const fix = makeFixture({ sessionScope: 'agent', now: () => clock });
+      try {
+        const agents = new AgentRepo(fix.db);
+        const cap = captureViewer(fix, fix.viewerUserId);
+
+        // Seed a real deadline via one admitted parsed event (prev null → FIRE,
+        // the never-active first crossing), then advance the clock PAST the TTL
+        // so any excluded edge that wrongly stamped WOULD cross Away→Online.
+        fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, fix.channelId, clock), 'conn-1');
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(cap.received).toHaveLength(1);
+        clock = BASE + PRESENCE_AWAY_TTL_MS + 1;
+
+        // input_lifecycle parsed event — returns early before the stamp.
+        fix.fanout.onEvent(fix.hostId, {
+          runtime_generation: 1,
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_parsed_event',
+          runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          parsed: { kind: 'input_lifecycle', commandUuid: 'cmd-1', state: 'started' },
+          ts: clock,
+        }, 'conn-1');
+
+        // runtime_state — not an activity edge.
+        fix.fanout.onEvent(fix.hostId, {
+          runtime_generation: 1,
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_state',
+          runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          state: {
+            ...RUN_STATE,
+            conversationId: fix.channelId,
+            agentId: fix.agentId,
+            status: 'thinking',
+          },
+          ts: clock,
+        }, 'conn-1');
+
+        // runtime_exit — the stuck-then-exit case must NOT self-revive.
+        fix.fanout.onEvent(fix.hostId, {
+          runtime_generation: 1,
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_exit',
+          runtime_scope: { kind: 'agent', agent_id: fix.agentId },
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          code: 1,
+          intentional: false,
+          ts: clock,
+        }, 'conn-1');
+
+        // Deadline unchanged, and no FURTHER invalidation fired: the excluded
+        // edges neither stamped nor crossed → length stays at the seed's 1.
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(cap.received).toEqual([
+          {
+            kind: AGENT_PRESENCE_CHANGED_EVENT,
+            payload: { agent_id: fix.agentId },
+          },
+        ]);
+        cap.off();
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('runtime_delivery_consumed stamps last_activity_at forward and fires on an Away→Online crossing', () => {
+      let clock = BASE;
+      const fix = makeFixture({ now: () => clock });
+      try {
+        const agents = new AgentRepo(fix.db);
+        const cap = captureViewer(fix, fix.viewerUserId);
+
+        const consume = (ts: number) => {
+          const msg = fix.messages.insertForConversation({
+            conversationId: fix.channelId,
+            fromKind: 'user',
+            content: `deliver @ ${ts}`,
+          });
+          const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+          fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
+          fix.fanout.onEvent(fix.hostId, {
+            direction: 'daemon_to_server',
+            type: 'event',
+            kind: 'runtime_delivery_consumed',
+            runtime_scope: { kind: 'conversation', conversation_id: fix.channelId, agent_id: fix.agentId },
+            conversation_id: fix.channelId,
+            agent_id: fix.agentId,
+            runtime_generation: 1,
+            delivery_ids: [delivery.inboxId],
+            ts,
+          }, 'conn-1');
+        };
+
+        // First consume: prev null → stamps AND fires (never-active first
+        // crossing).
+        consume(clock);
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(cap.received).toHaveLength(1);
+
+        // Advance past the TTL, consume again → forward stamp + another fire.
+        clock = BASE + PRESENCE_AWAY_TTL_MS + 5;
+        consume(clock);
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(clock);
+        expect(cap.received).toEqual([
+          {
+            kind: AGENT_PRESENCE_CHANGED_EVENT,
+            payload: { agent_id: fix.agentId },
+          },
+          {
+            kind: AGENT_PRESENCE_CHANGED_EVENT,
+            payload: { agent_id: fix.agentId },
+          },
+        ]);
+        cap.off();
+      } finally {
+        fix.cleanup();
+      }
+    });
+
+    it('is monotonic-max: a stamp with an earlier clock never moves last_activity_at backward (and does not fire)', () => {
+      let clock = BASE;
+      const fix = makeFixture({ sessionScope: 'agent', now: () => clock });
+      try {
+        const agents = new AgentRepo(fix.db);
+        const cap = captureViewer(fix, fix.viewerUserId);
+
+        // Stamp at BASE (prev null → FIRE, never-active first crossing).
+        fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, fix.channelId, clock), 'conn-1');
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(cap.received).toHaveLength(1);
+
+        // A later frame carrying an EARLIER backend clock: MAX keeps the stored
+        // value, and the transition check (atMs < prev + TTL) cannot fire.
+        clock = BASE - 1_000;
+        fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, fix.channelId, clock), 'conn-1');
+        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        // Backward stamp fired nothing → exactly one frame total.
+        expect(cap.received).toHaveLength(1);
+        cap.off();
+      } finally {
+        fix.cleanup();
+      }
+    });
+  });
 });
 
 function emitRuntimeExit(
@@ -4078,6 +4335,10 @@ interface Fixture {
   transport: FakeTransport;
   agentTokens: AgentTokenStore;
   fanout: OutboundRuntimeEventFanout;
+  /** v82 (#task:2049) the per-viewer scope bus the presence producer publishes
+   *  `agent_presence_changed` on (separate from the `events` array, which only
+   *  records the fanout's conversation publish/publishSide). */
+  presenceScopeEvents: ScopeEventBus;
   row(): { status: string; pid: number | null; cli_session_id: string | null };
   cleanup(): void;
 }
@@ -4101,6 +4362,9 @@ function makeFixture(
      * prove first-claim failure semantics opt out explicitly. */
     preclaimRuntime?: boolean;
     sessionScope?: 'agent' | 'conversation';
+    /** v82 (#task:2049) controllable backend clock for the presence-clock
+     *  stamp. Defaults to `Date.now` inside `createRuntimeFanoutDbDeps`. */
+    now?: () => number;
   } = {},
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
@@ -4151,6 +4415,14 @@ function makeFixture(
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
   const transport = new FakeTransport();
+  // v82 (#task:2049) — minimal ctx for the REAL presence producer. It reads
+  // only `authorizationReads` (to resolve the viewer audience) and `events` (to
+  // publish `agent_presence_changed` per viewer), so a bare pair is faithful.
+  const presenceScopeEvents = new ScopeEventBus();
+  const presenceCtx = {
+    events: presenceScopeEvents,
+    authorizationReads: createBackendPersistence(db).authorizationReads,
+  } as unknown as BackendContext;
   // #task:1596/#task:1612 — the L2 seed dep is LOAD-BEARING for regular
   // spawns (missing → fail closed), so the fixture defaults to a
   // permissive in-memory fake. A test opts into the real class (wired to
@@ -4176,6 +4448,11 @@ function makeFixture(
       db,
       events: publisher,
       logger: opts.logger ?? SILENT_LOGGER,
+      // v82 (#task:2049) — mirror index.ts: real presence fire path. The clock
+      // is injectable so write-edge tests can cross PRESENCE_AWAY_TTL_MS.
+      now: opts.now,
+      onAgentAwayToOnline: agentId =>
+        publishAgentPresenceChangedForAgent(presenceCtx, agentId),
     }),
     events: publisher,
     transport: () => transport,
@@ -4212,6 +4489,7 @@ function makeFixture(
     transport,
     agentTokens,
     fanout,
+    presenceScopeEvents,
     row: () => {
       const row = runtimeSlots.get(runtimeScope);
       if (!row) throw new Error('runtime slot row missing');

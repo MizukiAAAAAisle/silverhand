@@ -122,6 +122,7 @@
   "GET /api/agents/:id/runtime-state",
   "GET /api/agents/:id/liveness",
   "GET /api/agents/:id/availability",
+  "GET /api/agents/:id/presence",
   "GET /api/agents/:id/chats",
   "GET /api/agents/:id/chats/:conversationId/messages",
   "GET /api/agents/:id/chats/:conversationId/attachments/:attachmentId",

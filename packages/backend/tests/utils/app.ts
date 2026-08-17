@@ -114,6 +114,7 @@ import {
   publishAgentAvailabilityChangedForAgent,
   publishAgentAvailabilityChangedForHost,
 } from '../../src/application/agent-availability-changed.js';
+import { publishAgentPresenceChangedForAgent } from '../../src/application/agent-presence-changed.js';
 
 /**
  * Records every call routes / provision make into the runtime host.
@@ -1153,6 +1154,10 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       },
       hostId,
     );
+  // #task:2049 — mirror the composition root's presence-invalidation edge so
+  // route/use-case tests observe the SAME viewer fan-out production does.
+  ctx.publishAgentPresenceChangedForAgent = agentId =>
+    publishAgentPresenceChangedForAgent(ctx, agentId);
   const conversationPersistence = createSqliteConversationPersistence(db);
   const unreadPublish = createUnreadPublishAdapter({ db, events: ctx.events });
   ctx.channelService = new ChannelService({

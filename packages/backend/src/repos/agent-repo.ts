@@ -53,6 +53,7 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     materialization_failed_code: row.materialization_failed_code,
     materialization_failed_at: row.materialization_failed_at,
     deletion_started_at: row.deletion_started_at,
+    last_activity_at: row.last_activity_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -652,6 +653,36 @@ export class AgentRepo {
       .prepare<[string], AgentRow>('SELECT * FROM agents WHERE id = ?')
       .get(id);
     return row ?? null;
+  }
+
+  /**
+   * v82 (#task:2049): stamp the durable presence clock at an admitted
+   * runtime-activity edge. Persistence-only — carries NO presence policy: it
+   * reads the current `last_activity_at` (returned as `previous`) and moves it
+   * forward by monotonic MAX(COALESCE(current, 0), atMs), so an out-of-order or
+   * backend-retried lower value never moves it backward. The Away→Online
+   * transition judgment (against PRESENCE_AWAY_TTL_MS) lives in the sink, not
+   * here, so the repo stays free of presence policy.
+   *
+   * Deliberately does NOT bump `updated_at`: that would ripple into the
+   * `agent_changed` identity fan-out via IDENTITY_CARRIERS. Only
+   * `last_activity_at` is touched.
+   */
+  stampLastActivity(agentId: string, atMs: number): { previous: number | null } {
+    const prevRow = this.db
+      .prepare<[string], { last_activity_at: number | null }>(
+        'SELECT last_activity_at FROM agents WHERE id = ?',
+      )
+      .get(agentId);
+    const previous = prevRow?.last_activity_at ?? null;
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET last_activity_at = MAX(COALESCE(last_activity_at, 0), ?)
+          WHERE id = ?`,
+      )
+      .run(atMs, agentId);
+    return { previous };
   }
 
   /**

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   AgentAvailabilityDtoSchema,
   AgentLivenessDtoSchema,
+  AgentPresenceDtoSchema,
   AGENT_AVAILABILITY_CHANGED_EVENT,
   encodeUserPrincipalHeader,
   fixedConversationTitle,
@@ -2400,6 +2401,85 @@ describe('GET /api/agents/:id/availability (#task:2043)', () => {
     const stranger = await readAvailability(agentId, 'someone');
     const unknownId = await http(t!, asUser('someone')).get(
       '/api/agents/zzzzzzzzzzzzzzzz/availability',
+    );
+    expect(stranger.status).toBe(404);
+    expect(await stranger.text()).toBe(await unknownId.text());
+  });
+});
+
+// ── GET /api/agents/:id/presence (#task:2049) ───────────────────────────────
+//
+// The activity-deadline axis, SEPARATE from availability. `away_at` is the
+// absolute epoch-ms deadline (last_activity_at + PRESENCE_AWAY_TTL_MS) at which
+// a currently-available agent projects to Away, or null when never active
+// (never-active ⇒ away_at null ⇒ renderer projects Away, since Online needs a
+// positive live deadline). Same `canViewAgent` gate +
+// 404-anti-enumeration ladder as `/availability`.
+describe('GET /api/agents/:id/presence (#task:2049)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const PRESENCE_AWAY_TTL_MS = 30 * 60_000;
+  const asUser = (id: string) => ({
+    [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(id),
+  });
+  const readPresence = (agentId: string, userId?: string): Promise<Response> =>
+    userId === undefined
+      ? http(t!).get(`/api/agents/${agentId}/presence`)
+      : http(t!, asUser(userId)).get(`/api/agents/${agentId}/presence`);
+
+  async function createAgent(): Promise<string> {
+    const created = (await (
+      await http(t!).post('/api/agents', {
+        name: 'presence-agent',
+        runtime: 'claude',
+        session_scope: 'agent',
+      })
+    ).json()) as any;
+    expect(created.agent?.id, JSON.stringify(created)).toBeTruthy();
+    return created.agent.id;
+  }
+
+  it('away_at is null for a never-active agent (last_activity_at null) — renderer projects Away, no fabricated deadline', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const agentId = await createAgent();
+    // A fresh agent has never been active: the column is NULL (never backfilled).
+    expect(new AgentRepo(t.ctx.db).get(agentId)!.last_activity_at).toBeNull();
+
+    const res = await readPresence(agentId);
+    expect(res.status).toBe(200);
+    expect(AgentPresenceDtoSchema.parse(await res.json()).away_at).toBeNull();
+  });
+
+  it('away_at === last_activity_at + PRESENCE_AWAY_TTL_MS once the presence clock is stamped, and server_now carries the backend clock for renderer skew calibration', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const agentId = await createAgent();
+    const at = 1_700_000_000_000;
+    // Stamp through the real repo edge (monotonic-max from NULL), not raw SQL.
+    new AgentRepo(t.ctx.db).stampLastActivity(agentId, at);
+
+    const before = Date.now();
+    const res = await readPresence(agentId);
+    expect(res.status).toBe(200);
+    const dto = AgentPresenceDtoSchema.parse(await res.json());
+    expect(dto.away_at).toBe(at + PRESENCE_AWAY_TTL_MS);
+    // server_now is the live backend clock at response time (emit-only; the
+    // renderer, not the backend, uses it to calibrate client↔server skew).
+    expect(dto.server_now).toBeGreaterThanOrEqual(before);
+    expect(dto.server_now).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('hides the agent (404, byte-identical to an unknown id) from a viewer failing canViewAgent — no presence oracle', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const agentId = await createAgent();
+    new AgentRepo(t.ctx.db).stampLastActivity(agentId, 1_700_000_000_000);
+
+    const stranger = await readPresence(agentId, 'someone');
+    const unknownId = await http(t!, asUser('someone')).get(
+      '/api/agents/zzzzzzzzzzzzzzzz/presence',
     );
     expect(stranger.status).toBe(404);
     expect(await stranger.text()).toBe(await unknownId.text());
