@@ -31,8 +31,9 @@ interface ConversationSearchRow {
   closed_at: number | null;
   conversation_created_at: number;
   // NULLABLE since #task:2053: a `direct_pair` conversation has no workspace, so
-  // the LEFT JOIN yields NULL workspace columns. The DTO carries this through as
-  // a null `workspace` ref (welded to `placement_kind` in the shared schema).
+  // the LEFT JOIN yields NULL workspace columns. `conversationRef` reconciles
+  // this null against `placement_kind` and builds the discriminated `direct_pair`
+  // arm, which has no `workspace` field at all (no nullable sibling on the wire).
   workspace_id: string | null;
   workspace_name: string | null;
   workspace_kind: SearchWorkspaceKind | null;
@@ -64,8 +65,10 @@ type MessageSearchRow = MessageRow & {
 /** The workspace ref for a result row, or `null` when the conversation is
  *  workspace-less (a `direct_pair`). Null is keyed on `workspace_id` — the LEFT
  *  JOIN's only NULL-producing column — so the ref exists exactly when a
- *  workspace coordinate resolved. The shared schema's superRefine then welds
- *  this to `placement_kind` (#task:2053-C). */
+ *  workspace coordinate resolved. `conversationRef` then selects the shared
+ *  discriminated arm by `placement_kind` (#task:2053-C): the workspace ref lives
+ *  INSIDE the `workspace` arm as a compiler-enforced type fact — there is no
+ *  runtime superRefine and no nullable sibling to reconcile. */
 function workspaceRefOrNull(row: {
   workspace_id: string | null;
   workspace_name: string | null;
@@ -496,6 +499,12 @@ function applyConversationScopeFilters(
     );
   }
   if (input.workspace_id) {
+    // #task:2053-N1 — a COORDINATE filter, unlike the E scope-token KIND filters
+    // above, needs NO `placement_kind = 'workspace'` conjunct: positive equality
+    // on `${workspaceAlias}.id` is self-excluding for a `direct_pair` — after the
+    // LEFT join its workspace id is NULL, and `NULL = ?` is never true. The
+    // exclusion is unambiguous positive-coordinate semantics, not the NULL
+    // coincidence the KIND tokens had to guard against with an explicit conjunct.
     where.push(`${workspaceAlias}.id = ?`);
     params.push(input.workspace_id);
   }
