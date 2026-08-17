@@ -282,6 +282,35 @@ export function projectAgentAvailability(state: {
   return state.data;
 }
 
+/**
+ * A roster's answer to "is this agent a member" is a THREE-state projection, not
+ * a boolean over a default-`[]` list (@Cindy, #task:2039). The presence line uses
+ * it only for the MEMBERSHIP gate — Online/Offline is Availability's job — so the
+ * one thing it must never do is let an un-settled read impersonate absence:
+ *
+ *  - `undefined` (loading, or errored with no prior successful snapshot) →
+ *    `unknown`: no membership verdict, so the caller draws no `Not here`. A
+ *    default `[]` here was the bug — it painted a real member as `Not here` on the
+ *    first popover open, the same "un-settled must not impersonate absent" rule
+ *    the availability fold enforces.
+ *  - a successful snapshot (even an empty one) that CONTAINS the agent → `member`.
+ *  - a successful snapshot that does NOT contain it → `not_here`.
+ *
+ * A failed refetch RETAINS the last successful snapshot (React Query keeps
+ * `data`), and a failure states nothing new about membership, so a retained
+ * snapshot is used as-is: this keys on `data` being defined, never on fetch/error
+ * status. Callers must pass the RAW `query.data` — defaulting it to `[]` reopens
+ * the exact hole this closes.
+ */
+export type RosterMembership = 'unknown' | 'member' | 'not_here';
+export function projectRosterMembership(
+  members: readonly { agent_id: string }[] | undefined,
+  agentId: string,
+): RosterMembership {
+  if (members === undefined) return 'unknown';
+  return members.some(m => m.agent_id === agentId) ? 'member' : 'not_here';
+}
+
 /** Minimal WS frame shape {@link decideAgentAvailabilityInvalidation} consumes,
  *  so the decision is exercised without React or a socket (mirrors
  *  `DirectPairsSyncFrame`). */

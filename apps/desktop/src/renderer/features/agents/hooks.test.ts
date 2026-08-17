@@ -12,6 +12,7 @@ import {
   projectAgentAvailability,
   projectAgentLiveness,
   projectGlobalPresence,
+  projectRosterMembership,
 } from './hooks';
 
 /**
@@ -160,6 +161,43 @@ describe('projectAgentAvailability', () => {
     // `unknown` (→ no-status) until a successful refetch replaces it.
     expect(projectAgentAvailability({ data: 'online', isStale: true })).toBe('unknown');
     expect(projectAgentAvailability({ data: 'offline', isStale: true })).toBe('unknown');
+  });
+});
+
+/**
+ * The MEMBERSHIP gate a roster adds to the presence line (@Cindy, #task:2039).
+ * It is a three-state projection, not a boolean over a default-`[]` list: the
+ * roster read can be pending or cold-errored with no successful snapshot, and a
+ * default `[]` there asserted "answered, no members" — painting a real member as
+ * `Not here` on the first popover open. Same "un-settled must not impersonate
+ * absent" rule the availability fold enforces, pinned so a later edit cannot
+ * reintroduce the default empty array.
+ */
+describe('projectRosterMembership', () => {
+  it('answers unknown while the roster read has no successful snapshot (undefined)', () => {
+    // loading, or errored with no prior success — draw no `Not here`.
+    expect(projectRosterMembership(undefined, 'a-1')).toBe('unknown');
+  });
+
+  it('answers member when a successful snapshot contains the agent', () => {
+    expect(projectRosterMembership([{ agent_id: 'a-1' }, { agent_id: 'a-2' }], 'a-1')).toBe(
+      'member',
+    );
+  });
+
+  it('answers not_here only on a successful snapshot that omits the agent', () => {
+    // A defined snapshot IS a real answer, even an empty one — that is the one
+    // place `Not here` is earned.
+    expect(projectRosterMembership([{ agent_id: 'a-2' }], 'a-1')).toBe('not_here');
+    expect(projectRosterMembership([], 'a-1')).toBe('not_here');
+  });
+
+  it('uses a retained snapshot as-is — failure states nothing new about membership', () => {
+    // A failed refetch keeps the last successful `data`; the projection keys on
+    // `data` being defined, never on fetch/error status, so the retained snapshot
+    // still answers member / not_here rather than collapsing to unknown.
+    expect(projectRosterMembership([{ agent_id: 'a-1' }], 'a-1')).toBe('member');
+    expect(projectRosterMembership([{ agent_id: 'a-2' }], 'a-1')).toBe('not_here');
   });
 });
 

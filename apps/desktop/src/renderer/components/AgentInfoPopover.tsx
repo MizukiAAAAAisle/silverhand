@@ -18,6 +18,7 @@ import { useConversationById } from '@/features/conversations/useConversationByI
 import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
 import {
   projectGlobalPresence,
+  projectRosterMembership,
   useAgentAvailability,
   useAgentLiveness,
 } from '@/features/agents/hooks';
@@ -335,11 +336,13 @@ function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | nul
 
 /**
  * A roster-bearing placement adds exactly ONE thing to the presence line that
- * Availability already answers: MEMBERSHIP (@Cindy, #task:2039). An agent not on
- * this conversation's roster reads `Not here`; a member's Online/Away/Offline
- * then comes from the same availability × liveness composition every placement
- * uses. The roster no longer supplies the online/offline word — only the "is it
- * here" gate — so a retained `active` roster row can never re-assert Online.
+ * Availability already answers: MEMBERSHIP (@Cindy, #task:2039). The membership
+ * question is itself a THREE-state projection (`projectRosterMembership`): until
+ * the roster read is settled-successful it answers `unknown` and the line draws
+ * nothing — a pending / cold-errored roster must NOT impersonate `Not here`. A
+ * confirmed non-member reads `Not here`; a member's Online/Away/Offline then comes
+ * from the same availability × liveness composition every placement uses, so the
+ * roster never supplies the online/offline word — only the "is it here" gate.
  */
 function RosterMemberPresence({
   agent,
@@ -348,8 +351,13 @@ function RosterMemberPresence({
   agent: AgentDto;
   conversationId: string;
 }): JSX.Element | null {
-  const { data: members = [] } = useChannelAgents(conversationId);
-  if (!members.some(s => s.agent_id === agent.id)) {
+  // Raw `query.data`, NOT `= []`: a default empty array would collapse a
+  // not-yet-loaded / errored roster into "answered, no members" and paint a real
+  // member as `Not here` on first open (@Cindy, #task:2039).
+  const { data: members } = useChannelAgents(conversationId);
+  const membership = projectRosterMembership(members, agent.id);
+  if (membership === 'unknown') return null;
+  if (membership === 'not_here') {
     return <PresenceLine dot="bg-text-muted/40" label="Not here" />;
   }
   return <GlobalPresenceInline agent={agent} />;
