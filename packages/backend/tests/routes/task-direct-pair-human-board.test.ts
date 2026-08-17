@@ -252,6 +252,52 @@ describe('#task:2037 — human↔agent DirectPair task on the human read faces',
       await columnIds(t, ENDPOINT_ID, { status: 'todo', workspace_id: ws.workspace.id }),
     ).toEqual([]);
 
+    // THE DM LEAF (#task:2041 B2, pinned on @Cindy's ruling). Inside the
+    // `direct_messages` container the renderer may narrow to ONE peer, and it
+    // does so through the existing `channel_id` axis — the axis is named for
+    // channels but its coordinate has always been a CONVERSATION id
+    // (`t.conversation_id = ?`), and for a pair the conversation IS the line. So
+    // the leaf needs no new parameter and no pseudo workspace/channel
+    // coordinate. That is load-bearing rather than incidental: the DM leaf is
+    // the only way to select one peer, and it had no coverage — adding a
+    // workspace join to the `channelId` branch would empty every DM leaf while
+    // this suite stayed green.
+    expect(
+      await columnIds(t, ENDPOINT_ID, { status: 'todo', channel_id: pair.id }),
+    ).toEqual([taskId]);
+    // Container ∩ leaf INTERSECT (they are not alternatives): the leaf inside its
+    // own container is the same row…
+    expect(
+      await columnIds(t, ENDPOINT_ID, {
+        status: 'todo',
+        container: 'direct_messages',
+        channel_id: pair.id,
+      }),
+    ).toEqual([taskId]);
+    // …and a leaf that its container cannot hold is empty, not silently widened
+    // to the container (or to the leaf).
+    expect(
+      await columnIds(t, ENDPOINT_ID, {
+        status: 'todo',
+        container: 'workspace',
+        channel_id: pair.id,
+      }),
+    ).toEqual([]);
+    // Counts are computed on the same population as the leaf column.
+    expect((await counts(t, ENDPOINT_ID, { channel_id: pair.id })).todo).toBe(1);
+    expect(
+      (await counts(t, ENDPOINT_ID, { container: 'direct_messages', channel_id: pair.id }))
+        .todo,
+    ).toBe(1);
+    // NAMING A LINE IS NOT READING IT: the leaf coordinate is not a capability.
+    // A third party who knows the pair's conversation id gets an empty board, not
+    // its tasks — the per-task placement ACL still decides, exactly as on the
+    // unfiltered board.
+    expect(
+      await columnIds(t, STRANGER_ID, { status: 'todo', channel_id: pair.id }),
+    ).toEqual([]);
+    expect((await counts(t, STRANGER_ID, { channel_id: pair.id })).todo).toBe(0);
+
     // The stranger's own task lives on a REGULAR workspace: it is in the
     // `workspace` container, NOT `agent_space` (that split is `workspace_kind`,
     // not placement, so a proxy that only saw `placement_kind='workspace'` would
