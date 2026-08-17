@@ -1,5 +1,22 @@
 import type { AgentActivitySink } from './event-handler.js';
-import { PRESENCE_AWAY_TTL_MS } from '../routes/agents.js';
+
+// #task:2049 — presence-OWNED activity-deadline TTL. `away_at` =
+// last_activity_at + PRESENCE_AWAY_TTL_MS. Meaning: Away = 30 min with NO
+// observable progress (NOT fed by liveness) — a genuinely silent long turn
+// shows Away by design. Intentionally EQUAL to IDLE_REAP_TTL_MS
+// (services/idle-reaper-service.ts) TODAY, but INDEPENDENTLY owned because Away
+// and idle-reap denote DIFFERENT sets: the reaper additionally gates on runtime
+// phase ready + status idle. Coupling the two would let one set's redefinition
+// silently drag the other.
+//
+// Owned HERE, in the presence domain (the sink is the trigger + the Away→Online
+// deadline judge), and IMPORTED by the `/presence` read face — the same
+// owner-exports / consumer-imports shape as `IDLE_REAP_TTL_MS`. The route once
+// owned it, which made `runtime/` import the whole route module (hono app
+// factory, runtime host, data plane) for one domain constant — a reversed
+// dependency edge. The sink judges the Away→Online transition against the SAME
+// TTL the read face uses, so the fire and the deadline cannot drift.
+export const PRESENCE_AWAY_TTL_MS = 30 * 60_000;
 
 /**
  * Persistence port the sink needs — the monotonic-max stamp of the durable

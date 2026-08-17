@@ -53,7 +53,6 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     materialization_failed_code: row.materialization_failed_code,
     materialization_failed_at: row.materialization_failed_at,
     deletion_started_at: row.deletion_started_at,
-    last_activity_at: row.last_activity_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -683,6 +682,28 @@ export class AgentRepo {
       )
       .run(atMs, agentId);
     return { previous };
+  }
+
+  /**
+   * v82 (#task:2049): narrow read of the durable presence clock for the
+   * `GET /api/agents/:id/presence` read face. Returns `last_activity_at`
+   * (epoch ms) or null when the agent has never been active.
+   *
+   * A DELIBERATELY narrow read, NOT a projection off `AgentDto`: the raw stamp
+   * is kept off the wire DTO (it has no invalidation edge — see
+   * `AgentDtoSchema`), so the route resolves `away_at` from this single-column
+   * read instead. A vanished row (deleted between the caller's existence check
+   * and this read) also returns null → the route emits `away_at: null` → Away,
+   * the same safe projection as never-active, so no separate not-found branch is
+   * needed here.
+   */
+  presenceClockFor(agentId: string): number | null {
+    const row = this.db
+      .prepare<[string], { last_activity_at: number | null }>(
+        'SELECT last_activity_at FROM agents WHERE id = ?',
+      )
+      .get(agentId);
+    return row?.last_activity_at ?? null;
   }
 
   /**

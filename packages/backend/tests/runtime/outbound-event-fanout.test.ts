@@ -4010,7 +4010,7 @@ describe('OutboundRuntimeEventFanout', () => {
         // first activity IS an Away→Online crossing → FIRE (the dominant
         // post-deploy transition under v82's no-backfill).
         fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, pair.id, clock), 'conn-1');
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(BASE);
         expect(cap.received).toEqual([
           {
             kind: AGENT_PRESENCE_CHANGED_EVENT,
@@ -4027,7 +4027,7 @@ describe('OutboundRuntimeEventFanout', () => {
         clock = BASE + PRESENCE_AWAY_TTL_MS - 1;
         fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, pair.id, clock), 'conn-1');
         expect(cap.received).toHaveLength(1);
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(clock);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(clock);
 
         // Cross the deadline: the next admitted parsed event is again an
         // Away→Online crossing (atMs >= prev + TTL) → exactly one MORE id-only
@@ -4063,7 +4063,7 @@ describe('OutboundRuntimeEventFanout', () => {
         // the never-active first crossing), then advance the clock PAST the TTL
         // so any excluded edge that wrongly stamped WOULD cross Away→Online.
         fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, fix.channelId, clock), 'conn-1');
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(BASE);
         expect(cap.received).toHaveLength(1);
         clock = BASE + PRESENCE_AWAY_TTL_MS + 1;
 
@@ -4114,7 +4114,7 @@ describe('OutboundRuntimeEventFanout', () => {
 
         // Deadline unchanged, and no FURTHER invalidation fired: the excluded
         // edges neither stamped nor crossed → length stays at the seed's 1.
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(BASE);
         expect(cap.received).toEqual([
           {
             kind: AGENT_PRESENCE_CHANGED_EVENT,
@@ -4158,13 +4158,13 @@ describe('OutboundRuntimeEventFanout', () => {
         // First consume: prev null → stamps AND fires (never-active first
         // crossing).
         consume(clock);
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(BASE);
         expect(cap.received).toHaveLength(1);
 
         // Advance past the TTL, consume again → forward stamp + another fire.
         clock = BASE + PRESENCE_AWAY_TTL_MS + 5;
         consume(clock);
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(clock);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(clock);
         expect(cap.received).toEqual([
           {
             kind: AGENT_PRESENCE_CHANGED_EVENT,
@@ -4190,14 +4190,14 @@ describe('OutboundRuntimeEventFanout', () => {
 
         // Stamp at BASE (prev null → FIRE, never-active first crossing).
         fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, fix.channelId, clock), 'conn-1');
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(BASE);
         expect(cap.received).toHaveLength(1);
 
         // A later frame carrying an EARLIER backend clock: MAX keeps the stored
         // value, and the transition check (atMs < prev + TTL) cannot fire.
         clock = BASE - 1_000;
         fix.fanout.onEvent(fix.hostId, parsedTextFrame(fix, fix.channelId, clock), 'conn-1');
-        expect(agents.get(fix.agentId)!.last_activity_at).toBe(BASE);
+        expect(agents.presenceClockFor(fix.agentId)).toBe(BASE);
         // Backward stamp fired nothing → exactly one frame total.
         expect(cap.received).toHaveLength(1);
         cap.off();

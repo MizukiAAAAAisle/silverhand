@@ -68,7 +68,15 @@ export const AgentDtoSchema = z.object({
   /** Durable terminal-deletion intent. Non-null means host cleanup/DB commit
    *  is pending or retrying; management readers must not present it as active. */
   deletion_started_at: z.number().nullable(),
-  last_activity_at: z.number().nullable(),
+  // #task:2049 — `last_activity_at` is DELIBERATELY NOT on this DTO. The
+  // presence clock has exactly ONE wire read face: `GET /api/agents/:id/presence`
+  // (`away_at`), invalidated by `agent_presence_changed`. `stampLastActivity`
+  // intentionally does NOT bump `updated_at` (avoids the IDENTITY_CARRIERS
+  // `agent_changed` ripple), so `agent_changed` never fires for it — putting the
+  // raw stamp here would be a second read face with NO invalidation edge (a
+  // client would cache a forever-stale value). Same discipline that kept
+  // `away_at` off the availability DTO. Do not re-add; presence readers hit
+  // `/presence`.
   created_at: z.number(),
   updated_at: z.number(),
 });

@@ -71,6 +71,7 @@ import {
   dispatchMcpProbe,
   resolveOutboundForHost,
 } from '../runtime/workspace-data-plane.js';
+import { PRESENCE_AWAY_TTL_MS } from '../runtime/agent-activity-sink.js';
 import {
   CreateAgentInputSchema,
   ParticipantNameSchema,
@@ -126,16 +127,10 @@ export interface AgentsRouteDeps {
 // `!ok` → 400.
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_\-]{1,64}$/;
 
-// #task:2049 — presence-OWNED activity-deadline TTL. `away_at` =
-// last_activity_at + PRESENCE_AWAY_TTL_MS. Meaning: Away = 30 min with NO
-// observable progress (NOT fed by liveness) — a genuinely silent long turn
-// shows Away by design. Intentionally EQUAL to IDLE_REAP_TTL_MS
-// (services/idle-reaper-service.ts) TODAY, but INDEPENDENTLY owned because Away
-// and idle-reap denote DIFFERENT sets: the reaper additionally gates on runtime
-// phase ready + status idle. Coupling the two would let one set's redefinition
-// silently drag the other. Exported so AgentActivitySink judges the Away→Online
-// transition against the SAME TTL the read face uses (they cannot drift).
-export const PRESENCE_AWAY_TTL_MS = 30 * 60_000;
+// #task:2049 — presence-OWNED activity-deadline TTL, owned by the presence
+// domain (the sink) and imported here for the `/presence` read face. See its
+// definition docblock in `runtime/agent-activity-sink.ts` for why it is
+// independently owned from IDLE_REAP_TTL_MS and why the owner is the sink.
 
 function parseIdempotencyKeyHeader(
   raw: string | undefined,
@@ -1113,17 +1108,16 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   // absolute epoch-ms deadline at which a currently-available agent projects to
   // Away. Same `canViewAgent` gate + 404-on-miss/deny anti-enumeration ladder
   // as `/availability`. Invalidated ONLY by `agent_presence_changed`.
-  // Deadline uses the presence-owned PRESENCE_AWAY_TTL_MS (module const below).
+  // Deadline uses the presence-owned PRESENCE_AWAY_TTL_MS (imported from the
+  // sink, its owning presence-domain module).
   //
   // never-active (last_activity_at === null) has NO fabricated deadline — the
   // route emits away_at:null, which the renderer projects to Away (Online
   // requires a positive live deadline). With v82's no-backfill this is the
   // dominant post-deploy state; we do NOT fabricate a future deadline, which
   // would falsely render every agent Online on deploy day.
-  const resolveAgentAwayAt = (agent: AgentDto): number | null =>
-    agent.last_activity_at === null
-      ? null
-      : agent.last_activity_at + PRESENCE_AWAY_TTL_MS;
+  const resolveAgentAwayAt = (lastActivityAt: number | null): number | null =>
+    lastActivityAt === null ? null : lastActivityAt + PRESENCE_AWAY_TTL_MS;
 
   app.get('/api/agents/:id/presence', c => {
     const agent = agents.get(c.req.param('id'));
@@ -1132,7 +1126,9 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'agent not found' }, 404);
     }
     return c.json({
-      away_at: resolveAgentAwayAt(agent),
+      // Narrow presence-clock read; the raw stamp is kept off `AgentDto`
+      // (single wire read face for the clock — see AgentDtoSchema).
+      away_at: resolveAgentAwayAt(agents.presenceClockFor(agent.id)),
       // Backend clock at response time; the renderer calibrates client↔server
       // skew against this before comparing `away_at` (an absolute server-epoch
       // deadline) to its own wall clock. Emit-only — no calibration here.

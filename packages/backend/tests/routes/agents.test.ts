@@ -2447,7 +2447,7 @@ describe('GET /api/agents/:id/presence (#task:2049)', () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const agentId = await createAgent();
     // A fresh agent has never been active: the column is NULL (never backfilled).
-    expect(new AgentRepo(t.ctx.db).get(agentId)!.last_activity_at).toBeNull();
+    expect(new AgentRepo(t.ctx.db).presenceClockFor(agentId)).toBeNull();
 
     const res = await readPresence(agentId);
     expect(res.status).toBe(200);

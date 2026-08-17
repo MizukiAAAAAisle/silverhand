@@ -53,7 +53,6 @@ describe('agent reasoning_effort validation', () => {
       materialization_failed_code: null,
       materialization_failed_at: null,
       deletion_started_at: null,
-      last_activity_at: null,
       created_at: 1,
       updated_at: 1,
     });
@@ -221,7 +220,6 @@ describe('agent materialization fields (D4.d v33)', () => {
     created_by_user_id: 'u1',
     avatar_url: null,
     deletion_started_at: null,
-    last_activity_at: null,
     created_at: 1,
     updated_at: 1,
   };
