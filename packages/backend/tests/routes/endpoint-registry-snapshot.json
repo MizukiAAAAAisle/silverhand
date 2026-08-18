@@ -120,7 +120,6 @@
   "GET /api/agents/:id/profile/mcp",
   "POST /api/agents/:id/profile/mcp/probe",
   "GET /api/agents/:id/runtime-state",
-  "GET /api/agents/:id/liveness",
   "GET /api/agents/:id/availability",
   "GET /api/agents/:id/presence",
   "GET /api/agents/:id/chats",

@@ -410,37 +410,19 @@ export const AgentRuntimeStateDtoSchema = z.object({
 });
 export type AgentRuntimeStateDto = z.infer<typeof AgentRuntimeStateDtoSchema>;
 
-// GET /api/agents/:id/liveness (#task:2043 B) — the ONE process bit a viewer
-// authorized on the agent may read, deliberately a value object of its own and
-// NOT a field on the runtime-state DTO above. Both faces share the SAME
-// `canViewAgent` gate; they differ in what they project. Runtime-state projects
-// the agent's seats/participations and filters those per-conversation
-// (`canViewConversation`), so its payload is viewer-dependent; this face
-// projects a single tri-state derived from the host's authoritative
-// active-runtime snapshot, which needs no such narrowing. (The genuinely
-// owner-only face is `GET /api/hosts/:id/status` — a whole-host snapshot.)
-// Three values, not a boolean: `unknown` means there is no live host snapshot to
-// answer from (no read model / host revoked / disconnected / unreachable) and
-// MUST NOT be folded to `offline` — "we cannot tell" is not "the process is
-// down".
-export const AgentLivenessSchema = z.enum(['online', 'offline', 'unknown']);
-export type AgentLiveness = z.infer<typeof AgentLivenessSchema>;
-
-export const AgentLivenessDtoSchema = z.object({
-  liveness: AgentLivenessSchema,
-});
-export type AgentLivenessDto = z.infer<typeof AgentLivenessDtoSchema>;
-
 // GET /api/agents/:id/availability (#task:2043) — the ONE reachability bit a
-// viewer authorized on the agent may read. This is the SECOND, orthogonal axis
-// to liveness above: liveness projects whether a live *process* exists right
-// now; availability projects whether the agent's host is *reachable* right now
-// (an authenticated outbound attachment is connected and the host is not
-// revoked), which is a total function of transport + agent validity —
-// independent of any runtime snapshot, hydration, or active-agent set. An
-// idle-reaped or not-yet-hydrated agent on a connected host is AVAILABLE (the
-// next inbound message re-spawns it), which is why availability must not be
-// derived from the active-runtime snapshot the way liveness is.
+// viewer authorized on the agent may read. Read it against the concept it is
+// NOT: process-aliveness — "does a live process exist right now?" — which
+// #task:2049 retired as a presence input and #task:2056 deleted as a read face
+// outright (no per-agent liveness endpoint exists; the surviving
+// `host_agent_liveness_changed` frame is a HOST-level, owner-scoped
+// invalidation, not a viewer read face). Availability projects whether the
+// agent's host is *reachable* right now (an authenticated outbound attachment
+// is connected and the host is not revoked), which is a total function of
+// transport + agent validity — independent of any runtime snapshot, hydration,
+// or active-agent set. An idle-reaped or not-yet-hydrated agent on a connected
+// host is AVAILABLE (the next inbound message re-spawns it), which is why
+// availability must not be derived from the active-runtime snapshot at all.
 //
 // Deliberately TWO values, not three. The source is a total in-process fact:
 // the attachment is either present or absent; "the authority could not read"
@@ -507,7 +489,7 @@ export type AgentPresenceDto = z.infer<typeof AgentPresenceDtoSchema>;
 // #task:2049 dropped the liveness axis from the projection) into Online / Away /
 // Offline / no-status. Emitted only on transport-reachability transitions
 // (attachment connect / disconnect, host revoke) — never on runtime-liveness
-// changes, which drive liveness, not this axis.
+// changes, which drove the retired process axis, not this one.
 export const AGENT_AVAILABILITY_CHANGED_EVENT = 'agent_availability_changed';
 export const AgentAvailabilityChangedEventSchema = z
   .object({

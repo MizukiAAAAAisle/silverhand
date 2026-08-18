@@ -83,8 +83,6 @@ import {
   type AgentDto,
   type AgentAvailability,
   type AgentAvailabilityDto,
-  type AgentLiveness,
-  type AgentLivenessDto,
   type AgentMaterializationStatus,
   type AgentPresenceDto,
   type NameAvailabilityDto,
@@ -99,8 +97,8 @@ export interface AgentsRouteDeps {
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
-  /** #task:2043 B — read `host.revoked_at` for the viewer-authorized liveness
-   *  bit: a revoked host answers `unknown`, never `offline`. */
+  /** #task:2043 — read `host.revoked_at` for the viewer-authorized availability
+   *  bit: a revoked host reads `offline` even while a socket lingers. */
   hosts: HostRepo;
   /** #task:2036 part ② — the owner-audit chats list projection (bound handle). */
   agentAuditChats: AgentAuditChatsReadModel;
@@ -1010,53 +1008,16 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     });
   });
 
-  // ── GET /api/agents/:id/liveness (#task:2043 B) ───────────────────────────
-  // ONE viewer-authorized bit: is this agent's process live right now? Same
-  // two-step anti-enum ladder as the other agent faces — `canViewAgent` (incl.
-  // #2043 C's DirectPair-endpoint arm) → 404 hides the agent from a non-viewer.
-  // Deliberately narrower than the sibling faces. `runtime-state` shares this
-  // `canViewAgent` gate but then projects the agent's seats/participations, each
-  // further filtered per-conversation by `canViewConversation`; `hostStatus` is
-  // owner-only and exposes a whole-host snapshot. Liveness projects instead a
-  // single tri-state derived from the host's authoritative active-runtime
-  // snapshot — the one process bit a DM partner may legitimately read.
-  //
-  // Three values, and the `unknown` arm is load-bearing: there is a difference
-  // between "the host answered and this agent is not in its active set"
-  // (`offline` — the process is down) and "we have no live snapshot to answer
-  // from" (`unknown` — no read model, host revoked, disconnected, or
-  // unreachable). Folding `unknown` to `offline` would assert a process is dead
-  // on the strength of not being able to reach the machine that runs it.
-  const resolveAgentLiveness = (agentHostId: string, agentId: string): AgentLiveness => {
-    const readModel = ctx.hostStatusReadModel?.();
-    if (!readModel) return 'unknown';
-    // Revoked short-circuits BEFORE the dispatch (mirrors the hostStatus route):
-    // a revoked host may still answer on a grace-window credential, but it is no
-    // longer a host we treat as usable, so its agents read `unknown`, not a
-    // stale `online`/`offline`.
-    const host = hosts.get(agentHostId);
-    if (!host || host.revoked_at !== null) return 'unknown';
-    const dispatch = readModel.read(agentHostId);
-    if (dispatch.kind !== 'ok') return 'unknown';
-    return dispatch.activeAgentIds.has(agentId) ? 'online' : 'offline';
-  };
-
-  app.get('/api/agents/:id/liveness', c => {
-    const agent = agents.get(c.req.param('id'));
-    if (!agent) return c.json({ error: 'agent not found' }, 404);
-    if (!canViewAgent(ctx, getUserPrincipal(c), agent.id)) {
-      return c.json({ error: 'agent not found' }, 404);
-    }
-    return c.json({
-      liveness: resolveAgentLiveness(agent.host_id, agent.id),
-    } satisfies AgentLivenessDto);
-  });
-
   // ── GET /api/agents/:id/availability (#task:2043) ─────────────────────────
-  // The orthogonal axis to liveness: is this agent REACHABLE right now, not is
-  // a process live. Same `canViewAgent` gate (incl. the DirectPair-endpoint
-  // arm). Availability reuses the EXACT authority the delivery path reads for
-  // its transport gate: `ctx.outboundFrameAdapter().connectionIdForHost(hostId)`
+  // Read this face against the concept it is NOT: process-aliveness ("is a live
+  // process running right now?"), which #task:2049 retired as a presence input
+  // and #task:2056 deleted as a read face — there is no per-agent liveness
+  // endpoint, and the surviving `host_agent_liveness_changed` frame is a
+  // HOST-level owner-scoped invalidation, not a viewer read face. Availability
+  // asks whether this agent is REACHABLE right now. Same `canViewAgent` gate
+  // (incl. the DirectPair-endpoint arm). Availability reuses the EXACT authority
+  // the delivery path reads for its transport gate:
+  // `ctx.outboundFrameAdapter().connectionIdForHost(hostId)`
   // — the first two gates of real delivery (host exists & not revoked; an
   // outbound attachment is connected) MINUS the runtime-hydrate wait. Reading
   // the same port the delivery gate reads is load-bearing: the (B)

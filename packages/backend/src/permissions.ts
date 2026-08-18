@@ -859,7 +859,7 @@ function agentHumanViewerUserIds(
  * The user ids who may currently VIEW an agent — the audience DUAL of
  * {@link canViewAgent} for human principals. Lives here, beside the predicate it
  * mirrors, because "who may see this agent" is an access decision: a fan-out
- * that reaches availability/liveness invalidations must reach exactly the humans
+ * that reaches availability/presence invalidations must reach exactly the humans
  * the read route would serve, and no other module may read the authorization
  * port to answer it (W6 Gate 8).
  *

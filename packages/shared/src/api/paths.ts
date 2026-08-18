@@ -106,13 +106,6 @@ export const apiPaths = {
    *  (Test connection / List tools buttons) calls this. */
   agentProfileMcpProbe: (id: string) => `/api/agents/${id}/profile/mcp/probe`,
   agentRuntimeState: (id: string) => `/api/agents/${id}/runtime-state`,
-  /** One-bit VIEWER-authorized liveness (#task:2043 B): is this agent's process
-   *  live right now? `canViewAgent`-gated (incl. #2043 C's DirectPair-endpoint
-   *  arm), so a human who DMs the agent may read it — distinct from the
-   *  owner-only `hostStatus` snapshot, which projects a whole host and stays
-   *  owner-only. Returns `{ liveness: 'online' | 'offline' | 'unknown' }`;
-   *  `unknown` (no live host snapshot) MUST NOT be read as offline. */
-  agentLiveness: (id: string) => `/api/agents/${id}/liveness`,
   /** One-bit VIEWER-authorized availability (#task:2043): is this agent's host
    *  REACHABLE right now (outbound attachment connected + host not revoked +
    *  agent valid)? The reachability axis composed WITH the `agentPresence`

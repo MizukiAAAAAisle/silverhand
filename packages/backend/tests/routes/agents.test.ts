@@ -2,7 +2,6 @@ import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   AgentAvailabilityDtoSchema,
-  AgentLivenessDtoSchema,
   AgentPresenceDtoSchema,
   AGENT_AVAILABILITY_CHANGED_EVENT,
   encodeUserPrincipalHeader,
@@ -2005,19 +2004,19 @@ describe('DELETE /api/agents/:id (full flow)', () => {
   });
 });
 
-// ── GET /api/agents/:id/liveness (#task:2043 B) ─────────────────────────────
+// A fake host controller that steers `host_status.active_agent_ids`, shared by
+// the availability and presence describes below. It extends the composition-root
+// host controller so `POST /api/agents` still materializes through the real
+// command acks; it only intercepts `host_status` to inject the active set the
+// test controls. No raw SQL — the agent is created through the production route
+// and read through the API.
 //
-// The ONE viewer-authorized liveness bit, and the three values it must keep
-// distinct. The load-bearing case is `unknown` ≠ `offline`: a host we cannot
-// answer from (revoked / disconnected) is NOT a claim that the process is dead.
-// Online/offline both require a live seeded snapshot; only the agent's presence
-// in the host's active set separates them.
-//
-// The fake extends the composition-root host controller so `POST /api/agents`
-// still materializes through the real command acks; it only intercepts
-// `host_status` to inject the active set this test controls. No raw SQL — the
-// agent is created through the production route and read through the API.
-class LivenessFakeHostWs extends FakeHostWsServerController {
+// The active set it injects is what a RETIRED read face was derived from
+// (#task:2056 deleted the per-agent liveness endpoint). It stays because the
+// surviving faces need the OPPOSITE assertion: a seeded snapshot with an EMPTY
+// active set is exactly the state on which availability must still read
+// `online`, i.e. the process axis must not leak back into reachability.
+class ActiveSetFakeHostWs extends FakeHostWsServerController {
   activeAgentIds: string[] = [];
 
   override async sendCommand<K extends OutboundServerCommandKind>(
@@ -2040,156 +2039,19 @@ class LivenessFakeHostWs extends FakeHostWsServerController {
   }
 }
 
-describe('GET /api/agents/:id/liveness (#task:2043 B)', () => {
-  let t: TestApp | null = null;
-  afterEach(() => {
-    t?.cleanup();
-    t = null;
-  });
-
-  const asUser = (id: string) => ({
-    [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(id),
-  });
-
-  /** Build an app whose host controller lets us steer the active set, create an
-   *  agent through the real route (default viewer is its owner + host), and
-   *  return both plus the live controller. */
-  async function setup(): Promise<{
-    agentId: string;
-    hostId: string;
-    controller: LivenessFakeHostWs;
-  }> {
-    let controller: LivenessFakeHostWs | null = null;
-    t = buildTestApp({
-      seedAllFixtureMemberships: false,
-      hostWsController: () => controller,
-    });
-    controller = new LivenessFakeHostWs(t.silverhandDir);
-    const created = (await (
-      await http(t).post('/api/agents', {
-        name: 'live-agent',
-        runtime: 'claude',
-        // Liveness / DM positive controls run on a real agent-scoped agent:
-        // the frozen model binds Direct Message to `session_scope='agent'`, and
-        // the C crosscheck below pairs this agent with a human endpoint.
-        session_scope: 'agent',
-      })
-    ).json()) as any;
-    expect(created.agent?.id, JSON.stringify(created)).toBeTruthy();
-    return { agentId: created.agent.id, hostId: created.agent.host_id, controller };
-  }
-
-  async function readLiveness(agentId: string, userId?: string): Promise<Response> {
-    return userId === undefined
-      ? http(t!).get(`/api/agents/${agentId}/liveness`)
-      : http(t!, asUser(userId)).get(`/api/agents/${agentId}/liveness`);
-  }
-
-  it('resolves `online` when the seeded host snapshot carries the agent in its active set', async () => {
-    const { agentId, hostId, controller } = await setup();
-    controller.activeAgentIds = [agentId];
-    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
-
-    const res = await readLiveness(agentId);
-    expect(res.status).toBe(200);
-    expect(AgentLivenessDtoSchema.parse(await res.json()).liveness).toBe('online');
-  });
-
-  it('resolves `offline` when the host answers but the agent is not in its active set', async () => {
-    const { agentId, hostId, controller } = await setup();
-    controller.activeAgentIds = []; // host is up; this agent's process is not
-    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
-
-    const res = await readLiveness(agentId);
-    expect(res.status).toBe(200);
-    expect(AgentLivenessDtoSchema.parse(await res.json()).liveness).toBe('offline');
-  });
-
-  it('resolves `unknown` for a revoked host even though its active set would read `online` (revoked ≠ offline)', async () => {
-    const { agentId, hostId, controller } = await setup();
-    controller.activeAgentIds = [agentId];
-    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
-
-    // Before revoke the very same snapshot reads `online` — so the transition
-    // below is purely the revoke, not an empty active set.
-    expect(
-      AgentLivenessDtoSchema.parse(await (await readLiveness(agentId)).json()).liveness,
-    ).toBe('online');
-
-    expect(new HostRepo(t!.ctx.db).revoke(hostId)).toBe(true);
-    const res = await readLiveness(agentId);
-    expect(res.status).toBe(200);
-    // NOT `offline`: a revoked host is one we no longer answer from, not one we
-    // have observed the process to be down on.
-    expect(AgentLivenessDtoSchema.parse(await res.json()).liveness).toBe('unknown');
-  });
-
-  it('resolves `unknown` when no daemon is attached (disconnected ≠ offline)', async () => {
-    let controller: LivenessFakeHostWs | null = null;
-    t = buildTestApp({
-      seedAllFixtureMemberships: false,
-      hostWsController: () => controller,
-    });
-    controller = new LivenessFakeHostWs(t.silverhandDir);
-    const created = (await (
-      await http(t).post('/api/agents', {
-        name: 'live-agent',
-        runtime: 'claude',
-        session_scope: 'agent',
-      })
-    ).json()) as any;
-    const agentId: string = created.agent.id;
-
-    // Drop the daemon connection: the adapter now resolves no live generation,
-    // so there is no snapshot to answer from — `unknown`, never `offline`.
-    controller = null;
-    const res = await readLiveness(agentId);
-    expect(res.status).toBe(200);
-    expect(AgentLivenessDtoSchema.parse(await res.json()).liveness).toBe('unknown');
-  });
-
-  it('hides the agent from a stranger (404) but serves the human DM endpoint via the #2043 C DirectPair arm', async () => {
-    const { agentId, hostId, controller } = await setup();
-    controller.activeAgentIds = [agentId];
-    await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
-
-    // A human↔agent DirectPair whose endpoint is TEAMMATE — a person with no
-    // other tie to the agent (not its creator, shares no workspace).
-    new ConversationRepo(t!.ctx.db).getOrCreateDirectPair(
-      { kind: 'agent', id: agentId },
-      { kind: 'human', id: 'teammate' },
-      Date.now(),
-    );
-
-    // The DM endpoint may read the bit — the SAME endpoint-ness the #2035 read
-    // faces already grant — and sees the real value, not a fallback.
-    const endpoint = await readLiveness(agentId, 'teammate');
-    expect(endpoint.status).toBe(200);
-    expect(AgentLivenessDtoSchema.parse(await endpoint.json()).liveness).toBe('online');
-
-    // A stranger to the pair is indistinguishably blind: 404, byte-identical to
-    // an unknown agent id (no existence oracle).
-    const stranger = await readLiveness(agentId, 'someone');
-    const unknownId = await http(t!, asUser('someone')).get(
-      '/api/agents/zzzzzzzzzzzzzzzz/liveness',
-    );
-    expect(stranger.status).toBe(404);
-    expect(await stranger.text()).toBe(await unknownId.text());
-  });
-});
-
 // ── GET /api/agents/:id/availability (#task:2043) ───────────────────────────
 //
-// The axis ORTHOGONAL to liveness: is the agent's host REACHABLE right now, not
-// is a process live. This is the fix for the DM "Offline after every turn" bug —
-// the renderer was reading a process bit (idle-reaped ⇒ offline) where it wanted
-// reachability. The load-bearing property is the CONTRAST test below: on one and
-// the same seeded-but-empty-active-set state, liveness reads `offline` while
-// availability reads `online`. If those two ever collapse to the same value the
-// bug is back.
+// Reachability: is the agent's host REACHABLE right now — deliberately NOT
+// process-aliveness, the concept #task:2049 retired as a presence input and
+// #task:2056 deleted as a read face. This is the fix for the DM "Offline after
+// every turn" bug — the renderer was reading a process bit (idle-reaped ⇒
+// offline) where it wanted reachability. The load-bearing property is the first
+// test below: on a seeded host snapshot whose active set is EMPTY — i.e. no live
+// process — availability still reads `online`. If reachability ever starts
+// tracking the active set again, the bug is back.
 //
-// Two values, total — NOT three. Unlike liveness there is no `unknown`: the
-// source (`read()`) is a total in-process fact about whether an attachment is
+// Two values, total — NOT three. There is no `unknown` arm: the source
+// (`read()`) is a total in-process fact about whether an attachment is
 // connected, so a read that cannot be answered is an infra fault (5xx), never a
 // laundered domain value. `unknown` lives in the renderer's query projection.
 //
@@ -2214,14 +2076,14 @@ describe('GET /api/agents/:id/availability (#task:2043)', () => {
   async function setup(): Promise<{
     agentId: string;
     hostId: string;
-    controller: LivenessFakeHostWs;
+    controller: ActiveSetFakeHostWs;
   }> {
-    let controller: LivenessFakeHostWs | null = null;
+    let controller: ActiveSetFakeHostWs | null = null;
     t = buildTestApp({
       seedAllFixtureMemberships: false,
       hostWsController: () => controller,
     });
-    controller = new LivenessFakeHostWs(t.silverhandDir);
+    controller = new ActiveSetFakeHostWs(t.silverhandDir);
     const created = (await (
       await http(t).post('/api/agents', {
         name: 'reach-agent',
@@ -2238,17 +2100,14 @@ describe('GET /api/agents/:id/availability (#task:2043)', () => {
       ? http(t!).get(`/api/agents/${agentId}/availability`)
       : http(t!, asUser(userId)).get(`/api/agents/${agentId}/availability`);
 
-  it('reads `online` on a connected host whose active set is EMPTY — the same state on which liveness reads `offline` (the two-axis contrast; sea-bug regression)', async () => {
+  it('reads `online` on a connected host whose seeded active set is EMPTY — no live process, yet reachable (sea-bug regression)', async () => {
     const { agentId, hostId, controller } = await setup();
     controller.activeAgentIds = []; // host connected + seeded; no live process
     await t!.ctx.hostStatusReadModel!().seedEagerly(hostId);
 
-    // Liveness (process axis) sees no process → offline …
-    const liveness = await http(t!).get(`/api/agents/${agentId}/liveness`);
-    expect(AgentLivenessDtoSchema.parse(await liveness.json()).liveness).toBe('offline');
-
-    // … availability (reachability axis), on the identical state, sees a
-    // connected host → online. Collapsing these two is exactly the bug.
+    // The snapshot positively says "no process of this agent is live here", and
+    // availability must still read `online` off the connected attachment.
+    // Deriving reachability from that active set is exactly the bug.
     const res = await readAvailability(agentId);
     expect(res.status).toBe(200);
     expect(AgentAvailabilityDtoSchema.parse(await res.json()).availability).toBe('online');
@@ -2283,12 +2142,12 @@ describe('GET /api/agents/:id/availability (#task:2043)', () => {
   });
 
   it('reads `offline` when no daemon is attached (disconnected ⇒ offline, never unknown)', async () => {
-    let controller: LivenessFakeHostWs | null = null;
+    let controller: ActiveSetFakeHostWs | null = null;
     t = buildTestApp({
       seedAllFixtureMemberships: false,
       hostWsController: () => controller,
     });
-    controller = new LivenessFakeHostWs(t.silverhandDir);
+    controller = new ActiveSetFakeHostWs(t.silverhandDir);
     const created = (await (
       await http(t).post('/api/agents', {
         name: 'reach-agent',

@@ -529,17 +529,24 @@ export interface UpdateHostMutationVars {
 }
 
 /**
- * `#task:1361` — per-agent liveness for the AGENTS rail, sourced from each
+ * `#task:1361` — per-agent, HOST-level liveness for the computer detail view's
+ * agent list (today's only consumer: `HostDetailView`), sourced from each
  * computer's host status (`/status.agents[].online`, derived backend-side from
  * the daemon's active-runtime set) rather than the conversation runtime-state.
  * A daemon-connected agent that is spawned & reachable but not mid-turn reads
- * `online` here yet `idle` in `/runtime-state`, so the rail dot — which means
- * "is this agent up on its computer" — must read this source, not the
- * conversation runtime-state projection (Cindy #task:1362 P1).
+ * `online` here yet `idle` in `/runtime-state`, so the dot — which means "is
+ * this agent up on its computer" — must read this source, not the conversation
+ * runtime-state projection (Cindy #task:1362 P1).
+ *
+ * This is NOT the agent-presence axis: #task:2049 made presence
+ * `(availability, away_at)` and forbade process-aliveness as an input, and
+ * #task:2056 deleted the per-agent liveness read face entirely. "Is this agent's
+ * process up on that machine" survives only HERE, as a host-scoped operational
+ * detail of the computer view — never as a person's presence.
  *
  * Shares `hostStatusKey(id)` with the detail view / picker (one cache per
  * computer, N computers ≤ N agents). #task:1588 slice 2 removed the 5s
- * poll: presence changes now arrive as `host_agent_liveness_changed`
+ * poll: host-level liveness changes now arrive as `host_agent_liveness_changed`
  * invalidations pushed by the backend (see `host-connection-sync.ts`), so
  * the dots stay live without any interval. Returns `Map<agentId, boolean>`
  * (true = online); agents whose computer has no status (deleted / unowned

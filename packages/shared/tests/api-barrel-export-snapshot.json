@@ -38,8 +38,6 @@
   "AgentListWorkspacesDtoSchema",
   "AgentListedChannelSchema",
   "AgentListedWorkspaceSchema",
-  "AgentLivenessDtoSchema",
-  "AgentLivenessSchema",
   "AgentMemberDtoSchema",
   "AgentOnHostDtoSchema",
   "AgentPeerProfileQuerySchema",
