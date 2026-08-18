@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Bookmark, Clock, Layers } from 'lucide-react';
 import dayjs from 'dayjs';
-import type { AgentDto, SavedMessageDto } from '@silverhand/shared';
+import type { AgentDto, DirectPairCounterpart, SavedMessageDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import { ChannelIcon } from '@/components/ChannelIcon';
@@ -12,8 +12,15 @@ import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import { useDirectPairs } from '@/features/direct-pairs/hooks';
+import {
+  presentCounterpart,
+  collectCounterpartAvatarSources,
+} from '@/features/direct-pairs/counterpart-presentation';
 import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
+import { workspaceDisplayName } from '@/lib/workspace-name';
 import { FilterBlock } from '@/components/ui/filter-select';
 import { ListRowsSkeleton } from './ListRowsSkeleton';
 import {
@@ -113,12 +120,32 @@ export function SavedListView({
   // user with no way to clear.
   const showFilters = hasFilters || items.length > 0;
 
-  // Identity resolution for each row's meta line (shiki #task:1441): the row now
-  // shows the WORKSPACE's own icon, the CHANNEL's `#`, and the SENDER's avatar.
+  // Identity resolution for each row's meta line (shiki #task:1441). A
+  // `workspace_channel` row shows the WORKSPACE's own icon + name (joined live
+  // from the workspace list — `SavedPlace` embeds only `workspace_id` +
+  // `workspace_kind`, never a frozen name, #task:2055), the CHANNEL's `#` +
+  // `place.channel_name`, and the SENDER's avatar.
   const workspacesById = useMemo(
     () => new Map(workspaces.map(w => [w.id, w])),
     [workspaces],
   );
+  // A `direct_pair` row has no workspace / channel — its "where" is the person on
+  // the other end, resolved through the SAME shared pair path Search + the DM
+  // pane use (`presentCounterpart`, #task:2055 / #task:2051 F1): the carrier
+  // holds only `conversation_id`, so the counterpart (label + avatar) is joined
+  // live from the viewer's own pair list, keyed by that id. A cold pair list
+  // degrades to a kind-generic label, never a blank.
+  const pairs = useDirectPairs();
+  const counterpartByConversation = useMemo<ReadonlyMap<string, DirectPairCounterpart>>(
+    () => new Map(pairs.map(p => [p.conversation_id, p.counterpart])),
+    [pairs],
+  );
+  const counterpartSources = useMemo(
+    () => collectCounterpartAvatarSources(pairs),
+    [pairs],
+  );
+  const counterpartAgentAvatarUrls = useAgentAvatarObjectUrls(counterpartSources.agents);
+  const counterpartUserAvatarUrls = useUserAvatarObjectUrls(counterpartSources.users);
   // The agent directory drives only the WorkspaceIcon's DM-avatar (an
   // INDEPENDENT facet — the DM workspace's agent, not the row's author).
   const { data: agents = [] } = useAgents();
@@ -186,20 +213,33 @@ export function SavedListView({
               <SavedItem
                 key={item.id}
                 item={item}
-                workspace={workspacesById.get(item.workspace_id) ?? null}
+                workspacesById={workspacesById}
                 agentsById={agentsById}
                 dmAgentAvatarUrls={dmAgentAvatarUrls}
                 authorAgentAvatarUrls={authorAgentAvatarUrls}
                 authorHumanAvatarUrls={authorHumanAvatarUrls}
+                counterpartByConversation={counterpartByConversation}
+                counterpartAgentAvatarUrls={counterpartAgentAvatarUrls}
+                counterpartUserAvatarUrls={counterpartUserAvatarUrls}
                 onJump={() =>
-                  onJump({
-                    workspaceId: item.workspace_id,
-                    channelId: item.channel_id,
-                    // New reply-cluster: the saved message carries its own
-                    // `thread_root_id`; the cluster pane opens to it.
-                    threadRootId: item.message.thread_root_id,
-                    messageId: item.message.id,
-                  })
+                  onJump(
+                    item.place.kind === 'workspace_channel'
+                      ? {
+                          workspaceId: item.place.workspace_id,
+                          channelId: item.place.conversation_id,
+                          // New reply-cluster: the saved message carries its own
+                          // `thread_root_id`; the cluster pane opens to it.
+                          threadRootId: item.message.thread_root_id,
+                          messageId: item.message.id,
+                        }
+                      : {
+                          // A direct-pair save has no workspace: the pane opens
+                          // the pair straight from its conversation id.
+                          channelId: item.place.conversation_id,
+                          threadRootId: item.message.thread_root_id,
+                          messageId: item.message.id,
+                        },
+                  )
                 }
                 onUnsave={() => unsave.mutate(item.message.id)}
               />
@@ -213,19 +253,23 @@ export function SavedListView({
 
 function SavedItem({
   item,
-  workspace,
+  workspacesById,
   agentsById,
   dmAgentAvatarUrls,
   authorAgentAvatarUrls,
   authorHumanAvatarUrls,
+  counterpartByConversation,
+  counterpartAgentAvatarUrls,
+  counterpartUserAvatarUrls,
   onJump,
   onUnsave,
 }: {
   item: SavedMessageDto;
-  /** The row's workspace record (joined by id upstream) — drives the
-   *  WorkspaceIcon's kind / DM-agent branch. Null in the brief window before
-   *  the workspace list resolves. */
-  workspace: WorkspaceListItem | null;
+  /** Workspace records joined by id — the `workspace_channel` arm reads its
+   *  workspace out of this to drive the WorkspaceIcon's kind / DM-agent branch
+   *  and the live display name. Empty in the brief window before the list
+   *  resolves. */
+  workspacesById: ReadonlyMap<string, WorkspaceListItem>;
   agentsById: ReadonlyMap<string, AgentDto>;
   /** Directory avatars, for the WorkspaceIcon's DM agent only (independent
    *  facet — NOT the row's author). */
@@ -233,6 +277,11 @@ function SavedItem({
   /** Byline avatars derived from the row's own author DTO (#task:1792 B2). */
   authorAgentAvatarUrls: ReadonlyMap<string, string | null>;
   authorHumanAvatarUrls: ReadonlyMap<string, string | null>;
+  /** Direct-pair counterpart identity, keyed by conversation id — the
+   *  `direct_pair` arm's "where" segment (#task:2055). */
+  counterpartByConversation: ReadonlyMap<string, DirectPairCounterpart>;
+  counterpartAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  counterpartUserAvatarUrls: ReadonlyMap<string, string | null>;
   onJump: () => void;
   onUnsave: () => void;
 }): JSX.Element {
@@ -250,6 +299,22 @@ function SavedItem({
     () => dayjs(item.saved_at).format('YYYY-MM-DD HH:mm'),
     [item.saved_at],
   );
+
+  // The saved's "where" lives in its discriminated `place` (#task:2055): a
+  // `workspace_channel` save is the workspace + channel it sits in; a
+  // `direct_pair` save is the pair, whose identity IS its counterpart. Both are
+  // joined live from the viewer's own lists — the carrier freezes neither the
+  // workspace name nor the pair label.
+  const place = item.place;
+  const workspace =
+    place.kind === 'workspace_channel'
+      ? workspacesById.get(place.workspace_id) ?? null
+      : null;
+  const counterpart =
+    place.kind === 'direct_pair'
+      ? counterpartByConversation.get(place.conversation_id) ?? null
+      : null;
+  const cpPresentation = counterpart ? presentCounterpart(counterpart) : null;
 
   return (
     <li>
@@ -285,11 +350,13 @@ function SavedItem({
         // the brand hue. Local layout only below.
         className="px-4 py-3"
       >
-        {/* Meta line, three identity segments (shiki #task:1441): the WORKSPACE
-            wears its own icon, the CHANNEL owns the `#`, and the SENDER gets an
-            avatar — the `#` no longer sits (wrongly) in front of the workspace
-            name. Canonical primitives throughout (WorkspaceIcon / ChannelIcon /
-            Agent|UserAvatar), so this row reads like every other identity row.
+        {/* Meta line identity segments (shiki #task:1441). A workspace_channel
+            save wears three: the WORKSPACE icon + name, the CHANNEL `#` +
+            `place.channel_name`, and the SENDER avatar. A direct_pair save has
+            no workspace / channel, so its "where" is a single COUNTERPART
+            identity segment — the same face + label the DM pane and Search use
+            (#task:2055), never a `#` glyph (a pair is not a channel). Canonical
+            primitives throughout, so a row reads like every other identity row.
 
             No `·` separators (shiki 2026-07-27, the same call as the task card
             meta row in #task:1579): every segment already opens with its own
@@ -298,19 +365,36 @@ function SavedItem({
             it gets a `Clock` — utility scale (14px), a notch under the 16px
             identity glyphs beside it. */}
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
-          <span className="inline-flex items-center gap-1 font-medium text-text-primary">
-            <WorkspaceIcon
-              kind={workspace?.kind ?? 'regular'}
-              dmAgentId={workspace?.dm_agent_id ?? null}
-              agentsById={agentsById}
-              dmAgentAvatarUrls={dmAgentAvatarUrls}
-            />
-            {item.workspace_name}
-          </span>
-          <span className="inline-flex min-w-0 items-center gap-1">
-            <ChannelIcon variant="sticker" density="sm" />
-            <span className="truncate">{item.conversation_title}</span>
-          </span>
+          {place.kind === 'workspace_channel' ? (
+            <>
+              <span className="inline-flex items-center gap-1 font-medium text-text-primary">
+                <WorkspaceIcon
+                  kind={workspace?.kind ?? 'regular'}
+                  dmAgentId={workspace?.dm_agent_id ?? null}
+                  agentsById={agentsById}
+                  dmAgentAvatarUrls={dmAgentAvatarUrls}
+                />
+                {workspace ? workspaceDisplayName(workspace) : ''}
+              </span>
+              <span className="inline-flex min-w-0 items-center gap-1">
+                <ChannelIcon variant="sticker" density="sm" />
+                <span className="truncate">{place.channel_name}</span>
+              </span>
+            </>
+          ) : (
+            <span className="inline-flex min-w-0 items-center gap-1 font-medium text-text-primary">
+              <AuthorAvatarView
+                avatar={cpPresentation?.avatar ?? { variant: 'neutral-agent' }}
+                size={AVATAR_PX.xs}
+                label={cpPresentation?.label ?? 'Direct message'}
+                agentAvatarUrls={counterpartAgentAvatarUrls}
+                humanAvatarUrls={counterpartUserAvatarUrls}
+              />
+              <span className="truncate">
+                {cpPresentation?.label ?? 'Direct message'}
+              </span>
+            </span>
+          )}
           <span className="inline-flex min-w-0 items-center gap-1">
             <AuthorAvatarView
               avatar={presentation?.avatar ?? { variant: 'neutral-user' }}

@@ -115,15 +115,18 @@ export type ConversationScopedListData = { items: ConversationAttributed[] };
  *  {@link attributedRowFamily}. */
 export type ChannelAttributedRow =
   | { workspace_id: string; channel_id: string }
-  /** #2045 (#task:2041): task rows fold their attribution into `place` — the
-   *  proof accepts the arm-attributed shape, and
-   *  {@link heldChannelIdsInWorkspace}-style enumerators derive the workspace by
-   *  narrowing `place.kind === 'workspace'` and read `place.conversation_id` as
-   *  the channel coordinate (a DirectPair row belongs to no workspace and is
-   *  never held by one). */
+  /** #2045: row DTOs fold their attribution into a discriminated `place`. The
+   *  proof accepts the arm-attributed shape, and enumerators derive the workspace
+   *  by narrowing the workspace arm and reading `place.conversation_id` as the
+   *  channel coordinate (a DirectPair row belongs to no workspace and is never
+   *  held by one). The workspace arm's discriminant differs by DTO — `TaskPlace`
+   *  spells it `workspace` (#task:2041), `SavedPlace` spells it `workspace_channel`
+   *  (#task:2055) — so both literals are accepted here; each carries the same two
+   *  axes (`workspace_id` + `conversation_id`). */
   | {
       place:
         | { kind: 'workspace'; conversation_id: string; workspace_id: string }
+        | { kind: 'workspace_channel'; conversation_id: string; workspace_id: string }
         | { kind: 'direct_pair'; conversation_id: string };
     };
 

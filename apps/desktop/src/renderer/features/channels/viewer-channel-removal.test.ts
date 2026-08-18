@@ -36,7 +36,7 @@ import type {
 } from '@silverhand/shared';
 import { activityKey } from '../attention/hooks';
 import { messageKey } from '../messages/hooks';
-import { savedKey } from '../saved/hooks';
+import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from '../saved/hooks';
 import { searchKey } from '../search/hooks';
 import {
   boardColumnKey,
@@ -115,11 +115,26 @@ function savedRow(id: string, channelId: string, workspaceId = WS): SavedMessage
   return {
     id,
     message: message(`m-${id}`, channelId),
-    workspace_id: workspaceId,
-    workspace_name: 'Workspace',
-    conversation_id: channelId,
-    conversation_title: 'channel',
-    channel_id: channelId,
+    place: {
+      kind: 'workspace_channel',
+      conversation_id: channelId,
+      workspace_id: workspaceId,
+      workspace_kind: 'regular',
+      channel_name: 'channel',
+    },
+    agent_name: null,
+    saved_at: 2,
+  };
+}
+
+/** A DM save. Both `SavedPlace` arms carry `conversation_id`, so this row is
+ *  indistinguishable from a channel save by that field alone — only `kind`
+ *  separates them, which is what the two cells below pin. */
+function savedPairRow(id: string, conversationId: string): SavedMessageDto {
+  return {
+    id,
+    message: message(`m-${id}`, conversationId),
+    place: { kind: 'direct_pair', conversation_id: conversationId },
     agent_name: null,
     saved_at: 2,
   };
@@ -1183,6 +1198,48 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       );
       expect(decision.losses).toEqual([]);
       expect(decision.baseline).toEqual({ workspaceId: WS, ids: new Set([KEPT]) });
+    });
+  });
+
+  // A DM save shares the Saved list with channel saves, and both `SavedPlace`
+  // arms carry `conversation_id` — so a mis-written `kind` check compiles
+  // silently and the type system cannot catch it. What is downstream is
+  // DESTRUCTIVE, not cosmetic: a pair id reported as a held channel reaches the
+  // foreign-workspace reconciler, which re-reads that workspace's authoritative
+  // channel tables, cannot find a pair among them, and therefore grades it a
+  // `ChannelMembershipLoss` — destroying that pair's caches (and possibly moving
+  // the pane) over a channel event that never touched it. Hence a fence rather
+  // than trust in the narrowing.
+  describe('a DM save is never a channel holding (#task:2055)', () => {
+    const PAIR = 'conv-dm';
+
+    it('a direct_pair row is not reported as a held channel of any workspace', () => {
+      const qc = new QueryClient();
+      qc.setQueryData(savedKey, [
+        savedRow('s-channel', KEPT, OTHER_WS),
+        savedPairRow('s-dm', PAIR),
+      ]);
+
+      // The saved enumerator skips the arm outright…
+      expect(savedHeldChannelIds(qc, OTHER_WS)).toEqual([KEPT]);
+      // …and the registry aggregate the reconciler actually consumes never sees
+      // the pair id — under no workspace, since a pair belongs to none.
+      expect(heldChannelIdsInWorkspace(qc, OTHER_WS)).toEqual(new Set([KEPT]));
+      expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set());
+    });
+
+    it('a channel removal leaves direct_pair rows untouched', () => {
+      const qc = new QueryClient();
+      qc.setQueryData(savedKey, [savedRow('s-gone', LOST), savedPairRow('s-dm', PAIR)]);
+
+      // Direct call first, then the whole entry path, so a regression is
+      // attributed to the filter rather than to the sweep around it.
+      removeChannelFromSaved(qc, LOST);
+      expect(qc.getQueryData(savedKey)).toEqual([savedPairRow('s-dm', PAIR)]);
+
+      qc.setQueryData(savedKey, [savedRow('s-gone', LOST), savedPairRow('s-dm', PAIR)]);
+      handleViewerChannelRemoved(qc, REMOVE_LOST);
+      expect(qc.getQueryData(savedKey)).toEqual([savedPairRow('s-dm', PAIR)]);
     });
   });
 

@@ -106,7 +106,9 @@ function _typeParamIsMandatory(): void {
 // answers "which channels OF THIS WORKSPACE does the cache still describe", which
 // a row carrying only `channel_id` cannot answer for a non-selected workspace.
 function _rowFamilyNeedsBothAxes(): void {
-  // Positive control: the real Saved DTO carries workspace_id + channel_id.
+  // Positive control: the real Saved DTO folds both axes into its `place`
+  // discriminated union (workspace_channel arm carries workspace_id +
+  // conversation_id), so it satisfies the family constraint (#task:2055).
   const ok: RegisteredChannelReadModel = attributedRowFamily<SavedMessageDto[]>({
     id: 'saved',
     key: ['saved'],
