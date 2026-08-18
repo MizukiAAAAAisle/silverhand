@@ -1061,6 +1061,8 @@ export function createConversationMessagingApp(
     const parsed = SavedMessagesQueryInputSchema.safeParse({
       workspace_id: c.req.query('workspace_id'),
       since: c.req.query('since'),
+      user_id: c.req.query('user_id'),
+      agent_id: c.req.query('agent_id'),
     });
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
@@ -1079,10 +1081,21 @@ export function createConversationMessagingApp(
         exists ? 403 : 404,
       );
     }
+    // Sender narrowing (#task:2059) is single-select: the schema's refine keeps
+    // `user_id` and `agent_id` mutually exclusive, so at most one arm is set and
+    // "no filter" stays structurally distinct from "filtered to someone" (never
+    // an empty-string / empty-list sentinel). Ids are NOT existence-checked —
+    // an unknown id matches nothing, exactly as in search.
+    const sender = parsed.data.user_id
+      ? ({ kind: 'user', id: parsed.data.user_id } as const)
+      : parsed.data.agent_id
+        ? ({ kind: 'agent', id: parsed.data.agent_id } as const)
+        : undefined;
     return c.json({
       saved: saved.listForUser(principal.userId, {
         workspaceId: parsed.data.workspace_id,
         since: parsed.data.since,
+        sender,
       }),
     });
   });

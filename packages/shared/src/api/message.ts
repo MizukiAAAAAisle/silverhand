@@ -713,17 +713,37 @@ export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;
  *  messages older than the newest N). `workspace_id` narrows to one workspace
  *  (omitted = all workspaces the caller can see); `since` is `saved_at >= since`
  *  (epoch ms) — the SAVE-time window, not message created/updated time, matching
- *  the list's `saved_at DESC` order. Both are applied before `ORDER BY … LIMIT`. */
-export const SavedMessagesQueryInputSchema = z.object({
-  workspace_id: z.preprocess(
-    v => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  since: z.preprocess(
-    v => (v === '' || v === undefined ? undefined : v),
-    z.coerce.number().int().nonnegative().optional(),
-  ),
-});
+ *  the list's `saved_at DESC` order. All are applied before `ORDER BY … LIMIT`.
+ *
+ *  `user_id` / `agent_id` narrow by SENDER (#task:2059) and deliberately mirror
+ *  `SearchQueryInputSchema`'s pair — same two mutually exclusive params, same
+ *  `user:<id>` / `agent:<id>` picker encoding on the client — so the two sibling
+ *  read faces do not grow two different sender contracts. What this face does
+ *  NOT copy is search's PREDICATE: the saved list matches on the stable
+ *  send-time snapshot (`from_kind` + `author_id`), not on the live FK, so a
+ *  sender who has since been hard-deleted still filters correctly (the FK is
+ *  nulled by ON DELETE SET NULL; the snapshot survives). That follows the author
+ *  identity rule already used for distinct-replier grouping (#task:1791). A
+ *  sender id is never validated for existence — an unknown id simply matches
+ *  nothing, exactly as in search, so this filter is not an existence oracle for
+ *  user/agent ids. */
+export const SavedMessagesQueryInputSchema = z
+  .object({
+    workspace_id: z.preprocess(
+      v => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().optional(),
+    ),
+    since: z.preprocess(
+      v => (v === '' || v === undefined ? undefined : v),
+      z.coerce.number().int().nonnegative().optional(),
+    ),
+    user_id: SearchOptionalStringSchema,
+    agent_id: SearchOptionalStringSchema,
+  })
+  .refine(v => !(v.user_id && v.agent_id), {
+    message: 'user_id and agent_id cannot both be set',
+    path: ['user_id'],
+  });
 export type SavedMessagesQueryInput = z.infer<typeof SavedMessagesQueryInputSchema>;
 
 //

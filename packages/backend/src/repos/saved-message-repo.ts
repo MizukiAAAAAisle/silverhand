@@ -259,18 +259,39 @@ export class SavedMessageRepo {
    * The `workspaceId` filter runs on the derived `conv.workspace_id` (the row no
    * longer carries its own copy), so an unknown/hidden id simply yields no rows
    * on top of the participation gate.
+   *
+   * `sender` (#task:2059) narrows by author. It matches the STABLE send-time
+   * snapshot — `m.from_kind` + `m.author_id` — NOT the live FK
+   * (`from_agent_id`/`from_user_id`), which `ON DELETE SET NULL` clears when the
+   * actor is hard-deleted: an FK predicate would silently drop every saved
+   * message from a since-deleted sender. This is the same author-identity rule
+   * `MessageRepo`'s distinct-replier grouping already uses (#task:1791). Rows
+   * with no stable identity at all (legacy pre-snapshot deletes, `author_id
+   * IS NULL` → `unresolved`) are unfilterable by construction and are simply not
+   * matched by any sender. An unknown sender id matches nothing rather than
+   * erroring, so the filter is not an existence oracle.
    */
   listForUser(
     userId: string,
-    opts: { workspaceId?: string; since?: number; limit?: number } = {},
+    opts: {
+      workspaceId?: string;
+      since?: number;
+      limit?: number;
+      sender?: { kind: 'user' | 'agent'; id: string };
+    } = {},
   ): SavedMessageDto[] {
-    const { workspaceId, since, limit = 200 } = opts;
+    const { workspaceId, since, limit = 200, sender } = opts;
     const participation = userParticipates('conv', userId);
     const conds = ['sm.user_id = ?', participation.sql];
     const params: (string | number)[] = [userId, ...participation.params];
     if (workspaceId !== undefined) {
       conds.push('conv.workspace_id = ?');
       params.push(workspaceId);
+    }
+    if (sender !== undefined) {
+      conds.push('m.from_kind = ?');
+      conds.push('m.author_id = ?');
+      params.push(sender.kind, sender.id);
     }
     if (since !== undefined) {
       conds.push('sm.saved_at >= ?');
