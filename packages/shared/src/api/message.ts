@@ -681,7 +681,17 @@ export const SavedMessageDtoSchema = z.object({
    *  (`place.conversation_id`) folded with the placement-specific display
    *  coordinates (see SavedPlaceSchema). Narrow on `place.kind` — workspace
    *  fields are structurally ABSENT on the pair arm. This is THE conversation
-   *  coordinate; there is no separate top-level `conversation_id`/`channel_id`. */
+   *  coordinate; there is no separate top-level `conversation_id`/`channel_id`.
+   *
+   *  `place.conversation_id` is the SOLE conversation coordinate here, and it
+   *  names the PARENT CHANNEL — it equals `message.conversation_id` by
+   *  construction (the row is written from it: `saved-message-repo.ts`). A
+   *  thread is a reply-cluster INSIDE that same conversation, and
+   *  `message.thread_root_id` is a MESSAGE id, not a conversation coordinate:
+   *  there is no "thread conversation" to address. So a saved reply carries its
+   *  channel's id here, exactly like a saved top-level message, and no consumer
+   *  may read any `conversation_id` as a thread coordinate — attributing or
+   *  filtering a row "by thread" from this field silently means "by channel". */
   place: SavedPlaceSchema,
   /**
    * The author agent's immutable `@handle` (`agents.name`), or `null` for
