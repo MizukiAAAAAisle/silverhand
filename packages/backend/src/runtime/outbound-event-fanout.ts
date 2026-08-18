@@ -95,6 +95,7 @@ function wireScopeOwnsEventTarget(
 import { RuntimeDeliveryCoordinator, type RuntimeDelivery } from './delivery-coordinator.js';
 import {
   RuntimeEventHandler,
+  type AgentActivitySink,
   type ConversationActivitySink,
   type EventPublisher,
   type InboxAckSink,
@@ -150,6 +151,13 @@ export interface OutboundRuntimeEventFanoutOptions {
    * not allowed to omit it.
    */
   conversationActivity: ConversationActivitySink;
+  /**
+   * v82 (#task:2049) durable per-agent presence-clock sink. REQUIRED here even
+   * though `RuntimeEventHandler` takes it optionally, mirroring
+   * `conversationActivity`: unwired, the presence clock silently stops
+   * advancing with no type error, so composition may not omit it.
+   */
+  agentActivity: AgentActivitySink;
   events: EventPublisher;
   transport: () => OutboundFrameAdapter | null;
   logger: BackendLogger;
@@ -2025,6 +2033,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       onRuntimeCustodyFinalized: principal =>
         this.opts.agentTokens.revokeFor(principal),
       conversationActivity: this.opts.conversationActivity,
+      agentActivity: this.opts.agentActivity,
       onParsedEvent: (cid, aid, event) =>
         coordinator.onParsedEvent(cid, aid, event),
       onRuntimeExit: (cid, aid, meta) => {

@@ -215,6 +215,18 @@ export interface ConversationActivitySink {
   }): ConversationActivityEvent;
 }
 
+/**
+ * v82 (#task:2049) — durable per-agent presence clock write edge. Fed at
+ * admitted runtime-activity edges (parsed event / delivery consumed) so the
+ * `/presence` read face's `away_at` deadline moves forward. The concrete
+ * implementation stamps `last_activity_at` with the BACKEND clock and fires the
+ * per-viewer `agent_presence_changed` invalidation ONLY on an Away→Online
+ * transition. Optional/no-op-safe: an unwired handler simply does not stamp.
+ */
+export interface AgentActivitySink {
+  stampActivity(agentId: string): void;
+}
+
 type ConversationActivityRecordResult =
   | ConversationActivityEvent
   | ConversationActivityEvent[]
@@ -354,6 +366,10 @@ export interface RuntimeEventHandlerDeps {
    *  are written into `conversation_events` and the resulting row DTO is
    *  published as `conversation_activity` on the conversation scope. */
   conversationActivity?: ConversationActivitySink;
+  /** v82 (#task:2049) Optional per-agent presence-clock sink. When present,
+   *  admitted runtime-activity edges stamp `last_activity_at` and may fire the
+   *  per-viewer `agent_presence_changed` invalidation on an Away→Online edge. */
+  agentActivity?: AgentActivitySink;
   logger?: RuntimeEventHandlerLogger;
 }
 
@@ -436,6 +452,7 @@ export class RuntimeEventHandler {
   ) => void | Promise<void>;
   private readonly activityLog?: ActivityLogWriter;
   private readonly conversationActivity?: ConversationActivitySink;
+  private readonly agentActivity?: AgentActivitySink;
   private readonly logger: RuntimeEventHandlerLogger;
   private readonly pendingTextActivityBlocks = new Map<string, PendingTextActivityBlock>();
 
@@ -511,6 +528,7 @@ export class RuntimeEventHandler {
     this.onHydrateCompleteCb = deps.onHydrateComplete;
     this.activityLog = deps.activityLog;
     this.conversationActivity = deps.conversationActivity;
+    this.agentActivity = deps.agentActivity;
     this.logger = deps.logger ?? NOOP_LOGGER;
   }
 
@@ -696,6 +714,11 @@ export class RuntimeEventHandler {
         const settlement = this.inboxSettlementAuthority(frame);
         if (!settlement) return;
         this.inboxAck.markDelivered(settlement);
+        // v82 (#task:2049) Edge B — an accepted dispatch is observable progress:
+        // a peer message consumed by the runtime extends the Online window
+        // (intentional). Stamp the presence clock; the sink fires
+        // `agent_presence_changed` on an Away→Online crossing like Edge A.
+        this.agentActivity?.stampActivity(frame.agent_id);
         return;
       }
       case 'runtime_delivery_failed': {
@@ -823,6 +846,16 @@ export class RuntimeEventHandler {
           );
           return;
         }
+        // v82 (#task:2049) Edge A — admitted parsed event = observable runtime
+        // progress. Stamp the durable presence clock (backend clock) and let the
+        // sink fire `agent_presence_changed` on an Away→Online crossing. Ordering
+        // is LOAD-BEARING: the stamp (and any fire) runs BEFORE the
+        // `agent_event`/`agent_activity` publish below, so a same-conversation
+        // viewer re-reading `/presence` on that activity always sees the fresh
+        // `away_at`. `input_lifecycle` already returned early above and is not
+        // stamped (diagnostics only); `runtime_state` / `runtime_exit` /
+        // delivery-failed / watchdog / synthetic-clear are likewise not stamped.
+        this.agentActivity?.stampActivity(frame.agent_id);
         // Project to the historical `agent_event` SSE shape so the
         // renderer's Events panel and the agent-event listeners can't
         // tell which runtime produced the publish. MUST run

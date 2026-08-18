@@ -68,6 +68,7 @@ import {
   publishAgentAvailabilityChangedForAgent,
   publishAgentAvailabilityChangedForHost,
 } from './application/agent-availability-changed.js';
+import { publishAgentPresenceChangedForAgent } from './application/agent-presence-changed.js';
 import { sweepStoredBlobs } from './application/delete-agent.js';
 import { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.js';
@@ -840,7 +841,15 @@ export async function startBackend(
       // backend-side wiring indicator only; the daemon-side attachment
       // lifecycle is reported separately via `getAttachment`.
       outboundFanout = new OutboundRuntimeEventFanout({
-        ...persistence.effects.runtimeFanout({ events: ctx.events, logger }),
+        ...persistence.effects.runtimeFanout({
+          events: ctx.events,
+          logger,
+          // #task:2049 — late-bound: the closure resolves `ctx.publish...` at
+          // call time (a frame arriving), so it works even though the binding is
+          // assigned below after the fanout is constructed. Default `now`.
+          onAgentAwayToOnline: agentId =>
+            ctx.publishAgentPresenceChangedForAgent?.(agentId),
+        }),
         events: ctx.events,
         transport: () => outboundAdapter,
         logger,
@@ -882,6 +891,12 @@ export async function startBackend(
       publishAgentAvailabilityChangedForAgent(ctx, agentId);
     ctx.publishAgentAvailabilityChangedForHost = hostId =>
       publishAgentAvailabilityChangedForHost(ctx, availabilityChangedDeps, hostId);
+    // #task:2049 — presence-invalidation effect edge. Fired by the presence
+    // clock's Away→Online transition (`AgentActivitySink` → `onAgentAwayToOnline`
+    // threaded into the fanout deps below). Per-agent only; same viewer set as
+    // availability.
+    ctx.publishAgentPresenceChangedForAgent = agentId =>
+      publishAgentPresenceChangedForAgent(ctx, agentId);
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
       hostTokenVerifier: new HostTokenService(persistence.hostTokens),
       hosts: persistence.repos.hosts,

@@ -245,6 +245,16 @@ export interface BackendContext {
   publishAgentAvailabilityChangedForAgent?: (agentId: string) => void;
   publishAgentAvailabilityChangedForHost?: (hostId: string) => void;
   /**
+   * #task:2049 — the presence-invalidation effect edge. Fired ONLY on an
+   * Away→Online transition (an agent past its away deadline producing real
+   * runtime activity again), driven by the presence-clock stamp in
+   * `AgentActivitySink`. Per-agent only (there is no host-wide presence edge:
+   * presence is a per-agent activity fact, not a shared host-reachability one).
+   * Optional: a harness without a fanout leaves it absent and the transition
+   * publishes nothing. Pairs with `GET /api/agents/:id/presence`.
+   */
+  publishAgentPresenceChangedForAgent?: (agentId: string) => void;
+  /**
    * #task:1588 — late-bound per-host liveness view from the outbound
    * event fanout (event-maintained, generation-bound). The host-status
    * read model consumes it so `GET /api/hosts/:id/status` serves the

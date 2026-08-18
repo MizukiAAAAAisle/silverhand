@@ -655,6 +655,58 @@ export class AgentRepo {
   }
 
   /**
+   * v82 (#task:2049): stamp the durable presence clock at an admitted
+   * runtime-activity edge. Persistence-only — carries NO presence policy: it
+   * reads the current `last_activity_at` (returned as `previous`) and moves it
+   * forward by monotonic MAX(COALESCE(current, 0), atMs), so an out-of-order or
+   * backend-retried lower value never moves it backward. The Away→Online
+   * transition judgment (against PRESENCE_AWAY_TTL_MS) lives in the sink, not
+   * here, so the repo stays free of presence policy.
+   *
+   * Deliberately does NOT bump `updated_at`: that would ripple into the
+   * `agent_changed` identity fan-out via IDENTITY_CARRIERS. Only
+   * `last_activity_at` is touched.
+   */
+  stampLastActivity(agentId: string, atMs: number): { previous: number | null } {
+    const prevRow = this.db
+      .prepare<[string], { last_activity_at: number | null }>(
+        'SELECT last_activity_at FROM agents WHERE id = ?',
+      )
+      .get(agentId);
+    const previous = prevRow?.last_activity_at ?? null;
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET last_activity_at = MAX(COALESCE(last_activity_at, 0), ?)
+          WHERE id = ?`,
+      )
+      .run(atMs, agentId);
+    return { previous };
+  }
+
+  /**
+   * v82 (#task:2049): narrow read of the durable presence clock for the
+   * `GET /api/agents/:id/presence` read face. Returns `last_activity_at`
+   * (epoch ms) or null when the agent has never been active.
+   *
+   * A DELIBERATELY narrow read, NOT a projection off `AgentDto`: the raw stamp
+   * is kept off the wire DTO (it has no invalidation edge — see
+   * `AgentDtoSchema`), so the route resolves `away_at` from this single-column
+   * read instead. A vanished row (deleted between the caller's existence check
+   * and this read) also returns null → the route emits `away_at: null` → Away,
+   * the same safe projection as never-active, so no separate not-found branch is
+   * needed here.
+   */
+  presenceClockFor(agentId: string): number | null {
+    const row = this.db
+      .prepare<[string], { last_activity_at: number | null }>(
+        'SELECT last_activity_at FROM agents WHERE id = ?',
+      )
+      .get(agentId);
+    return row?.last_activity_at ?? null;
+  }
+
+  /**
    * Every conversation this agent participates in, with display coordinates for
    * the profile. This is a PARTICIPATION projection and never reads runtime slots;
    * the control/read-model unit for processes is `RuntimeSlotRepo.listSeats`.

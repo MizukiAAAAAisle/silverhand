@@ -180,7 +180,7 @@ export function useWorkspaceSortState() {
  * validates independently. See `docs/viewer-visibility-sync-v1.md`.
  */
 interface ViewerWorkspacesChangedPayload {
-  change: 'added' | 'removed' | 'role_changed';
+  change: 'added' | 'removed' | 'role_changed' | 'metadata_changed';
   workspace_id: string;
   role?: WorkspaceRole;
 }
@@ -191,7 +191,15 @@ export function isViewerWorkspacesChangedPayload(
   if (typeof payload !== 'object' || payload === null) return false;
   const o = payload as Record<string, unknown>;
   return (
-    (o.change === 'added' || o.change === 'removed' || o.change === 'role_changed') &&
+    (o.change === 'added' ||
+      o.change === 'removed' ||
+      o.change === 'role_changed' ||
+      // A mutable workspace field the read model projects (today: `name`,
+      // #task:2050 §4-B) moved with no membership/role change. Whitelisting it
+      // is what makes the producer edge live: without it the frame fails this
+      // guard and `['workspaces']` never refetches, so the F1 live-join of the
+      // workspace label would inherit the exact staleness the embed had.
+      o.change === 'metadata_changed') &&
     typeof o.workspace_id === 'string'
   );
 }
@@ -219,7 +227,11 @@ export interface ViewerSyncFrame {
  * - `viewer_workspaces_changed` event → always `['workspaces']`; for
  *   `role_changed` additionally the workspace's members query (governance
  *   `viewerRole` is sourced there, not from the list); for `added` additionally
- *   the attention badge roll-up (below) and the favorites list.
+ *   the attention badge roll-up (below) and the favorites list. `metadata_changed`
+ *   (#task:2050 §4-B — a projected label such as `name` moved, membership
+ *   unchanged) needs only the list: the refetch carries the new label to every
+ *   surface that joins it (Task/Saved place, Search), which is the whole point of
+ *   F1 replacing frozen snapshots with a live join.
  * - anything else → no invalidation.
  *
  * Why `added` reaches FAVORITES (#task:1889, @Cindy MUST FIX): a star is stored on

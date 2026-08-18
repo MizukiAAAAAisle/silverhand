@@ -158,11 +158,11 @@ describe('MessageAuthorDto surface contract (#task:1791)', () => {
     const saved = new SavedMessageRepo(db);
     expect(saved.save(msg.id, 'local')).not.toBeNull();
 
-    const before = saved.list().find(s => s.message.id === msg.id)!;
+    const before = saved.listForUser('local').find(s => s.message.id === msg.id)!;
     expect(before.message.author).toEqual(activeAgent(delId, 'del-agent', 'del-agent'));
 
     hardDeleteAgent(db, delId);
-    const after = saved.list().find(s => s.message.id === msg.id)!;
+    const after = saved.listForUser('local').find(s => s.message.id === msg.id)!;
     expect(after.message.author).toEqual(deletedAgent(delId, 'del-agent', 'del-agent'));
   });
 
@@ -178,7 +178,7 @@ describe('MessageAuthorDto surface contract (#task:1791)', () => {
     const query = SearchQueryInputSchema.parse({ q: 'zqvq' });
     const findHit = () =>
       search
-        .search(query, { visibleUserId: 'local' })
+        .search(query, 'local')
         .results.find(r => r.type === 'message' && r.message.id === msg.id) as
         | { type: 'message'; message: { author: unknown } }
         | undefined;

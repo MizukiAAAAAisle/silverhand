@@ -780,7 +780,7 @@ describe('perimeter substitutability — an alternate implementation is injectab
     };
     const conversations: RuntimePerimeterConversationReadPort = {
       exists: conversationId => conversationId === 'conv-known',
-      hasAgent: (conversationId, agentId) =>
+      isAgentParticipant: (conversationId, agentId) =>
         conversationId === 'conv-known' && agentId === 'agent-mine',
     };
     const guard = new EventPerimeterGuard({ agents, conversations, logger });

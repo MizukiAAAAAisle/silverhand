@@ -68,6 +68,15 @@ export const AgentDtoSchema = z.object({
   /** Durable terminal-deletion intent. Non-null means host cleanup/DB commit
    *  is pending or retrying; management readers must not present it as active. */
   deletion_started_at: z.number().nullable(),
+  // #task:2049 — `last_activity_at` is DELIBERATELY NOT on this DTO. The
+  // presence clock has exactly ONE wire read face: `GET /api/agents/:id/presence`
+  // (`away_at`), invalidated by `agent_presence_changed`. `stampLastActivity`
+  // intentionally does NOT bump `updated_at` (avoids the IDENTITY_CARRIERS
+  // `agent_changed` ripple), so `agent_changed` never fires for it — putting the
+  // raw stamp here would be a second read face with NO invalidation edge (a
+  // client would cache a forever-stale value). Same discipline that kept
+  // `away_at` off the availability DTO. Do not re-add; presence readers hit
+  // `/presence`.
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -439,8 +448,10 @@ export type AgentLivenessDto = z.infer<typeof AgentLivenessDtoSchema>;
 // Folding a fault into a domain value would license callers to disguise a
 // backend failure as a normal answer. "We cannot tell right now" is a RENDERER
 // query-projection state (pending / error / cached-stale ⇒ its own `unknown`),
-// not a backend value. The UI composes THIS axis with liveness into the
-// user-facing Online / Away / Offline / no-status projection.
+// not a backend value. The UI composes THIS axis with the presence deadline
+// (`away_at`, the #task:2049 activity axis — NOT liveness, which #task:2049
+// dropped from the projection) into the user-facing Online / Away / Offline /
+// no-status projection.
 export const AgentAvailabilitySchema = z.enum(['online', 'offline']);
 export type AgentAvailability = z.infer<typeof AgentAvailabilitySchema>;
 
@@ -448,6 +459,37 @@ export const AgentAvailabilityDtoSchema = z.object({
   availability: AgentAvailabilitySchema,
 });
 export type AgentAvailabilityDto = z.infer<typeof AgentAvailabilityDtoSchema>;
+
+// GET /api/agents/:id/presence (#task:2049). The activity-deadline axis, kept
+// SEPARATE from availability on purpose: availability's invalidation contract
+// (below) explicitly excludes runtime-liveness edges, so folding `away_at` onto
+// that DTO would re-weld the two axes #task:2043 split. `away_at` is the
+// absolute epoch-ms deadline at which a currently-available agent projects to
+// Away: last_activity_at + PRESENCE_AWAY_TTL_MS, or null when never active (no
+// fabricated deadline — see below, null projects to Away, NOT Online). The
+// renderer projects presence = availability × away_at, and Online requires
+// POSITIVE evidence of a live window (an away_at number still in the future):
+//   offline                                    ⇒ Offline
+//   online + away_at is number ∧ now <  away_at ⇒ Online
+//   online + away_at is number ∧ now >= away_at ⇒ Away
+//   online + away_at === null                  ⇒ Away   (never active; v82 has
+//       no backfill, so this is the DOMINANT post-deploy state — Online here
+//       would be a deploy-day mass lie)
+//   online + away_at unknown (fetch pending/errored) ⇒ Away
+// This read face is invalidated ONLY by
+// `agent_presence_changed`, NEVER by `agent_availability_changed`.
+//
+// `server_now` is the backend clock at response time. Because `away_at` is an
+// ABSOLUTE server-epoch deadline, a renderer comparing it against its own wall
+// clock would misproject under client/server skew; the consumer calibrates at
+// the read boundary (offset = dataUpdatedAt − server_now; away_at_client =
+// away_at + offset). The backend's whole skew responsibility is to EMIT
+// `server_now` alongside `away_at` — no calibration logic lives here.
+export const AgentPresenceDtoSchema = z.object({
+  away_at: z.number().nullable(),
+  server_now: z.number(),
+});
+export type AgentPresenceDto = z.infer<typeof AgentPresenceDtoSchema>;
 
 // Invalidation event for GET /api/agents/:id/availability (#task:2043). A pure
 // CACHE-INVALIDATION frame, NOT a state patch: it carries only the agent id, so
@@ -461,7 +503,8 @@ export type AgentAvailabilityDto = z.infer<typeof AgentAvailabilityDtoSchema>;
 // read, so the backend publishes to `viewer:{userId}` for exactly the users who
 // can currently see the agent (creator ∪ DirectPair human endpoints ∪
 // shared-workspace members, each filtered through `canViewAgent`). The renderer
-// composes the refetched availability with liveness into Online / Away /
+// composes the refetched availability with the presence deadline (`away_at`;
+// #task:2049 dropped the liveness axis from the projection) into Online / Away /
 // Offline / no-status. Emitted only on transport-reachability transitions
 // (attachment connect / disconnect, host revoke) — never on runtime-liveness
 // changes, which drive liveness, not this axis.
@@ -473,6 +516,43 @@ export const AgentAvailabilityChangedEventSchema = z
   .strict();
 export type AgentAvailabilityChangedEvent = z.infer<
   typeof AgentAvailabilityChangedEventSchema
+>;
+
+// Invalidation event for GET /api/agents/:id/presence (#task:2049). A pure,
+// id-only CACHE-INVALIDATION frame — same discipline as
+// `agent_availability_changed` above: the wire never ships the new value, only
+// the agent id whose derived `/presence` read is now stale, so a subscriber's
+// SOLE reaction is to refetch `/presence` for that id.
+//
+// Fires on an Away→Online transition, judged at the presence-clock write edge,
+// in TWO cases: (a) an agent already past its away deadline (a currently-Away
+// projection) producing real runtime activity again; and (b) a never-active
+// agent (prev null — which the projection renders Away, NOT Online) producing
+// its first-ever activity. Both are real Away→Online crossings a
+// cross-conversation viewer cannot observe on its own — a viewer not on the
+// active conversation has no other signal that the silent (or never-yet-seen)
+// agent came alive — so both are worth a per-viewer push. With v82's
+// no-backfill, case (b) is the DOMINANT post-deploy transition, not an edge
+// case. No frame is emitted while the agent stays within its window (continuous
+// activity inside the deadline).
+//
+// Fan-out is per-VIEWER via the SAME `agentViewerUserIds` set availability uses
+// (creator ∪ DirectPair human endpoints ∪ shared-workspace members, each
+// through `canViewAgent`): publish to `viewer:{userId}` for exactly the users
+// who can currently see the agent.
+//
+// This must NOT reuse `agent_availability_changed`: that event's contract
+// explicitly FORBIDS runtime-liveness triggers (it fires only on
+// transport-reachability transitions), whereas this event's whole purpose is a
+// runtime-activity edge. They are distinct axes with distinct read faces.
+export const AGENT_PRESENCE_CHANGED_EVENT = 'agent_presence_changed';
+export const AgentPresenceChangedEventSchema = z
+  .object({
+    agent_id: z.string(),
+  })
+  .strict();
+export type AgentPresenceChangedEvent = z.infer<
+  typeof AgentPresenceChangedEventSchema
 >;
 
 export const DeleteAgentInputSchema = z.object({

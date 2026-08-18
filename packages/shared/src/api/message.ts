@@ -2,7 +2,6 @@
 // Bounded context: message. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import {
-  ConversationPlacementKindSchema,
   ConversationRosterPolicySchema,
   FromKindSchema,
 } from '../db/schema.js';
@@ -524,20 +523,54 @@ export const SearchWorkspaceRefSchema = z.object({
 });
 export type SearchWorkspaceRef = z.infer<typeof SearchWorkspaceRefSchema>;
 
-export const SearchConversationRefSchema = z.object({
+/** Fields of a search conversation ref that do not depend on placement. */
+const searchConversationRefBase = {
   id: z.string(),
   title: z.string(),
-  placement_kind: ConversationPlacementKindSchema,
   roster_policy: ConversationRosterPolicySchema,
   channel_id: z.string(),
   closed_at: z.number().nullable(),
   created_at: z.number(),
-});
+};
+
+// #task:2053-C — the conversation ref is a DISCRIMINATED UNION on
+// `placement_kind`, the SINGLE authority for "where is this conversation". The
+// workspace ref lives INSIDE the workspace arm — workspace is a property of the
+// conversation's PLACEMENT, not of the search result — so the discriminator and
+// the field it governs sit at the SAME level: `conv.placement_kind ===
+// 'workspace'` narrows the type, and the `direct_pair` arm has no `workspace`
+// field to read at all. The "workspace present iff workspace-placed" invariant
+// is therefore a TYPE FACT the compiler enforces on the consumer, not a
+// cross-layer superRefine that only holds at runtime (which would leave the
+// consumer free to branch on `workspace === null` — the same field-absence-as-
+// discriminator failure mode as the `resolveNavWorkspaceId` finding).
+//
+// Only the two placements search's producer whitelist admits appear here.
+// `agent_inbox` has NO arm on purpose: a mis-projected inbox row fails to
+// parse, so exhaustive/fail-closed is enforced at the type layer independently
+// of the SQL whitelist (#task:2053-B②) — both guards, same direction.
+export const SearchConversationRefSchema = z.discriminatedUnion(
+  'placement_kind',
+  [
+    z.object({
+      ...searchConversationRefBase,
+      placement_kind: z.literal('workspace'),
+      workspace: SearchWorkspaceRefSchema,
+    }),
+    z.object({
+      ...searchConversationRefBase,
+      placement_kind: z.literal('direct_pair'),
+    }),
+  ],
+);
 export type SearchConversationRef = z.infer<typeof SearchConversationRefSchema>;
 
 export const SearchResultDtoSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('workspace'),
+    // The workspace-DISCOVERY arm: the matched entity IS a workspace, so this
+    // is the workspace itself, not a placement container. Unaffected by
+    // #task:2053 — it always carries a real workspace.
     workspace: SearchWorkspaceRefSchema.extend({
       description: z.string().nullable(),
       archived_at: z.number().nullable(),
@@ -547,12 +580,18 @@ export const SearchResultDtoSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('conversation'),
-    workspace: SearchWorkspaceRefSchema,
+    // No result-level `workspace`: the container now lives inside the
+    // placement-discriminated `conversation` ref (#task:2053-C). This arm's
+    // `direct_pair` case is structurally unreached today — a pair's stored
+    // title is `''` (`DIRECT_PAIR_STORED_TITLE`) and discovery requires a
+    // non-empty query — but the ref shape is uniform with the message arm.
     conversation: SearchConversationRefSchema,
   }),
   z.object({
     type: z.literal('message'),
-    workspace: SearchWorkspaceRefSchema,
+    // The container is `conversation.<workspace arm>.workspace`; this is the
+    // arm where the `direct_pair` case is actually REACHED (a message in a
+    // workspace-less human↔agent DM).
     conversation: SearchConversationRefSchema,
     message: MessageDtoSchema,
     /** The author agent's immutable `@handle` (`agents.name`), or `null` for
@@ -579,16 +618,71 @@ export type SearchDto = z.infer<typeof SearchDtoSchema>;
 
 //
 // One global flat list — no per-channel grouping, no tags. Each entry
-// joins back to the source message + its workspace/conversation so the Saved
-// view can render content + jump back to the conversation.
+// joins back to the source message + its place (workspace channel or DM) so the
+// Saved view can render content + jump back to the conversation.
+
+/** Where a saved message lives, as a discriminated union on the canonical
+ *  human-conversation-place `kind` (`workspace_channel` / `direct_pair`, the
+ *  same vocabulary Search reuses — NOT a private `place_kind`). The routing
+ *  coordinate `conversation_id` is folded into each arm, so a `SavedPlace` is
+ *  the message's complete location with no parallel top-level coordinate.
+ *
+ *  - workspace_channel arm: `conversation_id` plus the workspace board namespace
+ *    (`workspace_id` + the `regular | agent_space` DOMAIN `workspace_kind`;
+ *    physical `agent_home` never reaches the wire, contract §2 rule 5) and the
+ *    one embedded mutable name, `channel_name`. The workspace NAME is deliberately
+ *    NOT here (F1, mirrors the shipped `TaskPlace` workspace arm): a workspace's
+ *    name is its aggregate's mutable field, so the renderer joins it live from the
+ *    `['workspaces']` directory (kept fresh by `viewer_workspaces_changed`,
+ *    §4-B) rather than freezing a per-read-model snapshot. `channel_name` stays
+ *    embedded, aligned with the shipped #2041 `TaskPlace`, and is a LIVE
+ *    projection: `['saved']` MUST subscribe `workspace_channels_changed` (§4-A)
+ *    and INVALIDATE only — never apply the payload as a snapshot. (The full
+ *    coordinate-only endgame — join `channel_name` too — is deferred to #2045:
+ *    the client channel-name join authority already exists
+ *    (`useChannelsAcrossWorkspaces`), so it is a three-consumer convergence, not
+ *    new infrastructure. The name-join model holds ONLY while task/saved
+ *    visibility stays participation-only; widening to "workspace member may read"
+ *    would make the join miss names that an embed would not — that is the real
+ *    falsifier for this axis. See `docs/placement-contract.md`.)
+ *  - direct_pair arm: ONLY `conversation_id`. No title (a DM stores none) and no
+ *    peer name/avatar — the per-viewer `dm:@other` label and the peer identity
+ *    are resolved live via the DirectPair carrier (contract §4-C), never frozen
+ *    into a saved row.
+ *
+ *  Display/namespace ONLY — access control NEVER reads it (the ACL always
+ *  recomputes from `conversation_id` back to the canonical participation
+ *  authority; contract §4a: a Place DTO is not an authorization source). */
+export const SavedPlaceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('workspace_channel'),
+    conversation_id: z.string(),
+    workspace_id: z.string(),
+    /** Domain projection of the workspace kind; physical `agent_home` never
+     *  reaches the wire (contract §2 rule 5). */
+    workspace_kind: z.enum(['regular', 'agent_space']),
+    /** The channel's display title (a channel has one; a DM does not). A LIVE
+     *  projection: `['saved']` subscribes `workspace_channels_changed` (§4-A)
+     *  and invalidates on it. The workspace NAME is deliberately absent —
+     *  joined live from `['workspaces']` (F1, mirrors `TaskPlace`). */
+    channel_name: z.string(),
+  }),
+  z.object({
+    kind: z.literal('direct_pair'),
+    conversation_id: z.string(),
+  }),
+]);
+export type SavedPlace = z.infer<typeof SavedPlaceSchema>;
+
 export const SavedMessageDtoSchema = z.object({
   id: z.string(),
   message: MessageDtoSchema,
-  workspace_id: z.string(),
-  workspace_name: z.string(),
-  conversation_id: z.string(),
-  conversation_title: z.string(),
-  channel_id: z.string(),
+  /** The saved message's place: the routing coordinate
+   *  (`place.conversation_id`) folded with the placement-specific display
+   *  coordinates (see SavedPlaceSchema). Narrow on `place.kind` — workspace
+   *  fields are structurally ABSENT on the pair arm. This is THE conversation
+   *  coordinate; there is no separate top-level `conversation_id`/`channel_id`. */
+  place: SavedPlaceSchema,
   /**
    * The author agent's immutable `@handle` (`agents.name`), or `null` for
    * user messages. NOT a display-name snapshot: `name` is decided at agent

@@ -180,7 +180,7 @@ describe('agent inbox — workspace-scoped read faces exclude it by decision', (
     const t = bootstrap();
     const found = new SearchRepo(t.db).search(
       SearchQueryInputSchema.parse({ q: NEEDLE, limit: 50 }),
-      { visibleUserId: t.viewerUserId },
+      t.viewerUserId,
     );
     const messageIds = found.results
       .filter(r => r.type === 'message')
@@ -346,18 +346,28 @@ describe('agent inbox — faces with no workspace answer refuse instead of guess
     }
   });
 
-  it('cannot have a message saved: the write asserts the workspace arm', () => {
+  it('cannot have a message saved: the write refuses the non-participatory placement', () => {
     const t = bootstrap();
     const saved = new SavedMessageRepo(t.db);
-    // Loud, not silent — and specifically NOT left to `saved_messages`'
-    // NOT NULL `workspace_id`: the insert is `INSERT OR IGNORE` (for save
-    // idempotence), which suppresses a NOT NULL violation just as happily as
-    // the duplicate it is aimed at. That path would return `null`, which the
-    // route reports as "message not found", so a human could confirm a save
-    // that never happened. The assertion makes the refusal the domain's.
+    // Loud, not silent — and specifically the DOMAIN's refusal, no longer a
+    // storage constraint. `saved_messages.workspace_id` was dropped (v81), so a
+    // NULL-workspace placement is now perfectly INSERTable; the fail-closed gate
+    // is `save()` asserting the placement is one a human can participate in. The
+    // refusal is the three-arm `SavedPlacementError` — narrowed on
+    // `placement_kind`, NOT the removed "not workspace-placed" wording, because
+    // `direct_pair` IS now saveable and the objection is specifically "a human is
+    // never a participant of an agent_inbox".
     expect(() => saved.save(t.inboxMessage.id, t.viewerUserId)).toThrow(
-      /not workspace-placed/i,
+      /placement_kind=agent_inbox.*not a saveable placement/is,
     );
+
+    // The counterpart: a DM-SHAPED (dm_channel) message the viewer participates
+    // in round-trips through save → listForUser, so the inbox's absence above is
+    // a decision about the inbox, not saved being unable to hold a DM.
+    expect(saved.save(t.dmMessage.id, t.viewerUserId)).not.toBeNull();
+    const listed = saved.listForUser(t.viewerUserId).map(s => s.message.id);
+    expect(listed).toContain(t.dmMessage.id);
+
     expect(saved.save(t.channelMessage.id, t.viewerUserId)).not.toBeNull();
   });
 });

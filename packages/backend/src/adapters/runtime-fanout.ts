@@ -49,7 +49,11 @@ import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { MembershipService } from '../services/membership-service.js';
 import { EventPerimeterGuard } from '../runtime/event-perimeter.js';
 import { DbRuntimeStatusProjector } from '../runtime/status-projector.js';
-import type { ConversationActivitySink } from '../runtime/event-handler.js';
+import { AgentActivitySinkImpl } from '../runtime/agent-activity-sink.js';
+import type {
+  AgentActivitySink,
+  ConversationActivitySink,
+} from '../runtime/event-handler.js';
 import type { RuntimeEventPerimeterPort } from '../runtime/event-perimeter.js';
 import type { RuntimeStatusProjector } from '../runtime/status-projector.js';
 import type {
@@ -102,6 +106,7 @@ export interface RuntimeFanoutDbDeps {
   perimeter: RuntimeEventPerimeterPort;
   statusProjector: RuntimeStatusProjector;
   conversationActivity: ConversationActivitySink;
+  agentActivity: AgentActivitySink;
 }
 
 /** Field-by-field, so a column added to `messages` cannot ride along into the
@@ -142,6 +147,12 @@ export function createRuntimeFanoutDbDeps(deps: {
   db: Db;
   events: EventPublisher;
   logger: BackendLogger;
+  /** v82 (#task:2049) backend clock for the presence-clock stamp (F1). */
+  now?: () => number;
+  /** v82 (#task:2049) fired on an Away→Online transition; the composition
+   *  root binds it to `publishAgentPresenceChangedForAgent`. Defaults to a
+   *  no-op so a construction site that does not care omits it. */
+  onAgentAwayToOnline?: (agentId: string) => void;
 }): RuntimeFanoutDbDeps {
   const agents = new AgentRepo(deps.db);
   const conversations = new ConversationRepo(deps.db);
@@ -370,8 +381,16 @@ export function createRuntimeFanoutDbDeps(deps: {
       agents: { ownerHostIdOf: agentId => agents.get(agentId)?.host_id ?? null },
       conversations: {
         exists: conversationId => conversations.get(conversationId) !== null,
-        hasAgent: (conversationId, agentId) =>
-          conversations.getAgent(conversationId, agentId) !== null,
+        // #task:2048 — the ingress admission question is placement participation,
+        // NOT roster membership. Converge onto the one authority: its workspace
+        // arm already gates the `conversation_agents` EXISTS behind
+        // `placement_kind = 'workspace'`, so a stray roster row on a DirectPair
+        // stays inert here for free (no hand-written `participation OR roster`
+        // fallback, which Gate 9 forbids). This is what lets a rosterless
+        // DirectPair / agent-inbox agent's parsed-event frames past the
+        // perimeter so their activity feed is not permanently empty.
+        isAgentParticipant: (conversationId, agentId) =>
+          conversations.isAgentParticipant(conversationId, agentId),
       },
       logger: deps.logger,
     }),
@@ -382,5 +401,10 @@ export function createRuntimeFanoutDbDeps(deps: {
         agents.listRuntimeParticipations(agentId).map(row => row.conversation_id),
     }),
     conversationActivity: conversationEvents,
+    agentActivity: new AgentActivitySinkImpl({
+      agents,
+      now: deps.now ?? (() => Date.now()),
+      onAwayToOnline: deps.onAgentAwayToOnline ?? (() => {}),
+    }),
   };
 }
