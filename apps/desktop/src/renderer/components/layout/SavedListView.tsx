@@ -12,6 +12,7 @@ import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
 import { workspaceDisplayName } from '@/lib/workspace-name';
@@ -22,6 +23,11 @@ import {
   workspaceFilterId,
   type WorkspaceFilterValue,
 } from '@/components/ui/workspace-filter-select';
+import {
+  SenderFilterSelect,
+  parseSenderFilter,
+  type SenderFilterValue,
+} from '@/components/ui/sender-filter-select';
 import {
   DateFilterSelect,
   dateFilterSince,
@@ -34,11 +40,15 @@ import { paneChrome } from './pane-chrome';
  *  restart clears it back to the default. */
 export interface SavedFilterState {
   workspace: WorkspaceFilterValue;
+  /** Sender axis, single-select (shiki #task:2059). Same value encoding and
+   *  same control as Search — see `sender-filter-select.tsx`. */
+  sender: SenderFilterValue;
   date: DateFilterValue;
 }
 
 export const SAVED_FILTER_DEFAULT: SavedFilterState = {
   workspace: 'all',
+  sender: 'all',
   date: 'all',
 };
 
@@ -93,22 +103,43 @@ export function SavedListView({
   // Same filter form as ArchivedChannelsPanel (shiki #task:1258): Workspace +
   // Date, sharing that panel's WorkspaceFilterSelect (identical item design +
   // canonical workspace data source) and DateFilterSelect (same recency option
-  // semantics). No Sender axis. State is App-owned (controlled) so switching
-  // panes and coming back keeps the selection for the session.
-  const { workspace, date } = filter;
+  // semantics). Sender joined in #task:2059 through the control Search already
+  // used, so the two message-collection panes filter by sender identically.
+  // State is App-owned (controlled) so switching panes and coming back keeps
+  // the selection for the session.
+  const { workspace, sender, date } = filter;
   const setWorkspace = (next: WorkspaceFilterValue) =>
     onFilterChange({ ...filter, workspace: next });
+  const setSender = (next: SenderFilterValue) =>
+    onFilterChange({ ...filter, sender: next });
   const setDate = (next: DateFilterValue) =>
     onFilterChange({ ...filter, date: next });
   const wsId = workspaceFilterId(workspace);
+  const senderQuery = useMemo(() => parseSenderFilter(sender), [sender]);
   const since = useMemo(() => dateFilterSince(date), [date]);
 
-  // Filtering is SERVER-SIDE: the query carries workspace_id + since so the
-  // backend narrows the FULL saved set, not a client slice of the LIMIT-200
-  // window (which would silently drop older history).
-  const { data, isLoading } = useSavedMessages({ workspaceId: wsId, since });
+  // The sender picker's OPTIONS come from the server directory read faces
+  // (shiki 2026-08-18 "服务端"), never a distinct over the fetched rows — a
+  // window-derived domain would offer only the senders inside the capped
+  // `saved_at DESC LIMIT` page. A since-deleted sender is therefore not an
+  // option (shiki's ruling); their rows stay findable by content, and the
+  // absence gets no explanatory copy.
+  const { data: agents = [] } = useAgents();
+  const { data: users = [] } = useUsers();
+  const usersById = useUsersById();
+  const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
+
+  // Filtering is SERVER-SIDE: the query carries workspace_id + since + the
+  // sender param so the backend narrows the FULL saved set, not a client slice
+  // of the LIMIT-200 window (which would silently drop older history).
+  const { data, isLoading } = useSavedMessages({
+    workspaceId: wsId,
+    since,
+    userId: senderQuery.userId,
+    agentId: senderQuery.agentId,
+  });
   const items = useMemo(() => data ?? [], [data]);
-  const hasFilters = workspace !== 'all' || date !== 'all';
+  const hasFilters = workspace !== 'all' || sender !== 'all' || date !== 'all';
   // Keep the filter row visible whenever a filter is active, even if it yields
   // zero rows — else filtering to empty would hide the controls and trap the
   // user with no way to clear.
@@ -129,9 +160,9 @@ export function SavedListView({
   // exist. The row's only identity is then its SENDER, which every row already
   // carries. So no pair join here: the counterpart face belongs to the DM pane
   // and the pair list, not to a cross-conversation row's meta line.
-  // The agent directory drives only the WorkspaceIcon's DM-avatar (an
-  // INDEPENDENT facet — the DM workspace's agent, not the row's author).
-  const { data: agents = [] } = useAgents();
+  // The agent directory serves two INDEPENDENT facets: the sender picker's
+  // option domain above, and the WorkspaceIcon's DM-avatar here (the DM
+  // workspace's agent — not the row's author, and not the row's sender).
   const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(
     () => new Map(agents.map(a => [a.id, a])),
     [agents],
@@ -170,6 +201,16 @@ export function SavedListView({
                 workspaces={workspaces}
                 onChange={setWorkspace}
                 allIcon={<Layers className="size-3.5" />}
+              />
+            </FilterBlock>
+            <FilterBlock label="Sender" className="w-full sm:w-60">
+              <SenderFilterSelect
+                value={sender}
+                agents={agents}
+                users={users}
+                userResolver={userResolver}
+                onChange={setSender}
+                ariaLabel="Saved sender filter"
               />
             </FilterBlock>
             <FilterBlock label="Saved date" className="w-full sm:w-48">

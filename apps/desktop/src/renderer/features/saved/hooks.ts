@@ -16,8 +16,9 @@ import {
 import { useWorkspaces } from '@/features/workspaces/hooks';
 
 /** Prefix key of every Saved list variant. The per-variant key appends the
- *  filter object (`['saved', { workspaceId, since }]`), so a channel-scoped
- *  cleanup must walk ALL loaded variants, not one canonical key (#task:1689). */
+ *  filter object (`['saved', { workspaceId, since, userId, agentId }]`), so a
+ *  channel-scoped cleanup must walk ALL loaded variants, not one canonical key
+ *  (#task:1689). */
 export const savedKey = ['saved'] as const;
 const savedInvalidationTimers = new WeakMap<
   QueryClient,
@@ -122,25 +123,38 @@ export function savedWorkspaceFrameInvalidates(
  * (channel/conversation/agent names + full message body).
  *
  * Filtering is SERVER-SIDE (mirror archived-channels, #task:1258): pass
- * `{ workspaceId, since }` and the backend applies `workspace_id` + `saved_at
- * >= since` WHERE clauses BEFORE the `ORDER BY saved_at DESC LIMIT` — so a
- * filter narrows the FULL set, never a client-side slice of the capped window
- * (which would silently drop older history). The filter params are part of the
- * query key so each variant caches independently; the `['saved']` prefix
- * invalidation from save/unsave + the WS `saved_changed` effect (viewer scope) +
- * the `workspace_channels_changed` effect (workspace scope, keeping embedded
+ * `{ workspaceId, since, userId | agentId }` and the backend applies
+ * `workspace_id` + `saved_at >= since` + the sender predicate as WHERE clauses
+ * BEFORE the `ORDER BY saved_at DESC LIMIT` — so a filter narrows the FULL set,
+ * never a client-side slice of the capped window (which would silently drop
+ * older history). The filter params are part of the query key so each variant
+ * caches independently; the `['saved']` prefix invalidation from save/unsave +
+ * the WS `saved_changed` effect (viewer scope) + the
+ * `workspace_channels_changed` effect (workspace scope, keeping embedded
  * `channel_name` live) cover every variant. Call with no args for the full list
  * (used by `useSavedMessageIds`).
+ *
+ * `userId` / `agentId` are MUTUALLY EXCLUSIVE (#task:2059): they are the two
+ * scoped shapes of one single-select sender axis, so at most one is ever set —
+ * "no sender filter" is both absent, which the server distinguishes from
+ * "filtered to someone" structurally. The renderer never invents the pair
+ * independently: `parseSenderFilter` in `components/ui/sender-filter-select.tsx`
+ * is the one place the picker's `user:<id>` / `agent:<id>` value becomes these
+ * params, shared with Search (#task:2062).
  */
 export interface SavedMessagesQuery {
   workspaceId?: string | null;
   since?: number | null;
+  userId?: string | null;
+  agentId?: string | null;
 }
 
 export function useSavedMessages(params?: SavedMessagesQuery) {
   const qc = useQueryClient();
   const workspaceId = params?.workspaceId ?? null;
   const since = params?.since ?? null;
+  const userId = params?.userId ?? null;
+  const agentId = params?.agentId ?? null;
 
   useEffect(() => {
     const sub = subscribeViewerScope();
@@ -182,11 +196,17 @@ export function useSavedMessages(params?: SavedMessagesQuery) {
   }, [qc, workspaceScopeKey]);
 
   return useQuery({
-    queryKey: [...savedKey, { workspaceId, since }] as const,
+    queryKey: [...savedKey, { workspaceId, since, userId, agentId }] as const,
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (workspaceId) qs.set('workspace_id', workspaceId);
       if (since != null) qs.set('since', String(since));
+      if (userId) qs.set('user_id', userId);
+      // Emitted independently, NOT `else if`: the two are mutually exclusive by
+      // construction (one single-select value), and if a caller ever broke that
+      // the server's own refine should refuse the request loudly rather than
+      // this line silently preferring one axis.
+      if (agentId) qs.set('agent_id', agentId);
       const suffix = qs.toString();
       const res = await api<{ saved: SavedMessageDto[] }>(
         `/api/saved${suffix ? `?${suffix}` : ''}`,
