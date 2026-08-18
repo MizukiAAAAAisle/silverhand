@@ -116,15 +116,20 @@ export function SenderFilterSelect({
                 Humans
               </Select.Label>
               {sortedUsers.length === 0 ? (
-                // Viewer-less fallback (registration in progress / users
-                // endpoint still loading) — still allow the viewer to
-                // pick "self" so the filter is usable on first paint.
-                <FilterSelectItem
-                  value={`user:${viewerId ?? 'self'}`}
-                  icon={<UserAvatar size={AVATAR_PX.xs} />}
-                >
-                  {formatUserDisplayName(viewerId, userResolver)}
-                </FilterSelectItem>
+                // Empty is a LOAD WINDOW, not a state, so it offers no option
+                // at all (#task:2063): `GET /api/users` returns the unfiltered
+                // human roster and the viewer is itself a `users` row, so this
+                // list can only be empty before it resolves. The old fallback
+                // synthesized `user:${viewerId ?? 'self'}` — with the viewer
+                // still unresolved that is a literal `user:self`, an option
+                // whose id names no sender (the server answers it with an empty
+                // list, no error) sitting under an "Unknown user" label. A
+                // picker option's value must always come from a real directory
+                // row, so this arm mirrors the Agents group below: one quiet
+                // row, nothing selectable.
+                <div className="px-2 py-1.5 text-xs italic text-text-muted">
+                  No humans
+                </div>
               ) : (
                 sortedUsers.map(user => (
                   <FilterSelectItem
