@@ -11,7 +11,12 @@ import {
   User,
   X,
 } from 'lucide-react';
-import type { AgentDto, SearchResultDto, UserDto } from '@silverhand/shared';
+import type {
+  AgentDto,
+  DirectPairCounterpart,
+  SearchResultDto,
+  UserDto,
+} from '@silverhand/shared';
 import { Input } from '@/components/ui/input';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import {
@@ -31,6 +36,11 @@ import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import { useDirectPairs } from '@/features/direct-pairs/hooks';
+import {
+  presentCounterpart,
+  collectCounterpartAvatarSources,
+} from '@/features/direct-pairs/counterpart-presentation';
 import { useMessageSearch } from '@/features/search/hooks';
 import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
@@ -188,6 +198,32 @@ export function SearchPanel({
   );
   const resultGroups = useMemo(() => groupResults(results), [results]);
 
+  // A `direct_pair` message hit is a workspace-less human↔agent DM: the frozen
+  // carrier's pair arm holds NO counterpart, and its stored title is the empty
+  // `DIRECT_PAIR_STORED_TITLE` sentinel — reading that as a name renders every DM
+  // hit identically (Paul #task:2051 F1). A pair's identity IS its counterpart,
+  // resolved here through the ONE authoritative pair-label path the `#conv:` chip
+  // and the DM pane share (`presentCounterpart`, #task:2035/2038), which already
+  // covers the deleted-endpoint arm. The pair list is a free viewer-global
+  // observer (`DIRECT_PAIRS_QUERY_POLICY`), so mapping it per surface adds no
+  // read; counterpart avatar bytes come from the pair rows' own `avatar_url` via
+  // the same batch the DM list uses.
+  const pairs = useDirectPairs();
+  const counterpartByConversation = useMemo(
+    () => new Map(pairs.map(p => [p.conversation_id, p.counterpart])),
+    [pairs],
+  );
+  const counterpartSources = useMemo(
+    () => collectCounterpartAvatarSources(pairs),
+    [pairs],
+  );
+  const counterpartAgentAvatarUrls = useAgentAvatarObjectUrls(
+    counterpartSources.agents,
+  );
+  const counterpartUserAvatarUrls = useUserAvatarObjectUrls(
+    counterpartSources.users,
+  );
+
   const resetFilters = (): void => {
     setQuery('');
     onFilterChange(SEARCH_FILTER_DEFAULT);
@@ -298,20 +334,55 @@ export function SearchPanel({
                       query={query}
                       agentAvatarUrls={agentAvatarUrls}
                       userAvatarUrls={humanAvatarUrls}
+                      counterpartByConversation={counterpartByConversation}
+                      counterpartAgentAvatarUrls={counterpartAgentAvatarUrls}
+                      counterpartUserAvatarUrls={counterpartUserAvatarUrls}
                       onClick={() => {
                         if (result.type === 'workspace') {
+                          // Discovery arm: the workspace IS the hit and keeps a
+                          // result-level `workspace` ref (#task:2053-C).
                           onOpenWorkspace(result.workspace.id);
                         } else if (result.type === 'conversation') {
-                          onOpenConversation(
-                            result.workspace.id,
-                            result.conversation.channel_id,
-                          );
-                        } else {
+                          // Branch BEFORE reading the workspace container: it now
+                          // lives inside the placement-discriminated `conversation`
+                          // ref, present only on the `workspace` arm (#task:2053-C).
+                          // A `direct_pair` conversation hit is workspace-less; but
+                          // pair titles are empty so a pair never surfaces as a
+                          // conversation-discovery result — no nav path, no-op.
+                          if (result.conversation.placement_kind === 'workspace') {
+                            onOpenConversation(
+                              result.conversation.workspace.id,
+                              result.conversation.channel_id,
+                            );
+                          } else if (import.meta.env.DEV) {
+                            // Premise (above): a pair can't reach the
+                            // conversation-discovery arm, so this is dead. Assert
+                            // rather than silently no-op — if a producer ever gives
+                            // a pair a title, this fires in dev and forces the nav
+                            // path to be built instead of the click dying quietly
+                            // (Paul #task:2051 F3; a comment alone can't fail).
+                            console.assert(
+                              false,
+                              'direct_pair surfaced as a conversation-discovery result — needs a nav path',
+                            );
+                          }
+                        } else if (result.conversation.placement_kind === 'workspace') {
                           onJumpMessage({
-                            workspaceId: result.workspace.id,
+                            workspaceId: result.conversation.workspace.id,
                             channelId: result.conversation.channel_id,
                             // New reply-cluster: jump uses the message's own
                             // `thread_root_id`; the cluster pane opens to it.
+                            threadRootId: result.message.thread_root_id,
+                            messageId: result.message.id,
+                          });
+                        } else {
+                          // `direct_pair`: a workspace-less human↔agent DM. Omit
+                          // `workspaceId` so the App's jump handler resolves the
+                          // pair through `directPairAuthority` → `toDirect`
+                          // (branch-before-resolve, #task:2052); a pair has no
+                          // workspace container to pass.
+                          onJumpMessage({
+                            channelId: result.conversation.channel_id,
                             threadRootId: result.message.thread_root_id,
                             messageId: result.message.id,
                           });
@@ -604,12 +675,18 @@ function SearchResultRow({
   query,
   agentAvatarUrls,
   userAvatarUrls,
+  counterpartByConversation,
+  counterpartAgentAvatarUrls,
+  counterpartUserAvatarUrls,
   onClick,
 }: {
   result: SearchResultDto;
   query: string;
   agentAvatarUrls: Map<string, string | null>;
   userAvatarUrls: Map<string, string | null>;
+  counterpartByConversation: ReadonlyMap<string, DirectPairCounterpart>;
+  counterpartAgentAvatarUrls: Map<string, string | null>;
+  counterpartUserAvatarUrls: Map<string, string | null>;
   onClick: () => void;
 }): JSX.Element {
   const isMessage = result.type === 'message';
@@ -636,6 +713,9 @@ function SearchResultRow({
               result={result}
               agentAvatarUrls={agentAvatarUrls}
               userAvatarUrls={userAvatarUrls}
+              counterpartByConversation={counterpartByConversation}
+              counterpartAgentAvatarUrls={counterpartAgentAvatarUrls}
+              counterpartUserAvatarUrls={counterpartUserAvatarUrls}
             />
           ) : (
             <>
@@ -680,10 +760,16 @@ function MessageResultHeader({
   result,
   agentAvatarUrls,
   userAvatarUrls,
+  counterpartByConversation,
+  counterpartAgentAvatarUrls,
+  counterpartUserAvatarUrls,
 }: {
   result: Extract<SearchResultDto, { type: 'message' }>;
   agentAvatarUrls: Map<string, string | null>;
   userAvatarUrls: Map<string, string | null>;
+  counterpartByConversation: ReadonlyMap<string, DirectPairCounterpart>;
+  counterpartAgentAvatarUrls: Map<string, string | null>;
+  counterpartUserAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
   // Author identity via the ONE shared seam (#task:1792): the server-
   // authoritative `MessageAuthorDto` → `presentAuthor`, never a live `from_*_id`
@@ -694,28 +780,63 @@ function MessageResultHeader({
     ? presentAuthor(result.message.author)
     : null;
   const senderName = presentation?.label ?? 'System';
+  // The container lives inside the placement-discriminated ref. On the
+  // `workspace` arm it is the workspace + channel; on the `direct_pair` arm it is
+  // the pair's COUNTERPART — a DM has no workspace and no channel title (the
+  // stored title is the empty sentinel), so its "where" is the person on the
+  // other end, resolved through the shared pair-label path (#task:2051 F1).
+  const place = result.conversation;
+  const cp =
+    place.placement_kind === 'workspace'
+      ? null
+      : counterpartByConversation.get(place.id) ?? null;
+  const cpPresentation = cp ? presentCounterpart(cp) : null;
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-      <span className="flex min-w-0 items-center gap-1">
-        <WorkspaceIcon
-          kind={result.workspace.kind === 'dm' ? 'dm' : 'regular'}
-          dmAgentId={null}
-        />
-        <span className="truncate">{workspaceDisplayName(result.workspace)}</span>
-      </span>
-      <span className="flex min-w-0 items-center gap-1">
-        {/* Same channel glyph the sidebar / saved / activity lists use, via
-            the shared ChannelIcon primitive. `sticker` → the `data-channel-icon`
-            hook lets each theme paint its `#` chip (forza6 poster sticker) so a
-            channel reads identically everywhere. `sm` (12px) is intentional
-            (shiki #task:1438): forza6's content-box chip (+2px pad +2px border)
-            lands at 16px — matching the 16px workspace icon + sender avatar on
-            this row (shiki #task:1336); warm / slack paint no chip, so their
-            glyph is simply 12px. Not the chat-header hero
-            (`data-conversation-hash-icon`, ~28px). */}
-        <ChannelIcon variant="sticker" density="sm" />
-        <span className="truncate">{result.conversation.title}</span>
-      </span>
+      {place.placement_kind === 'workspace' ? (
+        <>
+          <span className="flex min-w-0 items-center gap-1">
+            <WorkspaceIcon
+              kind={place.workspace.kind !== 'dm' ? 'regular' : 'dm'}
+              dmAgentId={null}
+            />
+            <span className="truncate">
+              {workspaceDisplayName(place.workspace)}
+            </span>
+          </span>
+          <span className="flex min-w-0 items-center gap-1">
+            {/* Same channel glyph the sidebar / saved / activity lists use, via
+                the shared ChannelIcon primitive. `sticker` → the
+                `data-channel-icon` hook lets each theme paint its `#` chip
+                (forza6 poster sticker) so a channel reads identically everywhere.
+                `sm` (12px) is intentional (shiki #task:1438): forza6's content-box
+                chip (+2px pad +2px border) lands at 16px — matching the 16px
+                workspace icon + sender avatar on this row (shiki #task:1336);
+                warm / slack paint no chip, so their glyph is simply 12px. Not the
+                chat-header hero (`data-conversation-hash-icon`, ~28px). */}
+            <ChannelIcon variant="sticker" density="sm" />
+            <span className="truncate">{place.title}</span>
+          </span>
+        </>
+      ) : (
+        // A `direct_pair` hit wears its counterpart as the container identity —
+        // the same face + label the DM pane and `#conv:` chip use — never a `#`
+        // channel glyph (a pair is not a channel) and never the empty stored
+        // title. A cold pair list degrades to a kind-generic label rather than a
+        // blank, and never flashes on invalidation (retained-rows labelling).
+        <span className="flex min-w-0 items-center gap-1">
+          <AuthorAvatarView
+            avatar={cpPresentation?.avatar ?? { variant: 'neutral-agent' }}
+            size={AVATAR_PX.xs}
+            label={cpPresentation?.label ?? 'Direct message'}
+            agentAvatarUrls={counterpartAgentAvatarUrls}
+            humanAvatarUrls={counterpartUserAvatarUrls}
+          />
+          <span className="truncate">
+            {cpPresentation?.label ?? 'Direct message'}
+          </span>
+        </span>
+      )}
       <span className="flex min-w-0 items-center gap-1">
         <AuthorAvatarView
           avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
@@ -823,11 +944,18 @@ function resultMeta(result: SearchResultDto): string[] {
     return [result.workspace.kind === 'dm' ? 'Agent Space' : 'Workspace'];
   }
   if (result.type === 'conversation') {
-    return [
-      'Channel',
-      workspaceDisplayName(result.workspace),
-      dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
-    ];
+    // Workspace name only on the `workspace` arm; a `direct_pair` conversation
+    // hit is workspace-less (#task:2053-C) and reads as an Agent Space.
+    return result.conversation.placement_kind === 'workspace'
+      ? [
+          'Channel',
+          workspaceDisplayName(result.conversation.workspace),
+          dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
+        ]
+      : [
+          'Agent Space',
+          dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
+        ];
   }
   return [];
 }
@@ -835,12 +963,22 @@ function resultMeta(result: SearchResultDto): string[] {
 function resultTitle(result: SearchResultDto): string {
   if (result.type === 'workspace') return workspaceDisplayName(result.workspace);
   if (result.type === 'conversation') return result.conversation.title;
+  // Message rows render through `MessageResultHeader` (which resolves a pair's
+  // counterpart, never its empty stored title), so this arm is unreachable and
+  // exists only for type-exhaustiveness — do NOT wire it to a display path that
+  // would surface the `direct_pair` title sentinel (Paul #task:2051 F1 aside).
   return result.conversation.title;
 }
 
 function resultExcerpt(result: SearchResultDto, query: string): string | null {
   if (result.type === 'workspace') return result.workspace.description;
-  if (result.type === 'conversation') return workspaceDisplayName(result.workspace);
+  if (result.type === 'conversation') {
+    // Excerpt line for a channel/thread hit is its workspace name; a workspace-
+    // less `direct_pair` hit has none to show (#task:2053-C).
+    return result.conversation.placement_kind === 'workspace'
+      ? workspaceDisplayName(result.conversation.workspace)
+      : null;
+  }
   return buildExcerpt(result.message.content, query);
 }
 

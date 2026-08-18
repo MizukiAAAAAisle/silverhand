@@ -74,8 +74,14 @@ export function removeChannelFromSearch(qc: QueryClient, channelId: string): voi
 }
 
 /** Which channels of ONE workspace a loaded search result set references
- *  (#task:1689). Each result carries `workspace.id` + `conversation.channel_id`
- *  (a thread hit's `conversation.id` is the thread, `channel_id` the parent). */
+ *  (#task:1689). The workspace container now lives inside the placement-
+ *  discriminated `conversation` ref (#task:2053-C), so this reads
+ *  `conversation.workspace.id` only on the `workspace` arm; a `direct_pair`
+ *  result is workspace-less and belongs to no workspace's channel set, so it is
+ *  skipped. (Every result row's `conversation.id === channel_id`: a thread is a
+ *  reply-cluster, not a separate conversation — `search-repo.ts` joins on
+ *  `conv.id = m.conversation_id` — so a thread hit is identified by its
+ *  `message.thread_root_id`, never by a distinct conversation id.) */
 export function searchHeldChannelIds(
   qc: QueryClient,
   workspaceId: string,
@@ -86,7 +92,12 @@ export function searchHeldChannelIds(
     if (!data) continue;
     for (const r of data.results) {
       if (r.type === 'workspace') continue;
-      if (r.workspace.id === workspaceId) ids.add(r.conversation.channel_id);
+      if (
+        r.conversation.placement_kind === 'workspace' &&
+        r.conversation.workspace.id === workspaceId
+      ) {
+        ids.add(r.conversation.channel_id);
+      }
     }
   }
   return [...ids];

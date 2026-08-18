@@ -169,11 +169,11 @@ function searchDto(channelId: string, workspaceId = WS): SearchDto {
     results: [
       {
         type: 'message',
-        workspace: { id: workspaceId, name: 'Workspace', kind: 'regular' },
         conversation: {
           id: channelId,
           title: 'channel',
           placement_kind: 'workspace',
+          workspace: { id: workspaceId, name: 'Workspace', kind: 'regular' },
           roster_policy: 'open',
           channel_id: channelId,
           closed_at: null,
