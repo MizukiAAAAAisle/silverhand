@@ -1253,17 +1253,8 @@ export function createConversationRuntimeApp(
       }
       parsed.data.thread_root_id = rootMessage.thread_root_id ?? rootMessage.id;
     }
-    // Legacy `messages.from_user_id IS NULL` rows predate the principal
-    // middleware. The renderer treats them as authored by the current
-    // viewer, so when the search filter targets the viewer we widen the
-    // SQL to include NULLs. Done here (not in the repo) so SearchRepo
-    // stays a pure SQL adapter without an implicit settings lookup.
     const viewerUserId = requireViewerUserId(c);
-    const includeNullAuthor =
-      parsed.data.user_id !== undefined && parsed.data.user_id === viewerUserId;
-    const { results, total, truncated } = search.search(parsed.data, viewerUserId, {
-      includeNullAuthor,
-    });
+    const { results, total, truncated } = search.search(parsed.data, viewerUserId);
     return c.json({ query: parsed.data, results, total, truncated });
   });
 

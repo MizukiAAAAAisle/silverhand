@@ -476,6 +476,36 @@ export type SearchStream = z.infer<typeof SearchStreamSchema>;
 export const SearchOrderSchema = z.enum(['recency_desc', 'seq_asc']);
 export type SearchOrder = z.infer<typeof SearchOrderSchema>;
 
+// The SENDER axis, defined once and spread into every read face that carries it
+// (search + saved). It is ONE axis in two scoped shapes: a sender is a user or
+// an agent, and the two id namespaces are disjoint, so the wire spells the kind
+// structurally instead of tagging one `sender` string. "No sender filter" is
+// therefore BOTH absent — never a `sender=''` sentinel the server would have to
+// interpret.
+//
+// Both faces resolve a selection against the STABLE send-time author snapshot
+// (`from_kind` + `author_id`), not the live FK — see `SavedMessagesQueryInputSchema`
+// below for the full rule (#task:2059 / #task:2061). This fragment exists so the
+// two faces cannot drift into two sender contracts: they shared the field pair
+// and this refine by copy until #task:2061, and a copy is exactly what let their
+// PREDICATES diverge for a release.
+const SENDER_FILTER_FIELDS = {
+  user_id: SearchOptionalStringSchema,
+  agent_id: SearchOptionalStringSchema,
+};
+
+/** Single-select (@shiki, 2026-08-18): one sender at a time on both faces, so
+ *  naming both is a client bug to refuse loudly, not a union to silently pick
+ *  one arm from. */
+const senderIsSingleSelect = (v: {
+  user_id?: string | undefined;
+  agent_id?: string | undefined;
+}): boolean => !(v.user_id && v.agent_id);
+const SENDER_SINGLE_SELECT_ISSUE: { message: string; path: (string | number)[] } = {
+  message: 'user_id and agent_id cannot both be set',
+  path: ['user_id'],
+};
+
 export const SearchQueryInputSchema = z
   .object({
     q: z.string().trim().max(200).optional().default(''),
@@ -484,8 +514,7 @@ export const SearchQueryInputSchema = z
     workspace_id: SearchOptionalStringSchema,
     conversation_id: SearchOptionalStringSchema,
     thread_root_id: SearchOptionalStringSchema,
-    user_id: SearchOptionalStringSchema,
-    agent_id: SearchOptionalStringSchema,
+    ...SENDER_FILTER_FIELDS,
     from: SearchOptionalMillisSchema,
     to: SearchOptionalMillisSchema,
     order: SearchOrderSchema.optional().default('recency_desc'),
@@ -493,10 +522,7 @@ export const SearchQueryInputSchema = z
     // match set for prev/next; advanced search callers keep the 80 default.
     limit: z.coerce.number().int().positive().max(500).optional().default(80),
   })
-  .refine(v => !(v.user_id && v.agent_id), {
-    message: 'user_id and agent_id cannot both be set',
-    path: ['user_id'],
-  })
+  .refine(senderIsSingleSelect, SENDER_SINGLE_SELECT_ISSUE)
   // A stream only exists within a conversation; narrowing to one requires
   // naming which conversation.
   .refine(v => v.stream === 'all' || !!v.conversation_id, {
@@ -715,18 +741,22 @@ export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;
  *  (epoch ms) — the SAVE-time window, not message created/updated time, matching
  *  the list's `saved_at DESC` order. All are applied before `ORDER BY … LIMIT`.
  *
- *  `user_id` / `agent_id` narrow by SENDER (#task:2059) and deliberately mirror
- *  `SearchQueryInputSchema`'s pair — same two mutually exclusive params, same
- *  `user:<id>` / `agent:<id>` picker encoding on the client — so the two sibling
- *  read faces do not grow two different sender contracts. What this face does
- *  NOT copy is search's PREDICATE: the saved list matches on the stable
- *  send-time snapshot (`from_kind` + `author_id`), not on the live FK, so a
- *  sender who has since been hard-deleted still filters correctly (the FK is
- *  nulled by ON DELETE SET NULL; the snapshot survives). That follows the author
- *  identity rule already used for distinct-replier grouping (#task:1791). A
- *  sender id is never validated for existence — an unknown id simply matches
- *  nothing, exactly as in search, so this filter is not an existence oracle for
- *  user/agent ids. */
+ *  `user_id` / `agent_id` narrow by SENDER (#task:2059). They are the shared
+ *  `SENDER_FILTER_FIELDS` axis above, spread — not copied — so this face and
+ *  search cannot grow two different sender contracts (they did diverge once,
+ *  which is what #task:2061 fixed).
+ *
+ *  BOTH faces match on the stable send-time snapshot (`from_kind` +
+ *  `author_id`), never on the live FK (`from_user_id` / `from_agent_id`), which
+ *  `ON DELETE SET NULL` clears when the actor is hard-deleted: an FK predicate
+ *  silently drops every message from a since-deleted sender. This is the author
+ *  identity rule already used for distinct-replier grouping (#task:1791). For an
+ *  actor that still exists the two keys are row-equivalent, so the snapshot key
+ *  costs nothing and only differs where it matters. A row with neither FK nor
+ *  snapshot (`author_id IS NULL` → `unresolved`) has no nameable identity and is
+ *  matched by NO sender — never attributed to the viewer. A sender id is never
+ *  validated for existence — an unknown id simply matches nothing, so this
+ *  filter is not an existence oracle for user/agent ids. */
 export const SavedMessagesQueryInputSchema = z
   .object({
     workspace_id: z.preprocess(
@@ -737,13 +767,9 @@ export const SavedMessagesQueryInputSchema = z
       v => (v === '' || v === undefined ? undefined : v),
       z.coerce.number().int().nonnegative().optional(),
     ),
-    user_id: SearchOptionalStringSchema,
-    agent_id: SearchOptionalStringSchema,
+    ...SENDER_FILTER_FIELDS,
   })
-  .refine(v => !(v.user_id && v.agent_id), {
-    message: 'user_id and agent_id cannot both be set',
-    path: ['user_id'],
-  });
+  .refine(senderIsSingleSelect, SENDER_SINGLE_SELECT_ISSUE);
 export type SavedMessagesQueryInput = z.infer<typeof SavedMessagesQueryInputSchema>;
 
 //

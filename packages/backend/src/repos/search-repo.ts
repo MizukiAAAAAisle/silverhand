@@ -121,14 +121,6 @@ function conversationRef(row: {
   return { ...base, placement_kind: 'workspace', workspace };
 }
 
-export interface SearchOptions {
-  /** When true and the input filters by `user_id`, also match rows
-   *  where `messages.from_user_id IS NULL`. Routes pass true when the
-   *  filter id matches the resolved viewer; pre-PR1 NULL-authored
-   *  legacy messages are surfaced as "from current viewer". */
-  includeNullAuthor?: boolean;
-}
-
 export class SearchRepo {
   constructor(private readonly db: Db) {}
 
@@ -141,15 +133,17 @@ export class SearchRepo {
    *  `viewerUserId` is REQUIRED (#task:2053-B①): search is a content read face,
    *  and every population arm rests on it (workspace discovery on
    *  `workspace_users`, conversation/message arms on `userParticipates`). It was
-   *  previously an OPTIONAL `SearchOptions.visibleUserId` that defaulted to
+   *  previously an OPTIONAL options-bag field (`visibleUserId`) that defaulted to
    *  "no filter", which put the exclusion of workspace-less placements on a
    *  coordinate-lookup side effect a caller could silently drop. As a required
    *  parameter, under-supplying the viewer fails to compile rather than opening
-   *  the face at runtime. */
+   *  the face at runtime. That bag is now gone entirely (#task:2061 removed its
+   *  last field, `includeNullAuthor`): every search input arrives through
+   *  `SearchQueryInput`, so there is no second, caller-shaped channel that can
+   *  change which rows match. */
   search(
     input: SearchQueryInput,
     viewerUserId: string,
-    opts: SearchOptions = {},
   ): { results: SearchResultDto[]; total: number; truncated: boolean } {
     const query = input.q.trim();
     const hasAuthorFilter = !!input.user_id || !!input.agent_id;
@@ -185,7 +179,7 @@ export class SearchRepo {
       );
     }
 
-    const messages = this.searchMessages(input, query, limit, viewerUserId, opts);
+    const messages = this.searchMessages(input, query, limit, viewerUserId);
     results.push(...messages.results);
     return {
       results: results.slice(0, limit),
@@ -306,7 +300,6 @@ export class SearchRepo {
     query: string,
     limit: number,
     viewerUserId: string,
-    opts: SearchOptions,
   ): { results: SearchResultDto[]; total: number; truncated: boolean } {
     const where: string[] = [];
     const params: SqlValue[] = [];
@@ -333,20 +326,36 @@ export class SearchRepo {
     }
     applyTimeFilters(where, params, input, 'm.created_at');
     applyUserParticipation(where, params, viewerUserId, 'conv');
+    // Sender narrowing matches the STABLE send-time snapshot
+    // (`m.from_kind` + `m.author_id`), NOT the live FK
+    // (`from_user_id` / `from_agent_id`), which `ON DELETE SET NULL` clears when
+    // the actor is hard-deleted — an FK predicate silently drops every message
+    // from a since-deleted sender. For an actor that still exists the two keys
+    // are row-equivalent (v63 backfilled `author_id = from_*_id`, and every
+    // insert since writes the same id into both), so this is free on active
+    // senders and only differs where it matters. Same key as the saved list
+    // (#task:2059) and as distinct-replier grouping (#task:1791) — one author
+    // identity rule across every face that filters or groups by sender
+    // (#task:2061).
+    //
+    // A row with neither FK nor snapshot (`author_id IS NULL` → `unresolved`)
+    // has no nameable identity, so `= ?` with a non-null parameter matches it
+    // under NO sender. That is deliberate: this arm used to widen to
+    // `from_user_id IS NULL` whenever the filter id equalled the viewer, which
+    // attributed every legacy anonymous row to whoever was searching — the same
+    // rows counted for two different humans, so per-sender results summed past
+    // `total`, while the renderer had always drawn them as "Unknown user".
+    // The two arms stay independent `if`s (not `else if`): the schema refine
+    // makes them mutually exclusive, and if a caller ever broke that the
+    // conjunction yields nothing rather than silently preferring one axis.
     if (input.user_id) {
       where.push(`m.from_kind = 'user'`);
-      // Legacy NULL-authored messages are surfaced as "from current
-      // viewer" (see route layer's includeNullAuthor flag).
-      if (opts.includeNullAuthor) {
-        where.push(`(m.from_user_id = ? OR m.from_user_id IS NULL)`);
-      } else {
-        where.push(`m.from_user_id = ?`);
-      }
+      where.push(`m.author_id = ?`);
       params.push(input.user_id);
     }
     if (input.agent_id) {
       where.push(`m.from_kind = 'agent'`);
-      where.push(`m.from_agent_id = ?`);
+      where.push(`m.author_id = ?`);
       params.push(input.agent_id);
     }
     const whereSql = where.length > 0 ? where.join(' AND ') : '1 = 1';

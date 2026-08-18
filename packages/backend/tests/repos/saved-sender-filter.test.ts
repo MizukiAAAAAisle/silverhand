@@ -20,11 +20,11 @@
  * parameter is not an existence oracle for user/agent ids.
  *
  * The third author state — `unresolved`, a pre-v63 row with neither FK nor
- * snapshot — needs no cell: `m.author_id = ?` with a non-null parameter cannot
- * match NULL, so such a row is matched by no sender by construction. The place
- * that state was actively MIS-attributed (search's `includeNullAuthor`, which
- * counted it as the viewer's own) is #task:2061, and the assertion belongs
- * there.
+ * snapshot — needs no cell here: `m.author_id = ?` with a non-null parameter
+ * cannot match NULL, so such a row is matched by no sender by construction. The
+ * place that state was actively MIS-attributed (search's `includeNullAuthor`,
+ * which counted it as the viewer's own) was fixed in #task:2061, and its
+ * assertion lives in that ticket's `search-sender-filter.test.ts`.
  *
  * `seedAllFixtureMemberships: false` is load-bearing: the fixture trigger would
  * seat every human in every conversation, masking the participation conjunction
