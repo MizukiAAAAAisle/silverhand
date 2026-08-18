@@ -93,31 +93,35 @@ export function HeroDot(): JSX.Element {
 }
 
 export interface PresencePillProps {
-  /** Agent-on-computer liveness — whether the agent's runtime is live on
-   *  its computer (`/hosts/:id/status.agents[].online`). Online → solid
-   *  success pill, offline → outline pill. This is the agent-global
-   *  liveness axis; it is deliberately NOT conversation activity (an agent
-   *  can be live-but-idle: its CLI stays resident between turns). Per-
-   *  conversation running/idle belongs on conversation surfaces, never
-   *  here (#task:1362). */
+  /** Whether the agent reads as present. The value is the agent-global presence
+   *  projection (`useAgentPresence` → `projectGlobalPresence`), NOT raw runtime
+   *  liveness: `true` for the `online` state (solid success pill), `false` for
+   *  `away` (outline pill). Presence is `(availability, away_at)` only — a live
+   *  runtime with no observable progress past the inactivity window projects to
+   *  `away`, so this is deliberately NOT "is the CLI resident" (#task:2049). It
+   *  is also NOT per-conversation running/idle — that belongs on conversation
+   *  surfaces, never here (#task:1362). */
   online: boolean;
-  /** Override label. Defaults to Online / Offline. */
+  /** Override label. Defaults to Online / Offline; AgentHeader passes `Away`
+   *  for the `away` state. */
   label?: string;
 }
 
 /**
  * Presence indicator for the agent-global Hero. Renders a HUD-style state
- * tag — solid `bg-success` tile + on-color dot for online, outline form
- * (transparent bg + border + muted text + dot) for offline — the same
- * geometry across both states so online/offline read as one indicator
- * family at different states, matching the Activity / Schedule pill
- * vocabulary.
+ * tag — solid `bg-success` tile + on-color dot for the present state, outline
+ * form (transparent bg + border + muted text + dot) for the absent one — the
+ * same geometry across both states so they read as one indicator family at
+ * different states, matching the Activity / Schedule pill vocabulary.
  *
- * Reads liveness, NOT conversation activity: the Agent page is the agent's
- * global profile (not a conversation), so an alive-but-idle agent must read
- * as Online here, otherwise users mistake a resident runtime for "no
- * runtime" (shiki #task:1362). Conversation running/idle lives on
- * conversation surfaces + the Stop button, never in this pill.
+ * Reads the agent-global PRESENCE projection, NOT conversation activity: the
+ * Agent page is the agent's global profile (not a conversation). #2049 defines
+ * presence from `(availability, away_at)` alone — a runtime that is alive but
+ * has shown no observable progress for the inactivity window reads as Away here
+ * (this supersedes the older #task:1362 rule that an alive-but-idle agent must
+ * always read Online; what still holds from #1362 is that per-conversation
+ * running/idle is NOT presence and lives on conversation surfaces + the Stop
+ * button, never in this pill).
  */
 export function PresencePill({
   online,

@@ -88,13 +88,14 @@ export function placementOfPaneMode(
  * never a permission.
  *
  * Presence is deliberately NOT a field here. Both placements now read a member's
- * Online/Offline from the SAME authority — the agent's Availability
- * (`agent_availability_changed`, #task:2043), composed with liveness by
- * `projectGlobalPresence` — so "which authority answers presence" is no longer a
- * placement-specific capability (frozen contract, @Cindy #task:2039). The one
+ * presence from the SAME authority — the agent's Availability
+ * (`agent_availability_changed`, #task:2043), projected to Online/Away by
+ * `projectGlobalPresence` from `(availability, away_at)` alone (#task:2049
+ * dropped liveness as an input) — so "which authority answers presence" is no
+ * longer a placement-specific capability. The one
  * remaining placement difference is MEMBERSHIP: a roster-bearing placement can say
  * `Not here` for a non-member, which is exactly {@link hasRoster}. A runtime state
- * (`starting` / `crashed`) is orthogonal and never decides Offline.
+ * (`starting` / `crashed`) is orthogonal and never decides presence.
  */
 export interface ConversationPaneCapabilities {
   /** The identity primitive the header wears: the channel `#`, the counterpart's

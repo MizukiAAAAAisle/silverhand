@@ -14,7 +14,7 @@ import {
   PersonHero,
   PresencePill,
 } from '@/features/common/PersonHero';
-import { projectGlobalPresence, useAgentAvailability, useAgentLiveness, useStopAgent } from './hooks';
+import { useAgentPresence, useStopAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { DeleteAgentDialog } from './DeleteAgentDialog';
 
@@ -44,17 +44,15 @@ export function AgentHeader({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const stopAgent = useStopAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
-  // Hero presence composes the two orthogonal axes into one word (#task:2039):
-  // availability (host reachable × agent valid — the primary axis) with liveness
-  // (a live process this instant). The Agent page is the agent's global profile,
-  // not a conversation — a resident-but-idle agent on a reachable host reads as
-  // Away, and a reap between turns must never read as Offline. Both endpoints are
+  // Hero presence composes availability (host reachable × agent valid — the
+  // primary axis) with the presence-clock deadline into one word (#task:2049).
+  // The Agent page is the agent's global profile, not a conversation — a
+  // reachable agent past its activity deadline reads Away, and a runtime that
+  // exited between turns must never read Offline. Both endpoints are
   // `canViewAgent`-gated; `null` (availability not yet a definite answer) draws
   // no pill at all — a disconnected host is not a dead process (#task:2043 /
-  // #task:2039).
-  const availability = useAgentAvailability(agent.id);
-  const liveness = useAgentLiveness(agent.id);
-  const presence = projectGlobalPresence(availability, liveness);
+  // #task:2049).
+  const presence = useAgentPresence(agent.id);
   // Stop targets conversation-running work, so it keeps the conversation
   // runtime-state predicate: count both `starting` and `active` so an agent
   // mid-spawn doesn't slip past the Stop button between exec and first message.

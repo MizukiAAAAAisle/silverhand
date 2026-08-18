@@ -1,11 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type {
   AgentAvailability,
   AgentAvailabilityDto,
   AgentDto,
-  AgentLiveness,
-  AgentLivenessDto,
+  AgentPresenceDto,
   AgentRuntimeStateDto,
   AgentWorkspaceFileRead,
   AgentWorkspaceTree,
@@ -22,6 +21,8 @@ import { apiPaths } from '@silverhand/shared';
 import {
   AGENT_AVAILABILITY_CHANGED_EVENT,
   AgentAvailabilityChangedEventSchema,
+  AGENT_PRESENCE_CHANGED_EVENT,
+  AgentPresenceChangedEventSchema,
 } from '@silverhand/shared';
 import { api, apiUpload, ApiError } from '@/lib/api';
 import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from '@/lib/ws-client';
@@ -101,144 +102,198 @@ export function useAgent(agentId: string | null) {
   });
 }
 
-const agentLivenessKey = (id: string) => ['agents', id, 'liveness'] as const;
+const agentPresenceKey = (id: string) => ['agents', id, 'presence'] as const;
 
 /**
- * The liveness query's refresh + retry policy, as ONE falsifiable config apart
- * from the fold. The endpoint has NO push invalidation (Alice, #task:2043): the
- * server recomputes the bit per GET from its host snapshot and never emits a
- * change event. So freshness is the client's responsibility — a mounted surface
- * (a DM popover, the profile hero) must refresh on a bounded timer, or a value
- * read once at mount would silently age past `staleMs`, fold to `unknown`, and
- * the hero that just showed "online" would disappear ~15s later (shiki, dogfood
- * 2026-08-17). `staleTime` alone does NOT do this: it only expires the value, it
- * never refetches — so without an interval the stale value is never replaced.
- *
- * INVARIANT `refetchIntervalMs < staleMs` (asserted in the unit test): each
- * mounted poll writes a fresh `dataUpdatedAt`, resetting the stale countdown
- * BEFORE the value can age out. A reachable host therefore keeps reading its
- * last state for as long as the surface is mounted — the fold never sees a
- * fresh value flip to `unknown` between polls (no per-poll flicker; see
- * `projectAgentLiveness`, which by design does not read `isFetching`). The value
- * only ages into `unknown` when the polls themselves FAIL past `staleMs` — an
- * unreachable host, which is the honest outcome.
- *
- * `refetchIntervalInBackground: false` — an unmounted / backgrounded surface has
- * no viewer, so it stops polling and refetches on the next mount instead.
+ * The activity deadline in the CLIENT's wall-clock domain, or a sentinel when
+ * there is none:
+ *  - a `number` — the calibrated instant (client clock) the agent crosses to
+ *    Away; the projection compares it against the same clock's `now`.
+ *  - `null` — the backend reported `away_at === null` (never active).
+ *  - `'unknown'` — the `/presence` read is pending / cold-errored (no deadline).
+ * The RAW server-epoch `away_at` deliberately is NOT this type and never leaves
+ * {@link useAgentPresence}: comparing a server-epoch deadline against a client
+ * `now` silently misprojects under clock skew (#task:2049).
  */
-export const AGENT_LIVENESS_QUERY_POLICY = {
-  staleMs: 15 * 1000,
-  refetchIntervalMs: 10 * 1000,
-  refetchIntervalInBackground: false,
-  /** Transport / 5xx retries are BOUNDED — a persistently-failing read has
-   *  nothing to eventually deliver by retrying forever, so after this many it
-   *  settles into the honest `unknown` rather than hammering an unreachable
-   *  host. A 4xx is terminal before this count even applies (see below). */
-  maxRetries: 2,
-} as const;
+export type PresenceDeadline = number | null | 'unknown';
 
 /**
- * Retry predicate for the liveness read, pulled out so its ceiling is a unit
- * assertion rather than behavior buried in the query config:
- *  - a 4xx is TERMINAL — a 404 is the endpoint's anti-enumeration answer for a
- *    non-viewer, which retrying can never turn into a liveness bit;
- *  - transport failures and 5xx retry up to `maxRetries`, then stop so the read
- *    folds to `unknown` instead of retrying forever against a host with no
- *    pending answer to give.
+ * Shift the backend's ABSOLUTE server-epoch `away_at` into the CLIENT's
+ * wall-clock domain so a local `now` / timer comparison doesn't misfire under
+ * client↔server clock skew (#task:2049). The backend emits `server_now` (its
+ * clock at response time) beside `away_at`; the client measures skew as
+ * `offset = dataUpdatedAt − server_now` (its own clock at the SAME response)
+ * and adds it to the deadline. `null` (never active) has no deadline to shift
+ * and passes through unchanged.
+ *
+ * `dataUpdatedAt` and `server_now` MUST come from the SAME fetch — this is the
+ * reason the `['agents', id, 'presence']` cache is refetch-ONLY and NEVER
+ * written by `setQueryData` (see {@link useAgentPresence}): an optimistic write
+ * or an id-only-frame back-fill would advance `dataUpdatedAt` to now while
+ * `server_now` stayed at the prior fetch, poisoning `offset` with the cache
+ * entry's AGE — reviving skew, not staleness. This is the same discipline as
+ * "an id-only invalidation frame carries no value, so apply it only as a
+ * refetch, never as a snapshot". Pure — exported for unit tests.
+ *
+ * Residual (accepted, #task:2049): the offset is recomputed only on each fetch,
+ * so across a long-lived cache entry an NTP correction or sleep/wake drifts the
+ * deadline until the next refetch — a second reason nav/mount must truly refetch
+ * `/presence`, not merely read a warm entry.
  */
-export function agentLivenessRetry(failureCount: number, err: unknown): boolean {
-  if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+export function calibratePresenceDeadline(
+  awayAt: number | null,
+  serverNow: number,
+  dataUpdatedAt: number,
+): number | null {
+  if (awayAt === null) return null;
+  return awayAt + (dataUpdatedAt - serverNow);
+}
+
+/**
+ * Pure decision: does this frame invalidate the given agent's presence read?
+ * Same shape as {@link decideAgentAvailabilityInvalidation} on the presence
+ * event: `snapshot_required` counts unconditionally (a replay gap may have
+ * swallowed the id-only `agent_presence_changed` frame, and the only recovery
+ * for a dropped viewer-scoped delta is to refetch), and an
+ * `agent_presence_changed` event counts only when its validated `agent_id`
+ * matches this agent (the frame is per-viewer, not per-agent). The caller gates
+ * `isCurrentViewerScope(frame.scope)` first. Pure — exported for unit tests.
+ */
+export function decideAgentPresenceInvalidation(
+  frame: AgentAvailabilitySyncFrame,
+  agentId: string,
+): boolean {
+  if (frame.type === 'snapshot_required') return true;
+  if (frame.type !== 'event' || frame.kind !== AGENT_PRESENCE_CHANGED_EVENT) {
     return false;
   }
-  return failureCount < AGENT_LIVENESS_QUERY_POLICY.maxRetries;
+  const parsed = AgentPresenceChangedEventSchema.safeParse(frame.payload);
+  return parsed.success && parsed.data.agent_id === agentId;
 }
 
 /**
- * Pure projection of the liveness query state onto the tri-state a consumer
- * draws. The endpoint has NO invalidation channel (Alice, #task:2043): the
- * server recomputes the bit per GET from its host snapshot and never pushes a
- * change, so a value the client holds is trustworthy ONLY while it is a FRESH
- * successful read. Every other state folds to `unknown` — the honest "we don't
- * know", NEVER to `offline` (an unreachable/disconnected host is not a dead
- * process, #task:2039):
- *  - `data === undefined` — first load in flight, disabled, or a read that
- *    failed with no prior value (incl. the 404 anti-enum for a non-viewer);
- *  - `isStale` — a value aged past `staleTime`. With nothing to invalidate it, a
- *    stale bit has no authority; it also covers a value stranded behind a failing
- *    background refetch (React Query retains the old `data` and keeps `status`
- *    `'success'`, but never refreshes `dataUpdatedAt`, so it ages into stale).
+ * The agent's user-facing presence (Online / Away / Offline / no-status),
+ * composed from the two orthogonal reads this hook owns (#task:2049):
+ *  - availability ({@link useAgentAvailability}) — host reachable × agent valid,
+ *    the PRIMARY axis and the only source of Offline;
+ *  - the presence CLOCK (`GET /api/agents/:id/presence` → `{ away_at, server_now }`)
+ *    — the absolute deadline past which a reachable agent reads Away.
  *
- * A FRESH value with a poll in flight (`isFetching`, mounted refresh not yet
- * resolved) intentionally reads as its last state, NOT `unknown`: the input is
- * `{ data, isStale }` and deliberately omits `isFetching`. Folding an in-flight
- * poll to `unknown` would flicker a mounted `online` hero to nothing on every
- * `refetchInterval` tick. A fresh value is still authoritative until it either
- * goes stale or a poll replaces it (see `AGENT_LIVENESS_QUERY_POLICY`).
+ * Liveness is NO LONGER an input (the old availability × liveness composition is
+ * gone): a one-shot runtime that replies and then cleanly exits is not evidence
+ * it crossed the inactivity boundary, so presence is judged by the durable
+ * `away_at` deadline, not by "is a process alive this instant".
  *
- * Splitting this out makes the fold falsifiable in isolation: the query config
- * (retry/refetch policy) can move without touching the online/offline/unknown
- * decision, and each fold case is a one-line unit assertion.
+ * Two things this hook OWNS so every consumer stays a one-liner:
+ *  1. Clock-domain calibration ({@link calibratePresenceDeadline}) — done ONCE
+ *     here; the raw server-epoch `away_at` never leaves this hook, so no second
+ *     site can compare it against a local clock and silently misfire under skew.
+ *  2. The boundary re-render: the backend emits `agent_presence_changed` only on
+ *     an Away→ONLINE crossing (real activity), NEVER when an idle agent passively
+ *     crosses its deadline to Away — so a resident surface would sit on a stale
+ *     Online forever without a client timer. A single `setTimeout` at the
+ *     calibrated deadline bumps a tick to re-project exactly once, at the flip.
+ *
+ * The presence cache is refetch-ONLY (`staleTime: Infinity`, event-invalidated,
+ * NEVER written by `setQueryData`). Beyond the usual "don't apply an id-only
+ * frame as a snapshot" rule, an optimistic write here would also poison the skew
+ * offset — see {@link calibratePresenceDeadline}. A retained value (invalidated
+ * but not yet refetched) is used as-is rather than folded to unknown: its
+ * `away_at`/`server_now` are still a matched pair, and the deadline degrades
+ * safely (a past deadline reads Away; the availability axis, which folds stale →
+ * unknown, is the safety valve for "should we claim anything at all").
  */
-export function projectAgentLiveness(state: {
-  data: AgentLiveness | undefined;
-  isStale: boolean;
-}): AgentLiveness {
-  if (state.data === undefined || state.isStale) return 'unknown';
-  return state.data;
-}
-
-/**
- * The agent's process liveness — the ONE viewer-authorized bit
- * `GET /api/agents/:id/liveness` answers (#task:2043 B). Tri-state:
- *  - `online`  — the runtime is live on its computer;
- *  - `offline` — the computer answered and the process is not running;
- *  - `unknown` — the host hasn't answered / the computer is unreachable, OR the
- *    client's own read is loading / stale / failing. This is NOT the same as
- *    offline (a revoked or disconnected host is not a dead process), so a
- *    consumer renders unknown as unknown — usually nothing — never as Offline.
- *
- * `canViewAgent`-gated, so the HUMAN endpoint of a human↔agent DirectPair can
- * read its counterpart's liveness — the bit the old owner-only host-status path
- * could not give a non-owner, which is why a DM popover showed no status at all
- * (#task:2039). A point read, not a realtime subscription: the endpoint has no
- * push channel, so a mounted surface polls on a BOUNDED interval
- * (`AGENT_LIVENESS_QUERY_POLICY`, interval < staleTime) to keep a resident value
- * fresh; an unmounted surface stops. The tri-state is projected by
- * `projectAgentLiveness`, so a cached-old / cold / failing read reads as
- * `unknown` rather than asserting a possibly-wrong online/offline forever.
- */
-export function useAgentLiveness(
+export function useAgentPresence(
   agentId: string | null | undefined,
-): AgentLiveness {
+): GlobalPresence | null {
+  const qc = useQueryClient();
+  const availability = useAgentAvailability(agentId);
   const query = useQuery({
-    queryKey: agentId ? agentLivenessKey(agentId) : ['agents', 'none', 'liveness'],
+    queryKey: agentId ? agentPresenceKey(agentId) : ['agents', 'none', 'presence'],
     enabled: !!agentId,
-    staleTime: AGENT_LIVENESS_QUERY_POLICY.staleMs,
-    // Bounded mounted refresh: the endpoint never pushes, so poll to keep a
-    // resident value fresh. Interval < staleTime, so a reachable host stays
-    // fresh between polls (no flicker); only failing polls let it age to
-    // `unknown`. Stops when the surface unmounts / backgrounds.
-    refetchInterval: AGENT_LIVENESS_QUERY_POLICY.refetchIntervalMs,
-    refetchIntervalInBackground:
-      AGENT_LIVENESS_QUERY_POLICY.refetchIntervalInBackground,
-    retry: agentLivenessRetry,
+    // Route is the single source of the value; `agent_presence_changed` drives
+    // every refresh, so no timer-based staleness (the boundary timer below
+    // re-PROJECTS, it never refetches). Same retry ceiling as availability.
+    staleTime: Infinity,
+    // …but a mount MUST hit the wire, not read a warm entry. The WS listener is
+    // unbuffered and lives on this hook's effect, so any `agent_presence_changed`
+    // / reconnect `snapshot_required` that arrives while every presence surface
+    // is unmounted is dropped with no compensation; within the default gcTime a
+    // remount would otherwise reuse a never-stale warm entry and paint a working
+    // agent Away for as long as its next real crossing is away. `'always'` closes
+    // that gap and re-pairs `(dataUpdatedAt, server_now)` each mount, bounding the
+    // skew residual (see {@link calibratePresenceDeadline}) to mount granularity.
+    refetchOnMount: 'always',
+    retry: agentAvailabilityRetry,
     queryFn: async () => {
-      const res = await api<AgentLivenessDto>(apiPaths.agentLiveness(agentId!));
-      return res.liveness;
+      const res = await api<AgentPresenceDto>(apiPaths.agentPresence(agentId!));
+      return res;
     },
   });
-  return projectAgentLiveness({ data: query.data, isStale: query.isStale });
+  useEffect(() => {
+    if (!agentId) return;
+    const sub = subscribeViewerScope();
+    const unsub = onWsFrame(frame => {
+      if (
+        (frame.type !== 'event' && frame.type !== 'snapshot_required') ||
+        !isCurrentViewerScope(frame.scope)
+      ) {
+        return;
+      }
+      if (decideAgentPresenceInvalidation(frame, agentId)) {
+        void qc.invalidateQueries({ queryKey: agentPresenceKey(agentId) });
+      }
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [agentId, qc]);
+
+  const deadline: PresenceDeadline =
+    query.data === undefined
+      ? 'unknown'
+      : calibratePresenceDeadline(query.data.away_at, query.data.server_now, query.dataUpdatedAt);
+
+  // Re-project once at the deadline: `agent_presence_changed` fires only for an
+  // Away→Online crossing, never for the passive Online→Away one, so without a
+  // timer a resident Online would stick past the deadline. A single timer per
+  // mount; every mount shares the one presence cache entry, computes the same
+  // deadline, and flips together. A deadline already in the past needs no timer
+  // (the projection already reads Away).
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (typeof deadline !== 'number') return;
+    let timer: ReturnType<typeof setTimeout>;
+    // `setTimeout` may fire a hair EARLY under engine clock granularity; a
+    // forceTick then would re-render while `Date.now() < deadline` still reads
+    // Online, and `deps: [deadline]` wouldn't re-arm — stranding this mount on a
+    // stale Online. So the callback re-checks: only flip once the deadline has
+    // truly passed, otherwise re-arm for the remainder.
+    const tick = (): void => {
+      if (Date.now() >= deadline) {
+        forceTick(t => t + 1);
+        return;
+      }
+      timer = setTimeout(tick, deadline - Date.now());
+    };
+    timer = setTimeout(tick, deadline - Date.now());
+    return () => clearTimeout(timer);
+  }, [deadline]);
+
+  return projectGlobalPresence(availability, deadline, Date.now());
 }
 
 const agentAvailabilityKey = (id: string) => ['agents', id, 'availability'] as const;
 
 /**
  * Transport / 5xx retries for the availability read are BOUNDED, and a 4xx is
- * TERMINAL — the SAME shape as the liveness read: a 404 is the endpoint's
- * anti-enumeration answer for a non-viewer, which no amount of retrying turns
- * into an availability bit. A persistently-failing read has nothing to deliver
- * by hammering an unreachable authority, so it settles into the renderer's
- * `unknown` (no-status) instead.
+ * TERMINAL: a 404 is the endpoint's anti-enumeration answer for a non-viewer,
+ * which no amount of retrying turns into an availability bit. A persistently-
+ * failing read has nothing to deliver by hammering an unreachable authority, so
+ * it settles into the renderer's `unknown` (no-status) instead. The presence
+ * read shares this retry (`retry: agentAvailabilityRetry`), the same 4xx-terminal
+ * shape.
  */
 const AGENT_AVAILABILITY_MAX_RETRIES = 2;
 
@@ -269,10 +324,9 @@ export function agentAvailabilityRetry(failureCount: number, err: unknown): bool
  *    `staleTime: Infinity` with no guaranteed next frame. From invalidation until a
  *    successful replacement the projection reads `unknown`; the brief no-status
  *    blink on a genuine change is acceptable because availability changes are rare
- *    events, not a 10s poll (contrast `projectAgentLiveness`, whose poll would
- *    flicker if it folded in-flight — that fold deliberately omits `isFetching`;
- *    THIS fold keys on `isStale`, which an in-flight-but-not-invalidated poll never
- *    sets, so a rare event's replacement is the only thing that clears it).
+ *    events, not a poll: this fold keys on `isStale`, which an
+ *    in-flight-but-not-invalidated read never sets, so a rare event's replacement
+ *    is the only thing that clears it.
  */
 export function projectAgentAvailability(state: {
   data: AgentAvailability | undefined;
@@ -350,10 +404,10 @@ export function decideAgentAvailabilityInvalidation(
  * The agent's reachability — the ONE viewer-authorized bit
  * `GET /api/agents/:id/availability` answers (#task:2043). TWO values on the
  * wire (`online` | `offline`), projected here to a tri-state with the renderer's
- * own `unknown` (query pending / errored with no prior value). Composes with
- * liveness via {@link projectGlobalPresence}.
+ * own `unknown` (query pending / errored with no prior value). Composes with the
+ * presence deadline via {@link projectGlobalPresence}.
  *
- * Unlike liveness, this endpoint HAS a push channel: the viewer-scoped
+ * This endpoint HAS a push channel: the viewer-scoped
  * `agent_availability_changed {agent_id}` frame is a pure invalidation signal, so
  * the query is `staleTime: Infinity` with NO polling — a mounted surface
  * subscribes the `viewer:<userId>` scope and refetches only when a matching event
@@ -361,7 +415,10 @@ export function decideAgentAvailabilityInvalidation(
  * the hook, not app-shell-global: availability only matters while a presence line
  * for that agent is on screen, so there is nothing to keep live for an agent no
  * view is reading (contrast `useDirectPairsSync`, which must catch a stranger's
- * first DM while the viewer looks elsewhere).
+ * first DM while the viewer looks elsewhere). That "no keep-alive while unmounted"
+ * stance is only sound because a mount truly refetches (`refetchOnMount: 'always'`
+ * below) — any frame dropped while every surface was unmounted is recovered on the
+ * next mount rather than left painting a stale value from a never-stale warm entry.
  */
 export function useAgentAvailability(
   agentId: string | null | undefined,
@@ -373,6 +430,10 @@ export function useAgentAvailability(
     // The route is the single source of the value; the event drives every
     // refresh, so there is no timer-based staleness (no poll, no age-out).
     staleTime: Infinity,
+    // A mount must hit the wire (see docblock): the unbuffered WS listener lives
+    // on this hook, so a frame dropped while unmounted is only recovered by a
+    // real mount refetch — never by rereading a never-stale warm entry.
+    refetchOnMount: 'always',
     retry: agentAvailabilityRetry,
     queryFn: async () => {
       const res = await api<AgentAvailabilityDto>(apiPaths.agentAvailability(agentId!));
@@ -401,38 +462,44 @@ export function useAgentAvailability(
   return projectAgentAvailability({ data: query.data, isStale: query.isStale });
 }
 
-/** The user-facing presence a consumer draws once both axes are composed. */
+/** The user-facing presence a consumer draws once availability and the presence
+ *  deadline are composed. */
 export type GlobalPresence = 'online' | 'away' | 'offline';
 
 /**
- * Compose the two orthogonal presence axes into the one word the UI shows
- * (shiki 2026-08, frozen): Availability answers "can this agent work for me
- * right now" (host reachable × agent valid); liveness answers "is a live process
- * running this instant". Availability is the PRIMARY axis:
- *  - availability `unknown` (query pending / errored) → `null`: there is no
- *    presence to claim yet, so the consumer draws no dot and no label — never a
- *    speculative Offline for an agent we simply haven't read.
- *  - availability `offline` → `Offline`: the host is unreachable or the agent is
- *    invalid; this is the honest Offline regardless of any stale liveness bit (a
- *    reaped process on a reachable host is NOT offline).
- *  - availability `online` → the agent WILL answer. A live process now
- *    (`liveness === 'online'`) → `Online`; otherwise reachable-but-idle
- *    (idle-reaped, waking on the next message, or liveness not yet known) →
- *    `Away` (shiki: idle-reap → Away, not Offline).
+ * Compose the agent's availability with its (client-domain) presence deadline
+ * into the one word the UI shows (#task:2049, frozen — supersedes the old
+ * availability × liveness composition). Availability is the PRIMARY axis and the
+ * only source of Offline; Online requires POSITIVE evidence — an away deadline
+ * still in the future:
+ *  - availability `unknown` (read pending / errored) → `null`: no presence to
+ *    claim yet, so draw nothing — never a speculative status.
+ *  - availability `offline` → Offline: host unreachable / agent invalid — the
+ *    honest Offline regardless of any deadline (a reaped process on a reachable
+ *    host is NOT offline; that path reads Away below).
+ *  - availability `online` + deadline a FUTURE instant (`now < deadline`) →
+ *    Online.
+ *  - availability `online` + deadline in the PAST (`now >= deadline`) → Away.
+ *  - availability `online` + deadline `null` (never active) → Away. v82 has NO
+ *    backfill, so null is the DOMINANT post-deploy state; Online-on-null would be
+ *    a deploy-day mass lie.
+ *  - availability `online` + deadline `'unknown'` (presence read pending/errored)
+ *    → Away.
  *
- * Reading Offline ONLY from availability — never from liveness — is the whole
- * point: liveness-alone showed a reachable agent that had just replied as
- * Offline (#task:2039, "sea"). The transitions this admits as data arrives move
- * one way only (no-status → Away → Online), never a backward flip to a louder
- * claim.
+ * `now` is INJECTED (the hook owns the clock + the boundary timer), so this stays
+ * a pure, testable time function with no `Date.now()` inside. The transitions it
+ * admits move one way only (no-status → Away → Online), never a backward flip to
+ * a louder claim.
  */
 export function projectGlobalPresence(
   availability: AgentAvailability | 'unknown',
-  liveness: AgentLiveness,
+  deadline: PresenceDeadline,
+  now: number,
 ): GlobalPresence | null {
   if (availability === 'unknown') return null;
   if (availability === 'offline') return 'offline';
-  return liveness === 'online' ? 'online' : 'away';
+  if (deadline === 'unknown' || deadline === null) return 'away';
+  return now < deadline ? 'online' : 'away';
 }
 
 const agentProfileMcpKey = (id: string) => ['agents', id, 'profile-mcp'] as const;

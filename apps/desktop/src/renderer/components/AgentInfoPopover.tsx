@@ -17,10 +17,8 @@ import {
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
 import {
-  projectGlobalPresence,
   projectRosterMembership,
-  useAgentAvailability,
-  useAgentLiveness,
+  useAgentPresence,
 } from '@/features/agents/hooks';
 import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
@@ -310,16 +308,13 @@ function PresenceInline({
 }
 
 function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | null {
-  // Two orthogonal axes composed into one word (#task:2039): availability
-  // (host reachable × agent valid — "can it work for me now") is primary,
-  // liveness (a live process this instant) only distinguishes Online from Away
-  // once available. Reading Offline from liveness ALONE was the bug — a
-  // reachable agent that had just replied showed Offline because its process had
-  // been idle-reaped. `projectGlobalPresence` reads Offline solely from
-  // availability, so idle-reap now reads Away, not Offline.
-  const availability = useAgentAvailability(agent.id);
-  const liveness = useAgentLiveness(agent.id);
-  const presence = projectGlobalPresence(availability, liveness);
+  // Availability (host reachable × agent valid — "can it work for me now") is
+  // the primary axis and the only source of Offline; the presence-clock deadline
+  // distinguishes Online from Away once available (#task:2049). Reading Offline
+  // from a process-liveness bit ALONE was the old bug — a reachable agent that
+  // had just replied showed Offline because its runtime had exited. `useAgentPresence`
+  // reads Offline solely from availability, so idle now reads Away, not Offline.
+  const presence = useAgentPresence(agent.id);
   // `null` = no definite answer yet (availability pending / errored). Draw
   // nothing rather than assert a speculative status.
   if (presence === null) return null;
@@ -341,8 +336,8 @@ function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | nul
  * the roster read is settled-successful it answers `unknown` and the line draws
  * nothing — a pending / cold-errored roster must NOT impersonate `Not here`. A
  * confirmed non-member reads `Not here`; a member's Online/Away/Offline then comes
- * from the same availability × liveness composition every placement uses, so the
- * roster never supplies the online/offline word — only the "is it here" gate.
+ * from the same availability × presence-deadline composition every placement uses,
+ * so the roster never supplies the online/offline word — only the "is it here" gate.
  */
 function RosterMemberPresence({
   agent,

@@ -1,137 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import { AGENT_AVAILABILITY_CHANGED_EVENT } from '@silverhand/shared';
+import { AGENT_AVAILABILITY_CHANGED_EVENT, AGENT_PRESENCE_CHANGED_EVENT } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { agentRunStatesKey } from '@/lib/agentRunStateCache';
 import {
-  AGENT_LIVENESS_QUERY_POLICY,
   agentAvailabilityRetry,
-  agentLivenessRetry,
   applySwitchAgentRuntimeSideEffects,
+  calibratePresenceDeadline,
   decideAgentAvailabilityInvalidation,
+  decideAgentPresenceInvalidation,
   projectAgentAvailability,
-  projectAgentLiveness,
   projectGlobalPresence,
   projectRosterMembership,
 } from './hooks';
-
-/**
- * The liveness endpoint has no push invalidation (#task:2043): a value the
- * client holds is trustworthy ONLY while it is a fresh successful read, so the
- * projection folds every non-fresh state to `unknown` and NEVER to `offline` (a
- * disconnected host is not a dead process, #task:2039). Each fold case is pinned
- * here in isolation because #task:2039 shipped a hook that returned the raw
- * cached value — a stale/failing read kept asserting a possibly-wrong
- * online/offline indefinitely.
- */
-describe('projectAgentLiveness', () => {
-  it('passes a fresh successful read straight through', () => {
-    expect(projectAgentLiveness({ data: 'online', isStale: false })).toBe('online');
-    expect(projectAgentLiveness({ data: 'offline', isStale: false })).toBe('offline');
-    expect(projectAgentLiveness({ data: 'unknown', isStale: false })).toBe('unknown');
-  });
-
-  it('folds no value (loading / disabled / errored-with-no-data) to unknown', () => {
-    expect(projectAgentLiveness({ data: undefined, isStale: false })).toBe('unknown');
-    expect(projectAgentLiveness({ data: undefined, isStale: true })).toBe('unknown');
-  });
-
-  it('folds a stale value to unknown — a cached-old bit has no authority', () => {
-    // Covers a value stranded behind a failing background refetch: React Query
-    // retains the old `data` (status stays 'success') but never refreshes
-    // `dataUpdatedAt`, so it ages into `isStale` and stops being asserted.
-    expect(projectAgentLiveness({ data: 'online', isStale: true })).toBe('unknown');
-    expect(projectAgentLiveness({ data: 'offline', isStale: true })).toBe('unknown');
-  });
-
-  it('keeps a FRESH value while a mounted poll is in flight — no per-poll flicker', () => {
-    // The fold's input is `{ data, isStale }` and deliberately omits
-    // `isFetching`: a bounded mounted poll (`refetchInterval`) is in flight on a
-    // still-fresh value, and folding that to `unknown` would blink a mounted
-    // `online` hero to nothing on every tick. The fresh value stays authoritative
-    // until it goes stale or the poll replaces it.
-    expect(projectAgentLiveness({ data: 'online', isStale: false })).toBe('online');
-    expect(projectAgentLiveness({ data: 'offline', isStale: false })).toBe('offline');
-  });
-
-  it('never folds any non-fresh state to offline', () => {
-    const nonFresh = [
-      { data: undefined, isStale: false },
-      { data: undefined, isStale: true },
-      { data: 'online' as const, isStale: true },
-      { data: 'offline' as const, isStale: true },
-      { data: 'unknown' as const, isStale: true },
-    ];
-    for (const state of nonFresh) {
-      expect(projectAgentLiveness(state)).not.toBe('offline');
-    }
-  });
-});
-
-/**
- * The endpoint has NO push invalidation (#task:2043), so freshness of a MOUNTED
- * value is the query config's job — the fold alone cannot save it. #task:2039's
- * Round 1 shipped `staleTime` WITHOUT a refetch interval: `staleTime` only
- * expires the value, it never refetches, so a resident hero read once at mount
- * aged to `unknown` after 15s and vanished. These pin the policy as a config:
- * the interval must exist and be STRICTLY below staleTime (so a reachable host
- * stays fresh between polls), and the retry ceiling must be bounded.
- */
-describe('AGENT_LIVENESS_QUERY_POLICY', () => {
-  it('polls on a bounded interval strictly shorter than staleTime', () => {
-    // < staleMs is the whole invariant: each mounted poll refreshes
-    // `dataUpdatedAt` before the value can age out, so the fold never sees a
-    // fresh value flip to `unknown` between polls. `>=` would reintroduce the
-    // 15s-then-gone bug (the value goes stale before the next poll refreshes it).
-    expect(AGENT_LIVENESS_QUERY_POLICY.refetchIntervalMs).toBeGreaterThan(0);
-    expect(AGENT_LIVENESS_QUERY_POLICY.refetchIntervalMs).toBeLessThan(
-      AGENT_LIVENESS_QUERY_POLICY.staleMs,
-    );
-  });
-
-  it('does not poll while unmounted / backgrounded', () => {
-    // A surface with no viewer stops polling and refetches on next mount.
-    expect(AGENT_LIVENESS_QUERY_POLICY.refetchIntervalInBackground).toBe(false);
-  });
-
-  it('bounds retries with a finite positive ceiling', () => {
-    expect(AGENT_LIVENESS_QUERY_POLICY.maxRetries).toBeGreaterThan(0);
-    expect(Number.isInteger(AGENT_LIVENESS_QUERY_POLICY.maxRetries)).toBe(true);
-  });
-});
-
-/**
- * The retry predicate is the OTHER half of the freshness contract: a failing
- * read must eventually stop and let the fold settle into `unknown` rather than
- * hammer an unreachable host forever, but a 4xx (the anti-enumeration answer for
- * a non-viewer) must not be retried at all.
- */
-describe('agentLivenessRetry', () => {
-  it('never retries a 4xx — it is a terminal answer, not a transient failure', () => {
-    for (const status of [400, 403, 404, 429]) {
-      expect(agentLivenessRetry(0, new ApiError(status, 'client', 'no'))).toBe(false);
-    }
-  });
-
-  it('retries a 5xx up to the ceiling, then stops', () => {
-    const err = new ApiError(500, 'Server Error', '');
-    const { maxRetries } = AGENT_LIVENESS_QUERY_POLICY;
-    expect(agentLivenessRetry(0, err)).toBe(true);
-    expect(agentLivenessRetry(maxRetries - 1, err)).toBe(true);
-    expect(agentLivenessRetry(maxRetries, err)).toBe(false);
-  });
-
-  it('retries a transport failure up to the ceiling, then stops', () => {
-    // status 0 (unreachable backend) and non-ApiError both fall through to the
-    // bounded branch — a disconnected host is a "try again", not a 4xx verdict.
-    const transport = new ApiError(0, '', 'backend_unreachable', 'backend_unreachable');
-    const { maxRetries } = AGENT_LIVENESS_QUERY_POLICY;
-    expect(agentLivenessRetry(0, transport)).toBe(true);
-    expect(agentLivenessRetry(0, new Error('boom'))).toBe(true);
-    expect(agentLivenessRetry(maxRetries, transport)).toBe(false);
-    expect(agentLivenessRetry(maxRetries, new Error('boom'))).toBe(false);
-  });
-});
 
 /**
  * Availability is the SECOND presence axis (#task:2043), event-invalidated
@@ -271,34 +152,128 @@ describe('decideAgentAvailabilityInvalidation', () => {
 });
 
 /**
- * The composition that #task:2039 turns on: Offline is read from AVAILABILITY
- * ALONE, never from liveness. The shipped bug read Offline from liveness, so a
- * reachable agent whose process had been idle-reaped after replying showed
- * Offline. Every cell of the 3×3 (availability × liveness) is pinned so a later
- * edit cannot quietly let liveness drive the Offline word again.
+ * The pure invalidation decision for the viewer-scoped PRESENCE event. Mirror of
+ * `decideAgentAvailabilityInvalidation` on `agent_presence_changed`: the caller
+ * has already gated `isCurrentViewerScope(frame.scope)`, so this only matches the
+ * kind, validates the payload, and fences the event to THIS agent (the frame is
+ * per-viewer, not per-agent). It must NOT fire on `agent_availability_changed` —
+ * the two axes have distinct read faces (#task:2049).
+ */
+describe('decideAgentPresenceInvalidation', () => {
+  const AGENT = 'agent-1';
+
+  it('invalidates on a matching agent_presence_changed event', () => {
+    expect(
+      decideAgentPresenceInvalidation(
+        { type: 'event', kind: AGENT_PRESENCE_CHANGED_EVENT, payload: { agent_id: AGENT } },
+        AGENT,
+      ),
+    ).toBe(true);
+  });
+
+  it('ignores the event for a DIFFERENT agent (per-viewer, not per-agent fan-out)', () => {
+    expect(
+      decideAgentPresenceInvalidation(
+        { type: 'event', kind: AGENT_PRESENCE_CHANGED_EVENT, payload: { agent_id: 'other' } },
+        AGENT,
+      ),
+    ).toBe(false);
+  });
+
+  it('ignores the availability event — distinct axis, distinct read face', () => {
+    expect(
+      decideAgentPresenceInvalidation(
+        { type: 'event', kind: AGENT_AVAILABILITY_CHANGED_EVENT, payload: { agent_id: AGENT } },
+        AGENT,
+      ),
+    ).toBe(false);
+  });
+
+  it('ignores a malformed payload even on the right kind', () => {
+    expect(
+      decideAgentPresenceInvalidation(
+        { type: 'event', kind: AGENT_PRESENCE_CHANGED_EVENT, payload: { wrong: 1 } },
+        AGENT,
+      ),
+    ).toBe(false);
+  });
+
+  it('invalidates unconditionally on snapshot_required (a replay gap may have dropped the frame)', () => {
+    expect(decideAgentPresenceInvalidation({ type: 'snapshot_required' }, AGENT)).toBe(true);
+  });
+});
+
+/**
+ * The skew calibration that keeps a server-epoch deadline comparable to a client
+ * clock (#task:2049). `offset = dataUpdatedAt − server_now` is the client↔server
+ * skew measured at the SAME response; the deadline shifts by it. The pairing is
+ * the whole point — both inputs come from one fetch — which is why the presence
+ * cache is refetch-only and never `setQueryData`'d (an optimistic write would
+ * advance `dataUpdatedAt` while `server_now` stayed old, poisoning the offset
+ * with the entry's age). `null` (never active) has no deadline to shift.
+ */
+describe('calibratePresenceDeadline', () => {
+  it('shifts the deadline by the client↔server offset', () => {
+    // Client clock is 1000ms AHEAD of the server (dataUpdatedAt 6000 vs
+    // server_now 5000) → offset +1000 → a server deadline of 8000 lands at 9000
+    // on the client clock.
+    expect(calibratePresenceDeadline(8000, 5000, 6000)).toBe(9000);
+  });
+
+  it('shifts backward when the client clock trails the server', () => {
+    // Client 2000ms BEHIND (dataUpdatedAt 3000 vs server_now 5000) → offset -2000.
+    expect(calibratePresenceDeadline(8000, 5000, 3000)).toBe(6000);
+  });
+
+  it('is identity when the clocks agree', () => {
+    expect(calibratePresenceDeadline(8000, 5000, 5000)).toBe(8000);
+  });
+
+  it('passes null (never active) through — no deadline to shift', () => {
+    expect(calibratePresenceDeadline(null, 5000, 6000)).toBeNull();
+  });
+});
+
+/**
+ * The composition #task:2049 turns on: Offline is read from AVAILABILITY ALONE,
+ * and Online requires POSITIVE evidence — an away deadline (in the CLIENT clock
+ * domain) still in the future against the injected `now`. Liveness is no longer
+ * an input. Every truth-table cell is pinned so a later edit cannot let a stale /
+ * absent deadline paint Online, nor let availability's Offline leak from the
+ * deadline axis. `now` is injected (the hook owns the clock), so this stays pure.
  */
 describe('projectGlobalPresence', () => {
-  it('availability unknown → no status regardless of liveness', () => {
-    for (const l of ['online', 'offline', 'unknown'] as const) {
-      expect(projectGlobalPresence('unknown', l)).toBeNull();
+  const NOW = 1_000;
+
+  it('availability unknown → no status regardless of deadline', () => {
+    for (const d of [500, 2_000, null, 'unknown'] as const) {
+      expect(projectGlobalPresence('unknown', d, NOW)).toBeNull();
     }
   });
 
-  it('availability offline → Offline regardless of any liveness bit', () => {
-    for (const l of ['online', 'offline', 'unknown'] as const) {
-      expect(projectGlobalPresence('offline', l)).toBe('offline');
+  it('availability offline → Offline regardless of any deadline', () => {
+    for (const d of [500, 2_000, null, 'unknown'] as const) {
+      expect(projectGlobalPresence('offline', d, NOW)).toBe('offline');
     }
   });
 
-  it('available + live process → Online', () => {
-    expect(projectGlobalPresence('online', 'online')).toBe('online');
+  it('available + a future deadline → Online', () => {
+    expect(projectGlobalPresence('online', NOW + 1, NOW)).toBe('online');
   });
 
-  it('available but no live process (idle-reaped / not-yet-known) → Away, NEVER Offline', () => {
-    // The #task:2039 regression pin: reachable-but-idle must read Away. If this
-    // ever returns 'offline', liveness has crept back into the Offline decision.
-    expect(projectGlobalPresence('online', 'offline')).toBe('away');
-    expect(projectGlobalPresence('online', 'unknown')).toBe('away');
+  it('available + a past-or-now deadline → Away (the boundary is inclusive of Away)', () => {
+    expect(projectGlobalPresence('online', NOW - 1, NOW)).toBe('away');
+    expect(projectGlobalPresence('online', NOW, NOW)).toBe('away');
+  });
+
+  it('available + null deadline (never active) → Away, NEVER Online', () => {
+    // v82 has no backfill, so null is the DOMINANT post-deploy state; Online here
+    // would be a deploy-day mass lie.
+    expect(projectGlobalPresence('online', null, NOW)).toBe('away');
+  });
+
+  it('available + unknown deadline (presence read pending / errored) → Away', () => {
+    expect(projectGlobalPresence('online', 'unknown', NOW)).toBe('away');
   });
 });
 
