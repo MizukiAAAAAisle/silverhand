@@ -52,6 +52,45 @@ export function parseSenderFilter(value: SenderFilterValue): {
   return {};
 }
 
+/**
+ * URL round-trip for the sender axis (`?sender=agent:<id>`, #task:2114). The
+ * param IS the value encoding — one vocabulary, so a link and a picked option
+ * can never mean different things — and it lives here rather than in the router
+ * because this module owns the union: the router only knows "present and
+ * non-empty" and hands the raw string to {@link senderFilterFromParam}.
+ *
+ * `'all'` has no param (absence IS "no sender filter", mirroring the wire
+ * shape above), and an unparseable value yields `null` so a hand-edited or
+ * stale link degrades to "no sender filter" instead of a dead selection.
+ */
+export function senderFilterToParam(value: SenderFilterValue): string | undefined {
+  return value === 'all' ? undefined : value;
+}
+
+export function senderFilterFromParam(raw: string | null): SenderFilterValue | null {
+  if (!raw) return null;
+  for (const prefix of ['user:', 'agent:'] as const) {
+    if (raw.startsWith(prefix) && raw.length > prefix.length) {
+      return raw as SenderFilterValue;
+    }
+  }
+  return null;
+}
+
+/**
+ * The sender selection that names ONE principal, from the endpoint vocabulary a
+ * conversation coordinate speaks (`human` / `agent`) — a `direct_pair`'s
+ * counterpart is the only place today that has to cross those two spellings
+ * (#task:2114). Mapping it here keeps the `human` → `user:` translation in the
+ * module that defines both sides of it.
+ */
+export function senderFilterForEndpoint(
+  kind: 'human' | 'agent',
+  id: string,
+): SenderFilterValue {
+  return kind === 'agent' ? `agent:${id}` : `user:${id}`;
+}
+
 export function SenderFilterSelect({
   value,
   agents,

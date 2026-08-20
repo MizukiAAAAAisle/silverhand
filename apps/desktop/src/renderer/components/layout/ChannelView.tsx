@@ -56,6 +56,10 @@ import {
   useInlineFindController,
   useInlineFindHotkey,
 } from '@/features/search/useInlineFind';
+import {
+  directPairSenderSeed,
+  type AdvancedSearchSeed,
+} from '@/features/search/advanced-search-seed';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 import type { ConversationVisibility } from '@silverhand/shared';
 import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
@@ -210,11 +214,11 @@ interface ChannelViewProps {
    *  skipped. Absent → no find affordance (e.g. secondary panes, which don't
    *  support being jumped into). */
   onJumpToMessage?: (params: MessageJumpTarget) => void;
-  /** Opens the advanced `SearchPanel`, carrying the current inline query AND
-   *  this conversation's workspace so the advanced panel opens scoped to the
-   *  same workspace (shiki #task:1335). Wired in App to prefill the query +
-   *  workspace filter. */
-  onOpenAdvancedSearch?: (query: string, workspaceId?: string) => void;
+  /** Opens the advanced `SearchPanel` with this pane's own coordinate translated
+   *  into the axes that panel HAS (shiki #task:1335, #task:2114): a channel
+   *  seeds its workspace, a `direct_pair` seeds its counterpart as the sender.
+   *  See `AdvancedSearchSeed` for why a pair cannot seed a container. */
+  onOpenAdvancedSearch?: (seed: AdvancedSearchSeed) => void;
 }
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -918,7 +922,19 @@ function ActiveChannelView({
           <InlineFindBar
             controller={find}
             onOpenAdvanced={() =>
-              onOpenAdvancedSearch?.(find.query, conversation.workspace_id ?? undefined)
+              onOpenAdvancedSearch?.({
+                query: find.query,
+                workspaceId: conversation.workspace_id ?? undefined,
+                // A pair has no workspace to hand over, so it hands over the
+                // counterpart instead — otherwise the advanced panel opened
+                // from a DM carried NO seed at all and kept whatever workspace
+                // filter the session had, which filtered the DM's own results
+                // away (#task:2114).
+                sender:
+                  paneMode.kind === 'direct_message'
+                    ? directPairSenderSeed(paneMode.counterpart)
+                    : undefined,
+              })
             }
             placeholder="Search this channel"
           />

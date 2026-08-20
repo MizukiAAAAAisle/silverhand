@@ -21,6 +21,14 @@ import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
 import { ChannelAttachmentsPanel } from '@/components/layout/ChannelAttachmentsPanel';
 import { SavedListView, SAVED_FILTER_DEFAULT, type SavedFilterState } from '@/components/layout/SavedListView';
 import { SearchPanel, SEARCH_FILTER_DEFAULT, type SearchFilterState } from '@/components/layout/SearchPanel';
+import {
+  senderFilterFromParam,
+  senderFilterToParam,
+} from '@/components/ui/sender-filter-select';
+import {
+  directPairSenderSeed,
+  type AdvancedSearchSeed,
+} from '@/features/search/advanced-search-seed';
 import { ArchivedChannelsPanel, ARCHIVED_FILTER_DEFAULT, type ArchivedFilterState } from '@/components/layout/ArchivedChannelsPanel';
 import { ActivityView } from '@/components/layout/ActivityView';
 import { SplitPane } from '@/components/layout/SplitPane';
@@ -626,19 +634,51 @@ function RegisteredAppShell({
   // (#task:1259), same rationale as savedFilter: survive pane switches, not
   // persisted across restart. Search's query text stays panel-local.
   const [searchFilter, setSearchFilter] = useState<SearchFilterState>(SEARCH_FILTER_DEFAULT);
-  // Inline header find → advanced SearchPanel handoff (#task:1335). Carries the
-  // query (via `?q=` route prefill) AND scopes the advanced panel to the source
-  // conversation's workspace by seeding the App-owned workspace filter — so the
-  // handoff actually lands in the filter, not just the URL.
+  // Inline header find → advanced SearchPanel handoff (#task:1335, #task:2114).
+  // The callback ONLY navigates: the seed rides the URL (`?q=` + `reset=1` +
+  // `?workspace=` / `?sender=`) and the effect below applies it. Writing it
+  // straight into `searchFilter` here was the older shape and could only ADD to
+  // whatever the session was already carrying — which is exactly wrong for a
+  // `direct_pair`, whose hand-off has no workspace to name and therefore left a
+  // stale `workspace:` filter in place, filtering the DM's own results away.
+  //
+  // `reset: true` on EVERY hand-off, including one that can name no axis at all:
+  // "this find is the whole filter set now" is a property of the hand-off, not
+  // of how much of it happened to be expressible.
   const handleOpenAdvancedSearch = useCallback(
-    (query: string, workspaceId?: string) => {
-      if (workspaceId) {
-        setSearchFilter(f => ({ ...f, workspace: `workspace:${workspaceId}` }));
-      }
-      nav.toChatSearch(query);
+    (seed: AdvancedSearchSeed) => {
+      nav.toChatSearch({
+        q: seed.query,
+        reset: true,
+        workspace: seed.workspaceId,
+        sender: seed.sender ? senderFilterToParam(seed.sender) : undefined,
+      });
     },
     [nav],
   );
+  // Apply the route's filter seed (#task:2114). ONE direction only: the URL
+  // seeds the filters, the panel's own filter edits never write back — so
+  // landing here from a hand-off is reproducible (and shareable), while editing
+  // a filter afterwards is not fighting the address bar.
+  //
+  // `reset` is what licenses starting from the DEFAULTS rather than merging, and
+  // that is what clears the axes the hand-off did not name (a DM names a sender
+  // and has no workspace). The deps are the params themselves, so a later
+  // in-panel edit does not re-fire it; without `reset` — the sidebar's Search
+  // entry, or a bare `?q=` link — the session filters stay untouched (#task:1259).
+  const seedReset = route.searchFilterReset;
+  const seedWorkspace = route.searchWorkspace;
+  const seedSender = route.searchSender;
+  useEffect(() => {
+    if (route.chatView !== 'search') return;
+    if (!seedReset) return;
+    const sender = senderFilterFromParam(seedSender);
+    setSearchFilter({
+      ...SEARCH_FILTER_DEFAULT,
+      ...(seedWorkspace ? { workspace: `workspace:${seedWorkspace}` as const } : {}),
+      ...(sender ? { sender } : {}),
+    });
+  }, [route.chatView, seedReset, seedWorkspace, seedSender]);
   const [archivedFilter, setArchivedFilter] = useState<ArchivedFilterState>(ARCHIVED_FILTER_DEFAULT);
   // Per-workspace notification unread count (mention / agent-failure alerts).
   const { data: unreadCounts } = useUnreadCounts();
@@ -2322,6 +2362,12 @@ function RegisteredAppShell({
           onJumped={handleJumped}
           onJumpToMessage={handleJumpToMessage}
           onOpenAdvancedSearch={handleOpenAdvancedSearch}
+          // A DM thread's find seeds the SAME sender the mainline pair seeds
+          // (#task:2114). Read from the pair carrier rather than projected from a
+          // pane mode, for the reason the capabilities comment above gives: a
+          // thread has no placement of its own. Null on the channel arm, where
+          // `workspaceId` above is the expressible narrowing instead.
+          advancedSearchSender={directPairSenderSeed(directPair?.counterpart)}
         />
       </ConversationPaneCapabilitiesProvider>
     );

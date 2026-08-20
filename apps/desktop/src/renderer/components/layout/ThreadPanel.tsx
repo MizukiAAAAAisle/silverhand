@@ -10,6 +10,8 @@ import {
   useInlineFindController,
   useInlineFindHotkey,
 } from '@/features/search/useInlineFind';
+import type { AdvancedSearchSeed } from '@/features/search/advanced-search-seed';
+import type { SenderFilterValue } from '@/components/ui/sender-filter-select';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
@@ -130,10 +132,16 @@ interface ThreadPanelProps {
    *  `threadRootId` so the cluster window is primed + this pane scroll-locates
    *  the reply). Absent → no find affordance (e.g. docked source viewer). */
   onJumpToMessage?: (params: MessageJumpTarget) => void;
-  /** Opens the advanced `SearchPanel`, carrying the current inline query AND
-   *  this thread's workspace so the advanced panel opens scoped to it
-   *  (shiki #task:1335). */
-  onOpenAdvancedSearch?: (query: string, workspaceId?: string) => void;
+  /** Opens the advanced `SearchPanel`, carrying the current inline query AND the
+   *  narrowing this thread's PARENT conversation can express — its workspace, or
+   *  the sender below for a `direct_pair` (shiki #task:1335, #task:2114). */
+  onOpenAdvancedSearch?: (seed: AdvancedSearchSeed) => void;
+  /** Sender seed for the hand-off above when this thread's PARENT is a
+   *  `direct_pair` (#task:2114). Passed in rather than derived: a thread is not
+   *  a conversation, so this panel holds no descriptor to project a pane mode
+   *  from — its host does. Absent for a workspace channel's thread, which seeds
+   *  `workspaceId` instead. */
+  advancedSearchSender?: SenderFilterValue;
 }
 
 /**
@@ -171,6 +179,7 @@ export function ThreadPanel({
   onJumped,
   onJumpToMessage,
   onOpenAdvancedSearch,
+  advancedSearchSender,
 }: ThreadPanelProps): JSX.Element {
   // `canParticipate` (member effects: follow / react / save / attachment export
   // + the mark-read effect below) rides the gate's member-effect axis; the
@@ -907,7 +916,13 @@ export function ThreadPanel({
         <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
           <InlineFindBar
             controller={find}
-            onOpenAdvanced={() => onOpenAdvancedSearch?.(find.query, workspaceId ?? undefined)}
+            onOpenAdvanced={() =>
+              onOpenAdvancedSearch?.({
+                query: find.query,
+                workspaceId: workspaceId ?? undefined,
+                sender: advancedSearchSender,
+              })
+            }
             placeholder="Search this thread"
           />
         </div>

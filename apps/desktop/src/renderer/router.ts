@@ -30,12 +30,43 @@ import type { AppSection } from '@/components/layout/NavRail';
 export const routes = {
   home: () => '/',
   chat: () => '/chat',
-  // Optional `q` prefills the advanced SearchPanel's query — the inline header
-  // find's "高级搜索" hand-off carries the current keyword (#task:1335).
-  chatSearch: (query?: string) =>
-    query && query.trim()
-      ? `/chat/search?q=${encodeURIComponent(query.trim())}`
-      : '/chat/search',
+  /**
+   * Advanced search, optionally SEEDED by the inline header find's hand-off
+   * (#task:1335, extended #task:2114).
+   *
+   * The seed travels in the URL rather than being written straight into App's
+   * session filter state, because a hand-off from a `direct_pair` has to say
+   * two things at once — "filter to this counterpart" AND "forget the filters
+   * you were carrying" — and a merge-into-state seed can only say the first
+   * (a stale `workspace:` from an earlier search then filters the DM's own
+   * results away, which is the reported bug).
+   *
+   * So the two things are TWO params: `reset=1` means "start from the filter
+   * defaults", and each filter param names one axis to apply on top. They are
+   * orthogonal on purpose — a hand-off sends `reset=1` even when it can express
+   * NO axis (a pair whose counterpart is deleted seeds no sender, and a pair has
+   * no workspace at all), which is the case an implicit "any filter param means
+   * the URL owns the filter set" rule silently misses: nothing to send, so the
+   * stale filters would survive the hand-off exactly as before.
+   *
+   * The sidebar's own Search entry passes no seed, so it keeps carrying the
+   * session filters across pane switches (#task:1259), as does a bare `?q=`.
+   */
+  chatSearch: (seed?: {
+    q?: string;
+    workspace?: string;
+    sender?: string;
+    reset?: boolean;
+  }) => {
+    const params = new URLSearchParams();
+    const q = seed?.q?.trim();
+    if (q) params.set('q', q);
+    if (seed?.reset) params.set('reset', '1');
+    if (seed?.workspace) params.set('workspace', seed.workspace);
+    if (seed?.sender) params.set('sender', seed.sender);
+    const qs = params.toString();
+    return qs ? `/chat/search?${qs}` : '/chat/search';
+  },
   chatSaved: () => '/chat/saved',
   chatArchived: () => '/chat/archived',
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
@@ -130,6 +161,19 @@ export interface RouteState {
    *  query on mount when the inline header find hands off to advanced search
    *  (#task:1335). Null when absent. */
   searchQuery: string | null;
+  /**
+   * Advanced-search FILTER seed (`?reset=1&workspace=<id>&sender=<user|agent>:<id>`,
+   * #task:2114). The two axis params are raw strings: the sender vocabulary
+   * belongs to the filter control, so validation happens where that union is
+   * defined (`senderFilterFromParam`) rather than here — the router's job is only
+   * "present and non-empty".
+   *
+   * `searchFilterReset` is what makes the seed a REPLACEMENT rather than a merge;
+   * false ⇒ App leaves the session filters alone (see `routes.chatSearch`).
+   */
+  searchFilterReset: boolean;
+  searchWorkspace: string | null;
+  searchSender: string | null;
   workspaceId: string | null;
   channelId: string | null;
   /**
@@ -320,6 +364,16 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const rawSearchQuery = searchParams.get('q');
   const searchQuery =
     rawSearchQuery && rawSearchQuery.length > 0 ? rawSearchQuery : null;
+  // Advanced-search filter seed (#task:2114) — same non-empty-or-null rule.
+  // `reset` is a presence flag: only the canonical `1` counts, so a hand-edited
+  // `reset=false` reads as "no reset" instead of as a truthy string.
+  const searchFilterReset = searchParams.get('reset') === '1';
+  const rawSearchWorkspace = searchParams.get('workspace');
+  const searchWorkspace =
+    rawSearchWorkspace && rawSearchWorkspace.length > 0 ? rawSearchWorkspace : null;
+  const rawSearchSender = searchParams.get('sender');
+  const searchSender =
+    rawSearchSender && rawSearchSender.length > 0 ? rawSearchSender : null;
 
   let section: AppSection = 'chat';
   if (pathname.startsWith('/members')) section = 'members';
@@ -340,6 +394,9 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     section,
     chatView,
     searchQuery,
+    searchFilterReset,
+    searchWorkspace,
+    searchSender,
     workspaceId: workspaceId ?? null,
     channelId: channelId ?? null,
     directConversationId,
@@ -867,7 +924,12 @@ export function buildAgentPanelOpenUrl(
 export function useNav(): {
   go: (to: string, opts?: { replace?: boolean }) => void;
   toChat: () => void;
-  toChatSearch: (query?: string) => void;
+  toChatSearch: (seed?: {
+    q?: string;
+    workspace?: string;
+    sender?: string;
+    reset?: boolean;
+  }) => void;
   toChatSaved: () => void;
   toChatArchived: () => void;
   toActivity: () => void;
@@ -1045,7 +1107,8 @@ export function useNav(): {
   }, [navigate, location.pathname, location.search]);
   const toChat = useCallback(() => go(routes.chat()), [go]);
   const toChatSearch = useCallback(
-    (query?: string) => go(routes.chatSearch(query)),
+    (seed?: { q?: string; workspace?: string; sender?: string; reset?: boolean }) =>
+      go(routes.chatSearch(seed)),
     [go],
   );
   const toChatSaved = useCallback(() => go(routes.chatSaved()), [go]);
