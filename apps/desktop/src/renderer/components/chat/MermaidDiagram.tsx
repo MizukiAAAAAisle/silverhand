@@ -1,12 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, Copy, Minus, Plus } from 'lucide-react';
 
 /**
- * Renders a ```mermaid fenced block as an actual diagram (#task:1322).
+ * Renders a ```mermaid fenced block as an actual diagram (#task:1322), inside its
+ * own operable block (#task:2114).
  *
  * Product contract (shiki): a mermaid block AUTO-renders to a diagram by
  * default; only if rendering fails does it fall back to showing the source.
  * The fallback is per-diagram and non-blocking — one broken diagram never
  * takes down the rest of the message.
+ *
+ * The block's chrome is the CODE BLOCK's chrome (`.code-block` + its header
+ * strip), not a second vocabulary: a diagram and a snippet are the same kind of
+ * thing in prose — an island with a language tag — and one of this block's two
+ * views IS a code block. Reusing it also means every theme already paints this
+ * surface (the `island` token family), with no per-theme work.
  *
  * Why lazy `import('mermaid')`: the library is large (~500KB) and most
  * messages have no diagram, so we keep it out of the main renderer chunk and
@@ -30,8 +38,9 @@ import { useEffect, useRef, useState } from 'react';
  * (`ImagePreviewModal`) pre-renders each diagram to SVG *before* capture via
  * {@link renderMermaidSvg} — the SAME render entry and theme this component
  * uses — and injects the finished SVG into the static tree; a diagram that
- * fails (or times out) pre-render still falls back to source. See
- * `Markdown.tsx` `pre` and `ImagePreviewModal`.
+ * fails (or times out) pre-render still falls back to source. That tree keeps
+ * the chrome-less `.mermaid-diagram` shell: zoom and a view toggle are
+ * interactions, and a captured image has none.
  */
 
 // Monotonic id source: mermaid.render needs a DOM-id-safe unique id per call.
@@ -90,10 +99,27 @@ type RenderState =
   | { status: 'ok'; svg: string }
   | { status: 'error'; message: string };
 
+/**
+ * Zoom steps, not a continuous factor: a diagram is read at a few useful sizes
+ * (fit, a bit closer, twice), and discrete steps make the control's two ends
+ * reachable and its state announceable. `1` is "fit the message column" — the
+ * SVG's own `max-width: 100%` — so the ladder is relative to what the reader
+ * already sees, never to the diagram's intrinsic pixel size, which no reader
+ * can see anyway.
+ */
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.5, 2, 3] as const;
+const ZOOM_BASE_INDEX = ZOOM_STEPS.indexOf(1);
+
 export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const [state, setState] = useState<RenderState>({ status: 'pending' });
   // Bumped whenever the app theme changes so the render effect re-fires.
   const [themeTick, setThemeTick] = useState(0);
+  // View + zoom are per-block session state, deliberately NOT reset when `code`
+  // changes: a streaming edit re-renders the same diagram, and yanking the
+  // reader back to fit-width mid-read would read as the block fighting them.
+  const [view, setView] = useState<'diagram' | 'code'>('diagram');
+  const [zoomIndex, setZoomIndex] = useState(ZOOM_BASE_INDEX);
+  const [copied, setCopied] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Re-render on app theme switch so diagram colors track the UI.
@@ -135,12 +161,24 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
     };
   }, [code, themeTick]);
 
+  const onCopy = useCallback(async () => {
+    const text = code.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard denied; ignore */
+    }
+  }, [code]);
+
   if (state.status === 'error') {
-    // Fall back to the raw source so no information is lost. Styled as a code
-    // block (reuses existing `.code-block` CSS) with a mermaid tag so it reads
-    // as "this was meant to be a diagram" rather than a plain snippet.
+    // Fall back to the raw source so no information is lost. Same block chrome,
+    // and NO view toggle: there is no diagram to switch to, so the source is
+    // not a "view" here — it is all there is. The note says why.
     return (
-      <div className="code-block mermaid-fallback">
+      <div className="code-block mermaid-block mermaid-fallback">
         <div className="code-block__header">
           <span className="code-block__lang">mermaid</span>
           <span className="mermaid-fallback__note" title={state.message}>
@@ -154,22 +192,113 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
     );
   }
 
+  const zoom = ZOOM_STEPS[zoomIndex] ?? 1;
+  const diagramReady = state.status === 'ok';
+
   return (
     <div
       ref={containerRef}
-      className="mermaid-diagram"
+      className="code-block mermaid-block"
       data-mermaid-state={state.status}
-      // SVG is produced by mermaid with securityLevel:'strict' (DOMPurify-
-      // sanitized). While pending we render nothing (no layout jump: the
-      // diagram simply appears once ready — diagrams are block-level and
-      // typically the last thing to settle in a message).
-      dangerouslySetInnerHTML={
-        state.status === 'ok' ? { __html: state.svg } : undefined
-      }
+      data-mermaid-view={view}
     >
-      {state.status === 'pending' ? (
-        <span className="mermaid-diagram__pending">Rendering diagram…</span>
-      ) : null}
+      <div className="code-block__header">
+        <span className="code-block__lang">mermaid</span>
+        <div className="mermaid-block__controls">
+          {/* Zoom belongs to the diagram view only — in the code view the same
+              buttons would be present and inert, which is a worse answer than
+              their absence. The code view answers with Copy in the same slot,
+              matching `CodeBlock`'s header exactly. */}
+          {view === 'diagram' ? (
+            <>
+              <button
+                type="button"
+                className="mermaid-block__icon"
+                onClick={() => setZoomIndex(i => Math.max(0, i - 1))}
+                disabled={!diagramReady || zoomIndex === 0}
+                aria-label="Zoom out"
+                title="Zoom out"
+              >
+                <Minus className="size-3" />
+              </button>
+              {/* The readout IS the reset control: a fourth button spelling
+                  "Reset" would spend header width on a state that the number
+                  already names, and clicking a zoom readout to get back to 100%
+                  is the gesture readers already have. */}
+              <button
+                type="button"
+                className="mermaid-block__zoom"
+                onClick={() => setZoomIndex(ZOOM_BASE_INDEX)}
+                disabled={!diagramReady || zoomIndex === ZOOM_BASE_INDEX}
+                aria-label="Reset zoom"
+                title="Reset zoom"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className="mermaid-block__icon"
+                onClick={() =>
+                  setZoomIndex(i => Math.min(ZOOM_STEPS.length - 1, i + 1))
+                }
+                disabled={!diagramReady || zoomIndex === ZOOM_STEPS.length - 1}
+                aria-label="Zoom in"
+                title="Zoom in"
+              >
+                <Plus className="size-3" />
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="code-block__copy"
+              onClick={onCopy}
+              title={copied ? 'Copied' : 'Copy source'}
+              aria-label="Copy source"
+            >
+              {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+            </button>
+          )}
+          {/* One button, labelled with the view it takes you TO — the pair of
+              tabs this replaces would carry a selected state for a two-state
+              choice the label already states. Text, not a glyph: there is no
+              icon that reads as "the source of this diagram". */}
+          <button
+            type="button"
+            className="mermaid-block__view"
+            onClick={() => setView(v => (v === 'diagram' ? 'code' : 'diagram'))}
+            aria-label={view === 'diagram' ? 'Show source' : 'Show diagram'}
+          >
+            {view === 'diagram' ? 'Source' : 'Diagram'}
+          </button>
+        </div>
+      </div>
+      {view === 'code' ? (
+        <pre>
+          <code className="language-mermaid">{code}</code>
+        </pre>
+      ) : (
+        <div className="mermaid-block__viewport">
+          {diagramReady ? (
+            <div
+              className="mermaid-block__canvas"
+              // Scale, not a width override: the SVG's internal geometry is
+              // laid out by mermaid, so a transform is the one operation that
+              // cannot reflow labels into each other. `transform-origin` is
+              // top-left (CSS) so zooming grows the scrollable area to the
+              // right/bottom instead of pushing the diagram off two edges.
+              style={{ transform: `scale(${zoom})` }}
+              // SVG is produced by mermaid with securityLevel:'strict'
+              // (DOMPurify-sanitized).
+              dangerouslySetInnerHTML={{ __html: state.svg }}
+            />
+          ) : (
+            // Pending: the block's own shell is already on screen, so this only
+            // has to say the inside is still coming.
+            <span className="mermaid-diagram__pending">Rendering diagram…</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

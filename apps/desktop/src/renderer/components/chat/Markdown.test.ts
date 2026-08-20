@@ -1856,10 +1856,13 @@ describe('Markdown mermaid fences (#task:1322)', () => {
   it('routes a ```mermaid fence to the diagram container, not a code block', () => {
     // SSR can't run the async render effect, so we assert the wiring: the
     // fence mounts MermaidDiagram (pending state) rather than a <CodeBlock>.
+    // The probe is the render STATE, not a class: the live diagram wears the
+    // code block's own chrome now (#task:2114), so "which component mounted"
+    // can only be read off the state attribute.
     const html = renderInteractive(DIAGRAM);
-    expect(html).toContain('class="mermaid-diagram"');
     expect(html).toContain('data-mermaid-state="pending"');
-    // Not the interactive code-block chrome (that path has a copy button).
+    // Not the interactive code-block chrome (that path offers copy; the
+    // diagram view offers zoom + the source toggle instead).
     expect(html).not.toContain('code-block__copy');
   });
 
@@ -1867,7 +1870,7 @@ describe('Markdown mermaid fences (#task:1322)', () => {
     // `mermaid` is a proper noun; a stray capital must not demote the diagram
     // to a plain code block.
     const html = renderInteractive('```Mermaid\ngraph TD; A-->B;\n```');
-    expect(html).toContain('class="mermaid-diagram"');
+    expect(html).toContain('data-mermaid-state="pending"');
     expect(html).not.toContain('code-block__copy');
   });
 

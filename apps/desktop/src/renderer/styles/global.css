@@ -1153,7 +1153,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 /* Mermaid diagrams (#task:1322). Auto-rendered ```mermaid fences. The SVG
    carries mermaid's own theme palette (dark/light mapped from the app theme),
    so the container stays chrome-light: a centered, horizontally-scrollable
-   block that never overflows the message column. */
+   block that never overflows the message column.
+
+   This chrome-less shell is now the EXPORT path's shell only (the static tree
+   injects a pre-rendered SVG into it); the live path renders `.mermaid-block`
+   below, which has a header strip because it has controls. */
 .markdown-body .mermaid-diagram {
   margin: 0.5em 0;
   max-width: 100%;
@@ -1169,6 +1173,79 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   padding: 0.6em 0;
   font-size: 0.85em;
   color: var(--text-muted);
+}
+
+/* Operable mermaid block (#task:2114): the live diagram in a `.code-block`
+   shell with two views (diagram / source) and a zoom ladder. Everything
+   structural lives here; every colour comes from the `island` family the code
+   block already uses, so no theme needs to know this block exists. */
+.markdown-body .mermaid-block__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.15em;
+}
+/* Icon controls take the copy button's treatment verbatim (same strip, same
+   hit area) but keep their OWN class: `code-block__copy` names an action, and a
+   zoom button wearing it would make "does this block offer copy?" unanswerable
+   from the DOM. */
+.markdown-body .mermaid-block__icon {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15em;
+  color: var(--text-muted);
+  transition: color 120ms ease;
+}
+.markdown-body .mermaid-block__icon:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+/* Zoom readout + view toggle are TEXT controls in an icon strip, so they take
+   the header's own muted-to-primary hover instead of a second treatment. No
+   fill, no border: the header strip is already a surface, and a chip inside a
+   chip is one lift too many. */
+.markdown-body .mermaid-block__zoom,
+.markdown-body .mermaid-block__view {
+  padding: 0.15em 0.35em;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: inherit;
+  transition: color 120ms ease;
+}
+.markdown-body .mermaid-block__zoom:hover:not(:disabled),
+.markdown-body .mermaid-block__view:hover {
+  color: var(--text-primary);
+}
+/* A control that cannot act reads as absent-but-reserved, not as clickable:
+   the ladder's ends and the pending window both land here. Reserved rather
+   than removed so the strip's width does not twitch as you step the zoom. */
+.markdown-body .mermaid-block__controls button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.markdown-body .mermaid-block__zoom {
+  /* Tabular so 50% / 100% / 300% occupy one width — the readout sits between
+     two buttons, which would otherwise shift under the pointer mid-zoom. */
+  font-variant-numeric: tabular-nums;
+}
+/* The scroll viewport. Capped like `pre` (22rem) so a tall diagram cannot own
+   the whole message; zooming scrolls INSIDE this box rather than growing the
+   message, which is the whole point of a block that zooms. */
+.markdown-body .mermaid-block__viewport {
+  max-height: 22rem;
+  overflow: auto;
+  padding: 0.7em 0.9em;
+}
+/* `transform` is set inline (the live zoom step). Origin top-left keeps the
+   scaled canvas anchored to the corner the reader scrolls from; `width:
+   max-content` stops the pre-transform box from being capped at the viewport
+   width, so at >100% the scrollable area actually grows. */
+.markdown-body .mermaid-block__canvas {
+  transform-origin: top left;
+  width: max-content;
+  max-width: 100%;
+}
+.markdown-body .mermaid-block__canvas svg {
+  max-width: 100%;
+  height: auto;
 }
 /* Source fall-back when a diagram fails to render — reuses `.code-block`
    chrome; this note just tags why the source is showing. */
