@@ -33,7 +33,11 @@ import {
   findForbiddenCodePoint,
 } from './display-name-charset.js';
 import { foldCase } from './unicode-case-fold.js';
-import { decodeAddressSegment, encodeAddressSegment } from './address-segment.js';
+import {
+  TARGET_SEGMENT_CODEC,
+  URI_SEGMENT_CODEC,
+  type SegmentCodec,
+} from './address-segment.js';
 
 /**
  * Title length, in CODE POINTS — `Array.from`, not UTF-16 units, so an astral
@@ -194,15 +198,13 @@ export function fixedConversationTitle(literal: string): CanonicalConversationTi
   return result.value;
 }
 
-/** Human-readable form of an issue, shared by the wire schema and the service
- *  error so a user reads the same sentence wherever the title was refused. */
 /** Canonical readable-address segment for a workspace-placed conversation —
  *  the second segment of `#<workspace>/<title>` (#task:2021 P4-4). Symmetric with `formatWorkspaceAddressSegment`, so the two
  *  segments of one token are escaped by the same codec. */
 export function formatConversationAddressSegment(
   title: CanonicalConversationTitle,
 ): string {
-  return encodeAddressSegment(title.title);
+  return TARGET_SEGMENT_CODEC.encode(title.title);
 }
 
 /**
@@ -219,15 +221,43 @@ export function formatConversationAddressSegment(
 export function parseConversationAddressSegment(
   segment: string,
 ): CanonicalConversationTitle | null {
-  const decoded = decodeAddressSegment(segment);
+  return parseTitleSegment(segment, TARGET_SEGMENT_CODEC);
+}
+
+/** The same title in the prose-URI carrier — `silverhand://workspace/<ws>/<title>`
+ *  (#task:2119). A separate function rather than a carrier argument so that a call
+ *  site cannot pick the wrong escape set by omission. */
+export function formatConversationUriSegment(
+  title: CanonicalConversationTitle,
+): string {
+  return URI_SEGMENT_CODEC.encode(title.title);
+}
+
+/** Strict inverse of {@link formatConversationUriSegment}, under the same three
+ *  conditions {@link parseConversationAddressSegment} applies. The re-encode check
+ *  is what makes the two carriers' accept sets DISJOINT where they differ rather
+ *  than one being a superset of the other. */
+export function parseConversationUriSegment(
+  segment: string,
+): CanonicalConversationTitle | null {
+  return parseTitleSegment(segment, URI_SEGMENT_CODEC);
+}
+
+/** One implementation for both carriers: the three conditions are a property of
+ *  the NAME domain, and only the escape set differs. */
+function parseTitleSegment(
+  segment: string,
+  codec: SegmentCodec,
+): CanonicalConversationTitle | null {
+  const decoded = codec.decode(segment);
   if (decoded === null) return null;
   const parsed = parseConversationTitle(decoded);
   if (!parsed.ok || parsed.value.title !== decoded) return null;
-  return formatConversationAddressSegment(parsed.value) === segment
-    ? parsed.value
-    : null;
+  return codec.encode(parsed.value.title) === segment ? parsed.value : null;
 }
 
+/** Human-readable form of an issue, shared by the wire schema and the service
+ *  error so a user reads the same sentence wherever the title was refused. */
 export function describeConversationTitleIssue(
   issue: ConversationTitleIssue,
 ): string {

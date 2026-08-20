@@ -26,6 +26,7 @@ export * from './display-name-charset.js';
 export * from './handle.js';
 export * from './host-diagnostics.js';
 export * from './layout-migration-diagnostics.js';
+export * from './locator.js';
 export * from './logging.js';
 export * from './markdown-escape.js';
 export * from './protocol-versions.js';

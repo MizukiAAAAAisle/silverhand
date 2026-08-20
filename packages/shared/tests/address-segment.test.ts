@@ -15,8 +15,8 @@ import {
   ADDRESS_TOKEN_MAX_BYTES,
   CONVERSATION_TITLE_MAX_CODE_POINTS,
   addressTokenByteLength,
-  decodeAddressSegment,
-  encodeAddressSegment,
+  TARGET_SEGMENT_CODEC,
+  URI_SEGMENT_CODEC,
   parseConversationTitle,
 } from '../src/index.js';
 
@@ -53,13 +53,13 @@ describe('address segment round trip (#task:2016)', () => {
 
   for (const [title, encoded, why] of TITLES) {
     it(`encodes ${JSON.stringify(title)} as ${JSON.stringify(encoded)} — ${why}`, () => {
-      expect(encodeAddressSegment(title)).toBe(encoded);
-      expect(decodeAddressSegment(encoded)).toBe(title);
+      expect(TARGET_SEGMENT_CODEC.encode(title)).toBe(encoded);
+      expect(TARGET_SEGMENT_CODEC.decode(encoded)).toBe(title);
     });
   }
 
   it('is injective over the corpus: no two titles share an encoding', () => {
-    const encodings = TITLES.map(([title]) => encodeAddressSegment(title));
+    const encodings = TITLES.map(([title]) => TARGET_SEGMENT_CODEC.encode(title));
     expect(new Set(encodings).size).toBe(encodings.length);
   });
 
@@ -90,9 +90,9 @@ describe('address segment round trip (#task:2016)', () => {
       // Every one of these must be a LEGAL title, or the case proves nothing.
       expect(parsed.ok).toBe(true);
       if (!parsed.ok) continue;
-      const encoded = encodeAddressSegment(parsed.value.title);
+      const encoded = TARGET_SEGMENT_CODEC.encode(parsed.value.title);
       expect(encoded).not.toMatch(/\s/u);
-      expect(decodeAddressSegment(encoded)).toBe(parsed.value.title);
+      expect(TARGET_SEGMENT_CODEC.decode(encoded)).toBe(parsed.value.title);
     }
   });
 });
@@ -119,7 +119,7 @@ describe('address segment canonical form (#task:2016)', () => {
 
   for (const [segment, why] of REFUSED) {
     it(`refuses ${JSON.stringify(segment)} — ${why}`, () => {
-      expect(decodeAddressSegment(segment)).toBeNull();
+      expect(TARGET_SEGMENT_CODEC.decode(segment)).toBeNull();
     });
   }
 });
@@ -142,12 +142,12 @@ describe('address token budget (#task:2016)', () => {
     // is judged on the encoded form: an escape is ASCII, but it is one triplet PER
     // UTF-8 BYTE, so a `%` costs 3 and a U+3000 space costs 9 — 3x the 3x. The
     // worst case is therefore not the ASCII one.
-    const escapedPercent = encodeAddressSegment(
+    const escapedPercent = TARGET_SEGMENT_CODEC.encode(
       '%'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS),
     );
     expect(escapedPercent.length).toBe(384);
     expect(addressTokenByteLength(escapedPercent)).toBe(384);
-    const escapedSpace = encodeAddressSegment(
+    const escapedSpace = TARGET_SEGMENT_CODEC.encode(
       '\u{3000}'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS),
     );
     expect(escapedSpace.length).toBe(1152);
@@ -160,7 +160,7 @@ describe('address token budget (#task:2016)', () => {
     // the reason a name-shaped address is allowed to be unavailable.
     const token
       = `${ENVELOPE}team/`
-      + encodeAddressSegment('\u{1F680}'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS));
+      + TARGET_SEGMENT_CODEC.encode('\u{1F680}'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS));
     expect(addressTokenByteLength(token)).toBeGreaterThan(
       ADDRESS_TOKEN_MAX_BYTES,
     );
@@ -168,11 +168,79 @@ describe('address token budget (#task:2016)', () => {
 
   it('admits the names people actually type, envelope and thread suffix included', () => {
     const token
-      = `${ENVELOPE}${encodeAddressSegment('silverhand 工作区')}`
-      + `/${encodeAddressSegment('UI/UX 优化')}`
+      = `${ENVELOPE}${TARGET_SEGMENT_CODEC.encode('silverhand 工作区')}`
+      + `/${TARGET_SEGMENT_CODEC.encode('UI/UX 优化')}`
       + '/thread:lHtaFjNlIiZNGk_J';
     expect(addressTokenByteLength(token)).toBeLessThanOrEqual(
       ADDRESS_TOKEN_MAX_BYTES,
     );
+  });
+});
+
+/**
+ * The two carriers (#task:2119).
+ *
+ * The escape SETS nest — the URI set is the target set plus four characters — and
+ * the accept sets deliberately DO NOT. Each carrier accepts exactly one of the two
+ * spellings of a differing character, and which one is opposite in the two
+ * carriers. This matters because both spellings decode to the same visible name, so
+ * an accept set that was a superset would give one name two addresses in that
+ * carrier and nothing would look wrong anywhere.
+ *
+ * All four differing characters are LEGAL IN A NAME (`NAME_RENDERABLE_RANGES`
+ * admits `P*` and `S*`), so every cell below is reachable by a user naming a
+ * channel — none of them is a hypothetical.
+ */
+describe('segment carriers (#task:2119)', () => {
+  const DIFFERING: readonly (readonly [string, string, string])[] = [
+    ['<', '%3C', 'terminates the CommonMark autolink the locator travels inside'],
+    ['>', '%3E', 'terminates it from the other side'],
+    ['#', '%23', 'the fragment delimiter: a URL parser cuts the href here'],
+    ['?', '%3F', 'the query delimiter: the same cut'],
+  ];
+
+  for (const [raw, escaped, why] of DIFFERING) {
+    it(`${JSON.stringify(raw)} — ${why}`, () => {
+      // target: raw is the canonical spelling, and the escape is unknown there.
+      expect(TARGET_SEGMENT_CODEC.encode(raw)).toBe(raw);
+      expect(TARGET_SEGMENT_CODEC.decode(raw)).toBe(raw);
+      expect(TARGET_SEGMENT_CODEC.decode(escaped)).toBeNull();
+      // uri: exactly the other way round.
+      expect(URI_SEGMENT_CODEC.encode(raw)).toBe(escaped);
+      expect(URI_SEGMENT_CODEC.decode(escaped)).toBe(raw);
+      expect(URI_SEGMENT_CODEC.decode(raw)).toBeNull();
+    });
+  }
+
+  it('escape sets nest, and the difference is exactly those four', () => {
+    const target = TARGET_SEGMENT_CODEC.escaped;
+    const uri = URI_SEGMENT_CODEC.escaped;
+    for (const character of target) expect(uri.has(character)).toBe(true);
+    const added = [...uri].filter(character => !target.has(character));
+    expect(new Set(added)).toEqual(new Set(DIFFERING.map(([raw]) => raw)));
+  });
+
+  it('agrees on every shared member, so the carriers differ ONLY in those four', () => {
+    const shared = ['%', '/', ' ', '\u{3000}', '\u{00A0}'];
+    for (const character of shared) {
+      const encoded = TARGET_SEGMENT_CODEC.encode(character);
+      expect(URI_SEGMENT_CODEC.encode(character)).toBe(encoded);
+      expect(URI_SEGMENT_CODEC.decode(encoded)).toBe(character);
+      expect(URI_SEGMENT_CODEC.decode(character)).toBeNull();
+    }
+  });
+
+  it('keeps CJK, pictographs and the rest raw in both carriers', () => {
+    for (const value of ['UI优化', '\u{1F680}', 'thread:1', 'a@b:c[d]', 'é']) {
+      expect(TARGET_SEGMENT_CODEC.encode(value)).toBe(value);
+      expect(URI_SEGMENT_CODEC.encode(value)).toBe(value);
+      expect(URI_SEGMENT_CODEC.decode(value)).toBe(value);
+    }
+  });
+
+  it('refuses a non-canonical escape in the URI carrier too', () => {
+    for (const segment of ['%3c', '%2f', '%41', '%', '%2', '%C3%A9']) {
+      expect(URI_SEGMENT_CODEC.decode(segment)).toBeNull();
+    }
   });
 });

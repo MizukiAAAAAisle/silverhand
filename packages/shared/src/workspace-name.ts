@@ -9,7 +9,11 @@ import {
   parseConversationTitle,
   type ConversationTitleIssue,
 } from './conversation-title.js';
-import { decodeAddressSegment, encodeAddressSegment } from './address-segment.js';
+import {
+  TARGET_SEGMENT_CODEC,
+  URI_SEGMENT_CODEC,
+  type SegmentCodec,
+} from './address-segment.js';
 
 export const WORKSPACE_NAME_MAX_CODE_POINTS = 64;
 
@@ -78,7 +82,7 @@ export function fixedWorkspaceName(literal: string): CanonicalWorkspaceName {
 
 /** Canonical readable-address segment for a regular workspace. */
 export function formatWorkspaceAddressSegment(name: CanonicalWorkspaceName): string {
-  return encodeAddressSegment(name.name);
+  return TARGET_SEGMENT_CODEC.encode(name.name);
 }
 
 /** Strict inverse of {@link formatWorkspaceAddressSegment}. Besides the
@@ -87,13 +91,34 @@ export function formatWorkspaceAddressSegment(name: CanonicalWorkspaceName): str
 export function parseWorkspaceAddressSegment(
   segment: string,
 ): CanonicalWorkspaceName | null {
-  const decoded = decodeAddressSegment(segment);
+  return parseNameSegment(segment, TARGET_SEGMENT_CODEC);
+}
+
+/** The same name in the prose-URI carrier — the root segment of
+ *  `silverhand://workspace/<name>` (#task:2119). Separate from the `target=`
+ *  carrier by function name, not by an argument, so no call site can pick the wrong
+ *  escape set by omission. */
+export function formatWorkspaceUriSegment(name: CanonicalWorkspaceName): string {
+  return URI_SEGMENT_CODEC.encode(name.name);
+}
+
+/** Strict inverse of {@link formatWorkspaceUriSegment}. */
+export function parseWorkspaceUriSegment(
+  segment: string,
+): CanonicalWorkspaceName | null {
+  return parseNameSegment(segment, URI_SEGMENT_CODEC);
+}
+
+/** One implementation for both carriers; only the escape set differs. */
+function parseNameSegment(
+  segment: string,
+  codec: SegmentCodec,
+): CanonicalWorkspaceName | null {
+  const decoded = codec.decode(segment);
   if (decoded === null) return null;
   const parsed = parseWorkspaceName(decoded);
   if (!parsed.ok || parsed.value.name !== decoded) return null;
-  return formatWorkspaceAddressSegment(parsed.value) === segment
-    ? parsed.value
-    : null;
+  return codec.encode(parsed.value.name) === segment ? parsed.value : null;
 }
 
 export function describeWorkspaceNameIssue(issue: WorkspaceNameIssue): string {
