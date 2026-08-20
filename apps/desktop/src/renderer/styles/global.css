@@ -522,10 +522,14 @@ button:disabled { cursor: not-allowed; }
 
 /* Floating frame (PR-4 token promotion). All Radix menu surfaces
    (`[data-radix-menu-content]` — DropdownMenu + ContextMenu) and our
-   `[data-popover-frame='info']` info-card hook (AgentInfoPopover,
-   HumanInfoPopover, ManageMembersPopover, HoverPopover) read a single
-   3-token contract for outer border + outer radius + inner item
-   radius. Each theme owns its values. TSX intentionally still carries
+   `[data-popover-frame]` hook (AgentInfoPopover, HumanInfoPopover,
+   ManageMembersPopover, HoverPopover, dialogs, the reaction picker, the
+   selection toolbar) read a single 3-token contract for outer border +
+   outer radius + inner item radius. Each theme owns its values. The
+   attribute IS the opt-in — its value names the surface kind (`info`,
+   `toolbar`) for readability and for per-theme painting, it does not gate
+   the frame; the scrollbar rule above already reads it attribute-generic.
+   TSX intentionally still carries
    `border border-border rounded-md` Tailwind classes; the rules below
    sit later in CSS source order at equal specificity, so they win and
    the values come from tokens (forza6 → 2px black + 0 radius; the
@@ -539,7 +543,7 @@ button:disabled { cursor: not-allowed; }
    (forza6 v5.7.1 rationale, preserved).
    Cindy `GZJAggfU2U8kcIV0` / `L4ApUD5JQCD8LuAQ`. */
 [data-radix-menu-content],
-[data-popover-frame='info'] {
+[data-popover-frame] {
   border: var(--floating-border);
   border-radius: var(--floating-radius);
 }

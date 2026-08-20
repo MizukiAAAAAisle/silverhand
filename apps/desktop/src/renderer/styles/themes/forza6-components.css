@@ -1813,7 +1813,7 @@
 /* Poster sticker frame for menus + popovers — values now live in the
    `--floating-border` / `--floating-radius` / `--floating-item-radius`
    token contract (forza6.css + global.css rules). The surface scope
-   choices (`[data-radix-menu-content]`, `[data-popover-frame='info']`,
+   choices (`[data-radix-menu-content]`, `[data-popover-frame]`,
    inner items by role) are documented in global.css's floating-frame
    block. Tooltip and Select listbox stay soft on purpose — they sit
    outside the global rule for the same reason they used to sit outside
@@ -2345,7 +2345,7 @@
    `ImagePreviewModal` and `Lightbox` (the two image viewers take the
    shadow but carry NO resting frame since #task:1959 — a border over
    the image competes with it). Only surfaces that also carry
-   `data-popover-frame="info"` get the 2px ink frame. */
+   `data-popover-frame` (any value) get the 2px ink frame. */
 [data-theme='forza6'] [data-modal-shell] {
   box-shadow: var(--forza6-poster-shadow-lg);
 }
