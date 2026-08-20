@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUTHORED_HREF_PROP,
+  authoredHref,
   classifyReferenceHref,
   isPluginLink,
   isReferenceScheme,
@@ -29,6 +31,15 @@ import {
 const stamped = { properties: { [PLUGIN_LINK_PROP]: true } };
 /** A link node exactly as an author's body produces it: no metadata at all. */
 const authored = { properties: {} };
+
+/** A link node as `remarkRefs` leaves it, carrying the authored destination too
+ *  (#task:2120). `href` is what hast serialization would have produced from
+ *  `url`; the two differ exactly when `normalizeUri` had bytes to rewrite. */
+function stampedWith(url: string): { properties: Record<string, unknown> } {
+  return {
+    properties: { [PLUGIN_LINK_PROP]: true, [AUTHORED_HREF_PROP]: url },
+  };
+}
 
 describe('isReferenceScheme', () => {
   it('admits the canonical spelling', () => {
@@ -181,5 +192,121 @@ describe('classifyReferenceHref — arm per destination', () => {
     // `href` is optional on an mdast link node's rendered props.
     expect(classifyReferenceHref(undefined, stamped)).toEqual({ arm: 'other' });
     expect(classifyReferenceHref(null, stamped)).toEqual({ arm: 'other' });
+  });
+});
+
+/**
+ * #task:2120 — the locator arm, whose whole subject is WHICH BYTES DECIDE.
+ *
+ * Between mdast and this function, `href` has been through
+ * `normalizeUri` — so for every locator whose names contain a byte outside
+ * `[!#$&-;=?-Z_a-z~]`, the href is a DIFFERENT STRING from what the author wrote,
+ * and the strict grammar correctly refuses that second spelling. The pair of cases
+ * below is the proof that the decision does not read it: the SAME href
+ * (`…/a%5Eb`) yields a chip when the author wrote `a^b` and no chip when the author
+ * wrote `a%5Eb`, because over-escaping is not the canonical spelling of that name.
+ */
+describe('classifyReferenceHref — locator arm reads the authored bytes', () => {
+  it('draws a chip from bytes the href no longer carries', () => {
+    // Exactly the form `locator.ts` documents: `%2F` / `%20` are already the
+    // canonical spelling of a slash and a space, the CJK is raw.
+    const url = 'silverhand://workspace/silverhand/UI%2FUX%20优化';
+    // What `normalizeUri` hands the component: the CJK is gone.
+    const href = 'silverhand://workspace/silverhand/UI%2FUX%20%E4%BC%98%E5%8C%96';
+
+    expect(classifyReferenceHref(href, stampedWith(url))).toMatchObject({
+      arm: 'locator',
+      locator: { kind: 'channel' },
+    });
+    // The same node without the authored bytes: the href alone cannot produce it.
+    expect(classifyReferenceHref(href, stamped)).toEqual({ arm: 'inert' });
+  });
+
+  it('decides on the authored spelling even when both spell one name', () => {
+    // Identical `href`, opposite outcomes — the whole point.
+    const href = 'silverhand://workspace/a%5Eb';
+    expect(
+      classifyReferenceHref(href, stampedWith('silverhand://workspace/a^b')),
+    ).toMatchObject({ arm: 'locator' });
+    expect(
+      classifyReferenceHref(href, stampedWith('silverhand://workspace/a%5Eb')),
+    ).toEqual({ arm: 'inert' });
+  });
+
+  it('accepts an already-escaped name, which is that name canonically', () => {
+    // `%2F` and `%20` are the canonical spelling of a slash and a space in a
+    // segment, so these are not "encoded" locators — they are the locator.
+    expect(
+      classifyReferenceHref(
+        'silverhand://workspace/silverhand/UI%2FUX%20design',
+        stampedWith('silverhand://workspace/silverhand/UI%2FUX%20design'),
+      ),
+    ).toMatchObject({ arm: 'locator', locator: { kind: 'channel' } });
+  });
+
+  it('is inert without the authored bytes, never falling back to the href', () => {
+    // Review point 1 (@Cindy): one authority. An ASCII-only locator would parse
+    // from the href just fine, which is exactly why a fallback would be invisible
+    // until the first name with a CJK character in it.
+    const href = 'silverhand://dm/Cindy/shiki';
+    expect(classifyReferenceHref(href, stamped)).toEqual({ arm: 'inert' });
+    expect(classifyReferenceHref(href, stampedWith(href))).toMatchObject({
+      arm: 'locator',
+      locator: { kind: 'direct_pair' },
+    });
+  });
+
+  it('is inert for an unstamped node however well-formed the destination', () => {
+    // Provenance still gates first: a labelled `[text](silverhand://workspace/x)`
+    // is not a coordinate the author wrote as one.
+    expect(
+      classifyReferenceHref('silverhand://workspace/x', {
+        properties: { [AUTHORED_HREF_PROP]: 'silverhand://workspace/x' },
+      }),
+    ).toEqual({ arm: 'inert' });
+  });
+
+  it('is inert for a destination neither grammar accepts', () => {
+    for (const url of [
+      'silverhand://workspace',
+      'silverhand://workspace/',
+      'silverhand://workspace/a/b/c/d',
+      'silverhand://dm/Cindy',
+      // A self-pair is not a coordinate (`locator.ts`).
+      'silverhand://dm/shiki/shiki',
+      // Case is canonical for a root word too.
+      'silverhand://Workspace/x',
+    ]) {
+      expect(classifyReferenceHref(url, stampedWith(url)), url).toEqual({
+        arm: 'inert',
+      });
+    }
+  });
+
+  it('lets the addressing grammar win, and cannot be crossed', () => {
+    // The two grammars are disjoint by root word, so a reference destination
+    // carrying authored bytes is still a reference — and a locator's root word can
+    // never produce one.
+    expect(
+      classifyReferenceHref(
+        'silverhand://agent/Alice',
+        stampedWith('silverhand://agent/Alice'),
+      ),
+    ).toEqual({ arm: 'reference', reference: { kind: 'agent', handle: 'Alice' } });
+  });
+});
+
+describe('authoredHref', () => {
+  it('reads only a string written by the remark pass', () => {
+    expect(authoredHref(stampedWith('silverhand://workspace/x'))).toBe(
+      'silverhand://workspace/x',
+    );
+    expect(authoredHref(stamped)).toBe(null);
+    expect(authoredHref(undefined)).toBe(null);
+    // One writer, one reader: anything but a string means the assumption behind
+    // this prop no longer holds, and guessing at it would be a second authority.
+    expect(authoredHref({ properties: { [AUTHORED_HREF_PROP]: true } })).toBe(
+      null,
+    );
   });
 });

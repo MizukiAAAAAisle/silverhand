@@ -10,7 +10,7 @@ import { MESSAGE_RENDER_BUDGET_BYTES } from './markdown-render-budget';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
 import type { WorkspaceChannelReference } from './ConversationRef';
-import { PLUGIN_LINK_PROP } from './reference-href';
+import { AUTHORED_HREF_PROP, PLUGIN_LINK_PROP } from './reference-href';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import { taskBoardCacheScope, taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { setCurrentUserId } from '@/lib/current-user';
@@ -1298,6 +1298,11 @@ describe('Markdown canonical references (#task:2000)', () => {
     // flag must not survive into the document — and neither must react-markdown's
     // `node` prop, which the override now destructures instead of spreading onto
     // the plain-link `<a>`.
+    //
+    // The authored destination (#task:2120) is held to the same fence and needs it
+    // MORE: it is a whole URL rather than a boolean, so leaking it would put an
+    // internal destination back into the document as an attribute — the one place
+    // this design keeps it out of.
     for (const body of [
       'cc <silverhand://agent/Alice>',
       'cc <silverhand://agent/Nobody>',
@@ -1305,10 +1310,15 @@ describe('Markdown canonical references (#task:2000)', () => {
       '[Alice](silverhand://human/shiki)',
       'cc @Alice and #task:12 and #conv:AbC123_-xyZ789qR',
       'see <https://example.com/x>',
+      'in <silverhand://workspace/silverhand>',
+      'in <silverhand://workspace/silverhand/UI%2FUX%20优化>',
+      'in <silverhand://dm/Cindy/shiki>',
+      '[here](silverhand://workspace/silverhand)',
     ]) {
       for (const interactive of [true, false]) {
         const html = renderRef(body, interactive);
         expect(html, body).not.toContain(PLUGIN_LINK_PROP);
+        expect(html, body).not.toContain(AUTHORED_HREF_PROP);
         expect(html, body).not.toContain(' node=');
       }
     }
@@ -1962,4 +1972,168 @@ describe('oversized-content guard (#task:1550)', () => {
     );
     expect(html).toContain('<h1');
   });
+});
+
+/**
+ * #task:2120 — the locator, end to end through the real pipeline.
+ *
+ * WHY THIS FILE AND NOT THE UNIT TEST. Between the remark pass and the `a` override
+ * the destination is rewritten: `mdast-util-to-hast` runs `normalizeUri`, which
+ * percent-encodes every byte outside its ASCII set — so for a locator naming a CJK
+ * channel, or a name containing `^`, the href the component receives is a DIFFERENT
+ * STRING from the one the author typed, and the canonical grammar correctly refuses
+ * that second spelling. `reference-href.test.ts` asserts the decision reads the
+ * authored bytes; only a real parse can assert that those bytes SURVIVE the pipeline
+ * and that the surviving pair is the one the grammar sees (@Cindy, review point 3).
+ *
+ * Every chip here is INERT, and that is the environment rather than a ruling: SSR
+ * mounts no query, so nothing resolves and `resolveLocatorTarget` returns `null`. What
+ * these assertions own is therefore existence and words — whether a coordinate became
+ * a chip at all, and which text it drew — which is exactly the half the byte question
+ * decides. Navigability itself is asserted in `locator-target.test.ts`, where it is
+ * decided.
+ */
+describe('Markdown locators (#task:2120)', () => {
+  function renderLocator(content: string, interactive: boolean): string {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(
+          StaticRouter,
+          { location: '/' },
+          React.createElement(Markdown, { content, interactive }),
+        ),
+      ),
+    );
+  }
+
+  for (const interactive of [true, false]) {
+    const branch = interactive ? 'live' : 'export';
+
+    it(`draws a channel coordinate whose name the href can no longer spell (${branch})`, () => {
+      // `%2F` and `%20` are the canonical spelling of a slash and a space; the CJK is
+      // raw, so `normalizeUri` rewrites it and the href alone would refuse. The chip
+      // exists here ⇒ the authored bytes reached the decision.
+      const html = renderLocator(
+        'see <silverhand://workspace/silverhand/UI%2FUX%20优化>',
+        interactive,
+      );
+
+      expect(html).toContain('data-locator-ref="channel"');
+      // Decoded, which is what a reader can check against the sidebar.
+      expect(html).toContain('UI/UX 优化');
+      expect(html).toContain('silverhand');
+      // The destination is consumed, never emitted — an internal scheme must not
+      // reach the OS opener on either branch.
+      expect(html).not.toContain('silverhand://');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`draws a coordinate for a name normalizeUri would escape (${branch})`, () => {
+      // `^` is legal in a name and stays raw in the canonical spelling, so the href
+      // the component sees is `…/a%5Eb` — a spelling the grammar refuses. The chip is
+      // the proof that the pipeline decided on what the author wrote.
+      const html = renderLocator('see <silverhand://workspace/a^b>', interactive);
+
+      expect(html).toContain('data-locator-ref="workspace"');
+      expect(html).toContain('a^b');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`refuses the over-escaped spelling of that same name (${branch})`, () => {
+      // Same href as the case above, opposite outcome: `%5E` is not how that name is
+      // spelled, so this is not a coordinate at all — no chip, just the authored
+      // text, silently (`parseLocator`).
+      const html = renderLocator('see <silverhand://workspace/a%5Eb>', interactive);
+
+      expect(html).not.toContain('data-locator-ref=');
+      expect(html).toContain('silverhand://workspace/a%5Eb');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`draws every segment a thread coordinate spells, ending in the word (${branch})`, () => {
+      // shiki, 2026-08-21: the thread leaf is the glyph plus the fixed word, because
+      // a root message id is not a name and showing it would be an opaque token the
+      // reader cannot check.
+      const html = renderLocator(
+        'see <silverhand://workspace/silverhand/design/BmgJYofni2Q9Glth>',
+        interactive,
+      );
+
+      expect(html).toContain('data-locator-ref="channel"');
+      expect(html).toContain('design');
+      // The word itself, not a class or an icon attribute that happens to say it.
+      expect(html).toContain('>thread<');
+      // The id is a route argument, never a label.
+      expect(html).not.toContain('BmgJYofni2Q9Glth');
+    });
+
+    it(`draws a DM coordinate with both handles, joined (${branch})`, () => {
+      const html = renderLocator('see <silverhand://dm/Cindy/shiki>', interactive);
+
+      expect(html).toContain('data-locator-ref="direct_pair"');
+      // `&` joins the pair — one coordinate, not a path — and the handle charset
+      // cannot contain it, so the join is unambiguous.
+      expect(html).toContain('Cindy &amp; shiki');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`ignores a label-carrying link to a locator (${branch})`, () => {
+      // Provenance gates first, exactly as for a reference: the chip REPLACES the
+      // label, so chipping this would drop the author's word from the rendered
+      // message while the raw body still shows it.
+      const html = renderLocator(
+        '[here](silverhand://workspace/silverhand)',
+        interactive,
+      );
+
+      expect(html).toContain('here');
+      expect(html).not.toContain('data-locator-ref=');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`does not draw a coordinate written inside a code span (${branch})`, () => {
+      // The syntax is quoted constantly in prose about the product; a chip there
+      // would make the example unreadable.
+      const html = renderLocator(
+        'write `<silverhand://workspace/silverhand>`',
+        interactive,
+      );
+
+      expect(html).toContain('silverhand://workspace/silverhand');
+      expect(html).not.toContain('data-locator-ref=');
+    });
+
+    it(`leaves a destination neither grammar accepts as its own text (${branch})`, () => {
+      for (const href of [
+        'silverhand://workspace',
+        'silverhand://workspace/',
+        'silverhand://workspace/a/b/c/d',
+        'silverhand://dm/Cindy',
+        'silverhand://dm/shiki/shiki',
+        'silverhand://Workspace/x',
+        'silverhand://workspace/silverhand/design/short',
+      ]) {
+        const html = renderLocator(`see <${href}> here`, interactive);
+        expect(html, href).not.toContain('data-locator-ref=');
+        expect(html, href).not.toContain('data-mention-kind=');
+        expect(html, href).not.toContain('<a ');
+      }
+    });
+
+    it(`renders an unresolvable coordinate as the inert sigil, not as nothing (${branch})`, () => {
+      // Under SSR nothing resolves, which is the same shape as a name the viewer
+      // cannot see: the reader still gets the full coordinate, and it is not a
+      // control. One state for every reason — no existence oracle.
+      const html = renderLocator('see <silverhand://workspace/nobody>', interactive);
+
+      expect(html).toContain('data-locator-navigable="false"');
+      expect(html).toContain('nobody');
+      expect(html).not.toContain('role="button"');
+    });
+  }
 });

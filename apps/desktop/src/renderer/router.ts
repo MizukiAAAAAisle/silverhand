@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
 import type { AppSection } from '@/components/layout/NavRail';
+import type { LocatorTarget } from '@/features/conversations/locator-target';
 
 /**
  * Single source of truth for our URL scheme. Keep all path templates
@@ -492,13 +493,11 @@ export function layoutMemoryFromRoute(
  *
  * `workspaceId` is NON-NULL by contract: layout memory is a channel-restore
  * mechanism, and the workspace-less `direct_pair` route (#task:2035) is
- * deliberately outside it — a pair withholds the panes this URL would restore
- * (threads/attachments resolve through the backend's channel-like index, which
- * does not serve a pair), so a `/chat/d/:id?thread=…` could only preserve a pane
- * that never mounts. A pair is opened with `routes.chatDirect` directly, and
- * nothing records layout for it (see App's layout-memory effect), so there is
- * no null caller to serve here. Do NOT widen this to `string | null` to make a
- * test compile.
+ * deliberately outside it — nothing records layout for a pair (see App's
+ * layout-memory effect), so there is no null caller to serve here. Do NOT widen
+ * this to `string | null` to make a test compile. A pair is opened with
+ * `routes.chatDirect`, and the one pane it does restore by URL is written by
+ * {@link buildLocatorTargetUrl}.
  */
 export function buildChannelLayoutUrl(
   workspaceId: string,
@@ -520,6 +519,48 @@ export function buildChannelLayoutUrl(
       break;
   }
   return `${base}?${params.toString()}`;
+}
+
+/**
+ * The URL a locator chip navigates to (#task:2120) — the ONE place a resolved
+ * {@link LocatorTarget} becomes a destination.
+ *
+ * THE ONLY NAVIGATION AUTHORITY FOR A LOCATOR (@Cindy, #task:2120 review point 2).
+ * A locator arrives as a link node, so the browser's own href is a second, silent
+ * route to somewhere — and that href is the SANITIZED spelling, not the one the
+ * grammar accepted. The chip therefore takes the default action over and comes here
+ * with the parser's output; nothing downstream reads the href.
+ *
+ * TOTAL over the target type, which is why it is a switch on `kind` with no
+ * fallback: every arm of {@link LocatorTarget} is navigable by construction (the
+ * resolver returns `null` for everything else), so a new arm has to answer this
+ * question rather than inherit a guess.
+ *
+ * The thread leaf appends `?thread=` on both container routes, including the
+ * workspace-less pair route — a pair's reply cluster resolves through the same
+ * channel-like index and its pane mounts with a null workspace (#task:2096), so
+ * `/chat/d/:id?thread=<root>` is a real destination. Whether that root message
+ * exists is the pane's answer, not this writer's.
+ */
+export function buildLocatorTargetUrl(target: LocatorTarget): string {
+  switch (target.kind) {
+    case 'workspace':
+      return routes.chatWorkspace(target.workspaceId);
+    case 'channel':
+      return buildChannelLayoutUrl(
+        target.workspaceId,
+        target.conversationId,
+        target.threadRootId === null
+          ? { kind: 'none' }
+          : { kind: 'thread', rootId: target.threadRootId },
+      );
+    case 'direct_pair': {
+      const base = routes.chatDirect(target.conversationId);
+      return target.threadRootId === null
+        ? base
+        : `${base}?${new URLSearchParams({ thread: target.threadRootId }).toString()}`;
+    }
+  }
 }
 
 /**

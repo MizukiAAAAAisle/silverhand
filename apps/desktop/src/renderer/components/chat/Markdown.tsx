@@ -16,6 +16,7 @@ import {
 import { Mention } from './Mention';
 import { MermaidDiagram } from './MermaidDiagram';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
+import { LocatorRef, LocatorRefStaticChip } from './LocatorRef';
 import {
   ConversationRef,
   conversationIcon,
@@ -25,6 +26,7 @@ import {
 } from './ConversationRef';
 import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from './TaskRef';
 import {
+  AUTHORED_HREF_PROP,
   classifyReferenceHref,
   isPluginLink,
   isReferenceScheme,
@@ -297,6 +299,11 @@ function MarkdownInner({
                     />
                   );
                 }
+                if (staticRef.arm === 'locator') {
+                  // A locator in an export is a coordinate, never a control —
+                  // see `LocatorRefStaticChip`.
+                  return <LocatorRefStaticChip locator={staticRef.locator} />;
+                }
                 if (staticRef.arm !== 'other') {
                   // Either malformed, or written in a spelling display refuses.
                   // Both show the authored text and nothing else — never a
@@ -407,6 +414,12 @@ function MarkdownInner({
                   conversationId={conversationId ?? null}
                 />
               );
+            }
+            if (liveRef.arm === 'locator') {
+              // A container coordinate (#task:2120). It resolves itself — no map
+              // is threaded in, because a locator can name ANY workspace and the
+              // render context's maps are scoped to this message's one.
+              return <LocatorRef locator={liveRef.locator} />;
             }
             if (liveRef.arm !== 'other') {
               // Our scheme, but either a malformed destination or a spelling
@@ -745,6 +758,24 @@ function pluginLink(url: string, text: string): MdastNode {
   });
 }
 
+/**
+ * Carry the destination's authored bytes past hast serialization, which rewrites
+ * them — see {@link AUTHORED_HREF_PROP} for why a locator cannot be parsed from
+ * the `href` the `a` override receives.
+ *
+ * Only an AUTHORED destination gets this: a link this pass built out of prose
+ * (`pluginLink`) has a synthesized internal-scheme url and no author behind it, so
+ * stamping one would make the prop's name false. Reading it is therefore a strict
+ * question — "did the author write this destination?" — with `null` for everything
+ * else.
+ */
+function stampAuthoredHref(node: MdastNode, url: string): void {
+  node.data = {
+    ...node.data,
+    hProperties: { ...node.data?.hProperties, [AUTHORED_HREF_PROP]: url },
+  };
+}
+
 function walk(node: MdastNode, source: string): void {
   if (!node.children || node.children.length === 0) return;
   const next: MdastNode[] = [];
@@ -789,11 +820,16 @@ function walk(node: MdastNode, source: string): void {
  * A destination we do NOT stamp keeps its authored href and therefore lands on
  * the inert arm — visible text, no chip, not clickable. The flag lives in mdast
  * metadata rather than in the href precisely so that an author cannot write it.
+ *
+ * Both stamps are applied together and to the same set of destinations, so
+ * "vouched for" and "here are its authored bytes" can never disagree about a node
+ * (#task:2120).
  */
 function markReferenceAutolink(node: MdastNode, source: string): void {
   if (typeof node.url !== 'string' || !isReferenceScheme(node.url)) return;
   if (!isAutolink(node, source)) return;
   stampPluginLink(node);
+  stampAuthoredHref(node, node.url);
 }
 
 // Leading-boundary validation is handled in `canStartRef`. It keeps
