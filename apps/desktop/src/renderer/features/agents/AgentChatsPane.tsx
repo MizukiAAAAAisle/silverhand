@@ -8,6 +8,12 @@
  * rail — a row now leads to the ordinary chat surface or nowhere, so there is no
  * second place to read a conversation from.
  *
+ * SHAPE (#task:2116, shiki): this is a list page like the others, so it speaks
+ * their vocabulary — {@link CollectionItemCard} rows in grouped sections, not the
+ * full-bleed `border-y` table this shipped with. And the rows are GROUPED, flat:
+ * one section per workspace, one for every direct line, no tree — see
+ * {@link groupAgentChats} for why that needs no authority beyond the list itself.
+ *
  * The list itself is still the OWNER-AUDIT read (`GET /api/agents/:id/chats`):
  * the owner may see which conversations their agent is in, including lines they
  * are no part of. Clickability is a different question with different
@@ -35,6 +41,10 @@ import { useMemo, type JSX, type ReactNode } from 'react';
 import type { AgentAuditChatSummary } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { ChannelIcon } from '@/components/ChannelIcon';
+import {
+  CollectionItemCard,
+  COLLECTION_CARD_CLASS,
+} from '@/components/layout/collection-item-card';
 import {
   AuthorAvatarView,
   DeletedActorMarker,
@@ -147,26 +157,91 @@ export function AgentChatsPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="px-8 py-6">
-        <ul className="border-y border-border-subtle">
-          {chats.map(chat => (
-            <li
-              key={chat.conversation_id}
-              className="border-b border-border-subtle last:border-b-0"
-            >
-              <ChatRow
-                chat={chat}
-                access={decideAgentChatRowAccess(chat, participation)}
-                agentAvatarUrls={agentAvatarUrls}
-                humanAvatarUrls={humanAvatarUrls}
-                onOpen={onOpenChat}
-              />
-            </li>
-          ))}
-        </ul>
+      <div className="space-y-5 px-8 py-6">
+        {groupAgentChats(chats).map(group => (
+          <section key={group.key}>
+            {/* Group chrome verbatim from SearchPanel's sections — same product
+                concept (a labelled band of collection cards), so no second
+                spelling. NO icon in the header, unlike Search: a workspace's
+                identity glyph needs its `owner_agent_id`, which the audit list
+                does not carry and the viewer's own workspace list cannot supply
+                for a container they are not in. A neutral glyph would draw
+                "unowned workspace" — a claim, not a gap (#task:2084's lesson).
+                Each ROW still wears its own entity's identity primitive. */}
+            <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-medium uppercase leading-none tracking-wider text-text-muted">
+              <span className="min-w-0 truncate leading-none">{group.label}</span>
+              <span className="leading-none text-text-muted/70">
+                {group.chats.length}
+              </span>
+            </header>
+            <ul className="space-y-2">
+              {group.chats.map(chat => (
+                <ChatRow
+                  key={chat.conversation_id}
+                  chat={chat}
+                  access={decideAgentChatRowAccess(chat, participation)}
+                  agentAvatarUrls={agentAvatarUrls}
+                  humanAvatarUrls={humanAvatarUrls}
+                  onOpen={onOpenChat}
+                />
+              ))}
+            </ul>
+          </section>
+        ))}
       </div>
     </div>
   );
+}
+
+/** One flat section of the list: a workspace's conversations, or every direct
+ *  line. */
+interface AgentChatGroup {
+  key: string;
+  label: string;
+  chats: AgentAuditChatSummary[];
+}
+
+/**
+ * Group the audit list FLAT — one section per workspace, one for all direct
+ * lines, no tree (shiki #task:2116「每个 workspace 是一个 group，agent space 是一个
+ * group，所有的 DM 是一个 group。平铺即可」). An agent space needs no arm of its own: it
+ * IS a workspace, so it falls out as its own section, labelled by its name —
+ * which for an agent space is the bound agent's.
+ *
+ * Both the sections and their rows keep the list's SERVER order (`created_at`,
+ * oldest first): a section takes the position of its first row, so the ordering
+ * needs nothing beyond the response — no workspace directory, which the viewer
+ * may not even have for a container they are not in. Direct lines go last: a
+ * pair is not a container, so it is the one group that names no place.
+ */
+function groupAgentChats(
+  chats: readonly AgentAuditChatSummary[],
+): AgentChatGroup[] {
+  const byWorkspace = new Map<string, AgentChatGroup>();
+  const directs: AgentAuditChatSummary[] = [];
+
+  for (const chat of chats) {
+    if (chat.placement_kind === 'direct_pair') {
+      directs.push(chat);
+      continue;
+    }
+    const existing = byWorkspace.get(chat.workspace_id);
+    if (existing) {
+      existing.chats.push(chat);
+      continue;
+    }
+    byWorkspace.set(chat.workspace_id, {
+      key: `workspace:${chat.workspace_id}`,
+      label: chat.workspace_name,
+      chats: [chat],
+    });
+  }
+
+  const groups = [...byWorkspace.values()];
+  if (directs.length > 0) {
+    groups.push({ key: 'direct', label: 'Direct messages', chats: directs });
+  }
+  return groups;
 }
 
 function PaneNote({ children }: { children: ReactNode }): JSX.Element {
@@ -189,38 +264,42 @@ const BLOCKED_TITLE: Record<AgentChatBlockedReason, string> = {
 /**
  * How one row names itself, derived in a SINGLE narrowing of the placement union:
  * the two arms don't share a name field — a workspace channel has a title, a
- * direct line is named by its counterpart — and they carry different metas.
- * Keeping it in one place also keeps the avatar/icon choice honest: `counterpart`
- * is non-null exactly for the rows that wear a face.
+ * direct line is named by its counterpart. Keeping it in one place also keeps the
+ * avatar/icon choice honest: `counterpart` is non-null exactly for the rows that
+ * wear a face.
+ *
+ * No meta line: the container's name and "this is a direct line" are now the
+ * GROUP's job (#task:2116), and repeating a section's label on every row inside it
+ * is ink that carries no information.
  */
 function describeChatRow(chat: AgentAuditChatSummary): {
   title: string;
-  meta: string;
   counterpart: CounterpartPresentation | null;
 } {
   if (chat.placement_kind === 'direct_pair') {
     const counterpart = presentCounterpart(chat.counterpart);
-    return { title: counterpart.label, meta: 'Direct message', counterpart };
+    return { title: counterpart.label, counterpart };
   }
-  return {
-    title: chat.title,
-    // The container's own name, which for an agent space IS the bound agent's —
-    // the same label every other picker/filter row shows. No kind branch: this
-    // carrier never had the list shape's `dm-` prefix, and #task:2066 retired
-    // that prefix everywhere, so both kinds render the name verbatim.
-    meta: chat.workspace_name,
-    counterpart: null,
-  };
+  return { title: chat.title, counterpart: null };
 }
 
 /**
- * One row. Identity primitive per entity, not one glyph everywhere: a workspace
- * channel wears the canonical `#`, a direct line wears its counterpart's avatar —
- * the same faces these conversations have in the sidebar.
+ * One row, in the shared collection-card vocabulary (#task:2116, shiki:
+ * 「Chats item 样式跟其他的列表页样式不一致（比如 searched message）」) — the same frame,
+ * inset and hover language as a search result or an archived channel, because it
+ * is the same product concept.
+ *
+ * Identity primitive per entity, not one glyph everywhere: a workspace channel
+ * wears the canonical `#` sticker, a direct line wears its counterpart's avatar —
+ * the same faces these conversations have in the sidebar. Both sit in the shared
+ * icon slot, which draws no frame of its own: a sticker already carries one, and a
+ * second box around it would be a lift on top of a lift.
  *
  * Two shells, chosen by the verdict, because they are two different things: a way
- * in (a real `<button>`, with the hover the rest of the app gives a navigable row)
- * and a fact on the page (no button, no hover, muted, with the reason on hover).
+ * in (a real `<button>` card) and a fact on the page (the same frame WITHOUT the
+ * hover hook, muted, with the reason on hover). The frame-minus-hook spelling is
+ * the shell's own documented one — `ListRowsSkeleton` uses it for the same reason,
+ * a card that must not answer the pointer.
  */
 function ChatRow({
   chat,
@@ -235,60 +314,66 @@ function ChatRow({
   humanAvatarUrls: ReadonlyMap<string, string | null>;
   onOpen?: (target: { conversationId: string; workspaceId: string | null }) => void;
 }): JSX.Element {
-  const { title, meta, counterpart } = describeChatRow(chat);
+  const { title, counterpart } = describeChatRow(chat);
 
   const body = (
     <>
-      {counterpart ? (
-        <AuthorAvatarView
-          avatar={counterpart.avatar}
-          size={16}
-          label={counterpart.label}
-          agentAvatarUrls={agentAvatarUrls}
-          humanAvatarUrls={humanAvatarUrls}
-        />
-      ) : (
-        <ChannelIcon variant="sticker" />
-      )}
-      <span className="min-w-0 flex-1 truncate">{title}</span>
+      <span
+        data-collection-card-icon
+        className="flex size-8 shrink-0 items-center justify-center text-text-muted"
+      >
+        {counterpart ? (
+          <AuthorAvatarView
+            avatar={counterpart.avatar}
+            size={24}
+            label={counterpart.label}
+            agentAvatarUrls={agentAvatarUrls}
+            humanAvatarUrls={humanAvatarUrls}
+          />
+        ) : (
+          <ChannelIcon variant="sticker" density="lg" />
+        )}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
       {counterpart?.isDeleted ? (
         <span className="flex shrink-0 items-center">
           <DeletedActorMarker />
         </span>
       ) : null}
-      <span className="shrink-0 text-xs text-text-muted">
-        {meta}
-        {chat.archived_at !== null ? ' · Archived' : ''}
-      </span>
+      {chat.archived_at !== null ? (
+        <span className="shrink-0 text-xs text-text-muted">Archived</span>
+      ) : null}
     </>
   );
 
-  const shell = 'flex h-11 w-full items-center gap-2.5 px-3 text-left text-sm';
+  const inner = 'flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left';
 
   if (access.kind === 'open' && onOpen) {
     return (
-      <button
-        type="button"
-        onClick={() => onOpen({
-          conversationId: access.conversationId,
-          workspaceId: access.workspaceId,
-        })}
-        className={cn(
-          shell,
-          'text-text-primary transition-colors hover:bg-bg-hover/50 focus-outline',
-        )}
-      >
-        {body}
-      </button>
+      <li>
+        <CollectionItemCard
+          as="button"
+          type="button"
+          onClick={() => onOpen({
+            conversationId: access.conversationId,
+            workspaceId: access.workspaceId,
+          })}
+          className={cn(inner, 'text-text-primary focus-outline')}
+        >
+          {body}
+        </CollectionItemCard>
+      </li>
     );
   }
 
   return (
-    <div
-      className={cn(shell, 'text-text-muted')}
-      title={access.kind === 'blocked' ? BLOCKED_TITLE[access.reason] : undefined}
-    >
-      {body}
-    </div>
+    <li>
+      <div
+        className={cn(COLLECTION_CARD_CLASS, inner, 'text-text-muted')}
+        title={access.kind === 'blocked' ? BLOCKED_TITLE[access.reason] : undefined}
+      >
+        {body}
+      </div>
+    </li>
   );
 }
