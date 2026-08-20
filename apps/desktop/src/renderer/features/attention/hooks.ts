@@ -586,17 +586,37 @@ export function removeWorkspaceFromAttentionBadges(
  *  cache entry; `['activity']` is its prefix for broad invalidation. */
 export const activityKey = () => ['activity', 'all'] as const;
 
+/** Whether an Activity item is attributed to ONE workspace — the single reading
+ *  of the `location` union that both the removal filter and the held-channel scan
+ *  go through, so they cannot disagree about attribution.
+ *
+ *  A `direct_pair` item belongs to NO workspace (#task:2115). A canonical pair is
+ *  workspace-LESS, so there is no id to compare and nothing a workspace-removal
+ *  fact can say about it: it is never attributed to a workspace and therefore never
+ *  removed with one. This is why the discriminant is tested rather than a nullable
+ *  id compared — `undefined !== workspaceId` would silently return the right answer
+ *  for the wrong reason, and would flip the moment a DM row's coordinate were
+ *  defaulted. */
+function isInWorkspace(item: ActivityItemDto, workspaceId: string): boolean {
+  return (
+    item.location.kind === 'workspace_channel' &&
+    item.location.workspace_id === workspaceId
+  );
+}
+
 /** Drop every Activity item for a workspace the viewer lost access to — removed
  *  from it, or the workspace deleted (#task:1409). Activity is the FOURTH
  *  viewer-local projection of the single `viewer_workspaces_changed(removed)`
- *  fact (after #task:1404's workspaces list / message-unread / favorites): each
- *  item carries `workspace_id`, so a removed workspace's items must drop or they
- *  linger as ghosts (and keep the #task:1408 rail dot falsely lit). Consume the
- *  event's `workspace_id` and filter in place — NOT a refetch: the list is
- *  GLOBAL (`['activity','all']`, so a refetch wouldn't 404), but a whole-list
- *  refetch re-scores and re-orders every SURVIVING item — a needless reflow for
- *  a pure membership drop. This is a straight membership filter, never a
- *  re-score, so it stays a pure projection: survivors keep their server order.
+ *  fact (after #task:1404's workspaces list / message-unread / favorites): a
+ *  `workspace_channel` item carries its `workspace_id`, so a removed workspace's
+ *  items must drop or they linger as ghosts (and keep the #task:1408 rail dot
+ *  falsely lit). Consume the event's `workspace_id` and filter in place — NOT a
+ *  refetch: the list is GLOBAL (`['activity','all']`, so a refetch wouldn't 404),
+ *  but a whole-list refetch re-scores and re-orders every SURVIVING item — a
+ *  needless reflow for a pure membership drop. This is a straight membership
+ *  filter, never a re-score, so it stays a pure projection: survivors keep their
+ *  server order, and a `direct_pair` survivor keeps its very identity — the
+ *  filter cannot touch a placement that has no workspace axis to lose.
  *  PRESENT-ONLY / idempotent, mirroring the sibling `removeWorkspaceFrom*`
  *  cleanups: list not loaded → no-op; no matching item → no write.
  *
@@ -612,7 +632,7 @@ export function removeWorkspaceFromActivity(
 ): void {
   const prev = qc.getQueryData<ListActivityDto>(activityKey());
   if (!prev) return; // list not loaded → no-op
-  const items = prev.items.filter(it => it.workspace_id !== workspaceId);
+  const items = prev.items.filter(it => !isInWorkspace(it, workspaceId));
   if (items.length === prev.items.length) return; // no matching item → no write
   qc.setQueryData<ListActivityDto>(activityKey(), { ...prev, items });
 }
@@ -644,10 +664,12 @@ export function removeConversationFromActivity(
 }
 
 /** Which channels of ONE workspace the Activity list still holds items for
- *  (#task:1689). Every item carries `workspace_id` + `conversation_id`, so the
- *  attribution is read off the payload, never inferred from the key (the list is
- *  global). Feeds the foreign-workspace convergence path: only a channel the
- *  viewer actually holds state for is worth an authoritative re-read. */
+ *  (#task:1689). Attribution is read off the payload's `location` (via the shared
+ *  {@link isInWorkspace}), never inferred from the key — the list is global, and it
+ *  now spans both placements, so a `direct_pair` item answers no workspace and
+ *  contributes no channel here. Feeds the foreign-workspace convergence path: only
+ *  a channel the viewer actually holds state for is worth an authoritative
+ *  re-read. */
 export function activityHeldChannelIds(
   qc: QueryClient,
   workspaceId: string,
@@ -655,8 +677,75 @@ export function activityHeldChannelIds(
   const data = qc.getQueryData<ListActivityDto>(activityKey());
   if (!data) return [];
   return data.items
-    .filter(it => it.workspace_id === workspaceId)
+    .filter(it => isInWorkspace(it, workspaceId))
     .map(it => it.conversation_id);
+}
+
+/**
+ * The viewer-scoped frame kinds a live Activity re-read hangs on — the whole set,
+ * named once so the list has ONE definition instead of a condition inlined in a
+ * closure no test can reach.
+ *
+ * ONE ENTRY PER CARRIER, not per source family, and that distinction is the bug
+ * this set was widened to fix (#task:2115). Activity has two source families
+ * (positional unread, directed notifications) but THREE carriers, because the
+ * positional family's frame is chosen by PLACEMENT on the emit side:
+ * `MessageDeliveryCoordinator.publishUnreadUpdated` sends `unread_updated` (+ the
+ * badge it is paired with) for a workspace conversation and
+ * `direct_pairs_changed` for a `direct_pair` — deliberately, since the unread
+ * read model's unit is (human viewer, WORKSPACE) and a pair has no coordinate in
+ * it. So for a DM there is no `unread_updated` to wait for, ever. Before this
+ * ticket that cost nothing because Activity could not show a DM at all; now that
+ * it can, a two-kind set means the rail goes stale for exactly the item class the
+ * person is most obliged to answer — a first DM arrives and the list, already
+ * mounted, never re-reads.
+ *
+ * The CLEAR direction is the same shape and is why this is not a one-way patch:
+ * `application/observe.ts` publishes `direct_pairs_changed` to the observing
+ * viewer when a pair's cursor moves, where the workspace arm publishes
+ * `unread_updated`. Without the third kind a DM read in the DM pane would leave
+ * its row sitting in Activity.
+ *
+ * What this is NOT is "invalidate on any viewer frame". The viewer scope also
+ * carries `attention_badge_updated`, `attention_pref_changed` and `task_changed`,
+ * none of which can change this list (`kind=task` is out of Activity v1), and
+ * swallowing them would turn every badge tick into a refetch of the app's hottest
+ * read. The set is exhaustive on purpose: a fourth carrier has to be a decision
+ * recorded here.
+ */
+export const ACTIVITY_INVALIDATING_EVENT_KINDS = [
+  'unread_updated',
+  'notification',
+  'direct_pairs_changed',
+] as const;
+
+/**
+ * Decide what one server frame does to the Activity cache — extracted from
+ * {@link useActivity}'s subscription so the decision is a pure function of
+ * (frame, isViewerScope), testable without a DOM, exactly as
+ * {@link applyAttentionFrame} is.
+ *
+ * `isViewerScope` is passed in rather than derived here for the same reason it is
+ * in the attention applier: the caller owns the identity of "this viewer", and a
+ * frame's scope string is only meaningful against it.
+ */
+export function applyActivityFrame(
+  qc: QueryClient,
+  frame: ServerFrame,
+  isViewerScope: boolean,
+): void {
+  if (frame.type === 'snapshot_required') {
+    // A gap on the viewer scope may have swallowed any of the three carriers, so
+    // the only honest answer is a re-read — the list is app-lifetime and the
+    // client disables `refetchOnWindowFocus`, so nothing else would.
+    if (isViewerScope) void qc.invalidateQueries({ queryKey: activityKey() });
+    return;
+  }
+  if (frame.type !== 'event') return;
+  if (!isViewerScope) return;
+  if ((ACTIVITY_INVALIDATING_EVENT_KINDS as readonly string[]).includes(frame.kind)) {
+    void qc.invalidateQueries({ queryKey: activityKey() });
+  }
 }
 
 /**
@@ -667,15 +756,15 @@ export function activityHeldChannelIds(
  * (§13.2) — the renderer renders it as-is and NEVER re-scores. The three filter
  * chips slice this purely client-side on `kind` / `thread_root_id`.
  *
- * Activity is fed by TWO source families, both converging on the viewer scope,
- * so it refreshes on a single subscription (same no-poll model as
- * `useConversationUnread`, #task:1226):
- *   - positional unread (cursor read-model) → viewer-scoped `unread_updated`
- *   - directed notifications (@me / agent-fail) → viewer-scoped `notification`
+ * Activity is fed by TWO source families, both converging on the viewer scope, so
+ * it refreshes on a single subscription (same no-poll model as
+ * `useConversationUnread`, #task:1226) — but on THREE frame kinds, because the
+ * positional family's carrier is chosen by placement on the emit side. The set and
+ * the reasoning live on {@link ACTIVITY_INVALIDATING_EVENT_KINDS}.
  *
  * `kind=task` is intentionally OUT of Activity v1 (#task:1227: a status mirror,
  * not an event), so THIS hook adds no `task_changed` subscription — one
- * `viewer:<id>` subscription covers both Activity live sources. (The task
+ * `viewer:<id>` subscription covers every Activity live source. (The task
  * board's own `useTaskBoardRealtime` does subscribe `task_changed` on the same
  * viewer scope; that is a separate consumer.) Task re-enters Activity in v2 only
  * via a notification-backed `task_needs_review`, which already rides the
@@ -688,17 +777,11 @@ export function useActivity() {
   useEffect(() => {
     const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
-        if (isCurrentViewerScope(frame.scope)) {
-          void qc.invalidateQueries({ queryKey });
-        }
-        return;
-      }
-      if (frame.type !== 'event') return;
-      if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind === 'unread_updated' || frame.kind === 'notification') {
-        void qc.invalidateQueries({ queryKey });
-      }
+      // `ServerFrame` includes scope-less frames (`AuthenticatedFrame`), so the
+      // scope has to be narrowed before it can be compared — same idiom as
+      // `useAttentionRealtime` above.
+      const scope = 'scope' in frame ? frame.scope : null;
+      applyActivityFrame(qc, frame, scope !== null && isCurrentViewerScope(scope));
     });
     return () => {
       sub.unsubscribe();

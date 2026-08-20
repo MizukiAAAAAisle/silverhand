@@ -9,8 +9,18 @@ import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
-import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
+import {
+  AuthorAvatarView,
+  AuthorName,
+  DeletedActorMarker,
+} from '@/components/chat/author-avatar-view';
 import { presentAuthor } from '@/components/chat/author-presentation';
+import type { AuthorAvatar } from '@/components/chat/author-presentation';
+import {
+  collectCounterpartAvatarSources,
+  presentCounterpart,
+} from '@/features/direct-pairs/counterpart-presentation';
+import type { CounterpartPresentation } from '@/features/direct-pairs/counterpart-presentation';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import type { AgentAvatarSource } from '@/features/agents/avatar-hooks';
@@ -35,16 +45,21 @@ import { paneChrome } from './pane-chrome';
  * no left salience rail, items spaced apart, themed border, forza6 poster hover
  * via the shared `data-collection-card` hook. Salience is carried by the two sections
  * (Requires attention / Subscribed), not by a per-row border. Location reads
- * through real identity icons on the where-line (workspace + channel).
+ * through real identity icons on the where-line.
  *
  * Row structure is SOURCE-FIRST (server-resolved fields only; never a
  * client-stitched message cache), now ICON-LED so location reads at a glance:
- *   - row 1 = WHERE: workspace icon + name, then channel icon + conversation `title`.
- *     The icons are the canonical identity primitives (`WorkspaceIcon`; `Hash`
- *     with the `data-channel-icon` theme hook), NOT raw glyphs — so forza6 paints
- *     them as its `W`/`#` posters instead of generic lucide shapes. The old
- *     "Channel/Mention/Thread" text label is dropped: real icons + the thread
- *     glyph (row 2) + the sender (row 3) carry that signal now.
+ *   - row 1 = WHERE, dispatched on `location.kind` (#task:2115) because Activity
+ *     spans BOTH placements: a `workspace_channel` draws workspace icon + name,
+ *     then channel icon + conversation `title`; a `direct_pair` draws the
+ *     COUNTERPART's face + name and NO workspace segment (a workspace-less pair
+ *     has no such coordinate to draw, and one is never fabricated). The icons are
+ *     the canonical identity primitives (`WorkspaceIcon`; `Hash` with the
+ *     `data-channel-icon` theme hook; `AuthorAvatarView` for a counterpart), NOT
+ *     raw glyphs — so forza6 paints them as its `W`/`#` posters instead of
+ *     generic lucide shapes. The old "Channel/Mention/Thread" text label is
+ *     dropped: real icons + the thread glyph (row 2) + the sender (row 3) carry
+ *     that signal now.
  *   - row 2 = SUBJECT: thread → a thread glyph + `thread_root_preview` (the root
  *     summary it belongs under); else → `preview` (the message excerpt).
  *   - row 3 = THREAD reply: `preview` (the triggering reply), shown only when
@@ -79,12 +94,26 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'thread', label: 'Threads' },
 ];
 
-/** Namespaced key for a sender's avatar object-url map. A sender's identity is
- *  `{kind, id}` — users and agents are separate tables, so a bare `id` could
- *  collide and cross-wire two avatars. `null` when the sender has no stable id
- *  (an `unresolved` author): it carries no avatar and is never batched. */
-function senderKey(s: MessageAuthorDto): string | null {
-  return s.id === null ? null : `${s.kind}:${s.id}`;
+/** Namespaced key into Activity's ONE avatar object-url batch. A face's identity
+ *  is `{kind, id}` — users and agents are separate tables, so a bare `id` could
+ *  collide and cross-wire two avatars. */
+function principalBatchKey(kind: 'agent' | 'user', id: string): string {
+  return `${kind}:${id}`;
+}
+
+/** The batch key for an already-resolved face, or `null` when it carries no bytes
+ *  at all (a neutral glyph: deleted / unresolved) and is therefore never batched.
+ *
+ *  Read off the resolved {@link AuthorAvatar} rather than off a DTO's own `kind`
+ *  field, because that variant is the ONE vocabulary the two kinds of face in this
+ *  list already share: a message sender resolves through `presentAuthor`, a pair
+ *  counterpart through `presentCounterpart` — which is also where the endpoint's
+ *  `human` → avatar `user` spelling change lives, so it does not happen again
+ *  here. */
+function avatarBatchKey(avatar: AuthorAvatar): string | null {
+  return avatar.variant === 'agent' || avatar.variant === 'user'
+    ? principalBatchKey(avatar.variant, avatar.id)
+    : null;
 }
 
 function matchesFilter(item: ActivityItemDto, key: FilterKey): boolean {
@@ -101,35 +130,58 @@ function matchesFilter(item: ActivityItemDto, key: FilterKey): boolean {
   }
 }
 
-/** Row-1 location glyph — the canonical themed primitive for where the item
- *  lives:
- *    - `agent_failed` → a warning glyph (error-tinted) — it has no normal channel
- *      context, and the warning must survive the dropped text label.
- *    - everything else → the `#` channel sticker, UNCONDITIONALLY.
+/** Row-1 location glyph — the canonical themed primitive for WHERE the item
+ *  lives. Its dispatch order is fixed:
  *
- *  Why the location has no branch to key (#task:2076 / #task:2077): both Activity
- *  sources are restricted to WORKSPACE placements (`read-model/activity.ts`
- *  carries one `WORKSPACE_PLACED` conjunct each, falsifier-gated one conjunct per
- *  case by `tests/routes/activity-placement-domain.test.ts`), and a workspace
- *  conversation IS a channel whatever its roster policy is (#task:1373). So every
- *  item that can reach this function is a channel; there is no second identity to
- *  draw.
+ *    1. `agent_failed` → the warning glyph (error-tinted), FIRST and identical in
+ *       both placements. A start failure has no normal conversation context to
+ *       draw, and the warning must survive the dropped text label; a start failure
+ *       inside a DM is still a start failure, so placement never displaces it.
+ *    2. otherwise → the placement's own identity (#task:2115):
+ *       - `direct_pair` → the COUNTERPART's face, through the pair SSOT
+ *         (`presentCounterpart` → {@link AuthorAvatarView}), in the same
+ *         `AVATAR_PX.xs` box the `#` sticker and `WorkspaceIcon` occupy — so the
+ *         where-line's height does not move between placements.
+ *       - `workspace_channel` → the `#` channel sticker.
  *
- *  This deleted a `roster_policy === 'fixed'` arm that drew a message-circle. It
- *  was wrong on every reachable state, not just an edge: within this domain the
- *  only rows it could match are an agent space's fixed-roster DM/Onboarding
- *  CHANNELS. Roster answers a capability question (can members change); identity
- *  is placement's to answer — and here placement is constant, which is why the
- *  DTO carries no classification field at all (see `ActivityItemDtoSchema`).
+ *  The `location.kind` test itself happens ONCE per row, in
+ *  {@link resolveRowLocation} — this component consumes its result (`counterpart`
+ *  non-null ⟺ the DM arm) precisely so a second copy of the discriminant cannot
+ *  drift out of agreement with the first, which also draws the row's NAME and
+ *  builds its jump target.
  *
- *  Falsifier: if Activity ever admits a workspace-less placement, this needs a
- *  branch keyed on `placement_kind`, never on the roster.
+ *  Keyed on PLACEMENT, never on the roster (#task:2076 / #task:2077): a workspace
+ *  conversation IS a channel whatever its roster policy is (#task:1373). An earlier
+ *  `roster_policy === 'fixed'` arm here drew a message-circle and was wrong on
+ *  every state it could reach — within a workspace the only rows it matched were an
+ *  agent space's fixed-roster DM/Onboarding CHANNELS. Roster answers a capability
+ *  question (can members change); identity is placement's to answer. That judgment
+ *  is why the DTO's discriminant is the placement and why it still carries no
+ *  roster field at all (see `ActivityLocationSchema`).
  *
  *  An if-chain (not an exhaustive switch on `kind`) so it stays decoupled from
  *  whether the shared `kind` union still carries the now-removed `task`. */
-function ChannelGlyph({ item }: { item: ActivityItemDto }): JSX.Element {
+function LocationGlyph({
+  item,
+  counterpart,
+  objectUrl,
+}: {
+  item: ActivityItemDto;
+  counterpart: CounterpartPresentation | null;
+  objectUrl: string | null;
+}): JSX.Element {
   if (item.kind === 'agent_failed') {
     return <AlertTriangle className="size-3.5 shrink-0 text-error" />;
+  }
+  if (counterpart) {
+    return (
+      <AuthorAvatarView
+        avatar={counterpart.avatar}
+        size={AVATAR_PX.xs}
+        label={counterpart.label}
+        objectUrlOverride={objectUrl}
+      />
+    );
   }
   return <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />;
 }
@@ -219,10 +271,64 @@ function relTime(ts: number): string {
  *  `ownerAgentId` feeds the canonical {@link WorkspaceIcon} (null → themed `W`;
  *  set → that agent's avatar). Activity never CLASSIFIES a workspace — it only
  *  resolves an identity — so this shape carries the id alone and no predicate
- *  (#task:2078). */
+ *  (#task:2078).
+ *
+ *  Only the `workspace_channel` arm of a row's location has anything to look up
+ *  here (#task:2115): a canonical `direct_pair` is workspace-LESS, so its row draws
+ *  no workspace segment rather than an invented one. */
 export interface ActivityWorkspaceRef {
   name: string;
   ownerAgentId: string | null;
+}
+
+/** Everything row 1 draws and everything `jump()` needs, resolved from the item's
+ *  placement in ONE dispatch on `location.kind` (#task:2115) — so the glyph, the
+ *  name, the workspace segment and the jump target cannot disagree about which
+ *  placement this row is.
+ *
+ *  The two arms are asymmetric by design, not by omission:
+ *    - `workspace_channel` → a workspace coordinate (icon + a name that
+ *      disambiguates same-titled channels across workspaces) plus the
+ *      conversation's server-side `title`;
+ *    - `direct_pair` → NO workspace axis at all. `workspaceId` is `undefined` and
+ *      nothing is fabricated to fill the segment: a faked coordinate would build a
+ *      channel URL under a workspace the conversation is not in. The name is the
+ *      COUNTERPART's, resolved by the pair SSOT (`presentCounterpart`), because a
+ *      pair holds no title and the DTO deliberately carries a counterpart instead
+ *      of a backend-synthesized display string — UI copy is never computed
+ *      server-side (#task:2035). */
+interface RowLocation {
+  /** Non-null ⟺ the `direct_pair` arm; the row's whole identity. */
+  counterpart: CounterpartPresentation | null;
+  /** The workspace segment to draw, or null (a DM row, or an id the map has not
+   *  resolved yet). */
+  workspace: ActivityWorkspaceRef | null;
+  /** The jump target's workspace coordinate — `undefined` for a DM, which is what
+   *  routes it through the viewer's pair authority to `/chat/d/:id`. */
+  workspaceId: string | undefined;
+  /** Row 1's name, and the subject fallback when the item carries no preview. */
+  label: string;
+}
+
+function resolveRowLocation(
+  location: ActivityItemDto['location'],
+  workspaceRefById: ReadonlyMap<string, ActivityWorkspaceRef>,
+): RowLocation {
+  if (location.kind === 'direct_pair') {
+    const counterpart = presentCounterpart(location.counterpart);
+    return {
+      counterpart,
+      workspace: null,
+      workspaceId: undefined,
+      label: counterpart.label,
+    };
+  }
+  return {
+    counterpart: null,
+    workspace: workspaceRefById.get(location.workspace_id) ?? null,
+    workspaceId: location.workspace_id,
+    label: location.title,
+  };
 }
 
 interface ActivityViewProps {
@@ -248,30 +354,40 @@ export function ActivityView({
 
   const items = data?.items ?? [];
 
-  // Resolve each row's sender avatar once, batched + cross-workspace (leaf
-  // avatar components never fetch — PR-2). Keyed off the FULL list so a filter
-  // switch doesn't tear down + refetch; the hook is generic over
-  // {id, avatar_url} and serves both user and agent senders. display_name is
-  // server-guaranteed non-empty, so the fallback glyph path only ever lacks an
-  // IMAGE, never a label.
-  const senderSources = useMemo(
-    () =>
-      items
-        .map(it => it.preview_sender)
-        .filter((s): s is MessageAuthorDto => s != null)
-        // Namespace the key by {kind, id} so a user/agent id collision can't
-        // cross-wire avatars. The hook keys its result map by the `id` we pass,
-        // so we pass the namespaced key here AND look up by it. Senders with no
-        // stable id (`unresolved`) carry no avatar and drop out of the batch.
-        .map(s => ({ key: senderKey(s), avatar_url: s.avatar_url }))
-        .filter(
-          (x): x is { key: string; avatar_url: string | null } =>
-            x.key !== null,
-        )
-        .map(x => ({ id: x.key, avatar_url: x.avatar_url })),
-    [items],
-  );
-  const senderAvatarUrls = useAgentAvatarObjectUrls(senderSources);
+  // Resolve every FACE this list draws in ONE batch (leaf avatar components never
+  // fetch — PR-2), keyed off the FULL list so a filter switch doesn't tear down +
+  // refetch. Two producers feed it, and they share one batch and one key namespace
+  // rather than growing a second parallel hook — so a principal that is both a
+  // counterpart and a sender is fetched once:
+  //   - each row's message sender (`preview_sender`);
+  //   - each `direct_pair` row's COUNTERPART (#task:2115), which is that row's row-1
+  //     identity.
+  // display_name is server-guaranteed non-empty, so the fallback glyph path only
+  // ever lacks an IMAGE, never a label.
+  const avatarSources = useMemo<AgentAvatarSource[]>(() => {
+    const byKey = new Map<string, string | null>();
+    for (const it of items) {
+      const sender = it.preview_sender;
+      if (!sender) continue;
+      // Keyed by the RESOLVED face, so a sender carrying no bytes (`deleted` /
+      // `unresolved` → a neutral glyph) drops out of the batch instead of
+      // occupying a slot that can never resolve to an image.
+      const key = avatarBatchKey(presentAuthor(sender).avatar);
+      if (key) byKey.set(key, sender.avatar_url);
+    }
+    // Counterparts go through the pair SSOT collector, so the active-only rule and
+    // the dedup-by-id live in ONE place; Activity only adds the kind namespace its
+    // shared batch needs (the collector has already split by exactly that axis).
+    const dm = collectCounterpartAvatarSources(
+      items.flatMap(it => (it.location.kind === 'direct_pair' ? [it.location] : [])),
+    );
+    for (const a of dm.agents) byKey.set(principalBatchKey('agent', a.id), a.avatar_url);
+    for (const u of dm.users) byKey.set(principalBatchKey('user', u.id), u.avatar_url);
+    return Array.from(byKey, ([id, avatar_url]) => ({ id, avatar_url }));
+  }, [items]);
+  // The hook keys its result map by the `id` we pass, so the namespaced key is
+  // both what goes in and what rows look up by.
+  const avatarUrls = useAgentAvatarObjectUrls(avatarSources);
 
   // Agent-space icons resolve through the SAME canonical `WorkspaceIcon` as the
   // rail / search / archived surfaces — so their uploaded agent avatars must be
@@ -390,7 +506,7 @@ export function ActivityView({
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
                 ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-                senderAvatarUrls={senderAvatarUrls}
+                avatarUrls={avatarUrls}
                 onJump={onJump}
               />
             ) : null}
@@ -401,7 +517,7 @@ export function ActivityView({
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
                 ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-                senderAvatarUrls={senderAvatarUrls}
+                avatarUrls={avatarUrls}
                 onJump={onJump}
               />
             ) : null}
@@ -418,7 +534,7 @@ function ActivitySection({
   workspaceRefById,
   agentsById,
   ownerAgentAvatarUrls,
-  senderAvatarUrls,
+  avatarUrls,
   onJump,
 }: {
   label: string;
@@ -426,7 +542,7 @@ function ActivitySection({
   workspaceRefById: ReadonlyMap<string, ActivityWorkspaceRef>;
   agentsById: ReadonlyMap<string, AgentDto>;
   ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
-  senderAvatarUrls: ReadonlyMap<string, string | null>;
+  avatarUrls: ReadonlyMap<string, string | null>;
   onJump: (target: MessageJumpTarget) => void;
 }): JSX.Element {
   return (
@@ -439,10 +555,10 @@ function ActivitySection({
           <ActivityRow
             key={item.id}
             item={item}
-            workspace={workspaceRefById.get(item.workspace_id)}
+            workspaceRefById={workspaceRefById}
             agentsById={agentsById}
             ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-            senderAvatarUrls={senderAvatarUrls}
+            avatarUrls={avatarUrls}
             onJump={onJump}
           />
         ))}
@@ -453,27 +569,47 @@ function ActivitySection({
 
 function ActivityRow({
   item,
-  workspace,
+  workspaceRefById,
   agentsById,
   ownerAgentAvatarUrls,
-  senderAvatarUrls,
+  avatarUrls,
   onJump,
 }: {
   item: ActivityItemDto;
-  workspace?: ActivityWorkspaceRef;
+  /** The whole map, not a pre-resolved ref: WHETHER this row has a workspace
+   *  segment is part of the placement dispatch, and that dispatch happens exactly
+   *  once, here (`resolveRowLocation`). */
+  workspaceRefById: ReadonlyMap<string, ActivityWorkspaceRef>;
   agentsById: ReadonlyMap<string, AgentDto>;
   ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
-  senderAvatarUrls: ReadonlyMap<string, string | null>;
+  /** The list's ONE face batch, keyed by {@link principalBatchKey} — senders and
+   *  DM counterparts alike. */
+  avatarUrls: ReadonlyMap<string, string | null>;
   onJump: (target: MessageJumpTarget) => void;
 }): JSX.Element {
   const clearItem = useClearActivityItem();
+
+  // The row's ONE placement dispatch: row 1's glyph, name and workspace segment
+  // plus the jump target all read from it (#task:2115).
+  const location = resolveRowLocation(item.location, workspaceRefById);
+  const isDirectPair = location.counterpart !== null;
+  const counterpartKey = location.counterpart
+    ? avatarBatchKey(location.counterpart.avatar)
+    : null;
+  const counterpartObjectUrl = counterpartKey
+    ? avatarUrls.get(counterpartKey) ?? null
+    : null;
 
   // Navigation needs a message anchor; agent_failed has none (pure read_at).
   const canJump = item.message_id != null;
   const jump = () => {
     if (item.message_id == null) return;
     onJump({
-      workspaceId: item.workspace_id,
+      // Undefined on the DM arm (see `RowLocation`): a workspace-less target is
+      // what routes the jump through the viewer's pair authority to `/chat/d/:id`,
+      // and a fabricated coordinate would instead build a channel URL under a
+      // workspace this conversation is not in.
+      workspaceId: location.workspaceId,
       channelId: item.conversation_id,
       threadRootId: item.thread_root_id,
       messageId: item.message_id,
@@ -489,11 +625,16 @@ function ActivityRow({
   //     `preview` line IS the last row and carries the sender; no separate row 3.
   // Server-resolved fields only, never a client-stitched message cache.
   const hasRootLine = isThread && item.thread_root_preview != null;
-  const sender = item.preview_sender;
-  const senderKeyValue = sender ? senderKey(sender) : null;
-  const senderObjectUrl = senderKeyValue
-    ? senderAvatarUrls.get(senderKeyValue) ?? null
-    : null;
+  // A DM row draws NO sender prefix, for two independent reasons:
+  //   (a) row 1 already IS that face. In a pair the counterpart is the only other
+  //       endpoint, so a prefix would draw the same entity twice on one card.
+  //   (b) the two faces are not even the same FACT: row 1's counterpart is a LIVE
+  //       join on the endpoint's principal, while a byline's deleted arm reads a
+  //       SEND-TIME snapshot. Drawing both invites a card that disagrees with
+  //       itself about who this is.
+  const sender = isDirectPair ? null : item.preview_sender;
+  const senderKey = sender ? avatarBatchKey(presentAuthor(sender).avatar) : null;
+  const senderObjectUrl = senderKey ? avatarUrls.get(senderKey) ?? null : null;
   // The §5.3 source_ref-out for this item, resolved through the single routing
   // chokepoint (`activityItemSource`, keyed on KIND not salience):
   //   - mention / agent_failed → by `notification_id`
@@ -551,28 +692,38 @@ function ActivityRow({
         }`}
       >
         <div className="min-w-0 flex-1">
-          {/* row 1 — WHERE: workspace icon + name, then channel icon + title.
-              Canonical identity primitives (themed `WorkspaceIcon` +
-              `data-channel-icon` `#`) replace the old type text label; forza6
-              repaints them as its posters. Segments self-delimit by identity
-              glyph + `gap` — no `·` middot. */}
+          {/* row 1 — WHERE, per placement (#task:2115): a channel draws workspace
+              icon + name then `#` + title; a pair draws the counterpart's face +
+              name and no workspace segment. Canonical identity primitives (themed
+              `WorkspaceIcon`, `data-channel-icon` `#`, `AuthorAvatarView`) replace
+              the old type text label; forza6 repaints them as its posters. Segments
+              self-delimit by identity glyph + `gap` — no `·` middot. */}
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
-            {workspace ? (
+            {location.workspace ? (
               <>
                 <WorkspaceIcon
-                  ownerAgentId={workspace.ownerAgentId}
+                  ownerAgentId={location.workspace.ownerAgentId}
                   agentsById={agentsById}
                   ownerAgentAvatarUrls={ownerAgentAvatarUrls}
                 />
                 <span className="min-w-0 shrink truncate text-text-secondary">
-                  {workspace.name}
+                  {location.workspace.name}
                 </span>
               </>
             ) : null}
-            <ChannelGlyph item={item} />
+            <LocationGlyph
+              item={item}
+              counterpart={location.counterpart}
+              objectUrl={counterpartObjectUrl}
+            />
             <span className="min-w-0 shrink truncate text-text-secondary">
-              {item.title}
+              {location.label}
             </span>
+            {/* A deleted endpoint keeps its row — the conversation still exists and
+                its unread still waits on the viewer — and says so through the SAME
+                quiet marker a byline uses, next to the kind-generic label
+                `presentCounterpart` owns. */}
+            {location.counterpart?.isDeleted ? <DeletedActorMarker /> : null}
             {/* "N new" rides right after the title — an aggregate about THIS
                 stream, kept next to its subject rather than floated to the row
                 edge (the timestamp owns the far-right). */}
@@ -598,7 +749,7 @@ function ActivityRow({
             <SenderMessageLine
               sender={sender}
               objectUrl={senderObjectUrl}
-              content={item.preview ?? item.title}
+              content={item.preview ?? location.label}
             />
           )}
 

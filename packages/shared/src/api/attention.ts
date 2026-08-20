@@ -12,6 +12,7 @@
 // Everything else Attention surfaces (positional unread / directed mentions /
 // tasks) is a projection, never an Attention-owned copy.
 import { z } from 'zod';
+import { DirectPairCounterpartSchema } from './conversation.js';
 import { MessageAuthorDtoSchema } from './message-author.js';
 
 /**
@@ -276,6 +277,56 @@ export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
  * (`agent_failed`, whose preview comes from the notification payload; and any
  * `system` anchor — system is not an actor).
  */
+/**
+ * WHERE an Activity item happened — the row-1 location identity, as ONE
+ * discriminated union rather than a set of independently-defaultable top-level
+ * fields (#task:2115).
+ *
+ * The list is GLOBAL, so it spans both conversation placements, and the two have
+ * disjoint identity vocabularies: a workspace channel is identified by its
+ * workspace + its own title, while a `direct_pair` has NEITHER coordinate — its
+ * stored title is the empty string (`DIRECT_PAIR_STORED_TITLE`) and it has no
+ * workspace_id at all. Carrying that as `workspace_id: string | null` +
+ * `title: string` would make the illegal states (a DM with a workspace, a
+ * channel without one, a pair with a synthesized title) representable, and the
+ * renderer would have to re-derive the placement from which fields happen to be
+ * NULL. Here the arm IS the answer, and `location.kind` is the renderer's single
+ * dispatch point.
+ *
+ * The DM arm carries the `counterpart` VALUE OBJECT, deliberately not a
+ * server-rendered display title: the counterpart's name, its deleted-endpoint
+ * wording and its avatar variant are UI copy, owned by the renderer's
+ * `presentCounterpart` SSOT (the same one the DM list and pane use). A synthesized
+ * `title` here would fork a second label vocabulary that drifts from it. This is
+ * ALSO why the field is unconditional on the item's `kind`: an `agent_failed` row
+ * on a DM still needs a name for row 1 (it keeps its own failure glyph in the
+ * identity slot, but the name line is still the counterpart's) — so `counterpart`
+ * hangs off the location, which always knows it, never off the item kind.
+ *
+ * NOTE this union is NOT `ConversationPlacementKind`: `workspace_channel` is the
+ * Activity-side word for "workspace-placed ⇒ a channel" (#task:1373), a
+ * conclusion this read model may draw because every workspace conversation it can
+ * surface is a channel. Keying identity on PLACEMENT rather than on roster is the
+ * #task:2076/#task:2077 judgment, unchanged: a fixed-roster channel inside an
+ * agent home is still a channel and still renders as one.
+ */
+export const ActivityLocationSchema = z.union([
+  z.object({
+    kind: z.literal('workspace_channel'),
+    workspace_id: z.string(),
+    /** ALWAYS the conversation title — never a message excerpt. */
+    title: z.string(),
+  }),
+  z.object({
+    kind: z.literal('direct_pair'),
+    /** The OTHER endpoint of the pair, as seen by this viewer — the same
+     *  {@link DirectPairCounterpartSchema} the DM list carries, with current (not
+     *  snapshotted) name/avatar and a `deleted` arm the renderer words itself. */
+    counterpart: DirectPairCounterpartSchema,
+  }),
+]);
+export type ActivityLocation = z.infer<typeof ActivityLocationSchema>;
+
 /** One row in the Activity list. Heterogeneous by `kind`: directed
  *  single-event items (`mention` / `agent_failed`) anchor on one message; an
  *  `unread` item is a per-STREAM aggregate (§7.3) carrying a count and anchored
@@ -295,7 +346,6 @@ export const ActivityItemDtoSchema = z.object({
   kind: z.enum(ACTIVITY_ITEM_KINDS),
   salience: z.enum(ACTIVITY_SALIENCES),
   /** Source routing (the §5.3 source_ref). */
-  workspace_id: z.string(),
   conversation_id: z.string(),
   /** Which stream: NULL = mainline / channel-level; non-NULL = that reply
    *  cluster. Carried for `mention` items too, so routing reaches the thread. */
@@ -309,24 +359,22 @@ export const ActivityItemDtoSchema = z.object({
    *  stream cursor). This is the source_ref-out for directed notification-backed
    *  claims — the renderer marks read BY this id, never by parsing `id`. */
   notification_id: z.string().nullable(),
-  // NO conversation-classification field rides this DTO — neither a roster bit
-  // nor a `conversation_placement_kind` (#task:2076). Both Activity sources are
-  // restricted to WORKSPACE placements (`read-model/activity.ts`, one
-  // `WORKSPACE_PLACED` conjunct each, individually falsifier-gated by
-  // `tests/routes/activity-placement-domain.test.ts`), so every item here is a
-  // workspace conversation = a channel (#task:1373): the row-1 identity has no
-  // branch to key, and a placement word would be the constant `'workspace'`.
+  // NO conversation-classification field rides this DTO beyond
+  // {@link ActivityLocationSchema}'s own discriminant — in particular no roster
+  // bit (#task:2076). Row-1 identity branches on PLACEMENT, which `location`
+  // already answers by construction; roster's live role for Activity is
+  // SERVER-SIDE salience (a fixed-roster stream's ambient unread is
+  // directed-grade, §5.1), a capability question answered in
+  // `read-model/activity.ts` off the SQL row that never needed to cross the wire.
   // `conversation_roster_policy` used to be here, and its docblock instructed the
   // renderer to derive a "Channel / DM" label from it — which is exactly how an
-  // agent home's DM/Onboarding channel got drawn as a private line. Roster's live
-  // role for Activity is SERVER-SIDE salience (a fixed-roster stream's ambient
-  // unread is directed-grade, §5.1): a capability question, answered in
-  // `read-model/activity.ts` off the SQL row, that never needed to cross the wire.
-  // The keying rule itself lives on `ConversationPlacementKindSchema` (db/schema).
-  /** Row-1 location title: ALWAYS the conversation title — never a message
-   *  excerpt. Stable across placements so the renderer's "where" line has one
-   *  meaning. */
-  title: z.string(),
+  // agent home's DM/Onboarding channel got drawn as a private line. The keying
+  // rule itself lives on `ConversationPlacementKindSchema` (db/schema).
+  /** Row-1 location identity + the source's workspace coordinate, if it has one.
+   *  A discriminated union because the two placements identify themselves by
+   *  different things and neither's fields are meaningful for the other. */
+  location: ActivityLocationSchema,
+
   /** For a thread item (`thread_root_id != null`): a one-line excerpt of the
    *  thread's ROOT message, rendered above the reply `preview` so the row reads
    *  root → reply. NULL for non-thread items (mainline unread, channel mention,

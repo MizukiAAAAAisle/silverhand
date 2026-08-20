@@ -153,9 +153,16 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     filter: { predicate: q => isWorkspaceMembersQueryKey(q.queryKey) },
   },
   {
-    // `ActivityPreviewSender{kind,id,display_name,avatar_url}` — resolved
-    // server-side by design (the list is cross-workspace, so the renderer has
-    // no directory that covers every sender).
+    // TWO server-resolved faces per list, both invalidated by the one entry (the
+    // registration is per CACHE, and the subject kinds are the same):
+    //   - the anchor message's sender (`MessageAuthorDto`);
+    //   - a `direct_pair` row's COUNTERPART (#task:2115) — a LIVE join on the
+    //     endpoint's principal, so a rename / avatar change / hard-delete of the
+    //     other endpoint must reach this list too, exactly as it reaches the DM
+    //     list itself.
+    // Resolved server-side by design: the list is cross-workspace AND spans a
+    // workspace-less placement, so the renderer has no directory that covers
+    // every face it draws.
     id: 'activity',
     kinds: ['agent', 'human'],
     facets: ['presentation'],

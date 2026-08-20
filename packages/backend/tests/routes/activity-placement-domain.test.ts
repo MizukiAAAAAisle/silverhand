@@ -1,47 +1,51 @@
 /**
- * #task:2035 (@Cindy B5) — the BEHAVIORAL falsifiers for Activity's placement
- * domain: the two `${WORKSPACE_PLACED}` conjuncts in `read-model/activity.ts`.
+ * Activity's PLACEMENT DOMAIN, behaviourally (#task:2035 @Cindy B5, inverted by
+ * #task:2115).
  *
- * WHY THIS FILE EXISTS. Both Activity sources were changed to state their domain
- * as the shared placement discriminator, and every existing Activity test stayed
- * green with EITHER conjunct deleted (@Cindy's mutation). Correct text with no
- * counterexample behind it is not a defense: the failure it is supposed to stop —
- * an `ActivityItemDto.workspace_id` that is typed `string` and is actually NULL,
- * i.e. a row the client navigates nowhere with — is silent, so nothing else in the
- * suite would notice its return.
+ * WHAT CHANGED, AND WHY THE FILE SURVIVES THE INVERSION. This file used to pin
+ * "Activity is workspace-placed only", one test per `${WORKSPACE_PLACED}` conjunct.
+ * That domain was a defect, not a scope: a DM's unread is directed-grade by
+ * definition (§5.1), so the one item class the human is MOST obliged to answer was
+ * the one class the global rail could not show, and
+ * `docs/activity-lifecycle-v1.md` said the opposite of the code. What the conjuncts
+ * were actually defending was the #2035 symptom — an UNOPENABLE item, a
+ * `workspace_id` typed `string` that was NULL with an empty title — and that is now
+ * unrepresentable in the DTO instead: `location` is a discriminated union, so a
+ * `direct_pair` item HAS no workspace coordinate to be missing.
  *
- * ONE TEST PER CONJUNCT, and each is a PAIR of assertions: zero items for the
- * workspace-less placement, and the workspace positive control still entering
- * through the very same source. Without the control, deleting the conjunct is not
- * the only way to redden the test (breaking the source outright would too), and
- * "this conjunct is load-bearing" would not be what passing means.
+ * So the tests invert but their SHAPE does not, and neither does the reason it is
+ * that shape: each is a DIFFERENTIAL over one source — the workspace-less pair AND
+ * a workspace-placed control entering through the very same source — because
+ * "these items exist" and "this source works at all" are different claims, and a
+ * one-sided assertion cannot tell them apart.
  *
- * The two tests are deliberately INDEPENDENT: the directed one gives its pair no
- * roster seat, the positional one triggers no notification, so deleting one
- * conjunct reddens exactly one of them.
+ * THE ONE CONJUNCT THAT REMAINS, and its falsifier. Merging participation did not
+ * widen either gate: the workspace arm still reads the roster seat under
+ * `placement_kind = 'workspace'`, and the DM arm reads ENDPOINTS only. The third
+ * test is the counterexample that makes that load-bearing — a stray
+ * `conversation_users` seat on a pair the viewer is NOT an endpoint of. Deleting
+ * the roster arm's placement conjunct does not merely leak an item there: the DM
+ * arm's counterpart resolution FAILS CLOSED (it cannot name "the other endpoint"
+ * for a non-endpoint viewer), so the whole rail 500s. That is the intended
+ * direction — a stranger's DM must never be drawn — and it is why the assertion is
+ * "the request succeeds AND the pair is absent" rather than only the absence.
  *
- * WHY BOTH FIXTURES OPT OUT OF `seedAllFixtureMemberships`. The default fixture
+ * WHY THE FIXTURES OPT OUT OF `seedAllFixtureMemberships`. The default fixture
  * installs a trigger that seats EVERY fixture user into EVERY conversation on
  * insert, so the canonical `direct_pair` — which production mints with its two
- * endpoint columns and no `conversation_users` row at all — silently arrives with
- * a roster seat. That single fixture fact broke both halves of the requirement:
- * the positional test's "stray seat" was already there before `addUser` (so the
- * premise under test was fictional), and the directed test's pair entered the
- * POSITIONAL source too, which made deleting the positional conjunct redden BOTH
- * tests. With the trigger off, each pair has exactly the participation production
- * gives it, and the one explicit `addUser` below is the whole counterexample.
- * Nothing else in these tests needs the trigger: `direct_pair` participation is
- * an endpoint arc (`resolveParticipation`), and the two workspace-placed controls
- * are seated by the production doors that create them.
+ * endpoint columns and no `conversation_users` row at all — would silently arrive
+ * with a roster seat, and the stray-seat test's premise would be fictional (the
+ * seat would predate the `addUser` that is supposed to be the whole
+ * counterexample). With the trigger off, each pair has exactly the participation
+ * production gives it.
  *
- * db-boundary (Gate 4): NO ledger entry is needed and none was added. Both
- * falsifiers reach their state through production doors and repository faces —
- * the resolver's allocating arm (`dm:@handle`), the human send route, the real
- * wake-failure notifier, `ConversationRepo.addUser` — and read it back through
- * `NotificationRepo` and `GET /api/activity`. There is no native statement call
- * in this file, which is also what makes the states it builds evidence of
- * something: a hand-written INSERT would prove the query filters rows I wrote,
- * not rows the product produces.
+ * db-boundary (Gate 4): NO ledger entry is needed and none was added. Every state
+ * is reached through production doors and repository faces — the resolver's
+ * allocating arm (`dm:@handle`), the human send route, the real wake-failure
+ * notifier, `ConversationRepo.addUser` — and read back through `NotificationRepo`
+ * and `GET /api/activity`. There is no native statement call in this file, which is
+ * also what makes the states it builds evidence of something: a hand-written
+ * INSERT would prove the query filters rows I wrote, not rows the product produces.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { apiPaths, internalPaths, type ActivityItemDto } from '@silverhand/shared';
@@ -62,8 +66,9 @@ async function makeAgent(
   expect(r.status).toBe(201);
   const body = (await r.json()) as any;
   // The agent's own `agent_home` DM channel: WORKSPACE-placed with a FIXED
-  // roster, which is exactly the positive control the positional conjunct must
-  // not disturb (that source's DM arm keys on `roster_policy`, not on placement).
+  // roster — the control that keeps "fixed roster" and "no workspace" separate
+  // claims. It enters through the positional source's roster_policy arm, exactly
+  // as the pair does, and it must keep its `workspace_channel` location.
   expect(typeof body.dm_channel_id).toBe('string');
   return { agentId: body.agent.id as string, homeChannelId: body.dm_channel_id as string };
 }
@@ -80,21 +85,25 @@ async function createWorkspaceChannel(
   return ((await r.json()) as any).onboarding_channel_id as string;
 }
 
-/** The stranger's DM, through the real addressing path: `dm:@handle` on a
- *  main-line write is the resolver's one allocating arm, so THIS is what opens the
- *  workspace-less pair — no fixture stands in for the placement under test. */
-async function dmTheViewer(
+/** A DM through the real addressing path: `dm:@handle` on a main-line write is the
+ *  resolver's one allocating arm, so THIS is what opens a workspace-less pair — no
+ *  fixture stands in for the placement under test. */
+async function dmByHandle(
   t: TestApp,
   agentId: string,
+  handle: string,
   content: string,
 ): Promise<string> {
   const r = await http(t, agentSlotAuth(t, agentId)).post(
     internalPaths.agentSendConversationMessage(agentId),
-    { content, target: `dm:@${VIEWER_HANDLE}` },
+    { content, target: `dm:@${handle}` },
   );
   expect(r.status).toBe(200);
   return ((await r.json()) as any).conversation_id as string;
 }
+
+const dmTheViewer = (t: TestApp, agentId: string, content: string): Promise<string> =>
+  dmByHandle(t, agentId, VIEWER_HANDLE, content);
 
 /** The human door, which admits a `direct_pair` today (`getChannelLike` +
  *  `canPostToConversation`) — the send whose failed fan-out produces the wake
@@ -134,14 +143,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
   }
 }
 
-describe('Activity is workspace-placed only (#task:2035 B5 falsifiers)', () => {
+describe('Activity spans both conversation placements (#task:2115)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('directed: a wake failure on a workspace-less DirectPair yields no item, while the same failure in a channel does', async () => {
+  it('directed: a wake failure on a workspace-less DirectPair yields an item located AT THE PAIR, alongside the channel case', async () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const { agentId: parent } = await makeAgent(t, 'parent');
     const channelId = await createWorkspaceChannel(t, parent);
@@ -164,42 +173,52 @@ describe('Activity is workspace-placed only (#task:2035 B5 falsifiers)', () => {
     const failures = () =>
       notifications.list({ userId: t!.viewerUserId }).filter(n => n.kind === 'agent_start_failed');
     await waitFor(() => failures().length === 2);
-    // The state under test is real and is what the read model would have to
-    // reject: an unread directed notification whose workspace coordinate is NULL.
+    // The row whose workspace coordinate is NULL — the state the old domain
+    // rejected and this one describes.
     expect(failures().find(n => n.conversation_id === pairId)).toMatchObject({
       workspace_id: null,
       read_at: null,
     });
 
     const items = await getActivity(t);
-    // The falsifier: with `AND ${WORKSPACE_PLACED}` deleted from the directed
-    // source, this item is emitted as `kind: 'agent_failed'` with a NULL
-    // workspace_id in a field the DTO types `string`, and an empty title.
-    expect(items.filter(i => i.conversation_id === pairId)).toEqual([]);
-    // The control: the same source, the same kind, one placement over.
-    expect(
-      items.filter(i => i.kind === 'agent_failed' && i.conversation_id === channelId),
-    ).toHaveLength(1);
+    const pairItems = items.filter(i => i.conversation_id === pairId);
+    // TWO items, from BOTH sources: the wake failure (directed) and the stranger's
+    // own unread message (positional). Asserting both here is not scope creep — it
+    // is the claim that the two sources answer WHERE through the same seam, which a
+    // single-source assertion cannot make.
+    expect(pairItems.map(i => i.kind).sort()).toEqual(['agent_failed', 'unread']);
+    // The whole point of the union: a workspace-less item is not a workspace item
+    // with holes in it. It answers WHERE with the pair's own coordinate — the
+    // counterpart — and carries no workspace field to be NULL.
+    for (const item of pairItems) {
+      expect(item).toMatchObject({
+        location: {
+          kind: 'direct_pair',
+          counterpart: { status: 'active', kind: 'agent', id: stranger, runtime: 'claude' },
+        },
+      });
+      expect(item.location).not.toHaveProperty('workspace_id');
+      expect(item.location).not.toHaveProperty('title');
+    }
+    // The control: the same source, the same kind, one placement over — and it
+    // still answers with a workspace coordinate.
+    const channelItems = items.filter(
+      i => i.kind === 'agent_failed' && i.conversation_id === channelId,
+    );
+    expect(channelItems).toHaveLength(1);
+    expect(channelItems[0]!.location).toMatchObject({ kind: 'workspace_channel' });
+    expect(channelItems[0]!.location).not.toHaveProperty('counterpart');
   });
 
-  it('positional: a stray roster seat on a DirectPair yields no item, while a workspace fixed-roster DM still enters', async () => {
+  it('positional: DM unread on a workspace-less DirectPair enters directed-grade, alongside a workspace fixed-roster DM', async () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const { agentId: parent, homeChannelId } = await makeAgent(t, 'parent');
     const stranger = insertAgentScopedAgent(t, parent, 'stranger');
     const pairId = await dmTheViewer(t, stranger, 'first contact');
-
-    // THE STRAY SEAT — the reachable shape of this conjunct's counterexample. A
-    // canonical `direct_pair` has no `conversation_users` row at all (the mint
-    // writes the endpoint columns and nothing else), so this source could not see
-    // one today. What makes the state reachable is that the seat is one ordinary
-    // repository call away: a member door that stops failing closed on non-workspace
-    // placements, a backfill that seats "the humans of every conversation", or a
-    // future placement that legitimately has both endpoints AND a roster. The
-    // conjunct is what makes that a no-op for Activity instead of a NULL
-    // workspace_id in a field typed `string`.
-    new ConversationRepo(t.ctx.db).addUser(pairId, t.viewerUserId);
     // Unread on the DM main line, from the counterpart (the viewer's own sends are
-    // never unread), so the source's `roster_policy = 'fixed'` arm would admit it.
+    // never unread). The pair carries NO `conversation_users` row, which is why the
+    // roster arm alone could not see it and why global Activity showed no DM unread
+    // before this ticket — the regression this test is the falsifier for.
     await dmTheViewer(t, stranger, 'still here');
 
     // The workspace positive control, entering through the SAME arm: an
@@ -207,13 +226,59 @@ describe('Activity is workspace-placed only (#task:2035 B5 falsifiers)', () => {
     await sendAsAgent(t, homeChannelId, parent, 'your agent reporting in');
 
     const items = await getActivity(t);
-    // The falsifier: with `AND ${WORKSPACE_PLACED}` deleted from
-    // `POSITIONAL_STREAMS_SQL`, this row enters as a directed-salience `unread`
-    // item whose `workspace_id` is NULL.
-    expect(items.filter(i => i.conversation_id === pairId)).toEqual([]);
-    // The control: same source, same arm, workspace-placed.
+    const pairItems = items.filter(i => i.conversation_id === pairId);
+    // Directed SALIENCE with a positional MECHANISM: a fixed-roster stream's
+    // unread is directed-grade (§5.1), and the grade is decided server-side off
+    // `roster_policy` — the placement decides IDENTITY, never loudness.
+    expect(pairItems).toMatchObject([
+      {
+        kind: 'unread',
+        salience: 'directed',
+        unread_count: 2,
+        location: {
+          kind: 'direct_pair',
+          counterpart: { status: 'active', kind: 'agent', id: stranger },
+        },
+      },
+    ]);
+    // The control: same source, same arm, workspace-placed — and it stays a
+    // channel, because a fixed roster inside an agent home is still a channel
+    // (#task:2076).
     expect(
       items.filter(i => i.kind === 'unread' && i.conversation_id === homeChannelId),
-    ).toMatchObject([{ salience: 'directed', unread_count: 1 }]);
+    ).toMatchObject([
+      { salience: 'directed', unread_count: 1, location: { kind: 'workspace_channel' } },
+    ]);
+  });
+
+  it("a stray roster seat on someone else's DirectPair stays inert", async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const { agentId: parent, homeChannelId } = await makeAgent(t, 'parent');
+    const stranger = insertAgentScopedAgent(t, parent, 'stranger');
+    // A pair between TWO AGENTS, opened through the same allocating arm: the viewer
+    // is not an endpoint of it, and no addressing path would ever hand it to them.
+    const foreignPairId = await dmByHandle(t, stranger, 'parent', 'agent to agent');
+    await dmByHandle(t, stranger, 'parent', 'and again');
+
+    // THE STRAY SEAT — the reachable shape of the counterexample. A canonical
+    // `direct_pair` has no `conversation_users` row at all (the mint writes the
+    // endpoint columns and nothing else), so no source could see one today. What
+    // makes the state reachable is that the seat is one ordinary repository call
+    // away: a member door that stops failing closed on non-workspace placements, a
+    // backfill that seats "the humans of every conversation", or a future placement
+    // that legitimately has both endpoints AND a roster. The roster arm's
+    // `placement_kind = 'workspace'` conjunct is what makes that a no-op.
+    new ConversationRepo(t.ctx.db).addUser(foreignPairId, t.viewerUserId);
+
+    // A real item the viewer IS entitled to, so the assertion below cannot pass by
+    // the rail being empty or erroring.
+    await sendAsAgent(t, homeChannelId, parent, 'your agent reporting in');
+
+    const items = await getActivity(t);
+    // Absence AND liveness: with the conjunct deleted, the seat admits the pair to
+    // the positional source, `resolveCounterpart` throws (the viewer is neither
+    // endpoint) and this request 500s — `getActivity` asserts the 200 first.
+    expect(items.filter(i => i.conversation_id === foreignPairId)).toEqual([]);
+    expect(items.filter(i => i.conversation_id === homeChannelId)).toHaveLength(1);
   });
 });

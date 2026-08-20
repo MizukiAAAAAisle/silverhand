@@ -352,7 +352,16 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     const scoped = (await (
       await http(t).get(`/api/activity?workspace_id=${a.workspaceId}`)
     ).json()) as any;
-    expect(scoped.items.every((i: any) => i.workspace_id === a.workspaceId)).toBe(true);
+    // A workspace-scoped list is a single-placement list by construction: a
+    // `direct_pair` has no workspace coordinate to match, so every item here must
+    // be the workspace arm AND carry this workspace's id (#task:2115).
+    expect(
+      scoped.items.every(
+        (i: any) =>
+          i.location.kind === 'workspace_channel' &&
+          i.location.workspace_id === a.workspaceId,
+      ),
+    ).toBe(true);
     expect(scoped.items.some((i: any) => i.conversation_id === a.channelId)).toBe(true);
     expect(scoped.items.some((i: any) => i.conversation_id === bChannel)).toBe(false);
 

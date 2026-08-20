@@ -20,13 +20,15 @@
 //      PAYLOAD are declared in {@link VIEWER_LOCAL_READ_MODELS} through
 //      registration helpers whose types make `cleanup` MANDATORY:
 //        - {@link itemScopedList} takes `entry: TData extends ItemScopedListData
-//          ? Entry : never`. Because TS is STRUCTURAL, a DTO that already carries
-//          `workspace_id` (ActivityItemDto, FavoriteRowDto) satisfies the guard
-//          with no shared `extends`; a NON-attributed DTO — OR omitting the type
-//          param — collapses the param to `never`, and `cleanup` is required. So a
-//          new `{ items: WorkspaceAttributed[] }` cache CANNOT be registered
-//          without a removal cleanup, and attribution can never be defaulted-away
-//          (proven by the `@ts-expect-error` fixtures in the type-test).
+//          ? Entry : never`. Because TS is STRUCTURAL, a DTO that already answers
+//          "which workspace, if any" — a top-level `workspace_id` (FavoriteRowDto)
+//          or a discriminated `location` (ActivityItemDto, #task:2115) — satisfies
+//          the guard with no shared `extends`; a DTO that leaves it unanswerable —
+//          OR omitting the type param — collapses the param to `never`, and
+//          `cleanup` is required. So a new `{ items: WorkspaceRemovalAddressable[] }`
+//          cache CANNOT be registered without a removal cleanup, and attribution can
+//          never be defaulted-away (proven by the `@ts-expect-error` fixtures in the
+//          type-test).
 //        - {@link recordKeyedSummary} tags the one Record-keyed cache
 //          (`{ by_workspace: Record<wsId, …> }`) — structurally undetectable, so
 //          the form is explicit and `cleanup` is required by the signature.
@@ -70,18 +72,44 @@ import {
   removeWorkspaceFromMessageUnread,
 } from '@/features/channels/message-unread';
 
-/** Structural marker: a value that belongs to exactly one workspace. Renderer-
- *  local BY DESIGN — TS is structural, so any DTO that already has
- *  `workspace_id: string` satisfies it with no shared `extends` (a shared marker
- *  would be a decorative re-declaration of an existing field, #task:1412). NOTE
- *  the field is REQUIRED: a DTO with `workspace_id?: string` would NOT match, so
- *  the conditional cleanup guard would silently stop firing — the type-test
- *  pins the current DTOs as attributed to catch that regression (Alice ①). */
-export type WorkspaceAttributed = { workspace_id: string };
+/** A value that carries its workspace as a REQUIRED top-level `workspace_id` —
+ *  the shape a favorites row has. Renderer-local BY DESIGN: TS is structural, so
+ *  such a DTO satisfies it with no shared `extends` (a shared marker would be a
+ *  decorative re-declaration of an existing field, #task:1412). NOTE the field is
+ *  REQUIRED: `workspace_id?: string` does NOT match, so the conditional cleanup
+ *  guard would silently stop firing — the type-test pins that (Alice ①). */
+type TopLevelWorkspaceAttributed = { workspace_id: string };
 
-/** The one payload shape whose attribution TS can PROVE: a list of attributed
- *  items. Drives the mandatory-cleanup constraint in {@link itemScopedList}. */
-export type ItemScopedListData = { items: WorkspaceAttributed[] };
+/** A value that carries its workspace inside a DISCRIMINATED placement — the shape
+ *  an Activity item has since it spans both placements (#task:2115).
+ *
+ *  Deliberately NOT `{ workspace_id: string | null }`. A nullable id makes "not in a
+ *  workspace" and "in a workspace we failed to resolve" the same value, and a
+ *  removal filter written against it is correct only by luck (`null !== wsId`). The
+ *  discriminant is what makes non-attribution a STATED fact: the `workspace_channel`
+ *  arm must carry a required id, and the `direct_pair` arm declares that it has no
+ *  such axis at all — a canonical pair is workspace-less, so a workspace-removal
+ *  fact says nothing about it and must leave it untouched. Both halves are pinned by
+ *  the type-test's negative fixtures. */
+type LocationAttributed = {
+  location:
+    | { kind: 'workspace_channel'; workspace_id: string }
+    | { kind: 'direct_pair' };
+};
+
+/** What a `viewer_workspaces_changed(removed)` fact can ADDRESS in an item: either
+ *  carrier above. Two carriers, ONE question — "which workspace, if any, is this
+ *  item in" — so a list qualifies for {@link itemScopedList} by answering it in
+ *  either spelling, and cannot qualify by leaving it unanswerable. */
+export type WorkspaceRemovalAddressable =
+  | TopLevelWorkspaceAttributed
+  | LocationAttributed;
+
+/** The one payload shape whose attribution TS can PROVE: a list of items a removal
+ *  fact can address. Drives the mandatory-cleanup constraint in
+ *  {@link itemScopedList}. */
+export type ItemScopedListData = { items: WorkspaceRemovalAddressable[] };
+
 
 /** How a viewer-local cache carries a workspace — each settles differently on
  *  removal. Exhaustive: a 4th member must also gain a dispatch branch in
@@ -91,7 +119,7 @@ export type ProjectionForm =
   | 'workspace-keyed'
   /** global key, data = `{ by_workspace: Record<wsId, …> }` → delete map entry. */
   | 'record-keyed-summary'
-  /** global key, data = `{ items: WorkspaceAttributed[] }` → filter items. */
+  /** global key, data = `{ items: WorkspaceRemovalAddressable[] }` → filter items. */
   | 'item-scoped-list';
 
 type CleanupFn = (qc: QueryClient, workspaceId: string) => void;
@@ -115,9 +143,9 @@ interface ItemScopedListEntry {
  * Register an ITEM-SCOPED list read model. Attribution is proven at the type
  * level: the entry param is `TData extends ItemScopedListData ? Entry : never`,
  * so `TData` MUST be passed explicitly (`itemScopedList<ListActivityDto>({…})`)
- * AND the DTO must genuinely carry `workspace_id`:
- *   - a NON-attributed DTO → the conditional resolves to `never` → the object
- *     literal is rejected;
+ * AND the DTO must genuinely answer which workspace (if any) each item is in:
+ *   - a DTO that cannot answer it → the conditional resolves to `never` → the
+ *     object literal is rejected;
  *   - OMITTING the type param → `TData` defaults to `unknown ⊄ ItemScopedListData`
  *     → also `never` (this is why the constraint is on the param, not a phantom
  *     `<TData extends …>` that silently skips when the arg is omitted — Alice ②:

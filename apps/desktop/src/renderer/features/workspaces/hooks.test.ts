@@ -611,24 +611,43 @@ describe('decideFavoritesInvalidation (#task:1889)', () => {
 
 describe('removeWorkspaceFromActivity (#task:1409)', () => {
   // Activity is the FOURTH viewer-local projection of a workspace-removed fact
-  // (after list / message-unread / favorites). Items carry workspace_id, so a
-  // removed workspace's items are filtered out locally (no refetch → no reorder
-  // reflow of survivors).
-  const activityItem = (id: string, workspaceId: string): ActivityItemDto => ({
+  // (after list / message-unread / favorites). A `workspace_channel` item carries
+  // its workspace_id, so a removed workspace's items are filtered out locally (no
+  // refetch → no reorder reflow of survivors).
+  const baseItem = (id: string): Omit<ActivityItemDto, 'location'> => ({
     id,
     kind: 'unread',
     salience: 'ambient',
-    workspace_id: workspaceId,
     conversation_id: `c-${id}`,
     thread_root_id: null,
     message_id: `m-${id}`,
     notification_id: null,
-    title: `#${id}`,
     thread_root_preview: null,
     preview: null,
     preview_sender: null,
     timestamp: 1,
     unread_count: 2,
+  });
+  const activityItem = (id: string, workspaceId: string): ActivityItemDto => ({
+    ...baseItem(id),
+    location: { kind: 'workspace_channel', workspace_id: workspaceId, title: `#${id}` },
+  });
+  // A canonical workspace-less pair (#task:2115): it has no workspace axis, so no
+  // workspace-removal fact can address it.
+  const dmItem = (id: string): ActivityItemDto => ({
+    ...baseItem(id),
+    location: {
+      kind: 'direct_pair',
+      counterpart: {
+        status: 'active',
+        kind: 'agent',
+        id: `agent-${id}`,
+        name: `agent-${id}`,
+        display_name: `Agent ${id}`,
+        avatar_url: null,
+        runtime: 'claude',
+      },
+    },
   });
 
   it('drops every item of the removed workspace, keeps survivors in order', () => {
@@ -647,6 +666,37 @@ describe('removeWorkspaceFromActivity (#task:1409)', () => {
     expect(next?.items.map(i => i.id)).toEqual(['b', 'd']);
   });
 
+  // The fence is on the PRESERVED side (#task:2115). A workspace-less DM has no
+  // workspace to lose, so it must come through a removal untouched — and "untouched"
+  // is pinned as REFERENCE EQUALITY plus relative order, not as a re-derived equal
+  // value: that is what distinguishes a FILTER from a rebuild. A rebuild would also
+  // be the shape of a re-score, which this cleanup must never be.
+  //
+  // Structural sharing is OFF for this client on purpose. React Query's
+  // `replaceEqualDeep` walks the new array INDEX-WISE against the old one and returns
+  // a merged copy for any position whose neighbour differs — so once an earlier item
+  // is dropped, every shifted survivor gets a fresh object identity no matter what
+  // this function did. That is the cache's behaviour, not ours, and it masks the
+  // distinction in BOTH directions (it would also hand a genuine rebuild the old
+  // references back). Turning it off makes the assertion measure the one thing under
+  // test: what `removeWorkspaceFromActivity` itself put in the array.
+  it('preserves direct_pair items by identity — a workspace fact cannot address them', () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { structuralSharing: false } },
+    });
+    const dmEarly = dmItem('dm-early');
+    const dmLate = dmItem('dm-late');
+    qc.setQueryData<ListActivityDto>(activityKey(), {
+      items: [dmEarly, activityItem('a', 'w-1'), dmLate, activityItem('d', 'w-3')],
+    });
+    removeWorkspaceFromActivity(qc, 'w-1');
+    const next = qc.getQueryData<ListActivityDto>(activityKey());
+    expect(next?.items.map(i => i.id)).toEqual(['dm-early', 'dm-late', 'd']);
+    // Same objects, not equal copies.
+    expect(next?.items[0]).toBe(dmEarly);
+    expect(next?.items[1]).toBe(dmLate);
+  });
+
   it('is idempotent: list not loaded / no matching item → no write', () => {
     const qc = new QueryClient();
     // Not loaded → no-op, no throw.
@@ -655,6 +705,17 @@ describe('removeWorkspaceFromActivity (#task:1409)', () => {
     // Loaded but no matching item → the cached object is left in place (no write),
     // so a whole-list refetch/reorder is never triggered for an unaffected delete.
     const loaded: ListActivityDto = { items: [activityItem('b', 'w-2')] };
+    qc.setQueryData<ListActivityDto>(activityKey(), loaded);
+    removeWorkspaceFromActivity(qc, 'w-1');
+    expect(qc.getQueryData(activityKey())).toBe(loaded);
+  });
+
+  // A DM-ONLY list is the sharper half of the same rule: with nothing addressable
+  // in it, a workspace removal is not just order-preserving but a NO-WRITE — the
+  // whole cached object keeps its identity, so no consumer re-renders at all.
+  it('leaves a DM-only list byte-identical (no write)', () => {
+    const qc = new QueryClient();
+    const loaded: ListActivityDto = { items: [dmItem('dm-1'), dmItem('dm-2')] };
     qc.setQueryData<ListActivityDto>(activityKey(), loaded);
     removeWorkspaceFromActivity(qc, 'w-1');
     expect(qc.getQueryData(activityKey())).toBe(loaded);

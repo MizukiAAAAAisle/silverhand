@@ -13,6 +13,10 @@ import {
   ConversationReadRepo,
   STREAM_UNREAD_FOR_CONVERSATION_SQL,
 } from '../../src/repos/conversation-read-repo.js';
+import {
+  DIRECT_PAIR_IDS_FOR_USER_SQL,
+  workspacePlaced,
+} from '../../src/repos/conversation-placement-sql.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
@@ -91,9 +95,25 @@ const LEGACY_POSITIONAL_STREAMS_SQL = `WITH viewer_unread AS (
        ) AS cnt
      FROM messages m
      JOIN conversations c ON c.id = m.conversation_id
-     JOIN conversation_users cu
-       ON cu.conversation_id = c.id AND cu.user_id = @viewer
     WHERE ${LIVE_CONVERSATION_PREDICATE}
+      -- PARTICIPATION, merged across both placements (#task:2115) — the same rule
+      -- production states as a UNION ALL CTE, written here in the oracle's own
+      -- idiom (a semi-join PREDICATE) so the differential compares the merge's
+      -- SEMANTICS rather than two copies of one text. The workspace arm keeps its
+      -- placement conjunct: a stray conversation_users row on a pair must be inert
+      -- on BOTH sides, or the oracle would absorb exactly the widening it exists
+      -- to catch. The DM arm interpolates the shared placement authority, for the
+      -- same reason the two predicate builders above are interpolated.
+      AND (
+        (${workspacePlaced('c')}
+         AND EXISTS (
+           SELECT 1 FROM conversation_users cu
+            WHERE cu.conversation_id = c.id
+              AND cu.user_id = @viewer
+         ))
+        OR (c.placement_kind = 'direct_pair'
+            AND c.id IN (${DIRECT_PAIR_IDS_FOR_USER_SQL}))
+      )
       AND (@ws IS NULL OR c.workspace_id = @ws)
       AND m.from_kind != 'system'
       AND NOT (m.from_kind = 'user'
@@ -114,6 +134,16 @@ const LEGACY_POSITIONAL_STREAMS_SQL = `WITH viewer_unread AS (
      c.roster_policy                 AS conversation_roster_policy,
      c.title                         AS conversation_title,
      c.workspace_id                  AS workspace_id,
+     -- The PLACEMENT columns the DTO's location union is built from (#task:2115).
+     -- Both arms' coordinates are projected unconditionally on both sides, because
+     -- which arm a row is cannot be known before the row is read.
+     c.placement_kind                AS placement_kind,
+     c.endpoint_a_kind               AS endpoint_a_kind,
+     c.endpoint_a_id                 AS endpoint_a_id,
+     c.endpoint_a_deleted_at         AS endpoint_a_deleted_at,
+     c.endpoint_b_kind               AS endpoint_b_kind,
+     c.endpoint_b_id                 AS endpoint_b_id,
+     c.endpoint_b_deleted_at         AS endpoint_b_deleted_at,
      vu.message_id                   AS first_unread_message_id,
      vu.seq                          AS first_unread_seq,
      vu.content                      AS first_unread_content,
@@ -191,6 +221,7 @@ interface Fixture {
   db: Db;
   reads: ConversationReadRepo;
   messages: MessageRepo;
+  conversations: ConversationRepo;
   /** Every conversation the fixture created, in a stable order. */
   conversationIds: string[];
   wsA: string;
@@ -204,6 +235,10 @@ interface Fixture {
   chCursorPastHead: string;
   chInMutedWs: string;
   dm: string;
+  /** The WORKSPACE-LESS `direct_pair` (#task:2115): mainline + followed thread. */
+  pair: string;
+  /** The pair's counterpart agent, i.e. the endpoint that is not the viewer. */
+  pairAgentId: string;
   /** chAll mainline: cursor far behind; unread = [byDeleted, latest]. */
   chAllByDeletedId: string;
   chAllLatestId: string;
@@ -217,8 +252,8 @@ interface Fixture {
  * The acceptance matrix as one DB: mainline + thread streams, cursors
  * absent / mid-history / at head, every excluded author class, both attention
  * tiers plus the workspace suppressor, archived / non-member / freshness-exempt
- * conversations, a DM, a deleted message author, and a second viewer with no
- * cursors at all.
+ * conversations, a workspace-placed DM channel, a WORKSPACE-LESS `direct_pair`, a
+ * deleted message author, and a second viewer with no cursors at all.
  */
 function buildFixture(): Fixture {
   const { db, localHostId } = openTestDb();
@@ -234,6 +269,11 @@ function buildFixture(): Fixture {
   const speaker = agents.create({ name: 'speaker', runtime: 'claude' }, localHostId, 'local');
   const doomed = agents.create({ name: 'doomed', runtime: 'codex' }, localHostId, 'local');
   const dmAgent = agents.create({ name: 'dm-agent', runtime: 'claude' }, localHostId, 'local');
+  const pairAgent = agents.create(
+    { name: 'pair-agent', runtime: 'codex' },
+    localHostId,
+    'local',
+  );
 
   const wsA = workspaces.insert({ name: fixedWorkspaceName('ws-a'), description: null }).id;
   const wsMuted = workspaces.insert({ name: fixedWorkspaceName('ws-muted'), description: null }).id;
@@ -255,6 +295,19 @@ function buildFixture(): Fixture {
     title: fixedConversationTitle('dm-agent'),
     agentId: dmAgent.id,
   }).id;
+  // The WORKSPACE-LESS placement (#task:2115), minted through the production
+  // get-or-create so it carries what production gives it: two endpoint columns,
+  // `roster_policy = 'fixed'`, and a NULL `workspace_id`. The fixture's
+  // seat-everyone trigger then hands it a `conversation_users` row for EVERY
+  // fixture user — which is not a nuisance here but the falsifier: 'alice' is not
+  // an endpoint, so her stray seat must stay inert on both sides of the
+  // differential, and dropping the roster arm's placement conjunct in production
+  // hands her someone else's DM.
+  const pair = conversations.getOrCreateDirectPair(
+    { kind: 'human', id: 'local' },
+    { kind: 'agent', id: pairAgent.id },
+    Date.now(),
+  ).conversation.id;
 
   channelPrefs.upsert({ viewerUserId: 'local', conversationId: chMentions, mode: 'mentions' });
   channelPrefs.upsert({ viewerUserId: 'local', conversationId: chMute, mode: 'mute' });
@@ -409,6 +462,33 @@ function buildFixture(): Fixture {
     source: 'reply',
   });
 
+  // ── the workspace-less pair: the same two streams, one placement over ──────
+  // Mainline enters through the SAME `roster_policy = 'fixed'` arm as the DM
+  // channel above (a pair IS fixed-roster), and the thread enters through the
+  // ambient arm with a NULL workspace coordinate — the case that would break if
+  // the tier predicate treated its workspace parameter as a required coordinate
+  // rather than as a mute lookup that a NULL simply misses.
+  const pairRoot = messages.insertForConversation({
+    conversationId: pair,
+    fromKind: 'agent',
+    fromAgentId: pairAgent.id,
+    content: 'pair mainline unread',
+  });
+  messages.insertForConversation({
+    conversationId: pair,
+    fromKind: 'agent',
+    fromAgentId: pairAgent.id,
+    threadRootId: pairRoot.id,
+    content: 'pair thread unread',
+  });
+  followers.upsert({
+    threadRootId: pairRoot.id,
+    conversationId: pair,
+    principalKind: 'human',
+    principalId: 'local',
+    source: 'reply',
+  });
+
   // ── freshness-exempt only: no stream head row exists at all ───────────────
   // The rewrite enumerates streams from `conversation_stream_heads`, so the one
   // writer that deliberately leaves the head behind (§5.2, schedule_fire) is
@@ -446,6 +526,7 @@ function buildFixture(): Fixture {
     db,
     reads,
     messages,
+    conversations,
     conversationIds: [
       chAll,
       chMentions,
@@ -456,6 +537,7 @@ function buildFixture(): Fixture {
       chCursorPastHead,
       chInMutedWs,
       dm,
+      pair,
     ],
     wsA,
     wsMuted,
@@ -468,6 +550,8 @@ function buildFixture(): Fixture {
     chCursorPastHead,
     chInMutedWs,
     dm,
+    pair,
+    pairAgentId: pairAgent.id,
     chAllByDeletedId: byDeleted.id,
     chAllLatestId: chAllLatest.id,
     followedRoot: followedRootMsg.id,
@@ -503,6 +587,10 @@ describe('#task:1967 unread rewrite — semantic equivalence vs the frozen pre-r
       [f.chCursorPastHead]: [0, 1],
       [f.chInMutedWs]: [2, 2],
       [f.dm]: [2, 2],
+      // The per-conversation query is placement-agnostic (it is keyed on ONE
+      // conversation the caller already resolved), so the pair answers it for
+      // 'alice' too — participation is the ROUTE's question there, not this SQL's.
+      [f.pair]: [2, 2],
     };
     for (const conv of f.conversationIds) {
       for (const [i, viewer] of ['local', 'alice'].entries()) {
@@ -520,15 +608,21 @@ describe('#task:1967 unread rewrite — semantic equivalence vs the frozen pre-r
   it('activity.positional_streams matches the oracle across viewer × workspace filter', () => {
     const f = buildFixture();
     const cases: Array<{ viewer: string; ws: string | null; rows: number }> = [
-      // 'local': chAll mainline + its followed thread + DM mainline + DM thread.
+      // 'local': chAll mainline + its followed thread + DM mainline + DM thread +
+      // the workspace-less pair's mainline + its followed thread (#task:2115).
       // Everything else is filtered by tier / mute / archive / membership.
-      { viewer: 'local', ws: null, rows: 4 },
+      { viewer: 'local', ws: null, rows: 6 },
+      // A workspace-SCOPED list drops both DM-pair streams: `NULL = @ws` is NULL,
+      // so the pair has no coordinate to match. Global spans placements, scoped
+      // does not — the same 2 rows as before this ticket.
       { viewer: 'local', ws: f.wsA, rows: 2 },
       { viewer: 'local', ws: f.wsMuted, rows: 0 },
       // 'alice' has no cursors, no follows and no attention prefs: every live
       // channel she is a member of enters at the default 'all' tier, mainline
       // only (thread ambient needs a follow) — including the workspace whose
       // mute belongs to 'local', which is what makes the suppressor per-viewer.
+      // Her stray fixture seat on the pair adds NOTHING: she is not an endpoint,
+      // and the roster arm does not apply to a `direct_pair`.
       { viewer: 'alice', ws: null, rows: 7 },
       { viewer: 'alice', ws: f.wsA, rows: 5 },
     ];
@@ -541,6 +635,50 @@ describe('#task:1967 unread rewrite — semantic equivalence vs the frozen pre-r
         c.rows,
       );
     }
+  });
+
+  it('the participation merge admits the viewer by ENDPOINT and only the viewer (#task:2115)', () => {
+    const f = buildFixture();
+    // The differential above proves both queries agree; a wrong-but-matching pair
+    // of texts would still pass it, so the merge's two halves are asserted
+    // directly on the production statement.
+    const mine = run(f.db, POSITIONAL_STREAMS_SQL, activityBinds('local', null, [])).filter(
+      r => r.conversation_id === f.pair,
+    );
+    // POSITIVE: both of the pair's streams enter the GLOBAL rail, and each row
+    // carries the placement columns `buildLocation` turns into the DM arm —
+    // no workspace coordinate, and the two endpoints, one of which is the viewer.
+    expect(mine.map(r => r.root)).toEqual([null, expect.any(String)]);
+    for (const row of mine) {
+      expect(row).toMatchObject({
+        placement_kind: 'direct_pair',
+        workspace_id: null,
+        conversation_roster_policy: 'fixed',
+      });
+      // Slot order is canonical ('agent' < 'human'), so the agent is A and the
+      // viewer is B — asserted rather than assumed, because the counterpart
+      // resolution downstream reads these very columns.
+      expect(row.endpoint_a_kind).toBe('agent');
+      expect(row.endpoint_a_id).toBe(f.pairAgentId);
+      expect(row.endpoint_b_kind).toBe('human');
+      expect(row.endpoint_b_id).toBe('local');
+    }
+
+    // NEGATIVE: 'alice' HAS a `conversation_users` seat on this pair (the fixture
+    // trigger seats every fixture user) and is not an endpoint. The roster arm's
+    // placement conjunct is the only thing standing between her and a stranger's
+    // DM — and the read model would not soften it, it would THROW
+    // (`resolveCounterpart` fails closed when the viewer is not an endpoint), so
+    // the widening's real symptom is a 500 on the global rail. The seat is asserted
+    // through the repo face, not a hand-written SELECT: if it were absent, "alice
+    // sees nothing" would be true for a reason that has nothing to do with the
+    // conjunct under test.
+    expect(f.conversations.getUser(f.pair, 'alice')).not.toBeNull();
+    expect(
+      run(f.db, POSITIONAL_STREAMS_SQL, activityBinds('alice', null, [])).filter(
+        r => r.conversation_id === f.pair,
+      ),
+    ).toEqual([]);
   });
 
   it('directed subtraction moves the count AND the anchor, identically in both queries', () => {
@@ -733,8 +871,18 @@ describe('#task:1967 query-plan contract', () => {
     const f = buildScaleFixture();
     const plan = planOf(f.db, POSITIONAL_STREAMS_SQL, activityBinds('local', null, []));
     // Enumeration starts from the viewer's memberships — the smallest set that
-    // can bound the work — never from a message scan.
+    // can bound the work — never from a message scan. BOTH participation arms are
+    // pinned (#task:2115): the merge added a second way into the enumeration, and
+    // an unindexed arm would make the hottest read in the app scan `conversations`
+    // once per request while every assertion below stayed green.
     expect(plan).toContain('idx_conversation_users_user (user_id=?)');
+    expect(plan, 'the pair arm must seek slot A').toContain(
+      'idx_conversations_direct_pair_endpoints',
+    );
+    expect(plan, 'the pair arm must seek slot B — the hot slot for a human').toContain(
+      'idx_conversations_direct_pair_endpoint_b',
+    );
+    expect(plan, 'neither pair arm may scan conversations').not.toMatch(/\bSCAN c_p\b/);
     expect(plan).toContain(
       'idx_conversation_stream_heads_conversation (conversation_id=?)',
     );

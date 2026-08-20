@@ -42,6 +42,21 @@
 //      precondition, necessary not sufficient, #task:1268).
 // Then salience is derived (DM = directed-grade) and the list sorted §13.2:
 // directed tier first, most-recent-first within a tier.
+//
+// PLACEMENT SCOPE (#task:2115). Activity spans BOTH conversation placements:
+// workspace channels and workspace-less `direct_pair` lines. It used to be
+// workspace-only, and that was a real defect rather than a scope: a DM's unread
+// is directed-grade by definition, so the one item class the human is most
+// obliged to answer was the one class the global rail could not show
+// (docs/activity-lifecycle-v1.md — DM unread always enters Activity). The
+// restriction was introduced to stop shipping an UNOPENABLE item (an empty
+// `workspace_id` + empty title, #task:2035 Cindy FAIL 3); what removes it for
+// good is the DTO, which now carries WHERE the item is as a discriminated union
+// (`ActivityLocation`) instead of a workspace coordinate every item had to have.
+// Both sources therefore carry a PARTICIPATION MERGE — the workspace roster seat
+// (authoritative for the workspace arm only) UNIONed with the `direct_pair`
+// endpoint transpose `DIRECT_PAIR_IDS_FOR_USER_SQL` — and neither invents an arm
+// of its own, so "may this viewer see this stream" has one answer per placement.
 // #task:1983 W2 — the handle is bound at ASSEMBLY time
 // (`createActivityReadModel`), not read out of a god-context per call: this
 // projection only ever needed `db`, and taking the whole `BackendContext` is
@@ -50,20 +65,34 @@ import type { Database as Db } from 'better-sqlite3';
 import { prepareObserved } from '../observability/observed-statement.js';
 import { channelAmbientEntersPredicate } from '../repos/attention-tier-predicates.js';
 import { LIVE_CONVERSATION_PREDICATE } from '../repos/conversation-liveness.js';
-import { WORKSPACE_PLACED } from '../repos/conversation-placement-sql.js';
+import {
+  DIRECT_PAIR_IDS_FOR_USER_SQL,
+  WORKSPACE_PLACED,
+  workspacePlaced,
+} from '../repos/conversation-placement-sql.js';
 import { EFFECTIVE_DIRECTED_MENTION_PREDICATE } from '../repos/directed-claim-predicate.js';
 import {
   apiPaths,
   DEFAULT_CHANNEL_ATTENTION_MODE,
   principalAvatarUrl,
+  requireWorkspacePlacement,
   resolveMessageAuthor,
   type ActivityItemDto,
+  type ActivityLocation,
   type ActivitySalience,
+  type ConversationEndpointRef,
+  type ConversationPlacementKind,
   type ListActivityDto,
   type MessageAuthorDto,
   type MessageAuthorLiveActor,
   type RuntimeKind,
 } from '@silverhand/shared';
+import {
+  createPrincipalResolver,
+  resolveCounterpart,
+  type CounterpartResolution,
+} from './direct-pair-counterpart.js';
+
 
 export interface ListActivityParams {
   viewerUserId: string;
@@ -192,51 +221,146 @@ const SENDER_SELECT = `
                            WHEN 'agent' THEN sa.updated_at END          AS live_updated_at,
           CASE m.from_kind WHEN 'agent' THEN sa.runtime END             AS live_runtime`;
 
-interface DirectedNotificationRow extends SenderColumns {
+/** Row fields carrying the item's PLACEMENT — the columns {@link buildLocation}
+ *  turns into the DTO's `location` union. Both placements' coordinates are read
+ *  unconditionally because the discriminant is a column, not a parameter: which
+ *  arm a row is cannot be known before the row is read, so a query that selected
+ *  only one arm's columns would be deciding the placement in SQL and then
+ *  re-deciding it in TS.
+ *
+ *  Extends {@link ConversationEndpointRef} rather than re-listing the six endpoint
+ *  columns, so `directPairEndpointsOf` (via `resolveCounterpart`) accepts the row
+ *  as-is and "which slot is the other one" stays answered in exactly one place. */
+interface LocationColumns extends ConversationEndpointRef {
+  /** NULL exactly for a non-workspace placement — a CHECK on `conversations`, so
+   *  {@link buildLocation}'s workspace arm asserts rather than coerces. */
+  workspace_id: string | null;
+  /** The conversation's stored title. Carries identity for the workspace arm ONLY:
+   *  a `direct_pair`'s stored title is `DIRECT_PAIR_STORED_TITLE` (''), which is
+   *  why the DM arm names its counterpart instead (#task:2115). */
+  conversation_title: string;
+}
+
+/** SQL fragment selecting {@link LocationColumns} off the joined conversation `c`.
+ *  Reads the coordinate off the CONVERSATION in both sources — never off a
+ *  denormalized copy on the driving row — so "where does this item live" has one
+ *  answer per item and cannot go stale against the placement it describes. */
+const LOCATION_SELECT = `
+          c.placement_kind        AS placement_kind,
+          c.workspace_id          AS workspace_id,
+          c.title                 AS conversation_title,
+          c.endpoint_a_kind       AS endpoint_a_kind,
+          c.endpoint_a_id         AS endpoint_a_id,
+          c.endpoint_a_deleted_at AS endpoint_a_deleted_at,
+          c.endpoint_b_kind       AS endpoint_b_kind,
+          c.endpoint_b_id         AS endpoint_b_id,
+          c.endpoint_b_deleted_at AS endpoint_b_deleted_at`;
+
+/**
+ * The item's `location` — the ONE place a row's placement becomes the DTO's
+ * discriminated union, shared by both sources so neither can grow its own idea of
+ * what a DM row's identity is.
+ *
+ * The two arms are asymmetric ON PURPOSE, and each asymmetry is the shared
+ * authority speaking:
+ *
+ *  - `workspace_channel` asserts its coordinate through `requireWorkspacePlacement`
+ *    (a surface whose unit IS a workspace must not invent one). A `?? ''` here is
+ *    precisely the #2035 defect — an item nothing can open — which is why the
+ *    shared assert exists instead of a local fallback.
+ *  - `direct_pair` carries a COUNTERPART, not a title, and resolves it through the
+ *    shared `resolveCounterpart`: identity is the other endpoint's live principal,
+ *    and the wire value object stops at the coordinate + status + live fields. The
+ *    DISPLAY STRING is not computed here and must not be — UI copy (including the
+ *    deleted-endpoint wording) belongs to the renderer's `presentCounterpart`,
+ *    which is also what keeps this face free of a second "deleted" spelling.
+ *
+ * `resolveCounterpart` fails loud when the viewer is not exactly one endpoint of
+ * the row, and that is a deliberate coupling to the enumeration: both sources
+ * admit a `direct_pair` only through `DIRECT_PAIR_IDS_FOR_USER_SQL`, so a throw
+ * here means a query drifted off that authority — the one failure a counterpart
+ * face must never absorb quietly, because absorbing it draws a STRANGER's name.
+ */
+function buildLocation(
+  row: LocationColumns,
+  conversationId: string,
+  ac: ActivityAssemblyContext,
+): ActivityLocation {
+  if (row.placement_kind === 'direct_pair') {
+    return {
+      kind: 'direct_pair',
+      counterpart: resolveCounterpart(
+        { ...row, id: conversationId },
+        { kind: 'human', id: ac.viewerUserId },
+        ac.principals.resolve,
+      ),
+    };
+  }
+  return {
+    kind: 'workspace_channel',
+    workspace_id: requireWorkspacePlacement({
+      id: conversationId,
+      workspace_id: row.workspace_id,
+      placement_kind: row.placement_kind,
+    }),
+    title: row.conversation_title,
+  };
+}
+
+/**
+ * The viewer's PARTICIPATION in a `direct_pair`, as the second arm of both
+ * sources' enumeration — the human transpose of the two endpoint slots, taken
+ * VERBATIM from the placement authority (`DIRECT_PAIR_IDS_FOR_USER_SQL`) so the
+ * DM arm of "may this viewer see this stream" has exactly one text.
+ *
+ * Why participation is answered PER PLACEMENT rather than once: a workspace
+ * conversation's authority is the roster seat, and a `direct_pair` has no roster
+ * row at all (`getOrCreateDirectPair` writes the two endpoint columns and nothing
+ * else). Merging by placement is therefore not a widening of the gate — it keeps
+ * both gates exactly as tight as they were. The `placement_kind` conjunct is what
+ * makes that true in the other direction too: a STRAY `conversation_users` row on
+ * a pair the viewer is not an endpoint of stays inert, because the roster arm
+ * never applies to a pair and this arm reads endpoints only.
+ */
+const DIRECT_PAIR_PARTICIPATION_ARM = `(c.placement_kind = 'direct_pair'
+           AND c.id IN (${DIRECT_PAIR_IDS_FOR_USER_SQL}))`;
+
+interface DirectedNotificationRow extends SenderColumns, LocationColumns {
   id: string;
   kind: 'mention_self' | 'agent_start_failed';
-  conversation_id: string | null;
+  /** NON-NULLABLE, and the query is what makes it so: it is selected as `c.id`
+   *  under {@link LIVE_CONVERSATION_PREDICATE}, whose `c.id IS NOT NULL` conjunct
+   *  drops the LEFT JOIN miss (a notification whose conversation was deleted —
+   *  `ON DELETE SET NULL` — has an unknowable destination and fails closed).
+   *  Reading the coordinate off the JOINED CONVERSATION rather than off
+   *  `n.conversation_id` is what makes the non-nullability visible in ONE place
+   *  instead of a per-item `?? ''` that would ship an unopenable row. */
+  conversation_id: string;
   message_id: string | null;
   thread_root_id: string | null;
   root_content: string | null;
   message_content: string | null;
-  conversation_title: string | null;
-  /** NON-NULLABLE, and the query is what makes it so: the WHERE clause restricts
-   *  this source to WORKSPACE-placed conversations, and `placement_kind =
-   *  'workspace' ⇒ workspace_id IS NOT NULL` is a CHECK on `conversations`. So
-   *  the coordinate `ActivityItemDto` requires is a consequence of the domain
-   *  restriction, declared here rather than re-tested per item.
-   *
-   *  It is declared instead of re-tested DELIBERATELY (@Cindy B5). A second
-   *  `if (!row.workspace_id) continue` in the loop below read as belt-and-braces
-   *  but made BOTH copies unfalsifiable: deleting either one alone changed no
-   *  behavior, so no test could distinguish the domain restriction from its
-   *  absence, and the SQL text was the only evidence the restriction existed. One
-   *  decision, in the place that can express it as a domain (`WORKSPACE_PLACED`);
-   *  everything downstream reads the type. */
-  workspace_id: string;
   payload: string | null;
   created_at: number;
 }
 
-interface PositionalStreamRow extends SenderColumns {
+interface PositionalStreamRow extends SenderColumns, LocationColumns {
   conversation_id: string;
   root: string | null;
   root_content: string | null;
   /** Read for ONE thing: the §5.1 salience grade (a fixed-roster stream's ambient
    *  unread is directed-grade). A CAPABILITY question, which is roster's proper
    *  domain — see the keying rule on `ConversationPlacementKindSchema`. It is not
-   *  a conversation classification and does not reach `ActivityItemDto`, which
-   *  carries no classification bit at all (#task:2076). */
+   *  a conversation classification and does not reach `ActivityItemDto`, whose
+   *  only classification is its `location` discriminant (#task:2076). */
   conversation_roster_policy: 'open' | 'fixed';
-  conversation_title: string;
-  workspace_id: string;
   first_unread_message_id: string;
   first_unread_seq: number;
   first_unread_content: string | null;
   first_unread_created_at: number;
   unread_count: number;
 }
+
 
 /**
  * The ORDERED registry of Activity sources — the chokepoint (#task:1410, Cindy
@@ -268,6 +392,13 @@ interface ActivityAssemblyContext {
   viewerUserId: string;
   wsFilter: string | null;
   directedMessageIds: Set<string>;
+  /** Counterpart identity lookups for `direct_pair` items, built ONCE per list
+   *  (`listActivity`) and shared by every source. Memoized per (kind, id), so the
+   *  cost is the distinct counterparts in the list rather than its row count —
+   *  and a viewer's several DMs with the same agent resolve it once. NOT a
+   *  per-item query, and not a second cache: it is the same resolver the DM list
+   *  and the owner-audit list use. */
+  principals: CounterpartResolution;
 }
 
 /** An Activity source: given the assembly context, produce this source's items.
@@ -294,15 +425,13 @@ const assembleDirectedNotifications: ActivitySource = ac => {
       `SELECT
           n.id                AS id,
           n.kind              AS kind,
-          n.conversation_id   AS conversation_id,
+          c.id                AS conversation_id,
           n.message_id        AS message_id,
           m.thread_root_id    AS thread_root_id,
           root.content        AS root_content,
           m.content           AS message_content,
-          c.title             AS conversation_title,
-          COALESCE(n.workspace_id, c.workspace_id) AS workspace_id,
           n.payload           AS payload,
-          n.created_at        AS created_at,${SENDER_SELECT}
+          n.created_at        AS created_at,${LOCATION_SELECT},${SENDER_SELECT}
         FROM notifications n
         LEFT JOIN messages m ON m.id = n.message_id
         LEFT JOIN messages root ON root.id = m.thread_root_id
@@ -324,27 +453,31 @@ const assembleDirectedNotifications: ActivitySource = ac => {
          -- (archived/deleted) are not visible Activity — see
          -- LIVE_CONVERSATION_PREDICATE (the shared gate).
          AND ${LIVE_CONVERSATION_PREDICATE}
-         -- ...and conversation-backed here means WORKSPACE-PLACED. Every Activity
-         -- item's coordinate is (workspace, conversation) — ActivityItemDto
-         -- declares workspace_id as a string and the client navigates with it — so
-         -- a notification about a workspace-less placement (a direct_pair) has no
-         -- item in this read model. It used to be shipped anyway, with an EMPTY
-         -- workspace_id and title: a row nothing can open (#task:2035, Cindy
-         -- FAIL 3). The DM surface is GET /api/direct-pairs, and the bell face
-         -- keeps the notification itself — that DTO's workspace_id is honestly
-         -- nullable. A DOMAIN restriction of this read model, not a claim that the
-         -- reference was unresolved.
+         -- ...and conversation-backed spans BOTH placements, each admitted by its
+         -- own participation authority (#task:2115). The workspace arm is the
+         -- notification itself: notifications.user_id = @viewer already means
+         -- "addressed to this viewer", and WORKSPACE_PLACED is what makes the
+         -- location union's workspace arm constructable. The DM arm additionally
+         -- requires CURRENT endpoint participation, because a pair's notification
+         -- outlives nothing else that could answer it: there is no roster row to
+         -- lose, so user_id alone would keep answering after the placement
+         -- itself stopped being the viewer's.
          --
          -- Stated as the shared placement discriminator, not as "the workspace
          -- column is not null" (Cindy B5): placement_kind is this feature's single
          -- truth for which placement a row is, and a nullable column is its
          -- CONSEQUENCE. Reading the consequence is how two faces of one domain
          -- drift, and conversation-placement-sql.ts requires the workspace face to
-         -- carry WORKSPACE_PLACED explicitly for exactly that reason. It is also
+         -- carry WORKSPACE_PLACED explicitly for exactly that reason. Both arms are
          -- NULL-safe on the LEFT JOIN above: a notification whose conversation row
-         -- is gone is not workspace-placed, so it cannot enter.
-         AND ${WORKSPACE_PLACED}
-         AND (@ws IS NULL OR COALESCE(n.workspace_id, c.workspace_id) = @ws)
+         -- is gone matches neither placement, so it cannot enter (and the liveness
+         -- gate has already dropped it).
+         AND (${WORKSPACE_PLACED} OR ${DIRECT_PAIR_PARTICIPATION_ARM})
+         -- The workspace-scoped call reads the CONVERSATION's coordinate, the same
+         -- column LOCATION_SELECT projects — one workspace face per item. A pair
+         -- has none, so NULL = @ws excludes every DM from a workspace-scoped
+         -- Activity list without a placement test of its own.
+         AND (@ws IS NULL OR c.workspace_id = @ws)
        ORDER BY n.created_at DESC`,
     )
     .all({ viewer: viewerUserId, ws: wsFilter });
@@ -362,20 +495,19 @@ const assembleDirectedNotifications: ActivitySource = ac => {
   for (const n of notifRows) {
     if (n.kind === 'mention_self') {
       // Type narrowing only — the shared predicate already guaranteed an
-      // existing anchor message, and the join above a non-NULL conversation.
-      if (!n.conversation_id || !n.message_id) continue;
+      // existing anchor message.
+      if (!n.message_id) continue;
       // already claimed this message (e.g. a duplicate mention notification).
       if (directedByMessage.has(n.message_id)) continue;
       directedByMessage.set(n.message_id, {
         id: `mention:${n.id}`,
         kind: 'mention',
         salience: 'directed',
-        workspace_id: n.workspace_id,
+        location: buildLocation(n, n.conversation_id, ac),
         conversation_id: n.conversation_id,
         thread_root_id: n.thread_root_id,
         message_id: n.message_id,
         notification_id: n.id,
-        title: n.conversation_title ?? '',
         thread_root_preview: preview(n.root_content),
         preview: preview(n.message_content),
         preview_sender: buildPreviewSender(n),
@@ -399,12 +531,15 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         id: `agent_failed:${n.id}`,
         kind: 'agent_failed',
         salience: 'directed',
-        workspace_id: n.workspace_id,
-        conversation_id: n.conversation_id ?? '',
+        // A failure row is located exactly like every other row. Its own kind
+        // never substitutes for a location: a failed wake in a DM still has to
+        // NAME the pair, which is why the counterpart hangs off the location arm
+        // rather than off the item kind (#task:2115).
+        location: buildLocation(n, n.conversation_id, ac),
+        conversation_id: n.conversation_id,
         thread_root_id: null,
         message_id: null,
         notification_id: n.id,
-        title: n.conversation_title ?? '',
         thread_root_preview: null,
         preview: agentPreview,
         preview_sender: null,
@@ -431,9 +566,12 @@ const assembleDirectedNotifications: ActivitySource = ac => {
  *
  * Driven by STREAMS, not by message history:
  *
- *  1. `entering_stream` enumerates the viewer's candidate streams — member ∩ live
- *     ∩ (workspace filter) ∩ `enter()` — from `conversation_stream_heads`, and
- *     resolves each one's cursor with an indexed probe into `conversation_reads`
+ *  1. `viewer_conversation` enumerates the conversations the viewer PARTICIPATES
+ *     in, one arm per placement (roster seat for the workspace arm, endpoint for
+ *     the DM arm — #task:2115), and `entering_stream` narrows those to candidate
+ *     streams — live ∩ (workspace filter) ∩ `enter()` — from
+ *     `conversation_stream_heads`, resolving each one's cursor with an indexed
+ *     probe into `conversation_reads`
  *     (idx_conversation_reads_user_conversation_stream). `latest_seq` is
  *     deliberately NOT read: it is the FRESHNESS head, which freshness-exempt
  *     rows (§5.2) leave behind, so a cursor may legitimately exceed it. Only the
@@ -466,13 +604,41 @@ const assembleDirectedNotifications: ActivitySource = ac => {
  * tail-inner is the entire point, so it is stated rather than hoped for.
  */
 export const POSITIONAL_STREAMS_SQL = `
-  WITH entering_stream AS (
+  WITH viewer_conversation AS (
+    -- ── PARTICIPATION, merged across both placements (#task:2115) ────────────
+    -- The enumeration's entry gate, and the smallest set that can bound the work.
+    -- One arm per placement, because the two placements answer "is this the
+    -- viewer's stream" with different authorities and neither answers for the
+    -- other. UNION ALL, not plain UNION: the arms are mutually exclusive on ONE
+    -- column (placement_kind), so a duplicate is unrepresentable and a dedup pass
+    -- would be a temp b-tree bought to defend against nothing — see the plan
+    -- contract, which pins the GROUP BY as the query's only one.
+    --
+    -- Workspace arm: the roster seat, which is authoritative FOR THIS ARM ONLY.
+    -- The placement conjunct is what keeps that scoped: without it, a stray
+    -- conversation_users row on a pair would admit a stream through the wrong
+    -- authority — a member door that stopped failing closed, or a backfill, would
+    -- silently hand a non-endpoint someone else's DM.
+    SELECT cu.conversation_id AS conversation_id
+      FROM conversation_users cu
+      JOIN conversations c_seat ON c_seat.id = cu.conversation_id
+     WHERE cu.user_id = @viewer
+       AND ${workspacePlaced('c_seat')}
+    UNION ALL
+    -- DM arm: endpoint participation, taken verbatim from the placement authority
+    -- so this face cannot drift from every other reader of "the viewer's pairs".
+    -- A canonical pair has NO roster row at all (getOrCreateDirectPair writes the
+    -- endpoint columns and nothing else), which is why the arm above could never
+    -- reach it and why global Activity showed no DM unread before this ticket.
+    ${DIRECT_PAIR_IDS_FOR_USER_SQL}
+  ),
+  entering_stream AS (
     SELECT c.id                          AS conversation_id,
            sh.thread_root_id             AS root,
            COALESCE(cr.last_read_seq, 0) AS cursor_seq
-      FROM conversations c
-      JOIN conversation_users cu
-        ON cu.conversation_id = c.id AND cu.user_id = @viewer
+      FROM viewer_conversation vc
+      JOIN conversations c
+        ON c.id = vc.conversation_id
       JOIN conversation_stream_heads sh
         ON sh.conversation_id = c.id
       LEFT JOIN conversation_reads cr
@@ -480,32 +646,20 @@ export const POSITIONAL_STREAMS_SQL = `
        AND cr.conversation_id = c.id
        AND cr.thread_root_id IS sh.thread_root_id
      WHERE ${LIVE_CONVERSATION_PREDICATE}
-       -- WORKSPACE PLACEMENTS ONLY, the same domain restriction the directed
-       -- source carries, stated with the same shared discriminator and for the
-       -- same reason (#task:2035, Cindy B5). An Activity item is a NAVIGABLE
-       -- COORDINATE: ActivityItemDto.workspace_id is a required string and the
-       -- client opens the item with it, so a workspace-less placement has no item
-       -- here. PositionalStreamRow.workspace_id declares that as a fact
-       -- (non-nullable) and this conjunct is what makes it one.
-       --
-       -- HOW REACHABLE IT IS, stated honestly rather than borrowed from the
-       -- directed source's story: the join above needs a conversation_users row,
-       -- and a canonical DirectPair has none (getOrCreateDirectPair writes the two
-       -- endpoint columns and no roster row), so today's DM traffic never entered
-       -- this source. What this conjunct defends is a STRAY roster row on a
-       -- workspace-less placement — a member door that stops failing closed, a
-       -- backfill, a future placement — where the symptom would be silent: an item
-       -- with a null workspace_id typed as a string.
-       --
-       -- Nothing is lost either way: a DM's unread is carried by its own read
-       -- surface (GET /api/direct-pairs, invalidated by direct_pairs_changed),
-       -- viewer-scoped exactly because the placement is workspace-free. And this
-       -- does NOT touch the agent_home DM channels the roster_policy = 'fixed'
-       -- arm below exists for: those are workspace-placed and keep entering.
-       AND ${WORKSPACE_PLACED}
+       -- The workspace-scoped call, which is a COORDINATE filter and not a
+       -- placement test: a pair has no workspace_id, so NULL = @ws drops every
+       -- DM from a per-workspace Activity list, and @ws IS NULL (the global rail)
+       -- keeps both placements. That asymmetry is the feature — the global rail is
+       -- the only surface that spans placements, and it is where a DM's unread
+       -- belongs, because DM unread is directed-grade (§5.1) and therefore the
+       -- class the human is MOST obliged to answer.
        AND (@ws IS NULL OR c.workspace_id = @ws)
        AND (
-         -- DM mainline: directed-grade, always enters (§5.1).
+         -- Fixed-roster mainline (a DM: an agent_home DM channel or a
+         -- workspace-less pair): directed-grade, always enters (§5.1). The pair
+         -- needs no new arm here — roster_policy = 'fixed' is exactly what it
+         -- is, so it enters and scores through the SAME rule, and the ambient
+         -- tier below never applies to it.
          (sh.thread_root_id IS NULL AND c.roster_policy = 'fixed')
          -- Channel mainline: enters when the EFFECTIVE tier is 'all' — the
          -- channel's own tier with the viewer's workspace mute folded in
@@ -521,6 +675,11 @@ export const POSITIONAL_STREAMS_SQL = `
          -- mainline and its threads. follow is a delivery decision and must not
          -- force ambient on over the viewer's explicit mentions-only/muted pref
          -- (delivery vs attention); thread @mentions still enter via directed.
+         --
+         -- Placement-safe for a pair without a special case: the tier predicate
+         -- takes the workspace coordinate as a PARAMETER, and a NULL workspace
+         -- matches no mute row, so a pair's thread enters iff it is followed and
+         -- the pair's own stored mode is 'all'.
          OR (sh.thread_root_id IS NOT NULL
              AND EXISTS (
                SELECT 1 FROM thread_followers tf
@@ -558,13 +717,11 @@ export const POSITIONAL_STREAMS_SQL = `
     ps.root             AS root,
     root.content        AS root_content,
     c.roster_policy     AS conversation_roster_policy,
-    c.title             AS conversation_title,
-    c.workspace_id      AS workspace_id,
     m.id                AS first_unread_message_id,
     m.seq               AS first_unread_seq,
     m.content           AS first_unread_content,
     m.created_at        AS first_unread_created_at,
-    ps.unread_count     AS unread_count,${SENDER_SELECT}
+    ps.unread_count     AS unread_count,${LOCATION_SELECT},${SENDER_SELECT}
     FROM per_stream ps
     JOIN messages m
       ON m.conversation_id = ps.conversation_id AND m.seq = ps.first_unread_seq
@@ -606,23 +763,23 @@ const assemblePositionalStreams: ActivitySource = ac => {
     // A fixed-roster stream's unread is positional by MECHANISM and
     // directed-grade by SALIENCE (§5.1). This is the one live roster read on this
     // face, and it is a capability/attention-policy question — it decides how loud
-    // the item is, never what the conversation IS. The identity question has no
-    // branch here at all: this source only admits workspace placements (the
-    // WORKSPACE_PLACED conjunct above), so every item is a channel (#task:1373),
-    // which is why the roster bit stops at this line instead of riding the DTO
-    // (#task:2076).
+    // the item is, never what the conversation IS. The identity question is
+    // answered independently, by the row's PLACEMENT (`buildLocation`), which is
+    // why the roster bit stops at this line instead of riding the DTO: a
+    // workspace-placed DM channel and a workspace-less pair are both `fixed` and
+    // both directed-grade, yet they are different placements and draw different
+    // row-1 identities (#task:2076, #task:2115).
     const salience: ActivitySalience =
       s.conversation_roster_policy === 'fixed' ? 'directed' : 'ambient';
     items.push({
       id: `unread:${s.conversation_id}::${s.root ?? ''}`,
       kind: 'unread',
       salience,
-      workspace_id: s.workspace_id,
+      location: buildLocation(s, s.conversation_id, ac),
       conversation_id: s.conversation_id,
       thread_root_id: s.root,
       message_id: s.first_unread_message_id,
       notification_id: null,
-      title: s.conversation_title,
       thread_root_preview: preview(s.root_content),
       preview: preview(s.first_unread_content),
       preview_sender: buildPreviewSender(s),
@@ -658,6 +815,10 @@ export function listActivity(
     viewerUserId: params.viewerUserId,
     wsFilter: params.workspaceId ?? null,
     directedMessageIds: new Set(),
+    // ONE resolver per list, shared by every source: counterpart identity is a
+    // property of the pair, not of the source that surfaced it, and two sources
+    // resolving the same pair must not disagree — nor pay twice.
+    principals: createPrincipalResolver(db),
   };
 
   const items: ActivityItemDto[] = [];

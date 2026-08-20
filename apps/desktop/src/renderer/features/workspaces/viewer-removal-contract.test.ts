@@ -45,20 +45,55 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       id,
       kind: 'unread' as const,
       salience: 'ambient' as const,
-      workspace_id: workspaceId,
+      location: {
+        kind: 'workspace_channel' as const,
+        workspace_id: workspaceId,
+        title: `#${id}`,
+      },
       conversation_id: `c-${id}`,
       thread_root_id: null,
       message_id: `m-${id}`,
       notification_id: null,
-      title: `#${id}`,
       thread_root_preview: null,
       preview: null,
       preview_sender: null,
       timestamp: 1,
       unread_count: 1,
     });
+    // A workspace-LESS `direct_pair` item (#task:2115) rides along in the SAME
+    // cache: the chokepoint must carry it through a removal untouched, because a
+    // workspace fact cannot address a placement that has no workspace axis. It also
+    // keeps the whole-cache invariant honest — the survivor half of that assertion
+    // now covers an item that is a survivor for a STRUCTURAL reason rather than
+    // because its id happens not to match.
+    const dm = {
+      id: 'dm',
+      kind: 'unread' as const,
+      salience: 'directed' as const,
+      location: {
+        kind: 'direct_pair' as const,
+        counterpart: {
+          status: 'active' as const,
+          kind: 'agent' as const,
+          id: 'agent-dm',
+          name: 'agent-dm',
+          display_name: 'Agent DM',
+          avatar_url: null,
+          runtime: 'claude' as const,
+        },
+      },
+      conversation_id: 'c-dm',
+      thread_root_id: null,
+      message_id: 'm-dm',
+      notification_id: null,
+      thread_root_preview: null,
+      preview: null,
+      preview_sender: null,
+      timestamp: 1,
+      unread_count: 1,
+    };
     qc.setQueryData(activityKey(), {
-      items: [item('gone', REMOVED), item('keep', SURVIVOR)],
+      items: [item('gone', REMOVED), item('keep', SURVIVOR), dm],
     });
   },
   favorites: qc => {
@@ -211,6 +246,11 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
     expect(cacheMentions(qc, REMOVED)).toBe(false);
     // Survivor's data across every projection is untouched.
     expect(cacheMentions(qc, SURVIVOR)).toBe(true);
+    // …and so is the workspace-LESS survivor, which the invariant above cannot
+    // speak for: it mentions no workspace at all, so only a direct read proves the
+    // chokepoint dropped by ATTRIBUTION rather than by list position (#task:2115).
+    const activity = qc.getQueryData<{ items: { id: string }[] }>(activityKey());
+    expect(activity?.items.map(i => i.id)).toEqual(['keep', 'dm']);
   });
 
   it('is idempotent and cold-safe: a second run / empty cache never throws', () => {

@@ -585,12 +585,30 @@ describe('db-boundary: participation authority', () => {
    *     and this states the intent that makes the count correct: channels are
    *     enumerated workspace-first.
    *   - ONE BINDING FOR ONE VALUE, by name, for the same reason as `@conv`.
+   *   - A BAG, not a set — the ONE fragment here that is pinned that way, and the
+   *     asymmetry against the two set readings above is the schema speaking rather
+   *     than a looser standard (#task:2115). Those two fix a conversation and
+   *     produce principals, where an id repeating across arms would be a second
+   *     delivery and the callers do not rely on today's exclusivity. This one fixes
+   *     a principal and produces conversations, and a conversation can match both
+   *     arms only when its two endpoints are the SAME (human, viewer) coordinate —
+   *     which the v73 arc CHECK's STRICT `(a) < (b)` order makes unrepresentable.
+   *     So the dedup would defend against a row the DB cannot hold, while costing
+   *     every caller a SORT OF BOTH INDEX SEEKS (a deduplicating compound is merged,
+   *     so SQLite orders each arm first) — including the global Activity rail, which
+   *     interpolates this text into its participation merge and pins its per-stream
+   *     GROUP BY as the query's only temp b-tree.
    */
-  it('the direct-pair transpose covers both endpoint slots, stays rosterless, and binds the viewer once, by name', () => {
+  it('the direct-pair transpose covers both endpoint slots, stays rosterless, binds the viewer once by name, and does not dedup', () => {
     const sql = DIRECT_PAIR_IDS_FOR_USER_SQL;
-    const arms = sql.split(/\bUNION\b/);
+    const arms = sql.split(/\bUNION ALL\b/);
     expect(arms).toHaveLength(2);
-    expect(sql).not.toContain('UNION ALL');
+    // A BAG on purpose (see the docblock): the arms are disjoint by the arc CHECK,
+    // so the dedup a bare UNION buys is unreachable and its merge-sort is not. This
+    // is also what makes the text safe to interpolate into a LARGER compound —
+    // compounds are left-associative, so a bare UNION here would re-impose dedup on
+    // the whole merge.
+    expect(sql).not.toMatch(/\bUNION(?!\s+ALL\b)/);
     // One arm per slot, named by the column that answers for it, so neither can be
     // dropped nor both collapsed onto one slot.
     expect(arms.filter(arm => arm.includes('endpoint_a_id'))).toHaveLength(1);

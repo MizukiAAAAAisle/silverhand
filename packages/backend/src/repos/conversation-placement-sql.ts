@@ -413,13 +413,31 @@ export const PARTICIPANT_USER_IDS_SQL = `${workspaceHumanRosterMembers()}
  * 'agent' < 'human' — so in every agent<->human pair the person is in slot B and
  * the human transpose's HOT arm is the one v74 did not cover. The plan contract is
  * an EXPLAIN falsifier over the production statement.
+ *
+ * `UNION ALL`, and the ALL is a CONSEQUENCE of the schema rather than a tolerance
+ * for duplicates (#task:2115). A conversation matches both arms only if its two
+ * endpoints are the SAME (human, viewer) coordinate, and the v73 arc CHECK —
+ * `(endpoint_a_kind, endpoint_a_id) < (endpoint_b_kind, endpoint_b_id)`, a STRICT
+ * order — makes that unrepresentable. So the arms are disjoint for every binding,
+ * the result set is identical either way, and a dedup would be work bought to
+ * defend against a row the DB cannot hold.
+ *
+ * That is not a micro-optimization, which is why it is stated here rather than at
+ * a call site: a deduplicating compound forces SQLite to SORT BOTH index seeks so
+ * it can merge them, so every caller paid two `USE TEMP B-TREE FOR ORDER BY`
+ * passes over its own participation set — including the global Activity rail,
+ * whose query-plan contract pins the per-stream GROUP BY as the ONLY temp b-tree
+ * in the hottest read in the app. Interpolating this text into a larger compound
+ * (Activity's participation merge) is also precedence-safe now: SQL compounds are
+ * left-associative, so a `UNION` here would have re-imposed dedup on the whole
+ * merge.
  */
 export const DIRECT_PAIR_IDS_FOR_USER_SQL = `SELECT c_p.id AS conversation_id
               FROM conversations c_p
              WHERE c_p.placement_kind = 'direct_pair'
                AND c_p.endpoint_a_kind = 'human'
                AND c_p.endpoint_a_id = @viewer
-             UNION
+             UNION ALL
             SELECT c_p.id AS conversation_id
               FROM conversations c_p
              WHERE c_p.placement_kind = 'direct_pair'

@@ -31,6 +31,7 @@ import {
   encodeUserPrincipalHeader,
   MAX_MESSAGE_CONTENT_BYTES,
   X_SILVERHAND_PRINCIPAL_HEADER,
+  type ActivityItemDto,
   type DirectPairListItem,
   type DirectPairListResponse,
   type ScheduleDto,
@@ -621,16 +622,17 @@ describe('GET /api/direct-pairs + direct_pairs_changed', () => {
     });
   });
 
-  // ── A DM is not a workspace Activity coordinate ────────────────────────────────
+  // ── In a DM the stream IS the mention ──────────────────────────────────────────
 
   it('a human reference inside a DM resolves but produces no mention notification', async () => {
     // In a `direct_pair` THE STREAM IS THE MENTION: the placement has two endpoints
     // and the human is a party to every message in it, so a `mention_self` row would
-    // tell them what they were already told — while the surface it feeds (Activity)
-    // is coordinated by (workspace, conversation), which a DM has no first half of.
-    // Inserting one anyway shipped an Activity item with `workspace_id: ''`: not a
-    // navigable coordinate, and a fabricated workspace is worse than the
-    // mis-delivery it replaced.
+    // tell them what they were already told — the DM's own unread already owes them
+    // the line. That reasoning is the DIRECTED one and it is all that is left: the
+    // original justification also leaned on Activity being coordinated by
+    // (workspace, conversation), which #task:2115 retired — a DM item now answers
+    // WHERE with its counterpart, so there is no fabricated `workspace_id: ''` to
+    // avoid. What withholding still buys is non-duplication, not representability.
     t = buildTestApp();
     const parent = await makeAgent(t, 'parent');
     const stranger = insertAgentScopedAgent(t, parent, 'stranger');
@@ -661,7 +663,23 @@ describe('GET /api/direct-pairs + direct_pairs_changed', () => {
 
     const activity = await http(t).get(apiPaths.activity);
     expect(activity.status).toBe(200);
-    expect(((await activity.json()) as any).items).toEqual([]);
+    // Activity shows the DM — exactly ONE item, and it is the POSITIONAL unread the
+    // stream owes anyway (`notification_id: null` is what makes it positional; a
+    // withheld `mention_self` cannot be spelled that way). Asserting the whole list
+    // rather than only "no mention item" is deliberate: the empty-list form this
+    // replaced was load-bearing against a SECOND, notification-backed row, and a
+    // one-sided `not.toContainEqual` would go green on any third kind.
+    const items = ((await activity.json()) as any).items as ActivityItemDto[];
+    expect(items).toMatchObject([
+      {
+        kind: 'unread',
+        salience: 'directed',
+        conversation_id: ack!.conversation_id,
+        notification_id: null,
+        unread_count: 1,
+        location: { kind: 'direct_pair', counterpart: { kind: 'agent', id: stranger } },
+      },
+    ]);
     // The line itself is still announced and still carries the unread — the DM's own
     // read surface is where this message is owed to the viewer.
     expect(viewerFrames(frames, t).map(f => f.kind)).toEqual([
