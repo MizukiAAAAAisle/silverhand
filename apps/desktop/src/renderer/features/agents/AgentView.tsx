@@ -532,8 +532,13 @@ function AgentSidePanel({
                 </span>
               ) : null}
             </div>
-            <p className="truncate text-[length:var(--text-meta)] capitalize leading-tight text-text-muted">
-              {agent.runtime}
+            {/* `capitalize` wraps the runtime ENUM only. A model id is a raw
+                string the driver has to receive back verbatim
+                (`claude-opus-5`), so a shared `capitalize` on this line
+                rendered it as `Claude-opus-5` — the same split AgentHeader's
+                meta row already uses (#task:2114). */}
+            <p className="truncate text-[length:var(--text-meta)] leading-tight text-text-muted">
+              <span className="capitalize">{agent.runtime}</span>
               {agent.model ? ` · ${agent.model}` : ''}
             </p>
           </div>
