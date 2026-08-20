@@ -9,7 +9,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from 'react';
-import { Hash, Paperclip, X } from 'lucide-react';
+import { AtSign, Hash, Paperclip, X } from 'lucide-react';
 import type {
   AgentDto,
   ChannelConversationDto,
@@ -110,6 +110,13 @@ interface ComposerProps {
 
 const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
 type PendingAttachment = CachedPendingAttachment;
+
+/** The toolbar's icon buttons (attach / `@` / `#`) — one recipe so the row reads
+ *  as one group of peers: quiet by default, ground only on hover, no resting
+ *  frame or fill (the composer shell is the frame here, and three framed chips
+ *  inside it would be a lift on top of a lift). */
+const COMPOSER_TOOL_CLASS =
+  'inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50';
 
 // Stable empty defaults for the workspace-scoped mention sources. While
 // `useWorkspaceMemberLists` has no data (workspaceId null or query loading)
@@ -809,6 +816,39 @@ export function Composer({
     }
   }, [trigger, dismissedPos]);
 
+  /**
+   * Toolbar affordance for the two pickers (#task:2118, shiki:「composer 中现在有
+   * attachment button，还需要增加 @ 和 # button」): type the trigger FOR the user
+   * and let the ordinary path take over — {@link detectTrigger} sees the same
+   * character it would have seen from the keyboard, so there is no second picker
+   * state, no second insert idiom, and the button can never disagree with typing.
+   *
+   * Two details the keyboard gets for free and a button does not:
+   *   - a boundary is required in front of the trigger (`me@x` must stay quiet),
+   *     so pad with a space when the caret sits right after a word char or `/`;
+   *   - Escape suppression is keyed to the token's position, and clicking the
+   *     button IS a request to see the menu, so clear it rather than insert a
+   *     trigger that opens nothing.
+   */
+  const insertTriggerAtCaret = (kind: '@' | '#'): void => {
+    const el = ref.current;
+    const pos = el?.selectionStart ?? caretRef.current;
+    const text = draftRef.current;
+    const before = text.slice(0, pos);
+    const lead = /[\w/]$/.test(before) ? ' ' : '';
+    const nextDraft = before + lead + kind + text.slice(pos);
+    const nextCaret = before.length + lead.length + 1;
+    setDismissedPos(null);
+    updateDraft(nextDraft, nextCaret);
+    requestAnimationFrame(() => {
+      const node = ref.current;
+      if (!node) return;
+      node.focus();
+      node.setSelectionRange(nextCaret, nextCaret);
+      updateCaret(nextCaret);
+    });
+  };
+
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
     // Picker eats navigation keys whenever it's actually visible
     // (matches available AND not dismissed for the current token).
@@ -948,7 +988,12 @@ export function Composer({
                   ? 'This conversation is read-only'
                   : disabled
                     ? 'This conversation is closed'
-                    : 'Enter to send · Shift + Enter for a new line · @member · #channel'
+                    // `#channel` only where a channel namespace exists — on a
+                    // private line the picker has nothing to offer, so naming the
+                    // trigger there promises a menu that never opens (#task:2118).
+                    : hasChannelNamespace
+                      ? 'Enter to send · Shift + Enter for a new line · @member · #channel'
+                      : 'Enter to send · Shift + Enter for a new line · @member'
             }
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the
@@ -974,15 +1019,47 @@ export function Composer({
            *  textarea + toolbar as one box, and an internal divider
            *  read as two separate widgets stacked. */}
           <div className="flex items-center justify-between px-2 py-1.5">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || pending.length >= MAX_ATTACHMENTS}
-              title="Attach a file"
-              className="inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Paperclip className="size-4" />
-            </button>
+            {/* One flat group, no dividers: three peers that all put something
+                into the message. The `#` button is absent — not disabled — where
+                the placement has no channel namespace (a `direct_pair`): there is
+                no container whose channels it could name, so the picker would open
+                on nothing. A control that can never answer is worse than no
+                control (same reason the placeholder below drops `#channel` there). */}
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || pending.length >= MAX_ATTACHMENTS}
+                title="Attach a file"
+                className={COMPOSER_TOOL_CLASS}
+              >
+                <Paperclip className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => insertTriggerAtCaret('@')}
+                disabled={disabled}
+                title="Mention a member"
+                aria-label="Mention a member"
+                data-composer-tool="mention"
+                className={COMPOSER_TOOL_CLASS}
+              >
+                <AtSign className="size-4" />
+              </button>
+              {hasChannelNamespace ? (
+                <button
+                  type="button"
+                  onClick={() => insertTriggerAtCaret('#')}
+                  disabled={disabled}
+                  title="Reference a channel"
+                  aria-label="Reference a channel"
+                  data-composer-tool="channel"
+                  className={COMPOSER_TOOL_CLASS}
+                >
+                  <Hash className="size-4" />
+                </button>
+              ) : null}
+            </div>
             <Button
               type="submit"
               variant="default"
