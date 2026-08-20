@@ -29,6 +29,8 @@ import {
   DeletedActorMarker,
 } from '@/components/chat/author-avatar-view';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import { useAgentPresence } from '@/features/agents/hooks';
+import { usePresenceById } from '@/features/presence/hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
   collectCounterpartAvatarSources,
@@ -114,7 +116,72 @@ function CounterpartIdentity({
         <span className="flex shrink-0 items-center">
           <DeletedActorMarker />
         </span>
-      ) : null}
+      ) : (
+        <CounterpartPresenceDot counterpart={counterpart} />
+      )}
     </>
+  );
+}
+
+/**
+ * The counterpart's online dot, right after the name (shiki #task:2114:「DM channel
+ * header 中，在 agent 名字后面加上 online status dot」).
+ *
+ * A dot, not the Online/Away/Offline word: the header is identity at a glance and
+ * the word already lives in the counterpart's info card. `title` carries it for
+ * anyone who asks.
+ *
+ * Which authority — a pair has NO roster (that is what makes it a pair), so this
+ * is the agent's GLOBAL presence, the same composition the agent page's hero and
+ * the info popover use (`useAgentPresence`: availability × presence deadline).
+ * Deliberately NOT the roster seat status the member strip's dot shows: there is
+ * no seat here. `null` (no definite answer yet) draws NOTHING rather than assert a
+ * speculative state, and a deleted endpoint never reaches this component — it
+ * wears the deleted marker instead, which is a fact about the principal, not a
+ * state it could be in.
+ */
+function CounterpartPresenceDot({
+  counterpart,
+}: {
+  counterpart: DirectPairCounterpart;
+}): JSX.Element | null {
+  if (counterpart.status !== 'active') return null;
+  return counterpart.kind === 'agent' ? (
+    <AgentPresenceDot agentId={counterpart.id} />
+  ) : (
+    <HumanPresenceDot userId={counterpart.id} />
+  );
+}
+
+/** Dot ground: green is earned by a live, available agent; Away and Offline share
+ *  the muted pip (the distinction is a word, not a colour — an idle agent that
+ *  will answer the next message must not read as an alarm). Same palette as
+ *  `AgentInfoPopover`'s global presence line, which is the same projection. */
+const PRESENCE_DOT_CLASS = 'size-2 shrink-0 rounded-full';
+
+function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null {
+  const presence = useAgentPresence(agentId);
+  if (presence === null) return null;
+  return (
+    <span
+      data-header-presence-dot={presence}
+      title={presence === 'online' ? 'Online' : presence === 'away' ? 'Away' : 'Offline'}
+      className={`${PRESENCE_DOT_CLASS} ${presence === 'online' ? 'bg-success' : 'bg-text-muted/40'}`}
+    />
+  );
+}
+
+/** The human arm of the same dot. A pair's counterpart can be a human, and the
+ *  chip strip already gives humans this pip from the presence map — a DM header
+ *  that dotted only agents would answer the same question twice differently. */
+function HumanPresenceDot({ userId }: { userId: string }): JSX.Element {
+  const presence = usePresenceById().get(userId)?.presence;
+  const online = presence === 'online';
+  return (
+    <span
+      data-header-presence-dot={online ? 'online' : 'offline'}
+      title={online ? 'Online' : 'Offline'}
+      className={`${PRESENCE_DOT_CLASS} ${online ? 'bg-success' : 'bg-text-muted/40'}`}
+    />
   );
 }
