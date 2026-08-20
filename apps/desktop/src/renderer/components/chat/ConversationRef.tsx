@@ -1,5 +1,6 @@
 import { AtSign, Hash } from 'lucide-react';
 import { HoverPopover } from './HoverPopover';
+import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
 import {
   useConversationIdentity,
   type ConversationIdentity,
@@ -157,7 +158,14 @@ export function ConversationRef({
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-outline"
+      className={
+        'inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent focus-outline ' +
+        // The resting soft fill stays — it is this chip's identity as a BOX
+        // (an opaque id, not running text). Only the hover fill is gone: a
+        // soft→solid flip plus an ink inversion is a whole new surface for a
+        // pointer event, where the family now just darkens the ink.
+        INLINE_REF_HOVER_CLASS
+      }
       aria-label={tooltip}
       data-conversation-ref={id}
       onClick={event => {

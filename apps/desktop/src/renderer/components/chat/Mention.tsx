@@ -3,6 +3,13 @@ import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
 import { useNav } from '@/router';
+import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
+
+/** Both mention chips share one string on purpose: the two differ only in where
+ *  they navigate, so box model, ink, hover and focus must stay identical. */
+const MENTION_CHIP_CLASS =
+  'rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent ' +
+  `${INLINE_REF_HOVER_CLASS} focus-visible:bg-accent-soft focus-visible:outline-none`;
 
 interface MentionProps {
   /** The handle as it appeared in the source text (without `@`). */
@@ -90,7 +97,7 @@ function AgentMention({
           // Human mentions still go to the full user page (HumanMention).
           nav.openAgentPanel(agent.id);
         }}
-        className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+        className={MENTION_CHIP_CLASS}
         aria-label={`@${agent.name}`}
         data-mention-kind="agent"
         data-mention-id={agent.id}
@@ -127,7 +134,7 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
           event.preventDefault();
           nav.toMembersUser(human.id);
         }}
-        className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+        className={MENTION_CHIP_CLASS}
         aria-label={`@${human.name}`}
         data-mention-kind="human"
         data-mention-id={human.id}
