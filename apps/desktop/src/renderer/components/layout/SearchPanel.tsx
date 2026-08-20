@@ -30,12 +30,12 @@ import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useMessageSearch } from '@/features/search/hooks';
 import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
+import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
 import {
   SenderFilterSelect,
   parseSenderFilter,
   type SenderFilterValue,
 } from '@/components/ui/sender-filter-select';
-import { workspaceDisplayName } from '@/lib/workspace-name';
 import { ListRowsSkeleton } from './ListRowsSkeleton';
 import { paneChrome } from './pane-chrome';
 
@@ -92,7 +92,7 @@ interface ResultGroup {
 }
 
 /** Workspace glyph — a serif "W" matching the icon column width. Used
- *  wherever a workspace (regular kind) needs a marker; mirrors the
+ *  wherever a people-owned workspace needs a marker; mirrors the
  *  WorkspacesPanel sidebar. Sizes line up with Lucide `size-3/3.5/4`. */
 function WorkspaceGlyph({ size = 3.5 }: { size?: 3 | 3.5 | 4 }): JSX.Element {
   const px = size * 4;
@@ -133,18 +133,14 @@ export function SearchPanel({
   const usersById = useUsersById();
   const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
 
-  const channelQuery = useMemo(
-    () => parseWorkspaceFilter(workspaceFilter),
-    [workspaceFilter],
-  );
+  const workspaceIdFilter = workspaceIdFromFilter(workspaceFilter);
   const senderQuery = useMemo(() => parseSenderFilter(senderFilter), [senderFilter]);
   const timeQuery = useMemo(() => timeRangeBounds(timeRange), [timeRange]);
 
   const filters = useMemo(
     () => ({
       q: query,
-      scope: channelQuery.scope,
-      workspace_id: channelQuery.workspaceId,
+      workspace_id: workspaceIdFilter,
       user_id: senderQuery.userId,
       agent_id: senderQuery.agentId,
       from: timeQuery.from,
@@ -152,8 +148,7 @@ export function SearchPanel({
       limit: 100,
     }),
     [
-      channelQuery.workspaceId,
-      channelQuery.scope,
+      workspaceIdFilter,
       query,
       senderQuery.agentId,
       senderQuery.userId,
@@ -183,6 +178,11 @@ export function SearchPanel({
     () => new Map(agents.map(agent => [agent.id, agent])),
     [agents],
   );
+  // Owner avatars for workspace hits come from the DIRECTORY, not from the
+  // result set — a workspace's owning agent is not one of the matched messages'
+  // authors. Same wiring the filter dropdown already uses, so a workspace reads
+  // identically in the trigger and in the rows below it.
+  const ownerAgentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const resultGroups = useMemo(() => groupResults(results), [results]);
 
   const resetFilters = (): void => {
@@ -293,6 +293,8 @@ export function SearchPanel({
                       key={resultKey(result)}
                       result={result}
                       query={query}
+                      agentsById={agentsById}
+                      ownerAgentAvatarUrls={ownerAgentAvatarUrls}
                       agentAvatarUrls={agentAvatarUrls}
                       userAvatarUrls={humanAvatarUrls}
                       onClick={() => {
@@ -369,8 +371,8 @@ function WorkspaceFilterSelect({
   agents: AgentDto[];
   onChange: (value: WorkspaceFilter) => void;
 }): JSX.Element {
-  const dms = workspaces.filter(workspace => workspace.kind === 'dm');
-  const regular = workspaces.filter(workspace => workspace.kind === 'regular');
+  const agentSpaces = workspaces.filter(workspace => isAgentSpace(workspace));
+  const peopleOwned = workspaces.filter(workspace => !isAgentSpace(workspace));
   const agentsById = useMemo(
     () => new Map(agents.map(agent => [agent.id, agent])),
     [agents],
@@ -405,47 +407,45 @@ function WorkspaceFilterSelect({
             <SelectItem value="all" icon={<SearchIcon className="size-3.5" />}>
               All locations
             </SelectItem>
-            {dms.length > 0 ? (
+            {agentSpaces.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Agent Spaces
                 </Select.Label>
-                {dms.map(workspace => (
+                {agentSpaces.map(workspace => (
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
                     icon={
                       <WorkspaceIcon
-                        kind="dm"
-                        dmAgentId={workspace.dm_agent_id}
+                        ownerAgentId={workspace.owner_agent_id}
                         agentsById={agentsById}
-                        dmAgentAvatarUrls={agentAvatarUrls}
+                        ownerAgentAvatarUrls={agentAvatarUrls}
                       />
                     }
                   >
-                    {workspaceDisplayName(workspace)}
+                    {workspace.name}
                   </SelectItem>
                 ))}
               </Select.Group>
             ) : null}
-            {regular.length > 0 ? (
+            {peopleOwned.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
-                {regular.map(workspace => (
+                {peopleOwned.map(workspace => (
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
                     icon={
                       <WorkspaceIcon
-                        kind="regular"
-                        dmAgentId={null}
-                        dmAgentAvatarUrls={agentAvatarUrls}
+                        ownerAgentId={workspace.owner_agent_id}
+                        ownerAgentAvatarUrls={agentAvatarUrls}
                       />
                     }
                   >
-                    {workspaceDisplayName(workspace)}
+                    {workspace.name}
                   </SelectItem>
                 ))}
               </Select.Group>
@@ -504,18 +504,28 @@ function TimeRangeSelect({
 function SearchResultRow({
   result,
   query,
+  agentsById,
+  ownerAgentAvatarUrls,
   agentAvatarUrls,
   userAvatarUrls,
   onClick,
 }: {
   result: SearchResultDto;
   query: string;
+  /** Directory, for the workspace arm's OWNER identity. */
+  agentsById: ReadonlyMap<string, AgentDto>;
+  /** Owner-avatar bytes, keyed by agent id. Deliberately a SECOND map next to
+   *  `agentAvatarUrls`: a message byline's bytes come strictly from that hit's
+   *  own author DTO (#task:1792 B2), while a workspace's owner is not an author
+   *  at all and must come from the directory. One shared map would make an owner
+   *  avatar appear only when that agent happened to write a matching message. */
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
   agentAvatarUrls: Map<string, string | null>;
   userAvatarUrls: Map<string, string | null>;
   onClick: () => void;
 }): JSX.Element {
   const isMessage = result.type === 'message';
-  const icon = resultIcon(result);
+  const icon = resultIcon(result, agentsById, ownerAgentAvatarUrls);
   const excerpt = resultExcerpt(result, query);
 
   return (
@@ -610,12 +620,14 @@ function MessageResultHeader({
       {place.placement_kind === 'workspace' ? (
         <>
           <span className="flex min-w-0 items-center gap-1">
-            <WorkspaceIcon
-              kind={place.workspace.kind !== 'dm' ? 'regular' : 'dm'}
-              dmAgentId={null}
-            />
+            {/* No agent DIRECTORY is wired into this header, so an agent space's
+                owner cannot be resolved to an avatar and the icon lands on its
+                neutral unresolved-owner square. Behavior-identical to the old
+                `kind` + hardcoded-null-agent pair (#task:2078) — the ownership
+                arc just says it in one argument instead of two. */}
+            <WorkspaceIcon ownerAgentId={place.workspace.owner_agent_id} />
             <span className="truncate">
-              {workspaceDisplayName(place.workspace)}
+              {place.workspace.name}
             </span>
           </span>
           <span className="flex min-w-0 items-center gap-1">
@@ -674,13 +686,20 @@ function EmptyState({
   );
 }
 
+/** Split the flat result list into the panel's sections. The workspace-DISCOVERY
+ *  type feeds TWO of them, so the two filters must be exact complements — hence
+ *  one shared `isAgentSpace` and its negation, never two independently-written
+ *  conditions. Grouping asks OWNERSHIP only (#task:2078) and the agent directory
+ *  is not in scope here on purpose: a row whose owning agent has not resolved is
+ *  still an agent space, so it groups under Agent Spaces and degrades only in its
+ *  GLYPH — an unresolved directory can never move a row into Workspaces. */
 function groupResults(results: SearchResultDto[]): ResultGroup[] {
   const workspaces = results.filter(
-    result => result.type === 'workspace' && result.workspace.kind === 'regular',
+    result => result.type === 'workspace' && !isAgentSpace(result.workspace),
   );
   const conversations = results.filter(result => result.type === 'conversation');
-  const dms = results.filter(
-    result => result.type === 'workspace' && result.workspace.kind === 'dm',
+  const agentSpaces = results.filter(
+    result => result.type === 'workspace' && isAgentSpace(result.workspace),
   );
   const messages = results.filter(result => result.type === 'message');
 
@@ -702,7 +721,7 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
       key: 'dms',
       label: 'Agent Spaces',
       icon: <User className="size-3" />,
-      results: dms,
+      results: agentSpaces,
     },
     {
       key: 'messages',
@@ -713,17 +732,30 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
   ].filter(group => group.results.length > 0);
 }
 
-function resultIcon(result: SearchResultDto): JSX.Element {
+function resultIcon(
+  result: SearchResultDto,
+  agentsById: ReadonlyMap<string, AgentDto>,
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>,
+): JSX.Element {
   if (result.type === 'workspace') {
-    // Regular-workspace result rows wear the same `data-workspace-icon` badge
-    // as the sidebar rail and the filter dropdown (one canonical workspace
-    // glyph everywhere). DM workspaces keep the neutral person glyph here — the
-    // result row has no agent-avatar context wired and DM-as-result is rare
-    // (#task:1192).
-    return result.workspace.kind === 'dm' ? (
-      <User className="size-4" />
-    ) : (
-      <WorkspaceIcon kind="regular" dmAgentId={null} />
+    // ONE call, no local branch: `WorkspaceIcon` is the canonical workspace
+    // identity glyph (rail / filter dropdown / here) and it already answers all
+    // three ownership states from `owner_agent_id` alone — unowned → the serif
+    // `W` poster, owned + owner resolved → that agent's avatar, owned + owner
+    // unresolved → a neutral `User`.
+    //
+    // This replaced a hand-written `<User className="size-4" />` on the
+    // agent-space arm (#task:2084). That glyph is byte-identical to the one the
+    // authority draws for "owner NOT resolved", so one shape carried two facts:
+    // "this is an agent's space" and "I could not resolve this container's
+    // owner". Identity was drawn as absence. Passing the directory through is
+    // what separates them, so the three states now have three shapes.
+    return (
+      <WorkspaceIcon
+        ownerAgentId={result.workspace.owner_agent_id}
+        agentsById={agentsById}
+        ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+      />
     );
   }
   if (result.type === 'conversation') {
@@ -737,7 +769,7 @@ function resultIcon(result: SearchResultDto): JSX.Element {
  *  instead, so they don't pass through here. */
 function resultMeta(result: SearchResultDto): string[] {
   if (result.type === 'workspace') {
-    return [result.workspace.kind === 'dm' ? 'Agent Space' : 'Workspace'];
+    return [isAgentSpace(result.workspace) ? 'Agent Space' : 'Workspace'];
   }
   if (result.type === 'conversation') {
     // Workspace name only on the `workspace` arm; a `direct_pair` conversation
@@ -745,7 +777,7 @@ function resultMeta(result: SearchResultDto): string[] {
     return result.conversation.placement_kind === 'workspace'
       ? [
           'Channel',
-          workspaceDisplayName(result.conversation.workspace),
+          result.conversation.workspace.name,
           dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
         ]
       : [
@@ -757,7 +789,7 @@ function resultMeta(result: SearchResultDto): string[] {
 }
 
 function resultTitle(result: SearchResultDto): string {
-  if (result.type === 'workspace') return workspaceDisplayName(result.workspace);
+  if (result.type === 'workspace') return result.workspace.name;
   if (result.type === 'conversation') return result.conversation.title;
   // Message rows render through `MessageResultHeader` (which shows no title for a
   // pair at all, #task:2060), so this arm is unreachable and exists only for
@@ -772,7 +804,7 @@ function resultExcerpt(result: SearchResultDto, query: string): string | null {
     // Excerpt line for a channel/thread hit is its workspace name; a workspace-
     // less `direct_pair` hit has none to show (#task:2053-C).
     return result.conversation.placement_kind === 'workspace'
-      ? workspaceDisplayName(result.conversation.workspace)
+      ? result.conversation.workspace.name
       : null;
   }
   return buildExcerpt(result.message.content, query);
@@ -814,20 +846,16 @@ function highlightText(text: string, query: string): ReactNode {
   );
 }
 
-function parseWorkspaceFilter(value: WorkspaceFilter): {
-  scope: 'all' | 'regular' | 'dm';
-  workspaceId?: string;
-} {
-  if (value.startsWith('workspace:')) {
-    return { scope: 'all', workspaceId: value.slice('workspace:'.length) };
-  }
-  return { scope: 'all' };
+function workspaceIdFromFilter(value: WorkspaceFilter): string | undefined {
+  return value.startsWith('workspace:') ? value.slice('workspace:'.length) : undefined;
 }
 
-/** DM workspaces are 1:1 with an agent — show that agent's avatar so the
- *  DM group reads as "talking to @x" instead of a row of identical person
- *  glyphs. Falls back to the neutral person glyph when the agent can't be
- *  resolved (workspace not yet provisioned / agent list still loading). */
+/** The trigger's own label + identity for the selected filter. An agent space is
+ *  1:1 with its owning agent, so its row reads as "talking to @x" rather than a
+ *  column of identical container badges — but WHICH glyph that is belongs to
+ *  `WorkspaceIcon` (ownership in, identity out), so this only hands it the row's
+ *  `owner_agent_id` and the resolved avatar maps and never branches on the
+ *  container itself (#task:2078). */
 function workspaceFilterLabel(
   value: WorkspaceFilter,
   workspaces: WorkspaceListItem[],
@@ -839,22 +867,14 @@ function workspaceFilterLabel(
     const workspace = workspaces.find(w => w.id === workspaceId);
     if (workspace) {
       return {
-        label: workspaceDisplayName(workspace),
-        icon:
-          workspace.kind === 'dm' ? (
-            <WorkspaceIcon
-              kind="dm"
-              dmAgentId={workspace.dm_agent_id}
-              agentsById={agentsById}
-              dmAgentAvatarUrls={agentAvatarUrls}
-            />
-          ) : (
-            <WorkspaceIcon
-              kind="regular"
-              dmAgentId={null}
-              dmAgentAvatarUrls={agentAvatarUrls}
-            />
-          ),
+        label: workspace.name,
+        icon: (
+          <WorkspaceIcon
+            ownerAgentId={workspace.owner_agent_id}
+            agentsById={agentsById}
+            ownerAgentAvatarUrls={agentAvatarUrls}
+          />
+        ),
       };
     }
   }

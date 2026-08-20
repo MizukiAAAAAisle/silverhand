@@ -56,7 +56,6 @@ import type { InternalRouteDeps } from './deps.js';
  */
 const REFUSAL_STATUS: Record<DeliveryTargetRefusalCode, 400 | 404> = {
   target_malformed: 400,
-  inbox_not_writable: 400,
   self_pair_not_addressable: 400,
   target_unresolved: 404,
   thread_not_in_target: 404,
@@ -64,7 +63,6 @@ const REFUSAL_STATUS: Record<DeliveryTargetRefusalCode, 400 | 404> = {
 
 const REFUSAL_MESSAGE: Record<DeliveryTargetRefusalCode, string> = {
   target_malformed: 'target is not an address',
-  inbox_not_writable: 'an agent inbox is not a write destination',
   self_pair_not_addressable: 'a direct message needs another participant',
   target_unresolved: 'target names no stream you can use',
   thread_not_in_target: 'target names no reply cluster of that conversation',

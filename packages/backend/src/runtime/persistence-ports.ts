@@ -39,7 +39,7 @@ import type {
   FromKind,
   MemberDto,
   MessageDto,
-  WorkspaceDto,
+  Workspace,
 } from '@silverhand/shared';
 import type {
   RuntimePrincipal,
@@ -178,8 +178,8 @@ export interface RuntimeAgentReadPort {
 export interface RuntimeConversationReadPort {
   get(conversationId: string): ConversationDto | null;
   /** Placement-aware participant authority. Runtime policy must not infer
-   * participation from roster projection rows: AgentInbox deliberately has
-   * no `conversation_agents` row and DirectPair will add another arm. */
+   * participation from roster projection rows: a DirectPair deliberately has no
+   * `conversation_agents` row — its typed endpoints ARE its participants. */
   isAgentParticipant(conversationId: string, agentId: string): boolean;
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
   listAgents(conversationId: string): ConversationAgentDto[];
@@ -195,12 +195,14 @@ export interface RuntimeConversationReadPort {
 }
 
 export interface RuntimeWorkspaceReadPort {
-  get(workspaceId: string): WorkspaceDto | null;
+  get(workspaceId: string): Workspace | null;
   /** Every workspace the agent is a member of — the spawn's memory index. */
-  listForAgent(agentId: string): WorkspaceDto[];
-  /** The ADDRESS ROOT of a workspace: kind, display name, stored fold. Same
-   *  reason as `conversations.addressFacts` — `name_key` is stripped from the DTO
-   *  on purpose, and `name_key IS NULL` is the agent-home fallback. */
+  listForAgent(agentId: string): Workspace[];
+  /** The ADDRESS ROOT of a workspace: its home agent (if any), display name,
+   *  stored fold. Same reason as `conversations.addressFacts` — `name_key` is
+   *  stripped from the DTO on purpose, and `name_key IS NULL` is the agent-home
+   *  fallback. The ownership column is what NAMES that fallback: a container
+   *  with no home agent whose fold is missing is corruption, not privacy. */
   addressRoot(workspaceId: string): StreamNamingRoot | null;
 }
 

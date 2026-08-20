@@ -145,6 +145,11 @@ describe('FakeSupervisor — deliver spawn-with-batch (happy path)', () => {
       delivery_ids: [101, 102, 103],
       kind: 'message',
       text: 'hi',
+      deliveries: [
+        { delivery_id: 101, seq: 101, presentation: { body: 'hi', instruction: 'other' } },
+        { delivery_id: 102, seq: 102, presentation: { body: 'hi', instruction: 'other' } },
+        { delivery_id: 103, seq: 103, presentation: { body: 'hi', instruction: 'other' } },
+      ],
       spawn_options: testStartOptions(),
     });
     expect(r.disposition).toBe('spawning');
@@ -182,6 +187,10 @@ describe('FakeSupervisor — deliver spawn-with-batch (failure path)', () => {
       delivery_ids: [1, 2],
       kind: 'message',
       text: 'stub',
+      deliveries: [
+        { delivery_id: 1, seq: 1, presentation: { body: 'stub', instruction: 'other' } },
+        { delivery_id: 2, seq: 2, presentation: { body: 'stub', instruction: 'other' } },
+      ],
       spawn_options: testStartOptions(),
     });
     h.flush();
@@ -219,6 +228,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
       delivery_ids: [42],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 42, seq: 42, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions(),
     });
     expect(r.disposition).toBe('spawning');
@@ -242,6 +252,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
       delivery_ids: [42],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 42, seq: 42, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions(),
     });
     expect(r.disposition).toBe('refused');
@@ -258,6 +269,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions(),
     });
     // Do NOT flush — the spawned runtime is still in startup_pending.
@@ -269,6 +281,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
       delivery_ids: [42],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 42, seq: 42, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions(),
     });
     expect(r.disposition).toBe('refused');
@@ -292,6 +305,11 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
       delivery_ids: [10, 11, 12],
       kind: 'message',
       text: 'stub',
+      deliveries: [
+        { delivery_id: 10, seq: 10, presentation: { body: 'stub', instruction: 'other' } },
+        { delivery_id: 11, seq: 11, presentation: { body: 'stub', instruction: 'other' } },
+        { delivery_id: 12, seq: 12, presentation: { body: 'stub', instruction: 'other' } },
+      ],
       spawn_options: testStartOptions(),
     });
     expect(r.disposition).toBe('admitted');
@@ -325,6 +343,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions(),
     });
     expect(r.disposition).toBe('refused');
@@ -354,6 +373,7 @@ describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions(),
     });
     // A dead handle is gone; deliver spawns-with-batch rather than refusing.

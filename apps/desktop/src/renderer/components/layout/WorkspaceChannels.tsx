@@ -90,8 +90,6 @@ import { channelRowBadge, type RowBadge } from '@/lib/attention-mode';
 import { sortModeOf } from '@/lib/viewer-sort';
 import { collapsedRevealRows, excludeStarredChannels } from '@/lib/home-grouping';
 
-export type WorkspaceUiKind = 'regular' | 'dm';
-
 interface ChannelNode {
   id: string;
   title: string;
@@ -126,15 +124,18 @@ interface ChannelNode {
  * `useChannelsForWorkspace`'s query), so mounting it on a COLLAPSED workspace
  * would fetch that workspace's channels — the one fetch the lazy mount exists to
  * avoid (see the file header for what "lazy" does and does not claim).
+ *
+ * Mounts only inside a RESOLVED workspace row's header (`WorkspacesPanel` maps
+ * over the list it already holds), which is why the `workspaceResolved` argument
+ * below is a literal `true` — same invariant, same origin as the one stated in
+ * {@link WorkspaceChannels} (@Paul, #task:2078 F2).
  */
 export function ChannelSortMenu({
   workspaceId,
-  workspaceKind,
 }: {
   workspaceId: string;
-  workspaceKind: WorkspaceUiKind;
 }): JSX.Element {
-  const { data: viewerSort } = useChannelSortState(workspaceId, workspaceKind);
+  const { data: viewerSort } = useChannelSortState(workspaceId, true);
   const setSortMode = useSetSortMode();
   const listKey = `channels:${workspaceId}`;
   return (
@@ -147,7 +148,6 @@ export function ChannelSortMenu({
 
 interface WorkspaceChannelsProps {
   workspaceId: string;
-  workspaceKind: WorkspaceUiKind;
   /** The conversation the tree is currently FILLing, or null. One id for the
    *  whole tree (the spec's single-highlight rule), so at most one row in one
    *  workspace can match. */
@@ -195,7 +195,6 @@ interface WorkspaceChannelsProps {
  */
 export function WorkspaceChannels({
   workspaceId,
-  workspaceKind,
   selectedChannelId,
   onSelectChannel,
   onCreateChannel,
@@ -203,14 +202,20 @@ export function WorkspaceChannels({
   pokeUnread = false,
   revealCaption,
 }: WorkspaceChannelsProps): JSX.Element {
-  const { data: items = [] } = useChannelsForWorkspace(workspaceId, workspaceKind);
-  const { data: viewerSort } = useChannelSortState(workspaceId, workspaceKind);
+  // The `workspaceResolved` argument is a literal `true` throughout this file: a
+  // subtree only ever mounts UNDER a resolved workspace row (WorkspacesPanel maps
+  // over the list it already has), so "id known, row not yet" — the window the
+  // argument exists to hold queries off for — is unreachable here. It is passed
+  // explicitly rather than defaulted, so the assertion is stated at the call site
+  // (#task:2078).
+  const { data: items = [] } = useChannelsForWorkspace(workspaceId, true);
+  const { data: viewerSort } = useChannelSortState(workspaceId, true);
   // ONE batch read of every channel tier in this workspace (#task:1870) — the
   // badges need a tier per row and the right-click menu needs the row's own
   // stored choice, so a per-channel GET would be both N requests and a second
   // carrier of the same fact.
   const { data: attentionModes } = useWorkspaceAttentionModes(workspaceId);
-  const { data: unreadData } = useMessageUnreadCounts(workspaceId, workspaceKind);
+  const { data: unreadData } = useMessageUnreadCounts(workspaceId, true);
   const starChannel = useStarChannel(workspaceId);
   const archiveChannel = useArchiveChannel(workspaceId);
 
@@ -300,7 +305,6 @@ export function WorkspaceChannels({
                 archiveChannel.mutate({ channelId, archived, workspaceId })
               }
               archivePending={archiveChannel.isPending}
-              workspaceKind={workspaceKind}
               unreadCount={unreadByChannel[c.id] ?? 0}
               attention={attentionByChannel.get(c.id)}
               workspaceMuted={workspaceMuted}
@@ -339,7 +343,6 @@ export function WorkspaceChannels({
     onArchive: (channelId: string, archived: boolean) =>
       archiveChannel.mutate({ channelId, archived, workspaceId }),
     archivePending: archiveChannel.isPending,
-    workspaceKind,
     unreadByChannel,
     attentionByChannel,
     workspaceMuted,
@@ -363,7 +366,6 @@ interface RowChildProps {
   onStar: (channelId: string, starred: boolean) => void;
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
-  workspaceKind: WorkspaceUiKind;
   unreadByChannel: Record<string, number>;
   /** This workspace's channel tiers, keyed by conversation id. Missing key ≡ the
    *  row has no tier of its own (a `dm_channel`, or the batch hasn't landed). */
@@ -388,7 +390,6 @@ function SortableChannelItem({
   onStar,
   onArchive,
   archivePending,
-  workspaceKind,
   unreadByChannel,
   attentionByChannel,
   workspaceMuted,
@@ -410,7 +411,6 @@ function SortableChannelItem({
         onStar={onStar}
         onArchive={onArchive}
         archivePending={archivePending}
-        workspaceKind={workspaceKind}
         unreadCount={unreadByChannel[channel.id] ?? 0}
         attention={attentionByChannel.get(channel.id)}
         workspaceMuted={workspaceMuted}
@@ -451,7 +451,6 @@ function ChannelRow({
   onStar,
   onArchive,
   archivePending,
-  workspaceKind,
   unreadCount,
   attention,
   workspaceMuted,
@@ -463,7 +462,6 @@ function ChannelRow({
   onStar: (channelId: string, starred: boolean) => void;
   onArchive: (channelId: string, archived: boolean) => void;
   archivePending: boolean;
-  workspaceKind: WorkspaceUiKind;
   unreadCount: number;
   /** This row's tier from the workspace batch, or `undefined` when it has none.
    *  Carries BOTH the stored `mode` (what the marker paints) and the folded
@@ -483,8 +481,8 @@ function ChannelRow({
   // Copy name. Star + manual drag-sort are viewer-local and stay available.
   const isMember = channel.is_member === true;
   // Archive/Restore is a channel-like organization action (#task:1145): it
-  // applies to any top-level channel-like row — `channel` in a regular workspace
-  // AND `dm_channel` in an agent_home/DM — and only excludes threads.
+  // applies to any top-level channel-like row — `channel` in a people-owned
+  // workspace AND `dm_channel` in an agent space — and only excludes threads.
   // Non-members can't organize a channel they haven't joined (the backend 403s),
   // so it is member-gated.
   const showArchiveMenu = isMember;
@@ -611,7 +609,8 @@ function ChannelRow({
   );
 }
 
-// `workspaceKind` is now non-nullable in this file: a subtree only exists under a
-// real workspace row, so the old "no workspace selected" arm (and its `null`
-// gates on the archive menu / list key) has no reachable input here.
+// Every workspace-scoped query in this file asserts a RESOLVED container row (see
+// the literal `true` at the call sites): a subtree only exists under a real
+// workspace row, so the old "no workspace selected" arm (and its `null` gates on
+// the archive menu / list key) has no reachable input here.
 export type { ChannelNode };

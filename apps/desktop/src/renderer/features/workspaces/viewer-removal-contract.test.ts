@@ -8,7 +8,10 @@
 //      layer-1 sweep drops the whole `['workspaces', wsId, …]` family.
 //   2. REGISTRY ↔ SEED lockstep — every registered read model is exercised.
 //   3. CLASSIFICATION ↔ REGISTRY consistency + the source smoke (layer 3): every
-//      exported read-model key is registry-handled or exempt-with-reason.
+//      exported read-model key is registry-handled or exempt-with-reason, and a
+//      key exempted BECAUSE the layer-1 sweep covers it is checked against the
+//      production sweep predicate (the whole-cache invariant cannot falsify that
+//      claim — those seeds have redundant, unattributable coverage).
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
@@ -16,6 +19,7 @@ import {
   activityKey,
   attentionBadgesKey,
   attentionModesKey,
+  workspaceAttentionPreferenceKey,
 } from '../attention/hooks';
 import { favoritesKey } from '../favorites/hooks';
 import {
@@ -24,6 +28,7 @@ import {
 } from '../channels/message-unread';
 import {
   handleViewerWorkspaceRemoved,
+  isWorkspaceKeyed,
   VIEWER_LOCAL_KEY_CLASSIFICATION,
   VIEWER_LOCAL_READ_MODELS,
 } from './viewer-removal-contract';
@@ -45,7 +50,6 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       thread_root_id: null,
       message_id: `m-${id}`,
       notification_id: null,
-      conversation_roster_policy: 'open' as const,
       title: `#${id}`,
       thread_root_preview: null,
       preview: null,
@@ -95,13 +99,13 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       by_workspace: { [REMOVED]: 3, [SURVIVOR]: 5 },
     });
     // by_conversation is workspace-KEYED — dropped by the layer-1 sweep (and, for
-    // belt-and-suspenders, by this read model's cleanup). Seed both partitions.
-    qc.setQueryData(messageUnreadByConversationKey(REMOVED, 'regular'), {
+    // belt-and-suspenders, by this read model's cleanup).
+    qc.setQueryData(messageUnreadByConversationKey(REMOVED), {
       by_conversation: { 'c-gone': 3 },
       latest_by_conversation: {},
       total: 3,
     });
-    qc.setQueryData(messageUnreadByConversationKey(SURVIVOR, 'regular'), {
+    qc.setQueryData(messageUnreadByConversationKey(SURVIVOR), {
       by_conversation: { 'c-keep': 5 },
       latest_by_conversation: {},
       total: 5,
@@ -254,6 +258,28 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
       }
       for (const reason of Object.values(VIEWER_LOCAL_KEY_CLASSIFICATION.exempt)) {
         expect(reason.length).toBeGreaterThan(0);
+      }
+    });
+
+    // An `exempt` entry whose reason is "layer-1 predicate sweep" is a CLAIM
+    // ABOUT THE KEY'S SHAPE, and the whole-cache invariant above cannot falsify
+    // it: those seeds are cleaned by two mechanisms at once (the layer-1 prefix
+    // sweep ∥ this read model's own `removeQueries(explicit key)`), so breaking
+    // the prefix alone still passes. Call the PRODUCTION predicate on the
+    // PRODUCTION key builder — a re-shaped key that drops the `['workspaces',
+    // wsId, …]` prefix goes red here and nowhere else (#task:2078).
+    it('every sweep-exempt key really is matched by the production sweep predicate', () => {
+      const SWEEP_KEYS: Record<string, (workspaceId: string) => readonly unknown[]> = {
+        messageUnreadByConversationKey,
+        workspaceAttentionPreferenceKey,
+      };
+      const sweepExempt = Object.entries(VIEWER_LOCAL_KEY_CLASSIFICATION.exempt)
+        .filter(([, reason]) => reason.includes('layer-1 predicate sweep'))
+        .map(([name]) => name);
+      expect(sweepExempt.sort()).toEqual(Object.keys(SWEEP_KEYS).sort());
+      for (const [name, build] of Object.entries(SWEEP_KEYS)) {
+        expect(isWorkspaceKeyed(build(REMOVED), REMOVED), name).toBe(true);
+        expect(isWorkspaceKeyed(build(SURVIVOR), REMOVED), name).toBe(false);
       }
     });
   });

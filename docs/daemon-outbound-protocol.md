@@ -119,6 +119,13 @@ stops the *new* daemon's retry loop; already-deployed older daemons keep dialing
 until upgraded, which is harmless to the server because a refused generation is
 invisible to every business reader.
 
+`OUTBOUND_PROTOCOL_VERSION` (and `HOST_PROTOCOL_VERSION`, which ships in the same
+`daemon-v*` artifact) are derived from the single authority
+`packages/shared/src/protocol-versions.ts`; there is no version literal in this
+module. At release, apply the manual +1-step check — each changed axis moves by
+exactly +1 over the last **published** `daemon-v*` tag, never judged against
+`origin/main` — documented in `docs/desktop-server-api-epoch.md` §6.
+
 Reconnect starts a fresh WebSocket. It does not replay any frame that was in
 the prior socket's process-local write buffer.
 
@@ -310,6 +317,7 @@ renamed to envelope `kind`:
 - `runtime_output_resumed`
 - `runtime_parsed_event`
 - `runtime_parsed_event_dropped`
+- `runtime_message_stale`
 
 `runtime_output` is the only droppable runtime event. All lifecycle,
 delivery-ack, parsed-event, and shutdown events are non-droppable from the
@@ -337,6 +345,11 @@ replay an event queue, and server reconciles current phase/run-state from the
 snapshot. `runtime_parsed_event_dropped` remains metadata-only; backend does
 not fabricate a parsed event payload and only projects a lossy diagnostic onto
 the existing run-state shape when a run-state entry is present.
+`runtime_message_stale` (#task:2099) is likewise daemon-authored rather than
+driver-observed: it relays the backend's own freshness verdict on a refused
+`message send` so the agent's Activity log carries the fact instead of the
+renderer guessing it from command text. It is identity + `ts` only, writes one
+`conversation_events` row, and projects NOTHING onto run state.
 
 ## Delivery-backed replay
 

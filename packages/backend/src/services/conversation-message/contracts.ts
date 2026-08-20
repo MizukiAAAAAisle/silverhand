@@ -8,6 +8,7 @@
 import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
+  AgentSessionScope,
   AttachmentRefInput,
   ConversationDto,
   DeliveryTarget,
@@ -74,12 +75,6 @@ export interface SendMessageInput {
    *  normalized from the wire union at the route boundary. */
   attachmentRefs?: AttachmentRefInput[];
   destination: SendMessageDestination;
-  /** The sender's claim about WHICH STREAM {@link seenUpToSeq} was measured
-   *  against, as the canonical id-form token (`#conv:<id>[/thread:<root>]`).
-   *  Cross-checked against the stream this send actually resolved to; a mismatch
-   *  hard-rejects rather than CAS-ing a boundary read somewhere else (§6.4). */
-  assertedStream?: string;
-  seenUpToSeq?: number;
   staleEventId?: string;
   staleResolutionReason?: AgentSendStaleResolutionReason;
   freshnessBypass?: boolean;
@@ -115,19 +110,6 @@ export interface SendMessageResult {
    * unresolved" indistinguishable from "not computed".
    */
   unresolvedReferences: readonly Reference[];
-  /** Stream head at the moment BEFORE this message was inserted. Set for an
-   *  agent send whose insert SKIPPED the freshness CAS — an explicit
-   *  `freshnessBypass`, or a loose first touch that carried no
-   *  `seenUpToSeq` — because in both cases nothing proved the sender covers
-   *  the stream, so the daemon needs a merge prerequisite for its own seq:
-   *  once its observed cursor covers everything below this message, the own
-   *  seq joins the watermark. Without it, such a send in a quiet stream
-   *  leaves the sender permanently stale on its own head (countgame P1,
-   *  #task:1854). Absent exactly when the CAS ran — the sender already covered
-   *  the stream it wrote into, which is a fact about that stream and not about
-   *  whether it was the sender's own conversation (#task:2021 P4-4). Carried
-   *  uniformly for main-line AND thread-reply sends. */
-  streamHeadBeforeSend?: number;
 }
 
 export interface ResolveStaleMessageInput {
@@ -220,9 +202,9 @@ export type ActorErrorCode =
   | 'agent_not_found'
   /**
    * PARTICIPATION, not roster membership: renamed with the rule it reports
-   * (#task:2021 P4-4). `direct_pair` / `agent_inbox` have no `conversation_agents`
-   * rows, so "not a member" was the wrong question for two of the three
-   * placements and refused every agent send into a DM.
+   * (#task:2021 P4-4). A `direct_pair` has no `conversation_agents` rows, so
+   * "not a member" was the wrong question for it and refused every agent send
+   * into a DM.
    */
   | 'agent_not_participant_of_conversation'
   /**
@@ -248,15 +230,7 @@ export class ActorError extends Error {
   }
 }
 
-export type TargetErrorCode =
-  | 'reply_target_not_found'
-  /**
-   * The sender measured its freshness boundary against a DIFFERENT stream from
-   * the one this send resolved to (#task:2021 P4-4). 409, like the stale
-   * conflict it protects: the sender's view of where it is has to be re-earned
-   * before the CAS means anything.
-   */
-  | 'asserted_stream_mismatch';
+export type TargetErrorCode = 'reply_target_not_found';
 
 export class TargetError extends Error {
   constructor(
@@ -295,38 +269,110 @@ export class AttachmentError extends Error {
   }
 }
 
-export class MessageFreshnessError extends Error {
+/**
+ * The send is stale (#task:2095). ONE class for the whole freshness axis: the
+ * guard throws it INSIDE the send transaction the moment it finds this runtime
+ * still holds undelivered input, and the service catch re-throws the SAME
+ * instance (never re-`new`s it) so the `staleEventId` is minted exactly once,
+ * inside that transaction. It maps to HTTP 409 at `routes/responses.ts`.
+ *
+ * Freshness is a property of the RUNTIME's field of view, not of a stream: a
+ * send is stale iff the runtime has an undelivered inbox row in its delivery
+ * scope. There is therefore NO seq pair to carry — the old model's
+ * `seen_up_to_seq`/`current_seq` were a per-stream CAS witness, and both the
+ * model and the payload retired with it. `scope` is the discriminant the
+ * observability log needs to answer "why stale" (agent-wide vs this pair).
+ */
+export class MessageStaleError extends Error {
+  // WIRE DISCRIMINANT — not a display string. `routes/responses.ts` emits this
+  // as `details.subkind` and the daemon's `extractStaleConflict`
+  // (`host/.../supervisor/index.ts`) hard-compares `subkind === 'message_stale'`
+  // before it will arm a stale event. The class NAME and `this.name` are free to
+  // change; THIS LITERAL is not — renaming it silently removes the stale
+  // capability exactly like dropping an arming field would (#task:2095 §4).
   readonly code = 'message_stale' as const;
 
   constructor(
-    public readonly conversationId: string,
-    public readonly seenUpToSeq: number,
-    public readonly currentSeq: number,
+    /** The conversation the rejected send TARGETED (name matches the log key
+     *  it feeds). Diagnostic only — the arm's actual scope is {@link scope};
+     *  it routes nothing. */
+    public readonly targetConversationId: string,
     public readonly staleEventId: string,
-    /** Target stream the CAS was scoped to (NULL = main line). */
-    public readonly threadRootId: string | null = null,
+    /** Which RuntimeScope arm rejected: `'agent'` = the runtime has undelivered
+     *  input in SOME conversation; `'conversation'` = in this bound pair. Read
+     *  by the observability log to answer "why stale". */
+    public readonly scope: AgentSessionScope,
+    /** Target stream the rejected send aimed at (NULL = main line). Kept ONLY
+     *  because the rejection log reads it ("thread X vs main line" is real
+     *  diagnostic); it no longer routes anything. NO default: a required
+     *  parameter (`undeliveredCount`) follows, so the single construction site
+     *  must pass this explicitly — a `= null` here would be a dead affordance
+     *  (F15). */
+    public readonly threadRootId: string | null,
+    /** How many undelivered inbox rows this runtime's delivery scope holds
+     *  (#task:2095 F13). LOG-ONLY, exactly like {@link scope}/{@link threadRootId}:
+     *  `routes/responses.ts` MUST NOT project it onto the 409 — the agent
+     *  surface stays signal-only. The count is deliberately measured with the
+     *  SAME predicate as the guard (`delivered_at IS NULL AND failed_at IS NULL`,
+     *  in_flight rows INCLUDED), so it is structurally an upper bound on "what
+     *  the agent has not yet seen" (an in-flight row may already be in its
+     *  context) — honest only as a rejection-path diagnostic, never as a number
+     *  shown to the agent. Read once by the "freshness guard rejected send"
+     *  WARN and nowhere else. NO default: this class existing means the guard
+     *  found ≥1 undelivered row, so a 0 here would be a self-contradictory
+     *  diagnostic; the single construction site MUST measure it (compiler-
+     *  enforced). */
+    public readonly undeliveredCount: number,
   ) {
     super(
-      `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
-        `to ${currentSeq} before send`,
+      'message is stale: this runtime has undelivered input it must consume ' +
+        'before sending (drain it, or resend with --anyway)',
     );
-    this.name = 'MessageFreshnessError';
+    this.name = 'MessageStaleError';
   }
 }
 
-export class MessageFreshnessGuardError extends Error {
-  constructor(
-    public readonly conversationId: string,
-    public readonly seenUpToSeq: number,
-    public readonly currentSeq: number,
-    public readonly threadRootId: string | null,
-  ) {
+/**
+ * Thrown when the freshness guard cannot resolve the acting runtime's scope
+ * because the authorized actor has no `agents` row in the guard's transaction.
+ *
+ * This is an INVARIANT VIOLATION, not a domain refusal: the send path authorizes
+ * the actor upstream (participant seat / actor gate) and an FK guarantees a
+ * participant's `agents` row exists, so the branch is unreachable by
+ * construction. It is thrown — loudly, carrying the `agentId` — rather than
+ * silently widened to the broad `'agent'` scope arm, because that widening is
+ * unsafe: judging a conversation-scoped runtime by the agent arm keys the guard
+ * on undelivered rows from OTHER conversations it cannot drain (guard scope ≠
+ * drain scope = the #task:2095 round-1 F1 latch), an undrainable deadlock.
+ *
+ * Deliberately NOT a {@link MessageStaleError}: the service's stale catch
+ * rethrows only `MessageStaleError`, so this surfaces as an unmapped 500 (a bug
+ * to find and fix), never a 409 that would send the runtime to stale-receive an
+ * empty batch and retry a non-stale error forever.
+ */
+export class FreshnessGuardInvariantError extends Error {
+  constructor(public readonly agentId: string) {
     super(
-      `message is stale: conversation advanced from seq ${seenUpToSeq} ` +
-        `to ${currentSeq} before send`,
+      `freshness guard invariant: no agents row for authorized actor ${agentId}`,
     );
-    this.name = 'MessageFreshnessGuardError';
+    this.name = 'FreshnessGuardInvariantError';
   }
+}
+
+/**
+ * The freshness guard's runtime-scope arm, pure over the agent row so the
+ * unreachable "missing row" branch is directly testable (尺子⑭ — an unreachable
+ * arm with no test is a phantom fence, and "missing row" is the branch most
+ * likely to quietly become reachable if the upstream authorization chain
+ * changes). Throws {@link FreshnessGuardInvariantError} on a missing row rather
+ * than widening to the broad `'agent'` arm.
+ */
+export function freshnessGuardScope(
+  agentRow: { session_scope: AgentSessionScope } | null | undefined,
+  agentId: string,
+): AgentSessionScope {
+  if (agentRow == null) throw new FreshnessGuardInvariantError(agentId);
+  return agentRow.session_scope;
 }
 
 export interface ConversationMessageServiceOptions {
@@ -350,6 +396,25 @@ export interface ConversationMessageServiceOptions {
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
+  /**
+   * "May this user open a direct line to the agent this handle names, and which
+   * agent is that?" — `null` when they may not, or when the handle names no agent
+   * (#task:2072).
+   *
+   * Injected as a bound predicate, exactly like `TaskService`'s `canUseCapability`:
+   * the answer is `canInitiateDirectMessageToAgent`, whose reads are authorization
+   * state rather than this send's transaction, so it must be asked BEFORE
+   * `atomically` opens — and asking it here, at the single send funnel, keeps it
+   * out of the per-door knowledge that #task:2035's fence exists to prevent.
+   *
+   * It returns the AGENT ID it gated, so the mention CC's in-transaction check is
+   * membership in a set of ids: a handle that resolves differently inside the
+   * transaction is then absent from it and fails closed.
+   *
+   * Only the mention CC consumes this, so it is asked only for the actor kinds
+   * whose policy carries one (`POLICIES.user.ccMentions`).
+   */
+  directLineTargetFor(userId: string, agentHandle: string): string | null;
 }
 
 /**
@@ -419,12 +484,16 @@ export interface SendMessageTxResult {
    *  CC actually copied. Reported to the SENDER after commit; see
    *  {@link SendMessageResult.unresolvedReferences}. */
   unresolvedReferences: Reference[];
-  skippedFreshnessReason: string | null;
+  /** True iff this agent send explicitly bypassed the freshness guard
+   *  (`--anyway` / `freshnessBypass`). The only surviving "skip" reason under
+   *  #task:2095: the old `missing_seen_up_to_seq` retired with the per-stream
+   *  boundary, and a human send simply never reaches the guard (F8). Drives the
+   *  post-commit "freshness guard bypassed" observability line. */
+  bypassedFreshness: boolean;
   /** S1 (#task:1276) authoritative projection deltas computed IN this
    *  transaction, attached to the post-commit `message` event. Null when the
    *  send touches no derived projection (a main-line, non-reply message). */
   projections: MessageProjections | null;
-  streamHeadBeforeSend: number | null;
 }
 
 export const REPLIED: AgentRunTerminalReason = 'replied';

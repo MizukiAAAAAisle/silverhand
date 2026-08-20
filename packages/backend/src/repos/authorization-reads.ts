@@ -48,7 +48,6 @@ export function createSqliteAuthorizationReads(
       const row = workspaces.get(workspaceId);
       if (!row) return null;
       return {
-        workspace_kind: row.workspace_kind,
         owner_agent_id: row.owner_agent_id,
       };
     },
@@ -64,8 +63,8 @@ export function createSqliteAuthorizationReads(
       workspaces.listUserMemberIds(workspaceId),
     conversation: (conversationId): AuthorizationConversationFacts | null => {
       // The PLACEMENT-aware identity read: the participant rule branches on
-      // `placement_kind` / `inbox_agent_id` (§4.2), which the wire DTO
-      // deliberately does not carry.
+      // `placement_kind` and, for a `direct_pair`, on the endpoint columns
+      // (§4.2), which the wire DTO deliberately does not carry.
       const row = conversations.getIdentity(conversationId);
       if (!row) return null;
       return {
@@ -73,7 +72,6 @@ export function createSqliteAuthorizationReads(
         workspace_id: row.workspace_id,
         placement_kind: row.placement_kind,
         roster_policy: row.roster_policy,
-        inbox_agent_id: row.inbox_agent_id,
         visibility: row.visibility,
         archived_at: row.archived_at,
         endpoint_a_kind: row.endpoint_a_kind,

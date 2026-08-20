@@ -67,39 +67,16 @@ export interface MessageInsertArgs {
   /** Set ONLY by the in-transaction mention CC write (v71, §5): the source
    *  message this row copies. The partial UNIQUE on
    *  `(cc_source_message_id, conversation_id)` is what makes "one copy per
-   *  inbox" a schema fact. */
+   *  DESTINATION conversation" a schema fact — since #task:2072 the destination
+   *  is the author↔agent `direct_pair`, so one source message mentioning two
+   *  agents still lands one copy in each of the two lines, and a retry lands
+   *  none. */
   ccSourceMessageId?: string | null;
 }
-
-/** Compare-and-set insert arguments: `seenUpToSeq` is the actor's last
- *  observed seq IN THE SAME STREAM. No `freshnessExempt` — an exempt row is
- *  outside the freshness universe, so it can never be CAS-guarded. */
-export interface MessageInsertIfFreshArgs
-  extends Omit<MessageInsertArgs, 'freshnessExempt'> {
-  seenUpToSeq: number;
-}
-
-export type MessageInsertIfFreshResult =
-  | { ok: true; message: MessageDto }
-  | { ok: false; currentSeq: number };
 
 /** Message reads + writes available INSIDE a transaction. */
 export interface MessageTxMessagesPort {
   insertForConversation(args: MessageInsertArgs): MessageDto;
-  /**
-   * Freshness CAS insert. Contract the adapter MUST honour: the global seq
-   * allocation and the per-stream CAS share ONE nested rollback boundary
-   * (SQLite savepoint / PG SAVEPOINT), so a CAS miss rolls back the burned
-   * seq WITHOUT aborting the caller's outer transaction. Flattening this into
-   * the outer transaction is a contract violation, not an optimisation
-   * (docs/thread-reply-cluster-v1.md §6.4).
-   */
-  insertForConversationIfFresh(
-    args: MessageInsertIfFreshArgs,
-  ): MessageInsertIfFreshResult;
-  /** Freshness head of one stream (`threadRootId` null = main line); 0 when
-   *  the stream has no head row yet. */
-  streamHeadLatestSeq(conversationId: string, threadRootId: string | null): number;
   getInConversation(conversationId: string, messageId: string): MessageDto | null;
   replyCountsByRoot(
     conversationId: string,
@@ -109,17 +86,6 @@ export interface MessageTxMessagesPort {
     conversationId: string,
     rootId: string,
   ): ThreadSummaryInvariant | null;
-  listStreamWindowMeta(
-    conversationId: string,
-    threadRootId: string | null,
-    afterSeq: number,
-    throughSeq: number,
-  ): Array<{
-    id: string;
-    seq: number;
-    from_kind: string;
-    from_agent_id: string | null;
-  }>;
   listStreamBelowSeq(
     conversationId: string,
     threadRootId: string,
@@ -147,8 +113,8 @@ export interface MessageTxConversationsPort {
   /**
    * PARTICIPATION — is this agent one of the conversation's participants, judged
    * by its PLACEMENT (agent-scoped-session-v1 §4.2)? THE write gate's membership
-   * conjunct, and deliberately NOT "is there a roster row": `direct_pair` and
-   * `agent_inbox` have no roster rows by construction, so the roster-only
+   * conjunct, and deliberately NOT "is there a roster row": a `direct_pair` has
+   * no roster rows by construction, so the roster-only
    * predicate the write gate used to ask instead (`getAgent`, below) refused
    * every agent send into a DM, which is the same fact as `dm:@handle` not
    * working at all (#task:2021 P4-4 finding (b)).
@@ -169,9 +135,9 @@ export interface MessageTxConversationsPort {
    * Answers from the one participation authority
    * (`repos/conversation-placement-sql.ts`), whose human arms are the v25 PAIR
    * (`conversation_users` seat AND `workspace_users` membership) for the workspace
-   * placement, the `human` endpoint for a `direct_pair`, and NOTHING for an
-   * `agent_inbox` — a human is never a participant of one, not even the agent's
-   * creator (`created_by_user_id` is management authority, not a message ACL).
+   * placement and the `human` endpoint for a `direct_pair`. Those are the only
+   * human arms there are: participation is never inferred from
+   * `created_by_user_id`, which is management authority and not a message ACL.
    */
   isUserParticipant(conversationId: string, userId: string): boolean;
   /**
@@ -189,17 +155,26 @@ export interface MessageTxConversationsPort {
    *  `repos/endpoint-principal-presence.ts` for why it is kind-directed and why
    *  both faces share one dispatch. */
   endpointPrincipalExists(endpoint: ConversationEndpointIdentity): boolean;
-    /**
-   * The mentioned agent's INBOX placement (v71, §4.2) — the destination of the
-   * mention CC copy, which is written in the source message's own transaction.
+  /**
+   * The MINT half of `openDirectPair`, transaction-scoped (#task:2072).
    *
-   * Id only. The inbox has no workspace and no roster rows, so a wider shape
-   * would hand the CC use case coordinates that do not exist on this arc. `null`
-   * means the Agent aggregate is missing its inbox invariant — the use case
-   * fails loud rather than creating one lazily (the retired title-keyed
-   * get-or-create is exactly what made two inboxes possible).
+   * The mention CC's destination is the pair "source author ↔ mentioned agent",
+   * and it must come into existence in the SOURCE SEND's own transaction: the copy
+   * is written there (§5), so a rolled-back send must leave no line behind either.
+   *
+   * The ANNOUNCEMENT is deliberately NOT here — this bundle carries no effect
+   * capability by construction — so the CC hands the mint the transaction-aware
+   * `DirectPairOpenedPort` (`recordDirectPairOpens`) and its post-commit half
+   * publishes what that recorded.
+   *
+   * Id only, for the same reason the retired `agentInbox` projection was id only:
+   * the write needs a destination, not a row.
    */
-  agentInbox(agentId: string): { id: string } | null;
+  getOrCreateDirectPair(
+    x: ConversationEndpointIdentity,
+    y: ConversationEndpointIdentity,
+    now: number,
+  ): { conversation: { id: string }; created: boolean };
 }
 
 /** The workspace facts the send transaction needs — the NAME only, for the
@@ -228,21 +203,26 @@ export interface MessageTxNotificationsPort {
  * The `mention_external` row's shape — settled product contract (shiki,
  * 2026-08-14, "option A"):
  *
- *   - the VIEWER is the source message's author. The mention is theirs; the
- *     inbox copy belongs to the agent, and an inbox has no human participant
- *     (§4.2), so nobody else could receive this notification.
+ *   - the VIEWER is the source message's author. The mention is theirs, and
+ *     since #task:2072 the copy lands in the author↔agent `direct_pair`, whose
+ *     only human endpoint IS that author — so nobody else could receive this
+ *     notification. (Under the retired `agent_inbox` the same conclusion held
+ *     for the opposite reason: no human was a participant at all, §4.2.)
  *   - the JUMP TARGET is the SOURCE message — `(conversationId, messageId)` name
- *     the source, never the inbox copy. The author is a member there and can
- *     read it; pointing at the inbox would send them to a conversation whose
- *     ACL denies them by domain rule.
+ *     the source, never the copy. NOT because the copy is unreachable: the
+ *     author can now read the line it lands in. The source is where the
+ *     surrounding context is, and the copy is already in front of a reader who
+ *     opened that line (the same reading the card's own origin link states,
+ *     #task:2089).
  *
  * Hence no `workspaceId` argument either: the source conversation's workspace is
- * the only workspace involved, and the inbox has none.
+ * the only workspace involved, and a `direct_pair` has none.
  */
 export interface MentionExternalNotificationArgs {
   /** The author of the source message — the viewer of this notification. */
   userId: string;
-  /** The agent that was mentioned (the inbox owner), for list rendering. */
+  /** The agent that was mentioned — the copy's other endpoint, for list
+   *  rendering. */
   agentId: string;
   sourceWorkspaceId: string;
   sourceConversationId: string;
@@ -309,6 +289,20 @@ export interface MessageTxScope {
       messageId: string,
       deliveryKind?: 'turn' | 'observe',
     ): void;
+    /** Freshness guard (#task:2095), conversation-scope arm: does this agent
+     *  have ANY undelivered inbox row in this (bound/source) conversation?
+     *  Boolean existence, never a seq — immune to rowid reuse. */
+    hasUndeliveredForPair(conversationId: string, agentId: string): boolean;
+    /** Freshness guard (#task:2095), agent-scope arm: does this agent-runtime
+     *  have ANY undelivered inbox row across ALL its conversations? */
+    hasUndeliveredForAgent(agentId: string): boolean;
+    /** Reject-path diagnostic COUNT companions of the two guard arms
+     *  (#task:2095 F13). SAME predicate as `hasUndeliveredFor*`
+     *  (in_flight rows included) — read ONCE on the throw path to stamp the
+     *  "freshness guard rejected send" WARN, never on the hot path and never
+     *  onto the 409 (the agent surface stays signal-only). */
+    countQueuedForPair(conversationId: string, agentId: string): number;
+    countQueuedForAgent(agentId: string): number;
   };
   threadFollowers: MessageTxThreadFollowersPort;
   attachments: AttachmentSnapshotSourcePort;
@@ -339,10 +333,10 @@ export interface MessageTxScope {
  *  FOR UPDATE` on the conversation row and its roster edge, or re-asserting the
  *  predicate in the INSERT's `WHERE`.
  *
- *  The freshness CAS (`insertForConversationIfFresh`) is NOT that mechanism and
- *  never was: it covers exactly one fact, the per-stream sequence head, and fails
- *  closed with its own error. An adapter may not infer that it also stabilises the
- *  gate's reads. */
+ *  The freshness guard (#task:2095, `hasUndeliveredFor{Pair,Agent}`) is NOT that
+ *  mechanism and never was: it covers exactly one fact — whether this runtime
+ *  still holds undelivered input — and fails closed with its own error. An
+ *  adapter may not infer that it also stabilises the gate's reads. */
 export interface MessageUnitOfWork {
   atomically<T>(fn: (tx: MessageTxScope) => T): T;
 }

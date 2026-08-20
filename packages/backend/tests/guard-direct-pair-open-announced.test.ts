@@ -39,7 +39,10 @@
  * that get-or-creates again without announcing) left every assertion green while
  * reintroducing the exact hole. The allowlist now carries a per-file SITE COUNT:
  * both a same-file second site and a new file trip it, and the patterns exclude
- * declarations and prose so the counts cannot be padded into silence.
+ * DECLARATIONS (and prose that merely names either half) so the counts cannot be
+ * padded into silence. Prose that QUOTES a call or an implementation still counts —
+ * the patterns are blind to code-vs-comment on purpose, so that a commented-out call
+ * stays in the offender list.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -106,19 +109,39 @@ const ALLOWED_MINT_SITES: Record<string, { count: number; reason: string }> = {
     reason:
       'the ONE mint operation both doors funnel through; announces through `ports.allocations` in the same breath',
   },
+  'packages/backend/src/repos/conversation-persistence.ts': {
+    count: 1,
+    reason:
+      'the THIRD port wiring, for the send transaction’s own scope (#task:2072): the mention CC mints its destination INSIDE the send, so the port cannot be a captured repo — it forwards the same repo method, adding no new caller and no second way to allocate',
+  },
+  'packages/backend/src/repos/agent-provisioning-persistence.ts': {
+    count: 1,
+    reason:
+      'the FOURTH port wiring, for the provisioning dependent-graph scope (#task:2072): an agent-scoped agent onboards into the creator’s direct line, minted INSIDE that graph so it rolls back with it, so the port cannot be a captured repo — it forwards the same repo method, adding no new caller and no second way to allocate',
+  },
 };
 
 /**
  * Who may name the obligation, and HOW MANY TIMES. TWO files, and the shape of the
  * counts is the invariant: one declaration-and-caller (2 sites — the port member
- * plus the single call from the mint), one implementation (1 site).
+ * plus the single call from the mint), and one file that holds EVERY implementation
+ * (2 sites since #task:2072 — the publisher, and the transaction-aware recorder the
+ * mention CC needs because its mint must roll back with the copy).
  *
- * A third file, or one extra site in either of these, is the thing this gate stops
- * — a second implementation is an announcement nobody wired, and a second caller
- * is an announcement for a row that did not just come into existence. The PORT
- * WIRING (`delivery-target-persistence.ts`) is deliberately absent: it composes the
- * implementation through `directPairAllocationPort(...)`, so its appearance here
- * would mean someone inlined a second announcer beside the real one.
+ * That the second implementation is in the SAME file is the point, not an
+ * exception: "not sending the frame yet" is still a way of answering for the frame,
+ * so it belongs where the frame lives. A THIRD file, or one extra site in either of
+ * these, is the thing this gate stops — an implementation anywhere else is an
+ * announcement nobody wired, and a second caller is an announcement for a row that
+ * did not just come into existence. The PORT WIRING
+ * (`delivery-target-persistence.ts`, `conversation-persistence.ts`) is deliberately
+ * absent: both compose an implementation from this file, so their appearance here
+ * would mean someone inlined an announcer beside the real ones.
+ *
+ * A per-file count only means "sites" while prose stays out of it. The pattern
+ * cannot tell code from a docblock, so a comment that QUOTES the identifier with a
+ * following `(` or `:` counts — see the note in `recordDirectPairOpens`, which
+ * paraphrases the hand-rolled shape for exactly this reason.
  */
 const ALLOWED_OBLIGATION_SITES: Record<string, { count: number; reason: string }> = {
   'packages/backend/src/application/open-direct-pair.ts': {
@@ -127,9 +150,9 @@ const ALLOWED_OBLIGATION_SITES: Record<string, { count: number; reason: string }
       'DECLARES the port member and CALLS it, from the one mint operation, when the row was created',
   },
   'packages/backend/src/application/direct-pairs-changed.ts': {
-    count: 1,
+    count: 2,
     reason:
-      'the ONE implementation: publishes `direct_pairs_changed` to the pair’s human participants',
+      'the ONLY home of the implementations: one publishes `direct_pairs_changed` to the pair’s human participants, one RECORDS the ids so an in-transaction minter can publish after its own commit (#task:2072)',
   },
 };
 
@@ -196,9 +219,9 @@ describe('direct-pair open is announced (#task:2035 producer/consumer fence)', (
     expect(countIn(secondMintSameFile, MINT_CALL)).toBe(2);
     expect(countIn(secondMintSameFile, OBLIGATION)).toBe(1);
 
-    // A DECLARATION and PROSE inflate neither count: the method definition has no
-    // leading `.`, and a docblock that only names the port has no `(`/`:` after it —
-    // which is what keeps the per-file counts above from being padded into silence.
+    // A DECLARATION and a NAMING prose mention inflate neither count: the method
+    // definition has no leading `.`, and a docblock that only names the port has no
+    // `(`/`:` after it.
     const declarationsAndProse = `
       getOrCreateDirectPair(a: X, b: X, now: number): Opened;
       // ConversationRepo.getOrCreateDirectPair derives created from the row count.
@@ -206,5 +229,16 @@ describe('direct-pair open is announced (#task:2035 producer/consumer fence)', (
     `;
     expect(countIn(declarationsAndProse, MINT_CALL)).toBe(0);
     expect(countIn(declarationsAndProse, OBLIGATION)).toBe(0);
+
+    // But prose that QUOTES the shape does count, and that is pinned rather than
+    // claimed away: the patterns are blind to code-vs-comment, which is what keeps a
+    // commented-out call in the offender list. The cost is that a docblock quoting
+    // the identifier with a following `(` reads as a site and must either be
+    // paraphrased or declared — the allowlist reasons say which.
+    const prosePassingAsASite = `
+      // A recorder assembled at the call site is the hand-rolled { directPairOpened() {} }
+      // this fence exists to make someone answer for.
+    `;
+    expect(countIn(prosePassingAsASite, OBLIGATION)).toBe(1);
   });
 });

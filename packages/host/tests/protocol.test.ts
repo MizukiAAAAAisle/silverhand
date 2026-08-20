@@ -412,7 +412,7 @@ describe('protocol — runtime_start D4.e-6 semantic refs + typed errors', () =>
       options: {
         ...testStartOptions(),
         workspace_memory_index: [
-          { id: 'ws1', name: 'primary', kind: 'regular', path: '/host/ws/ws1' },
+          { id: 'ws1', name: 'primary', path: '/host/ws/ws1' },
         ],
       },
     });
@@ -1201,6 +1201,84 @@ describe('protocol — runtime_parsed_event_dropped (metadata-only, Cindy `C2BZG
   });
 });
 
+describe('protocol — runtime_message_stale (identity + ts only, #task:2099)', () => {
+  it('accepts the minimal identity-only shape', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_message_stale',
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      runtime_generation: 1,
+      ts: 1,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects every triage field the WARN log owns instead', () => {
+    // The row is marker-only by decision (Norman + Cindy): the id, the count,
+    // and the refused SEND TARGET stay off the wire. `strict()` is what keeps
+    // that decision from eroding one convenient field at a time — a field added
+    // later is additive, but a persisted one cannot be retracted from history.
+    const forbidden = [
+      { stale_event_id: 'stale-1' },
+      { target_conversation_id: 'c2' },
+      { stale_count: 2 },
+      { seq: 7 },
+      { content: 'the refused message' },
+      { freshness_bypass: true },
+    ];
+    for (const extra of forbidden) {
+      const r = EventFrameSchema.safeParse({
+        event: 'runtime_message_stale',
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        runtime_generation: 1,
+        ts: 1,
+        ...extra,
+      });
+      expect(r.success).toBe(false);
+    }
+  });
+
+  it('requires the identity fields it does carry', () => {
+    const missing = [
+      { runtime_scope: undefined },
+      { conversation_id: undefined },
+      { conversation_id: '' },
+      { agent_id: undefined },
+      { agent_id: '' },
+      { runtime_generation: undefined },
+      { runtime_generation: 0 },
+      { ts: undefined },
+    ];
+    for (const override of missing) {
+      const r = EventFrameSchema.safeParse({
+        event: 'runtime_message_stale',
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        runtime_generation: 1,
+        ts: 1,
+        ...override,
+      });
+      expect(r.success).toBe(false);
+    }
+  });
+
+  it('accepts an agent-scoped runtime_scope (the case this ticket exists for)', () => {
+    const r = EventFrameSchema.safeParse({
+      event: 'runtime_message_stale',
+      runtime_scope: { kind: 'agent', agent_id: 'a1' },
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      runtime_generation: 1,
+      ts: 1,
+    });
+    expect(r.success).toBe(true);
+  });
+});
+
 describe('protocol — runtime_start result discriminated union (Cindy `-pdNvRYOWip5e9yA` 3c plan)', () => {
   // Pre-3c the result was a flat `{pid, started_at, startup_delivery_accepted?}`.
   // 3c added a cooldown-blocked arm so backend can project init cooldown
@@ -1309,14 +1387,18 @@ describe('protocol — runtime_start result discriminated union (Cindy `-pdNvRYO
 describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', () => {
   const spawnOptions = testStartOptions();
 
-  it('params parse with delivery_ids, kind, unencoded text, and spawn_options', () => {
+  it('params parse with delivery_ids, deliveries, kind, unencoded text, and spawn_options', () => {
     const r = RuntimeDeliverParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1, 2, 3],
-      delivered_up_to_seq: 3,
+      deliveries: [1, 2, 3].map(seq => ({
+        delivery_id: seq,
+        seq,
+        presentation: { body: `message ${seq}`, instruction: 'system' as const },
+      })),
       kind: 'message',
       text: 'hi',
       spawn_options: spawnOptions,
@@ -1324,14 +1406,76 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     expect(r.success).toBe(true);
   });
 
+  it('#task:2106 fences the deliveries container on both arms', () => {
+    // #task:2106 made `deliveries` REQUIRED and dropped the `delivered_up_to_seq`
+    // scalar (its value is now derived daemon-side from `max(deliveries[].seq)`).
+    // Two arms pin that irreversibly, and — since `RuntimeDeliverParamsSchema` is
+    // the SINGLE entry point shared by the local control socket and the outbound
+    // WS (`outbound-protocol.ts` reuses it) — this fences BOTH transports at once.
+    const base = {
+      runtime_generation: 1,
+      conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      text: 'combined',
+      spawn_options: spawnOptions,
+    } as const;
+    const deliveries = [{
+      delivery_id: 1,
+      seq: 1,
+      presentation: { body: 'message one', instruction: 'system' as const },
+    }];
+
+    // Arm 1 — a deliver with NO `deliveries` container is now unparseable: the
+    // no-metadata sender is gone, so a missing array is a hard error, not a
+    // legacy fallback.
+    expect(RuntimeDeliverParamsSchema.safeParse(base).success).toBe(false);
+
+    // Arm 2 — re-adding the deleted `delivered_up_to_seq` scalar is rejected as
+    // an unknown key by `.strict()`. Reviving the field (or quietly relaxing
+    // strictness) fails here instead of silently reintroducing a wire scalar
+    // that no consumer reads.
+    const revived = RuntimeDeliverParamsSchema.safeParse({
+      ...base,
+      deliveries,
+      delivered_up_to_seq: 1,
+    });
+    expect(revived.success).toBe(false);
+    if (!revived.success) {
+      expect(
+        revived.error.issues.some(
+          issue =>
+            issue.code === 'unrecognized_keys' &&
+            (issue as { keys?: string[] }).keys?.includes('delivered_up_to_seq'),
+        ),
+      ).toBe(true);
+    }
+
+    // Sanity: the same base WITH `deliveries` and WITHOUT the scalar parses.
+    expect(
+      RuntimeDeliverParamsSchema.safeParse({ ...base, deliveries }).success,
+    ).toBe(true);
+  });
+
   it('params are batch-native — delivery_ids must be non-empty', () => {
     // Absorbs the retired `runtime_wake` batch-native contract.
+    // `deliveries` is non-empty so the SOLE failure cause is the empty
+    // `delivery_ids` — otherwise a missing-`deliveries` rejection (now that the
+    // container is required, #task:2106) would make this pass for the wrong
+    // reason and stop guarding `delivery_ids.min(1)`.
     const empty = RuntimeDeliverParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [],
+      deliveries: [{
+        delivery_id: 1,
+        seq: 1,
+        presentation: { body: 'hi', instruction: 'system' as const },
+      }],
       kind: 'message',
       text: 'hi',
       spawn_options: spawnOptions,
@@ -1354,10 +1498,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       ...base,
       deliveries: [{
         delivery_id: 1,
-        message_id: 'm1',
         seq: 1,
-        thread_root_id: null,
-        delivery_kind: 'turn',
         presentation: {
           body: '[msg_id=m1 sender=system type=system target=#conv:protocolConvId01 time=2026-01-01T00:00:00+00:00]\nmessage one',
           instruction: 'system',
@@ -1368,23 +1509,83 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       ...base,
       deliveries: [{
         delivery_id: 1,
-        message_id: 'm1',
         seq: 1,
-        thread_root_id: null,
-        delivery_kind: 'turn',
       }],
     }).success).toBe(false);
     expect(RuntimeDeliverParamsSchema.safeParse({
       ...base,
       deliveries: [{
         delivery_id: 1,
-        message_id: 'm1',
         seq: 1,
-        thread_root_id: null,
-        delivery_kind: 'turn',
         text: 'retired singleton payload',
       }],
     }).success).toBe(false);
+  });
+
+  it('rejects the three tails #task:2097 deleted — one key at a time', () => {
+    // The ticket's conclusion is a NET DROP with no optional compat: on this
+    // strict wire an accepted extra key would mean "a consumer may still
+    // appear". The positive test above pins the shape; this one pins that each
+    // deleted key is now a PARSE ERROR, individually, so re-adding any one of
+    // them (or quietly relaxing `.strict()`) fails here instead of silently
+    // reviving a field with no reader. Same schema on both transports —
+    // `RuntimeDeliverySchema` has exactly one params entry point — so this is
+    // also the outbound fence.
+    const base = {
+      runtime_generation: 1,
+      conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      text: 'combined',
+      spawn_options: spawnOptions,
+    } as const;
+    const entry = {
+      delivery_id: 1,
+      seq: 1,
+      presentation: {
+        body: '[msg_id=m1 sender=system type=system target=#conv:protocolConvId01 time=2026-01-01T00:00:00+00:00]\nmessage one',
+        instruction: 'system' as const,
+      },
+    };
+    // Baseline: the surviving alphabet is exactly these three keys.
+    const accepted = RuntimeDeliverParamsSchema.safeParse({
+      ...base,
+      deliveries: [entry],
+    });
+    expect(accepted.success).toBe(true);
+    expect(
+      Object.keys(accepted.success ? accepted.data.deliveries![0]! : {}).sort(),
+    ).toEqual(['delivery_id', 'presentation', 'seq']);
+
+    const retired: Array<[string, unknown]> = [
+      ['message_id', 'm1'],
+      ['thread_root_id', 'root-1'],
+      ['delivery_kind', 'turn'],
+    ];
+    for (const [key, value] of retired) {
+      const parsed = RuntimeDeliverParamsSchema.safeParse({
+        ...base,
+        deliveries: [{ ...entry, [key]: value }],
+      });
+      expect(parsed.success, `retired key ${key} must be rejected`).toBe(false);
+      // The refusal NAMES the offending key (strict's `unrecognized_keys`), so
+      // it reads as "this field is gone" rather than "deliveries is invalid".
+      expect(
+        parsed.success
+          ? []
+          : parsed.error.issues.flatMap(issue =>
+              issue.code === 'unrecognized_keys' ? issue.keys : [],
+            ),
+        `retired key ${key} must be named in the issue`,
+      ).toContain(key);
+    }
+    // `thread_root_id` is retired on the DELIVERY entry only — the send-ack /
+    // resolved-target lane that reports where a message landed keeps it.
+    expect(
+      RuntimeDeliverParamsSchema.safeParse({ ...base, deliveries: [entry] }).success,
+    ).toBe(true);
   });
 
   it('params REJECT missing text and empty text (Option A v2 — daemon owns encode)', () => {
@@ -1422,6 +1623,11 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
+      deliveries: [{
+        delivery_id: 1,
+        seq: 1,
+        presentation: { body: ' ', instruction: 'system' as const },
+      }],
       kind: 'message',
       text: ' ',
       spawn_options: spawnOptions,
@@ -1583,7 +1789,7 @@ describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 
   });
 });
 
-describe('protocol v13 runtime custody generation', () => {
+describe('runtime custody generation (current protocol generation)', () => {
   it('rejects start and deliver commands that omit runtime_generation', () => {
     expect(RuntimeStartParamsSchema.safeParse({
       conversation_id: 'c1',

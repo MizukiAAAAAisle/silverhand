@@ -5,6 +5,7 @@ import type {
   InjectedFileContent,
   WorkspaceMemoryIndexEntry,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspaceId } from '@silverhand/shared';
 import type {
   ResolvedStartOptions,
   ResolvedWorkspaceRef,
@@ -78,7 +79,6 @@ export async function buildPromptContextFromRuntimeStartOptions(
       agentScoped || options.workspace === null ? undefined : options.workspace,
     ),
     roleSystemPrompt,
-    roleSystemPromptPath,
     currentMemory,
     memoryNotesCatalog,
     workspaceMemoryIndex: buildWorkspaceMemoryIndexFromRuntimeStartOptions(
@@ -88,6 +88,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
       ? {
           kind: 'agent',
           computerId: options.computer_id,
+          memoryRootPath: options.agent.home_dir,
         }
       : options.workspace === null
         ? {
@@ -102,11 +103,13 @@ export async function buildPromptContextFromRuntimeStartOptions(
           conversationId: options.session.conversation_id,
           computerId: options.computer_id,
           workspaceName: options.workspace.name,
-          // The daemon-resolved local root on THIS computer — the deterministic
-          // agent-centric bundle coordinate for regular workspaces, the agent L1
-          // home for DMs. Never a server-supplied path.
           workspacePath: options.workspace.path,
-          channelKind: options.session.roster_policy === 'fixed' ? 'dm' : 'regular',
+          // A COORDINATE, not a decoded word (#task:2075). The daemon still READS
+          // the physical `agent_home` — that is what selects a path-resolution
+          // strategy (`runtime-start-resolve.ts`) — but it no longer publishes a
+          // container word derived from it; the prompt renderer asks
+          // `isAgentHomeWorkspaceId` itself.
+          workspaceId: options.workspace.id,
           sessionTitle: options.session.title,
           members: options.session.members,
         },
@@ -120,8 +123,17 @@ export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
   return options.workspace_memory_index.map(workspace => {
     const isCurrent = options.workspace !== null
       && workspace.id === options.workspace.id;
+    // Labels a WORKSPACE. It said `(DM)` until #task:2069 (an agent was told
+    // "DM" for the container a human saw as Agent Space), then a decoded
+    // container word until #task:2075. Now it asks the ID CONVENTION, which is
+    // both the daemon's only ownership authority here and strictly more precise:
+    // an entry whose stored word says `agent_home` but whose id is NOT this
+    // agent's home is a foreign/corrupt ref (it already fails soft to
+    // `memoryPath: null`) and no longer gets labelled an Agent Space either.
     const baseLabel =
-      workspace.kind === 'agent_home' ? `${workspace.name} (DM)` : workspace.name;
+      isAgentHomeWorkspaceId(workspace.id, options.agent.id)
+        ? `${workspace.name} (Agent Space)`
+        : workspace.name;
     return {
       label: isCurrent ? `${baseLabel} (current)` : baseLabel,
       // path === null → no local realization on this computer yet; the

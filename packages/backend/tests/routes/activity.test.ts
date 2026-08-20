@@ -74,6 +74,31 @@ async function getActivity(t: TestApp): Promise<any[]> {
   return dto.items;
 }
 
+/** Attach a REAL task to a message through the production create path, the way
+ *  a task becomes "on" a message post-v60 (`tasks.source_message_id`). The old
+ *  flat `messages.task_*` carrier these cases used to forge was physically
+ *  dropped in v87 (#task:2083); the assertion is unchanged, but it now runs
+ *  against the aggregate that actually exists. */
+async function createTaskFromMessage(
+  t: TestApp,
+  channelId: string,
+  agentId: string,
+  sourceMessageId: string,
+  title: string,
+  opts: { claim?: boolean } = {},
+): Promise<string> {
+  const result = await t.ctx.taskService.createTasks({
+    conversationId: channelId,
+    actor: { kind: 'agent', runtimeScope: 'conversation', agentId, conversationId: channelId },
+    tasks: [{ title, sourceMessageId }],
+    ...(opts.claim === true ? { claim: true } : {}),
+  });
+  if ('error' in result) throw new Error(`task create failed: ${result.error}`);
+  const created = result.tasks[0];
+  expect(created).toBeDefined();
+  return created!.id;
+}
+
 describe('activity list (#task:1227 ②c GET /api/activity)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
@@ -263,30 +288,37 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
 
   it('task-bearing messages produce NO kind=task item in v1 (tasks live in the panel)', async () => {
     t = buildTestApp();
-    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
-    // (a) a task assigned to the viewer, and (b) an in_review task by someone
-    // else — both used to project a kind=task item. v1 drops the task projection
-    // entirely (shiki 2026-06-26): tasks are tracked in the task panel; only
-    // message/unread/mention attention events enter Activity.
+    // (a) a claimed (in_progress) task and (b) an in_review task, each hanging
+    // off a message in the viewer's channel — both used to project a kind=task
+    // item. v1 drops the task projection entirely (shiki 2026-06-26): tasks are
+    // tracked in the task panel; only message/unread/mention attention events
+    // enter Activity. The old "assigned to the VIEWER" arm is not restated
+    // because the live aggregate cannot assign a task to a human at all
+    // (`claimTask` takes an agent assignee) — and since Activity reads nothing
+    // from `tasks`, no assignee shape can reintroduce the item.
     const mineMsg = await sendAsAgent(t, channelId, sender, 'assigned to me');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages SET task_number = 7, task_status = 'in_progress',
-            task_assignee_user_id = 'local', task_workspace_id = ?,
-            task_title = 'mine' WHERE id = ?`,
-      )
-      .run(workspaceId, mineMsg);
+    await createTaskFromMessage(t, channelId, sender, mineMsg, 'mine', { claim: true });
     const reviewMsg = await sendAsAgent(t, channelId, sender, 'please review');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages SET task_number = 8, task_status = 'in_review',
-            task_assignee_user_id = 'someone-else', task_workspace_id = ?,
-            task_title = 'awaiting validation' WHERE id = ?`,
-      )
-      .run(workspaceId, reviewMsg);
+    const reviewTask = await createTaskFromMessage(
+      t,
+      channelId,
+      sender,
+      reviewMsg,
+      'awaiting validation',
+      { claim: true },
+    );
+    // in_review is only reachable from in_progress (VALID_TRANSITIONS), which is
+    // what `claim` puts a fresh task into.
+    const moved = await t.ctx.taskService.updateStatus({
+      actor: { kind: 'user', userId: 'local' },
+      by: { taskId: reviewTask },
+      status: 'in_review',
+    });
+    expect(moved.success).toBe(true);
 
-    // No task items at all — neither the assigned-to-me nor the in_review branch.
+    // No task items at all — neither the claimed nor the in_review branch.
     expect((await getActivity(t)).some(i => i.kind === 'task')).toBe(false);
 
     // The task-bearing messages are still reachable via the ordinary unread path
@@ -332,18 +364,10 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
 
   it('a mention on a task-bearing message still enters as a mention (no kind=task in v1)', async () => {
     t = buildTestApp();
-    const { workspaceId, channelId } = await createWorkspaceChannel(t);
+    const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
     const msgId = await sendAsAgent(t, channelId, sender, 'ping <silverhand://human/local-test> review this');
-    t.ctx.db
-      .prepare(
-        `UPDATE messages
-            SET task_number = 13, task_status = 'in_progress',
-                task_assignee_user_id = 'local', task_workspace_id = ?,
-                task_title = 'mention + task'
-          WHERE id = ?`,
-      )
-      .run(workspaceId, msgId);
+    await createTaskFromMessage(t, channelId, sender, msgId, 'mention + task', { claim: true });
 
     const items = await getActivity(t);
     const onThatMessage = items.filter(i => i.message_id === msgId);
@@ -577,7 +601,46 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
 
   // ── source-first layout fields (shiki dogfood: row-1 where / row-2/3 content) ──
 
-  it('an open-roster mention carries conversation_roster_policy and a null thread_root_preview (mainline)', async () => {
+  // The absent-key half of #task:2076. This asserts the PARSED HTTP BODY, which
+  // is the only place the claim is testable end-to-end: nothing re-validates the
+  // response against `ActivityItemDtoSchema` on the way out, so the read model
+  // could ship a classification bit the schema does not declare. The schema-side
+  // fence (an exhaustive key set) lives in
+  // `packages/shared/tests/activity-item-face.test.ts` and fails differently —
+  // that one catches DECLARING the field, this one catches EMITTING it.
+  //
+  // PER-SOURCE, deliberately: `ACTIVITY_SOURCE_IDS` has two members and each
+  // builds its own item literal, so a fixture that produces only a `mention`
+  // proves nothing about the positional source. This was not hypothetical — the
+  // first version of this cell asserted on the mention alone and stayed GREEN with
+  // the roster bit added back to the positional item. Hence the two preconditions:
+  // the assertion runs over every item AND both sources must have produced one.
+  it('emits no conversation-classification bit from EITHER activity source', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
+      mode: 'all',
+    });
+    // A directed claim (→ directed_notification) and a plain message that stays
+    // ambient after §8 subtracts the mention (→ positional_stream).
+    await sendAsAgent(t, channelId, sender, 'look <silverhand://human/local-test>');
+    await sendAsAgent(t, channelId, sender, 'plain ambient line');
+
+    const items = await getActivity(t);
+    // Preconditions: both sources are represented, so neither leg passes vacuously.
+    expect(items.some(i => i.kind === 'mention')).toBe(true);
+    expect(items.some(i => i.kind === 'unread')).toBe(true);
+    // Identity on this face is unconditional (every item is workspace-placed ⇒ a
+    // channel, #task:1373), so neither the roster bit that used to drive a
+    // "Channel / DM" label nor a placement word rides any item.
+    for (const item of items) {
+      expect(Object.keys(item)).not.toContain('conversation_roster_policy');
+      expect(Object.keys(item)).not.toContain('conversation_placement_kind');
+    }
+  });
+
+  it('a mainline mention carries a null thread_root_preview', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
@@ -585,7 +648,6 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
 
     const mention = (await getActivity(t)).find(i => i.kind === 'mention');
     expect(mention).toBeTruthy();
-    expect(mention.conversation_roster_policy).toBe('open');
     expect(mention.thread_root_preview).toBeNull(); // mainline → no root row
   });
 
@@ -620,7 +682,6 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     );
     expect(thread).toHaveLength(1);
     expect(thread[0]).toMatchObject({
-      conversation_roster_policy: 'open',
       thread_root_id: rootMsg,
       message_id: replyMsg, // anchored at the first unread reply
     });

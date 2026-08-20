@@ -363,11 +363,10 @@ export class TaskService {
     const threadRootId: string | null = input.threadRootId ?? null;
 
     // The BOARD is placement-derived (P0-f §4.4): a workspace conversation
-    // files onto its WorkspaceBoard, a DirectPair onto its own board, and the
-    // agent inbox has none — the route folds inbox destinations before this
-    // service runs, and the persistence write re-derives the board with the
-    // v76 trigger as the proof, so a boardless destination cannot slip
-    // through to a row.
+    // files onto its WorkspaceBoard and a DirectPair onto its own board, which
+    // since #task:2072 is every placement there is. The persistence write
+    // re-derives the board with the v76 trigger as the proof, so a boardless
+    // destination cannot slip through to a row.
     const taskWorkspaceId = conversation.workspace_id;
 
     // Pre-txn source validation. `source_message_id` is a permanent 1:1
@@ -822,7 +821,7 @@ export class TaskService {
       // roster row (its typed endpoints ARE the participants), so a human endpoint
       // dispatching to the pair's own agent would fail `assignee_not_conversation_member`.
       // This is the same authority the read faces and `claimTaskAgent`
-      // already use: `isAgentParticipant` (roster ∪ agent_inbox ∪ direct_pair arc)
+      // already use: `isAgentParticipant` (roster ∪ direct_pair arc)
       // coincides with the roster row on the workspace arm, so channel behavior is
       // unchanged, and a non-participant agent is still refused here.
       if (!tx.conversationAccess.isAgentParticipant(row.conversation_id, assignee.agentId)) {

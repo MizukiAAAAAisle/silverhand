@@ -1,7 +1,7 @@
 import {
   parseWorkspaceAddressSegment,
   type CanonicalWorkspaceName,
-  type WorkspaceDto,
+  type Workspace,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -12,7 +12,7 @@ import type {
 } from './delivery-target-resolution.js';
 
 export type WorkspaceAddressResolution =
-  | { readonly kind: 'found'; readonly workspace: WorkspaceDto }
+  | { readonly kind: 'found'; readonly workspace: Workspace }
   | { readonly kind: 'unresolved' }
   | { readonly kind: 'ambiguous' };
 

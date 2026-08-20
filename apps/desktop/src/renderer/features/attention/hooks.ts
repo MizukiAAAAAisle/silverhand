@@ -142,14 +142,14 @@ export function useSetChannelAttentionPreference(channelId: string | null) {
 // ───────────────── Workspace mute suppressor + tier batch (#task:1870) ─────────
 
 /**
- * The viewer's mute suppressor for one REGULAR workspace
+ * The viewer's mute suppressor for one PEOPLE-OWNED workspace
  * (`GET /api/workspaces/:id/attention-preference`). A BOOLEAN, not a fourth
  * tier: it silences every channel in the workspace without rewriting any
  * channel's own stored choice, so un-muting restores each one verbatim.
  *
- * Regular workspaces only — an `agent_home` (DM) workspace can never carry a row
- * (DB trigger), so a DM is structurally un-mutable and callers must not offer the
- * control for one.
+ * People-owned workspaces only — a DB trigger refuses the row for an agent-owned
+ * workspace, so an agent space is structurally un-mutable and callers must not
+ * offer the control for one.
  */
 export function useWorkspaceAttentionPreference(workspaceId: string | null) {
   return useQuery<WorkspaceAttentionPreferenceDto>({

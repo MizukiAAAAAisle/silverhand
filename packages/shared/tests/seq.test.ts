@@ -3,15 +3,12 @@ import {
   type MessageSeq,
   type TransportSeq,
   type ReadSeq,
-  type ObservedSeq,
   type TransportEpoch,
   asReadSeq,
-  asObservedSeq,
   advanceTransportSeq,
   decodeMessageSeq,
   decodeTransportSeq,
   decodeReadSeq,
-  decodeObservedSeq,
   decodeTransportEpoch,
 } from '../src/seq.js';
 
@@ -25,12 +22,6 @@ describe('mint helpers (doc §4)', () => {
     const r: ReadSeq = asReadSeq(m);
     expect(r).toBe(7);
   });
-
-  it('asObservedSeq mints an ObservedSeq from a MessageSeq, value-preserving', () => {
-    const m = decodeMessageSeq(42);
-    const o: ObservedSeq = asObservedSeq(m);
-    expect(o).toBe(42);
-  });
 });
 
 describe('decode boundaries (doc §4.1)', () => {
@@ -39,14 +30,12 @@ describe('decode boundaries (doc §4.1)', () => {
     expect(decodeMessageSeq(1)).toBe(1); // first real message
     expect(decodeTransportSeq(0)).toBe(0); // never-published scope high-water
     expect(decodeReadSeq(0)).toBe(0); // never-read cursor
-    expect(decodeObservedSeq(5)).toBe(5);
   });
 
   it.each([
     ['decodeMessageSeq', decodeMessageSeq],
     ['decodeTransportSeq', decodeTransportSeq],
     ['decodeReadSeq', decodeReadSeq],
-    ['decodeObservedSeq', decodeObservedSeq],
   ])('%s rejects negative / non-integer / non-finite garbage', (_name, decode) => {
     expect(() => decode(-1)).toThrow(RangeError);
     expect(() => decode(1.5)).toThrow(RangeError);

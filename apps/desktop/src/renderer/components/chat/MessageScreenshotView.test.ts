@@ -11,7 +11,7 @@ import type {
 } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import type { ChannelReference } from './ChannelRef';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 import type { StaticTaskRefSummary } from './TaskRef';
 import { MessageScreenshotView } from './MessageScreenshotView';
 
@@ -124,7 +124,7 @@ function render(
     agentsByName?: ReadonlyMap<string, AgentDto>;
     humansByName?: ReadonlyMap<string, UserDto>;
     channelsByName?: ReadonlyMap<string, ChannelReference | null>;
-    conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+    conversationRefsById?: ReadonlyMap<string, WorkspaceChannelReference>;
     taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
     attachmentImageUrls?: ReadonlyMap<string, string>;
   } = {},
@@ -252,12 +252,11 @@ describe('MessageScreenshotView — non-interactive contract', () => {
   });
 
   it('resolved #conv: refs render human-readable labels in static export', () => {
-    const refs = new Map<string, ConversationReference>([
+    const refs = new Map<string, WorkspaceChannelReference>([
       [
         'abcdefghijklmnop',
         {
           id: 'abcdefghijklmnop',
-          roster_policy: 'open',
           title: 'infra',
         },
       ],

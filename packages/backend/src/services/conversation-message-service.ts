@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
-import { directPairIsReadOnlyForSurvivor, parseDeliveryTarget } from '@silverhand/shared';
+import { directPairIsReadOnlyForSurvivor } from '@silverhand/shared';
 import type {
   AttachmentRefInput,
   AttachmentSnapshot,
@@ -25,8 +25,8 @@ import {
   PolicyError,
   AttachmentError,
   ActorError,
-  MessageFreshnessError,
-  MessageFreshnessGuardError,
+  MessageStaleError,
+  freshnessGuardScope,
   type ConversationMessageServiceOptions,
   type ResolveStaleMessageInput,
   type SendMessageActor,
@@ -47,7 +47,9 @@ export {
   TargetError,
   PolicyError,
   AttachmentError,
-  MessageFreshnessError,
+  MessageStaleError,
+  FreshnessGuardInvariantError,
+  freshnessGuardScope,
 } from './conversation-message/contracts.js';
 export type {
   ConversationErrorCode,
@@ -104,12 +106,17 @@ export class ConversationMessageService {
   private readonly logger: BackendLogger;
   private readonly threadFollow: ThreadFollowManager;
   private readonly delivery: MessageDeliveryCoordinator;
+  private readonly directLineTargetFor: (
+    userId: string,
+    agentHandle: string,
+  ) => string | null;
 
   constructor(opts: ConversationMessageServiceOptions) {
     this.uow = opts.uow;
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
+    this.directLineTargetFor = opts.directLineTargetFor;
     this.threadFollow = new ThreadFollowManager({
       uow: opts.uow,
       read: opts.threadFollow.read,
@@ -148,6 +155,27 @@ export class ConversationMessageService {
     // identical bytes, and it keeps a pathological 64KiB Markdown parse OUT of
     // the write transaction instead of holding the write lock across it.
     const references = extractMessageReferences(input.content);
+    // #task:2072 — WHICH of the addressed agents this author may open a direct
+    // line to, resolved at the same boundary and for the same reason as
+    // `references` above: it is not a fact of the send transaction (the verdict
+    // reads authorization state, and the transaction's scope carries no
+    // authorization capability by construction), and asking it once here keeps the
+    // mention CC's destination gate out of per-door knowledge.
+    //
+    // Empty unless this actor's policy carries a CC — the only consumer — so no
+    // authorization read happens on a send that cannot use one. The actor kind is
+    // narrowed rather than assumed: `ccMentions` is a user-only policy today, and
+    // an agent actor has no user id to ask about.
+    const ccAuthorUserId = input.actor.kind === 'user' ? input.actor.userId : null;
+    const ccDirectLineAgentIds = new Set<string>(
+      policy.ccMentions && ccAuthorUserId !== null
+        ? references.flatMap(ref => {
+            if (ref.kind !== 'agent') return [];
+            const agentId = this.directLineTargetFor(ccAuthorUserId, ref.handle);
+            return agentId === null ? [] : [agentId];
+          })
+        : [],
+    );
 
     let txResult: SendMessageTxResult;
     try {
@@ -177,17 +205,17 @@ export class ConversationMessageService {
           targetConversation.id,
           destination,
         );
-        this.assertAssertedStreamMatches(input, targetConversation.id, threadRootId);
         const attachmentRefs = input.attachmentRefs ?? [];
         const snapshots = this.resolveAttachmentSnapshots(
           tx,
           targetConversation,
           attachmentRefs,
         );
-        // `streamHeadBeforeSend` is the merge prerequisite owed to an agent
-        // whose insert skipped the freshness CAS; the insert helper owns both
-        // that decision and the pre-insert head read (see its docs).
-        const { message, skippedFreshnessReason, streamHeadBeforeSend } =
+        // The freshness guard (#task:2095) lives in the insert helper: it is a
+        // per-RuntimeScope existence check, and a miss throws MessageStaleError
+        // from INSIDE this transaction. `bypassedFreshness` is the sole surviving
+        // "skip" fact (`--anyway`), for the post-commit observability line.
+        const { message, bypassedFreshness } =
           this.insertMessageWithFreshnessIfApplicable({
             tx,
             input,
@@ -214,11 +242,14 @@ export class ConversationMessageService {
         // Mention CC, IN THIS TRANSACTION (v71 §5, #task:2014). It was a
         // post-commit `void ccMentionsBestEffort(...)`: a crash in the gap
         // committed the human's message and lost the copy permanently, with
-        // nothing said to anyone. The copy, its durable inbox delivery row and
-        // the author's `mention_external` notification are all facts the domain
+        // nothing said to anyone. The copy, its durable delivery row and the
+        // author's `mention_external` notification are all facts the domain
         // cannot afford to lose, so they commit or roll back WITH the message
-        // that caused them. What it returns is the report the post-commit half
-        // needs (wake / WS frames / skip log) — no effect ran here.
+        // that caused them — and since #task:2072 the copy's DESTINATION is
+        // minted here too, so an allocated direct pair can never outlive a
+        // rolled-back copy. What it returns is the report the post-commit half
+        // needs (wake / WS frames / announcements / skip log) — no effect ran
+        // here.
         //
         // `sourceConversation`, not the target: the CC answers "who did this
         // message address that cannot see the channel it was written in", and a
@@ -229,6 +260,7 @@ export class ConversationMessageService {
               message,
               sourceConversation,
               references,
+              directLineAgentIds: ccDirectLineAgentIds,
             })
           : null;
         // What the author addressed and this send could not reach (#task:2021
@@ -282,8 +314,8 @@ export class ConversationMessageService {
           //
           // The set is the target's LIVE AGENT PARTICIPANTS — the placement
           // authority conjoined with a live `agents` row (#task:2021 P4-5), not
-          // the `conversation_agents` listing this replaced: a `direct_pair` /
-          // `agent_inbox` has no roster rows, so a committed DM message
+          // the `conversation_agents` listing this replaced: a `direct_pair`
+          // has no roster rows, so a committed DM message
           // enumerated ZERO recipients and was delivered to nobody. Enumerated
           // INSIDE this transaction, so the fan-out is the set that held when the
           // gate said yes.
@@ -300,72 +332,55 @@ export class ConversationMessageService {
               : [],
           threadDelivery,
           unresolvedReferences,
-          skippedFreshnessReason,
-          streamHeadBeforeSend,
+          bypassedFreshness,
           projections,
         };
       });
     } catch (err) {
-      if (err instanceof MessageFreshnessGuardError) {
-        const staleEventId = randomUUID();
-        // Signal-only stale contract (thread MzSv_f1u0e0xbKmH, shiki
-        // seq 1205): the 409 carries NO message bodies — bodies are
-        // released exactly once, through the normal inbox/admission face.
-        // The agent waits for its queued input (steer = this turn,
-        // next-turn-batch = the next boundary), observed advances via
-        // admission evidence, then it retries/resolves.
+      if (err instanceof MessageStaleError) {
+        // Rethrow the SAME instance (never re-`new` here): the guard minted
+        // `staleEventId` inside the transaction (a pure value, no persisted
+        // sink), so re-constructing it out here would move the mint back
+        // outside the tx and reintroduce the two-class shape (#task:2095 F7).
         //
-        // Diff-set guarantee for that wait (contract 3): a thread send by
-        // a non-follower is CAS-rejected while the prior replies have no
-        // inbox rows yet (follow/backfill only runs on the successful
-        // retry). Materialize the SAME observe deliveries the backfill
-        // would create — idempotent with it — so the signal always has a
-        // normal delivery to wait for. Main-line windows already have
-        // deliveries (fan-out) or are the agent's own/system rows handled
-        // by the universe-alignment rules.
-        if (input.actor.kind === 'agent') {
-          this.materializeAndDispatchThreadWindow({
-            agentId: input.actor.agentId,
-            conversationId: err.conversationId,
-            threadRootId: err.threadRootId,
-            seenUpToSeq: err.seenUpToSeq,
-            currentSeq: err.currentSeq,
-          });
-        }
+        // This WARN is the surviving observability carrier (§3): "wear is
+        // visible = read the log". It joins `logStaleResolution` via
+        // `staleEventId`. Its content is re-derived for the new model — there is
+        // no seq pair to report; what answers "why stale" is the RuntimeScope
+        // arm (`scope`), the rejected send's target conversation + stream, and
+        // whether this rejection immediately followed a claimed resolution
+        // (`priorStaleResolutionReason` = the only observable shape of the §6
+        // "guard ground to noise" failure mode). `undeliveredCount` (F13) is a
+        // rejection-path diagnostic only — a structural upper bound (predicate
+        // includes in_flight), which is exactly why it lives here and not on the
+        // signal-only 409.
         this.logger.warn(
           {
-            staleEventId,
-            conversationId: err.conversationId,
-            actorKind: input.actor.kind,
+            staleEventId: err.staleEventId,
+            scope: err.scope,
+            targetConversationId: err.targetConversationId,
+            threadRootId: err.threadRootId,
+            undeliveredCount: err.undeliveredCount,
             actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
-            seenUpToSeq: err.seenUpToSeq,
-            currentSeq: err.currentSeq,
             priorStaleEventId: input.staleEventId ?? null,
             priorStaleResolutionReason: input.staleResolutionReason ?? null,
           },
-          'conversation-message-service: freshness CAS rejected',
+          'conversation-message-service: freshness guard rejected send (runtime has undelivered input)',
         );
-        throw new MessageFreshnessError(
-          err.conversationId,
-          err.seenUpToSeq,
-          err.currentSeq,
-          staleEventId,
-          err.threadRootId,
-        );
+        throw err;
       }
       throw err;
     }
 
-    if (txResult.skippedFreshnessReason) {
+    if (txResult.bypassedFreshness) {
       this.logger.warn(
         {
           sourceConversationId: txResult.sourceConversation.id,
           targetConversationId: txResult.targetConversation.id,
           actorKind: input.actor.kind,
           actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
-          reason: txResult.skippedFreshnessReason,
         },
-        'conversation-message-service: freshness CAS skipped',
+        'conversation-message-service: freshness guard bypassed (--anyway)',
       );
     }
 
@@ -447,10 +462,7 @@ export class ConversationMessageService {
 
     // The caller-facing result reuses the SAME committed payload. Built once
     // here so both send branches (thread-reply / main-line) return an identical
-    // shape — `streamHeadBeforeSend` rides uniformly (it is a pre-insert value
-    // of the addressed stream, independent of thread vs main-line; the old
-    // thread-reply early return dropped it, stranding a freshnessBypass thread
-    // reply on its own head — countgame P1).
+    // shape.
     const result: SendMessageResult = {
       committed,
       targetConversationId: txResult.targetConversation.id,
@@ -458,9 +470,6 @@ export class ConversationMessageService {
       // published to the whole conversation, and who the author failed to
       // address is theirs alone (#task:2021 P4-5-b).
       unresolvedReferences: txResult.unresolvedReferences,
-      ...(txResult.streamHeadBeforeSend !== null
-        ? { streamHeadBeforeSend: txResult.streamHeadBeforeSend }
-        : {}),
     };
     // ORDER IS LOAD-BEARING (#task:1870): the mention notification row must be
     // committed BEFORE the unread frames go out, because `publishUnreadUpdated`
@@ -583,8 +592,7 @@ export class ConversationMessageService {
     snapshots: AttachmentSnapshot[];
   }): {
     message: MessageDto;
-    skippedFreshnessReason: string | null;
-    streamHeadBeforeSend: number | null;
+    bypassedFreshness: boolean;
   } {
     const { input, tx } = params;
     const base = {
@@ -597,86 +605,85 @@ export class ConversationMessageService {
       threadRootId: params.threadRootId,
     };
 
-    // Every agent send that skips the CAS owes the sender a merge prerequisite:
-    // the stream head just BEFORE this row is exactly what the skip stepped
-    // over, and the daemon merges its own seq into its watermark once real
-    // admission evidence covers that value. Without it the sender is
-    // permanently stale on its own head in a quiet stream — nothing ever
-    // delivers its own seq back to it (#task:1854 generalises what the
-    // `--anyway` path already needed).
-    //
-    // EVERY skip, with no exception per destination (#task:2021 P4-4). There
-    // used to be one for a send that landed outside the sender's own
-    // conversation, on the theory that a foreign stream has no cursor to merge
-    // into. That was a per-conversation-session artifact: a cursor is kept per
-    // OBSERVED STREAM, and the stream a send addressed is one the sender is by
-    // definition watching, so withholding the prerequisite there is exactly the
-    // self-stale bug the prerequisite exists to prevent.
-    //
-    // Deciding "did the CAS run" and reading the head are ONE act, and it
-    // lives here: the head must predate the insert while the skip is this
-    // function's own branch, so a caller-side copy of the predicate would be a
-    // second authority that silently drifts back into self-stale.
-    const insertWithoutFreshness = (
-      reason: string,
-    ): {
-      message: MessageDto;
-      skippedFreshnessReason: string;
-      streamHeadBeforeSend: number;
-    } => {
-      const streamHeadBeforeSend = tx.messages.streamHeadLatestSeq(
-        params.targetConversationId,
-        params.threadRootId,
-      );
-      return {
-        message: tx.messages.insertForConversation(base),
-        skippedFreshnessReason: reason,
-        streamHeadBeforeSend,
-      };
-    };
-
+    // F8 (#task:2095): a human has no runtime, and therefore no rows in
+    // `conversation_inboxes` — that table is the AGENT delivery domain. There is
+    // no consumption position for a human to be behind, so a human send never
+    // reaches the guard and never 409s. (This is the old `null`-reason branch
+    // under an honest rationale: the previous "users carry no per-stream cursor"
+    // was a fact about the retired model, not a reason in this one.)
     if (input.actor.kind !== 'agent') {
-      // Users carry no per-stream cursor, so there is nothing to merge into.
       return {
         message: tx.messages.insertForConversation(base),
-        skippedFreshnessReason: null,
-        streamHeadBeforeSend: null,
+        bypassedFreshness: false,
       };
     }
+    // `--anyway`: the explicit escape hatch (§3). It skips the guard entirely —
+    // the send lands even while the runtime still holds undelivered input — and
+    // is recorded as `bypassedFreshness` for the post-commit observability line.
     if (input.freshnessBypass) {
-      return insertWithoutFreshness('freshness_bypass_explicit');
-    }
-    if (input.seenUpToSeq === undefined) {
-      // Loose first touch: the daemon has never observed this stream, so it
-      // omitted the CAS fields rather than claim a false `seen`. The send is
-      // allowed, and this is the case that most needs the prerequisite.
-      return insertWithoutFreshness('missing_seen_up_to_seq');
-    }
-
-    // Freshness CAS: the port contract binds the adapter to run the seq
-    // allocation + per-stream compare-and-set inside ONE nested rollback
-    // boundary, so a miss rolls back only the burned seq and leaves this
-    // transaction alive to throw the guard error below.
-    const result = tx.messages.insertForConversationIfFresh({
-      ...base,
-      seenUpToSeq: input.seenUpToSeq,
-    });
-    if (result.ok) {
-      // The CAS proved `seen == head`, so the sender already covers everything
-      // before its own row: it advances its watermark directly, no merge owed.
       return {
-        message: result.message,
-        skippedFreshnessReason: null,
-        streamHeadBeforeSend: null,
+        message: tx.messages.insertForConversation(base),
+        bypassedFreshness: true,
       };
     }
 
-    throw new MessageFreshnessGuardError(
-      params.targetConversationId,
-      input.seenUpToSeq,
-      result.currentSeq,
-      params.threadRootId,
+    // Freshness guard (#task:2095). Freshness is a property of the RUNTIME's
+    // field of view, not of a stream: this send is stale iff the runtime still
+    // has an undelivered inbox row in its delivery scope. The scope arm is the
+    // agent's `session_scope` (the RuntimeScope discriminant); the set it asks
+    // about is a SUPERSET of the set that runtime can drain: the guard predicate
+    // (`delivered_at IS NULL AND failed_at IS NULL`, in-flight rows INCLUDED) is
+    // broader than `pendingOriginsForRuntime`, which additionally requires
+    // `in_flight_owner IS NULL`. So guard ⊇ drain, and the difference is EXACTLY
+    // the in-flight set — the one accepted residual: a runtime whose only
+    // undelivered rows are in-flight reads stale here yet can drain nothing,
+    // until those leases settle (delivery ack) or are swept
+    // (`outbound-event-fanout.ts:1283-1289`, start/disconnect, no time expiry).
+    // Draining makes MOST stale sends fresh, but NOT that window — do NOT read
+    // this as "guard scope ≡ drain scope"; it is a strict superset. The
+    // conversation arm keys on `input.conversationId`, the SOURCE conversation
+    // this runtime is bound to (its focus / drain scope), NOT the send target.
+    // The read is boolean existence, never a seq comparison, so it is immune to
+    // rowid reuse.
+    //
+    // A miss throws MessageStaleError from INSIDE this transaction, with the
+    // `staleEventId` minted right here — a pure value with no persisted sink, so
+    // the service catch can rethrow the SAME instance without re-minting (F7).
+    //
+    // The scope arm comes from the runtime's own `session_scope`. A missing row
+    // is NOT silently widened to the broad 'agent' arm — that direction is
+    // unsafe (the round-1 F1 latch, an undrainable deadlock), so it is thrown as
+    // an invariant violation via `freshnessGuardScope` (see its doc + the
+    // pure-function test that pins the unreachable arm).
+    const scope = freshnessGuardScope(
+      tx.agents.get(input.actor.agentId),
+      input.actor.agentId,
     );
+    const hasUndelivered =
+      scope === 'conversation'
+        ? tx.inboxes.hasUndeliveredForPair(input.conversationId, input.actor.agentId)
+        : tx.inboxes.hasUndeliveredForAgent(input.actor.agentId);
+    if (hasUndelivered) {
+      // Reject-path only (F13): one COUNT with the SAME predicate as the guard
+      // (in_flight rows included), carried on the error for the "rejected send"
+      // WARN and nowhere else. Never on the hot path — the boolean EXISTS above
+      // already decided — and never projected onto the 409.
+      const undeliveredCount =
+        scope === 'conversation'
+          ? tx.inboxes.countQueuedForPair(input.conversationId, input.actor.agentId)
+          : tx.inboxes.countQueuedForAgent(input.actor.agentId);
+      throw new MessageStaleError(
+        params.targetConversationId,
+        randomUUID(),
+        scope,
+        params.threadRootId,
+        undeliveredCount,
+      );
+    }
+    return {
+      message: tx.messages.insertForConversation(base),
+      bypassedFreshness: false,
+    };
   }
 
   /** Read a conversation the caller already named, inside the send transaction.
@@ -734,118 +741,6 @@ export class ConversationMessageService {
     return replied.thread_root_id ?? replied.id;
   }
 
-  /**
-   * Cross-check the sender's claim about WHICH STREAM it measured
-   * `seenUpToSeq` against, against the stream this send actually resolved to.
-   *
-   * Not redundancy with the target itself (#task:2021 P4-4). A readable address
-   * resolves by NAME, and a name can have been rebound to a different
-   * conversation since the sender last saw it resolve — so the boundary it
-   * measured and the stream it is now writing into genuinely differ, and the CAS
-   * would compare a seq against the wrong stream's head and PASS. Rejecting is
-   * the only safe answer: the sender must re-earn its view of where it is.
-   *
-   * READS the assertion through the grammar rather than formatting the resolved
-   * stream and comparing strings: `parseDeliveryTarget` is total on arbitrary
-   * input, so an assertion that is not the canonical id form fails closed here
-   * instead of at a formatter that would have to be handed unbranded ids.
-   * No-op when the sender made no claim — that is the loose first touch, which
-   * carries no `seenUpToSeq` either.
-   */
-  private assertAssertedStreamMatches(
-    input: SendMessageInput,
-    targetConversationId: string,
-    threadRootId: string | null,
-  ): void {
-    if (input.assertedStream === undefined) return;
-    const asserted = parseDeliveryTarget(input.assertedStream);
-    if (
-      asserted !== null
-      && asserted.conversationId === targetConversationId
-      && (asserted.threadRootId ?? null) === threadRootId
-    ) return;
-    this.logger.warn(
-      {
-        sourceConversationId: input.conversationId,
-        actorKind: input.actor.kind,
-        destination: input.destination.kind,
-        asserted_stream: input.assertedStream,
-        resolved_conversation_id: targetConversationId,
-        resolved_thread_root_id: threadRootId,
-      },
-      'conversation-message-service: asserted stream does not match the resolved stream (rejecting)',
-    );
-    throw new TargetError(
-      'asserted_stream_mismatch',
-      `the freshness boundary was measured against ${input.assertedStream}, `
-        + 'which is not the stream this send resolved to',
-    );
-  }
-
-  /**
-   * Signal-only stale support (contract 3): for a THREAD stream, ensure
-   * each non-own window message has the same `observe` delivery a later
-   * auto-follow backfill would create (idempotent with it —
-   * `ensureDelivery` hits the same row), then TRIGGER live delivery so
-   * the rows actually move — a mid-turn agent has no future
-   * ready_for_drain guarantee, so a bare pending row could sit forever
-   * (Cindy C1-gate P1-1). Main-line fan-out already creates deliveries at
-   * send time; own messages advance observed at send commit.
-   *
-   * Custody creation FAILS CLOSED (Cindy C1-gate P1-2): if the rows
-   * cannot be materialized, the error propagates and NO message_stale
-   * signal is returned — a signal that tells the agent to wait for a
-   * delivery that does not exist would be a fabricated promise. The
-   * dispatch leg stays best-effort: once the durable rows exist, the
-   * normal delivery machinery (reattach replay, next drain) owns
-   * recovery, exactly as for any other pending row.
-   */
-  private materializeAndDispatchThreadWindow(args: {
-    agentId: string;
-    conversationId: string;
-    threadRootId: string | null;
-    seenUpToSeq: number;
-    currentSeq: number;
-  }): void {
-    if (args.threadRootId === null) return;
-    const threadRootId = args.threadRootId;
-    const materialized = this.uow.atomically(tx => {
-      const window = tx.messages.listStreamWindowMeta(
-        args.conversationId,
-        threadRootId,
-        args.seenUpToSeq,
-        args.currentSeq,
-      );
-      let count = 0;
-      for (const msg of window) {
-        const own =
-          msg.from_kind === 'agent' && msg.from_agent_id === args.agentId;
-        if (own) continue;
-        tx.inboxes.ensureDelivery(
-          args.conversationId,
-          args.agentId,
-          msg.id,
-          'observe',
-        );
-        count += 1;
-      }
-      return count;
-    });
-    if (materialized === 0) return;
-    void this.runtimeHost
-      .deliverPending(args.conversationId, args.agentId)
-      .catch(err => {
-        this.logger.warn(
-          {
-            conversationId: args.conversationId,
-            agentId: args.agentId,
-            error_message: (err as Error).message,
-          },
-          'conversation-message-service: thread window dispatch failed; rows stay pending for the normal drain',
-        );
-      });
-  }
-
   private logStaleResolution(args: {
     sourceConversationId: string;
     targetConversationId: string;
@@ -887,7 +782,7 @@ export class ConversationMessageService {
    *
    * PARTICIPATION IS PLACEMENT-BASED, not roster-based. The predicate this
    * replaced was `tx.conversations.getAgent(...)` — a `conversation_agents` row —
-   * and `direct_pair` / `agent_inbox` have no roster rows by construction (§4.2),
+   * and a `direct_pair` has no roster rows by construction (§4.2),
    * so an agent posting into a new-model DM was refused unconditionally. That was
    * not a policy: it was the roster question being asked about placements whose
    * participants live on the row.

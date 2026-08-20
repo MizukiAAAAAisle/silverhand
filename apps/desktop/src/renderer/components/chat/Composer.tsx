@@ -38,7 +38,7 @@ import {
   type WorkspaceHumanMember,
   type WorkspaceMemberLists,
 } from '@/features/workspaces/hooks';
-import type { WorkspaceUiKind } from '@/features/conversations/pane-descriptor';
+
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
 import {
@@ -79,10 +79,11 @@ interface ComposerProps {
    *  `conversation_users` rows; only unresolved `@human` chips degrade to plain
    *  text. */
   workspaceId: string | null;
-  /** That workspace's kind, in the renderer's projection (`agent_home → 'dm'`).
-   *  `null` whenever `workspaceId` is, and also while a workspace's own kind is
-   *  unresolved — the `#` channel query treats both as "don't ask". */
-  workspaceKind: WorkspaceUiKind | null;
+  /** Whether that workspace has a `#` channel namespace to resolve against —
+   *  false whenever `workspaceId` is null, and also while the container's own row
+   *  is unresolved; the `#` channel query treats both as "don't ask" (#task:2078
+   *  collapsed the container kind this used to carry into the one bit read). */
+  hasChannelNamespace: boolean;
   /** When set, this composer posts replies into the given root's reply
    *  cluster (sends `reply_to_message_id`) and keeps its own draft,
    *  isolated from the channel's main composer. The channel id in
@@ -165,7 +166,7 @@ type SubmittingSnapshot = {
 export function Composer({
   conversationId,
   workspaceId,
-  workspaceKind,
+  hasChannelNamespace,
   threadRootId,
   disabled: disabledProp,
   archived = false,
@@ -405,13 +406,30 @@ export function Composer({
     () => buildShorthandResolver(agents, workspaceHumans),
     [agents, workspaceHumans],
   );
-  // `#` autocomplete uses the same workspace resolved above — channel
-  // references in chat resolve per-workspace (see Markdown.tsx
-  // CHANNEL_PREFIX → ChannelRef), so suggesting channels from another
-  // workspace would only ever render as unresolved muted text.
+  // `#` autocomplete candidates come ONLY from the pane's own workspace: that
+  // container's per-viewer channel list (workspace-placed, joined ∪ active
+  // public), never a cross-workspace directory (#task:2088).
+  //
+  // The boundary is what this container makes VISIBLE to the viewer, not what
+  // would resolve if offered. The picker inserts `#conv:<id>` (see
+  // {@link formatPickInsertion}), which is id-addressed and resolves in ANY
+  // workspace (`ConversationRef` → `useConversationIdentity` →
+  // `GET /api/conversations/:id/ref`), so a cross-workspace candidate would
+  // produce a WORKING chip; what makes it wrong is the offer itself — the list
+  // would name conversations this container does not hold. Do not re-derive the
+  // scoping from "it would not resolve anyway": that was this comment's earlier
+  // rationale and it is false for the token the picker actually emits.
+  //
+  // A conversation with no workspace at all (a `direct_pair`) is the same rule's
+  // terminal cell: `workspaceId` is null, this query stays off, and the picker
+  // offers NO channels — a private line has no container whose channels it could
+  // name.
   const { data: workspaceChannels = [] } = useChannelsForWorkspace(
     workspaceId,
-    workspaceKind,
+    // Sound as the hook's `workspaceResolved` argument: a namespace only exists
+    // for a RESOLVED workspace placement, so the bit implies the row resolved
+    // (the converse does not hold — hence two names, #task:2078).
+    hasChannelNamespace,
   );
 
   const trigger = useMemo(
@@ -1406,15 +1424,32 @@ export function selectMentionCandidates(
 }
 
 /**
- * Filter the workspace's conversation list down to top-level channels
- * the user can actually mention.
+ * Filter the workspace's conversation list down to the channels the picker
+ * offers for `#` mentions.
  *
- * - `roster_policy === 'open'` only: fixed-roster conversations are not channel
- *   mentions, and reply clusters are addressed through their root coordinate.
+ * - `roster_policy === 'open'` only. This is a deliberate PRODUCT policy keyed on
+ *   the roster — "which channels are worth offering" — and NOT an identity claim:
+ *   an agent space's fixed-roster `dm_channel` IS a channel and would render a
+ *   perfectly correct `#` chip if it were listed (#task:1373). Whether to offer
+ *   those rows here is @shiki's call (#task:2077); the exclusion is frozen until
+ *   then.
  * - Skip archived AND closed channels: both resolve to inert / dim
  *   refs on the receiving end (see ChannelRef's `closed_at`-driven
  *   `dim` class), so offering them in the picker would invite dead
  *   refs and inflate the menu with rows the user almost never wants.
+ *
+ * Why the key cannot be swapped mechanically, even though every other reader in
+ * #task:2077 moved to `placement_kind`: here `roster_policy` doubles as the TYPE
+ * discriminant. `ChannelListItem` is `ChannelConversationDto |
+ * FixedRosterConversationDto`, and only `ChannelConversationDto` pins
+ * `roster_policy: 'open'` — so the predicate below narrows by proof.
+ * `placement_kind === 'workspace'` proves nothing here: the fixed-roster arm
+ * ENUMERATES `'workspace'` in its own placement union (#task:2074), because an
+ * agent home's Onboarding channel is exactly `workspace` + `fixed`. The same
+ * predicate would therefore become an unchecked assertion. Changing the key means
+ * changing the element type as well: widen `onlyLive` to `ChannelListItem[]` and
+ * admit `placement_kind === 'workspace' && archived_at === null &&
+ * closed_at === null`. Behaviour change, so it waits for the call above.
  */
 export function filterChannels(
   channels: ChannelListItem[],
@@ -1699,7 +1734,11 @@ function rowKey(item: PickerItem): string {
  *                 silently produce different reliability for
  *                 different titles. Channel ids match `#conv:`'s
  *                 16-char alphanumeric+`-_` parser shape exactly,
- *                 so this branch always renders as a working ref.
+ *                 so this branch always renders as a working ref —
+ *                 in ANY workspace, which is why the candidate set's
+ *                 workspace scoping is a product rule and not a
+ *                 consequence of resolvability (see the
+ *                 `useChannelsForWorkspace` call above, #task:2088).
  *
  * The user can still type `#general` manually if they prefer the
  * shorter form for a handle-safe title — the picker just picks the

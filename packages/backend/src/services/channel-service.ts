@@ -2,11 +2,12 @@ import {
   type CanonicalConversationTitle,
   type ChannelConversationDto,
   type ConversationVisibility,
-  type DmChannelDto,
+  type FixedRosterConversationDto,
   type MessageDto,
   requireWorkspacePlacement,
   systemSubtype,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import {
   logTitleAddressMoved,
@@ -142,20 +143,27 @@ export class WorkspaceUnsuitableError extends Error {
 }
 
 /**
- * Defensive failures for {@link ChannelService.createAgentHomeDmChannel}. Both
- * codes guard a state the schema already forbids — `workspaces` carries a CHECK
- * (`agent_home ⇒ owner_agent_id IS NOT NULL`) and a FK
- * (`owner_agent_id → agents(id)`), so neither is reachable through the public
- * API. They exist purely so the service does not blindly trust its caller. The
- * route maps these two codes to their exact `{ error }`-only bodies (no `code`
- * field); it must NOT route them through `channelServiceErrorResponse`, which
- * would add a `code`. This error type covers ONLY these two branches — every
- * other failure (workspace missing / not agent_home / a persistence failure
- * inside the transaction) is left to surface as a generic 500.
+ * The ONE defensive failure of {@link ChannelService.createAgentHomeDmChannel}:
+ * the home's owner column points at an agent that is not there. A FK
+ * (`owner_agent_id → agents(id)`) already forbids it, so it is not reachable
+ * through the public API; it exists so the service does not blindly trust the
+ * row it read. The route maps this code to its exact `{ error }`-only body (no
+ * `code` field); it must NOT route it through `channelServiceErrorResponse`,
+ * which would add a `code`. Every other failure (workspace missing / not an agent
+ * home / a persistence failure inside the transaction) is left to surface through
+ * its own error type or a generic 500.
+ *
+ * A sibling `agent_home_missing_owner` code died with #task:2082. It answered
+ * "this container says it is a home but names no agent" — a question that only
+ * existed while the kind WORD and the ownership RELATION were two facts that
+ * could disagree. Now that the relation IS the question (and
+ * `isAgentHomeWorkspace` narrows the id to `string`), a container with no home
+ * agent is simply not a home: it is refused one guard earlier as
+ * `workspace_not_agent_home`, and the arm was not merely unreachable but
+ * inexpressible. Do not reintroduce it — see the note on the create face for the
+ * one observable consequence.
  */
-export type AgentHomeChannelErrorCode =
-  | 'agent_home_missing_owner'
-  | 'agent_home_owner_not_found';
+export type AgentHomeChannelErrorCode = 'agent_home_owner_not_found';
 
 export class AgentHomeChannelError extends Error {
   constructor(
@@ -268,7 +276,7 @@ export class ChannelService {
         'workspace not found',
       );
     }
-    if (workspace.workspace_kind !== 'regular') {
+    if (isAgentHomeWorkspace(workspace)) {
       throw new WorkspaceUnsuitableError(
         'workspace_not_regular',
         'workspace is not a regular workspace',
@@ -367,7 +375,7 @@ export class ChannelService {
             'workspace not found',
           );
         }
-        if (current.workspace_kind !== 'regular') {
+        if (isAgentHomeWorkspace(current)) {
           throw new WorkspaceUnsuitableError(
             'workspace_not_regular',
             'workspace is not a regular workspace',
@@ -554,34 +562,39 @@ export class ChannelService {
   }
 
   /**
-   * Create a secondary DM channel inside an agent_home workspace (the agent's
-   * private surface). The members are always the home owner agent + the current
-   * user, so this takes NO member list. Re-validates the workspace kind and
-   * owner defensively (see {@link AgentHomeChannelError}) rather than trusting
-   * the caller, then performs the three writes as a SINGLE transaction so a
-   * partial failure leaves no half DM, and publishes
-   * `workspace_channels_changed` only after the commit.
+   * Create a secondary DM channel inside an agent's home workspace (its private
+   * surface). The members are always the home owner agent + the current user, so
+   * this takes NO member list. Re-derives the container's suitability and its
+   * owner in the lock rather than trusting the caller, then performs the three
+   * writes as a SINGLE transaction so a partial failure leaves no half DM, and
+   * publishes `workspace_channels_changed` only after the commit.
+   *
+   * ONE OBSERVABLE CONSEQUENCE of #task:2082, stated here because it was the only
+   * place the swap was not verdict-for-verdict identical. Suitability asks the
+   * ownership relation, so a row with a NULL `owner_agent_id` is a regular
+   * container and `POST /workspaces/:id/channels` dispatches it to the regular
+   * arm. Before #task:2080 dropped the stored word, a row could still VIOLATE the
+   * schema CHECK that paired `workspace_kind = 'agent_home'` with that relation (a
+   * NULL `owner_agent_id`, reachable only by disabling check enforcement) and so
+   * be a corrupt home returning 500 here. Now that the word is gone, "an
+   * agent_home row with no owner" is not a state that can be described at all —
+   * the TERMINAL reading — which is why `agent_home_missing_owner` is gone rather
+   * than rewired.
    */
   async createAgentHomeDmChannel(input: {
     workspaceId: string;
     /** The DM's title, which is its address in the home workspace (#task:2016). */
     title: CanonicalConversationTitle;
     actor: ChannelActor;
-  }): Promise<{ channel: DmChannelDto }> {
+  }): Promise<{ channel: FixedRosterConversationDto }> {
     const workspace = this.workspaces.get(input.workspaceId);
     if (!workspace) {
       throw new WorkspaceUnsuitableError('workspace_not_found', 'workspace not found');
     }
-    if (workspace.workspace_kind !== 'agent_home') {
+    if (!isAgentHomeWorkspace(workspace)) {
       throw new WorkspaceUnsuitableError(
         'workspace_not_agent_home',
         'workspace is not an agent_home workspace',
-      );
-    }
-    if (!workspace.owner_agent_id) {
-      throw new AgentHomeChannelError(
-        'agent_home_missing_owner',
-        'agent_home workspace missing owner',
       );
     }
     const owner = this.agents.get(workspace.owner_agent_id);
@@ -594,7 +607,7 @@ export class ChannelService {
 
     const channel = this.uow.atomicallyInWorkspace(
       workspace.id,
-      (tx): DmChannelDto => {
+      (tx): FixedRosterConversationDto => {
         // In-lock re-derivation, same rule as `createChannel`: the kind/owner
         // facts this transaction writes by must be read under the mechanism that
         // protects them, not carried in from before BEGIN.
@@ -602,16 +615,10 @@ export class ChannelService {
         if (!current) {
           throw new WorkspaceUnsuitableError('workspace_not_found', 'workspace not found');
         }
-        if (current.workspace_kind !== 'agent_home') {
+        if (!isAgentHomeWorkspace(current)) {
           throw new WorkspaceUnsuitableError(
             'workspace_not_agent_home',
             'workspace is not an agent_home workspace',
-          );
-        }
-        if (!current.owner_agent_id) {
-          throw new AgentHomeChannelError(
-            'agent_home_missing_owner',
-            'agent_home workspace missing owner',
           );
         }
         const currentOwner = tx.agents.get(current.owner_agent_id);
@@ -668,7 +675,7 @@ export class ChannelService {
 
   async setArchived(
     input: SetArchivedInput,
-  ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
+  ): Promise<{ channel: ChannelConversationDto | FixedRosterConversationDto }> {
     const existing = this.channels.get(input.channelId);
     if (!existing) {
       throw new ChannelError('not_found', 'channel not found');
@@ -752,7 +759,7 @@ export class ChannelService {
    *
    * Refusals:
    *  - unknown id → `not_found`;
-   *  - a target with no workspace to hold an address (an agent inbox) →
+   *  - a target with no workspace to hold an address (a `direct_pair`) →
    *    `not_addressable`;
    *  - another channel in this workspace already showing that title → 409
    *    `conversation_title_taken`, never auto-suffixed.
@@ -769,7 +776,7 @@ export class ChannelService {
    */
   async renameChannel(
     input: RenameChannelInput,
-  ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
+  ): Promise<{ channel: ChannelConversationDto | FixedRosterConversationDto }> {
     // Pre-lock refusal for a placement that holds no address at all.
     // `workspace_id` is immutable, so reading the placement before BEGIN cannot go
     // stale — the same assumption the UnitOfWork's own key→workspace resolution
@@ -793,7 +800,7 @@ export class ChannelService {
       (
         tx,
       ): {
-        channel: ChannelConversationDto | DmChannelDto;
+        channel: ChannelConversationDto | FixedRosterConversationDto;
         releasedKey: string | null;
         announce: MessageDto | null;
       } => {

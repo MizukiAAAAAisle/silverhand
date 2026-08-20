@@ -7,7 +7,7 @@ import { LeaveWorkspaceConfirmDialog } from '@/features/workspaces/LeaveWorkspac
 import { WorkspaceMuteMenuItem } from './ChannelAttentionSurfaces';
 
 /**
- * The workspace/DM right-click menu — the container species' menu, mounted on
+ * The container row's right-click menu — the container species' menu, mounted on
  * the tree's header rows (`WorkspaceRow`). Conversations carry their own menu
  * (`FavoriteRow` / `ChannelRow`), so this one has a single consumer today. It
  * stays a component because the structure — which capabilities appear, in what
@@ -26,8 +26,8 @@ export function WorkspaceContextMenu({
 }: {
   trigger: ReactElement;
   /** The workspace whose mute suppressor this row can flip, or `null` when the
-   *  row has none: an `agent_home` (DM) workspace is structurally un-mutable (a
-   *  DM is directed-grade — there is no ambient traffic to silence, and the DB
+   *  row has none: an agent space is structurally un-mutable (its conversations
+   *  are directed-grade — there is no ambient traffic to silence, and the DB
    *  trigger forbids the row), and an archived workspace is not being listened to
    *  in the first place. Resolved by the caller. */
   muteWorkspaceId?: string | null;

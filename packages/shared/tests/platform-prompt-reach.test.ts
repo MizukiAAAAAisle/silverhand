@@ -40,7 +40,6 @@ function promptFor(sessionContext: SessionContextInput): string {
     runtime: 'claude',
     activeProfileDir: '.',
     roleSystemPrompt: 'role',
-    roleSystemPromptPath: '/tmp/system_prompt.md',
     currentMemory: { kind: 'missing' },
     memoryNotesCatalog: { entries: [], omittedCount: 0 },
     workspaceMemoryIndex: [],
@@ -72,8 +71,8 @@ const SCOPES: ReadonlyArray<{
       sessionTitle: 'a channel',
       members: [],
       workspaceName: 'ws',
-      workspacePath: '/tmp/ws',
-      channelKind: 'regular',
+      workspacePath: '/workspaces/ws',
+      workspaceId: 'ws-1',
     },
   },
   {
@@ -90,7 +89,11 @@ const SCOPES: ReadonlyArray<{
   {
     label: 'AgentSlot',
     slotKind: 'agent_slot',
-    sessionContext: { kind: 'agent', computerId: 'host-1' },
+    sessionContext: {
+      kind: 'agent',
+      computerId: 'host-1',
+      memoryRootPath: '/agents/a1',
+    },
   },
 ];
 

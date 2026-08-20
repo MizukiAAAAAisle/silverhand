@@ -20,32 +20,36 @@ describe('isStarredAt', () => {
   });
 });
 
-describe('partitionRailWorkspaces (#task:1888 — kind split only; containers have no star, #task:1900)', () => {
+describe('partitionRailWorkspaces (#task:1888 — ownership split only; containers have no star, #task:1900)', () => {
   const ws = (
     id: string,
-    over: { kind?: 'regular' | 'dm'; archived?: boolean } = {},
-  ) => ({ id, kind: over.kind ?? 'regular', archived: over.archived });
+    over: { agentOwned?: boolean; archived?: boolean } = {},
+  ) => ({
+    id,
+    owner_agent_id: over.agentOwned ? `agent-of-${id}` : null,
+    archived: over.archived,
+  });
 
-  it('splits workspaces by kind and keeps input order within a group', () => {
-    const { dms, regular } = partitionRailWorkspaces([
+  it('splits workspaces by ownership and keeps input order within a group', () => {
+    const { agentSpaces, regular } = partitionRailWorkspaces([
       ws('r1'),
-      ws('d1', { kind: 'dm' }),
+      ws('d1', { agentOwned: true }),
       ws('r2'),
-      ws('d2', { kind: 'dm' }),
+      ws('d2', { agentOwned: true }),
     ]);
     expect(regular.map(w => w.id)).toEqual(['r1', 'r2']);
-    expect(dms.map(w => w.id)).toEqual(['d1', 'd2']);
+    expect(agentSpaces.map(w => w.id)).toEqual(['d1', 'd2']);
   });
 
   it('DROPS archived workspaces entirely (#task:1889 — no ARCHIVED group in the tree)', () => {
-    const { regular, dms } = partitionRailWorkspaces([
+    const { regular, agentSpaces } = partitionRailWorkspaces([
       ws('a1', { archived: true }),
       ws('a2', { archived: true }),
-      ws('ad', { kind: 'dm', archived: true }),
+      ws('ad', { agentOwned: true, archived: true }),
       ws('r1'),
     ]);
     expect(regular.map(w => w.id)).toEqual(['r1']);
-    expect(dms).toEqual([]);
+    expect(agentSpaces).toEqual([]);
   });
 
   // The scope set for STARRED's freshness subscription (#task:1889). The bug this
@@ -56,15 +60,15 @@ describe('partitionRailWorkspaces (#task:1888 — kind split only; containers ha
   // that sees the raw input — is what makes "derived from the projection" not
   // expressible; these cells pin that it is strictly WIDER than the home groups.
   it('returns every raw workspace as the watch scope, including ones the tree drops', () => {
-    const { dms, regular, allVisibleIds } = partitionRailWorkspaces([
+    const { agentSpaces, regular, allVisibleIds } = partitionRailWorkspaces([
       ws('r1'),
       ws('a1', { archived: true }),
-      ws('d1', { kind: 'dm' }),
+      ws('d1', { agentOwned: true }),
     ]);
     // `a1` is archived: not in the tree, still watched — a restore is exactly the
     // event that brings its hidden star back.
     expect(allVisibleIds).toEqual(['r1', 'a1', 'd1']);
-    expect([...regular, ...dms].map(w => w.id)).not.toContain('a1');
+    expect([...regular, ...agentSpaces].map(w => w.id)).not.toContain('a1');
   });
 
   it('watches a workspace that contributes NO row at all (zero favorites, zero children)', () => {

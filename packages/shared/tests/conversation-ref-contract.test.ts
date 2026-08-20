@@ -1,7 +1,7 @@
 // `ConversationRef` is the WORKSPACE ARM ONLY (#task:2038, ruling A) — and since
 // this commit that is a wire contract, not a comment. Before it, the DTO used the
-// full `ConversationPlacementKindSchema`, so `direct_pair` (or `agent_inbox`)
-// paired with a NON-NULL `workspace_id` was a legal value of the type: an
+// full `ConversationPlacementKindSchema`, so `direct_pair` paired with a
+// NON-NULL `workspace_id` was a legal value of the type: an
 // impossible state, and one a renderer fixture was really consuming.
 //
 // These assertions are the falsifiers for that narrowing. Widening
@@ -22,21 +22,21 @@ const workspaceRef: ConversationRef = {
   roster_policy: 'open',
   title: 'planning',
   workspace_id: 'w-1',
-  workspace_kind: 'regular',
   closed_at: null,
   archived_at: null,
 };
 
 describe('ConversationRef — workspace-arm narrowing', () => {
-  it("accepts the workspace arm, including an agent-home dm_channel ('dm' projection)", () => {
+  it("accepts the workspace arm, including an agent home's fixed-roster channel", () => {
     expect(ConversationRefSchema.safeParse(workspaceRef).success).toBe(true);
-    // A DM on this face is workspace-PLACED with a fixed roster; `agent_home` is
-    // projected to `'dm'` externally. This is the only DM shape the ref can name.
+    // An agent home's channel on this face is workspace-PLACED with a fixed
+    // roster, and that is the ONLY thing distinguishing it here: since
+    // #task:2075's stop-publish step the ref carries no container word, so which
+    // KIND of container it sits in is not a fact this face states at all.
     expect(
       ConversationRefSchema.safeParse({
         ...workspaceRef,
         roster_policy: 'fixed',
-        workspace_kind: 'dm',
       }).success,
     ).toBe(true);
   });
@@ -47,7 +47,7 @@ describe('ConversationRef — workspace-arm narrowing', () => {
     const workspaceLess = ConversationPlacementKindSchema.options.filter(
       kind => kind !== 'workspace',
     );
-    expect(workspaceLess).toEqual(['direct_pair', 'agent_inbox']);
+    expect(workspaceLess).toEqual(['direct_pair']);
     for (const placement_kind of workspaceLess) {
       expect(
         ConversationRefSchema.safeParse({ ...workspaceRef, placement_kind })

@@ -35,7 +35,7 @@ import { Markdown } from './Markdown';
 import { presentAuthor, authorStateLabel, classifyRowAuthor, type AuthorPresentation } from './author-presentation';
 import { AuthorAvatarView, AuthorName } from './author-avatar-view';
 import type { ChannelReference } from './ChannelRef';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
 import type { CachedMessage } from '@/features/channels/pending-message';
 import { isCommittedMessage } from '@/features/channels/pending-message';
@@ -81,7 +81,7 @@ export interface MessageItemProps {
    *  to navigate the right workspace via `nav.toChannel`. */
   onOpenChannelRef?: (channelId: string) => void;
   /** Lookup by conversation id for inline `#conv:<id>` references. */
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   onStartThread?: (msg: CachedMessage, jumpToMessageId?: string) => void;
   /** When this message has an open thread anchored to it, the count of

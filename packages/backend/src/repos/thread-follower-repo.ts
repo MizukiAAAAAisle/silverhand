@@ -138,7 +138,7 @@ export class ThreadFollowerRepo {
    * The gate is `agentParticipatesCorrelated`, the ONE placement authority read in
    * its correlated form — not the `JOIN conversation_agents` this replaced
    * (#task:2021 P4-5). The roster join answered only the workspace arm, so on a
-   * `direct_pair` / `agent_inbox` thread it returned ZERO followers and a reply
+   * `direct_pair` thread it returned ZERO followers and a reply
    * delivered to nobody; and because both principal kinds now ask the same
    * authority (an agent through this correlated form, a human through the point
    * form in `followUser`), "follower ⊆ live participant" is one sentence about

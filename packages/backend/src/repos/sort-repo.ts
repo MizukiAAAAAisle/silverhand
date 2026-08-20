@@ -63,7 +63,7 @@ export class SortRepo {
 
   /**
    * Upsert one scope's sort mode. `scope` is '' for a list-wide list (channel
-   * sidebar) or a hard group ('dm'|'regular') for a per-section list
+   * sidebar) or a hard group ('agent_space'|'regular') for a per-section list
    * (workspace rail). The caller (route) derives scope from list_key + group
    * and validates it; the repo just persists.
    */
@@ -88,7 +88,7 @@ export class SortRepo {
    * ranks exist while the mode still reads 'recent' (which would make the mode
    * label lie). `scope` is the mode axis the drag belongs to ('' list-wide for
    * channels; the dragged group for the rail) — only that scope flips, so
-   * dragging the rail's `dm` section leaves the `regular` mode untouched.
+   * dragging the rail's `agent_space` section leaves the `regular` mode untouched.
    * Preserves each row's last_accessed_at. Other groups' rows are untouched —
    * grouping is a sort-time concern, so cross-group rank values never interact.
    * Caller validates group membership + derives scope first.

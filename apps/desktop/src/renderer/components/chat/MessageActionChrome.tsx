@@ -4,7 +4,7 @@ import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
 import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
 import type { MessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import type { MessageRenderContext } from '@/components/chat/useMessageRenderContext';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 
 /** Render context the image-export modal needs: a subset of
  *  `MessageRenderContext` plus the agent avatar batch (lifted per surface
@@ -18,7 +18,7 @@ export type MessageActionChromeRenderContext = Pick<
   | 'viewerAvatarObjectUrl'
 > & {
   agentAvatarUrls: ReadonlyMap<string, string | null>;
-  conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  conversationRefsById?: ReadonlyMap<string, WorkspaceChannelReference>;
 };
 
 /**

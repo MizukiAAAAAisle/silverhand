@@ -12,9 +12,12 @@ import {
   useWorkspaceSortState,
 } from '@/features/workspaces/hooks';
 import { sortModeOf } from '@/lib/viewer-sort';
+import { railSortGroupOf, type RailSortGroup } from '@/features/workspaces/rail-sort-group';
 import { useListDragSort } from './list-drag-sort';
 import { SortModeMenu } from './SortModeMenu';
 import {
+  AGENT_SPACES_SECTION_GLYPH,
+  WORKSPACES_SECTION_GLYPH,
   WorkspaceGroup,
   type WorkspaceItem,
   type WorkspaceSortConfig,
@@ -32,9 +35,9 @@ import { paneChrome } from './pane-chrome';
 interface SidebarProps {
   workspaces: WorkspaceItem[];
   /** Workspace agents indexed by id. Threaded through to
-   *  `WorkspaceGroup` so DM rows can resolve `dm_agent_id` and render
-   *  the agent's uploaded avatar (or runtime icon fallback) instead of
-   *  the generic User glyph. Optional — when absent, DM rows fall back
+   *  `WorkspaceGroup` so an agent space's row can resolve `owner_agent_id` and
+   *  render the agent's uploaded avatar (or runtime icon fallback) instead of
+   *  the generic User glyph. Optional — when absent, those rows fall back
    *  to the User icon. #task:919 */
   agentsById?: ReadonlyMap<string, AgentDto>;
   /** The workspace the primary pane is in. Since #task:1889 it never highlights
@@ -83,21 +86,25 @@ interface SidebarProps {
 }
 
 /** The rail is one sortable list (`list_key='workspaces'`) with two live hard
- *  groups by kind (DM / regular); never stored. Each group is its own mode scope
- *  (#task:1146). STARRED is NOT a rail partition — it is the global Favorites
+ *  groups by ownership (agent space / people-owned). Each group is its own mode
+ *  scope (#task:1146). STARRED is NOT a rail partition — it is the global Favorites
  *  list (#task:1253/#task:1254), a separate read-model, and since #task:1888 it
  *  holds CONVERSATIONS, so no rail row ever moves into it. A starred container
- *  stays in its kind group and is only PINNED to the top of it. See
- *  docs/list-sort-v1.md. */
-type RailGroup = 'dm' | 'regular';
+ *  stays in its own group and is only PINNED to the top of it. See
+ *  docs/list-sort-v1.md.
+ *
+ *  These group keys ARE `SortGroup` values — they travel to the server as the
+ *  mode scope (`user_list_sort_mode.scope`) and as the manual-rank group — so the
+ *  agent space's key is the STORED `'agent_space'` token (it was `'dm'` until
+ *  #task:2045 Delta 4 moved schema, backend and rows together in migration v86).
+ *  `railSortGroupOf` is the one translation. */
+type RailGroup = RailSortGroup;
 
-function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
-  return workspace.kind === 'dm' ? 'dm' : 'regular';
-}
+const railGroupKeyOf = (workspace: WorkspaceItem): RailGroup => railSortGroupOf(workspace);
 
 export function Sidebar(props: SidebarProps): JSX.Element {
-  // Home rail groups by KIND (DM / regular). Containers have exactly ONE ordering
-  // authority — the viewer's sort mode plus manual drag (#task:1900: the container
+  // Home rail groups by OWNERSHIP (agent_space / regular). Containers have exactly
+  // ONE ordering authority — the viewer's sort mode plus manual drag (#task:1900: the container
   // star was a second one, applied on top of the drag, and it is gone). Archived
   // workspaces are dropped outright (#task:1889): the top-level `Archived` entry is
   // the one archive index. `props.workspaces` is the RAW full visible set; these are
@@ -110,31 +117,34 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // branded `FavoritesWatchScope` so that substitution does not typecheck — the
   // shapes were identical before, so the wrong wiring compiled green.
   const {
-    dms: homeDms,
+    agentSpaces: homeAgentSpaces,
     regular: homeRegular,
     allVisibleIds: watchWorkspaceIds,
   } = useMemo(() => partitionRailWorkspaces(props.workspaces), [props.workspaces]);
 
-  // Resolve DM-agent avatar object URLs ONCE for the whole rail, over the
-  // STABLE union of every DM agent (across dm / regular / archived) from the RAW
-  // workspace set. Resolving over the raw set (not the home projection) keeps the
-  // map identical across renders — so no avatar tears down + refetches (the flash
-  // shiki saw came from per-section resolution churning when a row moved). The raw
-  // set is the right basis because it is the one input that never changes with
+  // Resolve owner-agent avatar object URLs ONCE for the whole rail, over the
+  // STABLE union of every owning agent (across every section, archived included)
+  // from the RAW workspace set. Resolving over the raw set (not the home projection)
+  // keeps the map identical across renders — so no avatar tears down + refetches (the
+  // flash shiki saw came from per-section resolution churning when a row moved). The
+  // raw set is the right basis because it is the one input that never changes with
   // ordering. #task:1146
-  const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
+  const ownerAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const agentsById = props.agentsById;
     if (!agentsById) return [];
     const out: AgentAvatarSource[] = [];
     for (const w of props.workspaces) {
-      if (w.kind !== 'dm' || !w.dm_agent_id) continue;
-      const agent = agentsById.get(w.dm_agent_id);
+      // The id itself, not `isAgentSpace`: this loop needs the agent to build an
+      // avatar source, so the null check is the identity read, not the grouping
+      // one (#task:2078).
+      if (!w.owner_agent_id) continue;
+      const agent = agentsById.get(w.owner_agent_id);
       if (!agent) continue;
       out.push({ id: agent.id, avatar_url: agent.avatar_url });
     }
     return out;
   }, [props.workspaces, props.agentsById]);
-  const dmAgentAvatarUrls = useAgentAvatarObjectUrls(dmAvatarSources);
+  const ownerAgentAvatarUrls = useAgentAvatarObjectUrls(ownerAvatarSources);
 
   // The tree's selection, composed ONCE here, because the third field can only be
   // answered above the sections: whether the open conversation has moved into
@@ -164,13 +174,14 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     WorkspaceItem
   >({
     listKey: 'workspaces',
-    groups: { dm: homeDms, regular: homeRegular },
+    // Keyed by the WIRE + DB tokens (see `RailGroup`), not the display words.
+    groups: { agent_space: homeAgentSpaces, regular: homeRegular },
     viewerSort,
     getId: w => w.id,
     getCreatedAt: w => w.created_at,
     modeScopeOf: g => g,
   });
-  const orderedDms = orderedGroups.dm;
+  const orderedAgentSpaces = orderedGroups.agent_space;
   const orderedRegular = orderedGroups.regular;
 
   // Each rail section owns its own sort menu (reads + writes that group's scope)
@@ -213,8 +224,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * all three sidebar row classes (rail / channel / tool) one row-language.
           *
           * Their glyphs sit on the OUTER column (`OUTER_GLYPH_INSET`,
-          * #task:1889) — the same x as a group header and as a workspace / DM
-          * header row, which is what lets the three of them line up with the tree
+          * #task:1889) — the same x as a group header and as a container header
+          * row, which is what lets the three of them line up with the tree
           * instead of floating in their own gutter. They share that column but NOT
           * the group's weight: `font-bold` belongs to the section LABEL, and every
           * ROW — these three included — takes `font-medium` (shiki, 2026-08-10).
@@ -300,7 +311,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * bottom where their length doesn't push the workspaces off-screen. */}
         <WorkspaceGroup
           label="WORKSPACES"
-          kind="regular"
+          icon={WORKSPACES_SECTION_GLYPH}
           workspaces={orderedRegular}
           selected={selected}
           onSelectChannel={props.onSelectChannel}
@@ -329,7 +340,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             </>
           }
           agentsById={props.agentsById}
-          dmAgentAvatarUrls={dmAgentAvatarUrls}
+          ownerAgentAvatarUrls={ownerAgentAvatarUrls}
           sort={sortConfigFor('regular')}
           persistId="workspaces"
         />
@@ -350,20 +361,24 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           // AGENT SPACES, not "DM" (#task:2035): these rows are agent-home
           // WORKSPACES — each expands into channels — and the section directly
           // above now holds the actual direct messages. Two different things had
-          // one name, and the name belonged to the other one. `persistId` stays
-          // `"dm"`: it is this section's STORAGE identity, so renaming it would
-          // silently reset every user's collapse choice.
+          // one name, and the name belonged to the other one.
+          //
+          // `persistId="dm"` stays: it is localStorage identity, and renaming it
+          // would silently reset every user's collapse choice for nothing (real
+          // DMs persist under `"direct-messages"`, so there is no collision to
+          // resolve) — #task:2035. The two sort arguments below are the WIRE +
+          // DB token, which #task:2045 Delta 4 did migrate (v86).
           label="AGENT SPACES"
-          kind="dm"
-          workspaces={orderedDms}
+          icon={AGENT_SPACES_SECTION_GLYPH}
+          workspaces={orderedAgentSpaces}
           selected={selected}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
           emptyHint="Creating an agent opens its space"
           agentsById={props.agentsById}
-          dmAgentAvatarUrls={dmAgentAvatarUrls}
-          headerAction={sortMenuFor('dm')}
-          sort={sortConfigFor('dm')}
+          ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+          headerAction={sortMenuFor('agent_space')}
+          sort={sortConfigFor('agent_space')}
           persistId="dm"
         />
         {/* No bottom ARCHIVED group since #task:1889: the top-level `Archived`

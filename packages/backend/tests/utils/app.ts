@@ -80,7 +80,11 @@ import { AgentService } from '../../src/services/agent-service.js';
 import { ChannelService } from '../../src/services/channel-service.js';
 import { ConversationMessageService } from '../../src/services/conversation-message-service.js';
 import { IdleReaperService } from '../../src/services/idle-reaper-service.js';
-import { canAgentUseCapability, canPostToConversation } from '../../src/permissions.js';
+import {
+  canAgentUseCapability,
+  canInitiateDirectMessageToAgent,
+  canPostToConversation,
+} from '../../src/permissions.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { UserService } from '../../src/services/user-service.js';
@@ -1179,6 +1183,17 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
+    // The REAL gate, not a stub (#task:2072): the mention CC's destination is a
+    // direct pair, and a harness that answered `true` here would make every
+    // route/use-case test pass through an authorization the product does not grant
+    // — including the conversation-scoped agent the real gate refuses.
+    directLineTargetFor: (userId, agentHandle) => {
+      const agent = persistence.repos.agents.getByName(agentHandle);
+      if (!agent) return null;
+      return canInitiateDirectMessageToAgent(ctx, { kind: 'user', userId }, agent.id)
+        ? agent.id
+        : null;
+    },
   });
   const taskPersistence = createSqliteTaskPersistence(db);
   ctx.taskService = new TaskService({

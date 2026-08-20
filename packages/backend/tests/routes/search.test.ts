@@ -348,3 +348,113 @@ describe('GET /api/search — stream scope (#task:1334)', () => {
     expect(body.truncated).toBe(false);
   });
 });
+
+// The container POPULATION on the workspace-DISCOVERY arm (#task:2068 →
+// #task:2075).
+//
+// This arm used to be the compiler-invisible one: a scope token was bound as a
+// SQL PARAMETER against the `search_ws` subquery's already-projected container
+// word, and nothing about that comparison was typed — if the projected word and
+// the scope alphabet drifted apart the query would simply match no row and
+// return empty instead of failing. #task:2075's stop-publish step deleted BOTH
+// sides of it (the projection and the token's kind members), so the drift these
+// cells guarded cannot exist any more.
+//
+// What still needs pinning is the POPULATION plus the fact that replaced the
+// word: both container kinds are discoverable through this arm, and each carries
+// the ownership arc. NON-EMPTY per kind is the load-bearing half — a cell that
+// only asserts exclusions stays green when a query matches nothing at all.
+describe('GET /api/search — container population on the discovery arm', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const NEEDLE = 'kindproj';
+  const REGULAR_NAME = `${NEEDLE}-regular-ws`;
+  // An agent home's workspace name mirrors the agent's name (`insertAgentHome`
+  // binds `agent.name`), and the creating user is stamped as its
+  // `workspace_users` OWNER — which is what makes it reachable through the
+  // membership gate this arm applies.
+  const AGENT_NAME = `${NEEDLE}-agent`;
+
+  async function seed(app: TestApp): Promise<{ agentId: string }> {
+    await http(app).post('/api/workspaces', { name: REGULAR_NAME });
+    const res = await http(app).post('/api/agents', {
+      name: AGENT_NAME,
+      runtime: 'claude',
+    });
+    const body = await res.json() as { agent: { id: string } };
+    return { agentId: body.agent.id };
+  }
+
+  async function workspaceHits(
+    app: TestApp,
+  ): Promise<{ name: string; owner_agent_id: string | null }[]> {
+    const res = await http(app).get(`/api/search?q=${NEEDLE}`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    return body.results
+      .filter((r: any) => r.type === 'workspace')
+      .map((r: any) => ({
+        name: r.workspace.name,
+        owner_agent_id: r.workspace.owner_agent_id,
+      }));
+  }
+
+  it('discovers both container kinds, each carrying its ownership arc', async () => {
+    t = buildTestApp();
+    const { agentId } = await seed(t);
+    const hits = await workspaceHits(t);
+    // A producer that copied the wrong column would still be non-empty here, so
+    // the arc VALUE is asserted per row rather than only its presence.
+    expect(hits).toEqual(
+      expect.arrayContaining([
+        { name: REGULAR_NAME, owner_agent_id: null },
+        { name: AGENT_NAME, owner_agent_id: agentId },
+      ]),
+    );
+  });
+
+  it('strips a retired scope token — the container axis is gone, not narrowable', async () => {
+    t = buildTestApp();
+    const { agentId } = await seed(t);
+    const res = await http(t).get(`/api/search?q=${NEEDLE}&scope=dm`);
+    // `scope` was a whole container-scope axis (`SearchScopeSchema =
+    // z.enum(['all','regular','dm'])` on `origin/main`); #task:2086 deleted the
+    // axis entirely — the fact it narrowed on is already carried by the concrete
+    // `workspace_id`/`conversation_id` coordinate. `dm` is one of its two
+    // published, now-retired members (`b17cd14a:message.ts:439`); we probe it
+    // rather than a never-published spelling like `agent_space` so this cell
+    // exercises the real contract change (a PUBLISHED dead token is dropped), not
+    // merely "an unknown param is stripped", which holds for any client.
+    //
+    // Stripping it is safe by PRODUCER REACHABILITY, not by the epoch gate: no
+    // published renderer sends a container token at all
+    // — `SearchPanel.tsx` only ever builds `scope:'all'` (`:887`/`:889`) and
+    // `hooks.ts:35` emits the param only `if (filters.scope !== 'all')`. Zero
+    // senders ⇒ the shift from a narrowing to a full-population answer is
+    // unobservable to every released client, independent of the epoch gate.
+    // (This generation raises `MINIMUM_CLIENT_API_EPOCH` and would refuse the
+    // last published desktop outright, but the strip is safe even setting that
+    // aside — that published renderer never sends a container token in the first
+    // place.) The input schema is non-strict, so the stray token is
+    // STRIPPED, not parsed as a narrowing: the request is served by concrete
+    // coordinate (here none) and returns the full discovery population. A future
+    // container-population filter arrives as a NEW token, never a revival.
+    expect(res.status).toBe(200);
+    const hits = ((await res.json()) as any).results
+      .filter((r: any) => r.type === 'workspace')
+      .map((r: any) => ({
+        name: r.workspace.name,
+        owner_agent_id: r.workspace.owner_agent_id,
+      }));
+    expect(hits).toEqual(
+      expect.arrayContaining([
+        { name: REGULAR_NAME, owner_agent_id: null },
+        { name: AGENT_NAME, owner_agent_id: agentId },
+      ]),
+    );
+  });
+});

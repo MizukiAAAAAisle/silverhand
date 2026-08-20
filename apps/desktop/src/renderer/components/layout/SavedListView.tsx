@@ -15,7 +15,6 @@ import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import { workspaceDisplayName } from '@/lib/workspace-name';
 import { FilterBlock } from '@/components/ui/filter-select';
 import { ListRowsSkeleton } from './ListRowsSkeleton';
 import {
@@ -147,9 +146,12 @@ export function SavedListView({
 
   // Identity resolution for each row's meta line (shiki #task:1441). A
   // `workspace_channel` row shows the WORKSPACE's own icon + name (joined live
-  // from the workspace list — `SavedPlace` embeds only `workspace_id` +
-  // `workspace_kind`, never a frozen name, #task:2055), the CHANNEL's `#` +
-  // `place.channel_name`, and the SENDER's avatar.
+  // from the workspace list — the carrier embeds a bare `workspace_id`, never a
+  // frozen name, #task:2055), the CHANNEL's `#` + `place.channel_name`, and the
+  // SENDER's avatar. The carrier answers WHERE, never WHAT KIND (#task:2078):
+  // container identity comes from the joined workspace itself, so a saved row
+  // and a rail row cannot disagree about the same container — which is what a
+  // second answer travelling with the pointer would have allowed.
   const workspacesById = useMemo(
     () => new Map(workspaces.map(w => [w.id, w])),
     [workspaces],
@@ -161,13 +163,13 @@ export function SavedListView({
   // carries. So no pair join here: the counterpart face belongs to the DM pane
   // and the pair list, not to a cross-conversation row's meta line.
   // The agent directory serves two INDEPENDENT facets: the sender picker's
-  // option domain above, and the WorkspaceIcon's DM-avatar here (the DM
-  // workspace's agent — not the row's author, and not the row's sender).
+  // option domain above, and the WorkspaceIcon's owner avatar here (the agent that
+  // owns the workspace — not the row's author, and not the row's sender).
   const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(
     () => new Map(agents.map(a => [a.id, a])),
     [agents],
   );
-  const dmAgentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const ownerAgentAvatarUrls = useAgentAvatarObjectUrls(agents);
   // The byline avatar's bytes come STRICTLY from each row's own author DTO
   // (#task:1792 B2) — never a directory join, so a saved message whose author is
   // outside the loaded directory (or deleted) still renders its own avatar.
@@ -239,7 +241,7 @@ export function SavedListView({
                 item={item}
                 workspacesById={workspacesById}
                 agentsById={agentsById}
-                dmAgentAvatarUrls={dmAgentAvatarUrls}
+                ownerAgentAvatarUrls={ownerAgentAvatarUrls}
                 authorAgentAvatarUrls={authorAgentAvatarUrls}
                 authorHumanAvatarUrls={authorHumanAvatarUrls}
                 onJump={() =>
@@ -276,7 +278,7 @@ function SavedItem({
   item,
   workspacesById,
   agentsById,
-  dmAgentAvatarUrls,
+  ownerAgentAvatarUrls,
   authorAgentAvatarUrls,
   authorHumanAvatarUrls,
   onJump,
@@ -284,14 +286,14 @@ function SavedItem({
 }: {
   item: SavedMessageDto;
   /** Workspace records joined by id — the `workspace_channel` arm reads its
-   *  workspace out of this to drive the WorkspaceIcon's kind / DM-agent branch
+   *  workspace out of this for the WorkspaceIcon's owner branch
    *  and the live display name. Empty in the brief window before the list
-   *  resolves. */
+   *  resolves, which is why the whole where-segment is nullability-gated. */
   workspacesById: ReadonlyMap<string, WorkspaceListItem>;
   agentsById: ReadonlyMap<string, AgentDto>;
-  /** Directory avatars, for the WorkspaceIcon's DM agent only (independent
+  /** Directory avatars, for the WorkspaceIcon's owning agent only (independent
    *  facet — NOT the row's author). */
-  dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
   /** Byline avatars derived from the row's own author DTO (#task:1792 B2). */
   authorAgentAvatarUrls: ReadonlyMap<string, string | null>;
   authorHumanAvatarUrls: ReadonlyMap<string, string | null>;
@@ -375,15 +377,24 @@ function SavedItem({
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
           {place.kind === 'workspace_channel' ? (
             <>
-              <span className="inline-flex items-center gap-1 font-medium text-text-primary">
-                <WorkspaceIcon
-                  kind={workspace?.kind ?? 'regular'}
-                  dmAgentId={workspace?.dm_agent_id ?? null}
-                  agentsById={agentsById}
-                  dmAgentAvatarUrls={dmAgentAvatarUrls}
-                />
-                {workspace ? workspaceDisplayName(workspace) : ''}
-              </span>
+              {/* The workspace segment is drawn only when the join RESOLVED
+                  (#task:2078). It used to render unconditionally, filling the
+                  gaps with `kind ?? 'regular'` + `name ?? ''` — so an
+                  unresolved workspace read as a confident serif "W" beside a
+                  blank name, i.e. absence dressed as a people-owned workspace.
+                  Glyph and name are one nullability branch: either the row
+                  states where it is, or it says nothing and lets the channel +
+                  sender segments carry it. */}
+              {workspace ? (
+                <span className="inline-flex items-center gap-1 font-medium text-text-primary">
+                  <WorkspaceIcon
+                    ownerAgentId={workspace.owner_agent_id}
+                    agentsById={agentsById}
+                    ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+                  />
+                  {workspace.name}
+                </span>
+              ) : null}
               <span className="inline-flex min-w-0 items-center gap-1">
                 <ChannelIcon variant="sticker" density="sm" />
                 <span className="truncate">{place.channel_name}</span>

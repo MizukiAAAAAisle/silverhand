@@ -146,7 +146,11 @@ async function buildAgentListWorkspacesDto(
       return {
         id: w.id,
         name: w.name,
-        kind: w.workspace_kind,
+        // The agent reads the OWNERSHIP RELATION, the same field a human viewer
+        // gets (#task:2075): the ubiquitous language does not fork by audience,
+        // and after this ticket there is no container word on either side to
+        // translate.
+        owner_agent_id: w.owner_agent_id,
         archived: w.archived_at !== null,
         updated_at: w.updated_at,
         agent_dir: agentDir,
@@ -222,8 +226,8 @@ export function registerConversationRoutes(
     // counter-example impossible.
     //
     // A channel is BORN INTO a workspace, and this route's only source for that
-    // workspace is the ADDRESSED conversation's own placement — so a pair or an
-    // `agent_inbox` names no destination for the act (v71, #task:2014). This is
+    // workspace is the ADDRESSED conversation's own placement — so a pair names
+    // no destination for the act (v71, #task:2014). This is
     // the bounded-context declaration, made explicitly and answered as
     // `workspace_scope_required`, rather than a workspace lookup that used to
     // fail as "workspace not found" on a coordinate the row never had.

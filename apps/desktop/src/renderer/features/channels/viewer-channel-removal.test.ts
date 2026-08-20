@@ -11,7 +11,7 @@
 //      must be GONE (ranked/capped result sets, single-object reads), and a
 //      server-unfiltered read model must be RETAINED.
 //   3. UNREAD ARITHMETIC — `total === sum(by_conversation)` after the patch, and
-//      the workspace rollup keeps its relationship to the partitions.
+//      the workspace rollup keeps its relationship to that total.
 //   4. REGISTRY ↔ SEED lockstep; REGISTRY ↔ CLASSIFICATION lockstep; and the
 //      layer-3 source scan over all of `features/**`.
 //   5. DETECTION — the pure resolver's transition table, the CONVERGENCE gate
@@ -119,10 +119,8 @@ function savedRow(id: string, channelId: string, workspaceId = WS): SavedMessage
       kind: 'workspace_channel',
       conversation_id: channelId,
       workspace_id: workspaceId,
-      workspace_kind: 'regular',
       channel_name: 'channel',
     },
-    agent_name: null,
     saved_at: 2,
   };
 }
@@ -135,7 +133,6 @@ function savedPairRow(id: string, conversationId: string): SavedMessageDto {
     id,
     message: message(`m-${id}`, conversationId),
     place: { kind: 'direct_pair', conversation_id: conversationId },
-    agent_name: null,
     saved_at: 2,
   };
 }
@@ -148,7 +145,6 @@ function taskRow(id: string, channelId: string, workspaceId = WS): TaskSummaryDt
       kind: 'workspace',
       conversation_id: channelId,
       workspace_id: workspaceId,
-      workspace_kind: 'regular',
       channel_name: 'channel',
     },
     thread_root_id: null,
@@ -176,7 +172,6 @@ function searchDto(channelId: string, workspaceId = WS): SearchDto {
   return {
     query: {
       q: 'hello',
-      scope: 'all',
       stream: 'all',
       order: 'recency_desc',
       limit: 80,
@@ -188,14 +183,17 @@ function searchDto(channelId: string, workspaceId = WS): SearchDto {
           id: channelId,
           title: 'channel',
           placement_kind: 'workspace',
-          workspace: { id: workspaceId, name: 'Workspace', kind: 'regular' },
+          workspace: {
+            id: workspaceId,
+            name: 'Workspace',
+            owner_agent_id: null,
+          },
           roster_policy: 'open',
           channel_id: channelId,
           closed_at: null,
           created_at: 1,
         },
         message: message(`hit-${channelId}`, channelId),
-        agent_name: null,
       },
     ],
     total: 42,
@@ -237,7 +235,6 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       thread_root_id: null,
       message_id: `m-${id}`,
       notification_id: null,
-      conversation_roster_policy: 'open' as const,
       title: `#${id}`,
       thread_root_preview: null,
       preview: null,
@@ -250,7 +247,7 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
     });
   },
   'message-unread': qc => {
-    qc.setQueryData(messageUnreadByConversationKey(WS, 'regular'), {
+    qc.setQueryData(messageUnreadByConversationKey(WS), {
       by_conversation: { [LOST]: 3, [KEPT]: 5 },
       latest_by_conversation: {
         [LOST]: { message_id: 'm-lost', seq: 7, thread_root_id: null },
@@ -289,8 +286,8 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
     qc.setQueryData(['task-by-number', WS, 8], taskRow('t-keep', KEPT));
   },
   search: qc => {
-    qc.setQueryData([...searchKey, { q: 'hello', scope: 'all' }], searchDto(LOST));
-    qc.setQueryData([...searchKey, { q: 'other', scope: 'all' }], searchDto(KEPT));
+    qc.setQueryData([...searchKey, { q: 'hello' }], searchDto(LOST));
+    qc.setQueryData([...searchKey, { q: 'other' }], searchDto(KEPT));
   },
   messages: qc => {
     // `['messages', <messageId>]` — keyed by the MESSAGE, so layer 1's
@@ -560,8 +557,8 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
 
       // `total`/`truncated` describe a window computed WITH the removed rows, so
       // filtering rows out would leave a set no refetch can return.
-      expect(qc.getQueryState([...searchKey, { q: 'hello', scope: 'all' }])).toBeUndefined();
-      expect(qc.getQueryData([...searchKey, { q: 'other', scope: 'all' }])).toEqual(
+      expect(qc.getQueryState([...searchKey, { q: 'hello' }])).toBeUndefined();
+      expect(qc.getQueryData([...searchKey, { q: 'other' }])).toEqual(
         searchDto(KEPT),
       );
     });
@@ -608,14 +605,14 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
   });
 
   describe('unread arithmetic (total is recomputed, never guessed)', () => {
-    it('the patched partition is refetch-shaped and its total is the sum of survivors', () => {
+    it('the patched map is refetch-shaped and its total is the sum of survivors', () => {
       const qc = new QueryClient();
       seedAll(qc);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
       // The workspace map is keyed by the WORKSPACE, so it survives the sweep and
       // must be PATCHED: the key is absent (never a phantom 0 a refetch would omit)
       // and `total` drops by the lost channel's 3.
-      expect(qc.getQueryData(messageUnreadByConversationKey(WS, 'regular'))).toEqual({
+      expect(qc.getQueryData(messageUnreadByConversationKey(WS))).toEqual({
         by_conversation: { [KEPT]: 5 },
         latest_by_conversation: {
           [KEPT]: { message_id: 'm-kept', seq: 9, thread_root_id: null },
@@ -630,10 +627,10 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
     it('a stale total is REPLACED by the survivor sum, not decremented by it', () => {
       // #task:1689 blocker 4: the two caches are patched independently, so `total`
       // can be stale relative to `by_conversation`. Subtracting the lost count
-      // would keep the lie (1 - 4 → clamped 0) and hide four unread messages the
-      // viewer still has. The invariant is `total === sum(by_conversation)`.
+      // would keep the lie (1 - 4 → 0) and hide four unread messages the viewer
+      // still has. The invariant is `total === sum(by_conversation)`.
       const qc = new QueryClient();
-      qc.setQueryData(messageUnreadByConversationKey(WS, 'regular'), {
+      qc.setQueryData(messageUnreadByConversationKey(WS), {
         by_conversation: { [LOST]: 4, [KEPT]: 5 },
         latest_by_conversation: {},
         total: 1,
@@ -645,7 +642,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       const patched = qc.getQueryData<{
         by_conversation: Record<string, number>;
         total: number;
-      }>(messageUnreadByConversationKey(WS, 'regular'));
+      }>(messageUnreadByConversationKey(WS));
       expect(patched).toEqual({
         by_conversation: { [KEPT]: 5 },
         latest_by_conversation: {},
@@ -654,46 +651,24 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       expect(patched?.total).toBe(
         Object.values(patched?.by_conversation ?? {}).reduce((s, n) => s + n, 0),
       );
-      // Only ONE partition is loaded here, so the workspace rollup can only be
-      // corrected by the same delta the partition moved by (1 → 5). That PRESERVES
-      // the summary's existing offset; it does not claim to turn an independently
-      // stale summary into refetch truth — only a refetch does that.
+      // The map is a single query keyed by the workspace (#task:2078), so once it
+      // is loaded the rollup entry is fully determined: it is SET to the survivor
+      // sum, not moved by a delta off an independently stale summary.
       expect(qc.getQueryData(messageUnreadSummaryKey)).toEqual({
         by_workspace: { [WS]: 5 },
       });
     });
 
-    it('with BOTH partitions loaded the rollup is the sum of their new totals', () => {
+    it('an emptied map settles the rollup at 0 rather than a stale count', () => {
       const qc = new QueryClient();
-      qc.setQueryData(messageUnreadByConversationKey(WS, 'regular'), {
-        by_conversation: { [LOST]: 4, [KEPT]: 5 },
-        latest_by_conversation: {},
-        total: 9,
-      });
-      qc.setQueryData(messageUnreadByConversationKey(WS, 'dm'), {
-        by_conversation: { 'dm-1': 2 },
-        latest_by_conversation: {},
-        total: 2,
-      });
-      qc.setQueryData(messageUnreadSummaryKey, { by_workspace: { [WS]: 999 } });
-
-      handleViewerChannelRemoved(qc, REMOVE_LOST);
-
-      expect(qc.getQueryData(messageUnreadSummaryKey)).toEqual({
-        by_workspace: { [WS]: 7 }, // 5 (regular survivors) + 2 (dm), not 999 - 4
-      });
-    });
-
-    it('a stale rollup can never be driven negative', () => {
-      const qc = new QueryClient();
-      qc.setQueryData(messageUnreadByConversationKey(WS, 'regular'), {
+      qc.setQueryData(messageUnreadByConversationKey(WS), {
         by_conversation: { [LOST]: 4 },
         latest_by_conversation: {},
         total: 1, // stale: the two caches are patched independently
       });
       qc.setQueryData(messageUnreadSummaryKey, { by_workspace: { [WS]: 1 } });
       handleViewerChannelRemoved(qc, REMOVE_LOST);
-      expect(qc.getQueryData(messageUnreadByConversationKey(WS, 'regular'))).toEqual({
+      expect(qc.getQueryData(messageUnreadByConversationKey(WS))).toEqual({
         by_conversation: {},
         latest_by_conversation: {},
         total: 0,
@@ -1265,7 +1240,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         ],
         pageParams: [null],
       });
-      qc.setQueryData(messageUnreadByConversationKey(OTHER_WS, 'regular'), {
+      qc.setQueryData(messageUnreadByConversationKey(OTHER_WS), {
         by_conversation: { [LOST]: 2 },
         latest_by_conversation: {
           [LOST]: { message_id: 'm', seq: 1, thread_root_id: null },
@@ -1273,7 +1248,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         total: 2,
       });
       qc.setQueryData(messageUnreadSummaryKey, { by_workspace: { [OTHER_WS]: 2 } });
-      qc.setQueryData([...searchKey, { q: 'x', scope: 'all' }], searchDto(LOST, OTHER_WS));
+      qc.setQueryData([...searchKey, { q: 'x' }], searchDto(LOST, OTHER_WS));
     }
 
     it('held ids are workspace-scoped: a channel of another workspace is not reported', () => {
@@ -1335,7 +1310,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
           }
         ).pages.map(p => p.items.map(t => t.id)),
       ).toEqual([['t-a']]);
-      expect(qc.getQueryData(messageUnreadByConversationKey(OTHER_WS, 'regular'))).toEqual({
+      expect(qc.getQueryData(messageUnreadByConversationKey(OTHER_WS))).toEqual({
         by_conversation: {},
         latest_by_conversation: {},
         total: 0,
@@ -1343,7 +1318,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       expect(qc.getQueryData(messageUnreadSummaryKey)).toEqual({
         by_workspace: { [OTHER_WS]: 0 },
       });
-      expect(qc.getQueryState([...searchKey, { q: 'x', scope: 'all' }])).toBeUndefined();
+      expect(qc.getQueryState([...searchKey, { q: 'x' }])).toBeUndefined();
       // …and the workspace the viewer IS looking at is untouched.
       expect(cacheMentions(qc, 'ch-in-a')).toBe(true);
     });

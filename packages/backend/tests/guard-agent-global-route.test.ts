@@ -2,7 +2,6 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { formatAgentRuntimeScopeBanner } from '@silverhand/shared';
 
 const backendRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(backendRoot, '..', '..');
@@ -63,17 +62,5 @@ describe('agent-global route authority static guard (#task:2030)', () => {
 
     expect(retiredFlagOwners).toEqual([]);
     expect(retiredPathOwners).toEqual([]);
-  });
-
-  it('keeps the AgentSlot banner semantic-only: scope plus per-delivery workdir', () => {
-    const source = sourceOf(
-      join(repoRoot, 'packages/shared/src/runtime-scope-banner.ts'),
-    );
-    const banner = formatAgentRuntimeScopeBanner('/tmp/worktree');
-
-    expect(banner).toContain('runtime_scope=agent');
-    expect(banner).toContain('workdir=');
-    expect(banner).not.toContain('target=');
-    expect(source).not.toContain('ROUTE_PLACEHOLDER');
   });
 });

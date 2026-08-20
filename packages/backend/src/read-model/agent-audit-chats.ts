@@ -8,8 +8,9 @@
 // enumeration lives in the single placement authority
 // (`AgentRepo.listAuditChats` → `agentParticipates`), so this module never
 // re-states which conversations an agent is a party to; it only turns each row
-// into the display union. The AgentInbox is dropped by the enumeration, matching
-// the per-conversation gate (`canAuditAgentConversation`).
+// into the display union. Since #task:2072 the enumeration narrows nothing beyond
+// participation, so it admits exactly what the per-conversation gate
+// (`canAuditAgentConversation`) admits.
 //
 // Heterogeneous by placement: a workspace-placed conversation draws by its title
 // and workspace coordinates; a `direct_pair` draws by its COUNTERPART — the
@@ -67,16 +68,12 @@ function toSummary(
       created_at: row.created_at,
     };
   }
-  // Workspace-placed (the enumeration excludes `agent_inbox`, so this is the only
+  // Workspace-placed (the placement alphabet has two members, so this is the
   // other arm). Its workspace coordinates are present-and-non-null by the
   // placement's definition — a workspace conversation has a workspace and a
   // title — so a NULL here is a loader fault, not a state: fail loud rather than
   // ship a half row.
-  if (
-    row.workspace_id === null
-    || row.workspace_name === null
-    || row.workspace_kind === null
-  ) {
+  if (row.workspace_id === null || row.workspace_name === null) {
     throw new Error(
       `audit chat ${row.id} is workspace-placed but is missing a workspace coordinate`,
     );
@@ -88,7 +85,6 @@ function toSummary(
     title: row.title,
     workspace_id: row.workspace_id,
     workspace_name: row.workspace_name,
-    workspace_kind: row.workspace_kind,
     archived_at: row.archived_at,
     created_at: row.created_at,
   };

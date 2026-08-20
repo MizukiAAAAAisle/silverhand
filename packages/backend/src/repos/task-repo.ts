@@ -341,9 +341,10 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
   }
 
   /** Resolve a message id to a viewer-readable nav ref, or null when the
-   *  message is gone or the viewer cannot read its conversation. `channel_id`
-   *  is the message's own conversation id (threads are reply clusters, not
-   *  standalone conversations). */
+   *  message is gone or the viewer cannot read its conversation.
+   *  `conversation_id` is the message's own conversation — channel or pair,
+   *  whichever holds it (threads are reply clusters, not standalone
+   *  conversations). */
   private resolveMessageNavRef(actor: TaskActor, messageId: string): TaskNavRef | null {
     const msg = prepareObserved<[string], { conversation_id: string; thread_root_id: string | null }>(
         this.db,
@@ -354,7 +355,7 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     if (!msg) return null;
     if (!this.viewerCanAccessConversation(actor, msg.conversation_id)) return null;
     return {
-      channel_id: msg.conversation_id,
+      conversation_id: msg.conversation_id,
       thread_root_id: msg.thread_root_id,
       message_id: messageId,
     };
@@ -408,7 +409,7 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
 
   /**
    * The board a conversation's placement yields, or null when it has none
-   * (agent_inbox, unknown placement, missing row). READ-side twin of the v76
+   * (unknown placement, missing row). READ-side twin of the v76
    * derivation trigger's CASE — the trigger is the authority; a drift between
    * the two is caught by it on every INSERT (and by the agreement falsifier
    * in the migration suite).
@@ -457,8 +458,8 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     // The BOARD is derived from the destination conversation's placement
     // (P0-f §4.4) — never a caller coordinate. This read and the v76 INSERT
     // trigger state the same rule; the trigger is the authority and would
-    // abort any drift here. A placement with no board (agent_inbox, unknown)
-    // derives null and fails loud before any number is allocated.
+    // abort any drift here. A placement with no board (an unknown one) derives
+    // null and fails loud before any number is allocated.
     const board = this.boardOfConversation(args.conversationId);
     if (!board) {
       throw new Error(

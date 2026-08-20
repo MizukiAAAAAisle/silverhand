@@ -23,11 +23,13 @@
  * placement can even show, so it must never be promoted into a front-end
  * permission truth.
  *
- * TOTAL OVER THE PLACEMENT UNION. `agent_inbox` is a real stored placement with
- * no user-facing pane today, and a fifth could be added tomorrow: anything that
- * is not one of the two known shapes projects to `unsupported`, which withholds
- * every placement-specific affordance. The default arm is the point — a new
- * placement kind cannot silently inherit channel chrome by falling through.
+ * TOTAL OVER THE PLACEMENT UNION, with a `default` arm that is NOT dead. The
+ * compiled alphabet is `workspace | direct_pair`, but this renderer reads it off
+ * an HTTP DTO with no runtime validation and can be OLDER than the server it
+ * talks to — a newer server may send a placement this build's alphabet does not
+ * contain. Such a value projects to `unsupported`, which withholds every
+ * placement-specific affordance, rather than inheriting channel chrome by
+ * falling through. The arm is the point: an unknown placement fails safe.
  */
 import type {
   ConversationPlacementKind,
@@ -121,6 +123,20 @@ export interface ConversationPaneCapabilities {
   workspaceScope: string | null;
 }
 
+/**
+ * Every placement-specific affordance withheld: no roster (so no roster read and
+ * no `Not here`), no workspace scope, and the title alone for identity.
+ *
+ * ONE literal with two callers, deliberately: an unknown placement and a parent
+ * that has not resolved yet are different facts with the same answer, and the
+ * point of that answer is that it cannot drift into "channel by default".
+ */
+const WITHHELD_PANE_CAPABILITIES: ConversationPaneCapabilities = {
+  headerIdentity: 'title_only',
+  hasRoster: false,
+  workspaceScope: null,
+};
+
 export function paneCapabilities(
   mode: ConversationPaneMode,
 ): ConversationPaneCapabilities {
@@ -138,12 +154,30 @@ export function paneCapabilities(
         workspaceScope: null,
       };
     case 'unsupported':
-      return {
-        headerIdentity: 'title_only',
-        hasRoster: false,
-        workspaceScope: null,
-      };
+      return WITHHELD_PANE_CAPABILITIES;
   }
+}
+
+/**
+ * The capabilities of a pane that is NOT a conversation of its own but hangs off
+ * one — a thread (#task:2098). A thread has no placement: it shares its parent
+ * conversation, so its capabilities ARE the parent's already-projected ones. This
+ * function is the whole seam; a thread surface must never re-derive placement from
+ * `workspaceId === null`, the route, or a local boolean, which is exactly how the
+ * DM thread came to paint a channel's `Not here` for an online agent.
+ *
+ * A `null` parent is the pane rendering before its parent conversation has
+ * resolved — a cold deep link to `?thread=<root>` whose thread stream has its own
+ * query and can settle first. It withholds, rather than inheriting the
+ * channel-shaped context default: during that window the surface shows no presence
+ * line at all, which is the same thing it already does while a roster read is
+ * unsettled, instead of asserting a membership fact it cannot know yet.
+ */
+export function inheritedPaneCapabilities(
+  parent: ConversationPaneDescriptor | null,
+): ConversationPaneCapabilities {
+  if (!parent) return WITHHELD_PANE_CAPABILITIES;
+  return paneCapabilities(projectConversationPaneMode(parent));
 }
 
 /**

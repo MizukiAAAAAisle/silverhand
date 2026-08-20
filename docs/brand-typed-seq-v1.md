@@ -8,6 +8,17 @@ inventory and rollout history belong to git and the task board.
 Ubiquitous-language note: this doc is the source of truth for what each "seq"
 means. When code conflicts with a name/semantic here, the code is the bug.
 
+> **Superseded in part (freshness redesign, scheme C — see
+> `freshness-boundary-authority-v1.md`).** The `ObservedSeq` brand and the daemon
+> per-stream **observed boundary** (`observedSeqByStream` /
+> `pendingAdmissionSeqByStream`) it typed **no longer exist**: freshness is now a
+> whole-runtime backend EXISTS-guard, not a per-stream daemon cursor. References
+> to `observedSeqByStream` / `ObservedSeq` below are retained as the **historical**
+> motivation for Axis B (the bug was real and did motivate S2), not as live sites.
+> The still-live brands are `MessageSeq` / `TransportSeq` / `ReadSeq` /
+> `TransportEpoch`; `ObservedSeq` and `asObservedSeq` have been removed from
+> `@silverhand/shared`.
+
 ---
 
 ## 1. Problem
@@ -25,11 +36,13 @@ pass would not have prevented the bug that motivated S2.
   hook could read as a MessageSeq) is exactly this — "one number, two meanings",
   the same shape as the false-stale bug class.
 - **Axis B — optionality collapse.** `map.get(k) ?? 0` conflates *"absent /
-  never set"* with *"present, value 0"*. **This is the false-stale bug's actual
+  never set"* with *"present, value 0"*. **This was the false-stale bug's actual
   root cause**
   (`observedSeqByStream.get(MAIN) ?? 0` manufactured `seen=0` for a
-  never-observed stream → false-stale). **Brand types do NOT fix Axis B.**
-  `?? 0` on a branded `ObservedSeq` still compiles and still lies.
+  never-observed stream → false-stale — the historical motivating bug; that
+  daemon observed-boundary has since been removed by the freshness redesign, but
+  the *shape* is what matters here). **Brand types do NOT fix Axis B.**
+  `?? 0` on a branded seq still compiles and still lies.
 
 > **Thesis (bold, falsifiable):** S2 must be **two-pronged**. Branding fixes
 > Axis A only. Axis B is fixed by *explicit absence* (`Seq | undefined`, no
@@ -38,10 +51,15 @@ pass would not have prevented the bug that motivated S2.
 > survives.
 >
 > Falsifier: if every live seq defect in the census (§2) were a space-mix and
-> none an optionality-collapse, Axis B would be redundant. It is not — the two
-> genuinely dangerous live sites are both `?? 0` optionality collapses at the
-> daemon observed-boundary (§2), which branding cannot catch. (Several other
-> `?? 0` sites are *role-defined zero* and correct — see §2's split.)
+> none an optionality-collapse, Axis B would be redundant. It is not — the
+> motivating sites were `?? 0` optionality collapses at the daemon
+> observed-boundary (§2). Those specific sites have since been **retired with the
+> freshness redesign** (freshness left the daemon), but Axis B stays
+> non-redundant: the discipline (no unclassified `?? 0`, explicit absence) is a
+> standing rule, the DeliverySeq boundary (§2) remains a candidate collapse, and
+> the ReadSeq role (§5) still demonstrates a *role-defined* zero that must be
+> decided per role, not defaulted. (Several other `?? 0` sites are *role-defined
+> zero* and correct — see §2's split.)
 
 ---
 
@@ -83,10 +101,15 @@ particular role. Proof they are MessageSeq, not independent spaces:
 - **StreamHeadSeq** = `conversation_stream_heads.latest_seq`. Schema comment,
   verbatim: *"latest_seq is the global messages.seq of the stream's newest
   message and doubles as the CAS token"* (`schema.ts:419-420`). → a MessageSeq.
-- **DeliverySeq** = `deliveredUpToSeq = Math.max(...claimed.map(r => r.message.seq))`
-  (`outbound-event-fanout.ts:1848`). → a MessageSeq (the high-water of a batch).
-- **ObservedSeq** = daemon `observedSeqByStream` — "highest MessageSeq the agent
-  has been shown in this stream" (`supervisor/handle.ts:124`). → a MessageSeq cursor.
+- **DeliverySeq** = the high-water of a delivery batch = `max(deliveries[].seq)`.
+  #task:2106 removed the backend-computed wire scalar; the daemon now derives it
+  as `deliveredUpToSeqOf(deliveries) = Math.max(...deliveries.map(d => d.seq))`
+  (`supervisor/index.ts`) purely to write the disk sidecar — it never rides the
+  wire. → a MessageSeq (the high-water of a batch).
+- **ObservedSeq** (retired) — was the daemon `observedSeqByStream` cursor,
+  "highest MessageSeq the agent has been shown in this stream". Removed with the
+  freshness redesign (scheme C): the daemon no longer keeps a per-stream observed
+  cursor, so this brand is gone. Listed here only so the census stays honest.
 - **ReadSeq** = `conversation_reads.last_read_seq` — "highest MessageSeq the
   viewer has read in this stream" (`schema.ts:435`). → a MessageSeq cursor.
 
@@ -155,8 +178,8 @@ carry **different** meaning for that role. Splitting the sites:
 
 | Site | Pattern | Note |
 |---|---|---|
-| `supervisor/index.ts:514` | `pendingAdmissionSeqByStream.get(k) ?? 0` | **false-stale family**: never-admitted vs. admitted-to-0. This is the daemon observed-boundary — the actual false-stale layer. |
-| `delivery-coordinator.ts:1270` | `deliveredUpToSeq ?? 0` | daemon-boundary-adjacent: "not delivered" vs. "delivered to 0". **Verify in impl** whether absent wrongly advances observed; if it only skips, downgrade. |
+| ~~`supervisor/index.ts:514`~~ (retired) | ~~`pendingAdmissionSeqByStream.get(k) ?? 0`~~ | Was the daemon observed-boundary — the original false-stale layer. **Removed with the freshness redesign** (scheme C): the daemon no longer computes a per-stream observed/admission seq, so this collapse site no longer exists. |
+| ~~`delivery-coordinator.ts:1270`~~ (resolved by #task:2106) | ~~`deliveredUpToSeq ?? 0`~~ | Was the surviving Axis-B DeliverySeq collapse candidate. **#task:2106 deleted the coordinator scalar entirely** — `deliveries` is required and the daemon derives the high-water from `max(deliveries[].seq)`, so there is no `deliveredUpToSeq ?? 0` fallback left to price. Finding closed; no impl verification outstanding. |
 
 **Role-defined zero (absent ≡ 0 *is the design*) — do NOT "fix":**
 
@@ -174,7 +197,9 @@ carry **different** meaning for that role. Splitting the sites:
 | `outbound-event-fanout.ts:1848` | `Math.max(...message.seq)` over a mixed-stream batch | same conversation-global ordinal interpreted across streams (§7) — a stream-key mismatch, not Message↔Transport. |
 
 Message↔Transport branding is **preventive** (guards the renderer finding-2 seam
-before it's violated); the live Axis-B bugs are the two daemon-boundary sites.
+before it's violated); the original live Axis-B bugs were the daemon
+observed-boundary sites, now retired with the freshness redesign — the surviving
+candidate is the DeliverySeq boundary (`delivery-coordinator.ts:1270`).
 
 ---
 
@@ -189,7 +214,6 @@ declare const MessageSeqB: unique symbol
 declare const TransportSeqB: unique symbol
 declare const TransportEpochB: unique symbol
 declare const ReadSeqB: unique symbol
-declare const ObservedSeqB: unique symbol
 
 export type MessageSeq   = number & { readonly [MessageSeqB]: true }
 export type TransportSeq = number & { readonly [TransportSeqB]: true }
@@ -197,17 +221,18 @@ export type TransportSeq = number & { readonly [TransportSeqB]: true }
 // ws-frames.ts:69,89,105. Branding it as number would encode the very axis error S2 kills.
 export type TransportEpoch = string & { readonly [TransportEpochB]: true }
 export type ReadSeq     = number & { readonly [ReadSeqB]: true }   // minted via observe (streamSourceAtSeq)
-export type ObservedSeq = number & { readonly [ObservedSeqB]: true } // minted via daemon admission
+// ObservedSeq (was: minted via daemon admission) has been RETIRED with the
+// freshness redesign — the daemon no longer keeps a per-stream observed cursor.
 ```
 
 - **NOT branded:** StreamHeadSeq, DeliverySeq → they are `MessageSeq` (a
   distinguished max/high-water). No independent write boundary to protect; their
   only defect is Axis B, fixed by explicit absence, not by a nominal type.
-- **ReadSeq / ObservedSeq are branded** precisely because each has a single mint
-  boundary (`observe` write; daemon admission) whose bypass is a bug. The brand
-  makes "you may only become a read cursor by going through observe" a
-  compile-time fact — a single testable conversion enforced by types, not
-  discipline.
+- **ReadSeq is branded** precisely because it has a single mint boundary
+  (`observe` write) whose bypass is a bug. The brand makes "you may only become a
+  read cursor by going through observe" a compile-time fact — a single testable
+  conversion enforced by types, not discipline. (`ObservedSeq` was branded for
+  the same reason at the daemon-admission boundary; that boundary is gone.)
 
 ---
 
@@ -216,7 +241,7 @@ export type ObservedSeq = number & { readonly [ObservedSeqB]: true } // minted v
 ```ts
 // The ONLY places a MessageSeq changes role. One function each; unit-tested.
 export const asReadSeq     = (m: MessageSeq): ReadSeq     => m as unknown as ReadSeq
-export const asObservedSeq = (m: MessageSeq): ObservedSeq => m as unknown as ObservedSeq
+// asObservedSeq was retired with the freshness redesign (no daemon observed cursor).
 ```
 
 **Ordering: NO generic cross-brand comparators in shared.**
@@ -240,7 +265,7 @@ re-opening the stream-key-mismatch bug the brand can't see. So:
 - **MessageSeq ↔ TransportSeq: NO conversion exists.** Any need to write one is
   a design error. The brand wall *is* the contract.
 - `asReadSeq` lives in `@silverhand/shared` (backend + CLI + renderer all mint).
-  Same for `asObservedSeq` (host imports from shared).
+  (`asObservedSeq` was retired with the freshness redesign.)
 - The mint helpers are the enforcement point for Axis B too: they take a
   *present* `MessageSeq`; there is no `asReadSeq(undefined)`. Absence is handled
   before the mint, explicitly (§5).
@@ -301,15 +326,16 @@ encoded at the single accessor + documented here:
 | Role | "absent" means | Collapse to 0? | Why |
 |---|---|---|---|
 | **ReadSeq** (read cursor) | never read | **Yes → 0 is correct** | nothing-read ≡ cursor before msg 1 ≡ all unread. `mention-cc.ts:351` `?? 0` is *correct*. |
-| **ObservedSeq** (freshness, daemon) | never observed | **No** | first-touch: **skip CAS** (omit `seen+stream_key`), ≠ observed-to-0. This is the false-stale fix (`observedSeqByStream.get(MAIN) ?? 0` no longer manufactures `seen=0`); S2 makes it type-visible so it can't regress. The one dangerous role. |
+| ~~**ObservedSeq** (freshness, daemon)~~ (retired) | — | — | The daemon per-stream observed boundary was **removed** with the freshness redesign (scheme C): freshness is now a whole-runtime backend EXISTS-guard, so there is no `observedSeqByStream` and no first-touch-skip-CAS decision to encode. This row was the original "one dangerous role"; it no longer exists. |
 | **StreamHeadSeq** (CAS token) | no stream head yet | **Yes → 0 is correct** | empty thread stream's CAS token **is** 0 by design — enables the first reply (`seen=0` inserts via `ON CONFLICT DO NOTHING`, pinned by `message-repo.test.ts:459`). Do **not** "fix" `message-repo.ts:1182`. |
 | **DeliverySeq** (high-water) | nothing delivered | **check in impl** | "not delivered" vs. "delivered to 0" may matter at the daemon boundary (`delivery-coordinator.ts:1270`); verify whether absent advances observed before deciding. |
 | **TransportSeq** (fanout counter) | scope never published | **Yes → 0 is correct** | current 0 / first publish 1 is allocator/high-water semantics (`scope-event-bus.ts:207`); resume gap detection is handled by `epoch` + buffer, not by treating 0 as special. |
 
 The brand cannot encode this table — it is the human contract the reviewer
-checks. **Only ObservedSeq (and possibly DeliverySeq) is a dangerous collapse;**
-the rest are role-defined zeros that must stay. Branding + this table together
-are the S2 deliverable.
+checks. **After the freshness redesign, DeliverySeq is the only remaining
+dangerous-collapse candidate** (ObservedSeq, formerly "the one dangerous role",
+was retired); the rest are role-defined zeros that must stay. Branding + this
+table together are the S2 deliverable.
 
 ---
 

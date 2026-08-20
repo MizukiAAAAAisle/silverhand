@@ -3,7 +3,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { AtSign, Check, Copy, Hash } from 'lucide-react';
+import { Check, Copy, Hash } from 'lucide-react';
 import { rehypeHighlightTerm } from './rehypeHighlightTerm';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { ADDRESSABLE_ID_PATTERN } from '@silverhand/shared';
@@ -18,8 +18,10 @@ import { MermaidDiagram } from './MermaidDiagram';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
 import {
   ConversationRef,
+  conversationIcon,
+  faceLabel,
   shortConversationId,
-  type ConversationReference,
+  type WorkspaceChannelReference,
 } from './ConversationRef';
 import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from './TaskRef';
 import {
@@ -64,7 +66,7 @@ interface MarkdownProps {
   /** Lookup by conversation id for `#conv:<id>` refs in the current
    *  workspace. Missing entries still render as clickable id refs when
    *  `onOpenConversationRef` is supplied. */
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   /** Static task summaries for export / screenshot rendering. Live
    *  `TaskRef` resolves with hooks; non-interactive export trees consume
@@ -642,18 +644,22 @@ function StaticConversationRef({
   conversation,
 }: {
   id: string;
-  conversation: ConversationReference | undefined;
+  conversation: WorkspaceChannelReference | undefined;
 }): JSX.Element {
   const label = conversation
     ? conversationDisplayName(conversation)
     : `#conv:${shortConversationId(id)}`;
-  const icon = conversationIcon(conversation?.roster_policy);
+  // `channel` is not a guess: the parameter's TYPE says this ref came from a
+  // workspace-scoped list ({@link WorkspaceChannelReference} carries the
+  // argument), so a direct pair never reaches it. Same face, same word, same
+  // glyph as the live chip — one authority (#task:1373).
+  const icon = conversationIcon(conversation ? 'channel' : undefined);
   return (
     <span
       className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
       aria-label={
         conversation
-          ? `${rosterLabel(conversation.roster_policy)} · ${label}`
+          ? `${faceLabel('channel')} · ${label}`
           : `Conversation #conv:${id}`
       }
       data-conversation-ref={id}
@@ -666,22 +672,8 @@ function StaticConversationRef({
   );
 }
 
-function conversationDisplayName(conversation: ConversationReference): string {
+function conversationDisplayName(conversation: WorkspaceChannelReference): string {
   return conversation.title;
-}
-
-function rosterLabel(policy: ConversationReference['roster_policy']): string {
-  if (policy === 'fixed') return 'DM';
-  return 'Channel';
-}
-
-function conversationIcon(
-  policy: ConversationReference['roster_policy'] | undefined,
-): JSX.Element {
-  if (policy === 'fixed') {
-    return <AtSign className="size-3 shrink-0 self-center" />;
-  }
-  return <Hash className="size-3 shrink-0 self-center" />;
 }
 
 // Walks the mdast tree and replaces inline `@handle`, `#handle`, and

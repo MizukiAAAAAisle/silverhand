@@ -103,7 +103,6 @@ function activityItem(overrides: Partial<ActivityItemDto>): ActivityItemDto {
     thread_root_id: null,
     message_id: 'msg-1',
     notification_id: null,
-    conversation_roster_policy: 'open',
     title: 'general',
     thread_root_preview: null,
     preview: null,
@@ -163,7 +162,6 @@ describe('activityItemSource (eliminate-route chokepoint)', () => {
       activityItem({
         kind: 'unread',
         salience: 'directed',
-        conversation_roster_policy: 'fixed',
         notification_id: null,
       }),
     );

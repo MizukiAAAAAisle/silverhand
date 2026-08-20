@@ -52,7 +52,7 @@ describe('ConversationRepo canonical schema', () => {
       expect(t.workspaces.get(workspace.id)).toMatchObject({
         id: workspace.id,
         name: 'eng',
-        workspace_kind: 'regular',
+        owner_agent_id: null,
       });
       expect(t.conversations.getChannel(channel.id)).toMatchObject({
         id: channel.id,
@@ -107,7 +107,6 @@ describe('ConversationRepo canonical schema', () => {
       t.conversations.addAgent(mentions.id, agent.id);
 
       expect(t.workspaces.get(home.id)).toMatchObject({
-        workspace_kind: 'agent_home',
         owner_agent_id: agent.id,
         dm_channel_id: dm.id,
       });

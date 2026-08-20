@@ -57,6 +57,25 @@ describe('sanitizeParsedEventForBroadcast', () => {
     ).toBe(long);
   });
 
+  it('applies the same cap to tool_call_input — the arm where the real params arrive (#task:2101)', () => {
+    const long = 'x'.repeat(RAW_AGENT_EVENT_STRING_MAX_CHARS + 200);
+    const ev: ParsedEvent = {
+      kind: 'tool_call_input',
+      toolCallId: 'tc-1',
+      input: { command: long },
+    };
+    const out = sanitizeParsedEventForBroadcast(ev) as Extract<
+      ParsedEvent,
+      { kind: 'tool_call_input' }
+    >;
+    const sanitized = (out.input as { command: string }).command;
+    expect(sanitized).toContain('<truncated 200 chars>');
+    // Correlation survives: without the id there is no row to refine.
+    expect(out.toolCallId).toBe('tc-1');
+    // Pure, like the tool_call arm.
+    expect((ev.input as { command: string }).command).toBe(long);
+  });
+
   it('preserves shallow object structure when within caps', () => {
     const ev = toolCall({ a: 1, b: 'short', c: true, d: null });
     const out = sanitizeParsedEventForBroadcast(ev) as Extract<

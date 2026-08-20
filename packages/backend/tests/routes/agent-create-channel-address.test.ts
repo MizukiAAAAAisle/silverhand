@@ -23,11 +23,11 @@ import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
  *
  * So the differentials here are all of the form "the credential's conversation
  * must not be able to influence the outcome": a source in a DIFFERENT workspace
- * with a DIFFERENT roster, and an anchor that is an agent inbox — no workspace at
- * all — which the old shape refused outright and the addressed shape does not even
- * consult. Plus the two refusals that keep the ambient guess from reappearing one
- * level down (`/thread:` suffix, workspace-less source) and the collapse that
- * keeps the resolver from becoming an existence oracle.
+ * with a DIFFERENT roster, and a bearer with no conversation coordinate at all —
+ * which the addressed shape does not even consult. Plus the two refusals that keep
+ * the ambient guess from reappearing one level down (`/thread:` suffix,
+ * workspace-less source) and the collapse that keeps the resolver from becoming an
+ * existence oracle.
  *
  * HOW FAR the address may reach is the credential's own axis (ruled 2026-08-15,
  * §7.1): `channel_fork_source` from a ConversationSlot acts only in its own
@@ -176,15 +176,13 @@ describe('internal create-channel — the address is the fork source', () => {
     t = buildTestApp();
     const seed = await makeAgent(t, 'seed');
     const alice = insertAgentScopedAgent(t, seed, 'alice');
-    const ws = await makeWorkspace(t, 'inbox-anchored', [alice]);
-    const inbox = new ConversationRepo(t.ctx.db).getAgentInbox(alice);
-    expect(inbox).not.toBeNull();
+    const ws = await makeWorkspace(t, 'agent-slot-anchored', [alice]);
 
     const res = await fork(
       t,
       { conversationId: ws.channelId, agentId: alice },
       `#conv:${ws.channelId}`,
-      'forked from an inbox session',
+      'forked from an agent-global session',
       agentSlotAuth(t, alice),
     );
     expect(res.status).toBe(200);
@@ -250,13 +248,20 @@ describe('internal create-channel — the address is the fork source', () => {
     t = buildTestApp();
     const seed = await makeAgent(t, 'seed');
     const alice = insertAgentScopedAgent(t, seed, 'alice');
-    const ws = await makeWorkspace(t, 'inbox-source-refused', [alice]);
-    const inbox = new ConversationRepo(t.ctx.db).getAgentInbox(alice);
+    const ws = await makeWorkspace(t, 'pair-source-refused', [alice]);
+    // Since #task:2072 the workspace-less placement is `direct_pair`, and alice is
+    // an ENDPOINT of this one — so the refusal below is about the missing
+    // workspace coordinate, not about her access to the source.
+    const pair = new ConversationRepo(t.ctx.db).getOrCreateDirectPair(
+      { kind: 'agent', id: alice },
+      { kind: 'human', id: 'local' },
+      Date.now(),
+    ).conversation;
 
     const res = await fork(
       t,
       { conversationId: ws.channelId, agentId: alice },
-      `#conv:${inbox!.id}`,
+      `#conv:${pair.id}`,
       'forked',
       agentSlotAuth(t, alice),
     );

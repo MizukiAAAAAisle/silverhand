@@ -28,7 +28,7 @@ async function createHomeWorkspace(
   const agentId = ((await agentRes.json()) as any).agent.id;
   const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
   const home = wsList.workspaces.find(
-    (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
+    (w: any) => w.owner_agent_id === agentId,
   );
   expect(home).toBeDefined();
   return { agentId, homeId: home.id };
@@ -117,19 +117,25 @@ describe('POST /api/workspaces/:id/channels — agent_home DM branch characteriz
     expect(channel.visibility).toBe('private');
   });
 
-  // The owner-unset 500 and owner-not-found 404 arms are DEFENSIVE guards
-  // against a state the schema forbids: a CHECK constraint enforces
-  // `agent_home ⇒ owner_agent_id IS NOT NULL`, and a FK enforces
-  // `owner_agent_id ⇒ a real agents row`. Neither state is reachable through
-  // the public API. To pin the exact responses these guards produce we
-  // simulate the corrupted row by briefly relaxing the relevant enforcement
-  // pragma for the UPDATE only, then restoring it. (Governance is user-role
-  // based — workspace_users — not owner_agent_id, so the 403 gate still passes
-  // and the handler reaches these branches.)
+  // The owner-not-found 404 arm is a DEFENSIVE guard against a state the schema
+  // forbids: a FK enforces `owner_agent_id ⇒ a real agents row`. It is not
+  // reachable through the public API, so to pin the exact response it produces we
+  // simulate the corrupted row by briefly relaxing the relevant enforcement pragma
+  // for the UPDATE only, then restoring it. (Governance is user-role based —
+  // workspace_users — not owner_agent_id, so the 403 gate still passes and the
+  // handler reaches the branch.)
+  //
+  // Its former sibling — "kind says agent_home, owner column is NULL" → 500 — is
+  // gone with #task:2082, and the cell below replaces it. Suitability now asks the
+  // ownership RELATION, so that row simply has no home agent; see the third cell
+  // for what it does instead.
 
-  it('returns 500 (body has no `code`) when an agent_home workspace has no owner_agent_id', async () => {
+  it('a container with no home agent is a regular container, whatever the stored word says', async () => {
     t = buildTestApp();
     const { homeId } = await createHomeWorkspace(t, 'alice');
+    // The state the two schema CHECKs forbid, reachable only by turning check
+    // enforcement off: the stored word still says `agent_home`, the relation says
+    // nobody owns it.
     t.ctx.db.pragma('ignore_check_constraints = ON');
     t.ctx.db
       .prepare('UPDATE workspaces SET owner_agent_id = NULL WHERE id = ?')
@@ -140,8 +146,16 @@ describe('POST /api/workspaces/:id/channels — agent_home DM branch characteriz
       title: 'X',
       member_agent_ids: [],
     });
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'agent_home workspace missing owner' });
+    // The TERMINAL reading, and the one observable consequence of #task:2082: this
+    // is no longer a corrupt home reporting `agent_home workspace missing owner`
+    // (500) — it is a container with no home agent, so the route dispatches it to
+    // the REGULAR create arm and succeeds. Once #task:2081 drops the word, "an
+    // agent_home row with no owner" is not a state that can be described at all,
+    // which is why the guard was deleted rather than rewired. Pinned rather than
+    // dropped so the behavior on a check-violating row stays written down.
+    expect(res.status).toBe(201);
+    const channel = ((await res.json()) as any).channel;
+    expect(channel).toMatchObject({ placement_kind: 'workspace' });
   });
 
   it('returns 404 (body has no `code`) when the agent_home owner agent does not exist', async () => {

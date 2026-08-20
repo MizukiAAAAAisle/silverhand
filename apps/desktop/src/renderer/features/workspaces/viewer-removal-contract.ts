@@ -208,8 +208,11 @@ export const VIEWER_LOCAL_KEY_CLASSIFICATION = {
 
 /** Predicate: is this a workspace-keyed cache for the removed workspace? Matches
  *  `['workspaces', wsId, …]` — the by_conversation unread map plus the
- *  channels/members/capabilities/archived caches in workspaces/hooks.ts. */
-function isWorkspaceKeyed(queryKey: unknown, workspaceId: string): boolean {
+ *  channels/members/capabilities/archived caches in workspaces/hooks.ts.
+ *  EXPORTED so the `exempt` classification can be fenced by machine rather than
+ *  by prose: an exempt key claims this sweep covers it, and only calling the
+ *  production predicate proves that claim still holds (#task:2078). */
+export function isWorkspaceKeyed(queryKey: unknown, workspaceId: string): boolean {
   return (
     Array.isArray(queryKey) &&
     queryKey[0] === 'workspaces' &&

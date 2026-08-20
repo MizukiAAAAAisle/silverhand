@@ -116,8 +116,6 @@ export type ErrorSubkind =
    * published set ever grows past this list. */
   /** The address names no stream this agent may use. */
   | 'target_unresolved'
-  /** An agent inbox is a read face, never a write destination. */
-  | 'inbox_not_writable'
   /** The `/thread:<root>` suffix names no reply cluster of that conversation. */
   | 'thread_not_in_target'
   /** `dm:@<own handle>` — a direct message needs another participant. */

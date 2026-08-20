@@ -4,7 +4,7 @@
 // Regeneration is impossible post-compaction (the chain is gone); the
 // two-stage drift guard in migration-baseline.test.ts pins this artifact.
 
-export const BASELINE_SCHEMA_VERSION = 44;
+export const BASELINE_MIGRATION_STEP = 44;
 
 export const BASELINE_SCHEMA_SQL = `
 CREATE TABLE hosts (

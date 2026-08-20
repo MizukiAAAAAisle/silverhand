@@ -18,6 +18,7 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 import type { UserNameResolver } from '@/lib/current-user';
+
 import type { ChannelReference } from './ChannelRef';
 
 /**
@@ -81,20 +82,19 @@ export function useMessageRenderContext(
   const { data: workspaces = [] } = useWorkspaces();
   // Resolve `#<channel_name>` against the message's workspace (not the
   // primary-selected one) so cross-workspace panes resolve their own
-  // refs. Both queries short-circuit (`enabled: false`) until the
-  // workspace kind is known, so they emit empty arrays in that window —
-  // which is also the terminal state for a workspace-less conversation
-  // (#task:2035): a `direct_pair` has no channel namespace, so `#name` refs
-  // there render as inert text, exactly as an unresolvable one does.
-  const workspaceKind: 'regular' | 'dm' | null =
-    workspaces.find(w => w.id === workspaceId)?.kind ?? null;
+  // refs. Both queries short-circuit (`enabled: false`) until that workspace's
+  // ROW has resolved, so they emit empty arrays in that window — which is also
+  // the terminal state for a workspace-less conversation (#task:2035): a
+  // `direct_pair` has no channel namespace, so `#name` refs there render as inert
+  // text, exactly as an unresolvable one does.
+  const workspaceResolved = workspaces.some(w => w.id === workspaceId);
   const { data: liveChannels = [] } = useChannelsForWorkspace(
     workspaceId,
-    workspaceKind,
+    workspaceResolved,
   );
   const { data: archivedChannels = [] } = useArchivedChannelsForWorkspace(
     workspaceId,
-    workspaceKind,
+    workspaceResolved,
   );
   const { data: rawViewer } = useViewerUser();
   const viewer =
@@ -162,7 +162,7 @@ export function useMessageRenderContext(
   // rather than guess a target.
   const channelsByName = useMemo(() => {
     const m = new Map<string, ChannelReference | null>();
-    if (workspaceKind === null) return m;
+    if (!workspaceResolved) return m;
     const consider = (c: ChannelListItem): void => {
       const title = c.title;
       if (m.has(title)) {
@@ -179,7 +179,7 @@ export function useMessageRenderContext(
     for (const c of liveChannels) consider(c);
     for (const c of archivedChannels) consider(c);
     return m;
-  }, [workspaceKind, liveChannels, archivedChannels]);
+  }, [workspaceResolved, liveChannels, archivedChannels]);
 
   return {
     agentsById,

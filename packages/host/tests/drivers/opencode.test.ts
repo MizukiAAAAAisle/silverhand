@@ -453,6 +453,123 @@ describe('OpenCodeDriver ACP event mapping', () => {
     ).toEqual([{ kind: 'tool_output', toolCallId: 'tool_1' }]);
   });
 
+  it('refines a tool call with the params that arrive in tool_call_update, without re-announcing the call (#task:2101)', () => {
+    const d = new OpenCodeDriver();
+    const update = (u: Record<string, unknown>) =>
+      d.parseLine(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: { sessionId: 'ses_1', update: u },
+        }),
+      );
+
+    // The real OpenCode sequence: the creating frame carries no command, only
+    // the scaffolding `cwd` — which is why every Silverhand command rendered
+    // as a bare `bash`.
+    expect(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool_1',
+        title: 'bash',
+        rawInput: { cwd: '/tmp/agent' },
+        status: 'pending',
+      }),
+    ).toEqual([
+      {
+        kind: 'tool_call',
+        name: 'bash',
+        input: { cwd: '/tmp/agent' },
+        toolCallId: 'tool_1',
+      },
+    ]);
+
+    // The command lands in a LATER update for the same id. It must come back
+    // as a refinement of that row, never as a second `tool_call`: `tool_call`
+    // is what increments `outstandingToolUses` / `toolCallCounts`.
+    const refined = update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool_1',
+      rawInput: { cwd: '/tmp/agent', command: 'silverhand message send' },
+      status: 'in_progress',
+    });
+    expect(refined).toEqual([
+      {
+        kind: 'tool_call_input',
+        toolCallId: 'tool_1',
+        input: { cwd: '/tmp/agent', command: 'silverhand message send' },
+      },
+    ]);
+    expect(refined.some(e => e.kind === 'tool_call')).toBe(false);
+
+    // A terminal update carrying revised params emits BOTH — the refinement
+    // for the row and the existing completion marker.
+    expect(
+      update({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool_1',
+        rawInput: { cwd: '/tmp/agent', command: 'silverhand message send --anyway' },
+        status: 'completed',
+      }),
+    ).toEqual([
+      {
+        kind: 'tool_call_input',
+        toolCallId: 'tool_1',
+        input: { cwd: '/tmp/agent', command: 'silverhand message send --anyway' },
+      },
+      { kind: 'tool_output', toolCallId: 'tool_1' },
+    ]);
+  });
+
+  it('emits no refinement for a tool call it never announced, or for an update with no params (#task:2101)', () => {
+    const d = new OpenCodeDriver();
+    const update = (u: Record<string, unknown>) =>
+      d.parseLine(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: { sessionId: 'ses_1', update: u },
+        }),
+      );
+
+    // Unknown id: there is no row to refine, so the backend would have nothing
+    // to update. Gated on what we announced, not on the payload.
+    expect(
+      update({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'never_seen',
+        rawInput: { command: 'ls' },
+        status: 'in_progress',
+      }),
+    ).toEqual([]);
+
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tool_2',
+      title: 'bash',
+      rawInput: { cwd: '/tmp/agent' },
+      status: 'pending',
+    });
+
+    // `rawInput` absent = the runtime revised something else (status, output).
+    // Absent is NOT the same as an empty object: `{}` is a real reported input.
+    expect(
+      update({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool_2',
+        status: 'in_progress',
+      }),
+    ).toEqual([]);
+    expect(
+      update({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool_2',
+        rawInput: {},
+        status: 'in_progress',
+      }),
+    ).toEqual([{ kind: 'tool_call_input', toolCallId: 'tool_2', input: {} }]);
+  });
+
   it('auto-approves permission requests to match full-access runtime posture', async () => {
     const { ctx, cleanup } = makeSpawnCtx();
     try {

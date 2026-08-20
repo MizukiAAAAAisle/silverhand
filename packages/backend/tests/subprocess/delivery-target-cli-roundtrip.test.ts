@@ -23,20 +23,20 @@
  *
  * and asserts the coordinate at the end equals the one at the start.
  *
- * THE MATRIX. Four placement/naming cells — every arm `streamNamingOf` can
- * return — each in both streams (main line and reply cluster), on both doors an
- * agent answers through (`message send`, `message history`):
+ * THE MATRIX. Three placement/naming cells — every arm `streamNamingOf` can
+ * return that an agent can hold end to end — each in both streams (main line and
+ * reply cluster), on both doors an agent answers through (`message send`,
+ * `message history`):
  *
  *   named         a workspace channel whose two names round-trip → the readable form
  *   direct_pair   a DM, viewed by one of its endpoints            → `dm:@handle`
  *   unnameable    a channel in an agent_home workspace            → `#conv:<id>`
- *   id_only       the agent's own inbox                           → `#conv:<id>`
  *
- * The last two render the same FORM on purpose (an agent cannot act on the
- * difference), but they are seeded separately because they reach it through
- * different arms and only one of them is writable — the inbox's write refusal is
- * asserted here too, since "the coordinate is stable" must not quietly come to
- * mean "every coordinate accepts a write".
+ * `streamNamingOf`'s fourth arm, `id_only`, is a DM whose peer handle cannot be
+ * rendered (a non-endpoint viewer, or an endpoint whose handle is gone). It emits
+ * the same FORM as `unnameable` and is exercised as a pure function in
+ * `application/stream-naming.test.ts`; it is not seeded here because no
+ * subprocess-visible behaviour distinguishes it from the cell above.
  *
  * WHY A REAL PORT AND A REAL PROCESS. `app.fetch` would skip the HTTP client,
  * argv parsing, the flag policy and the exit code — the layers that translate an
@@ -45,8 +45,8 @@
  * all, so it can only prove the token was forwarded, never that it means the
  * same stream on the other side.
  *
- * WHICH CREDENTIAL. An AGENT-SCOPED session, i.e. a real AgentSlot bearer. Three
- * of the four cells are not the route conversation, and reaching a stream other
+ * WHICH CREDENTIAL. An AGENT-SCOPED session, i.e. a real AgentSlot bearer. Two
+ * of the three cells are not the route conversation, and reaching a stream other
  * than its own is exactly what a ConversationSlot may NOT do on the write door
  * (#task:2021 P4-4, ruled 2026-08-15) — so a conversation-scoped credential could
  * not exercise this matrix at all, and pinning the confinement itself is
@@ -54,7 +54,7 @@
  * one absolute address means one stream end to end, which is the agent-scoped
  * session's whole premise.
  *
- * COST. ~17 subprocess spawns under `tsx`. That is the price of the only
+ * COST. ~13 subprocess spawns under `tsx`. That is the price of the only
  * evidence that this seam holds.
  */
 import { serve } from '@hono/node-server';
@@ -100,8 +100,6 @@ interface Cell {
   readonly conversationId: string;
   /** The cluster root seeded here, i.e. the `/thread:` half of the matrix. */
   readonly rootId: string;
-  /** False for the inbox: a stream can be addressable and still refuse writes. */
-  readonly writable: boolean;
 }
 
 interface Fixture {
@@ -287,9 +285,8 @@ beforeAll(async () => {
   // A capability is a grant INSIDE a workspace, held by a MEMBER (the grant table
   // keys on `workspace_members`), and a `regular` workspace with no grant row
   // denies — unlike the `agent_home` arm, where the owner holds implicit
-  // authority. The other three cells therefore need neither: the home channel and
-  // the inbox are alice's own surfaces, and a direct pair carries its
-  // participants on the row.
+  // authority. The other two cells therefore need neither: the home channel is
+  // alice's own surface, and a direct pair carries its participants on the row.
   workspaces.insertMembership(ws.id, alice.id);
   new AgentCapabilityRepo(db).replaceSet(ws.id, alice.id, [
     'send_messages',
@@ -316,9 +313,6 @@ beforeAll(async () => {
     NOW,
   ).conversation.id;
 
-  // `id_only`: the inbox — addressable, readable, never a write destination.
-  const inbox = conversations.insertAgentInbox(alice.id, NOW).id;
-
   const seedRoot = (conversationId: string): string =>
     messages.insertForConversation({
       conversationId,
@@ -338,24 +332,16 @@ beforeAll(async () => {
     bobHandle: bob.name,
     token: agentSlotToken(t, alice.id),
     cells: [
-      { label: 'named', conversationId: named, rootId: seedRoot(named), writable: true },
+      { label: 'named', conversationId: named, rootId: seedRoot(named) },
       {
         label: 'direct_pair',
         conversationId: pair,
         rootId: seedRoot(pair),
-        writable: true,
       },
       {
         label: 'unnameable',
         conversationId: home,
         rootId: seedRoot(home),
-        writable: true,
-      },
-      {
-        label: 'id_only',
-        conversationId: inbox,
-        rootId: seedRoot(inbox),
-        writable: false,
       },
     ],
   };
@@ -394,69 +380,51 @@ describe(
       }
       expect(tokens.get('named')).toBe('#rt-ws/general');
       expect(tokens.get('direct_pair')).toBe(`dm:@${fixture.bobHandle}`);
-      // Two arms, one form, on purpose: an agent cannot act on the difference.
+      // A workspace with no address root degrades to the id form rather than
+      // emitting a name nobody can paste back.
       expect(tokens.get('unnameable')).toBe(
         `#conv:${fixture.cells[2]!.conversationId}`,
       );
-      expect(tokens.get('id_only')).toBe(`#conv:${fixture.cells[3]!.conversationId}`);
     });
 
-    for (const index of [0, 1, 2, 3]) {
+    for (const index of [0, 1, 2]) {
       for (const stream of ['main', 'thread'] as const) {
-        const label = (['named', 'direct_pair', 'unnameable', 'id_only'] as const)[
-          index
-        ];
+        const label = (['named', 'direct_pair', 'unnameable'] as const)[index];
         it(`${label} / ${stream}: a real subprocess reaches exactly the stream the header named`, async () => {
           const cell = fixture.cells[index]!;
           const threadRootId = stream === 'main' ? null : cell.rootId;
           const token = headerTargetOf(fixture, cell.conversationId, threadRootId);
 
-          if (cell.writable) {
-            const body = `round-trip ${cell.label} ${stream}`;
-            const sent = await send(token, body);
-            expect(sent.code, sent.stderr).toBe(0);
-            const ack = JSON.parse(sent.stdout) as {
-              message_id: string;
-              thread_root_id: string | null;
-            };
-            // The wire's own answer about WHERE it landed…
-            expect(ack.thread_root_id).toBe(threadRootId);
-            // …and the row, read from the addressed conversation. Both, because
-            // an ack is a claim and the row is the fact.
-            const row = fixture.messages.getInConversation(
-              cell.conversationId,
-              ack.message_id,
-            );
-            expect(
-              row,
-              `${cell.label}/${stream}: the row is not in the addressed conversation`,
-            ).not.toBeNull();
-            expect(row!.content).toBe(body);
-            expect(row!.thread_root_id).toBe(threadRootId);
-            // STABLE, not merely correct: the header rendered for the message the
-            // agent just wrote is the token it was handed. Without this a
-            // spelling could resolve correctly and still re-render differently,
-            // and the next reply would carry a token nobody round-tripped.
-            expect(
-              headerTargetOf(fixture, cell.conversationId, row!.thread_root_id),
-            ).toBe(token);
-          } else {
-            // An inbox is addressable and readable, never a write destination —
-            // and the refusal is the TYPED one, not a resolution failure, so an
-            // agent learns "not here" rather than "no such stream". Read through
-            // the CLI's own translation, because that is the only refusal an
-            // agent ever sees: 400 → `validation_error`, with the backend's own
-            // code adopted as the subkind.
-            const refused = await send(token, 'into an inbox');
-            expect(refused.code, refused.stdout).toBe(1);
-            const error = errorOf(refused.stderr);
-            expect(error.code).toBe('validation_error');
-            expect(error.subkind).toBe('inbox_not_writable');
-            expect(error.message ?? '').toContain('inbox');
-          }
+          const body = `round-trip ${cell.label} ${stream}`;
+          const sent = await send(token, body);
+          expect(sent.code, sent.stderr).toBe(0);
+          const ack = JSON.parse(sent.stdout) as {
+            message_id: string;
+            thread_root_id: string | null;
+          };
+          // The wire's own answer about WHERE it landed…
+          expect(ack.thread_root_id).toBe(threadRootId);
+          // …and the row, read from the addressed conversation. Both, because
+          // an ack is a claim and the row is the fact.
+          const row = fixture.messages.getInConversation(
+            cell.conversationId,
+            ack.message_id,
+          );
+          expect(
+            row,
+            `${cell.label}/${stream}: the row is not in the addressed conversation`,
+          ).not.toBeNull();
+          expect(row!.content).toBe(body);
+          expect(row!.thread_root_id).toBe(threadRootId);
+          // STABLE, not merely correct: the header rendered for the message the
+          // agent just wrote is the token it was handed. Without this a
+          // spelling could resolve correctly and still re-render differently,
+          // and the next reply would carry a token nobody round-tripped.
+          expect(
+            headerTargetOf(fixture, cell.conversationId, row!.thread_root_id),
+          ).toBe(token);
 
-          // The read door takes the SAME token — one grammar, both directions,
-          // including for the stream a write was just refused on.
+          // The read door takes the SAME token — one grammar, both directions.
           const read = await history(token);
           expect(read.code, read.stderr).toBe(0);
           const window = JSON.parse(read.stdout) as HistoryWindow;

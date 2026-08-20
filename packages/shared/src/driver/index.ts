@@ -80,6 +80,28 @@ export const ParsedEventSchema = z.discriminatedUnion('kind', [
     .strict(),
   z
     .object({
+      /** Late-arriving parameters for a tool call the driver ALREADY
+       *  reported (#task:2101). ACP-family runtimes create a tool call
+       *  and revise it: OpenCode's first `tool_call` frame carries no
+       *  `rawInput` (we persist `{cwd}` alone), and the real command
+       *  arrives in a `tool_call_update` for the same `toolCallId`.
+       *
+       *  This is a REFINEMENT of one existing activity row, never a new
+       *  call: `tool_call` is what increments `outstandingToolUses` and
+       *  `toolCallCounts` (supervisor), so re-emitting `tool_call` for a
+       *  known id would double-count both and desync the outstanding
+       *  gauge. Like `input_lifecycle`, this kind touches NO run state.
+       *
+       *  `toolCallId` is REQUIRED (unlike on `tool_call`): without an id
+       *  there is no row to refine, and a driver that cannot correlate
+       *  must simply not emit this. */
+      kind: z.literal('tool_call_input'),
+      toolCallId: z.string().min(1),
+      input: RequiredUnknownSchema,
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal('tool_output'),
       name: z.string().min(1).optional(),
       toolCallId: z.string().min(1).optional(),
@@ -163,6 +185,7 @@ export const PARSED_EVENT_KINDS = [
   'thinking',
   'text',
   'tool_call',
+  'tool_call_input',
   'tool_output',
   'turn_end',
   'compaction_started',

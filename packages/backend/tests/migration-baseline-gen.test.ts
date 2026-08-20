@@ -36,7 +36,7 @@ import { type Migration, migrations } from '@silverhand/shared/db/migrations';
  * over. ALL DBs here are `:memory:` — never touch a live DB (shiki gate §6).
  */
 
-const BASELINE_VERSION = 44;
+const BASELINE_STEP = 44;
 const here = dirname(fileURLToPath(import.meta.url));
 
 function applyChain(db: Database.Database, plan: Migration[], maxVersion: number): void {
@@ -110,7 +110,7 @@ function freshDb(): Database.Database {
 
 describe('migration baseline generator (#task:1213, one-shot)', () => {
   const run = process.env.GEN_MIGRATION_BASELINE === '1';
-  const chainPresent = migrations.some(m => m.version < BASELINE_VERSION);
+  const chainPresent = migrations.some(m => m.version < BASELINE_STEP);
 
   it.runIf(run)('regenerates baseline artifacts from the real chain', () => {
     expect(
@@ -120,7 +120,7 @@ describe('migration baseline generator (#task:1213, one-shot)', () => {
 
     // Oracles from the REAL chain.
     const v44Db = freshDb();
-    applyChain(v44Db, migrations, BASELINE_VERSION);
+    applyChain(v44Db, migrations, BASELINE_STEP);
     const baselineSql = dumpExecutableSchema(v44Db);
     const v44Norm = normalizeSchema(v44Db);
 
@@ -137,7 +137,7 @@ describe('migration baseline generator (#task:1213, one-shot)', () => {
     // historical end state (compaction does not change current schema).
     const recombined = freshDb();
     recombined.exec(baselineSql);
-    for (const m of migrations.filter(x => x.version > BASELINE_VERSION)) {
+    for (const m of migrations.filter(x => x.version > BASELINE_STEP)) {
       recombined.exec(m.up);
     }
     expect(normalizeSchema(recombined)).toBe(currentNorm);
@@ -152,11 +152,11 @@ describe('migration baseline generator (#task:1213, one-shot)', () => {
     ).toBe(false);
     const tsBody =
       `// AUTO-GENERATED — DO NOT HAND-EDIT (#task:1213 baseline compaction).\n` +
-      `// Source of truth: a one-shot replay of historical migrations v1..v${BASELINE_VERSION}\n` +
+      `// Source of truth: a one-shot replay of historical migrations v1..v${BASELINE_STEP}\n` +
       `// (deleted from the live plan; preserved in this commit's git history).\n` +
       `// Regeneration is impossible post-compaction (the chain is gone); the\n` +
       `// two-stage drift guard in migration-baseline.test.ts pins this artifact.\n\n` +
-      `export const BASELINE_SCHEMA_VERSION = ${BASELINE_VERSION};\n\n` +
+      `export const BASELINE_MIGRATION_STEP = ${BASELINE_STEP};\n\n` +
       `export const BASELINE_SCHEMA_SQL = \`\n${baselineSql}\`;\n`;
     writeFileSync(join(here, '..', '..', 'shared', 'src', 'db', 'baseline-schema.ts'), tsBody);
 

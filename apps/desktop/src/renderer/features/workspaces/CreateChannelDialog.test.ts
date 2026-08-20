@@ -13,13 +13,13 @@ import {
 
 describe('computeCreateChannelPayload', () => {
   const base = {
-    isDm: false,
+    hasMembers: true,
     title: '  fix the login bug  ',
     selectedAgents: ['agent-alice', 'agent-bob'],
     selectedHumans: [] as string[],
   };
 
-  it('regular Private sends visibility=private and the explicit (empty) human list', () => {
+  it('a member-bearing workspace sends visibility=private and the explicit (empty) human list', () => {
     const payload = computeCreateChannelPayload({ ...base, visibility: 'private' });
     expect(payload).toEqual({
       title: 'fix the login bug', // trimmed
@@ -29,7 +29,7 @@ describe('computeCreateChannelPayload', () => {
     });
   });
 
-  it('regular Public sends visibility=public', () => {
+  it('a member-bearing workspace sends visibility=public', () => {
     const payload = computeCreateChannelPayload({
       ...base,
       visibility: 'public',
@@ -39,13 +39,14 @@ describe('computeCreateChannelPayload', () => {
     expect(payload.member_user_ids).toEqual(['user-x']);
   });
 
-  it('DM omits visibility entirely (never sent) and carries no member selection', () => {
+  it('a memberless container omits visibility entirely and carries no member selection', () => {
     const payload = computeCreateChannelPayload({
       ...base,
-      isDm: true,
+      hasMembers: false,
       visibility: 'private',
     });
-    // A DM must not put `visibility` on the wire at all — omission, not a value.
+    // An agent space must not put `visibility` on the wire at all — omission,
+    // not a value.
     expect('visibility' in payload).toBe(false);
     expect(payload.member_agent_ids).toEqual([]);
     expect(payload.member_user_ids).toBeUndefined();

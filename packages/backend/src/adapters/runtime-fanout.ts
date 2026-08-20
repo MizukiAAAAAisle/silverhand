@@ -387,8 +387,8 @@ export function createRuntimeFanoutDbDeps(deps: {
         // `placement_kind = 'workspace'`, so a stray roster row on a DirectPair
         // stays inert here for free (no hand-written `participation OR roster`
         // fallback, which Gate 9 forbids). This is what lets a rosterless
-        // DirectPair / agent-inbox agent's parsed-event frames past the
-        // perimeter so their activity feed is not permanently empty.
+        // DirectPair agent's parsed-event frames past the perimeter so its
+        // activity feed is not permanently empty.
         isAgentParticipant: (conversationId, agentId) =>
           conversations.isAgentParticipant(conversationId, agentId),
       },

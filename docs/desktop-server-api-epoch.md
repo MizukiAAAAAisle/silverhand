@@ -23,6 +23,16 @@ participates in:
 Never reuse one axis for another boundary, and never infer compatibility from
 app semver, git commit, or build identity.
 
+**Single numeric authority.** The digits behind all three wire axes (and the
+desktop minimum-client / minimum-server pair) live in ONE record,
+`packages/shared/src/protocol-versions.ts`; the constants above only re-export
+their own field. The CURRENT production values are not restated anywhere else —
+synthetic mismatch values in tests (built from the exported current) and
+historical numbers in archaeology prose are the only other numerals, and neither
+is a second write-point. Bump a version by editing that record and nothing else.
+The DB schema version (last table row) is a separate axis with its own authority
+and is NOT part of this record.
+
 The contract is **safe version skew (default plan A)**: a compatible pair runs
 normally; an incompatible pair is rejected *before any business DTO is read* —
 structured HTTP 426 (JSON `UpgradeRequiredBody`) on REST **and** on the
@@ -68,18 +78,12 @@ mismatched pair can be constructed. If it HAS been published, the same change
 needs its own triple.
 
 Check it, don't assume it — the current epoch is a working-tree value and says
-nothing about what shipped:
-
-```
-git show <published-upstream>:packages/shared/src/desktop-server-api-epoch.ts \
-  | grep 'DESKTOP_SERVER_API_EPOCH ='
-```
-
-plus the same question for artifacts built outside that upstream (a packaged
-desktop or a server bundle handed to anyone from a local tree). A local
-single-tree dogfood build does NOT count: it carries both sides and has zero skew
-by construction (§4.2). If either check finds the current epoch in the wild, fall
-back to the rules below.
+nothing about what shipped. A release IS a tag: read the LAST PUBLISHED value
+from the newest matching release tag with the recipe in §6 (it handles tags cut
+before `protocol-versions.ts` existed). An untagged local or dogfood build is
+not a release and puts no peer in the field — it carries both sides from one
+tree and has zero skew by construction (§4.2). If the current epoch already
+appears in a published tag, fall back to the rules below.
 
 - **Do NOT bump** for additive, old-side-safe changes: new optional DTO
   field, new endpoint, new optional event field old clients ignore safely.
@@ -90,16 +94,18 @@ back to the rules below.
   refused at admission, which is exactly the failure mode plan A exists to
   prevent; changing a discriminant, nullability, pagination/cursor
   semantics, permission semantics old clients would misinterpret; changing
-  event ordering guarantees). In the SAME commit as the breaking change set
-  ALL THREE constants to the same new value:
+  event ordering guarantees). In the SAME commit as the breaking change, edit
+  the desktop triple in `packages/shared/src/protocol-versions.ts` — and ONLY
+  there — to the same new value:
 
   ```
-  DESKTOP_SERVER_API_EPOCH  = N+1
-  MINIMUM_CLIENT_API_EPOCH  = N+1
-  MINIMUM_SERVER_API_EPOCH  = N+1
+  // packages/shared/src/protocol-versions.ts
+  desktopApi       = N+1
+  desktopMinClient = N+1
+  desktopMinServer = N+1
   ```
 
-  Bumping only `current` while a minimum stays behind silently re-admits the
+  Bumping only `desktopApi` while a minimum stays behind silently re-admits the
   exact incompatible pair plan A exists to reject. The lockstep test in
   `packages/shared/tests/desktop-server-api-epoch.test.ts` enforces this
   structurally: a minimum of 0 is legal ONLY while the current epoch is
@@ -215,7 +221,68 @@ admission on them would re-couple optional telemetry to the admission decision.
 Nothing here is a permanent fail-open, and there is no remaining bridge to
 exit; this section is the §11 record of its closure.
 
-## 6. Known residuals
+## 6. Release-time version-step check (all three wire axes) — MANUAL
+
+The single authority (`protocol-versions.ts`) removes *duplicate* version
+numbers; it does NOT prove the numbers move correctly across releases. That is a
+release-time discipline, done by a human against the release tags — deliberately
+NOT code and NOT a test. The rule for **every** wire axis
+(`HOST_PROTOCOL_VERSION`, `OUTBOUND_PROTOCOL_VERSION`, `DESKTOP_SERVER_API_EPOCH`
+and its two minima):
+
+> Each axis, versus the LAST PUBLISHED release of the artifact that carries it,
+> is either **unchanged** or **exactly +1**. Never +2 or more.
+
+**The tag is the only release proof — judge against it, never against
+`origin/main`.** `origin/main` can already carry an unreleased bump, so it is not
+"what shipped". Take the newest tag for the artifact that carries the axis, then
+read the last shipped value FROM THAT TAG:
+
+| Axis (`PROTOCOL_VERSIONS` field) | Tag family | Location inside a pre-authority tag |
+|---|---|---|
+| `host` | `daemon-v*` | `packages/host/src/protocol.ts` → `HOST_PROTOCOL_VERSION` |
+| `outbound` | `daemon-v*` | `packages/host/src/outbound-protocol.ts` → `OUTBOUND_PROTOCOL_VERSION` |
+| `desktopApi` / `desktopMinClient` / `desktopMinServer` | `desktop-v*` | `packages/shared/src/desktop-server-api-epoch.ts` → the three epoch constants |
+
+```
+# Daemon axes (host, outbound) — newest daemon-v* tag:
+TAG=$(git tag --list 'daemon-v*' --sort=-v:refname | head -1)
+git show "$TAG:packages/shared/src/protocol-versions.ts"    # authority (host, outbound)
+# ...or, for a tag cut before that file existed (e.g. daemon-v0.1.9), read BOTH
+# old per-axis files — never a single path that could match the wrong axis:
+git show "$TAG:packages/host/src/protocol.ts"           # HOST_PROTOCOL_VERSION
+git show "$TAG:packages/host/src/outbound-protocol.ts"  # OUTBOUND_PROTOCOL_VERSION
+
+# Desktop triple — newest desktop-v* tag:
+TAG=$(git tag --list 'desktop-v*' --sort=-v:refname | head -1)
+git show "$TAG:packages/shared/src/protocol-versions.ts"          # authority (the triple)
+# ...or, for a tag cut before that file existed (e.g. desktop-v0.2.3), read the
+# old desktop-epoch file — NOT host/protocol.ts, which exists in that tag and
+# would silently return the wrong axis:
+git show "$TAG:packages/shared/src/desktop-server-api-epoch.ts"   # the three epoch constants
+```
+
+Read the axis from the file the table names for its OWN tag family; do not use a
+generic `||` fallback, because the daemon files exist in a `desktop-v*` tag (and
+vice versa) and would succeed on the wrong axis. Do NOT transcribe the historical
+number into this doc — read it from the tag each time.
+
+Compare each field being released to the value that tag shows and confirm the
+step is 0 or +1.
+
+**A +2 is not "two breaking changes" — it is a skipped generation, and a bug.**
+Multiple breaking changes that never shipped separately fold into ONE generation
+(two peers built from the same tree are never a mixed pair), so they still move
+the axis by a single +1. A step of +2 means a value was minted for a generation
+no artifact ever carried — delete the phantom step and collapse to +1 before
+tagging. (This is exactly the drift #task:2110 corrected: the branch had jumped
+host/outbound/desktop by +3/+3/+2 over their published tags.)
+
+An unchanged axis needs no ceremony; only a CHANGED axis is checked. The daemon
+side records the same rule at the outbound gate in
+`docs/daemon-outbound-protocol.md`.
+
+## 7. Known residuals
 
 - `ClientInfoSchema` is `.strict()`: an OLD (pre-epoch) server parsing a NEW
   desktop's telemetry header classifies it `invalid`. That consumer is

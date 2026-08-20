@@ -319,7 +319,7 @@ describe('workspace self-leave (#task:1930)', () => {
     const home = t.ctx.db
       .prepare<[string], { id: string }>(
         `SELECT id FROM workspaces
-          WHERE workspace_kind = 'agent_home' AND owner_agent_id = ?`,
+          WHERE owner_agent_id = ?`,
       )
       .get(agentId);
     expect(home).toBeTruthy();

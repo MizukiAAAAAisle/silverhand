@@ -39,8 +39,9 @@ import {
   channelAxisScope,
   personFilterKey,
   taskFiltersEqual,
-  workspaceKindContainer,
+  workspaceBoardContainer,
   type BoardScopeSelection,
+  type ChannelSourceGroup,
   type PersonFilter,
   type PersonOption,
   type TaskBoardContainerAxis,
@@ -72,14 +73,14 @@ export interface ChannelOption {
    *  data source (`group`), not by this id. */
   workspaceId: string;
   /** Primary line — always the channel TITLE. This is a channel picker, so
-   *  the row reads as the channel; the source (workspace / DM agent) goes in
-   *  `sublabel` (shiki #task:1165). */
+   *  the row reads as the channel; the source (workspace name, or the owning
+   *  agent's name for an agent space) goes in `sublabel` (shiki #task:1165). */
   label: string;
   /** Data-source group for the dropdown's section split (#task:1165):
-   *  'dm' = the channel comes from a DM workspace, 'workspace' = a regular
-   *  workspace channel. Grouping is a PRESENTATION axis only — the filter
-   *  value stays a plain channel id. */
-  group: 'dm' | 'workspace';
+   *  `'agent_space'` = the channel comes from an agent space, `'workspace'` = a
+   *  regular workspace channel. Grouping is a PRESENTATION axis only — the
+   *  filter value stays a plain channel id. */
+  group: ChannelSourceGroup;
   /** Secondary line = the source: the workspace name for a regular channel,
    *  the AGENT'S NAME for an agent-space channel (#task:2044 — no `@`, that
    *  form belongs to the direct pair). This is what disambiguates the several
@@ -88,17 +89,17 @@ export interface ChannelOption {
 }
 
 /** A workspace offered by the upstream workspace filter (#task:1387). Both
- *  regular workspaces and DMs are selectable (shiki review: match the
- *  message-search workspace filter, which lists DMs too). `kind` + `dmAgentId`
- *  drive the canonical {@link WorkspaceIcon} — a serif "W" for a regular
- *  workspace, the bound agent's avatar for a DM. */
+ *  people-owned workspaces and agent spaces are selectable (shiki review: match the
+ *  message-search workspace filter, which lists them too). `ownerAgentId` is both
+ *  halves of the identity: it says WHICH side of the split this row is on and, for
+ *  an agent space, WHICH agent's avatar the canonical {@link WorkspaceIcon} shows —
+ *  a serif "W" when it is null (#task:2078). */
 export interface WorkspaceOption {
   id: string;
   label: string;
-  kind: 'regular' | 'dm';
-  /** The bound agent for a DM workspace (icon renders that agent's avatar);
-   *  null for a regular workspace. */
-  dmAgentId: string | null;
+  /** The agent that owns this container, or null for a people-owned workspace.
+   *  Classify through `isAgentSpace`, not by checking it inline. */
+  owner_agent_id: string | null;
 }
 
 /** A conversation considered for the channel-filter dropdown, normalized
@@ -109,11 +110,12 @@ export interface ChannelFilterCandidate {
    *  for the workspace→channel cascade (#task:1387). */
   workspaceId: string;
   title: string;
-  roster_policy: 'open' | 'fixed';
   archived_at: number | null;
-  /** True when the owning workspace is a DM workspace — drives the data-source
-   *  group even though the conversation kind is plain 'channel'. */
-  fromDmWorkspace?: boolean;
+  /** The data-source group, asked of the CONTAINER: true when this channel lives
+   *  in an agent space. Required, because it is the group's only determinant —
+   *  an optional bit would let a producer stay silent and be filed under
+   *  Workspaces by default. Classify through `isAgentSpace` (#task:2077). */
+  fromAgentSpace: boolean;
   /** Secondary line = the source (workspace name, or the agent's name for an
    *  agent space). */
   sublabel?: string;
@@ -138,12 +140,16 @@ export function buildChannelFilterOptions(
   for (const c of candidates) {
     if (c.archived_at !== null) continue;
     if (byId.has(c.id)) continue;
-    const isDm = c.fromDmWorkspace || c.roster_policy === 'fixed';
     byId.set(c.id, {
       id: c.id,
       workspaceId: c.workspaceId,
       label: c.title,
-      group: isDm ? 'dm' : 'workspace',
+      // The group is a CONTAINER question, so the container answers it. This
+      // used to also read `roster_policy === 'fixed'`, which is a ROSTER
+      // (capability) fact: redundant wherever the container already said yes,
+      // and wrong wherever it said no — a fixed-roster channel in a people-owned
+      // workspace would have been filed under Agent Spaces (#task:2077).
+      group: c.fromAgentSpace ? 'agent_space' : 'workspace',
       ...(c.sublabel !== undefined ? { sublabel: c.sublabel } : {}),
     });
   }
@@ -154,8 +160,8 @@ export function buildChannelFilterOptions(
  *  {@link ChannelIcon} so it picks up the theme's `#` sticker recipe, the same
  *  identity `#` as the sidebar's channel rows. The compact filter TRIGGER uses the
  *  utility variant instead (no sticker hook → can't inflate; #task:1437). The
- *  source (workspace / DM agent) is conveyed by the subtitle, not the icon
- *  (shiki #task:1165). */
+ *  source (workspace, or the owning agent for an agent space) is conveyed by the
+ *  subtitle, not the icon (shiki #task:1165). */
 function ChannelGlyph(): JSX.Element {
   return <ChannelIcon variant="sticker" />;
 }
@@ -552,7 +558,7 @@ function ChannelFilter({
     () =>
       [
         { key: 'workspace' as const, label: 'Workspaces' },
-        { key: 'dm' as const, label: 'Agent Spaces' },
+        { key: 'agent_space' as const, label: 'Agent Spaces' },
       ]
         .map(s => ({ ...s, items: filtered.filter(o => o.group === s.key) }))
         .filter(s => s.items.length > 0),
@@ -710,7 +716,7 @@ function ChannelFilter({
 // ── Board scope (container × concrete object) ─────────────────────
 
 /** One selectable row in the board-scope dropdown — a workspace whose pick stamps
- *  the container matching its `kind` (regular → `workspace`, agent home →
+ *  the container matching its OWNERSHIP (people-owned → `workspace`, agent space →
  *  `agent_space`). A DM is never a row here (contract §5). */
 interface ScopeRow {
   id: string;
@@ -722,13 +728,13 @@ interface ScopeRow {
  * The board-scope filter — the coarsest axis, as ONE grouped dropdown
  * (#task:2041, shiki 2026-08-17). An "All" row (the union of every container the
  * viewer can see, DM tasks included) sits above two sections that list the
- * CONCRETE objects the viewer can narrow to: Workspaces (regular) and Agent Spaces
- * (agent homes). Picking a leaf names the container KIND and the object together —
+ * CONCRETE objects the viewer can narrow to: Workspaces (people-owned) and Agent
+ * Spaces. Picking a leaf names the board container and the object together —
  * `applyBoardScopeSelection` stamps both — so the old pick-container-then-object
- * two-step is gone, and with it the bare "all agent spaces" pick (a container KIND
- * with no object): the "All" row covers the union, and every listed row is a
- * concrete scope. A workspace row wears its own icon (a DM/agent-home workspace =
- * its agent's avatar), resolved from the directory the person menus already
+ * two-step is gone, and with it the bare "all agent spaces" pick (a container with
+ * no object): the "All" row covers the union, and every listed row is a
+ * concrete scope. A workspace row wears its own icon (an agent space = its agent's
+ * avatar), resolved from the directory the person menus already
  * loaded (no extra fetch). Direct Messages are not a section: a DM is never a
  * selectable global scope (contract §5) — its tasks reach the board through the
  * "All" union or the direct line's own locked Tasks drawer, which hides this
@@ -749,9 +755,9 @@ function BoardScopeFilter({
 } & PersonDirectory): JSX.Element {
   const [open, setOpen] = useState(false);
 
-  // The two sections come from the pure `boardScopeGroups` seam (kind → section
-  // and the show-iff-rows rule live there, tested without a DOM); this memo only
-  // projects each section's workspaces into the ScopeRow shape the list renders
+  // The two sections come from the pure `boardScopeGroups` seam (ownership →
+  // section and the show-iff-rows rule live there, tested without a DOM); this memo
+  // only projects each section's workspaces into the ScopeRow shape the list renders
   // and roves over.
   const groups = useMemo(
     () =>
@@ -775,7 +781,7 @@ function BoardScopeFilter({
   const selectionFor = (row: ScopeRow): BoardScopeSelection => ({
     kind: 'workspace',
     workspaceId: row.ws.id,
-    container: workspaceKindContainer(row.ws.kind),
+    container: workspaceBoardContainer(row.ws),
   });
 
   const listId = useId();
@@ -799,10 +805,9 @@ function BoardScopeFilter({
   const selectedWs = flatRows.find(r => r.ws.id === workspaceValue);
   const triggerIcon = selectedWs ? (
     <WorkspaceIcon
-      kind={selectedWs.ws.kind}
-      dmAgentId={selectedWs.ws.dmAgentId}
+      ownerAgentId={selectedWs.ws.owner_agent_id}
       agentsById={agentsById}
-      dmAgentAvatarUrls={agentAvatarUrls}
+      ownerAgentAvatarUrls={agentAvatarUrls}
       size={TRIGGER_GLYPH_PX}
     />
   ) : (
@@ -865,10 +870,9 @@ function BoardScopeFilter({
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="shrink-0">
                       <WorkspaceIcon
-                        kind={row.ws.kind}
-                        dmAgentId={row.ws.dmAgentId}
+                        ownerAgentId={row.ws.owner_agent_id}
                         agentsById={agentsById}
-                        dmAgentAvatarUrls={agentAvatarUrls}
+                        ownerAgentAvatarUrls={agentAvatarUrls}
                       />
                     </span>
                     <span className="truncate">{row.label}</span>

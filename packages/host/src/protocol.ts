@@ -70,219 +70,43 @@ import {
   MessageReferenceSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
+  PROTOCOL_VERSIONS,
   ReasoningEffortTokenSchema,
   RUNTIME_DELIVERY_INSTRUCTION_SIGNALS,
   RuntimeCatalogResponseSchema,
   RuntimeKindSchema,
-  WorkspaceKindSchema,
 } from '@silverhand/shared';
 
 // ── Protocol handshake ─────────────────────────────────────────────
 //
-// Bumping the protocol version is a compatibility event, not a
-// package-version bump: clients fail loud during `hello` if the daemon
-// speaks a different version.
+// `HOST_PROTOCOL_VERSION` is an EQUALITY SENTINEL on the CLI/backend ↔ local
+// daemon boundary: clients fail loud during `hello` if the daemon speaks a
+// different version. It is not a package-version bump. The NUMBER lives in the
+// single protocol-version authority (`@silverhand/shared` →
+// `protocol-versions.ts`); this module owns the framing/contract, not the digit.
 //
-// v2 (reply-cluster §6.4): `runtime_start.startup_delivery.deliveries`,
-// `runtime_wake.deliveries`, and the new `agent_stream_observed` intent were
-// added to the strict command surface. A v1 daemon strict-parses the new keys
-// as unknown and rejects the command (and has no handler for the new intent),
-// so the version MUST gate at hello rather than silently breaking business
-// commands. `agent_stream_observed` lands in the SAME v2 surface (it was added
-// before v2 shipped to any deployment) — no further bump.
+// Why exact-equality (no skew window, unlike the desktop API epoch): a breaking
+// change here is a framing / ordering / custody / addressing break whose
+// mixed-pair failure is NOT a parse error. The daemon composes each agent's
+// platform prompt and renders every delivery header itself, so ITS generation
+// decides what every agent it spawns is TAUGHT while the backend decides what is
+// EMITTED — a version-mismatched pair would answer the right message in the WRONG
+// stream with no error on either side. No shim is possible (a prompt is composed
+// fresh at every spawn, a header rendered fresh at every delivery), so the only
+// safe move is to refuse the pair at hello before any agent is spawned.
+// `OUTBOUND_PROTOCOL_VERSION` moves with it whenever the same cutover also
+// crosses the daemon↔server wire.
 //
-// v3 (#task:1063): `agent_message_send.target` became the public stream
-// identity object (`{kind:'channel'}` / `{kind:'thread', message_id}`).
-// Older v2 daemons would strict-reject the new object at business-command time,
-// so this must also fail loud during hello.
+// Two peers built from the same tree are never a mixed pair, so multiple
+// unreleased breaking changes fold into ONE generation rather than minting a
+// number per ticket. What each generation changed, and why it must fail loud,
+// lives in its owning task/design doc — not as a number ledger here.
 //
-// v4 (#task:1417, daemon-authoritative delivery Stage 1): the `runtime_start`
-// reply's `started:true` arm gained a REQUIRED `phase`, so backend can act on
-// the daemon's authoritative handle phase instead of guessing from its own
-// (desyncable) `RunStateCache`. The reply schema is `.strict()` and shared by
-// both the local-socket and outbound-WS transports, so this is wire-breaking in
-// both directions (an old backend strict-rejects the extra key; a new backend
-// rejects the missing required key). It MUST fail loud at hello — a standalone
-// server and its daemon have to upgrade in lock-step. `OUTBOUND_PROTOCOL_VERSION`
-// bumps alongside (2→3) for the same reason.
-//
-// v5 (#task:1417, daemon-authoritative delivery Stage 2a): the new
-// `runtime_deliver` command joined the strict command surface and its unified
-// ack pair (`runtime_delivery_consumed` / `runtime_delivery_failed`) joined
-// `EventFrameSchema`. A v4 daemon has no handler for the command; a v4 backend
-// has no exhaustiveness case for the events — both are wire-breaking, so the
-// version gates at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (3→4).
-// The change is purely additive (the legacy `runtime_start`/`runtime_wake`
-// surface is untouched until Stage 2b), but the surface still changed, so a
-// mismatched pair must fail loud rather than silently ignore the new frames.
-//
-// v6 (#task:1417, daemon-authoritative delivery Stage 2c): the retired
-// delivery surfaces are DELETED now that `runtime_deliver` is the sole message
-// path. Gone: the whole `runtime_wake` command (params/result/reason), the
-// legacy `runtime_startup_delivery_consumed`/`_failed` event pair (subsumed by
-// the unified `runtime_delivery_*` family), and `runtime_start`'s
-// delivery-carrying surface — its `startup_delivery` param and the Stage 1
-// `phase` / `startup_delivery_accepted` result fields. `runtime_start` is now a
-// pure lifecycle spawn. Every deletion is `.strict()`-schema-breaking in both
-// directions, so it MUST fail loud at hello. `OUTBOUND_PROTOCOL_VERSION` bumps
-// alongside (4→5). No shim / dual-support window — the standalone daemon is
-// unreleased (zero deployments), so this is an internal wire change.
-//
-// v7 (#task:1417, daemon-authoritative delivery Stage 3): `runtime_deliver`
-// gains a fourth `deferred` disposition arm — a ready handle held mid-turn
-// (`gated`) or behind a write-in-flight is enqueued in the daemon's own
-// per-handle queue and flushed at the next safe boundary, moving the
-// safe-boundary hold out of the backend coordinator. A v6 peer has no
-// `deferred` arm in its result union, so the shape is wire-breaking and gates
-// at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (5→6). No shim.
-//
-// v8 (#task:1461): `runtime_deliver`'s SPAWN arm now carries the same typed
-// workspace-resolution errors as `runtime_start`. A v7 client rejects those
-// response codes, while a v7 daemon collapses them to `internal_error`, so the
-// pair is semantically incompatible and must fail loud at hello. The external
-// outbound protocol bumps alongside (6→7).
-//
-// NOT a bump — #task:1486 (Codex Ultra): adding a new reasoning-effort value is
-// deliberately NOT a protocol bump. The protocol epoch is reserved for
-// unsafe-to-parse framing / ordering / custody / security breaks that must fail
-// loud at hello; a new optional runtime-behavior value is neither. Two layers
-// carry it instead (see the two-layer note at KNOWN_CAPABILITIES_V1 below):
-// (1) the `runtime_start` reasoning token is an OPEN string on the wire
-// (`ReasoningEffortTokenSchema`), so a new daemon never strict-rejects a future
-// value; (2) the daemon advertises `runtime.codex.reasoning.v1` and the backend
-// only SENDS a non-baseline token to a daemon that advertised it — so an old
-// daemon (closed enum, no capability) is never handed a value it would reject.
-// Result: adding Ultra / any future effort value never disconnects any peer.
-//
-// v9 (#task:1558): `runtime_stop` loses its `mode:'soft'` stdin-directive arm
-// (params `soft_directive` field + soft result variant deleted; `mode` narrows
-// to the literal `'hard'`). A v8 peer sending soft would be strict-rejected by
-// a v9 daemon, and the v9 params schema no longer validates v8's enum — fail
-// loud at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (7→8). No shim —
-// soft stop had no product entry point.
-//
-// The v9 epoch ALSO covers two new strict `runtime_parsed_event.parsed` arms,
-// each independently bump-worthy (the parsed union is bilateral strict, so an
-// additive sender arm is a breaking change for an older receiver):
-//   - `input_lifecycle` (#task:1557/#task:1561): per-payload runtime
-//     lifecycle used as generation-boundary evidence.
-//   - `api_response` (#task:1582): normalized provider notice
-//     (waiting/ready/notice + message; never raw payloads).
-//
-// v10 (#task:1808, relocation-v1 §7-4 registry demotion): a SEMANTIC wire
-// break with NO schema/framing change — command shapes are byte-identical, so
-// old/new peers would hello cleanly and only diverge at business time. The
-// backend no longer dispatches `workspace_provision` (a regular workspace is
-// created as a pure DB write; each member's L2 bundle is materialized lazily
-// at first spawn), and the daemon now resolves a regular workspace's file
-// surfaces (`agent_workspace_tree`/`_file_read`) by the deterministic
-// agent-centric coordinate rather than a registry establishment gate. An old
-// daemon still expects a provision-established binding, so old daemon + new
-// backend would attach and then fail-closed later (`workspace_not_provisioned`
-// on a workspace the backend never provisions). The epoch bump converts that
-// silent behavioral incompatibility into a loud fail-at-hello.
-// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (8→9). No shim — the standalone
-// daemon epoch is unreleased and moves as one version.
-//
-// v11 (#task:1988): `agent_files_purge` is now a terminal deletion fence,
-// not a best-effort rm. Its strict success result gains REQUIRED
-// `quiesced_count`, purge errors gain `quiesce_failed`, and every agent-home
-// mutator may fail with `agent_deleting`. An old daemon would otherwise accept
-// the old purge and remove files without quiescing admitted work or live
-// children, reopening the deleted home after ack. Exact hello-version matching
-// must therefore reject mixed generations before any command runs.
-// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (9→10). No shim.
-//
-// v12 (#task:2000): the ADDRESSING contract changes, with byte-identical
-// framing — the same shape as v10, and for the same reason. Who a message
-// addresses is now decided by a canonical `<silverhand://<kind>/<name>>`
-// autolink; the plain `@name` form still RENDERS as a legacy display chip and
-// addresses nobody — render and addressing are two independent axes. The daemon is
-// a participant in that contract, not a bystander: it composes the platform
-// prompt itself (`supervisor` → `buildSystemPromptFor`, from the
-// `@silverhand/shared` copy bundled into the published daemon), so its
-// generation decides which addressing form every agent it spawns is TAUGHT.
-// A mixed pair fails silently in both directions: an old daemon teaches `@name`
-// to agents whose messages a new backend reads as addressing no one, and a new
-// daemon teaches the canonical token to a backend that only scans for `@name`.
-// Neither side errors, and a main-line message still reaches every member: what
-// is lost is the author's TARGETING — no notification, no auto-follow (so a
-// thread reply may not even reach the person it names), no CC, and a batch framed
-// as undirected (references-less user text is "for everyone"), so a message
-// written AT someone degrades into a broadcast. That is the least debuggable
-// failure this product has. Exact hello-version matching turns it into a loud
-// refusal before any agent is spawned.
-// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (10→11). No shim — a prompt is
-// composed fresh at every spawn, so admission is the whole migration.
-//
-// Generation check (the "is v11 already in the field?" precondition, borrowed
-// from the desktop-epoch runbook §3): v11 is NOT on npm — `@silverhand-ai/
-// daemon@latest` is 0.1.9 and advertises 10 — but it IS in the field as a
-// locally packaged daemon, and unlike a single-tree desktop build a daemon is an
-// independently-lived artifact: it keeps running across backend rebuilds and is
-// upgraded by its own install step. So v11 counts as released here and this
-// change may not join it.
-//
-// Disjoint from the desktop API epoch (`desktop-server-api-epoch.ts`), which
-// does not bump here: that gate guards `/api/*` (renderer ↔ server) and exempts
-// `/internal/*`, so it never classifies a daemon — and this constant never
-// classifies a renderer. Two boundaries, two admission facts.
-
-// v13 (agent-scoped sessions + one absolute address: #task:2015, #task:2019,
-// #task:2021) — ONE epoch for the whole unreleased cutover, deliberately.
-//
-// This number is an EQUALITY SENTINEL on a PUBLISHED compatibility boundary. Its
-// entire job is to make a mixed pair fail loud at hello, and two peers built from
-// the same unreleased tree are never a mixed pair. Incrementing once per ticket or
-// per review round would spend six numbers on one boundary and leave this ledger
-// claiming five field generations that never existed — future readers would then
-// have to date-check each one to know which are real.
-//
-// Generation check (the precondition every entry above answers): v12 is on
-// published history (`origin/main`, and it is the epoch the packaged daemon is
-// being reinstalled at for #task:2000's startup verification), so this change may
-// NOT join it. Everything below it in this tree is unreleased and therefore moves
-// together as v13. The next epoch answers the same question, and its clock starts
-// the moment v13 is in the field.
-//
-// What changes across the boundary. Each item would be its own bump if it shipped
-// alone, and each is fail-loud-at-hello for the same structural reason: no shim is
-// possible, because a platform prompt is composed fresh at every spawn, a delivery
-// header is rendered fresh at every delivery, and command params are validated
-// strictly on both sides.
-//
-//   - CUSTODY IS GENERATIONAL (#task:2015). runtime start/deliver, every
-//     status-mutating runtime event, every runtime snapshot, every destructive
-//     runtime command, and delivery consumed/failed settlements all carry the
-//     backend-claimed custody generation. A pre-v13 peer cannot prove an event
-//     belongs to the live slot, and a delivery id alone is not a settlement token
-//     once a successor generation can reclaim a rolled-back inbox row.
-//   - RUNTIME IDENTITY IS AN EXPLICIT DISCRIMINATED SCOPE (#task:2019) on
-//     start/deliver/status/events/stop/clear. A pre-v13 peer can only address a
-//     nullable conversation tuple, which ALIASES agent-scoped custody.
-//   - THE DELIVERY HEADER'S `target` IS AN ABSOLUTE ADDRESS (#task:2021 P4-3),
-//     derived per ROW, and the relative token `channel` is retired.
-//   - THE SEND DOOR TAKES THAT SAME ADDRESS (#task:2021 P4-4). The
-//     `agent_message_send` params lose `target: {kind:'channel'|'thread'}` and
-//     `reply_to_message_id` and carry one required `target` STRING; the result
-//     carries the `conversation_id` the address resolved TO. The gated per-turn
-//     default-reply-target cluster is deleted with it — there is no inference left
-//     to fall back on, and a send that cannot name its stream is refused by the
-//     CLI before it reaches the daemon.
-//
-// The last two are why this boundary cannot be lax, because their mixed-pair
-// failure is not a parse error. The daemon composes the platform prompt itself, so
-// ITS generation decides which target form every agent it spawns is TAUGHT while
-// the backend decides which form is EMITTED — and an agent-scoped runtime is woken
-// for N conversations. An old daemon teaches `target=channel|thread:<id>` to agents
-// receiving `#conv:<id>`; a new one teaches "read the absolute token's parts" to
-// agents whose backend still emits the ambient token. Either way the agent answers
-// the right message in the WRONG STREAM, with no error on either side. Exact hello
-// matching refuses the pair before any agent is spawned.
-//
-// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (11→12) and for the same reason: the
-// backend's send door changed shape in the same cutover.
-export const HOST_PROTOCOL_VERSION = 13;
+// Disjoint from the desktop API epoch (`desktop-server-api-epoch.ts`): that gate
+// guards `/api/*` (renderer ↔ server) and never classifies a daemon, and this
+// constant never classifies a renderer. Two boundaries, two admission rules —
+// one numeric source (`protocol-versions.ts`) for both.
+export const HOST_PROTOCOL_VERSION = PROTOCOL_VERSIONS.host;
 
 // ── capability tokens ────────────────────────────────────────────────
 //
@@ -700,62 +524,23 @@ export const AgentStaleResolveResultSchema = z.union([
       reason: z.literal('no_pending_stale_event'),
     })
     .strict(),
+  z
+    .object({
+      ok: z.literal(true),
+      resolved: z.literal(false),
+      // #task:2095 F18: a later 409 REPLACED the event the caller is
+      // resolving before this call ran. Only ONE stale event is held per
+      // runtime, so the id the caller named is gone; `current_stale_event_id`
+      // is the LIVE one to re-issue against (actionable on the CLI). Distinct
+      // from `no_pending_stale_event` (nothing pending at all).
+      reason: z.literal('stale_event_superseded'),
+      current_stale_event_id: z.string().min(1),
+    })
+    .strict(),
   AgentBackendHttpErrorSchema,
 ]);
 export type AgentStaleResolveResult = z.infer<
   typeof AgentStaleResolveResultSchema
->;
-
-// ── agent_stream_observed (CLI→daemon, reply-cluster §6.4 B-light) ──
-// A pull (`message history --target thread:<root>`) reaches the backend
-// over plain HTTP, NOT through the daemon — so the daemon never learns
-// that the agent observed the cluster. Without this the next
-// `send --reply-to` would treat a just-read cluster as unknown (Case A
-// loose), losing freshness protection on the read-then-reply path (THE
-// main thread workflow). After a successful thread pull the CLI fires
-// this daemon-local intent so the daemon advances the cluster's observed
-// boundary for the stream that was read.
-// Purely daemon-local state: no backend call, no HTTP-error arm.
-//
-// Contract (Cindy 2026-06-11, msg UbcoVgS3ZQ4TivZ6):
-//  - `observed_seq` is the max seq among REPLIES the pull returned
-//    (`thread_root_id === root`); 0 when the cluster has no replies. The
-//    root's own seq lives on the main line and MUST NOT be passed here.
-//  - the surfaced ids are NOT reported. Until #task:2021 P4-4 the intent
-//    also carried `reply_target_messages` (the root plus every returned
-//    reply id), because a reply was addressed by the message it answered and
-//    any of those ids could be the next `--reply-to`. An address's
-//    `/thread:<root>` is a ROOT id now, so the only id this intent still
-//    teaches is `thread_root_id` — the one it already carries. Reporting the
-//    replies would keep alive exactly the mapping (mid-cluster id → cluster)
-//    that P4-4 deleted, in the one process that must not hold a second
-//    opinion about what an address denotes.
-//  - TWO COORDINATES, TWO SUBJECTS (#task:2030). `runtime_scope` identifies the
-//    session handle. `stream_conversation_id` is where the OBSERVED cluster
-//    lives — the resolved `target.conversation_id` of the pull. They coincide
-//    only when a ConversationSlot read its own stream. An AgentSlot handle
-//    serves N conversations, so its observed boundaries are keyed by
-//    conversation; storing this one under the session anchor instead would file
-//    it where no send looks (`agent_message_send` keys by the ADDRESS's
-//    conversation), silently degrading every cross-stream read-then-reply to a
-//    loose first touch.
-export const AgentStreamObservedParamsSchema = z
-  .object({
-    ...AgentRuntimeIntentIdentityFields,
-    stream_conversation_id: z.string().min(1),
-    thread_root_id: z.string().min(1),
-    observed_seq: z.number().int().nonnegative(),
-  })
-  .strict();
-export type AgentStreamObservedParams = z.infer<
-  typeof AgentStreamObservedParamsSchema
->;
-
-export const AgentStreamObservedResultSchema = z
-  .object({ ok: z.literal(true) })
-  .strict();
-export type AgentStreamObservedResult = z.infer<
-  typeof AgentStreamObservedResultSchema
 >;
 
 // ── agent_stale_receive (CLI→daemon, #task:1614 deferred pull) ──────
@@ -769,20 +554,27 @@ export type AgentStreamObservedResult = z.infer<
 // pending / runtime-written content.
 //
 // Outcome arms state only provable facts (#task:1606 P2b):
-//   - `batch_covered`        — a prefix was taken AND its coverage
-//                              reaches the stale head's stream/seq.
-//   - `batch_partial_armed`  — a prefix was taken but the stale head is
-//                              NOT covered; the stale event stays armed.
-//   - `no_pending_stale`     — typed no-op; the named event is not pending.
-//   - `already_admitted`     — the observed cursor already covers the
-//                              ORIGINAL stale head (proves only that; a
-//                              newer head may exist — the send CAS is
-//                              still the authority).
-//   - `normal_delivery_in_progress` — the covering content already
-//                              entered normal release/admission (stdin
-//                              write in flight or parked mid-turn
-//                              admission); the tool will not take it
-//                              back.
+//   - `batch_queue_drained`  — a prefix was taken AND it emptied the
+//                              deferred queue (nothing more is pending).
+//   - `batch_more_pending`   — a prefix was taken but the deferred queue
+//                              still holds a remainder for the next pull.
+//                              (#task:2095 F12: the split is a property of
+//                              the QUEUE after the splice, not of any
+//                              per-stream seq coverage — freshness is now the
+//                              RuntimeScope-wide undelivered-inbox guard.)
+//   - `no_pending_stale`     — typed no-op; nothing at all is pending.
+//   - `stale_event_superseded` — a later 409 REPLACED the named event before
+//                              this pull parked; `current_stale_event_id` is
+//                              the LIVE one to re-issue against. Symmetric with
+//                              stale-resolve's `stale_event_superseded`, and
+//                              distinct from the mid-wait `stale_event_replaced`
+//                              arbitration error (which fires only after a wait
+//                              was already registered — see below).
+//   - `normal_delivery_in_progress` — a release is already underway for this
+//                              runtime (`startupDelivery !== null`); the tool
+//                              will not take that content back. (#task:2095
+//                              F12①: no per-stream seq comparison — a live
+//                              release is itself the proof.)
 //   - `timeout`              — no matching daemon batch was obtained in
 //                              this wait window. States nothing else:
 //                              custody and the stale event are both
@@ -811,27 +603,19 @@ const staleReceiveBatchFields = {
    *  preserved; the batch is opaque and never split). */
   text: z.string().min(1),
   delivery_ids: z.array(z.number().int().positive()).min(1),
-  /** Per-stream max seq the batch actually covers — the same derivation
-   *  admission uses. Observed advances by exactly this, never jumped to
-   *  the stale `current_seq`. */
-  covered_seq_by_stream: z.array(
-    z.tuple([z.string().min(1), z.number().int().positive()]),
-  ),
 } as const;
 
 export const AgentStaleReceiveResultSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('batch_covered'), ...staleReceiveBatchFields }).strict(),
+  z.object({ outcome: z.literal('batch_queue_drained'), ...staleReceiveBatchFields }).strict(),
   z
-    .object({ outcome: z.literal('batch_partial_armed'), ...staleReceiveBatchFields })
+    .object({ outcome: z.literal('batch_more_pending'), ...staleReceiveBatchFields })
     .strict(),
   z.object({ ok: z.literal(true), outcome: z.literal('no_pending_stale') }).strict(),
   z
     .object({
       ok: z.literal(true),
-      outcome: z.literal('already_admitted'),
-      stale_event_id: z.string().min(1),
-      stale_current_seq: z.number().int().positive(),
-      observed_seq: z.number().int().nonnegative(),
+      outcome: z.literal('stale_event_superseded'),
+      current_stale_event_id: z.string().min(1),
     })
     .strict(),
   z
@@ -860,7 +644,13 @@ export type AgentStaleReceiveResult = z.infer<
  *   - `pull_already_active`: one waiter/reservation per handle; a second
  *     concurrent pull is refused.
  *   - `stale_event_replaced`: the pending stale event changed identity
- *     after this call bound to it; the old waiter is invalid by contract.
+ *     after this call bound to it AND a wait was already registered; the old
+ *     waiter is invalid by contract. This is the MID-WAIT sibling of the
+ *     `stale_event_superseded` result outcome (which is the entry/pre-wait
+ *     check): both mean "a later 409 replaced the id you named", but they are
+ *     not merged because they fire at different points — `superseded` before
+ *     any wait exists (a benign re-anchor, `ok:true`), `replaced` after
+ *     (a parked waiter must be torn down, so it is a typed error).
  *   - `runtime_replaced`: the runtime handle this call bound to exited or
  *     was respawned while waiting.
  *   - `handoff_unsupported`: the ingress cannot prove a response
@@ -952,7 +742,13 @@ export const RuntimeStartWorkspaceRefSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
-    kind: WorkspaceKindSchema,
+    // #task:2081: NO stored container `kind` on this wire. The daemon used to
+    // select a filesystem-resolution strategy from a stored word; it now
+    // recognizes an agent-home ref from the id convention itself
+    // (`AGENT_HOME_WORKSPACE_ID_PREFIX` for the alphabet, exact match against
+    // `agentHomeWorkspaceId(agentId)` for ownership — `runtime-start-resolve.ts`),
+    // so the decision is keyed on the id, never on a copy of a container word
+    // that a product rename could contradict.
     // D4.e-6: SEMANTIC ref only — no `path`. The carve-out that let
     // `workspace.path` cross the boundary as "server DB metadata" is
     // REVOKED (design §3.5). The daemon is the sole authority for
@@ -1082,9 +878,10 @@ function rejectForbiddenRuntimeStartOptionKeys(
 /**
  * Runtime start metadata. This schema is deliberately strict and, as of
  * D4.e-6, carries NO host-local paths: `agent`/`workspace`/
- * `workspace_memory_index` are semantic refs (`id`/`name`/`kind`) and the
+ * `workspace_memory_index` are semantic refs (`id`/`name`) and the
  * daemon resolves every absolute path locally (the deterministic bundle
- * coordinate for `regular`, `resolveAgentDir` for `agent_home`). Server-derived execution artifacts
+ * coordinate for a regular workspace, `resolveAgentDir` for an agent home
+ * recognized by the `wsah_` id convention — #task:2081). Server-derived execution artifacts
  * and prompt bytes were never allowed and remain forbidden below.
  */
 const RuntimeStartCommonShape = {
@@ -1206,28 +1003,32 @@ export type RuntimeStateDto = z.infer<typeof RuntimeStateDtoSchema>;
 // ── runtime_start ───────────────────────────────────────────────────
 
 /**
- * Per-delivery wire metadata attached to a `runtime_deliver` batch so the
- * daemon can maintain a PER-STREAM observed boundary and resolve
- * `--reply-to` targets it has seen (reply-cluster §6.4). One entry per
- * delivered inbox row; the entry set MUST match the batch's
- * `delivery_ids` exactly (daemon hard-rejects a mismatch — text and
- * metadata must not drift). `thread_root_id === null` ⇒ the message lives
- * on the main line. A non-null root both locates the delivered reply and
- * proves that `thread:<thread_root_id>` is an observed canonical-root stream;
- * member-message ids still need the daemon's bounded member→root cache.
- * `delivery_kind` is decided at delivery creation and is per-delivery, never
- * batch-level (a spawn-with-batch can mix historical `observe` rows with the
- * current `turn` row). The scalar
- * `delivered_up_to_seq` stays as a legacy/diagnostic high-water; observed
- * authority is this array, advanced per stream.
+ * Per-delivery wire metadata attached to a `runtime_deliver` batch. One entry
+ * per delivered inbox row; the entry set MUST match the batch's `delivery_ids`
+ * exactly (daemon hard-rejects a mismatch — text and metadata must not drift).
+ *
+ * The alphabet is exactly the daemon's three readers, and #task:2097 made the
+ * schema say so: `delivery_id` (dedup key when it merges deliveries into a
+ * parked/pending batch), `seq` (the `delivered_up_to_seq` sidecar it writes to
+ * disk is `max(seq)` over this array — #task:2106 removed the wire scalar, so
+ * this array is now the SOLE source of that value), and `presentation` (novel-remainder reconstruction). There is no
+ * per-stream observed boundary: freshness is now a whole-runtime backend
+ * property (RuntimeScope EXISTS-guard), so the daemon maintains no per-stream
+ * cursor and this array is not an "observed authority".
+ *
+ * DELETED here by #task:2097, not deprecated: `message_id`, `thread_root_id`
+ * (null ⇒ main line) and `delivery_kind` (`turn`/`observe`). All three were
+ * readers of the deleted per-stream freshness subsystem (§6.4) and had no
+ * daemon reader left — the live `--reply-to` resolution parses the incoming
+ * request JSON, not this array; the turn/observe decision is made backend-side
+ * off `conversation_inboxes.delivery_kind` before a batch is ever assembled.
+ * Kept-as-optional was rejected: an optional field on a strict internal wire
+ * reads as "a consumer may appear", which is the claim being retired.
  */
 export const RuntimeDeliverySchema = z
   .object({
     delivery_id: z.number().int(),
-    message_id: z.string().min(1),
     seq: z.number().int().nonnegative(),
-    thread_root_id: z.string().min(1).nullable(),
-    delivery_kind: z.enum(['turn', 'observe']),
     /** Presentation fragment for canonical novel-remainder reconstruction. */
     presentation: z
       .object({
@@ -1374,8 +1175,7 @@ export const RuntimeDeliverParamsSchema = z
     runtime_generation: z.number().int().positive(),
     target: RuntimeActionTargetSchema,
     delivery_ids: z.array(z.number().int()).min(1),
-    delivered_up_to_seq: z.number().int().nonnegative().optional(),
-    deliveries: z.array(RuntimeDeliverySchema).min(1).optional(),
+    deliveries: z.array(RuntimeDeliverySchema).min(1),
     /** Distinguishes a normal message from a schedule fire, exactly as
      *  the retired `runtime_wake` did — the daemon's driver needs it to
      *  frame the payload. Spawn-time startup delivery had no `kind`
@@ -2749,10 +2549,6 @@ export const intentSchemas = {
     params: AgentStaleResolveParamsSchema,
     result: AgentStaleResolveResultSchema,
   },
-  agent_stream_observed: {
-    params: AgentStreamObservedParamsSchema,
-    result: AgentStreamObservedResultSchema,
-  },
   agent_stale_receive: {
     // #task:1614 — deferred-pull second consumer. Result arms carry the
     // custody facts; the widened error schema carries the non-custody
@@ -3068,6 +2864,19 @@ export type LooseResponseFrame = z.infer<typeof LooseResponseFrameSchema>;
  *    + `reason:'frame_too_large'` ONLY; explicitly NO payload (no
  *    raw line, no tool input, no text) so we never half-leak a
  *    truncated event onto the wire.
+ *
+ *  #task:2099 (folded into this same unreleased generation — see the
+ *  `HOST_PROTOCOL_VERSION` note above; NO separate number):
+ *
+ *  - `runtime_message_stale` — the ONE authoritative carrier for "this
+ *    runtime's `message send` was refused as stale". The fact is the
+ *    backend's freshness verdict, relayed by the daemon because the daemon
+ *    is the one holding both halves of it: it made the call, and it owns
+ *    the focus conversation the row belongs to. It is NOT a
+ *    `runtime_parsed_event`: `parsed` means "the driver read this out of
+ *    the runtime's own output", and a synthetic parsed event would both
+ *    forge that provenance and push a non-driver value into
+ *    `ParsedEventKind`, which the run-state projection consumes.
  */
 export const EventFrameSchema = z.discriminatedUnion('event', [
   HelloResultSchema.extend({
@@ -3325,6 +3134,39 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
       parsed_kind: ParsedEventKindSchema,
       encoded_bytes: z.number().int().nonnegative(),
       reason: z.literal('frame_too_large'),
+      ts: z.number().int(),
+    })
+    .strict(),
+  // `runtime_message_stale` (#task:2099) is the authoritative fact axis for a
+  // refused send. Before it, the desktop inferred staleness from the shape of
+  // the agent's command line (`--stale-resolution` / `--anyway` present), which
+  // is a client-side syntax proxy for a server-side verdict: it missed every
+  // retry that omitted the optional reason, reported a pre-emptive `--anyway`
+  // with nothing pending as a conflict, and went blind entirely on runtimes
+  // whose tool-call capture carries no command at all (OpenCode persists only
+  // `{cwd}`).
+  //
+  // The daemon does NOT classify: `extractStaleConflict` reads the backend's
+  // typed `details.subkind === 'message_stale'` and fails closed on a body it
+  // cannot parse, so this frame carries a verdict rather than a guess.
+  //
+  // `conversation_id` is the handle's CURRENT FOCUS target, i.e. the same key
+  // every other activity row of this turn (including the `tool_call` row for the
+  // very `silverhand message send` invocation) is written under. The refused
+  // send's TARGET conversation may differ under an agent-scoped session and is
+  // deliberately NOT carried: the row states that this runtime's send was
+  // refused, and per-conflict triage detail (`stale_event_id`, target, queue
+  // depth) stays in the backend's WARN log — the authority named by
+  // `docs/freshness-boundary-authority-v1.md` §3.2 (whose §6 records this row's
+  // own contract). Adding a field later is
+  // purely additive; retracting one that reached a persisted payload is not.
+  z
+    .object({
+      event: z.literal('runtime_message_stale'),
+      runtime_scope: RuntimeScopeSchema,
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+      runtime_generation: z.number().int().positive(),
       ts: z.number().int(),
     })
     .strict(),

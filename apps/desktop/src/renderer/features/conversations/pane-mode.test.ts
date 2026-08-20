@@ -9,6 +9,7 @@ import {
   placementOfPaneMode,
   projectConversationPaneMode,
   rosterQueryTarget,
+  inheritedPaneCapabilities,
   DEFAULT_PANE_CAPABILITIES,
   type ConversationPaneMode,
 } from './pane-mode';
@@ -52,7 +53,15 @@ const PLACEMENTS: readonly ConversationPlacementKind[] =
 const MODE_SAMPLES: Record<ConversationPaneMode['kind'], ConversationPaneMode> = {
   workspace_channel: { kind: 'workspace_channel', workspaceId: 'w-1' },
   direct_message: { kind: 'direct_message', counterpart: null },
-  unsupported: { kind: 'unsupported', placement: 'agent_inbox' },
+  // Not a stored placement after #task:2072 c4 — the alphabet is
+  // `workspace | direct_pair`. This is the old-client-new-server case: a value a
+  // newer server can send that this build's compiled union does not contain, which
+  // the projection funnels to `unsupported`. The cast lives in the test only; the
+  // production type stays narrow.
+  unsupported: {
+    kind: 'unsupported',
+    placement: 'future_placement' as ConversationPlacementKind,
+  },
 };
 const MODE_KINDS = Object.keys(MODE_SAMPLES) as ConversationPaneMode['kind'][];
 
@@ -76,8 +85,19 @@ describe('projectConversationPaneMode — total over the placement union', () =>
     ).toEqual([
       ['workspace', 'workspace_channel'],
       ['direct_pair', 'direct_message'],
-      ['agent_inbox', 'unsupported'],
     ]);
+  });
+
+  it('funnels an unknown wire placement to `unsupported` (old client, new server)', () => {
+    // The default arm is not dead after c4: this renderer reads placement off an
+    // unvalidated DTO and can be older than the server it talks to. A value
+    // outside the compiled alphabet must fail safe to `unsupported`, never inherit
+    // channel chrome by falling through. The cast lives here only.
+    expect(
+      projectConversationPaneMode(
+        descriptor({ placement_kind: 'future_placement' as ConversationPlacementKind }),
+      ),
+    ).toEqual({ kind: 'unsupported', placement: 'future_placement' });
   });
 
   it('round-trips through the placement inverse', () => {
@@ -199,8 +219,6 @@ describe('rosterQueryTarget — the capability turns the READS off, not just the
       ['workspace', false, null],
       ['direct_pair', true, null],
       ['direct_pair', false, null],
-      ['agent_inbox', true, null],
-      ['agent_inbox', false, null],
     ]);
   });
 
@@ -223,6 +241,76 @@ describe('DEFAULT_PANE_CAPABILITIES — a surface with no pane is unchanged', ()
       hasRoster: true,
       workspaceScope: null,
     });
+  });
+});
+
+describe('inheritedPaneCapabilities — a thread is its parent (#task:2098)', () => {
+  // The second finding of the same class as #task:2039: a pane that is NOT a
+  // conversation (a thread shares its parent's) had no projection at all, so it
+  // read the channel-shaped context default and answered `Not here` in a DM for an
+  // agent the mainline showed as Online. Both arms are pinned, because the failure
+  // mode of the fix is erasing the channel's REAL `Not here` along with the DM's
+  // false one.
+  const parent = (placement: ConversationPlacementKind) =>
+    descriptor({
+      placement_kind: placement,
+      workspace_id: placement === 'workspace' ? 'w-1' : null,
+    });
+
+  it('gives a DM thread the pair capabilities — no roster, so no `Not here`', () => {
+    expect(inheritedPaneCapabilities(parent('direct_pair'))).toEqual({
+      headerIdentity: 'counterpart',
+      hasRoster: false,
+      workspaceScope: null,
+    });
+  });
+
+  it('leaves a channel thread the roster, so a real non-member still reads `Not here`', () => {
+    expect(inheritedPaneCapabilities(parent('workspace'))).toEqual({
+      headerIdentity: 'channel_hash',
+      hasRoster: true,
+      workspaceScope: 'w-1',
+    });
+  });
+
+  it('is the parent projection itself for every placement — never a second mapping', () => {
+    // The anti-drift assertion, and the reason acceptance #3 forbids re-deriving
+    // placement in the thread pane: inheritance is defined as the parent's own
+    // answer, so mainline and thread cannot disagree about one conversation.
+    for (const placement of PLACEMENTS) {
+      expect(inheritedPaneCapabilities(parent(placement))).toEqual(
+        paneCapabilities(projectConversationPaneMode(parent(placement))),
+      );
+    }
+  });
+
+  it('withholds when the parent has not resolved — not the channel default', () => {
+    // A cold deep link to `?thread=<root>`: the thread stream has its own query and
+    // can settle before the parent conversation is known. Inheriting the context
+    // default here would reproduce the exact bug, so an unknown parent withholds —
+    // the surface shows no presence line, which is already what it does while a
+    // roster read is unsettled, rather than asserting a membership it cannot know.
+    expect(inheritedPaneCapabilities(null)).toEqual({
+      headerIdentity: 'title_only',
+      hasRoster: false,
+      workspaceScope: null,
+    });
+    expect(inheritedPaneCapabilities(null)).not.toEqual(DEFAULT_PANE_CAPABILITIES);
+  });
+
+  it('turns the thread pane roster READ off for a pair and on for a channel', () => {
+    // Same composition the pane uses. `hasRoster` gates the query, so the DM thread
+    // never starts the read whose empty response was being painted as `Not here`.
+    expect(
+      PLACEMENTS.map(p => [
+        p,
+        rosterQueryTarget(inheritedPaneCapabilities(parent(p)), 'c-1', true),
+      ]),
+    ).toEqual([
+      ['workspace', 'c-1'],
+      ['direct_pair', null],
+    ]);
+    expect(rosterQueryTarget(inheritedPaneCapabilities(null), 'c-1', true)).toBeNull();
   });
 });
 
@@ -277,5 +365,31 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // `hasRoster`, never the obsolete `agentPresence` source (#task:2039).
     expect(popoverSource).toContain('hasRoster={paneCaps.hasRoster}');
     expect(popoverSource).not.toContain('paneCaps.agentPresence');
+  });
+
+  it('mounts the thread pane INSIDE the inherited capability (#task:2098)', () => {
+    // The thread pane is the one surface outside `ChannelView` that hands a
+    // `conversationId` to the popover, which is what makes it the only place the
+    // missing provider could surface. Containment is asserted, not adjacency: the
+    // panel has to sit between the provider's tags, since a provider that merely
+    // appears in the file is the bug all over again.
+    const appSource = read('../../App.tsx');
+    const open = appSource.indexOf(
+      '<ConversationPaneCapabilitiesProvider value={primaryPaneCapabilities}>',
+    );
+    const close = appSource.indexOf('</ConversationPaneCapabilitiesProvider>', open);
+    expect(open).toBeGreaterThan(-1);
+    expect(close).toBeGreaterThan(open);
+    expect(appSource.slice(open, close)).toContain('<ThreadPanel');
+  });
+
+  it('inherits from the descriptor the primary pane renders, not a re-guess', () => {
+    // Acceptance #3: no `workspaceId === null`, no route sniffing, no local
+    // boolean. The capability is projected from `primaryPaneDescriptor` — the same
+    // object passed to `ChannelView` as `conversation` — so the two panes read one
+    // source of truth for the placement.
+    const appSource = read('../../App.tsx');
+    expect(appSource).toContain('inheritedPaneCapabilities(primaryPaneDescriptor)');
+    expect(appSource).toContain('conversation={primaryPaneDescriptor}');
   });
 });

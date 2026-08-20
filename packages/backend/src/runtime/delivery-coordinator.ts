@@ -180,16 +180,21 @@ export interface DriverDeliveryView {
  * `deliveryIds` carries every inbox row the combined text covers.
  * Coordinator treats them as one atomic ack group.
  */
-/** Per-delivery wire metadata carried alongside a delivery / startup batch so
- *  the daemon can maintain a per-stream observed boundary and resolve
- *  `--reply-to` targets it has seen (§6.4). One entry per delivered inbox
- *  row. `thread_root_id === null` ⇒ the message lives on the main line. */
+/** Per-delivery wire metadata carried alongside a delivery / startup batch.
+ *  One entry per delivered inbox row, and its three fields are exactly the
+ *  daemon's three readers: per-delivery dedup (`delivery_id`) plus
+ *  novel-remainder presentation rebuild (`presentation`, `seq`).
+ *
+ *  #task:2097 net-dropped `message_id` / `thread_root_id` / `delivery_kind`:
+ *  they fed the daemon's per-stream observed boundary (§6.4), which #task:2095
+ *  deleted, and nothing on the host side read them afterwards. The facts
+ *  themselves did not move here — the reply-cluster coordinate travels in the
+ *  stdin header's absolute `target` (`RuntimeInboxMessage.thread_root_id`) and
+ *  the turn/observe decision is made backend-side off
+ *  `conversation_inboxes.delivery_kind` before a batch is assembled. */
 export interface RuntimeDelivery {
   delivery_id: number;
-  message_id: string;
   seq: number;
-  thread_root_id: string | null;
-  delivery_kind: 'turn' | 'observe';
   /** Presentation fragment used to rebuild only a novel retry remainder. */
   presentation: import('@silverhand/shared').RuntimeDeliveryPresentation;
 }
@@ -200,15 +205,12 @@ export interface LiveDeliveryRequest {
    *  ids in the group are acked together (or stashed together for the
    *  B3 init gate). */
   deliveryIds: readonly number[];
-  /** Highest message seq covered by this text payload. */
-  deliveredUpToSeq?: number;
-  /** Per-delivery wire metadata for the daemon's per-stream observed
-   *  boundary (§6.4). One entry per `deliveryIds` member; carries the
-   *  message's stream (`thread_root_id`) and `delivery_kind`. The daemon
-   *  advances `observedSeqByStream` from this — NOT from the scalar
-   *  `deliveredUpToSeq`, which mixes streams. Optional only for legacy
-   *  callers/tests; production paths always populate it. */
-  deliveries?: readonly RuntimeDelivery[];
+  /** Per-delivery metadata (see `RuntimeDelivery`). Its live readers are the
+   *  daemon's per-delivery dedup and novel-remainder presentation rebuild;
+   *  the `delivered_up_to_seq` sidecar is derived from the max `seq` here
+   *  (#task:2106 removed the wire scalar, so this array is its sole source).
+   *  Required: every production and test path populates it. */
+  deliveries: readonly RuntimeDelivery[];
   /** Stable dedup key. For singleton groups, the row's message id; for
    *  pre-combined groups, an arbitrary key the caller picks (typically
    *  the first row's message id). Carried on the request for parity with
@@ -313,8 +315,7 @@ export interface CoordinatorBridge {
     conversation_id: string;
     agent_id: string;
     delivery_ids: number[];
-    delivered_up_to_seq?: number;
-    deliveries?: RuntimeDelivery[];
+    deliveries: RuntimeDelivery[];
     kind: 'message' | 'schedule_fire';
     text: string;
   }): Promise<RuntimeDeliverResult>;
@@ -717,19 +718,20 @@ export class RuntimeDeliveryCoordinator {
   ): Promise<LiveDeliveryDecision> {
     const text = this.combineText(batch);
     const deliveryIds = batch.flatMap(item => [...item.deliveryIds]);
-    // Flatten per-delivery metadata across the (possibly pre-combined) batch
-    // so the daemon advances observed per stream, not from the scalar high-
-    // water. Kept consistent with `deliveryIds` — the daemon hard-rejects a
-    // deliver whose id sets disagree.
-    const deliveries = batch.flatMap(item => [...(item.deliveries ?? [])]);
+    // Flatten the per-delivery entries across the (possibly pre-combined)
+    // batch. They carry the daemon's dedup key and presentation fragments —
+    // there is no observed/per-stream axis for them to advance (#task:2095
+    // deleted it; #task:2097 deleted the fields that described it). Kept
+    // consistent with `deliveryIds` — the daemon hard-rejects a deliver whose
+    // id sets disagree.
+    const deliveries = batch.flatMap(item => [...item.deliveries]);
     let result: RuntimeDeliverResult;
     try {
       result = await this.bridge.runtimeDeliver({
         conversation_id: conversationId,
         agent_id: agentId,
         delivery_ids: deliveryIds,
-        delivered_up_to_seq: maxDeliveredUpToSeq(batch),
-        ...(deliveries.length > 0 ? { deliveries } : {}),
+        deliveries,
         kind: 'message',
         text,
       });
@@ -962,17 +964,6 @@ export class RuntimeDeliveryCoordinator {
     }
     return batch[0]!.text;
   }
-}
-
-function maxDeliveredUpToSeq(
-  batch: ReadonlyArray<{ deliveredUpToSeq?: number }>,
-): number | undefined {
-  let max = 0;
-  for (const item of batch) {
-    const value = item.deliveredUpToSeq ?? 0;
-    if (value > max) max = value;
-  }
-  return max > 0 ? max : undefined;
 }
 
 function waitingSnippet(driver: DriverDeliveryView, thresholdMs: number): string {

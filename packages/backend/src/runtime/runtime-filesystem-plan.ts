@@ -12,22 +12,26 @@
  * workspaces never produce a seed target: their L2 IS L1, already materialized
  * by `agent_materialize`.
  */
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 
 export interface EnsurePlanWorkspace {
   id: string;
-  workspace_kind: string;
+  /** The container's home agent, or `null` for a regular workspace. The plan asks
+   *  "does this container have a home agent AT ALL" — not "is it THIS agent's" —
+   *  because a foreign agent's home has no L2 to seed either. */
+  owner_agent_id: string | null;
 }
 
 export interface RuntimeStartFilesystemPlan {
   /** The best-effort L2 seed target for the spawning agent, or null when
-   *  nothing needs seeding (agent_home / missing row). Never a spawn gate. */
+   *  nothing needs seeding (an agent home / missing row). Never a spawn gate. */
   seedWorkspaceId: string | null;
 }
 
 export function planRuntimeStartFilesystemEnsure(
   primary: EnsurePlanWorkspace | undefined,
 ): RuntimeStartFilesystemPlan {
-  if (!primary || primary.workspace_kind !== 'regular') {
+  if (!primary || isAgentHomeWorkspace(primary)) {
     return { seedWorkspaceId: null };
   }
   return { seedWorkspaceId: primary.id };

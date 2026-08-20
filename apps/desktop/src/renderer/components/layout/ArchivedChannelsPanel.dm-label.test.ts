@@ -6,15 +6,14 @@
  * belong to the direct pair, #task:2044) — while every row keeps the same `#`
  * channel glyph (an agent-space channel is channel-like, not a separate icon).
  *
- * The subtle part is that the SAME agent surfaces under two name shapes:
- *   - the `WorkspaceListItem` (filter dropdown) carries a UI `dm-` prefix
- *     (`workspaceToListItem`), e.g. `dm-Norman`;
- *   - the backend archived aggregate (`item.workspace.name`) returns the
- *     bare agent name (`insertAgentHome` sets `name = agent.name`), e.g.
- *     `Norman`.
- * Both must normalize to the identical `Norman` label. The prefix-stripping
- * convergence itself is pinned in `lib/workspace-name.test.ts`; here we pin the
- * archived row's kind → label wiring.
+ * The panel reads an agent space through TWO carriers — the backend archived
+ * aggregate (`item.workspace.name`, the channel rows' context line) and the
+ * viewer's own `WorkspaceListItem` (the workspace rows + filter dropdown) — and
+ * they must render the identical label. They used to disagree by construction:
+ * the list shape carried a `dm-Norman` UI prefix the aggregate never had, so a
+ * surface that forgot the stripper showed the internal spelling. #task:2066
+ * retired the prefix at the mint, so both carriers now hold the bare agent name
+ * and this file pins that they still land on one label.
  */
 import { describe, expect, it } from 'vitest';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
@@ -26,7 +25,7 @@ import {
   archivedWorkspaceRows,
 } from './ArchivedChannelsPanel';
 
-describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
+describe('archivedRowWorkspaceLabel — the aggregate name IS the context label', () => {
   const baseChannel = {
     id: 'c1',
     workspace_id: 'w1',
@@ -35,7 +34,7 @@ describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
     archived_at: 1_000,
   };
 
-  it('regular `channel` row shows the raw workspace name unchanged', () => {
+  it('people-owned `channel` row shows the raw workspace name unchanged', () => {
     const item = {
       channel: { ...baseChannel, placement_kind: 'workspace', roster_policy: 'open' },
       workspace: { id: 'w1', name: 'Engineering', archived_at: null },
@@ -61,7 +60,7 @@ describe('archivedRowOpenTarget — opens in the channel\'s OWN workspace', () =
     archived_at: 1_000,
   };
 
-  it('regular channel → its workspace id + channel id', () => {
+  it('people-owned workspace channel → its workspace id + channel id', () => {
     const item = {
       channel: { ...baseChannel, placement_kind: 'workspace', roster_policy: 'open' },
       workspace: { id: 'w1', name: 'Engineering', archived_at: null },
@@ -101,9 +100,8 @@ describe('archivedWorkspaceRows — membership + shared filters', () => {
     id: 'w1',
     name: 'Engineering',
     description: null,
-    kind: 'regular',
     workspace_scope_ids: ['w1'],
-    dm_agent_id: null,
+    owner_agent_id: null,
     dm_channel_ids: [],
     archived_at: null,
     created_at: 0,
@@ -151,9 +149,8 @@ describe('archivedWorkspaceRowLabel — one workspace, one label', () => {
     id: 'w1',
     name: 'Engineering',
     description: null,
-    kind: 'regular',
     workspace_scope_ids: ['w1'],
-    dm_agent_id: null,
+    owner_agent_id: null,
     dm_channel_ids: [],
     archived_at: 5_000,
     created_at: 0,
@@ -161,14 +158,17 @@ describe('archivedWorkspaceRowLabel — one workspace, one label', () => {
     ...over,
   });
 
-  it('regular workspace shows its bare name', () => {
+  it('people-owned workspace shows its bare name', () => {
     expect(archivedWorkspaceRowLabel(ws({}))).toBe('Engineering');
   });
 
   it('agent space converges on the same agent name the channel rows show', () => {
-    // The list shape carries the `dm-` UI prefix (`workspaceToListItem`); the
-    // channel rows' context line arrives bare. Both must read `Norman`.
-    expect(archivedWorkspaceRowLabel(ws({ kind: 'dm', name: 'dm-Norman' }))).toBe(
+    // Both carriers now hold the bare agent name; this pins that neither side
+    // re-decorates it (a prefix, an `@`, or the word "DM" would break the
+    // convergence the panel depends on).
+    expect(
+      archivedWorkspaceRowLabel(ws({ owner_agent_id: 'agent-norman', name: 'Norman' })),
+    ).toBe(
       'Norman',
     );
   });

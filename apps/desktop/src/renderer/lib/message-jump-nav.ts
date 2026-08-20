@@ -14,10 +14,13 @@ import type { DirectPairAuthority } from '@/lib/chat-place-restore';
  * HITs and only fails closed on what that answer could not yet confirm.
  *
  *   - `to-direct`         → the workspace-less target is one of the viewer's
- *                           direct lines; open it with `nav.toDirect`. Reached on
- *                           a HIT whether the list is settled (`ready`) or
- *                           `refetching` — a viewer's pair membership only grows,
- *                           so a hit cannot be revoked by a read in flight.
+ *                           direct lines; open its route (`routes.chatDirect`,
+ *                           plus `?thread` when the target names a reply
+ *                           cluster — a pair has clusters since #task:2096).
+ *                           Reached on a HIT whether the list is settled
+ *                           (`ready`) or `refetching` — a viewer's pair
+ *                           membership only grows, so a hit cannot be revoked by
+ *                           a read in flight.
  *   - `workspace-resolve` → resolve the target against the workspace arm
  *                           (`resolveNavWorkspaceId` → channel route). Reached
  *                           when the target carries its own workspace id, and
@@ -31,6 +34,64 @@ import type { DirectPairAuthority } from '@/lib/chat-place-restore';
  *                           in-flight read is about to introduce.
  */
 export type JumpNavDecision = 'to-direct' | 'workspace-resolve' | 'fail-closed';
+
+/**
+ * Where an ACCEPTED jump lands: which primary pane, and the reply cluster to
+ * open with it (#task:2102).
+ *
+ * This exists to make "does this arm carry the thread coordinate" ONE answer
+ * instead of one per arm. The bug it retires: the direct arm navigated with
+ * `nav.toDirect(channelId)` and dropped `threadRootId` on the floor, because it
+ * was written when a pair had no reply clusters — an invariant #task:2096 ended.
+ * So a DM attachment whose source message lived in a thread opened the pair's
+ * MAIN line, where that message is not, and the primed locate never matched.
+ * The workspace arm meanwhile carried the same coordinate correctly, which is
+ * exactly the shape a per-arm decision drifts into.
+ *
+ * `threadRootId` is therefore normalized ONCE here and shared by both variants;
+ * a future third pane kind gets it by construction rather than by remembering.
+ */
+export type JumpRoute =
+  | {
+      kind: 'direct';
+      conversationId: string;
+      /** Root of the reply cluster to open, or null for the main line. */
+      threadRootId: string | null;
+    }
+  | {
+      kind: 'channel';
+      workspaceId: string;
+      channelId: string;
+      threadRootId: string | null;
+    };
+
+export function resolveJumpRoute(inputs: {
+  /** The accepted decision from {@link resolveJumpNav}. `fail-closed` never
+   *  reaches here — it must return before any side effect. */
+  decision: Exclude<JumpNavDecision, 'fail-closed'>;
+  channelId: string;
+  /** The workspace the channel arm resolved (`resolveNavWorkspaceId`). Null
+   *  means unresolvable, and a channel URL cannot be built without it. The
+   *  direct arm never reads it: a pair has no container to name. */
+  navWorkspaceId: string | null;
+  /** The cluster the target names. Both "not named" (`undefined`) and "the main
+   *  line" (`null`) are the same downstream answer, which is why the caller can
+   *  hand its raw param straight in. */
+  threadRootId?: string | null | undefined;
+}): JumpRoute | null {
+  // One normalization for every arm — the whole point of this function.
+  const threadRootId = inputs.threadRootId ?? null;
+  if (inputs.decision === 'to-direct') {
+    return { kind: 'direct', conversationId: inputs.channelId, threadRootId };
+  }
+  if (!inputs.navWorkspaceId) return null;
+  return {
+    kind: 'channel',
+    workspaceId: inputs.navWorkspaceId,
+    channelId: inputs.channelId,
+    threadRootId,
+  };
+}
 
 export function resolveJumpNav(inputs: {
   /** Whether the target carries its own workspace coordinate

@@ -35,6 +35,7 @@ import {
   type UserDto,
   type WorkspaceUserMemberDto,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { AppEnv, Principal } from '../auth/principal.js';
 import { getAgentPrincipal, getPrincipal, getUserPrincipal } from '../auth/principal.js';
@@ -293,7 +294,7 @@ export function createWorkspaceMembershipApp(
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace || isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     const principal = getUserPrincipal(c);
@@ -389,7 +390,7 @@ export function createWorkspaceMembershipApp(
       return c.json({ error: 'workspace id and user id required' }, 400);
     }
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace || isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'owner')) {
@@ -427,7 +428,7 @@ export function createWorkspaceMembershipApp(
       return c.json({ error: 'workspace id and agent id required' }, 400);
     }
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') return c.body(null, 204);
+    if (!workspace || isAgentHomeWorkspace(workspace)) return c.body(null, 204);
     const principal = getUserPrincipal(c);
     // Roster-write FLOOR: workspace membership — same shape as the add route,
     // and for the same reason: what is required ON TOP of it follows the DATA.
@@ -503,7 +504,7 @@ export function createWorkspaceMembershipApp(
       return c.json({ error: 'workspace id and user id required' }, 400);
     }
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace || isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     // Human removal is owner-only (mirrors role PATCH), unlike admin-gated
@@ -568,7 +569,7 @@ export function createWorkspaceMembershipApp(
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace || isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     const principal = getUserPrincipal(c);
@@ -907,8 +908,8 @@ export function createConversationMembershipApp(
  * port so this file does not import the provider directly.
  *
  * PLACEMENT-scoped, not workspace-scoped (#task:2021 P4-4): the destination is
- * whatever the address resolved to, and a `direct_pair` or an `agent_inbox` has
- * no `workspace_id` at all. Passing that null into the workspace-grant verifier
+ * whatever the address resolved to, and a `direct_pair` has no `workspace_id` at
+ * all. Passing that null into the workspace-grant verifier
  * would answer `capability_denied` for a conversation whose real answer is "this
  * operation does not exist here" — a denial standing in for a domain refusal.
  */

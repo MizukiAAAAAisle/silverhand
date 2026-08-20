@@ -74,7 +74,6 @@ Errors:
   target_unresolved             it names no conversation you can use — the
                                 same answer for one that does not exist
   thread_suffix_not_supported   a \`/thread:\` suffix was appended
-  inbox_not_writable            an agent inbox is not a wake destination
   capability_denied             manage_schedules, judged where the wake lands
 
 stdout: { "schedule": ScheduleDto }`,

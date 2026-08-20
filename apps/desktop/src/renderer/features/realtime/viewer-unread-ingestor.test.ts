@@ -99,7 +99,7 @@ beforeEach(() => {
 });
 
 describe('patchMessageUnreadByConversation — sparse-map authoritative upsert', () => {
-  const key = messageUnreadByConversationKey('w-1', 'regular');
+  const key = messageUnreadByConversationKey('w-1');
 
   it('is a no-op (cold) when the query is not loaded', () => {
     expect(patchMessageUnreadByConversation(qc, payload())).toBe('cold');
@@ -272,7 +272,7 @@ describe('patchFavoritesUnread — list-row present-only write', () => {
 });
 
 describe('ingestViewerUnreadFrame — routing + single-dispatch fan-out', () => {
-  const byConvKey = messageUnreadByConversationKey('w-1', 'regular');
+  const byConvKey = messageUnreadByConversationKey('w-1');
   function seedAll(): void {
     qc.setQueryData<MessageUnreadByConversationDto>(byConvKey, {
       by_conversation: { 'c-1': 1 },

@@ -3,7 +3,6 @@
 import { z } from 'zod';
 import {
   AGENT_CAPABILITIES,
-  WorkspaceKindSchema,
 } from '../db/schema.js';
 import { AgentDtoSchema } from './agent.js';
 import { UserDtoSchema } from './user.js';
@@ -14,11 +13,35 @@ import { WorkspaceNameSchema } from './name.js';
 // legacy Channel/Conversation DTOs below remain during the transition so the
 // existing renderer can keep compiling until it is renamed.
 
-export const WorkspaceDtoSchema = z.object({
+/**
+ * A workspace as the DOMAIN sees it — the shape `WorkspaceRepo` returns.
+ *
+ * It carries the OWNERSHIP RELATION (`owner_agent_id`) and no container word at
+ * all. There used to be a stored `workspace_kind` here, mirrored from the column;
+ * every authorization door, kind guard and plan asks ownership through one named
+ * predicate (`isAgentHomeWorkspace` / `isAgentHomeWorkspaceOf`, see
+ * `agent-home-workspace.ts`) — a container IS an agent home exactly when it has a
+ * home agent — so the word was the same bit spelled twice. #task:2082 removed the
+ * last decision that read it, #task:2075 stopped publishing it, #task:2081 retired
+ * the last wire (`runtime_start`), and #task:2080 dropped the column itself; this
+ * domain shape retired its mirror in that same step. Do NOT reintroduce a decision
+ * that reads a container word, and do not re-derive one from `owner_agent_id`:
+ * that would move the alphabet rather than retire it.
+ *
+ * The host wire keys filesystem path resolution on the CONTAINER's identity
+ * separately (`runtime/runtime-start-options.ts` → `RuntimeStartWorkspaceRefSchema`).
+ * Publishing product words into this core would invert the dependency: the
+ * domain would speak the presentation's vocabulary.
+ *
+ * It was called `WorkspaceDto` until #task:2069. The suffix was a naming lie:
+ * one name did two jobs — this domain shape AND the payload the desktop
+ * received verbatim from `c.json` — which is precisely why there was no place
+ * to convert the word at. {@link ViewerWorkspaceDtoSchema} is that place now.
+ */
+export const WorkspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().nullable(),
-  workspace_kind: WorkspaceKindSchema,
   owner_agent_id: z.string().nullable(),
   owner_user_id: z.string().nullable(),
   dm_channel_id: z.string().nullable(),
@@ -27,7 +50,36 @@ export const WorkspaceDtoSchema = z.object({
   created_at: z.number(),
   updated_at: z.number(),
 });
-export type WorkspaceDto = z.infer<typeof WorkspaceDtoSchema>;
+export type Workspace = z.infer<typeof WorkspaceSchema>;
+
+/**
+ * A workspace as PUBLISHED to a human viewer — what the desktop receives from
+ * every `/api/workspaces*` face. It carries the ownership relation
+ * (`owner_agent_id`) and no container word at all: #task:2075's stop-publish step
+ * deleted the published `workspace_kind`, because that word was the same bit
+ * spelled twice — the renderer asks "whose container is this" through
+ * `isAgentHomeWorkspace*` instead of decoding a kind (#task:2078).
+ *
+ * Spelled out field by field rather than derived from {@link WorkspaceSchema}
+ * with one substitution: a derived face would auto-publish every future domain
+ * field, which is the double-duty problem again wearing a second name. What the
+ * wire carries is a CHOICE. `tests/viewer-workspace-face.test.ts` keeps a ledger
+ * cell over these keys, so a deliberate divergence is updated in the commit that
+ * makes it and an accidental one goes red.
+ */
+export const ViewerWorkspaceDtoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  owner_agent_id: z.string().nullable(),
+  owner_user_id: z.string().nullable(),
+  dm_channel_id: z.string().nullable(),
+  dm_channel_ids: z.array(z.string()),
+  archived_at: z.number().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+export type ViewerWorkspaceDto = z.infer<typeof ViewerWorkspaceDtoSchema>;
 
 export const WorkspaceMemberDtoSchema = z.object({
   workspace_id: z.string(),

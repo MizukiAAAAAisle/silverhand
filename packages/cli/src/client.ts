@@ -100,7 +100,6 @@ export class BackendClient {
      *  The route in the path below is unrelated to it — that is the credential's
      *  conversation, which says who is sending, never where the words go. */
     target: string;
-    seen_up_to_seq?: number;
     stale_event_id?: string;
     stale_resolution_reason?: AgentSendStaleResolutionReason;
     freshness_bypass?: boolean;

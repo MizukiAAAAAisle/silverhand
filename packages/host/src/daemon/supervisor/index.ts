@@ -16,16 +16,10 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
   AgentSendMessageOutputSchema,
-  type AddressableId,
-  addressableId,
   buildSystemPromptFor,
   composeRuntimeDeliveryPresentation,
-  formatAgentRuntimeScopeBanner,
-  formatDeliveryTarget,
-  parseDeliveryTargetInput,
   type AgentActivitySnippetKind,
   type AgentRunState,
-  decodeObservedSeq,
   internalPaths,
   type ParsedEvent,
   ParsedEventSchema,
@@ -58,8 +52,6 @@ import {
   type AgentStaleReceiveResult,
   type AgentStaleResolveParams,
   type AgentStaleResolveResult,
-  type AgentStreamObservedParams,
-  type AgentStreamObservedResult,
   type EventFrame,
   type RuntimeClearSessionParams,
   type RuntimeClearSessionResult,
@@ -340,17 +332,6 @@ function runtimeScopeKey(scope: RuntimeScope): string {
     : `conversation\x00${scope.conversation_id}\x00${scope.agent_id}`;
 }
 
-function runtimeActionText(
-  scope: RuntimeScope,
-  cwd: string,
-  text: string,
-): string {
-  if (scope.kind === 'conversation') return text;
-  // ONE authority for the banner grammar: the same formatter renders what
-  // `platform-prompt.ts` teaches and what the daemon frames.
-  return `${formatAgentRuntimeScopeBanner(cwd)}\n\n${text}`;
-}
-
 /** Delivery admission is the focus boundary for an AgentSlot. Keep the
  * handle's outer origin and an already-materialized AgentRunState coordinate
  * atomic so no frame can route to B while carrying A in its payload. */
@@ -415,26 +396,6 @@ function profileUsesBoundaryGate(handle: RuntimeHandle): boolean {
  *    readiness (`driverReadyToEncode`) is the release boundary.
  *  - The unified transport-safe predicate (`handleAtSafeBoundary`) was
  *    deleted in Commit C — no profile consumes it. */
-/** Per-stream max seq covered by a startup batch — the same derivation
- *  `admitDeliveryBatch` uses (structured deliveries, else the scalar
- *  main-stream high-water). Recorded on the payload uuid so a runtime
- *  `started(uuid)` echo can promote observed for exactly this coverage
- *  (#task:1558 B'). */
-function coveredSeqPairsForBatch(batch: StartupDeliveryState): Array<[string, number]> {
-  const byStream = new Map<string, number>();
-  if (batch.deliveries && batch.deliveries.length > 0) {
-    for (const delivery of batch.deliveries) {
-      const streamKey = streamKeyForMessage(delivery.thread_root_id);
-      const seq = safeSeq(delivery.seq);
-      if (seq === null) continue;
-      const prev = byStream.get(streamKey);
-      if (prev === undefined || seq > prev) byStream.set(streamKey, seq);
-    }
-  } else if (safeSeq(batch.deliveredUpToSeq) !== null) {
-    byStream.set(MAIN_STREAM_KEY, batch.deliveredUpToSeq as number);
-  }
-  return [...byStream.entries()];
-}
 
 function strategyBoundaryOpen(handle: RuntimeHandle): boolean {
   switch (handle.driver.releaseProfile) {
@@ -505,13 +466,21 @@ function spliceBoundedDeferredPrefix(queue: DeferredEntry[]): DeferredEntry[] {
   return queue.splice(0, Math.max(1, take));
 }
 
+/** The `delivered_up_to_seq` sidecar value for a batch: `max(seq)` over its
+ *  per-delivery entries. Since #task:2106 made `deliveries` required and
+ *  non-empty across the whole chain, this is the SINGLE derivation of that
+ *  scalar — there is no stored field and no wire scalar to drift from it. */
+function deliveredUpToSeqOf(deliveries: readonly RuntimeDelivery[]): number {
+  return Math.max(...deliveries.map(delivery => delivery.seq));
+}
+
 /** Fold a drained deferred batch into a single `StartupDeliveryState` for the
  *  shared consume path (#task:1417 Stage 3, §11.4). `gated` multi-entry
  *  batches combine their texts into one turn (`combineGatedBatch`); a single
  *  entry (always the case for `direct` FIFO, or a lone gated entry) keeps its
  *  text verbatim. delivery_ids concatenate so the one `consumed` covers the
- *  whole batch; per-delivery stream metadata flattens only when EVERY entry
- *  carries it (else fall back to the scalar `deliveredUpToSeq` high-water). */
+ *  whole batch; the per-delivery entries (required since #task:2106) flatten
+ *  across the batch. */
 function combineDeferredBatch(
   batch: readonly DeferredEntry[],
   gated: boolean,
@@ -530,45 +499,15 @@ function combineDeferredBatch(
     gated && texts.length > 1
       ? combineGatedBatch(texts, SEND_MESSAGE_TOOL)
       : (texts[0] ?? '');
-  const allHaveDeliveries = batch.every(e => e.deliveries !== undefined);
-  const deliveries = allHaveDeliveries
-    ? batch.flatMap(e => [...(e.deliveries ?? [])])
-    : undefined;
-  const seqs = batch
-    .map(e => e.deliveredUpToSeq)
-    .filter((s): s is number => s !== undefined);
-  const deliveredUpToSeq = seqs.length > 0 ? Math.max(...seqs) : undefined;
+  const deliveries = batch.flatMap(e => [...e.deliveries]);
   return {
     conversationId,
     actionWorkdir: batch[0]!.actionWorkdir,
     deliveryIds,
-    ...(deliveredUpToSeq !== undefined ? { deliveredUpToSeq } : {}),
-    ...(deliveries ? { deliveries } : {}),
+    deliveries,
     text,
   };
 }
-
-function safeSeq(value: number | undefined): number | null {
-  return Number.isSafeInteger(value) && value !== undefined && value > 0
-    ? value
-    : null;
-}
-
-/** Stream key for the channel's main line. */
-const MAIN_STREAM_KEY = 'main';
-
-/** Upper bound on the per-handle memory of seen cluster roots. A root beyond
- *  this LRU window is treated as "unseen" (Case A loose) — the send omits its
- *  freshness boundary rather than claiming an empty cluster it cannot vouch
- *  for. */
-const SEEN_CLUSTER_ROOT_CACHE_CAP = 4096;
-
-/** Upper bound on the per-handle name→conversation memo
- *  ({@link RuntimeHandle.resolvedConversationByAddressHead}). An address head
- *  evicted from this window costs one loose first touch the next time it is
- *  addressed, never a wrong stream: the memo is only ever read to KEY freshness,
- *  and its absence omits it. */
-const RESOLVED_ADDRESS_HEAD_CACHE_CAP = 1024;
 
 /**
  * Internal spawn input for {@link Supervisor.startUnlocked}. Stage 2c made the
@@ -584,27 +523,10 @@ type StartUnlockedParams = RuntimeStartParams & {
     conversation_id: string;
     action_workdir: string;
     delivery_ids: number[];
-    delivered_up_to_seq?: number;
-    deliveries?: RuntimeDelivery[];
+    deliveries: RuntimeDelivery[];
     text: string;
   };
 };
-
-/** The stream a message LIVES in — what its arrival/our own send
- *  advances as the observed boundary. `thread_root_id === null` ⇒ main
- *  line; otherwise the reply cluster rooted at that message. */
-function streamKeyForMessage(threadRootId: string | null | undefined): string {
-  return threadRootId ? `thread:${threadRootId}` : MAIN_STREAM_KEY;
-}
-
-function parsedStartsTurn(parsed: ParsedEvent): boolean {
-  return (
-    parsed.kind === 'thinking'
-    || parsed.kind === 'text'
-    || parsed.kind === 'tool_call'
-    || (parsed.kind === 'error' && parsed.fatal !== true)
-  );
-}
 
 function parseObjectJson(text: string): Record<string, unknown> | null {
   try {
@@ -617,12 +539,7 @@ function parseObjectJson(text: string): Record<string, unknown> | null {
   }
 }
 
-function extractStaleConflict(
-  bodyText: string,
-): (Omit<PendingStaleEvent, 'conversationId'> & {
-  /** The target conversation the 409 named, or `null` when it named none. */
-  conversationId: string | null;
-}) | null {
+function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
   const parsed = parseObjectJson(bodyText);
   const error = parsed?.['error'];
   if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
@@ -633,35 +550,24 @@ function extractStaleConflict(
   const d = details as Record<string, unknown>;
   if (d['subkind'] !== 'message_stale') return null;
   const id = d['stale_event_id'];
-  const currentSeq = d['current_seq'];
+  // The conversation the rejected send TARGETED (#task:2095 F17), surfaced on
+  // the 409 symmetrically with the success response's `conversation_id`. The
+  // daemon holds no address-resolution authority — for a name-shaped address it
+  // cannot re-derive this, and fabricating one is forbidden — so it MUST come
+  // from the backend or the send has no `stale-resolve` authorization anchor.
+  // Under the #task:2095 RuntimeScope model the 409 carries NO seq: staleness
+  // is "this runtime has an undelivered inbox row", not a per-stream position.
+  // Fail CLOSED: absent/blank id or target ⇒ no armed event.
+  const targetConversationIdRaw = d['target_conversation_id'];
   if (
     typeof id !== 'string'
     || id.length === 0
-    || typeof currentSeq !== 'number'
-    || !Number.isSafeInteger(currentSeq)
-    || currentSeq <= 0
+    || typeof targetConversationIdRaw !== 'string'
+    || targetConversationIdRaw.length === 0
   ) {
     return null;
   }
-  // Stream of the conflicted head (#task:1614): lets the stale-receive
-  // pull evaluate coverage. Absence fails CLOSED on coverage claims —
-  // never inferred as `main`.
-  const streamKeyRaw = d['stream_key'];
-  const streamKey =
-    typeof streamKeyRaw === 'string' && streamKeyRaw.length > 0
-      ? streamKeyRaw
-      : null;
-  // The TARGET conversation the CAS was scoped to (#task:2021 P4-4). Since a
-  // send addresses a stream that need not be the sender's own, the daemon cannot
-  // derive this from the intent — and for a name-shaped address it does not even
-  // know it yet. Absence is `null`, and the caller degrades to the source
-  // coordinate, which makes coverage claims fail closed rather than false.
-  const conversationIdRaw = d['conversation_id'];
-  const conversationId =
-    typeof conversationIdRaw === 'string' && conversationIdRaw.length > 0
-      ? conversationIdRaw
-      : null;
-  return { id, currentSeq, streamKey, conversationId };
+  return { id, targetConversationId: targetConversationIdRaw };
 }
 
 // ── agent_stale_receive (#task:1614) ────────────────────────────────
@@ -820,10 +726,6 @@ export class Supervisor implements SupervisorContract {
     this.daemonStartedAt = this.now();
   }
 
-  /** Pure per-stream observed advance: bump the stream to max(prev, seq)
-   *  and log when it actually moves. No turn side-effect — shared by the
-   *  send path (which additionally marks the turn) and the pull-observe
-   *  intent (which must NOT start a turn). */
   /** #task:1557 Phase 1: mint a stable uuid for one encoded stdin
    *  payload and remember which delivery ids it carried. Claude echoes
    *  the uuid back on `command_lifecycle` frames; other runtimes never
@@ -831,12 +733,10 @@ export class Supervisor implements SupervisorContract {
   private mintInputPayloadUuid(
     handle: RuntimeHandle,
     deliveryIds: readonly number[],
-    coveredSeqByStream: ReadonlyArray<readonly [string, number]> = [],
   ): string {
     const uuid = randomUUID();
     handle.inputPayloadUuids.set(uuid, {
       deliveryIds: [...deliveryIds],
-      coveredSeqByStream: coveredSeqByStream.map(([k, v]) => [k, v] as [string, number]),
       mintedAt: Date.now(),
     });
     while (handle.inputPayloadUuids.size > INPUT_PAYLOAD_UUID_CAP) {
@@ -847,329 +747,19 @@ export class Supervisor implements SupervisorContract {
     return uuid;
   }
 
-  private recordObservedStream(
-    handle: RuntimeHandle,
-    streamKey: string,
-    seq: number | undefined,
-    source: string,
-    conversationId: string = handle.conversationId,
-  ): void {
-    const nextSeq = safeSeq(seq);
-    if (nextSeq === null) return;
-    // Mint at a real observation boundary (delivery admit / stale response /
-    // send commit): a raw backend seq becomes this stream's ObservedSeq cursor
-    // via a validated decode — never a bare cast.
-    const observed = decodeObservedSeq(nextSeq);
-    const storageKey = this.streamStorageKey(handle, conversationId, streamKey);
-    const prev = handle.observedSeqByStream.get(storageKey);
-    // Monotonic advance WITHOUT flattening absence: `prev === undefined`
-    // ("never observed") is a distinct state from `prev = 0`, so we branch on
-    // it explicitly rather than `?? 0`. A first observation of a stream is a
-    // real advance worth logging.
-    if (prev !== undefined && prev >= observed) return;
-    handle.observedSeqByStream.set(storageKey, observed);
-    this.logger.info(
-      {
-        kind: 'process',
-        action: 'freshness_observed_seq_advanced',
-        conversationId,
-        agent_id: handle.agentId,
-        source,
-        stream_key: streamKey,
-        previous_seq: prev ?? null,
-        observed_seq: observed,
-      },
-      'runtime freshness observed seq advanced',
-    );
-    this.drainSkippedCasMerges(handle, storageKey);
-    // A stale-receive waiter (#task:1614) may now prove `already_admitted`.
-    this.wakePullWaiter(handle);
-  }
-
-  /** Countgame P1 / #task:1854 (skipped-CAS hole): merge the agent's own seqs
-   *  from sends that bypassed or skipped the per-stream CAS into the watermark
-   *  once real admission evidence covers their prerequisite head. Iterative (a
-   *  merged own seq can satisfy the next entry's prerequisite — chained
-   *  skips). Own seqs need no admission evidence: the sender authored them. */
-  private drainSkippedCasMerges(handle: RuntimeHandle, streamKey: string): void {
-    const entries = handle.pendingSkippedCasMergeByStream.get(streamKey);
-    if (!entries || entries.length === 0) return;
-    let current = handle.observedSeqByStream.get(streamKey);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (let i = 0; i < entries.length; i += 1) {
-        const entry = entries[i]!;
-        // Absence of a cursor is NOT "covers nothing" — the same present/absent
-        // discipline the send path keeps (Cindy/Norman on #task:1854). A
-        // `prereq === 0` entry is the backend's proof that the stream was EMPTY
-        // before the insert (`streamHeadLatestSeq` returns 0 when no head row
-        // exists), so there is nothing to cover and the baseline is a literal
-        // 0. That is the COMMON first touch — first reply in a cluster, first
-        // message in a channel — and reading absence as "nothing covered"
-        // parked it forever.
-        //
-        // The baseline stays a LITERAL 0 (Norman's fence): never
-        // `pendingAdmissionSeqByStream` (a pending seq must not become a merge
-        // prerequisite) and never the own seq (that would swallow an unread
-        // gap). A `prereq > 0` entry with no cursor still blocks — we have
-        // never read what we skipped past.
-        const baseline: number | undefined =
-          current ?? (entry.prereq === 0 ? 0 : undefined);
-        if (baseline === undefined) continue;
-        if (entry.prereq <= baseline) {
-          entries.splice(i, 1);
-          if (entry.ownSeq > baseline) {
-            current = decodeObservedSeq(entry.ownSeq);
-            handle.observedSeqByStream.set(streamKey, current);
-            this.logger.info(
-              {
-                kind: 'process',
-                action: 'freshness_observed_seq_advanced',
-                conversationId: handle.conversationId,
-                agent_id: handle.agentId,
-                source: 'skipped_cas_own_seq_merged',
-                stream_key: streamKey,
-                observed_seq: entry.ownSeq,
-                merge_prereq: entry.prereq,
-              },
-              'runtime freshness observed seq advanced',
-            );
-          }
-          changed = true;
-          break;
-        }
-      }
-    }
-    if (entries.length === 0) {
-      handle.pendingSkippedCasMergeByStream.delete(streamKey);
-    }
-  }
-
-  private advanceObservedStream(
-    handle: RuntimeHandle,
-    streamKey: string,
-    seq: number | undefined,
-    source: string,
-    conversationId: string = handle.conversationId,
-  ): void {
-    this.recordObservedStream(handle, streamKey, seq, source, conversationId);
-    // A send/arrival is turn activity; only mark the turn when we had a
-    // real seq to record (preserve the prior early-return semantics).
-    if (safeSeq(seq) !== null) handle.inputTurnActive = true;
-  }
-
-  private queueAdmissionStream(
-    handle: RuntimeHandle,
-    streamKey: string,
-    seq: number | undefined,
-    source: string,
-    conversationId: string = handle.conversationId,
-  ): void {
-    const nextSeq = safeSeq(seq);
-    if (nextSeq === null) return;
-    const pending = decodeObservedSeq(nextSeq);
-    const storageKey = this.streamStorageKey(handle, conversationId, streamKey);
-    const prev = handle.pendingAdmissionSeqByStream.get(storageKey);
-    // Same present/absent discipline as `recordObservedStream`.
-    if (prev !== undefined && prev >= pending) return;
-    handle.pendingAdmissionSeqByStream.set(storageKey, pending);
-    this.logger.warn(
-      {
-        kind: 'process',
-        action: 'freshness_pending_admission_queued',
-        conversationId,
-        agent_id: handle.agentId,
-        source,
-        stream_key: streamKey,
-        previous_pending_seq: prev ?? null,
-        pending_admission_seq: pending,
-      },
-      'runtime freshness pending admission queued',
-    );
-    // A stale-receive waiter (#task:1614) may now prove
-    // `normal_delivery_in_progress`.
-    this.wakePullWaiter(handle);
-  }
-
-  private admitPendingSeqForNewTurn(handle: RuntimeHandle, source: string): void {
-    if (handle.pendingAdmissionSeqByStream.size > 0) {
-      const pending = [...handle.pendingAdmissionSeqByStream.entries()];
-      handle.pendingAdmissionSeqByStream.clear();
-      for (const [storageKey, seq] of pending) {
-        const separator = handle.runtimeScope.kind === 'agent'
-          ? storageKey.indexOf('\u0000')
-          : -1;
-        const conversationId = separator >= 0
-          ? storageKey.slice(0, separator)
-          : handle.conversationId;
-        const streamKey = separator >= 0
-          ? storageKey.slice(separator + 1)
-          : storageKey;
-        this.recordObservedStream(
-          handle,
-          streamKey,
-          seq,
-          source,
-          conversationId,
-        );
-      }
-    }
-  }
-
-  private streamStorageKey(
-    handle: RuntimeHandle,
-    conversationId: string,
-    streamKey: string,
-  ): string {
-    return handle.runtimeScope.kind === 'agent'
-      ? `${conversationId}\u0000${streamKey}`
-      : streamKey;
-  }
-
-  /** Record that this session has seen the message a cluster is rooted at,
-   *  keeping the per-handle memory bounded (insertion-order LRU). Read only to
-   *  decide whether an addressed cluster is one this session can vouch for (see
-   *  {@link RuntimeHandle.seenClusterRootIds}). */
-  private rememberSeenClusterRoot(
-    handle: RuntimeHandle,
-    rootMessageId: string,
-  ): void {
-    const roots = handle.seenClusterRootIds;
-    roots.delete(rootMessageId);
-    roots.add(rootMessageId);
-    while (roots.size > SEEN_CLUSTER_ROOT_CACHE_CAP) {
-      const oldest = roots.values().next().value;
-      if (oldest === undefined) break;
-      roots.delete(oldest);
-    }
-  }
-
-  /** Remember what a name-shaped address head resolved to, keeping the memo
-   *  bounded (insertion-order LRU, same shape as the reply-target memory). */
-  private rememberResolvedAddressHead(
-    handle: RuntimeHandle,
-    memoKey: string,
-    conversationId: string,
-  ): void {
-    const map = handle.resolvedConversationByAddressHead;
-    map.delete(memoKey);
-    map.set(memoKey, conversationId);
-    while (map.size > RESOLVED_ADDRESS_HEAD_CACHE_CAP) {
-      const oldest = map.keys().next().value;
-      if (oldest === undefined) break;
-      map.delete(oldest);
-    }
-  }
-
-  /**
-   * What this daemon can say about a send address WITHOUT performing a lookup it
-   * has no authority for (#task:2021 P4-4).
-   *
-   * The return value is deliberately weak: a conversation id when the address is
-   * absolute or already learned, `null` otherwise — and `null` is never an error,
-   * it is "key no freshness boundary for this send". The grammar verdict is not
-   * duplicated here either; an unparsable address returns the same `null` and
-   * travels on to the resolver, which owns `target_malformed`.
-   *
-   * `memoKey` identifies the address HEAD by the parsed value's own fields rather
-   * than by re-cutting the raw token, so this function contains no spelling rules:
-   * a workspace+title pair and a `dm:@handle` each key one entry, independent of
-   * the `/thread:` suffix, which needs no resolving because it is already an id.
-   */
-  private resolveSendTargetStream(
-    handle: RuntimeHandle,
-    rawTarget: string,
-  ): {
-    conversationId: AddressableId | null;
-    threadRootId: AddressableId | null;
-    memoKey: string | null;
-  } {
-    const input = parseDeliveryTargetInput(rawTarget);
-    if (input === null) {
-      return { conversationId: null, threadRootId: null, memoKey: null };
-    }
-    if (input.kind === 'stream') {
-      return {
-        conversationId: input.stream.conversationId,
-        threadRootId: input.stream.threadRootId,
-        memoKey: null,
-      };
-    }
-    const memoKey =
-      input.kind === 'named_stream'
-        // NUL-joined for the same reason `streamStorageKey` is: a name may
-        // contain spaces, so any printable separator would let one pair collide
-        // with another ("a b"+"c" vs "a"+"b c").
-        ? `named:${input.workspace}\u0000${input.title}`
-        : `dm:${input.handle}`;
-    const remembered = handle.resolvedConversationByAddressHead.get(memoKey);
-    return {
-      // Re-branded rather than trusted: the memo holds whatever the backend
-      // answered, and a value the grammar would not accept must not become a
-      // freshness key (it would also be unformattable as `asserted_stream`).
-      conversationId:
-        remembered === undefined ? null : addressableId(remembered),
-      threadRootId: input.threadRootId,
-      memoKey,
-    };
-  }
-
-  /**
-   * Admit a delivered batch into the per-stream observed boundary
-   * (reply-cluster §6.4). With structured `deliveries[]` each row
-   * advances (or queues) the stream it lives in and records the cluster it
-   * anchors. Without metadata (legacy
-   * backend) we fall back to the scalar high-water on the main stream.
-   * `admitNow=false` queues instead of advancing, for a mid-turn batch
-   * that becomes precedent only at the next turn boundary.
-   */
-  private admitDeliveryBatch(
-    handle: RuntimeHandle,
-    deliveries: readonly RuntimeDelivery[] | undefined,
-    deliveredUpToSeq: number | undefined,
-    admitNow: boolean,
-    source: string,
-  ): void {
-    if (deliveries && deliveries.length > 0) {
-      for (const delivery of deliveries) {
-        // A main-line message is the root of the (so far empty) cluster that
-        // could hang off it, and every reply into that cluster would reach this
-        // session too — so seeing it is what licenses `seen=0` there later. A
-        // delivered REPLY teaches nothing of the kind: it names its root
-        // without showing us the root, let alone the rest of the cluster.
-        if (delivery.thread_root_id == null) {
-          this.rememberSeenClusterRoot(handle, delivery.message_id);
-        }
-        const streamKey = streamKeyForMessage(delivery.thread_root_id);
-        if (admitNow) {
-          this.advanceObservedStream(handle, streamKey, delivery.seq, source);
-        } else {
-          this.queueAdmissionStream(handle, streamKey, delivery.seq, source);
-        }
-      }
-      return;
-    }
-    if (admitNow) {
-      this.advanceObservedStream(handle, MAIN_STREAM_KEY, deliveredUpToSeq, source);
-    } else {
-      this.queueAdmissionStream(handle, MAIN_STREAM_KEY, deliveredUpToSeq, source);
-    }
-  }
-
-  /** Hard-reject a batch whose per-delivery metadata id-set does not
-   *  match its `delivery_ids` (text and stream metadata must not drift —
-   *  reply-cluster §6.4). A legacy batch without `deliveries[]` is
-   *  allowed and validated as a no-op. Throws on mismatch (a backend
-   *  contract bug): the delivery is left un-acked so the failure is loud. */
+  /** Hard-reject a batch whose per-delivery entry id-set does not match its
+   *  `delivery_ids` — text and per-delivery presentation must not drift. A
+   *  batch without `deliveries[]` (backend-side optional; test/non-populating
+   *  callers) is allowed and validated as a no-op. Throws on mismatch (a
+   *  backend contract bug): the delivery is left un-acked so the failure is
+   *  loud. */
   private assertDeliveryMetadataConsistent(
     conversationId: string,
     agentId: string,
     deliveryIds: readonly number[],
-    deliveries: readonly RuntimeDelivery[] | undefined,
+    deliveries: readonly RuntimeDelivery[],
     context: string,
   ): void {
-    if (!deliveries) return;
     const idSet = new Set(deliveryIds);
     const metaSet = new Set(deliveries.map(d => d.delivery_id));
     let mismatch = idSet.size !== metaSet.size;
@@ -1200,10 +790,6 @@ export class Supervisor implements SupervisorContract {
           + `deliveries=[${[...metaSet].join(',')}]`,
       );
     }
-  }
-
-  private shouldAdmitDeliveryImmediately(handle: RuntimeHandle): boolean {
-    return handle.inputTurnActive !== true;
   }
 
   private getHandleForAgentIntent(
@@ -1258,12 +844,13 @@ export class Supervisor implements SupervisorContract {
     // P1-2 v2 (#task:1614): settlement-before-send ordering barrier.
     // The response frame can reach the CLI BEFORE this process runs the
     // write callback (the kernel gives no cross-process ordering), so a
-    // resend reacting to `batch_covered` may arrive while the
+    // resend reacting to `batch_queue_drained` may arrive while the
     // settlement has not even been queued yet — lock-chain position
     // proves nothing here. The reservation's `settled` promise is the
     // explicit happens-before: it resolves only after
-    // `settleStaleReceiveHandoff` finished (observed advanced on a
-    // proven handoff, FIFO restored otherwise), and the write callback
+    // `settleStaleReceiveHandoff` finished (settled + `delivered_up_to_seq`
+    // scalar written on a proven handoff, FIFO restored otherwise), and the
+    // write callback
     // is guaranteed to fire eventually (flush, error, or destroy), so
     // this wait is bounded by transport liveness, never by scheduling
     // luck. Loop: a new reservation may exist by the time one resolves.
@@ -1271,85 +858,25 @@ export class Supervisor implements SupervisorContract {
     while (handle.pullReservation !== null) {
       await handle.pullReservation.settled;
     }
-    // WHICH per-stream observed boundary this send is anchored to
-    // (reply-cluster §6.4) — decided entirely by the ADDRESS since #task:2021
-    // P4-4. The daemon resolves only what it can know without a lookup:
-    //
-    //  - the id form           → the stream, exactly, with no resolution at all;
-    //  - a name / `dm:@handle` → the conversation this session already learned
-    //    that head resolves to (memo, fed by earlier send responses);
-    //  - anything else         → nothing. An address this daemon cannot parse is
-    //    not refused here: the resolver owns that verdict, so the send travels on
-    //    and comes back as `target_malformed` rather than as two opinions.
-    //
-    // Whether the resolved stream is one the agent has SEEN is a separate
-    // question, answered below — knowing which stream an address denotes says
-    // nothing about having read it.
-    const target = this.resolveSendTargetStream(handle, params.target);
-    const targetStreamKey = streamKeyForMessage(target.threadRootId);
-    const targetStorageKey =
-      target.conversationId === null
-        ? undefined
-        : this.streamStorageKey(handle, target.conversationId, targetStreamKey);
-    const pendingStaleKey = targetStorageKey;
-    const pendingStale = pendingStaleKey === undefined
-      ? null
-      : handle.pendingStaleEvents.get(pendingStaleKey) ?? null;
-    const targetObservedSeq =
-      targetStorageKey === undefined
-        ? undefined
-        : handle.observedSeqByStream.get(targetStorageKey);
-    // An addressed cluster whose ROOT this session was delivered: its emptiness
-    // is a fact we observed, not a guess, so `seen=0` is load-bearing there and
-    // the CAS can still catch a concurrent first reply into it. (The map's own
-    // docblock states why an entry `R → thread:R` proves exactly that.)
-    const addressedClusterSeenEmpty =
-      target.threadRootId !== null
-      && handle.seenClusterRootIds.has(target.threadRootId);
-    // A boundary is owed only when the daemon can NAME the stream AND has seen
-    // it. Everything else is a first touch that sends no boundary: a
-    // manufactured `seen=0` would stale the agent against seqs 1..N of a stream
-    // it never read, and the backend then merges our own seq through
-    // `stream_head_before` (below) so the skip costs no future send.
-    const useFreshnessBoundary =
-      targetStorageKey !== undefined
-      && (targetObservedSeq !== undefined || addressedClusterSeenEmpty);
-    // The present/absent DECISION is made above; the `?? 0` here is the
-    // role-defined seen=0 of a known-but-empty cluster, not absence-flattening.
-    // `seenUpToSeq` is a plain wire CAS int (not an ObservedSeq brand): it
-    // crosses to the backend's per-stream freshness check.
-    const seenUpToSeq: number | undefined = useFreshnessBoundary
-      ? (targetObservedSeq ?? 0)
-      : undefined;
-    // WHICH stream that boundary was measured against, spelled the one way that
-    // is total and comparable: the id form. The backend re-resolves the address
-    // independently and refuses a mismatch — the guard for a name rebound since
-    // the memo learned it. Only formattable because `resolveSendTargetStream`
-    // returns BRANDED ids; an id that could not be branded left
-    // `conversationId` null and took the first-touch path instead.
-    const assertedStream =
-      useFreshnessBoundary && target.conversationId !== null
-        ? formatDeliveryTarget({
-            conversationId: target.conversationId,
-            threadRootId: target.threadRootId,
-          })
-        : undefined;
-    if (!useFreshnessBoundary && !params.freshness_bypass) {
-      this.logger.info(
-        {
-          kind: 'process',
-          action: 'send_without_freshness_boundary',
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          // The address itself, not hashed: unlike the backend's refusal log
-          // this daemon is the agent's own process and the token is one its own
-          // runtime just wrote.
-          target: params.target,
-          resolved_conversation_id: target.conversationId,
-        },
-        'send target stream not yet observed by this daemon session — sending without per-stream freshness (Case A loose)',
-      );
-    }
+    // #task:2095: freshness is now a RuntimeScope-wide EXISTS guard the backend
+    // evaluates from `target` alone (it re-resolves the address it must resolve
+    // to insert anyway). There is no per-stream observed cursor for the daemon
+    // to stamp a `seen_up_to_seq`/`asserted_stream` boundary from, so the send
+    // carries none — the only freshness field it forwards is the human-typed
+    // `--anyway` bypass. `pendingStale` is the ONE event that may be armed for
+    // this runtime (the handle IS the scope); a retry attaches its id so the
+    // backend can pair the send with the conflict the agent digested.
+    const pendingStale = handle.pendingStaleEvent;
+    // Activity-row coordinate, snapshotted BEFORE the HTTP await (#task:2099,
+    // Cindy's review point 1). `handle.conversationId` is the focus target and
+    // is mutable for an agent-scoped session: a delivery that lands while the
+    // send is in flight rewrites it, and `agentMessageSend` holds no lifecycle
+    // lock. Reading it after the await would file the refusal under whichever
+    // conversation happened to win the race — precisely the cross-conversation
+    // case this ticket exists to get right. The snapshot is the conversation the
+    // command was issued from, which is also the key its sibling `tool_call` row
+    // was written under.
+    const activityConversationId = handle.conversationId;
     const body: Record<string, unknown> = {
       content: params.content,
       ...(params.attachment_ids ? { attachment_ids: params.attachment_ids } : {}),
@@ -1357,18 +884,7 @@ export class Supervisor implements SupervisorContract {
       // daemon that re-formatted it would be a second grammar between the two
       // authorities (the CLI's `--target` and the backend's resolver).
       target: params.target,
-      ...(params.freshness_bypass
-        ? { freshness_bypass: true }
-        : useFreshnessBoundary
-          ? {
-              seen_up_to_seq: seenUpToSeq,
-              // Paired with the boundary and never sent alone: the backend
-              // rejects the send if this is not the stream the address resolves
-              // to NOW, which is the only thing standing between a rebound name
-              // and a CAS against a stranger's head.
-              asserted_stream: assertedStream,
-            }
-          : {}),
+      ...(params.freshness_bypass ? { freshness_bypass: true } : {}),
       ...(pendingStale
         ? {
             stale_event_id: pendingStale.id,
@@ -1390,35 +906,37 @@ export class Supervisor implements SupervisorContract {
     if (!res.ok) {
       const bodyText = await safeReadResponseText(res);
       const stale = res.status === 409 ? extractStaleConflict(bodyText) : null;
-      if (stale?.conversationId) {
-        // Signal-only contract: the 409 exposed NO bodies, so the observed
-        // cursor does not move here. The unseen window arrives through the
-        // normal delivery face (steer = this turn, next-turn-batch = next
-        // boundary); admission evidence advances the cursor, and only then
-        // does a retry pass the CAS.
-        // The 409 is also an authoritative name-resolution answer. Remember it
-        // before keying the event so a retry of a readable address finds the
-        // same stream instead of falling back to runtime custody.
-        if (target.memoKey !== null) {
-          this.rememberResolvedAddressHead(
-            handle,
-            target.memoKey,
-            stale.conversationId,
-          );
-        }
-        const staleStorageKey = this.streamStorageKey(
-          handle,
-          stale.conversationId,
-          stale.streamKey ?? targetStreamKey,
-        );
-        handle.pendingStaleEvents.set(staleStorageKey, {
+      if (stale) {
+        // Signal-only: the 409 exposes NO bodies and NO seq. At most ONE event
+        // is pending per runtime (the handle IS the RuntimeScope), so a later
+        // 409 REPLACES this one (#task:2095 F18): the superseded id can no
+        // longer be resolved — the daemon holds only the live event's
+        // `targetConversationId` and fabricating one is forbidden — so
+        // `stale-receive`/`stale-resolve` answer `stale_event_superseded` with
+        // the live id rather than a false `no_pending_stale`.
+        handle.pendingStaleEvent = {
           id: stale.id,
-          currentSeq: stale.currentSeq,
-          streamKey: stale.streamKey,
-          conversationId: stale.conversationId,
+          targetConversationId: stale.targetConversationId,
+        };
+        // The ONE authoritative "a send of mine was refused as stale" fact
+        // (#task:2099). Emitted per refusal — a replacement 409 is a second
+        // refusal and gets its own row — and only from this branch, so a
+        // non-stale rejection or an unparseable 409 produces none. `parsed`
+        // events are the driver's; this one is the daemon relaying the backend's
+        // verdict, hence its own frame. No ids on it: see the schema arm.
+        this.emit({
+          event: 'runtime_message_stale',
+          runtime_scope: handle.runtimeScope,
+          conversation_id: activityConversationId,
+          agent_id: handle.agentId,
+          runtime_generation: handle.runtimeGeneration,
+          ts: this.now(),
         });
-      } else if (pendingStaleKey !== undefined && pendingStale) {
-        handle.pendingStaleEvents.delete(pendingStaleKey);
+      } else if (pendingStale) {
+        // A non-stale rejection (or a 409 this daemon could not parse) of a send
+        // that carried an armed draft clears it: the draft is no longer the live
+        // conflict.
+        handle.pendingStaleEvent = null;
       }
       return { ok: false, status: res.status, body_text: bodyText };
     }
@@ -1429,104 +947,17 @@ export class Supervisor implements SupervisorContract {
       throw new Error('backend send-message response missing message_id');
     }
     // WHERE the words actually landed, per the resolver — the one authority for
-    // what a name denoted at insert time, and required (P4-4): a send whose
-    // stream we cannot name would leave every cursor below keyed off a guess.
+    // what a name denoted at insert time, forwarded to the CLI so a caller can
+    // report which stream the message landed in (P4-4).
     const landedConversationId = json['conversation_id'];
     if (typeof landedConversationId !== 'string' || landedConversationId.length === 0) {
       throw new Error('backend send-message response missing conversation_id');
     }
     const resolvedRoot =
       typeof json['thread_root_id'] === 'string' ? json['thread_root_id'] : null;
-    const landedStreamKey = streamKeyForMessage(resolvedRoot);
-    // Teach the memo what this NAME resolves to, from the only party with the
-    // authority to say so. Written on EVERY send, not just the first: a rename
-    // that rebound the head is corrected by the next send's answer rather than
-    // by an expiry policy this process could not evaluate.
-    if (target.memoKey !== null) {
-      this.rememberResolvedAddressHead(handle, target.memoKey, landedConversationId);
-    }
-    // A main-line message of our own anchors a cluster nobody has replied to
-    // yet, and any reply to it will reach us as a delivery — so record it as a
-    // cluster root this session has seen. The ROOT we replied INTO is
-    // deliberately NOT recorded: our own send just put a message there, so
-    // claiming "seen empty" for it would stale the agent against itself
-    // (#task:1854).
-    if (resolvedRoot === null) {
-      this.rememberSeenClusterRoot(handle, messageId);
-    }
-    // Observed-advance asymmetry (Cindy ruling): a send the backend gated with
-    // the per-stream CAS proves — by that CAS passing — there is no unseen gap
-    // below our own message, so that stream's observed advances to our own
-    // seq.
-    //
-    // A send that SKIPPED the CAS proves NOTHING (Cindy countgame P1-B), and
-    // there are two such sends: an explicit `freshness_bypass` (--anyway) and
-    // a loose first touch, which omits seen+stream_key because we had never
-    // observed the target stream. For either, jumping observed to our own seq
-    // would silently swallow every unseen message in between (live trace:
-    // 11→15/11→16 across an unadmitted 12–14) and permanently disarm the
-    // guard. The message lands, but the cursor holds — the gap stays armed
-    // until real admission evidence covers it.
-    //
-    // The own seq is NOT abandoned either (Cindy follow-up P1): the sender is
-    // excluded from its own fan-out, so nothing ever delivers seq S back —
-    // holding forever would leave a permanent self-made freshness hole (quiet
-    // stream: observed converges to the pre-send head while head = S, so every
-    // later send 409s against itself). The backend tells us the head at insert
-    // time (`stream_head_before` = everything relevant we skipped); once
-    // observed covers it, the own seq merges via `drainSkippedCasMerges`.
-    //
-    // #task:1854: the loose-first-touch half of this used to fall through both
-    // branches, which is exactly the self-stale hole — a first touch of a
-    // quiet cluster succeeded and then locked itself out of that cluster
-    // forever. It is the SAME shape as a bypass (no CAS ran), so it merges
-    // through the same queue. Since P4-4 `stream_head_before` is owed on EVERY
-    // skipping send (the `cross_target_send` exception is gone) and the landed
-    // stream is always nameable from the response, so the merge no longer has a
-    // silent hole where a skipped CAS queued nothing.
-    //
-    // Both arms key off the LANDED stream, not the addressed one: for a CAS'd
-    // send they are provably the same coordinate (`asserted_stream` matched, or
-    // the send was refused), and for a skipped one the response is the only place
-    // the coordinate exists at all.
-    if (
-      !params.freshness_bypass &&
-      useFreshnessBoundary &&
-      typeof messageSeq === 'number'
-    ) {
-      this.advanceObservedStream(
-        handle,
-        landedStreamKey,
-        messageSeq,
-        'message_send_commit',
-        landedConversationId,
-      );
-    } else if (typeof messageSeq === 'number') {
-      const headBefore = json['stream_head_before'];
-      if (
-        typeof headBefore === 'number' &&
-        Number.isSafeInteger(headBefore)
-      ) {
-        const mergeStorageKey = this.streamStorageKey(
-          handle,
-          landedConversationId,
-          landedStreamKey,
-        );
-        const entries =
-          handle.pendingSkippedCasMergeByStream.get(mergeStorageKey) ?? [];
-        entries.push({ prereq: headBefore, ownSeq: messageSeq });
-        // Bounded: chained skipped-CAS sends beyond the cap drop the OLDEST
-        // entry — degradation is the pre-fix behavior for that seq
-        // (recoverable via any later message), never unbounded growth.
-        while (entries.length > 32) entries.shift();
-        handle.pendingSkippedCasMergeByStream.set(mergeStorageKey, entries);
-        // No gap at all (or already caught up): merge immediately.
-        this.drainSkippedCasMerges(handle, mergeStorageKey);
-      }
-    }
-    if (pendingStaleKey !== undefined) {
-      handle.pendingStaleEvents.delete(pendingStaleKey);
-    }
+    // The send committed, so whatever conflict was armed for this runtime is now
+    // resolved.
+    handle.pendingStaleEvent = null;
     // Sender-only feedback, FORWARDED and never derived (#task:2021 P4-5-b):
     // the daemon holds no participation authority, so it validates the shape
     // against the backend's own output contract and hands the answer through
@@ -1579,22 +1010,35 @@ export class Supervisor implements SupervisorContract {
       params.runtime_scope,
       params.agent_id,
     );
-    const pendingEntry = [...handle.pendingStaleEvents.entries()].find(
-      ([, event]) => event.id === params.stale_event_id,
-    );
-    if (!pendingEntry) {
+    const pending = handle.pendingStaleEvent;
+    if (!pending) {
       return { ok: true, resolved: false, reason: 'no_pending_stale_event' };
     }
-    const [staleStorageKey, pendingStale] = pendingEntry;
-    const staleEventId = pendingStale.id;
+    if (pending.id !== params.stale_event_id) {
+      // #task:2095 F18: a later 409 REPLACED the event the agent is resolving.
+      // Only ONE is held per runtime, so the superseded id is gone — report the
+      // LIVE id rather than a false `no_pending_stale_event` so the agent
+      // re-anchors onto the id that is actually pending. (Distinct from
+      // stale-receive's mid-wait `stale_event_replaced`, which fires while a
+      // pull is already parked; this one is the pre-flight entry check.)
+      return {
+        ok: true,
+        resolved: false,
+        reason: 'stale_event_superseded',
+        current_stale_event_id: pending.id,
+      };
+    }
     const res = await this.backendPost(
       handle,
       internalPaths.agentResolveStaleMessage(
         params.agent_id,
       ),
       {
-        conversation_id: pendingStale.conversationId,
-        stale_event_id: staleEventId,
+        // The backend requires the conversation as its authorization subject
+        // (#task:2095 F17); fed VERBATIM from the 409's `target_conversation_id`
+        // — the daemon holds no address-resolution authority to re-derive it.
+        conversation_id: pending.targetConversationId,
+        stale_event_id: pending.id,
         resolution_reason: params.resolution_reason,
       },
     );
@@ -1605,41 +1049,8 @@ export class Supervisor implements SupervisorContract {
         body_text: await safeReadResponseText(res),
       };
     }
-    handle.pendingStaleEvents.delete(staleStorageKey);
+    handle.pendingStaleEvent = null;
     return { ok: true, resolved: true };
-  }
-
-  /** Reply-cluster pull-observe (§6.4 B-light). The CLI fires this after a
-   *  successful `message history --target <address>/thread:<root>` so the
-   *  daemon — which never sees the HTTP pull — records that the agent observed
-   *  the cluster: advance that stream's observed boundary to the max REPLY seq
-   *  (the caller already excluded the root's main-line seq) and remember the
-   *  root as a cluster this session has seen. Daemon-local only — no backend
-   *  call, never marks a turn.
-   *
-   *  The handle is chosen by the SESSION's conversation and the boundary is
-   *  stored under the OBSERVED stream's conversation; see the intent schema for
-   *  why those must not be the same field. */
-  async agentStreamObserved(
-    params: AgentStreamObservedParams,
-  ): Promise<AgentStreamObservedResult> {
-    const handle = this.getHandleForAgentIntent(
-      params.runtime_scope,
-      params.agent_id,
-    );
-    const streamKey = streamKeyForMessage(params.thread_root_id);
-    this.recordObservedStream(
-      handle,
-      streamKey,
-      params.observed_seq,
-      'pull_history_observed',
-      params.stream_conversation_id,
-    );
-    // The pull showed us the cluster itself, which is stronger evidence than a
-    // main-line sighting of its root: if it came back with no replies, `seen=0`
-    // for it is something this session read.
-    this.rememberSeenClusterRoot(handle, params.thread_root_id);
-    return { ok: true };
   }
 
   // ── agent_stale_receive (#task:1614; custody contract #task:1606) ──
@@ -1669,14 +1080,24 @@ export class Supervisor implements SupervisorContract {
       params.runtime_scope,
       params.agent_id,
     );
-    const pendingEntry = [...handle.pendingStaleEvents.entries()].find(
-      ([, event]) => event.id === params.stale_event_id,
-    );
-    if (!pendingEntry) {
+    const pending = handle.pendingStaleEvent;
+    if (!pending) {
       return { ok: true, outcome: 'no_pending_stale' };
     }
-    const [staleStorageKey, boundStale] = pendingEntry;
-    const staleEventId = boundStale.id;
+    if (pending.id !== params.stale_event_id) {
+      // #task:2095 F18 (pre-wait): a later 409 REPLACED the event before this
+      // pull even parked. Report the LIVE id — symmetric with stale-resolve's
+      // `stale_event_superseded` — so the agent re-anchors rather than reading
+      // a false `no_pending_stale`. Distinct from the mid-wait
+      // `stale_event_replaced` thrown below, which fires only after a wait was
+      // already registered against the now-gone id.
+      return {
+        ok: true,
+        outcome: 'stale_event_superseded',
+        current_stale_event_id: pending.id,
+      };
+    }
+    const staleEventId = pending.id;
     const waitMs = Math.min(
       params.wait_ms ?? STALE_RECEIVE_DEFAULT_WAIT_MS,
       STALE_RECEIVE_MAX_WAIT_MS,
@@ -1711,7 +1132,6 @@ export class Supervisor implements SupervisorContract {
           this.evaluateStaleReceiveLocked(
             k,
             handle,
-            staleStorageKey,
             staleEventId,
             waiterToken,
             pullCall,
@@ -1757,20 +1177,21 @@ export class Supervisor implements SupervisorContract {
   /**
    * One locked arbitration step. Ordering is the contract's:
    *   1. binding validity (live handle, same stale event) — typed errors;
-   *   2. `already_admitted` (observed covers the ORIGINAL head);
-   *   3. take the next bounded FIFO prefix when — and only when — the
+   *   2. take the next bounded FIFO prefix when — and only when — the
    *      queue is non-empty, no release is in progress
    *      (`startupDelivery === null`), and no reservation is unresolved;
-   *   4. `normal_delivery_in_progress` when the covering content already
-   *      entered release/admission (in-flight write covers the head, or
-   *      the head is parked in mid-turn pending admission);
-   *   5. otherwise register the waiter (still under the lock) and wait.
+   *   3. `normal_delivery_in_progress` when a release is already underway
+   *      (`startupDelivery !== null`) — the covering content entered
+   *      admission on its own path;
+   *   4. otherwise register the waiter (still under the lock) and wait.
    * Queue-empty / timeout are never admission evidence (#task:1606).
+   * #task:2095 F12①: the stale event's identity never participates in any
+   * of these decisions — the retired per-stream observed-cursor coverage
+   * check (`already_admitted`) is gone.
    */
   private evaluateStaleReceiveLocked(
     k: string,
     handle: RuntimeHandle,
-    staleStorageKey: string,
     staleEventId: string,
     waiterToken: number,
     pullCall: { cancelled: boolean },
@@ -1788,7 +1209,7 @@ export class Supervisor implements SupervisorContract {
         'runtime handle exited or was replaced while the pull was waiting',
       );
     }
-    const stale = live.pendingStaleEvents.get(staleStorageKey);
+    const stale = live.pendingStaleEvent;
     if (!stale) {
       // Resolved while we waited (e.g. a parallel send succeeded).
       return { kind: 'result', result: { ok: true, outcome: 'no_pending_stale' } };
@@ -1813,25 +1234,6 @@ export class Supervisor implements SupervisorContract {
         'pull_already_active',
         'another stale-receive pull is already active for this runtime',
       );
-    }
-    const streamKey = stale.streamKey;
-    const streamStorageKey = streamKey === null
-      ? null
-      : this.streamStorageKey(live, stale.conversationId, streamKey);
-    if (streamKey !== null) {
-      const observed = live.observedSeqByStream.get(streamStorageKey!);
-      if (observed !== undefined && observed >= stale.currentSeq) {
-        return {
-          kind: 'result',
-          result: {
-            ok: true,
-            outcome: 'already_admitted',
-            stale_event_id: staleEventId,
-            stale_current_seq: stale.currentSeq,
-            observed_seq: observed,
-          },
-        };
-      }
     }
     if (
       live.deferredQueue.length > 0 &&
@@ -1869,13 +1271,10 @@ export class Supervisor implements SupervisorContract {
       ctx.responseHandoff = handoffOk => {
         void this.settleStaleReceiveHandoff(k, handle, handoffOk);
       };
-      const coveredPairs = coveredSeqPairsForBatch(combined);
-      const coveredSeq =
-        streamKey === null || combined.conversationId !== stale.conversationId
-          ? undefined
-          : coveredPairs.find(([s]) => s === streamKey)?.[1];
-      const covered =
-        coveredSeq !== undefined && coveredSeq >= stale.currentSeq;
+      // #task:2095 F12: the outcome is a property of the QUEUE after the
+      // splice, not of any per-stream seq coverage — did this prefix drain
+      // the deferred queue, or is more still pending?
+      const queueDrained = live.deferredQueue.length === 0;
       this.logger.info(
         {
           kind: 'process',
@@ -1884,7 +1283,7 @@ export class Supervisor implements SupervisorContract {
           agent_id: live.agentId,
           stale_event_id: staleEventId,
           delivery_ids: [...combined.deliveryIds],
-          covered,
+          queue_drained: queueDrained,
         },
         'stale-receive pull reserved the next deferred FIFO prefix',
       );
@@ -1892,39 +1291,26 @@ export class Supervisor implements SupervisorContract {
         kind: 'result',
         result: {
           ok: true,
-          outcome: covered ? 'batch_covered' : 'batch_partial_armed',
+          outcome: queueDrained ? 'batch_queue_drained' : 'batch_more_pending',
           stale_event_id: staleEventId,
           text: combined.text,
           delivery_ids: [...combined.deliveryIds],
-          covered_seq_by_stream: coveredPairs.map(
-            ([s, seq]) => [s, seq] as [string, number],
-          ),
         },
       };
     }
-    if (streamKey !== null) {
-      const pendingAdmission = live.pendingAdmissionSeqByStream.get(
-        streamStorageKey!,
-      );
-      const inFlightCovers =
-        live.startupDelivery !== null &&
-        live.startupDelivery.conversationId === stale.conversationId &&
-        (coveredSeqPairsForBatch(live.startupDelivery).find(
-          ([s]) => s === streamKey,
-        )?.[1] ?? 0) >= stale.currentSeq;
-      if (
-        inFlightCovers ||
-        (pendingAdmission !== undefined && pendingAdmission >= stale.currentSeq)
-      ) {
-        return {
-          kind: 'result',
-          result: {
-            ok: true,
-            outcome: 'normal_delivery_in_progress',
-            stale_event_id: staleEventId,
-          },
-        };
-      }
+    if (live.startupDelivery !== null) {
+      // A release is already underway for this runtime — the covering content
+      // entered admission on its own path. #task:2095 F12①: the stale event's
+      // identity plays no part; a live `startupDelivery` is itself the proof
+      // the field-of-view is draining.
+      return {
+        kind: 'result',
+        result: {
+          ok: true,
+          outcome: 'normal_delivery_in_progress',
+          stale_event_id: staleEventId,
+        },
+      };
     }
     // Nothing takeable and nothing provable: register the waiter under
     // the lock; the wait itself happens outside it. The waiter carries
@@ -1948,11 +1334,11 @@ export class Supervisor implements SupervisorContract {
    *
    *   - handoff OK → the tool result reached the CLI transport:
    *     constructive admission. One `runtime_delivery_consumed` for the
-   *     whole batch, observed advanced by the batch's ACTUAL per-stream
-   *     coverage with `admitNow=true` — the content is in the CURRENT
-   *     turn's context (that immediacy is the tool's entire point: the
-   *     same-turn resend passes CAS). Post-handoff crashes follow the
-   *     existing stdin-write at-most-once handoff-loss semantics.
+   *     whole batch; the content is now in the CURRENT turn's context. The
+   *     retired per-stream observed cursor no longer participates
+   *     (#task:2095) — only the published `deliveredUpToSeq` scalar sidecar
+   *     is written, for crash-recovery dedup. Post-handoff crashes follow
+   *     the existing stdin-write at-most-once handoff-loss semantics.
    *   - handoff failed, handle live → pre-proof failure: restore the
    *     prefix at the queue FRONT (later arrivals queued behind keep
    *     FIFO), zero consumed, zero observed.
@@ -1981,26 +1367,15 @@ export class Supervisor implements SupervisorContract {
         if (handoffOk) {
           bindRuntimeFocus(handle, reservation.combined.conversationId);
           this.emitStartupDeliveryConsumed(handle, reservation.combined.deliveryIds);
-          // Constructive admission of content into the CURRENT context —
-          // NOT the start of a new turn. `advanceObservedStream` (inside
-          // `admitDeliveryBatch`) marks turn activity because a stdin
-          // write starts one; a pull starts nothing: the turn it fed was
-          // either already active (normal mid-turn case) or already over
-          // (turn_end crossed the handoff window). Fabricating activity
-          // here would close the next-turn-batch boundary with no
-          // terminal left to reopen it — starving the queue remainder.
-          const turnActiveBefore = handle.inputTurnActive;
-          this.admitDeliveryBatch(
-            handle,
-            reservation.combined.deliveries,
-            reservation.combined.deliveredUpToSeq,
-            true,
-            'stale_receive_pull_admitted',
-          );
-          handle.inputTurnActive = turnActiveBefore;
+          // #task:2095: a pull feeds the CURRENT context and starts no turn;
+          // the retired observed-cursor admission (which marked turn activity
+          // for a stdin write) is gone, so there is nothing to advance and no
+          // turn-activity bit to preserve here. Only the published
+          // `deliveredUpToSeq` scalar sidecar is written, for crash-recovery
+          // dedup.
           await this.writeLastDeliveredSeq(
             handle,
-            reservation.combined.deliveredUpToSeq,
+            deliveredUpToSeqOf(reservation.combined.deliveries),
           );
           this.logger.info(
             {
@@ -2261,11 +1636,7 @@ export class Supervisor implements SupervisorContract {
       fastMode: startOptions.driver.fast_mode,
       systemPromptPath: spawnPrep.systemPromptPath,
       initialPrompt: driver.oneShot && params.startup_delivery
-        ? runtimeActionText(
-            startOptions.runtime_scope,
-            params.startup_delivery.action_workdir,
-            params.startup_delivery.text,
-          )
+        ? params.startup_delivery.text
         : '',
     };
 
@@ -2427,13 +1798,8 @@ export class Supervisor implements SupervisorContract {
           conversationId: params.startup_delivery.conversation_id,
           actionWorkdir: params.startup_delivery.action_workdir,
           deliveryIds: [...params.startup_delivery.delivery_ids],
-          deliveredUpToSeq: params.startup_delivery.delivered_up_to_seq,
           deliveries: params.startup_delivery.deliveries,
-          text: runtimeActionText(
-            params.options.runtime_scope,
-            params.startup_delivery.action_workdir,
-            params.startup_delivery.text,
-          ),
+          text: params.startup_delivery.text,
         }
       : null;
 
@@ -2448,18 +1814,13 @@ export class Supervisor implements SupervisorContract {
       driver,
       child,
       lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
-      observedSeqByStream: new Map(),
-      pendingAdmissionSeqByStream: new Map(),
-      pendingSkippedCasMergeByStream: new Map(),
-      seenClusterRootIds: new Set(),
-      resolvedConversationByAddressHead: new Map(),
       inputTurnActive: driver.oneShot && !!params.startup_delivery,
       nextTurnReserved: false,
       nextTurnReservedAt: null,
       reservationStallWarned: false,
       reservationStallTimer: null,
       turnEndCount: 0,
-      pendingStaleEvents: new Map(),
+      pendingStaleEvent: null,
       ensuredActionWorkdirs: new Set(
         params.startup_delivery ? [params.startup_delivery.action_workdir] : [],
       ),
@@ -2535,18 +1896,14 @@ export class Supervisor implements SupervisorContract {
 
     if (driver.oneShot && params.startup_delivery) {
       // oneShot drivers consume the startup batch at spawn time (no gate).
-      // Admit it into the per-stream observed map now so the agent's first
-      // send picks the right per-stream seen boundary.
-      this.admitDeliveryBatch(
-        handle,
-        params.startup_delivery.deliveries,
-        params.startup_delivery.delivered_up_to_seq,
-        true,
-        'oneshot_startup_admitted',
-      );
+      // #task:2095: the retired per-stream observed admission is gone; the
+      // scalar sidecar write below still records the last delivered seq
+      // (dedup cursor only on a ConversationSlot; diagnostic on an AgentSlot —
+      // see writeLastDeliveredSeq), and `inputTurnActive` was already set at
+      // handle init (a oneShot spawn carrying a startup batch begins a turn).
       void this.writeLastDeliveredSeq(
         handle,
-        params.startup_delivery.delivered_up_to_seq,
+        deliveredUpToSeqOf(params.startup_delivery.deliveries),
       );
       this.emitStartupDeliveryConsumed(
         handle,
@@ -2720,7 +2077,6 @@ export class Supervisor implements SupervisorContract {
     const payloadUuid = this.mintInputPayloadUuid(
       handle,
       deliveryIds,
-      coveredSeqPairsForBatch(batch),
     );
     const encoded = handle.driver.encodeStdinMessage(batch.text, handle.cliSessionId, {
       payloadUuid,
@@ -2747,40 +2103,58 @@ export class Supervisor implements SupervisorContract {
     }
 
     try {
-      // #task:1471 — mid-turn deliveries must NOT advance the model-seen
-      // observed cursor. `consumeStartupDelivery` is the shared write path for
-      // spawn/session-init AND mid-turn (`deliver` admitted arm + deferred
-      // flush), so route the admit decision through the same
-      // `shouldAdmitDeliveryImmediately(handle)` gate the pre-#1417 wake path
-      // used: turn active → queue into `pendingAdmissionSeqByStream` (promoted
-      // by `admitPendingSeqForNewTurn` on the next `parsedStartsTurn`); turn
-      // not active → admit now. Hardcoding `true` here was the freshness
-      // regression that let mid-turn writes silently bump `observedSeqByStream`
-      // between the model's turn-start context capture and its send, so
-      // `agentMessageSend` reported a `seen_up_to_seq` covering messages the
-      // model never had in scope and CAS never staled the reply.
+      // #task:2095: the retired per-stream observed-cursor admission is gone —
+      // freshness is now the RuntimeScope-wide undelivered-inbox guard, so a
+      // mid-turn write no longer needs a per-stream admit/queue decision. A
+      // stdin write DOES start a turn, which drives two turn-lifecycle flags —
+      // and they are NOT maintained the same way (F25):
+      //   - `inputTurnActive` is a profile-INDEPENDENT lifecycle fact ("the
+      //     turn this write started is still running"). It is set at handle
+      //     init for any oneShot startup delivery (:1814) and cleared for
+      //     EVERY profile on terminal/exit (:4232); the write path maintains
+      //     it the same way — unconditionally, gated only by the snapshot
+      //     below. It happens to have a reader ONLY in the `next-turn-batch`
+      //     boundary today (:415), but its MEANING is not a function of
+      //     release profile, so its three maintenance sites must stay
+      //     consistent rather than couple this one bit to a single profile.
+      //   - `nextTurnReserved` is a next-turn-batch-SPECIFIC concept (§3.4
+      //     step 2 reservation), so its set stays gated on that profile.
+      // Both are cleared by the parsed terminal `turn_end`. The scalar
+      // `deliveredUpToSeq` sidecar is written afterward (see writeLastDeliveredSeq).
       //
-      // Snapshot the decision BEFORE `await writeStdinPayload`. `dispatchParsedLine`
-      // runs synchronously from the stdout data listener and is NOT scoped
-      // under this handle's lifecycle lock, so `turn_end` processed during
-      // the write's await window would flip `inputTurnActive=false` and — if
-      // we read the decision post-await — cause a batch decided upon while
-      // the prior turn was active to slip past the pending-admission gate
-      // (Cindy: same-invariant race that the pre-#1417 `runtime_wake` path
-      // avoided by snapshotting first).
-      const admitNow = this.shouldAdmitDeliveryImmediately(handle);
+      // Snapshot the turn-end count BEFORE `await writeStdinPayload`.
+      // `dispatchParsedLine` runs synchronously from the stdout data listener
+      // and is NOT scoped under this handle's lifecycle lock, so a `turn_end`
+      // processed during the write's await window would flip
+      // `inputTurnActive=false` and consume the terminal. Setting either flag
+      // off a post-await read (unguarded) would then overwrite a finished turn
+      // back into the boundary-closed state with no terminal left to reopen it
+      // — holding the queue forever (#1558 final-gate P1-1). Both are therefore
+      // guarded by the one `turnEndsBeforeWrite` snapshot below.
       const turnEndsBeforeWrite = handle.turnEndCount;
       await this.writeStdinPayload(handle, encoded);
+      const turnStartedByThisWriteStillRunning =
+        handle.turnEndCount === turnEndsBeforeWrite;
+      if (turnStartedByThisWriteStillRunning) {
+        // Profile-independent lifecycle fact (F25): set under the snapshot
+        // guard ALONE, not gated on release profile, so this site stays
+        // consistent with the profile-agnostic init (:1814) and clear (:4232).
+        // If the terminal for this write already crossed the await window it
+        // has been consumed; re-setting the bit true would close the
+        // next-turn-batch boundary (:415) with no terminal left to reopen it,
+        // starving the queue permanently (#1558 final-gate P1-1).
+        handle.inputTurnActive = true;
+      }
       if (
         handle.driver.releaseProfile === 'next-turn-batch' &&
-        handle.turnEndCount === turnEndsBeforeWrite
+        turnStartedByThisWriteStillRunning
       ) {
         // §3.4 step 2: reserve the next turn the instant the write
         // lands — do NOT wait for the runtime's first activity frame.
-        // Guarded by the turn-end snapshot: if the terminal for this
-        // very write crossed the await window (fast runtime), arming
-        // now would overwrite a finished turn back into "reserved" and
-        // hold the queue forever (#1558 final-gate P1-1).
+        // Same snapshot guard: if the terminal for this very write crossed
+        // the await window (fast runtime), arming now would overwrite a
+        // finished turn back into "reserved" and hold the queue forever
+        // (#1558 final-gate P1-1).
         handle.nextTurnReserved = true;
         handle.nextTurnReservedAt = this.now();
         handle.reservationStallWarned = false;
@@ -2789,16 +2163,7 @@ export class Supervisor implements SupervisorContract {
         this.clearReservationStallTimer(handle);
         this.scheduleReservationStallCheck(handle);
       }
-      this.admitDeliveryBatch(
-        handle,
-        batch.deliveries,
-        batch.deliveredUpToSeq,
-        admitNow,
-        admitNow
-          ? 'startup_delivery_admitted'
-          : 'startup_delivery_queued_mid_turn',
-      );
-      await this.writeLastDeliveredSeq(handle, batch.deliveredUpToSeq);
+      await this.writeLastDeliveredSeq(handle, deliveredUpToSeqOf(batch.deliveries));
     } catch (err) {
       this.logger.warn(
         {
@@ -3221,10 +2586,7 @@ export class Supervisor implements SupervisorContract {
               conversation_id: params.conversation_id,
               action_workdir: actionWorkdir,
               delivery_ids: [...params.delivery_ids],
-              ...(params.delivered_up_to_seq !== undefined
-                ? { delivered_up_to_seq: params.delivered_up_to_seq }
-                : {}),
-              ...(params.deliveries ? { deliveries: params.deliveries } : {}),
+              deliveries: params.deliveries,
               text: params.text,
             },
           },
@@ -3365,15 +2727,8 @@ export class Supervisor implements SupervisorContract {
         conversationId: params.conversation_id,
         actionWorkdir,
         deliveryIds: [...params.delivery_ids],
-        ...(params.delivered_up_to_seq !== undefined
-          ? { deliveredUpToSeq: params.delivered_up_to_seq }
-          : {}),
-        ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-        text: runtimeActionText(
-          handle.runtimeScope,
-          actionWorkdir,
-          params.text,
-        ),
+        deliveries: params.deliveries,
+        text: params.text,
       };
       void this.consumeStartupDelivery(handle);
       return {
@@ -3553,14 +2908,11 @@ export class Supervisor implements SupervisorContract {
       for (const id of entry.deliveryIds) held.add(id);
     }
 
-    if (!params.deliveries) {
-      const novelIds = params.delivery_ids.filter(id => !held.has(id));
-      if (novelIds.length > 0 && novelIds.length !== params.delivery_ids.length) {
-        throw new Error(
-          'runtime_deliver partial ownership overlap requires per-delivery payload metadata',
-        );
-      }
-    } else {
+    // A partial overlap (some ids held, some novel) requires per-delivery
+    // metadata for the novel remainder so the daemon can rebuild its
+    // presentation. #task:2106 made `deliveries` always present, so this is a
+    // metadata-completeness check on the novel subset, never a hard refusal.
+    {
       const novelIds = params.delivery_ids.filter(id => !held.has(id));
       if (novelIds.length > 0 && novelIds.length !== params.delivery_ids.length) {
         const novel = new Set(novelIds);
@@ -3569,30 +2921,6 @@ export class Supervisor implements SupervisorContract {
         );
       }
     }
-
-    const assertOpaqueRebindSafe = (entries: readonly DeferredEntry[]): void => {
-      for (const entry of entries) {
-        if (entry.deliveries) continue;
-        const reboundIds = entry.deliveryIds.filter(
-          id => incoming.has(id) && entry.owners.get(id) !== owner,
-        );
-        if (
-          reboundIds.length > 0
-          && reboundIds.length < entry.deliveryIds.length
-        ) {
-          throw new Error(
-            'runtime_deliver cannot rebind a strict subset of an opaque presentation group',
-          );
-        }
-      }
-    };
-    // Validate the complete mutable custody surface before the first owner
-    // change. An opaque group can move only as a whole; otherwise a later
-    // disconnect cleanup would need presentation metadata it never received.
-    if (handle.pullReservation) {
-      assertOpaqueRebindSafe(handle.pullReservation.batch);
-    }
-    assertOpaqueRebindSafe(handle.deferredQueue);
 
     const rebind = (
       entries: DeferredEntry[],
@@ -3660,27 +2988,6 @@ export class Supervisor implements SupervisorContract {
     const isWholeBatch =
       deliveryIds.length === params.delivery_ids.length
       && deliveryIds.every((id, index) => id === params.delivery_ids[index]);
-    if (!params.deliveries) {
-      if (!isWholeBatch) {
-        throw new Error(
-          'runtime_deliver partial ownership overlap requires per-delivery presentation metadata',
-        );
-      }
-      return {
-        conversationId: params.conversation_id,
-        actionWorkdir,
-        deliveryIds: [...deliveryIds],
-        ...(params.delivered_up_to_seq !== undefined
-          ? { deliveredUpToSeq: params.delivered_up_to_seq }
-          : {}),
-        text: runtimeActionText(
-          handle.runtimeScope,
-          actionWorkdir,
-          params.text,
-        ),
-        owners: new Map(deliveryIds.map(id => [id, owner])),
-      };
-    }
     const byId = new Map(
       params.deliveries.map(delivery => [delivery.delivery_id, delivery]),
     );
@@ -3691,25 +2998,17 @@ export class Supervisor implements SupervisorContract {
       }
       return delivery;
     });
-    const deliveredUpToSeq = deliveries.length > 0
-      ? Math.max(...deliveries.map(delivery => delivery.seq))
-      : params.delivered_up_to_seq;
     return {
       conversationId: params.conversation_id,
       actionWorkdir,
       deliveryIds: [...deliveryIds],
-      ...(deliveredUpToSeq !== undefined ? { deliveredUpToSeq } : {}),
-      ...(params.deliveries ? { deliveries } : {}),
-      text: runtimeActionText(
-        handle.runtimeScope,
-        actionWorkdir,
-        isWholeBatch
-          ? params.text
-          : composeRuntimeDeliveryPresentation(
-              this.requireDeliveryPresentations(deliveries),
-              SEND_MESSAGE_TOOL,
-            ),
-      ),
+      deliveries,
+      text: isWholeBatch
+        ? params.text
+        : composeRuntimeDeliveryPresentation(
+            this.requireDeliveryPresentations(deliveries),
+            SEND_MESSAGE_TOOL,
+          ),
       owners: new Map(deliveryIds.map(id => [id, owner])),
     };
   }
@@ -3721,11 +3020,6 @@ export class Supervisor implements SupervisorContract {
     deliveryIds: readonly number[],
   ): DeferredEntry {
     if (deliveryIds.length === entry.deliveryIds.length) return entry;
-    if (!entry.deliveries) {
-      throw new Error(
-        'cannot split opaque deferred presentation group during owner cleanup',
-      );
-    }
     const selected = new Set(deliveryIds);
     const deliveries = entry.deliveries.filter(delivery =>
       selected.has(delivery.delivery_id)
@@ -3734,15 +3028,10 @@ export class Supervisor implements SupervisorContract {
       conversationId: entry.conversationId,
       actionWorkdir: entry.actionWorkdir,
       deliveryIds: [...deliveryIds],
-      deliveredUpToSeq: Math.max(...deliveries.map(delivery => delivery.seq)),
       deliveries,
-      text: runtimeActionText(
-        handle.runtimeScope,
-        entry.actionWorkdir,
-        composeRuntimeDeliveryPresentation(
-          this.requireDeliveryPresentations(deliveries),
-          SEND_MESSAGE_TOOL,
-        ),
+      text: composeRuntimeDeliveryPresentation(
+        this.requireDeliveryPresentations(deliveries),
+        SEND_MESSAGE_TOOL,
       ),
       owners: new Map(
         deliveryIds.map(id => [id, entry.owners.get(id)!]),
@@ -3846,45 +3135,36 @@ export class Supervisor implements SupervisorContract {
 
   private async writeLastDeliveredSeq(
     handle: RuntimeHandle,
-    deliveredUpToSeq: number | undefined,
+    deliveredUpToSeq: number,
   ): Promise<void> {
-    if (
-      deliveredUpToSeq === undefined
-      || !Number.isSafeInteger(deliveredUpToSeq)
-      || deliveredUpToSeq <= 0
-    ) {
+    if (!Number.isSafeInteger(deliveredUpToSeq) || deliveredUpToSeq <= 0) {
       return;
     }
     try {
-      if (handle.runtimeScope.kind === 'conversation') {
-        // Compatibility is byte-level: ConversationSlot keeps the historical
-        // scalar sidecar. Only AgentSlot needs a target-partitioned ledger.
-        await writeFile(
-          handle.lastDeliveredSeqPath,
-          `${deliveredUpToSeq}\n`,
-          'utf-8',
-        );
-        return;
-      }
-      const streams = [...handle.observedSeqByStream.entries()]
-        .map(([storageKey, seq]) => {
-          const separator = storageKey.indexOf('\u0000');
-          if (separator < 1) {
-            throw new Error(`invalid AgentSlot stream ledger key: ${storageKey}`);
-          }
-          return {
-            conversation_id: storageKey.slice(0, separator),
-            stream_key: storageKey.slice(separator + 1),
-            seq,
-          };
-        })
-        .sort((a, b) =>
-          a.conversation_id.localeCompare(b.conversation_id)
-          || a.stream_key.localeCompare(b.stream_key)
-        );
+      // #task:2095: both ConversationSlot and AgentSlot persist the
+      // last-written `delivered_up_to_seq` as a bare scalar (`<seq>\n`). The
+      // retired per-stream observed ledger (`{version:1,streams}`) had ZERO
+      // readers — the daemon no longer keeps per-stream observed cursors — so
+      // it collapses to this scalar. There is NO in-tree reader either way
+      // (`cli/src/env.ts` forwards the path but never parses it); per-origin
+      // ack authority lives on the `runtime_delivery_consumed` event stream,
+      // never here.
+      //
+      // Whether this file is monotonic — hence usable for out-of-tree
+      // crash-recovery dedup — depends on the slot (F24, do NOT conflate):
+      //   - ConversationSlot: `seq` is per-conversation
+      //     (`uniq_messages_conversation_seq`) and the slot IS one
+      //     conversation, so successive writes only ever ascend — a valid
+      //     per-origin dedup cursor.
+      //   - AgentSlot: one write is always a single conversation
+      //     (`spliceBoundedDeferredPrefix` breaks on a differing
+      //     `conversationId`) but the slot spans many, so the file HOPS
+      //     between seq spaces — it is the LAST value written, NOT a monotonic
+      //     high-water. On an AgentSlot this value is DIAGNOSTIC ONLY and must
+      //     NOT be used for dedup.
       await writeFile(
         handle.lastDeliveredSeqPath,
-        `${JSON.stringify({ version: 1, streams })}\n`,
+        `${deliveredUpToSeq}\n`,
         'utf-8',
       );
     } catch (err) {
@@ -4476,10 +3756,6 @@ export class Supervisor implements SupervisorContract {
       return;
     }
 
-    if (!handle.inputTurnActive && parsedStartsTurn(parsed)) {
-      this.admitPendingSeqForNewTurn(handle, 'queued_delivery_admitted_on_activity');
-    }
-
     // Boundary-reopen trigger for the daemon mid-turn queue (#task:1417
     // Stage 3, §11.4). Capture the safe-boundary state BEFORE the busy
     // transition; if this event reopens the boundary, flush any deferred
@@ -4502,12 +3778,8 @@ export class Supervisor implements SupervisorContract {
         // display-only Activity row. The message rides the run-state
         // snippet as its own `api_response` snippet kind — a discrete
         // notice, never blended into the thinking/text coalescing
-        // buffer. NOT generation-boundary evidence: `parsedStartsTurn`
-        // excludes this kind, so it never settles pending admission
-        // coverage.
-        //
-        // Display-state only, and only within its own lane: `waiting`
-        // may not displace a more specific state (running tool /
+        // buffer. Display-state only, and only within its own lane:
+        // `waiting` may not displace a more specific state (running tool /
         // compaction — same guard as tool_output's restore), `ready`
         // restores ONLY a hold that `waiting` itself created, and
         // `notice` never touches the run state at all. A notice that
@@ -4547,6 +3819,14 @@ export class Supervisor implements SupervisorContract {
           detail: parsed.name,
           ...(toolCallCounts ? { toolCallCounts } : {}),
         });
+        break;
+      case 'tool_call_input':
+        // #task:2101 — late parameters for a tool call already counted by its
+        // `tool_call`. Run state is deliberately untouched: `outstandingToolUses`
+        // and `toolCallCounts` were incremented once, at creation, and this frame
+        // reports no new call. It exists only to refine that row's payload, so it
+        // must not re-transition status either (the call may already have
+        // finished by the time the params arrive).
         break;
       case 'tool_output':
         handle.busy.outstandingToolUses = Math.max(
@@ -4623,30 +3903,12 @@ export class Supervisor implements SupervisorContract {
           },
           'runtime input lifecycle observed',
         );
-        // `input_lifecycle` is GENERATION-BOUNDARY evidence by contract
-        // (#task:1561 round 2, action-snapshot invariant): drivers may
-        // only emit it from a signal proving the payload became precedent
-        // context for the NEXT model generation — never from a
-        // write/transport/RPC ack (that misnaming caused countgame round
-        // 2's false-fresh duplicates). Sources, pinned by driver tests:
-        //   - claude: the runtime's own `command_lifecycle` frames
-        //     (write lands at a proven tool boundary; B' #task:1558).
-        //   - codex: the `item/started {type:'userMessage'}` echo of our
-        //     `clientUserMessageId` — emitted when codex drains
-        //     pending_input into model history, between the previous
-        //     generation and the next sampling request.
-        // Promote observed for exactly the covered streams/seqs
-        // (monotonic; already-admitted coverage is a no-op).
-        if (parsed.state === 'started' && mapped) {
-          for (const [streamKey, seq] of mapped.coveredSeqByStream) {
-            this.advanceObservedStream(
-              handle,
-              streamKey,
-              seq,
-              'input_lifecycle_started',
-            );
-          }
-        }
+        // #task:2095: with the per-stream observed cursor retired, this frame
+        // has nothing to promote — freshness is the RuntimeScope-wide
+        // undelivered-inbox guard, not a per-payload seq — so #task:1557
+        // Phase 1 is now literally pure observation: correlate, log, prune.
+        // Drivers still emit it only as generation-boundary evidence
+        // (#task:1561); the daemon simply no longer derives a cursor from it.
         if (parsed.state === 'completed') {
           handle.inputPayloadUuids.delete(parsed.commandUuid);
         }
@@ -5805,7 +5067,7 @@ async function ensureRuntimeScopeCwd(
   // contract surface. The absolute cwd path is a host-local diagnostic — logged
   // HERE (host-only) but MUST NOT ride the wire `message`, which is forwarded
   // verbatim to the API/renderer. The wire message names only the semantic
-  // workspace id + kind; the concrete path never leaves the host.
+  // workspace id; the concrete path never leaves the host.
   const logUnusable = (reason: string, detail?: string) => {
     logger.warn(
       {
@@ -5816,7 +5078,6 @@ async function ensureRuntimeScopeCwd(
         ...(workspace
           ? {
               workspace_id: workspace.id,
-              workspace_kind: workspace.kind,
               workspace_name: workspace.name,
             }
           : {}),
@@ -5830,8 +5091,8 @@ async function ensureRuntimeScopeCwd(
     new RuntimeStartResolveError(
       'workspace_bundle_missing',
       workspace
-        ? `runtime_start: session cwd for ${workspace.kind} workspace ` +
-          `${workspace.id} could not be created or entered on this computer`
+        ? `runtime_start: session cwd for workspace ${workspace.id} ` +
+          'could not be created or entered on this computer'
         : `runtime_start: agent-scoped session cwd for ${options.agent.id} ` +
           'could not be created or entered on this computer',
     );

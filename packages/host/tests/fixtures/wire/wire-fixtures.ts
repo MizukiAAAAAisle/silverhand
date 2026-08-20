@@ -288,6 +288,14 @@ const REQUESTS: WireFixture[] = [
         target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: DELIVERY_IDS,
+        deliveries: DELIVERY_IDS.map(id => ({
+          delivery_id: id,
+          seq: id,
+          presentation: {
+            body: `[msg_id=msg-${id} sender=system type=system target=#conv:${C} time=2026-08-14T13:00:00+08:00]\nhi`,
+            instruction: 'system' as const,
+          },
+        })),
         kind: 'message',
         text: 'hi',
         spawn_options: RUNTIME_START_OPTIONS,
@@ -308,6 +316,16 @@ const REQUESTS: WireFixture[] = [
         target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: [201],
+        deliveries: [
+          {
+            delivery_id: 201,
+            seq: 201,
+            presentation: {
+              body: `[msg_id=msg-201 sender=system type=system target=#conv:${C} time=2026-08-14T13:00:00+08:00]\nscheduled delivery`,
+              instruction: 'system',
+            },
+          },
+        ],
         kind: 'schedule_fire',
         text: 'scheduled delivery',
         spawn_options: RUNTIME_START_OPTIONS,
@@ -328,14 +346,10 @@ const REQUESTS: WireFixture[] = [
         target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: [200, 201],
-        delivered_up_to_seq: 201,
         deliveries: [
           {
             delivery_id: 200,
-            message_id: 'msg-200',
             seq: 200,
-            thread_root_id: null,
-            delivery_kind: 'turn',
             presentation: {
               body: `[msg_id=msg-200 sender=system type=system target=#conv:${C} time=2026-08-14T13:00:00+08:00]\nfirst`,
               instruction: 'system',
@@ -343,10 +357,7 @@ const REQUESTS: WireFixture[] = [
           },
           {
             delivery_id: 201,
-            message_id: 'msg-201',
             seq: 201,
-            thread_root_id: null,
-            delivery_kind: 'turn',
             presentation: {
               body: `[msg_id=msg-201 sender=system type=system target=#conv:${C} time=2026-08-14T13:00:01+08:00]\nsecond`,
               instruction: 'system',
@@ -657,23 +668,6 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_stale_resolve' },
   },
   {
-    name: 'request/agent_stream_observed',
-    description:
-      'Agent runtime tells the daemon it observed a reply cluster via an HTTP pull (history --target <address>/thread:<root>); daemon advances that stream\'s observed boundary and records the root as a cluster this session has seen. `runtime_scope` is the session handle, `stream_conversation_id` is where the observed cluster lives. Daemon-local, no backend call.',
-    frame: enc({
-      id: 'req-agent-stream-observed-1',
-      intent: 'agent_stream_observed',
-      params: {
-        runtime_scope: { kind: 'agent' },
-        stream_conversation_id: 'conv_B',
-        agent_id: 'agent_A',
-        thread_root_id: 'msg_root',
-        observed_seq: 14,
-      },
-    }),
-    kind: { kind: 'request', intent: 'agent_stream_observed' },
-  },
-  {
     name: 'request/agent_stale_receive',
     description:
       '#task:1614 deferred pull: after a message_stale 409 the agent asks the daemon for the deferred delivery batch as a tool result, with a bounded wait window. Custody arbitration is daemon-side (same lifecycle lock / bounded FIFO prefix as the auto-flush).',
@@ -861,45 +855,33 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     kind: { kind: 'response_success', intent: 'agent_stale_resolve' },
   },
   {
-    name: 'response/agent_stream_observed-success',
+    name: 'response/agent_stale_receive-batch_queue_drained',
     description:
-      'Daemon acked the pull-observe: per-stream observed boundary advanced and reply-target ids recorded. Daemon-local state only.',
-    frame: enc({
-      id: 'req-agent-stream-observed-1',
-      result: { ok: true },
-    }),
-    kind: { kind: 'response_success', intent: 'agent_stream_observed' },
-  },
-  {
-    name: 'response/agent_stale_receive-batch_covered',
-    description:
-      '#task:1614 pull took the next bounded FIFO prefix and its per-stream coverage reaches the stale head. Text is the verbatim combined batch the turn_end flush would have written.',
+      '#task:2095 pull took the next bounded FIFO prefix AND it emptied the deferred queue (nothing more pending). Text is the verbatim combined batch the turn_end flush would have written.',
     frame: enc({
       id: 'req-agent-stale-receive-1',
       result: {
         ok: true,
-        outcome: 'batch_covered',
+        outcome: 'batch_queue_drained',
         stale_event_id: 'stale-evt-1',
         text: '[msg from @alice] the newer message body',
         delivery_ids: [201, 202],
-        covered_seq_by_stream: [['main', 30]],
       },
     }),
     kind: { kind: 'response_success', intent: 'agent_stale_receive' },
   },
   {
-    name: 'response/agent_stale_receive-batch_partial_armed',
+    name: 'response/agent_stale_receive-batch_more_pending',
     description:
-      '#task:1614 pull took the prefix but the stale head is NOT covered; the stale event stays armed. Observed advances only by the actual coverage.',
+      '#task:2095 pull took a prefix but the deferred queue still holds a remainder; pull again for the rest.',
     frame: enc({
       id: 'req-agent-stale-receive-1',
       result: {
         ok: true,
-        outcome: 'batch_partial_armed',
+        outcome: 'batch_more_pending',
         stale_event_id: 'stale-evt-1',
         text: '[msg from @alice] an earlier message body',
         delivery_ids: [201],
-        covered_seq_by_stream: [['main', 21]],
       },
     }),
     kind: { kind: 'response_success', intent: 'agent_stale_receive' },
@@ -914,17 +896,15 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     kind: { kind: 'response_success', intent: 'agent_stale_receive' },
   },
   {
-    name: 'response/agent_stale_receive-already_admitted',
+    name: 'response/agent_stale_receive-stale_event_superseded',
     description:
-      '#task:1614 the observed cursor already covers the ORIGINAL stale head (proves only that; a newer head may exist — the send CAS stays authoritative).',
+      '#task:2095 a later 409 replaced the event id the pull named before it parked; the daemon holds only the newest. `current_stale_event_id` is the id to retry with.',
     frame: enc({
       id: 'req-agent-stale-receive-1',
       result: {
         ok: true,
-        outcome: 'already_admitted',
-        stale_event_id: 'stale-evt-1',
-        stale_current_seq: 30,
-        observed_seq: 31,
+        outcome: 'stale_event_superseded',
+        current_stale_event_id: 'stale-evt-2',
       },
     }),
     kind: { kind: 'response_success', intent: 'agent_stale_receive' },
@@ -2681,6 +2661,24 @@ const EVENTS: WireFixture[] = [
     kind: { kind: 'event' },
   },
   {
+    name: 'event/runtime_parsed_event-tool_call_input',
+    description:
+      'ParsedEvent fanout — late parameters for a tool_call already reported (#task:2101). toolCallId is REQUIRED on this arm (unlike tool_call): it is the only correlation to the row being refined.',
+    frame: enc({
+      runtime_generation: 1,
+      event: 'runtime_parsed_event',
+      conversation_id: C,
+      agent_id: A,
+      parsed: {
+        kind: 'tool_call_input',
+        toolCallId: 'tc-1',
+        input: { command: 'silverhand message send' },
+      },
+      ts: TS,
+    }),
+    kind: { kind: 'event' },
+  },
+  {
     name: 'event/runtime_parsed_event-tool_output',
     description: 'ParsedEvent fanout — tool_output (name + tool_call_id optional).',
     frame: enc({
@@ -2802,6 +2800,19 @@ const EVENTS: WireFixture[] = [
       parsed_kind: 'tool_call',
       encoded_bytes: 2_000_000,
       reason: 'frame_too_large',
+      ts: TS,
+    }),
+    kind: { kind: 'event' },
+  },
+  {
+    name: 'event/runtime_message_stale',
+    description:
+      "The backend's own freshness verdict relayed back so the activity axis keeps one author (#task:2099). Identity + ts ONLY: no stale_event_id, no target conversation, no queue depth — per-conflict triage stays in the backend WARN log.",
+    frame: enc({
+      event: 'runtime_message_stale',
+      conversation_id: C,
+      agent_id: A,
+      runtime_generation: 1,
       ts: TS,
     }),
     kind: { kind: 'event' },

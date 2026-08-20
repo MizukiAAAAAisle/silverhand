@@ -1,8 +1,8 @@
 // Adapter between the wire `viewer_sort` DTO (sparse per-entity state) and the
 // DTO-agnostic pure sorter in `./list-sort`. Components call `sortGroup` per
 // live hard group (channel: ONE group since #task:1888 — a starred conversation
-// moves to the global `favorites` list; rail: dm/regular, which carry no star at
-// all since #task:1900, so their order is mode + rank and nothing else) with the
+// moves to the global `favorites` list; rail: agent_space/regular, which carry no
+// star at all since #task:1900, so their order is mode + rank and nothing else) with the
 // viewer's per-SCOPE mode (see
 // `sortModeOf`). Keeping this here lets the sorter stay free of the sorter's own
 // `@silverhand/shared` dependency. See docs/list-sort-v1.md (#task:1146).
@@ -28,8 +28,8 @@ export function sortEntryLookup(
 
 /** The viewer's mode for one SCOPE of a list. A scope is an independently
  *  toggleable [recent|manual] axis:
- *    - workspace rail : scope = the hard group (`'dm' | 'regular'`). Containers
- *      have no star (#task:1900), so the group is the only scope axis.
+ *    - workspace rail : scope = the hard group (`'agent_space' | 'regular'`).
+ *      Containers have no star (#task:1900), so the group is the only scope axis.
  *    - channel sidebar: scope = `''` (list-wide) — pass no `group`.
  *  Absent stored mode = the default, `recent`. */
 export function sortModeOf(

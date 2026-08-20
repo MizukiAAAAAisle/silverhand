@@ -85,13 +85,11 @@ export function testStartOptions(
     workspace: {
       id: workspaceId,
       name: 'test-workspace',
-      kind: workspaceKind,
     },
     workspace_memory_index: [
       {
         id: workspaceId,
         name: 'test-workspace',
-        kind: workspaceKind,
       },
     ],
     session: {

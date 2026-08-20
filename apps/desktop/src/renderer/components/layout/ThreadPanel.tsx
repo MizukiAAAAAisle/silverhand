@@ -32,7 +32,7 @@ import {
   threadTailIsVisible,
   threadVisibleReplySeq,
 } from './threadMarkRead';
-import type { ConversationReference } from '@/components/chat/ConversationRef';
+import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import { type JumpPhase, jumpWindowLockedForPhase, threadLocateAllowed } from '@/features/channels/messageJumpPhase';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
@@ -50,22 +50,25 @@ import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useJoinChannel } from '@/features/workspaces/hooks';
 import type { ChannelGate } from '@/features/channels/membership';
-import type { WorkspaceUiKind } from '@/features/conversations/pane-descriptor';
 import { classifyTopShift } from '@/components/layout/messageListVirtualization';
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
    *  `thread_root_id = rootMessageId`; the panel reads/sends against it. */
   channelId: string;
-  /** The parent conversation's workspace. NON-NULL by contract: App mounts this
-   *  panel only for a workspace-placed parent, because a `direct_pair` withholds
-   *  threads entirely (#task:2035 — the backend's channel-like index does not
-   *  resolve a pair, so there is no reply cluster to show). Do NOT widen it to
-   *  `string | null` for a pair: that adds null branches with no caller and makes
-   *  a withheld affordance look half-wired. */
-  workspaceId: string;
-  /** That workspace's kind, forwarded to the composer's `#` channel query. */
-  workspaceKind?: WorkspaceUiKind | null;
+  /** The parent conversation's workspace, or null for a `direct_pair` (no
+   *  workspace coordinate). A pair's reply cluster resolves through the backend's
+   *  `getChannelLike` just like a channel's — it spans every top-level placement,
+   *  gated only by `canViewConversation` (#task:2096) — so this pane DOES mount for
+   *  a pair. Null degrades only the workspace-scoped facets (`@`/`#` directory,
+   *  channel-ref nav), exactly as the primary `ChannelView` handles its own
+   *  nullable `conversation.workspace_id`. */
+  workspaceId: string | null;
+  /** Whether the parent's container has a `#` channel namespace, forwarded to the
+   *  composer's `#` channel query. Required and un-defaulted: the parent
+   *  workspace ROW can still be unresolved while this pane is open, and a default
+   *  would silently claim a namespace that has not resolved (#task:2078). */
+  hasChannelNamespace: boolean;
   /** The root (main-line) message whose thread this panel shows. */
   rootMessageId: string;
   /** Parent channel title, shown in the header subtitle. */
@@ -94,7 +97,7 @@ interface ThreadPanelProps {
    *  reply resolves `#conv:` / `#<channel>` / `#task:` sigils identically
    *  to the channel pane (#task:1052). Same handlers App passes to
    *  `ChannelView`. */
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   /** `(workspaceId, channelId)` — App-level handler; the panel pre-binds
    *  it to this thread's workspace before handing it to the renderer. */
@@ -151,7 +154,7 @@ interface ThreadPanelProps {
 export function ThreadPanel({
   channelId,
   workspaceId,
-  workspaceKind = null,
+  hasChannelNamespace,
   rootMessageId,
   parentTitle,
   closed = false,
@@ -258,25 +261,17 @@ export function ThreadPanel({
     canSave: canParticipate,
   });
 
-  // Parent-channel title/kind for the export screenshot header + filename.
-  // The thread shares the parent channel's identity; fall back to the
-  // `parentTitle` prop when the channel list hasn't resolved yet.
-  const channelMeta = useMemo(() => {
+  // Parent-channel TITLE for the export screenshot header + filename — the only
+  // thing either consumer reads. The thread shares the parent channel's identity;
+  // fall back to the `parentTitle` prop when the channel list hasn't resolved yet.
+  // This used to also derive a `kind` from `roster_policy`, which nothing read
+  // (#task:2077): a roster-derived identity word with no consumer is a face that
+  // can go stale unobserved, and roster is the wrong key for identity anyway.
+  const parentChannelTitle = useMemo(() => {
     const c =
       liveChannels.find(x => x.id === channelId) ??
       archivedChannels.find(x => x.id === channelId);
-    if (!c) {
-      return { title: parentTitle ?? null, kind: null as 'channel' | 'dm' | null };
-    }
-    return {
-      title: c.title,
-      kind:
-        c.roster_policy === 'fixed'
-          ? ('dm' as const)
-          : c.roster_policy === 'open'
-            ? ('channel' as const)
-            : null,
-    };
+    return c ? c.title : parentTitle ?? null;
   }, [liveChannels, archivedChannels, channelId, parentTitle]);
 
   // Drop any active selection when the cluster WINDOW is replaced (not just
@@ -311,6 +306,10 @@ export function ThreadPanel({
   // `ChannelView` exactly so the renderer receives the same shapes.
   const handleOpenChannelRef = useCallback(
     (resolvedChannelId: string) => {
+      // A `#`-channel ref only resolves inside a workspace; a workspace-less pair
+      // renders `#name` refs as inert text (no namespace), so there is nothing to
+      // navigate to. Mirrors `ChannelView`'s own null-workspace guard.
+      if (workspaceId === null) return;
       onOpenChannelRef?.(workspaceId, resolvedChannelId);
     },
     [onOpenChannelRef, workspaceId],
@@ -446,7 +445,7 @@ export function ThreadPanel({
         }
       }
       onJumpToMessage?.({
-        workspaceId,
+        workspaceId: workspaceId ?? undefined,
         channelId,
         threadRootId: rootMessageId,
         messageId,
@@ -908,7 +907,7 @@ export function ThreadPanel({
         <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
           <InlineFindBar
             controller={find}
-            onOpenAdvanced={() => onOpenAdvancedSearch?.(find.query, workspaceId)}
+            onOpenAdvanced={() => onOpenAdvancedSearch?.(find.query, workspaceId ?? undefined)}
             placeholder="Search this thread"
           />
         </div>
@@ -940,7 +939,7 @@ export function ThreadPanel({
             }}
             workspaceId={workspaceId}
             conversationId={channelId}
-            channelTitle={channelMeta.title}
+            channelTitle={parentChannelTitle}
           />
           <div
             ref={scrollRef}
@@ -1048,7 +1047,7 @@ export function ThreadPanel({
           key={`${channelId}#cluster#${rootMessageId}`}
           conversationId={channelId}
           workspaceId={workspaceId}
-          workspaceKind={workspaceKind}
+          hasChannelNamespace={hasChannelNamespace}
           threadRootId={rootMessageId}
           disabled={closed || rootCtx.isError || !rootCtx.root}
           archived={archived}
@@ -1062,7 +1061,7 @@ export function ThreadPanel({
         <ChannelJoinBar
           onJoin={() => joinChannel.mutate(channelId)}
           joining={joinChannel.isPending}
-          channelTitle={channelMeta.title}
+          channelTitle={parentChannelTitle}
         />
       ) : null}
     </aside>

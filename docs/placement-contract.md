@@ -1,11 +1,15 @@
 # Canonical conversation-place contract (Milestone 1 of #task:2045)
 
-> Status: **contract only, for Cindy independent review (round 6).** No code
-> lands until PASS (Milestone 2). Rounds 1 (4), 2 (5), 3 (4), 4 (4), 5 (1)
-> blockers all accepted in full. Everything except the §3 discriminant unification
-> PASSed at R5. This round unifies Saved/Search onto the canonical
-> `HumanConversationPlace` `kind` discriminant and collapses the double
-> workspace-kind source in Search.
+> Status: **Milestone 1 (this contract) PASSed; Milestone 2 is landing
+> incrementally against it.** Review owner for M2 tickets is @Paul. Rounds 1 (4),
+> 2 (5), 3 (4), 4 (4), 5 (1), 6 (1) blockers all accepted in full; R6 unified
+> Saved/Search onto the canonical `HumanConversationPlace` `kind` discriminant and
+> collapsed the double workspace-kind source in Search.
+>
+> The M1 PASS covers **the contract, and is not an advance approval of any M2
+> commit**. In particular M1 does **not** authorize a new persisted `place`
+> column, nor freezing `channel_name` / `workspace_name` / `peer` presentation
+> back into storage — that would destroy §4's live projection.
 
 ## 0. Correction ledger
 
@@ -21,7 +25,8 @@
   left an "extend OR new event" implementer choice — now one frozen producer; §4-C
   wrongly folded `liveness` into the identity carrier — presence is a separate
   axis (#2043/#2049), the carrier holds presentation + subject lifecycle only; §6
-  proposed a package-semver regime — replaced by a scoped schema-epoch gate.
+  proposed a package-semver regime — replaced by a scoped schema-epoch gate, itself
+  retired in M2 once the "installed-CLI consumer" premise was falsified (see §6).
 - **R5**: §3 invented a second discriminant spelling (`place_kind:
   'workspace'|'direct_pair'`) instead of reusing the canonical
   `HumanConversationPlace` `kind: 'workspace_channel'|'direct_pair'` — Saved/Search
@@ -29,15 +34,23 @@
   `workspace_channel` arm (Task keeps its board-context `kind:'workspace'` legitimately).
   `SearchConversationPlace` carried both `SearchWorkspaceRef` (own `kind`) and a
   parallel `workspace_kind` (two contradictory kind sources) — collapsed to one by
-  correcting `SearchWorkspaceRef.kind` to `regular | agent_space`.
+  correcting `SearchWorkspaceRef.kind` to `regular | agent_space`. That surviving
+  `kind` was itself retired in #task:2075 (see §2 rule 5 and §3): one source became
+  no source.
 
 ## 1. Domain boundary + name is the first wall
 
 In-scope read models (task board, saved, search, favorites) are human-viewer
 faces. Human-viewable place: `placement_kind ∈ { workspace, direct_pair }`.
-`agent_inbox` is the third arc (`requireWorkspacePlacement`,
-`conversation-placement.ts:62`, **throws** on `workspace_id === null`) — an
-agent-runtime fact, never a human place. Identity core is named
+A third arc, `agent_inbox`, was an agent-runtime fact and never a human place;
+#task:2072 retired that placement (v84/v85), so the stored alphabet and the
+human-viewable set now COINCIDE. That is a fact about today's schema, not a
+relaxation of this section — the two walls carry the same weight against a
+different subject: `direct_pair` has no workspace coordinate
+(`requireWorkspacePlacement` in `conversation-placement.ts` **throws** on
+`workspace_id === null`, and a DM reaching a workspace-scoped surface is the
+routing bug it always was), and the next placement added must arrive at a
+refusal rather than at a silently omitted row. Identity core is named
 **`HumanConversationPlace`**: the name is the first wall, fail-closed constructor
 the second.
 
@@ -45,16 +58,81 @@ the second.
 
 ```
 HumanConversationPlace =
-  | { kind: 'workspace_channel'; conversation_id; workspace_id; workspace_kind: 'regular' | 'agent_space' }
+  | { kind: 'workspace_channel'; conversation_id; workspace_id }
   | { kind: 'direct_pair';       conversation_id }
-// constructor asserts placement_kind !== 'agent_inbox' (fail closed, not omit)
+// constructor is TOTAL over placement_kind: these two arms are the whole stored
+// alphabet today, and an unrecognized value throws (fail closed, not omit) — §1
 ```
 
 Rules: (1) `conversation_id` single routing coord both arms. (2) workspace-like
 only on `workspace_channel`; `direct_pair` fabricates no workspace/channel.
 (3) no mutable presentation in the core. (4) no board namespace (`pair_key`) in
-the core. (5) `workspace_kind` = domain projection `regular | agent_space`;
-physical `agent_home` stays behind the repo boundary. (6) no `{kind,value}` pair.
+the core. (5) **NO container word at all** (see below). (6) no `{kind,value}` pair.
+
+Rule (5) has been sharpened twice, and each version is stronger than the last —
+the later one is the contract:
+
+M2 (#task:2069, @Paul review finding; the original wording, "physical `agent_home`
+stays behind the repo boundary", named the wrong axis — a reader would derive the
+wrong rule from it):
+
+> **The physical word may be READ, never PUBLISHED.**
+
+The axis was WHERE THE WORD APPEARS, not which layer holds it and not who is
+reading. Every read face carried the PROJECTED word `regular | agent_space` —
+human and agent faces alike, because the ubiquitous language does not fork by
+audience (a private dialect for agents costs a vocabulary translation on every
+cross-surface inference).
+
+#task:2075's stop-publish step (the current rule):
+
+> **No container WORD is published — the ownership RELATION is.**
+
+The projected word was never independent data: it merely restated the ownership
+relation, so the boundary was translating a fact it could simply carry. Every
+published face now carries `owner_agent_id` and asks "whose container is this"
+through `isAgentHomeWorkspace*` (`packages/shared/src/agent-home-workspace.ts`) —
+one fact, one spelling, and a face that needs the OWNER (not merely the kind) no
+longer has to join for it. #task:2080 has since dropped the stored `workspace_kind`
+word itself, proving it redundant: `owner_agent_id` is now not merely the published
+spelling but the ONLY one that exists (the surviving schema CHECK ties it to
+name-namespace membership — an agent home carries no name key). The projection
+argument is therefore trivially true — there is no second carrier left to keep in
+step.
+
+Do NOT re-derive a container word from `owner_agent_id` at a read face: that moves
+the alphabet rather than retiring it, and re-creates the two-spellings-of-one-bit
+problem this step deleted (#task:2078 removed the last such derivation from the
+renderer).
+
+There are now **zero exceptions**. The rule can finally be phrased by boundary
+alone: no container-alphabet word crosses ANY wire. The last survivor —
+`RuntimeStartWorkspaceRefSchema.kind` on the host protocol — was retired by
+#task:2081. The daemon used to read that stored word to select a filesystem
+resolution strategy; it now recognizes an agent-home ref from the id convention
+itself (`AGENT_HOME_WORKSPACE_ID_PREFIX` for the alphabet, exact match against
+`agentHomeWorkspaceId(agentId)` for ownership — `daemon/runtime-start-resolve.ts`),
+so the decision is keyed on the id, never on a copy of a word a product rename
+could contradict. The two negative gates that pinned the survivor (the schema
+field had to be `WorkspaceKindSchema` itself, and the wire had to reject the
+published word) are gone with it. That removal folded into the same unreleased
+`HOST_PROTOCOL_VERSION` generation — no separate bump (§8's host-protocol
+physical-path fields remain untouched).
+
+**The axis is the container alphabet's VALUES** — what a face says the kind IS.
+Key spellings and id prefixes are not on it, so two things an `agent_home` grep
+will hit on the wire are off-axis rather than counter-examples to the sentence
+above: the `agent_home_workspace_id` field (the create-agent HTTP response and the
+`agent_materialize` host frame — declared in `useCreateAgent`'s response type on
+the renderer side, never read) and the `wsah_` id prefix, whose sole definition is
+`AGENT_HOME_WORKSPACE_ID_PREFIX` in `packages/shared/src/agent-home-workspace.ts`
+(its docblock already records that the prefix, its builder and its matcher live in
+exactly one place). Neither is a value in the alphabet, neither can be keyed on to
+branch, and respelling either buys no correctness — so they are deliberately left
+alone (@Paul, verified twice), not missed. This paragraph is a live rule, not a
+ledger entry: it exists to answer one future grep, so it anchors on names that a
+rename would have to update anyway, never on line numbers that any unrelated edit
+would silently falsify.
 
 ## 3. Per-bounded-context projections — one `place` per DTO, folded, no dual coord
 
@@ -62,7 +140,7 @@ physical `agent_home` stays behind the repo boundary. (6) no `{kind,value}` pair
 
   ```
   TaskPlace =
-    | { kind: 'workspace';   conversation_id; workspace_id; workspace_kind: 'regular'|'agent_space'; channel_name }
+    | { kind: 'workspace';   conversation_id; workspace_id; channel_name }
     | { kind: 'direct_pair'; conversation_id; pair_key }
   ```
 
@@ -76,7 +154,9 @@ physical `agent_home` stays behind the repo boundary. (6) no `{kind,value}` pair
   workspace directory (`taskContainer.ts:77` `position.workspace.name`), not a
   frozen DTO field. Building a liveness chain for a zero-consumer projection is
   over-construction; the minimal set `{conversation_id, workspace_id,
-  workspace_kind, channel_name}` is complete. Consequence: Task has **no**
+  channel_name}` is complete (the container word that sat in this set went the same
+  way and for a stronger reason — zero readers AND a second spelling of
+  `owner_agent_id`; #task:2075). Consequence: Task has **no**
   workspace-name liveness obligation (§4-B does not apply to Task).
 - **Saved [#task:2050] — `SavedMessageDto.place`, canonical `kind` discriminant.**
   It **reuses `HumanConversationPlace`'s `kind` and literals verbatim**
@@ -87,11 +167,11 @@ physical `agent_home` stays behind the repo boundary. (6) no `{kind,value}` pair
 
   ```
   SavedPlace =
-    | { kind: 'workspace_channel'; conversation_id; workspace_id; workspace_kind: 'regular'|'agent_space'; channel_name }
+    | { kind: 'workspace_channel'; conversation_id; workspace_id; channel_name }
     | { kind: 'direct_pair';       conversation_id }
   ```
 
-  `workspace_id` + `workspace_kind` are the canonical core (from §2);
+  `workspace_id` is the canonical core (from §2);
   `channel_name` is the one embedded presentation field, bound to workspace
   identity **in the same arm** — a `direct_pair` row cannot carry it (impossible
   to construct), and a `workspace_channel` row cannot carry peer presentation.
@@ -104,7 +184,7 @@ physical `agent_home` stays behind the repo boundary. (6) no `{kind,value}` pair
   — aligned with the shipped `TaskPlace` — and is the one presentation field §4-A
   keeps live. The pair arm holds only `conversation_id`; peer name/avatar is
   resolved by that id through the DirectPair carrier (§4-C), never frozen. Common
-  fields (`message`, `agent_name`, `saved_at`) stay outside the discriminant.
+  fields (`message`, `saved_at`) stay outside the discriminant.
   Because the discriminant is the canonical one, the shared constructor and
   exhaustiveness checks are reused — no second spelling of the same `place`.
 
@@ -129,18 +209,20 @@ physical `agent_home` stays behind the repo boundary. (6) no `{kind,value}` pair
     ```
 
     The `workspace_channel` arm carries **one** workspace identity — the
-    `SearchWorkspaceRef`, which already has its own `kind`; there is **no** parallel
-    `workspace_kind` field (that duplicate was the double-source of truth that could
-    construct two contradictory kinds). To make the ref the single source, its
-    external domain is corrected: **`SearchWorkspaceRef.kind` changes from
-    `'regular' | 'dm'` to `'regular' | 'agent_space'`** (`message.ts:523`) — physical
-    `dm`/`agent_home` no longer surfaces on the wire.
+    `SearchWorkspaceRef`; there is **no** parallel `workspace_kind` field beside it
+    (that duplicate was the double-source of truth that could construct two
+    contradictory kinds). M2 made the ref the single source by correcting its own
+    `kind` from `'regular' | 'dm'` to the published `'regular' | 'agent_space'`;
+    #task:2075's stop-publish step then deleted that `kind` as well and the ref
+    carries **`owner_agent_id`** instead (#task:2075-A1 added the arc BEFORE the word
+    left, so no face was ever wordless-and-arcless). One kind source became zero, and
+    the question "which kind of container" is answered from the relation.
   - `type: 'workspace'` is a **named-entity result, NOT a conversation place** — it
-    reuses **the same** `SearchWorkspaceRef` (now `regular | agent_space`), carries no
-    `conversation_id`, and can never be a `direct_pair`.
+    reuses **the same** `SearchWorkspaceRef`, carries no `conversation_id`, and can
+    never be a `direct_pair`.
   `type` selects the result kind; the canonical `kind` selects the placement inside
-  the two conversation-bearing arms; exactly one place per DTO, one workspace-kind
-  source, no parallel unions that could contradict.
+  the two conversation-bearing arms; exactly one place per DTO, no container word on
+  any of them, no parallel unions that could contradict.
 
 ## 4. Presentation liveness — SEPARATE fact edges, each with a real producer + subscription + falsifier (R3 blocker 2)
 
@@ -232,7 +314,7 @@ in:
 A `place` field (`TaskPlace`, `HumanConversationPlace`/`SavedPlace`,
 `SearchConversationPlace`, and the Favorites projection) is for **routing /
 presentation / namespace ONLY**. **No consumer may derive ACL or participation
-from a Place DTO's `workspace_id` / `workspace_kind` / `pair_key`.** Authorization ALWAYS
+from a Place DTO's `workspace_id` / `owner_agent_id` / `pair_key`.** Authorization ALWAYS
 recomputes from `conversation_id` back to the canonical placement-participation
 authority (`resolveParticipation` / `canViewConversation` /
 `conversation-placement-sql.ts`). This generalizes the task rule "Board is not an
@@ -251,36 +333,48 @@ only Assignee/From, no switching away. `taskContainer.ts:95` read-back removed;
 `46d0238a` pair-leaf trigger scrapped; backend `container=direct_messages` stays a
 query capability, not a global scope IA.
 
-## 6. `TaskNavRef.channel_id` — compat phase gated by a schema epoch, not package version (R4 blocker 4)
+## 6. `TaskNavRef.channel_id` → `conversation_id` — destructive rename, no bridge (R4 blocker 4, **AMENDED in M2**)
 
-`TaskNavRef.channel_id` (task.ts:161) has a proven installed-CLI consumer
-(`packages/cli/src/commands/task.ts` `nav.ref.channel_id`), which is why it earns a
-compat phase — but the deletion criterion must be **measurable**, or the dual-field
-becomes permanent. The problem is **response-schema compatibility**, not product
-versioning, so the gate is a scoped schema epoch — NOT a package-semver regime.
+**M2 amendment (2026-08-18, @Paul ruling): the compat phase and its epoch gate are
+RETIRED — unbuilt, not deferred.** The rename lands in one commit; the field is
+`conversation_id`; there is no dual-emit and no `SILVERHAND_CLI_API_EPOCH` /
+`MINIMUM_CLI_API_EPOCH`.
 
-- **Verified sensor gap:** the CLI sends only a static `X-Agent-Hub-Caller:
-  silverhand-cli` tag (`client.ts:55`); its `package.json` version is `0.0.0`. The
-  server captures `user-agent` only into auth session-metadata at session creation,
-  not per request. So "no old installed CLI remains" has **no sensor today**. This
-  stays a caller tag — it is not promoted to a release semver.
-- **M2 obligation (makes deletion observable, scoped to schema compat):**
-  1. The CLI sends a named, monotonic **`SILVERHAND_CLI_API_EPOCH`** request header
-     (an integer that increments only when it learns a new response-schema field —
-     independent of `package.json` version, which stays `0.0.0`).
-  2. The server reads it and enforces a **`MINIMUM_CLI_API_EPOCH`** floor. An old
-     CLI that omits the header is treated as **epoch 0**.
-  3. During the transition the floor is 0: the server accepts epoch-0 callers and
-     emits **both** `channel_id` and `conversation_id`, guaranteed **same value**.
-     Epoch-0 CLIs read `channel_id`; epoch-1 CLIs prefer `conversation_id`.
-  4. `channel_id` is removed only after the enforced floor is raised to **1** at a
-     dated cutover — raising the floor is what makes "no old CLI" *true*, not merely
-     observed.
-- If the epoch gate is not added, the compat phase is **rejected** (an unobservable
-  dual-field is worse than the wart it hides).
+This is not a reversal of R4's reasoning — it is R4's own rule applied after its
+premise was falsified. R4 granted the compat phase because the field had "a proven
+installed-CLI consumer (`packages/cli/src/commands/task.ts` `nav.ref.channel_id`)".
+That grep hit is `task detail --help` **prose**, and the CLI does not parse this
+response at all (`client.ts` `getTaskDetail` is a typed passthrough; the file
+contains no `parse`/`safeParse`) ⇒ **removing the field cannot make any installed
+CLI throw.** With no consumer, R4's own closing rule applies — the same treatment
+the top-level task `channel_id` gets in §3: destructive delete, no bridge. R4 also
+wrote that an un-gated compat phase is rejected outright, so nothing here survives
+the corrected premise either way.
 
-Contrast: the top-level task `channel_id` (§3) has NO external consumer → destructive
-delete, no bridge.
+Two further reasons the epoch gate was the wrong instrument, independent of the
+premise: it would have been a **third** protocol axis next to
+`desktop-server-api-epoch.ts` (self-described as "the SINGLE ROOT … One boundary,
+one axis") and the daemon↔backend `OUTBOUND_PROTOCOL_VERSION`; and the surface it
+was meant to guard is prose frozen in a client, which no handshake can admit or
+refuse — so it could never state an exit condition.
+
+**Substituted verification (same commit, ~3 lines):** the field-path placeholder
+table in `packages/cli/tests/help-address-grammar.test.ts` is DERIVED from
+`TaskNavRefSchema`'s keys instead of hardcoded. Hardcoded, it only reddened when
+prose grew an unknown placeholder; a schema rename with untouched prose stayed
+green — exactly the direction nobody guarded. Derived, that divergence is
+permanently red. The guarded object moves from "an old binary on someone else's
+machine" to "prose and schema inside ONE build must not disagree".
+
+**Residual risk, priced:** embedded/loopback ships backend and CLI as one artifact
+⇒ zero skew. Only hosted mode has a window, within one protocol generation, where
+older help prose teaches the old key name; the cost is one typed 404
+(`target_unresolved`, from `delivery-target.ts`'s closed rejection vocabulary — a
+malformed address is rejected pre-flight as `target_malformed`) plus a re-read of
+`nav`. In-band recoverable, no data loss. That cost does not buy a machine gate.
+
+Contrast retained: the top-level task `channel_id` (§3) likewise has NO external
+consumer → destructive delete, no bridge.
 
 ## 6b. Full workspace-require self-audit — corrected cardinality, zero-omission (R3 blocker 1)
 
@@ -292,18 +386,21 @@ internal/agent-only · **LFR** latent forbidden reuse.
 | Site | Class | Reason / guard-falsifier |
 |---|---|---|
 | `viewer-scope.ts:171` | **WOD** | DM handled by the parallel `publishUnreadUpdated` direct_pair branch (comment `:160`) |
-| `observe.ts:336` | **WOD** | `direct_pair` intercepted at `:329` (`publishDirectPairsChangedToViewer`); only workspace/agent_inbox fall through |
+| `observe.ts:336` | **WOD** | `direct_pair` intercepted at `:329` (`publishDirectPairsChangedToViewer`); since #task:2072 retired `agent_inbox`, workspace is the only placement left to fall through, so the call is the DECLARATION that what follows is workspace-scoped rather than a live branch |
 | `conversation-repo.ts:848` | **WOD** | inside the `WORKSPACE_PLACED` predicate; the assert ties the SQL filter to the non-null DTO field |
-| `attention.ts:189` | **WOD** | `getChannel` filter guarantees open-roster⇒workspace; agent_inbox already 404s |
+| `attention.ts:189` | **WOD** | `getChannel` filter guarantees open-roster⇒workspace; every fixed-roster row, `direct_pair` included, already 404s there |
 | `channel-service.ts:713/869/932` (×3) | **WOD** | channels are a workspace-only aggregate (invariant #3) |
 | `conversation-member.ts:260/541/622/667/905/963/1101/1208/1477` (×9) | **WOD** | membership/roster is a workspace concept; DirectPair has endpoints, not members; M2 asserts these paths reject a direct_pair |
 
 **16 WOD = 16.** (R3 correction: my prior "18 production / 17 WOD" wrongly
 counted the `:62` definition line into the total. #2050 RESOLVED the one HPB by
 REMOVAL: `saved-message-repo.ts` `save()` no longer calls
-`requireWorkspacePlacement` at all — it asserts a three-arm `SavedPlacementError`
-on `placement_kind` instead, so `direct_pair` is saveable while `agent_inbox`
-still fails closed. The universe therefore shrank 17→16 and is now purely WOD.)
+`requireWorkspacePlacement` at all — it asserts a `SavedPlacementError`
+on `placement_kind` instead, so `direct_pair` is saveable while any placement
+OUTSIDE the participatory set still fails closed. `agent_inbox` was that outside
+arm until #task:2072 retired it; the refusal is kept as the default branch, so it
+now binds the next placement added rather than a value this schema can store.
+The universe therefore shrank 17→16 and is now purely WOD.)
 
 **M2 mechanical completeness gate:** a test enumerates every
 `requireWorkspacePlacement` call site AND every hand-written roster read outside
@@ -334,10 +431,10 @@ conjunct.
 **Agent-side roster reads (`conversations.getAgent` — a `conversation_agents`
 row query, the agent twin of `EXISTS(conversation_users)`).** Same rule, same
 failure mode: `getAgent` agrees with `agentParticipates` only on the workspace
-arm and returns `null` for every rosterless `direct_pair` / `agent_inbox`
-placement, so any surface that gates on it silently excludes real endpoint/inbox
-agents. Enumerated here alongside the human-side reads so the disposition is
-recorded once, not re-derived per site:
+arm and returns `null` for every rosterless `direct_pair` placement, so any
+surface that gates on it silently excludes real endpoint agents. Enumerated here
+alongside the human-side reads so the disposition is recorded once, not
+re-derived per site:
 
 | Site | Class | Disposition |
 |---|---|---|
@@ -387,10 +484,15 @@ name"). It is pinned by behavior, not prose:
   deleted as factually wrong. Its unread dependency `unreadCountsByConversation`
   (`conversation-read-repo.ts:402`, roster-joins `conversation_users`) is **LFR
   promoted to HPB**: must include the DM arm via participation.
-- **DM `@agent` CC-to-inbox: NO.** Behavior stays "no CC"; `mention-cc.ts:178`'s
-  reason changes from `source_not_workspace_placed` to "this placement does not
-  permit audience expansion". Classified **IAO/product**; capability naming +
-  test corrected.
+- **DM `@agent` CC: NO.** Behavior stays "no CC" when the SOURCE is a DM. The
+  destination this item called "the inbox" was retired with the placement
+  (#task:2072) — a CC now lands in the direct pair between the agent and the
+  person who mentioned it — so the ruling is about the SOURCE placement, not the
+  destination. Shipped form (#task:2021 P4-4/P4-5): `mention-cc.ts`'s
+  `source_not_workspace_placed` is a REPORTED SKIP, not the throw M1 proposed to
+  rename, because a DM source carries no workspace coordinate to key the wrap
+  text and the `mention_external` row with. Classified **IAO/product**;
+  capability naming + test corrected.
 
 ## 8. Non-goals for Milestone 1
 

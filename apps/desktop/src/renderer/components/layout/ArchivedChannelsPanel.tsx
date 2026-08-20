@@ -14,7 +14,6 @@ import {
   useArchiveWorkspace,
   type WorkspaceListItem,
 } from '@/features/workspaces/hooks';
-import { agentSpaceLabel, workspaceDisplayName } from '@/lib/workspace-name';
 import { FilterBlock } from '@/components/ui/filter-select';
 import {
   WorkspaceFilterSelect,
@@ -69,22 +68,18 @@ export function ArchivedChannelsPanel({
     onFilterChange({ ...filter, workspace: next });
   const setDateFilter = (next: DateFilterValue) =>
     onFilterChange({ ...filter, date: next });
-  // Both collections feed this recovery index (#task:1145): regular
-  // workspaces' archived channels AND agent_home (DM) workspaces' archived
-  // dm_channels. The backend aggregate is channel-like, so the panel offers
+  // Both collections feed this recovery index (#task:1145): a people-owned
+  // workspace's archived channels AND an agent space's archived dm_channels. The
+  // backend aggregate is channel-like, so the panel offers
   // both as filter scopes and subscribes to both for live invalidation —
   // otherwise an archived DM would be unfindable/unrestorable from the
-  // default Archived entry.
-  const filterableWorkspaces = useMemo(
-    () =>
-      workspaces.filter(
-        workspace => workspace.kind === 'regular' || workspace.kind === 'dm',
-      ),
-    [workspaces],
-  );
+  // default Archived entry. Every visible workspace is in scope: the
+  // `kind === 'regular' || kind === 'agent_space'` pre-filter that used to sit here
+  // admitted the whole set (the union WAS the alphabet), so it fenced nothing and
+  // went out with the kind (#task:2078).
   const workspaceScopeIds = useMemo(
-    () => filterableWorkspaces.map(workspace => workspace.id),
-    [filterableWorkspaces],
+    () => workspaces.map(workspace => workspace.id),
+    [workspaces],
   );
   const workspaceId = workspaceFilterId(workspaceFilter);
   const since = useMemo(() => dateFilterSince(dateFilter), [dateFilter]);
@@ -99,9 +94,9 @@ export function ArchivedChannelsPanel({
     () => archivedWorkspaceRows(workspaces, { workspaceId, since }),
     [workspaces, workspaceId, since],
   );
-  // Identity for the workspace rows: a DM home shows its agent's avatar, the
-  // same primitive the rail shows — this view REPLACES the sidebar's archived
-  // group, so it must not degrade a DM to the generic glyph.
+  // Identity for the workspace rows: an agent space shows its owning agent's
+  // avatar, the same primitive the rail shows — this view REPLACES the sidebar's
+  // archived group, so it must not degrade one to the generic glyph.
   const { data: agents = [] } = useAgents();
   const agentsById = useMemo(
     () => new Map<string, AgentDto>(agents.map(a => [a.id, a])),
@@ -133,7 +128,7 @@ export function ArchivedChannelsPanel({
           <FilterBlock label="Workspace" className="w-full sm:w-72">
             <WorkspaceFilterSelect
               value={workspaceFilter}
-              workspaces={filterableWorkspaces}
+              workspaces={workspaces}
               onChange={setWorkspaceFilter}
               allIcon={<Archive className="size-3.5" />}
               showArchivedSuffix
@@ -253,10 +248,9 @@ function ArchivedWorkspaceRow({
         >
           <span data-collection-card-icon className="flex size-8 shrink-0 items-center justify-center text-text-muted">
             <WorkspaceIcon
-              kind={workspace.kind}
-              dmAgentId={workspace.dm_agent_id}
+              ownerAgentId={workspace.owner_agent_id}
               agentsById={agentsById}
-              dmAgentAvatarUrls={agentAvatarUrls}
+              ownerAgentAvatarUrls={agentAvatarUrls}
             />
           </span>
           <span className="min-w-0 flex-1">
@@ -362,19 +356,17 @@ function EmptyState({ text }: { text: string }): JSX.Element {
 
 /**
  * Workspace label for an archived row's context (#task:1145, label converged
- * #task:1156). A regular `channel` row shows its bare workspace name; a
- * `dm_channel` row shows the agent's name — the same label the filter dropdown
- * shows (one shared `agentSpaceLabel`, #task:2044: no `@`, that form belongs to
- * the direct pair). The agent-space name arrives bare here (`insertAgentHome`
- * sets `name = agent.name`); `agentSpaceLabel` also strips the `dm-` UI prefix
- * the dropdown shape carries, so both normalize to the same label.
+ * #task:1156). Both kinds show the container's own name: a regular `channel`
+ * row its workspace name, a `dm_channel` row the agent space's name, which IS
+ * the bound agent's (`insertAgentHome` sets `name = agent.name`). The two used
+ * to need different treatment only because the filter dropdown's shape carried a
+ * `dm-` prefix this one didn't; #task:2066 retired the prefix, so the label is
+ * the name on both paths and cannot drift between them again.
  */
 export function archivedRowWorkspaceLabel(
   item: ArchivedChannelListItemDto,
 ): string {
-  return item.channel.roster_policy === 'fixed'
-    ? agentSpaceLabel(item.workspace.name)
-    : item.workspace.name;
+  return item.workspace.name;
 }
 
 /** Nav target for opening an archived row. Always the channel's OWN
@@ -418,12 +410,10 @@ export function archivedWorkspaceRows(
   });
 }
 
-/** An archived workspace row's own label: the agent's name for an agent space,
- *  the bare name otherwise — deferred to the shared `workspaceDisplayName` so a
- *  workspace reads identically here, in the channel rows' context line
- *  (`archivedRowWorkspaceLabel`), and in every picker. */
+/** An archived workspace row's own label. Its own name whoever owns it — see
+ *  `archivedRowWorkspaceLabel` for why an agent space no longer differs. */
 export function archivedWorkspaceRowLabel(
   workspace: WorkspaceListItem,
 ): string {
-  return workspaceDisplayName(workspace);
+  return workspace.name;
 }

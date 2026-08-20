@@ -1,9 +1,10 @@
 import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import Sqlite, { type Database } from 'better-sqlite3';
-import { MIN_SUPPORTED_SCHEMA_VERSION, migrations } from '@silverhand/shared/db/migrations';
+import { migrations } from '@silverhand/shared/db/migrations';
+import { MIN_SUPPORTED_MIGRATION_STEP } from '@silverhand/shared/db/schema-epochs';
 import { fixedConversationTitle } from '@silverhand/shared';
-import { currentSchemaVersion, runMigrations } from '../src/db.js';
+import { currentMigrationStep, runMigrations } from '../src/db.js';
 import { AgentRepo } from '../src/repos/agent-repo.js';
 import { ConversationRepo } from '../src/repos/conversation-repo.js';
 import { RuntimeSlotRepo } from '../src/repos/runtime-slot-repo.js';
@@ -23,11 +24,11 @@ describe('migration v77 agent_runtime_control_audit', () => {
     const throughV76 = migrations.filter(migration => migration.version <= 76);
     const initial = runMigrations(database, {
       migrations: throughV76,
-      expectedVersion: 76,
-      minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+      expectedStep: 76,
+      minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
     });
-    expect(initial.afterVersion).toBe(76);
-    expect(currentSchemaVersion(database)).toBe(76);
+    expect(initial.afterStep).toBe(76);
+    expect(currentMigrationStep(database)).toBe(76);
 
     const schemaNamesBefore = new Set(
       database
@@ -40,15 +41,15 @@ describe('migration v77 agent_runtime_control_audit', () => {
     );
     const upgraded = runMigrations(database, {
       migrations: migrations.filter(migration => migration.version <= 77),
-      expectedVersion: 77,
-      minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+      expectedStep: 77,
+      minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
     });
     expect(upgraded).toMatchObject({
-      beforeVersion: 76,
-      afterVersion: 77,
-      appliedVersions: [77],
+      beforeStep: 76,
+      afterStep: 77,
+      appliedSteps: [77],
     });
-    expect(currentSchemaVersion(database)).toBe(77);
+    expect(currentMigrationStep(database)).toBe(77);
 
     const schemaNamesAfter = database
       .prepare<[], { name: string }>(

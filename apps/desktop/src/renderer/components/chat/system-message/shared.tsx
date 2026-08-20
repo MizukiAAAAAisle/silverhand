@@ -2,7 +2,7 @@ import { useMemo, type ComponentType } from 'react';
 import type { MessageDto, UserDto } from '@silverhand/shared';
 import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
 import { Markdown } from '@/components/chat/Markdown';
-import type { ConversationReference } from '@/components/chat/ConversationRef';
+import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import type { ChannelReference } from '@/components/chat/ChannelRef';
 
 /**
@@ -27,7 +27,7 @@ export function useUserResolver(): ReturnType<typeof makeUserNameResolver> {
  */
 export interface RendererProps {
   message: MessageDto;
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;

@@ -23,8 +23,6 @@ import type {
   AgentStaleReceiveResult,
   AgentStaleResolveParams,
   AgentStaleResolveResult,
-  AgentStreamObservedParams,
-  AgentStreamObservedResult,
   RuntimeClearSessionParams,
   RuntimeClearSessionResult,
   RuntimeCloseActivityLogParams,
@@ -129,9 +127,6 @@ export interface SupervisorContract {
   agentStaleResolve(
     params: AgentStaleResolveParams,
   ): AgentStaleResolveResult | Promise<AgentStaleResolveResult>;
-  agentStreamObserved(
-    params: AgentStreamObservedParams,
-  ): AgentStreamObservedResult | Promise<AgentStreamObservedResult>;
   /**
    * Deferred-pull second consumer (#task:1614, contract #task:1606).
    * Arbitrates against `flushDeferred` under the same per-handle

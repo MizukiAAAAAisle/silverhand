@@ -1960,7 +1960,6 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
         kind: 'workspace',
         conversation_id: 'c1',
         workspace_id: 'w1',
-        workspace_kind: 'regular',
         channel_name: 'general',
       },
       thread_root_id: null,

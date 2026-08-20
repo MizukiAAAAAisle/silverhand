@@ -485,6 +485,24 @@ function pointCacheKeysHolding(
 }
 
 /**
+ * Re-read every inline `#task:<n>` entry that holds this task, and no others —
+ * the narrow form of `invalidateQueries(['task-by-number'])`.
+ *
+ * Exported because a write that cannot patch its own outcome still must not
+ * re-read chips about OTHER tasks: `useAssignTask` invalidates rather than
+ * patches (the server may dispatch the task in the same write, so the resulting
+ * status is not this client's to guess), and that is a statement about VALUES,
+ * not about scope. Naming the entries needs no prediction — it is a content
+ * scan — so the two callers share this one definition instead of one of them
+ * walking the root.
+ */
+export function invalidateTaskPointCaches(qc: QueryClient, taskId: string): void {
+  for (const key of pointCacheKeysHolding(qc, taskId)) {
+    void qc.invalidateQueries({ queryKey: key, exact: true });
+  }
+}
+
+/**
  * The task as an inline chip's entry holds it, or `null`.
  *
  * `['task-by-number']` is a FIRST-CLASS read face, not an auxiliary cache: the
@@ -602,9 +620,7 @@ export function reconcileTaskStatusWrite(
     });
   }
   if (opts?.points) {
-    for (const key of pointCacheKeysHolding(qc, projection.taskId)) {
-      void qc.invalidateQueries({ queryKey: key, exact: true });
-    }
+    invalidateTaskPointCaches(qc, projection.taskId);
   }
 }
 

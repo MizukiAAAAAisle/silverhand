@@ -7,8 +7,7 @@ import {
   type AgentDto,
   type AgentRow,
   type UserRow,
-  type WorkspaceDto,
-  type WorkspaceKind,
+  type Workspace,
   type WorkspaceMemberDto,
   type WorkspaceMemberRow,
   type WorkspaceRole,
@@ -42,24 +41,23 @@ type WorkspaceSelectRow = WorkspaceRow & {
  * description, owner or archive state.
  */
 export interface WorkspaceAddressRoot {
-  workspace_kind: WorkspaceKind;
+  /** The home agent, or `null` for a regular workspace — the same ownership
+   *  relation every other decision reads (`isAgentHomeWorkspace`). It is here so
+   *  the naming rule can tell a private container apart from a CORRUPT one; see
+   *  `stream-naming.ts`. */
+  owner_agent_id: string | null;
   name: string;
-  /** `NULL` for `agent_home`: no name namespace, so no address root. */
+  /** `NULL` for an agent home: no name namespace, so no address root. */
   name_key: string | null;
 }
 
 function rowToDto(
   row: WorkspaceSelectRow & { sort_group?: number; sort_name?: string },
-): WorkspaceDto {
+): Workspace {
   const {
     dm_channel_ids_json: _dmChannelIdsJson,
     sort_group: _sortGroup,
     sort_name: _sortName,
-    // `pinned_at` is a vestigial column (#task:1209): pin/star became per-viewer
-    // sort state (user_sort_entry.starred_at), and a workspace lost even that
-    // when the container star was retired (#task:1899). The shared column is no
-    // longer read/written and must never reach the wire. Strip it here.
-    pinned_at: _pinnedAt,
     name_key: _nameKey,
     ...workspace
   } = row;
@@ -78,7 +76,7 @@ function rowToDto(
 const WORKSPACE_SELECT = `
   SELECT
     w.*,
-    CASE WHEN w.workspace_kind = 'agent_home' THEN (
+    CASE WHEN w.owner_agent_id IS NOT NULL THEN (
       SELECT c.id
         FROM conversations c
         LEFT JOIN agents owner ON owner.id = w.owner_agent_id
@@ -92,7 +90,7 @@ const WORKSPACE_SELECT = `
                 c.created_at ASC
        LIMIT 1
     ) ELSE NULL END AS dm_channel_id,
-    CASE WHEN w.workspace_kind = 'agent_home' THEN (
+    CASE WHEN w.owner_agent_id IS NOT NULL THEN (
       SELECT COALESCE(json_group_array(id), '[]')
         FROM (
           SELECT c.id
@@ -114,19 +112,18 @@ const WORKSPACE_SELECT = `
 export class WorkspaceRepo {
   constructor(private readonly db: Db) {}
 
-  list(_opts: { includeSystem?: boolean } = {}): WorkspaceDto[] {
+  list(_opts: { includeSystem?: boolean } = {}): Workspace[] {
     const rows = this.db
       .prepare<[], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
-         WHERE w.workspace_kind IN ('regular', 'agent_home')
-         ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
+         ORDER BY CASE WHEN w.owner_agent_id IS NULL THEN 0 ELSE 1 END,
                   w.updated_at DESC`,
       )
       .all();
     return rows.map(rowToDto);
   }
 
-  get(id: string): WorkspaceDto | null {
+  get(id: string): Workspace | null {
     const row = this.db
       .prepare<[string], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
@@ -137,8 +134,8 @@ export class WorkspaceRepo {
   }
 
   /**
-   * The ADDRESS ROOT of a workspace: its kind, its display name and the stored
-   * fold of that name (#task:2021 P4-4).
+   * The ADDRESS ROOT of a workspace: its home agent (if any), its display name
+   * and the stored fold of that name (#task:2021 P4-4).
    *
    * Not `get()`: `name_key` is stripped from the DTO on purpose (it must never
    * reach the wire), and the key is the whole point here — a renderer may emit a
@@ -149,13 +146,13 @@ export class WorkspaceRepo {
    */
   addressRoot(id: string): WorkspaceAddressRoot | null {
     const row = this.db
-      .prepare<[string], Pick<WorkspaceRow, 'workspace_kind' | 'name' | 'name_key'>>(
-        `SELECT workspace_kind, name, name_key FROM workspaces WHERE id = ?`,
+      .prepare<[string], Pick<WorkspaceRow, 'owner_agent_id' | 'name' | 'name_key'>>(
+        `SELECT owner_agent_id, name, name_key FROM workspaces WHERE id = ?`,
       )
       .get(id);
     return row
       ? {
-          workspace_kind: row.workspace_kind,
+          owner_agent_id: row.owner_agent_id,
           name: row.name,
           name_key: row.name_key,
         }
@@ -164,14 +161,14 @@ export class WorkspaceRepo {
 
   /** Resolve only the regular semantic namespace. The key is the same pinned
    * Unicode fold the terminal writer stores; agent_home never participates. */
-  getByName(name: string | CanonicalWorkspaceName): WorkspaceDto | null {
+  getByName(name: string | CanonicalWorkspaceName): Workspace | null {
     const canonical = typeof name === 'string' ? parseWorkspaceName(name) : { ok: true as const, value: name };
     if (!canonical.ok) return null;
     const row = this.db
       .prepare<[string], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
          WHERE w.name_key = ?
-           AND w.workspace_kind = 'regular'`,
+           AND w.owner_agent_id IS NULL`,
       )
       .get(canonical.value.key);
     return row ? rowToDto(row) : null;
@@ -180,11 +177,11 @@ export class WorkspaceRepo {
   /** Resolver-facing SET read. UNIQUE makes >1 unreachable on a clean DB, but
    * retaining the set lets the resolver distinguish corruption from absence
    * and emit the dogfood `ambiguous` signal instead of choosing a row. */
-  listRegularByNameKey(key: string): WorkspaceDto[] {
+  listRegularByNameKey(key: string): Workspace[] {
     return this.db
       .prepare<[string], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
-         WHERE w.workspace_kind = 'regular' AND w.name_key = ?
+         WHERE w.owner_agent_id IS NULL AND w.name_key = ?
          ORDER BY w.created_at ASC, w.id ASC`,
       )
       .all(key)
@@ -197,22 +194,22 @@ export class WorkspaceRepo {
    *  assuming uniqueness: only `regular` workspaces have a partial
    *  unique index, agent_home names mirror the agent's name and may
    *  collide across the two kinds. Compares in NFC — see `getByName`. */
-  findAllByName(name: string): WorkspaceDto[] {
+  findAllByName(name: string): Workspace[] {
     const canonical = parseWorkspaceName(name);
     if (!canonical.ok) return [];
     return this.db
       .prepare<[string, string], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
-         WHERE (w.workspace_kind = 'regular' AND w.name_key = ?)
-            OR (w.workspace_kind = 'agent_home' AND w.name = ?)
-         ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
+         WHERE (w.owner_agent_id IS NULL AND w.name_key = ?)
+            OR (w.owner_agent_id IS NOT NULL AND w.name = ?)
+         ORDER BY CASE WHEN w.owner_agent_id IS NULL THEN 0 ELSE 1 END,
                   w.created_at ASC`,
       )
       .all(canonical.value.key, canonical.value.name)
       .map(rowToDto);
   }
 
-  listForAgent(agentId: string): WorkspaceDto[] {
+  listForAgent(agentId: string): Workspace[] {
     return this.db
       .prepare<[string, string], WorkspaceSelectRow & { sort_group: number; sort_name: string }>(
         `SELECT *
@@ -226,7 +223,7 @@ export class WorkspaceRepo {
               FROM workspaces w
               JOIN workspace_members wm ON wm.workspace_id = w.id
              WHERE wm.agent_id = ?
-               AND w.workspace_kind = 'regular'
+               AND w.owner_agent_id IS NULL
              UNION ALL
              SELECT
                w.*,
@@ -264,7 +261,6 @@ export class WorkspaceRepo {
                w.name AS sort_name
               FROM workspaces w
              WHERE w.owner_agent_id = ?
-               AND w.workspace_kind = 'agent_home'
            )
           ORDER BY sort_group ASC,
                    sort_name COLLATE NOCASE ASC`,
@@ -277,11 +273,7 @@ export class WorkspaceRepo {
     id?: string;
     name: CanonicalWorkspaceName;
     description: string | null;
-    workspaceKind?: WorkspaceKind;
-  }): WorkspaceDto {
-    if (params.workspaceKind && params.workspaceKind !== 'regular') {
-      throw new Error('use insertAgentHome for agent_home workspaces');
-    }
+  }): Workspace {
     // `name` is the branded terminal pair from #task:2027: display bytes and
     // folded key were produced by one parse and cannot be supplied separately.
     // relocation-v1 §7 — a regular workspace no longer carries a host binding
@@ -293,9 +285,9 @@ export class WorkspaceRepo {
     this.db
       .prepare(
         `INSERT INTO workspaces
-         (id, name, name_key, description, workspace_kind,
+         (id, name, name_key, description,
           owner_agent_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'regular', NULL, NULL, ?, ?)`,
+         VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)`,
       )
       .run(
         id,
@@ -312,15 +304,15 @@ export class WorkspaceRepo {
 
   insertAgentHome(params: {
     agent: Pick<AgentDto, 'id' | 'name'>;
-  }): WorkspaceDto {
+  }): Workspace {
     const id = agentHomeWorkspaceId(params.agent.id);
     const now = Date.now();
     this.db
       .prepare(
         `INSERT INTO workspaces
-         (id, name, name_key, description, workspace_kind,
+         (id, name, name_key, description,
           owner_agent_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, NULL, ?, 'agent_home', ?, NULL, ?, ?)`,
+         VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)`,
       )
       .run(
         id,
@@ -335,16 +327,15 @@ export class WorkspaceRepo {
     return row;
   }
 
-  findAgentHome(agentId: string): WorkspaceDto | null {
+  findAgentHome(agentId: string): Workspace | null {
     return this.getAgentHomeByOwner(agentId);
   }
 
-  getAgentHomeByOwner(agentId: string): WorkspaceDto | null {
+  getAgentHomeByOwner(agentId: string): Workspace | null {
     const row = this.db
       .prepare<[string], WorkspaceSelectRow>(
         `${WORKSPACE_SELECT}
-         WHERE w.owner_agent_id = ?
-           AND w.workspace_kind = 'agent_home'`,
+         WHERE w.owner_agent_id = ?`,
       )
       .get(agentId);
     return row ? rowToDto(row) : null;
@@ -360,19 +351,19 @@ export class WorkspaceRepo {
   updateMutableMetadata(
     id: string,
     fields: { name?: CanonicalWorkspaceName; description?: string | null },
-  ): WorkspaceDto | null {
+  ): Workspace | null {
     const now = Date.now();
     if (fields.name !== undefined && fields.description !== undefined) {
       this.db.prepare(
         `UPDATE workspaces
             SET name = ?, name_key = ?, description = ?, updated_at = ?
-          WHERE id = ? AND workspace_kind = 'regular'`,
+          WHERE id = ? AND owner_agent_id IS NULL`,
       ).run(fields.name.name, fields.name.key, fields.description, now, id);
     } else if (fields.name !== undefined) {
       this.db.prepare(
         `UPDATE workspaces
             SET name = ?, name_key = ?, updated_at = ?
-          WHERE id = ? AND workspace_kind = 'regular'`,
+          WHERE id = ? AND owner_agent_id IS NULL`,
       ).run(fields.name.name, fields.name.key, now, id);
     } else if (fields.description !== undefined) {
       this.db.prepare(
@@ -394,13 +385,13 @@ export class WorkspaceRepo {
   }
 
 
-  setArchived(id: string, archived: boolean): WorkspaceDto | null {
+  setArchived(id: string, archived: boolean): Workspace | null {
     const now = Date.now();
     this.db
       .prepare(
         `UPDATE workspaces
          SET archived_at = ?, updated_at = ?
-         WHERE id = ? AND workspace_kind = 'regular'`,
+         WHERE id = ? AND owner_agent_id IS NULL`,
       )
       .run(archived ? now : null, now, id);
     return this.get(id);
@@ -408,7 +399,7 @@ export class WorkspaceRepo {
 
   delete(id: string): void {
     this.db
-      .prepare(`DELETE FROM workspaces WHERE id = ? AND workspace_kind = 'regular'`)
+      .prepare(`DELETE FROM workspaces WHERE id = ? AND owner_agent_id IS NULL`)
       .run(id);
   }
 

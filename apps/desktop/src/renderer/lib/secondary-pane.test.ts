@@ -26,7 +26,6 @@ const localChannelRef: ConversationRef = {
   roster_policy: 'open',
   title: 'planning',
   workspace_id: 'w-1',
-  workspace_kind: 'regular',
   closed_at: null,
   archived_at: null,
 };
@@ -37,13 +36,14 @@ const foreignChannelRef: ConversationRef = {
   roster_policy: 'open',
   title: 'team-y planning',
   workspace_id: 'w-2',
-  workspace_kind: 'regular',
   closed_at: null,
   archived_at: null,
 };
 
-// An agent's own `dm_channel`: workspace-PLACED (in that agent's agent_home,
-// projected to the external `workspace_kind: 'dm'`) with a fixed roster. This is
+// An agent's own `dm_channel`: workspace-PLACED (in that agent's agent_home)
+// with a fixed roster. The ref states no container word at all — #task:2075's
+// stop-publish step deleted it, and which KIND of container a channel sits in is
+// answered by the workspace directory's ownership arc, not by this ref. This is
 // the only kind of DM this DTO can name — a workspace-less `direct_pair` is not
 // expressible here at all (#task:2038, ruling A: `ConversationRef.placement_kind`
 // is `z.literal('workspace')`), and is modelled by its own carrier resolved from
@@ -54,7 +54,6 @@ const foreignDmRef: ConversationRef = {
   roster_policy: 'fixed',
   title: 'dm-bob',
   workspace_id: 'w-bob-home',
-  workspace_kind: 'dm',
   closed_at: null,
   archived_at: null,
 };
@@ -101,7 +100,7 @@ describe('selectSecondaryDescriptor — URL × identity matrix', () => {
         archived_at: null,
         workspace_id: 'w-1',
       },
-      workspaceKind: 'regular',
+      hasChannelNamespace: true,
     });
   });
 
@@ -117,11 +116,11 @@ describe('selectSecondaryDescriptor — URL × identity matrix', () => {
       status: 'resolved',
       id: 'c-foreign',
       descriptor: { workspace_id: 'w-2' },
-      workspaceKind: 'regular',
+      hasChannelNamespace: true,
     });
   });
 
-  it("?side resolved to a dm_channel projects workspace_kind='dm' through to the descriptor", () => {
+  it('?side resolved to a dm_channel: a fixed roster still HAS a channel namespace', () => {
     const out = selectSecondaryDescriptor(
       { sideConversationId: 'dm-foreign' },
       workspaceIdentity(foreignDmRef),
@@ -129,11 +128,14 @@ describe('selectSecondaryDescriptor — URL × identity matrix', () => {
     expect(out).toMatchObject({
       source: 'side',
       status: 'resolved',
-      // `'workspace'` + `workspaceKind: 'dm'` is what an agent-home DM channel
-      // looks like on this face; the fixed roster is what distinguishes it from
-      // a channel, and it still HAS a workspace (unlike a private line).
+      // `'workspace'` + a fixed roster is what an agent-home DM channel looks
+      // like on this face; the roster is what distinguishes it from a channel,
+      // and it still HAS a workspace (unlike a private line).
       descriptor: { placement_kind: 'workspace', roster_policy: 'fixed' },
-      workspaceKind: 'dm',
+      // The bit is the PLACEMENT's, not the container kind's: every workspace
+      // placement has a `#` namespace, whatever kind of workspace it is
+      // (#task:2078). No container kind rides this path in either spelling.
+      hasChannelNamespace: true,
     });
   });
 
@@ -164,9 +166,9 @@ describe('selectSecondaryDescriptor — URL × identity matrix', () => {
         read_only: false,
         counterpart: agentPair.counterpart,
       },
-      // Not 'dm': there is no workspace whose kind this could be. Downstream
-      // this withholds every top-level channel affordance.
-      workspaceKind: null,
+      // No workspace ⇒ no `#` namespace. Downstream this withholds every
+      // top-level channel affordance.
+      hasChannelNamespace: false,
     });
   });
 
@@ -237,7 +239,7 @@ const sideChannelDescriptor: SecondaryDescriptor = {
     archived_at: null,
     workspace_id: 'w-1',
   },
-  workspaceKind: 'regular',
+  hasChannelNamespace: true,
 };
 // A second resolved channel-kind side (distinct id from primary) to
 // exercise the downstream pure selectors on a resolved secondary.
@@ -254,7 +256,7 @@ const sideSecondDescriptor: SecondaryDescriptor = {
     archived_at: null,
     workspace_id: 'w-1',
   },
-  workspaceKind: 'regular',
+  hasChannelNamespace: true,
 };
 const foreignSideDescriptor: SecondaryDescriptor = {
   source: 'side',
@@ -269,7 +271,7 @@ const foreignSideDescriptor: SecondaryDescriptor = {
     archived_at: null,
     workspace_id: 'w-2',
   },
-  workspaceKind: 'regular',
+  hasChannelNamespace: true,
 };
 const pairSideDescriptor: SecondaryDescriptor = {
   source: 'side',
@@ -286,7 +288,7 @@ const pairSideDescriptor: SecondaryDescriptor = {
     read_only: false,
     counterpart: agentPair.counterpart,
   },
-  workspaceKind: null,
+  hasChannelNamespace: false,
 };
 const loadingSide: SecondaryDescriptor = {
   source: 'side',
@@ -567,17 +569,17 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
   it('returns null/primary fallbacks when there is no secondary', () => {
     const out = selectSecondaryViewInputs({
       secondary: null,
-      primaryChannelKind: 'regular',
+      primaryHasChannelNamespace: true,
       primaryWorkspaceId: 'w-1',
     });
     expect(out).toEqual({
       conversationDescriptor: null,
-      channelKind: 'regular',
+      hasChannelNamespace: true,
       archiveWorkspaceId: 'w-1',
     });
   });
 
-  it('cross-workspace ?side resolved channel: ChannelView gets the *foreign* workspace id/kind/path', () => {
+  it('cross-workspace ?side resolved channel: ChannelView gets the *foreign* workspace id/path', () => {
     // The end-to-end assertion Cindy asked for (PR-2 review):
     // "?side=<other-workspace-channel> resolved 后，ChannelView 收到
     // other workspace id/kind/path，focused IPC 也用 other workspace
@@ -586,9 +588,10 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     // workspace metadata.
     const out = selectSecondaryViewInputs({
       secondary: foreignSideDescriptor,
-      // Primary is on a different workspace, with a different kind.
-      // The foreign side must IGNORE these primary fallbacks.
-      primaryChannelKind: 'dm',
+      // Primary has NO namespace (it is on a private line), so the `true`
+      // below can only have come from the side's own descriptor — with a
+      // boolean, a matching primary fallback would prove nothing.
+      primaryHasChannelNamespace: false,
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor).toEqual({
@@ -603,43 +606,40 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       // then target the right workspace cache.
       workspace_id: 'w-2',
     });
-    // ChannelView's `channelKind` projects from the FOREIGN workspace,
-    // not from `primaryChannelKind`. (Renderer never sees agent_home.)
-    expect(out.channelKind).toBe('regular');
+    expect(out.hasChannelNamespace).toBe(true);
     // Archive mutation invalidation targets the FOREIGN workspace.
     expect(out.archiveWorkspaceId).toBe('w-2');
   });
 
-  it('cross-workspace ?side resolved dm_channel: workspace_kind projects to "dm" (not agent_home)', () => {
-    // Forward-compatibility check: the renderer only knows
-    // `regular | dm`. The ref endpoint is responsible for projecting
-    // `agent_home → dm` server-side; this test locks that the
-    // selector pipes that projection through to ChannelView's
-    // `channelKind` prop unchanged. Note this is the workspace-PLACED
-    // DM channel, which still has a workspace to invalidate.
+  it('cross-workspace ?side resolved dm_channel: the foreign placement decides the namespace bit', () => {
+    // The prop chain, locked at its far end: the bit comes from the SIDE's own
+    // placement, so ChannelView's `hasChannelNamespace` prop — and every
+    // consumer under it — ignores the primary. Note this is the
+    // workspace-PLACED DM channel, which still has a workspace to invalidate.
     const out = selectSecondaryViewInputs({
       secondary: selectSecondaryDescriptor(
         { sideConversationId: 'dm-foreign' },
         workspaceIdentity(foreignDmRef),
       ),
-      primaryChannelKind: 'regular',
+      primaryHasChannelNamespace: false,
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor?.workspace_id).toBe('w-bob-home');
     expect(out.conversationDescriptor?.roster_policy).toBe('fixed');
-    expect(out.channelKind).toBe('dm');
+    expect(out.hasChannelNamespace).toBe(true);
     expect(out.archiveWorkspaceId).toBe('w-bob-home');
   });
 
   it('?side resolved private line: ChannelView gets the DM descriptor and NO workspace', () => {
-    // The #task:2038 prop chain. `channelKind: null` is what withholds every
-    // top-level channel affordance (rename / archive / visibility / member
-    // management), and `archiveWorkspaceId: null` must NOT fall back to the
-    // primary's workspace — invalidating `['workspaces', w-1, 'channels']` for a
-    // conversation that is not in w-1 would be a wrong cache write.
+    // The #task:2038 prop chain. `hasChannelNamespace: false` is what withholds
+    // every top-level channel affordance (rename / archive / visibility /
+    // member management) — and it must not fall back to the primary's `true`.
+    // `archiveWorkspaceId: null` must NOT fall back either: invalidating
+    // `['workspaces', w-1, 'channels']` for a conversation that is not in w-1
+    // would be a wrong cache write.
     const out = selectSecondaryViewInputs({
       secondary: pairSideDescriptor,
-      primaryChannelKind: 'regular',
+      primaryHasChannelNamespace: true,
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor).toEqual({
@@ -653,7 +653,7 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       read_only: false,
       counterpart: agentPair.counterpart,
     });
-    expect(out.channelKind).toBeNull();
+    expect(out.hasChannelNamespace).toBe(false);
     expect(out.archiveWorkspaceId).toBeNull();
   });
 
@@ -662,7 +662,7 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     // primary, the pane routes through the identity resolution for consistency.
     const out = selectSecondaryViewInputs({
       secondary: sideChannelDescriptor,
-      primaryChannelKind: 'regular',
+      primaryHasChannelNamespace: true,
       primaryWorkspaceId: 'w-1',
     });
     expect(out.conversationDescriptor?.workspace_id).toBe('w-1');
@@ -673,12 +673,12 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
     for (const ph of [loadingSide, unauthorizedSide, notFoundSide, unresolvedSide]) {
       const out = selectSecondaryViewInputs({
         secondary: ph,
-        primaryChannelKind: 'regular',
+        primaryHasChannelNamespace: true,
         primaryWorkspaceId: 'w-1',
       });
       expect(out).toEqual({
         conversationDescriptor: null,
-        channelKind: 'regular',
+        hasChannelNamespace: true,
         archiveWorkspaceId: 'w-1',
       });
     }

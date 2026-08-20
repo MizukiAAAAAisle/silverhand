@@ -127,11 +127,12 @@ const AuthEmailSchema = z.string().trim().email().max(320);
  * primary deployment is a remote server with separately-installed desktops, so
  * skew is real (see `docs/desktop-server-api-epoch.md`). What makes this one
  * safe WITHOUT bumping the epoch is not that `/auth/signup` sits outside the
- * REST admission middleware — it is that epoch 2 is still unreleased and this
- * change ships inside the same release: any deployed desktop is at epoch ≤ 1 and
- * is already refused at startup by the epoch-2 minimum-client gate, so it can
- * never reach this shape. If this change is ever split out of that release, the
- * epoch MUST be bumped (or a compatibility bridge kept) instead.
+ * REST admission middleware — it is that the current desktop epoch is still
+ * unreleased and this change ships inside the same release: any deployed desktop
+ * predates this generation and is already refused at startup by the current
+ * minimum-client gate, so it can never reach this shape. If this change is ever
+ * split out of that release, the epoch MUST be bumped (or a compatibility
+ * bridge kept) instead.
  *
  * The wire keeps the domain word `name` (matching `UserDto.name` and
  * `agents.name`); "Handle" is the UI label for the same field, and the leading

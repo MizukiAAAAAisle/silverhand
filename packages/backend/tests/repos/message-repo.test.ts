@@ -53,60 +53,6 @@ describe('MessageRepo', () => {
     ).toBe(2);
   });
 
-  it('conditional insert rejects stale seen seq without inserting', () => {
-    const { db, channel, agentId } = bootstrapConversation();
-    const repo = new MessageRepo(db);
-
-    const observed = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'observed',
-    });
-    const newer = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'newer',
-    });
-
-    const stale = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: observed.seq,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'stale draft',
-    });
-
-    expect(stale).toEqual({ ok: false, currentSeq: newer.seq });
-    expect(repo.listForConversation(channel.id).map(m => m.content))
-      .toEqual(['observed', 'newer']);
-    expect(repo.listAfterSeq(channel.id, observed.seq).map(m => m.content))
-      .toEqual(['newer']);
-  });
-
-  it('conditional insert succeeds when seen seq matches latest', () => {
-    const { db, channel, agentId } = bootstrapConversation();
-    const repo = new MessageRepo(db);
-
-    const observed = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'observed',
-    });
-
-    const fresh = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: observed.seq,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'fresh draft',
-    });
-
-    expect(fresh.ok).toBe(true);
-    expect(fresh.ok && fresh.message.seq).toBe(2);
-    expect(repo.latestSeqForConversation(channel.id)).toBe(2);
-  });
-
   it('seq counters are independent per conversation', () => {
     const { db, workspace, channel, conversations } = bootstrapConversation();
     const channel2 = conversations.insertChannel({
@@ -386,12 +332,7 @@ describe('MessageRepo', () => {
   });
 });
 
-describe('MessageRepo per-stream freshness (v43 reply cluster)', () => {
-  function latestMessageSeq(db: any, convId: string): number {
-    return db
-      .prepare('SELECT latest_message_seq FROM conversations WHERE id = ?')
-      .get(convId).latest_message_seq as number;
-  }
+describe('MessageRepo per-stream reply-cluster read-model (v43)', () => {
   function streamHead(
     db: any,
     convId: string,
@@ -451,222 +392,35 @@ describe('MessageRepo per-stream freshness (v43 reply cluster)', () => {
     });
     expect(streamHead(db, channel.id, root.id)).toBe(3);
     expect(streamHead(db, channel.id, null)).toBe(1);
+    // Read-model membership survives #task:2095: the cluster view is the root
+    // plus its replies (`id = root OR thread_root_id = root`); the main stream
+    // is the root alone (`thread_root_id IS NULL`) — thread replies never leak
+    // onto the main line.
     expect(
-      repo
-        .listStreamWindowMeta(channel.id, root.id, 0, streamHead(db, channel.id, root.id)!)
-        .map(m => m.seq),
-    ).toEqual([2, 3]);
+      repo.listWindowForThreadCluster(channel.id, root.id).messages.map(m => m.seq),
+    ).toEqual([1, 2, 3]);
     expect(
-      repo
-        .listStreamWindowMeta(channel.id, null, 0, streamHead(db, channel.id, null)!)
-        .map(m => m.seq),
+      repo.listWindowForMainStream(channel.id).messages.map(m => m.seq),
     ).toEqual([1]);
   });
 
-  it('freshness-exempt rows stay out of the CAS universe; delivery past them still passes (§5.2)', () => {
-    const { db, channel, agentId } = bootstrapConversation();
-    const repo = new MessageRepo(db);
-    const seen = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'normal head',
-    });
-    expect(streamHead(db, channel.id, null)).toBe(seen.seq);
-
-    // Exempt row (e.g. schedule_fire): allocates a seq but must NOT bump
-    // the head — agents that never receive it are not CAS-blocked on it.
-    const exempt = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'system',
-      content: 'owner self-wake',
-      freshnessExempt: true,
-    });
-    expect(exempt.seq).toBeGreaterThan(seen.seq);
-    expect(streamHead(db, channel.id, null)).toBe(seen.seq);
-
-    // An agent that saw only the normal head passes the CAS…
-    const r1 = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: seen.seq,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'send with head boundary',
-    });
-    expect(r1.ok).toBe(true);
-
-    // …and the exempt row's own recipient, whose observed advanced PAST
-    // the head (seen = exempt.seq > head), must also pass — the CAS is
-    // `head <= seen`, not strict equality.
-    const exempt2 = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'system',
-      content: 'second self-wake',
-      freshnessExempt: true,
-    });
-    const r2 = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: exempt2.seq,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'owner send after wake',
-    });
-    expect(r2.ok).toBe(true);
-
-    // The guard itself stays armed: a boundary below the head still stales.
-    const r3 = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: seen.seq - 1,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'stale send',
-    });
-    expect(r3.ok).toBe(false);
-
-    // Cindy arm 3: once a RELEVANT row moves the head past the exempt seq
-    // (r2's own send did — head is now r2.seq > exempt2.seq), a boundary
-    // stuck at the exempt seq stales again — the relaxation never disarms
-    // the CAS for freshness-relevant content.
-    if (!r2.ok) throw new Error('unreachable');
-    expect(streamHead(db, channel.id, null)).toBe(r2.message.seq);
-    const r4 = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: exempt2.seq,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'stale after relevant row',
-    });
-    expect(r4.ok).toBe(false);
-    if (r4.ok) throw new Error('unreachable');
-    expect(r4.currentSeq).toBe(r2.message.seq);
-  });
-
-  it('thread first reply (seen=0) succeeds even though the main head exists', () => {
-    const { db, channel, agentId } = bootstrapConversation();
+  it('thread first reply lands under its root head even though the main head exists', () => {
+    const { db, channel } = bootstrapConversation();
     const repo = new MessageRepo(db);
     const root = repo.insertForConversation({
       conversationId: channel.id,
       fromKind: 'user',
       content: 'root',
     });
-    const res = repo.insertForConversationIfFresh({
+    const reply = repo.insertForConversation({
       conversationId: channel.id,
-      seenUpToSeq: 0,
       threadRootId: root.id,
-      fromKind: 'agent',
-      fromAgentId: agentId,
+      fromKind: 'user',
       content: 'first reply',
     });
-    expect(res.ok).toBe(true);
-    expect(res.ok && res.message.thread_root_id).toBe(root.id);
+    expect(reply.thread_root_id).toBe(root.id);
     expect(streamHead(db, channel.id, root.id)).toBe(2);
-  });
-
-  it('a thread reply does not make a main-line CAS stale (cross-stream isolation)', () => {
-    const { db, channel, agentId } = bootstrapConversation();
-    const repo = new MessageRepo(db);
-    const root = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'root',
-    });
-    repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'reply',
-      threadRootId: root.id,
-    });
-    // an agent that observed the main line up to seq 1 can still post there
-    const res = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: 1,
-      threadRootId: null,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'main reply',
-    });
-    expect(res.ok).toBe(true);
-    expect(res.ok && res.message.seq).toBe(3);
-    expect(streamHead(db, channel.id, null)).toBe(3);
-  });
-
-  it('a CAS miss rolls back the global allocator (no burned seq)', () => {
-    const { db, channel, agentId } = bootstrapConversation();
-    const repo = new MessageRepo(db);
-    const observed = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'observed',
-    });
-    const newer = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'newer',
-    });
-    const before = latestMessageSeq(db, channel.id);
-    const res = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: observed.seq,
-      threadRootId: null,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'stale',
-    });
-    expect(res).toEqual({ ok: false, currentSeq: newer.seq });
-    expect(latestMessageSeq(db, channel.id)).toBe(before);
-  });
-
-  it('seen>0 with a missing thread head is stale, never a wrongful insert', () => {
-    const { db, channel, agentId } = bootstrapConversation();
-    const repo = new MessageRepo(db);
-    const root = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'root',
-    });
-    const before = latestMessageSeq(db, channel.id);
-    const res = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: 5,
-      threadRootId: root.id,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'phantom reply',
-    });
-    expect(res.ok).toBe(false);
-    expect(res.ok === false && res.currentSeq).toBe(0);
-    expect(streamHead(db, channel.id, root.id)).toBeNull();
-    expect(latestMessageSeq(db, channel.id)).toBe(before);
-  });
-
-  it('concurrent thread first replies: the second seen=0 loses and is stale', () => {
-    const { db, channel, agentId } = bootstrapConversation();
-    const repo = new MessageRepo(db);
-    const root = repo.insertForConversation({
-      conversationId: channel.id,
-      fromKind: 'user',
-      content: 'root',
-    });
-    const first = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: 0,
-      threadRootId: root.id,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'first',
-    });
-    expect(first.ok).toBe(true);
-    const before = latestMessageSeq(db, channel.id);
-    const second = repo.insertForConversationIfFresh({
-      conversationId: channel.id,
-      seenUpToSeq: 0,
-      threadRootId: root.id,
-      fromKind: 'agent',
-      fromAgentId: agentId,
-      content: 'second',
-    });
-    expect(second.ok).toBe(false);
-    expect(second.ok === false && second.currentSeq).toBe(2);
-    expect(latestMessageSeq(db, channel.id)).toBe(before);
+    expect(streamHead(db, channel.id, null)).toBe(1);
   });
 });
 

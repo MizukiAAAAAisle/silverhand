@@ -127,11 +127,14 @@ function agentPrompt(): string {
     runtime: 'claude',
     activeProfileDir: '.',
     roleSystemPrompt: 'role',
-    roleSystemPromptPath: '/tmp/system_prompt.md',
     currentMemory: { kind: 'missing' },
     memoryNotesCatalog: { entries: [], omittedCount: 0 },
     workspaceMemoryIndex: [],
-    sessionContext: { kind: 'agent', computerId: 'host-1' },
+    sessionContext: {
+      kind: 'agent',
+      computerId: 'host-1',
+      memoryRootPath: '/agents/agent-1',
+    },
   };
   return buildPlatformPrompt(input);
 }

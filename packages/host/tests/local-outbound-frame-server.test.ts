@@ -9,7 +9,11 @@ import {
   encodeOutboundFrame,
   type OutboundServerToDaemonCommandFrame,
 } from '../src/outbound-protocol.js';
-import { splitNdjson, type EventFrame } from '../src/protocol.js';
+import {
+  splitNdjson,
+  HOST_PROTOCOL_VERSION,
+  type EventFrame,
+} from '../src/protocol.js';
 import {
   LocalOutboundFrameServer,
   deriveLocalOutboundFrameSocketPath,
@@ -583,7 +587,7 @@ describe('LocalOutboundFrameServer', () => {
 function makeReadyEvent(): Extract<EventFrame, { event: 'ready' }> {
   return {
     event: 'ready',
-    protocol_version: 2,
+    protocol_version: HOST_PROTOCOL_VERSION,
     daemon_version: 'test',
     daemon_id: 'local',
     instance_id: 'inst-1',

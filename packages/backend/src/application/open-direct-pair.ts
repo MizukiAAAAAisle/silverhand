@@ -95,14 +95,20 @@ export interface OpenDirectPairPorts<C> {
  * re-read the list (`GET /api/direct-pairs` is the authority; the frame is an
  * invalidation).
  *
- * THE DURABILITY OF THE ROW IS A FACT ABOUT TODAY'S CALLERS, NOT ABOUT THIS
- * FUNCTION (@Cindy #task:2035 B5). The mint is a single autocommit statement, and
- * every production caller opens the line BEFORE the transaction its door later
- * runs, so by the time this publishes, the row is committed and the frame cannot
- * point at something a rollback removes. A future caller that opened the line
- * INSIDE a transaction would have this fire pre-commit; it must publish after its
- * own commit or make the port transaction-aware, and may not inherit this
- * reasoning.
+ * WHETHER THE ROW IS ALREADY DURABLE WHEN THE FRAME GOES OUT IS A FACT ABOUT THE
+ * CALLER, NOT ABOUT THIS FUNCTION (@Cindy #task:2035 B5). For a door that opens the
+ * line BEFORE the transaction it later runs — `routes/direct-pairs.ts`, the
+ * resolver — the mint is a single autocommit statement, so by the time this
+ * publishes the row is committed and the frame cannot point at something a
+ * rollback removes.
+ *
+ * #task:2072 added the other kind of caller: the mention CC mints INSIDE the
+ * sender's send transaction, because a pair that outlived a rolled-back copy would
+ * be a line with nothing in it. It therefore does NOT inherit the paragraph above —
+ * it satisfies the same obligation the other way, by passing a transaction-aware
+ * `allocations` port (`recordDirectPairOpens`) that RECORDS the announcement and
+ * publishes after commit. Those are the only two shapes: publish-after-your-commit,
+ * or be a caller whose mint is already committed here.
  */
 export function openDirectPair<C extends { id: string }>(
   ports: OpenDirectPairPorts<C>,

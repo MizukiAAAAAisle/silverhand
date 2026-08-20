@@ -271,7 +271,7 @@ html, body, #root {
    in every theme file key on `.sidebar-row-border` by name, and forza6 turns
    that hover into a lime fill + drop shadow.
    Its consumers are the sidebar's two UNPAINTED lines — the collapsible section
-   header and the workspace / DM header row. Both are labels with a disclosure
+   header and the container header row. Both are labels with a disclosure
    affordance rather than rooms: hovering them swaps the glyph for the disclosure
    triangle (plus an ink lift on the instance row), never a fill (shiki,
    2026-08-08).

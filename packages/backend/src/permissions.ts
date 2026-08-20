@@ -14,6 +14,7 @@ import {
   directPairIsReadOnlyForSurvivor,
   resolveParticipation,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspaceOf } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
 import type { AuthorizationAgentFacts, AuthorizationConversationFacts } from './authorization-ports.js';
 import type { AgentPrincipal, Principal, UserPrincipal } from './auth/principal.js';
@@ -221,7 +222,7 @@ export function canGovernWorkspace(
  * of a workspace-less placement (§4.1) must be a stated rule instead —
  *
  *   - there is no workspace to hold a role IN, so no human can be its admin, and
- *   - its mutability is a PLACEMENT fact, not a role: an `agent_inbox` has a
+ *   - its mutability is a PLACEMENT fact, not a role: a `direct_pair` has a
  *     fixed roster, a title nobody may change and no archive affordance.
  *
  * so it fails closed for every principal except `system` (which passes every
@@ -275,7 +276,8 @@ export function canGovernConversationWorkspace(
  * `canAgentAccessWorkspace` / `task-service` §1268) and so the seed
  * migration never granted it caps. Without this exemption the agent would
  * be denied in its own DM/home. The exemption fires ONLY when the scoped
- * workspace is `agent_home` AND owned by THIS agent; a `regular`
+ * workspace is owned by THIS agent (`isAgentHomeWorkspaceOf`, one named
+ * question rather than a kind word AND an id comparison); a `regular`
  * workspace with no cap row still correctly returns false, and another
  * agent's home is never exempted.
  */
@@ -290,10 +292,7 @@ export function canAgentUseCapability(
   const reads = ctx.authorizationReads;
   const workspace = reads.workspace(scope.workspaceId);
   if (!workspace) return false;
-  if (
-    workspace.workspace_kind === 'agent_home' &&
-    workspace.owner_agent_id === principal.agentId
-  ) {
+  if (isAgentHomeWorkspaceOf(workspace, principal.agentId)) {
     return true;
   }
   return reads.hasCapability(scope.workspaceId, principal.agentId, capability);
@@ -307,13 +306,13 @@ export function canAgentUseCapability(
  *
  * The rule itself is shared's `resolveParticipation`, which answers for every
  * placement whose participants are written ON THE ROW (`direct_pair`'s two
- * endpoints, `agent_inbox`'s single owner) and returns `null` for the workspace
+ * endpoints) and returns `null` for the workspace
  * arm — the only one whose participants are a QUERY (workspace membership plus
  * the roster tables). So the arms below are that query, and nothing else.
  *
  * The split is the guarantee, not a convenience: the non-workspace arms are
  * evaluated inside a module that has no read port at all, so they CANNOT consult
- * `conversation_users` / `conversation_agents`. A roster row on a DM or an inbox
+ * `conversation_users` / `conversation_agents`. A roster row on a DM
  * is inert by construction, while the workspace arm here stays free to read the
  * roster — because that IS its authority. Pinned by
  * `tests/db-boundary/participation-authority.test.ts`.
@@ -494,7 +493,7 @@ export function canPostToConversation(
  *
  *   1. Is its roster MUTABLE — `roster_policy = 'open'`? For a `fixed` roster the
  *      participants are a property of the conversation itself (a `direct_pair`'s
- *      two endpoints, an `agent_inbox`'s owner, a legacy agent-home DM channel's
+ *      two endpoints, a legacy agent-home DM channel's
  *      pair), so "add a member" is not an operation that exists there for anyone.
  *      No principal can be authorized for it, which is why this arm comes first
  *      and ignores the caller entirely.
@@ -826,7 +825,7 @@ const ACTIVE_ONLY: ReadonlyArray<AgentMaterializationStatus> = ['active'];
  *   - creator (`created_by_user_id`);
  *   - the human endpoint of every human↔agent `direct_pair` this agent is in —
  *     the authority's SQL gates the slot on `endpoint_*_kind = 'human'`, so this
- *     never fires for an agent↔agent pair nor widens via `agent_inbox`;
+ *     never fires for an agent↔agent pair;
  *   - members of every workspace the agent reaches. For a HUMAN principal
  *     `canViewWorkspace` IS `isWorkspaceMember`, so enumerating members is the
  *     exact dual of the predicate's workspace arm, not an over-approximation —
@@ -959,15 +958,12 @@ export function canAuditAgentChats(
  * the list gate decides "may you audit this agent at all", this decides "is this
  * conversation in the audit face's domain and does the agent actually belong to it".
  *
- * Three added conjuncts on top of the owner ACL, each load-bearing:
+ * Two added conjuncts on top of the owner ACL, each load-bearing:
  *
  *   1. the conversation EXISTS — a miss collapses to the same denial as
  *      unauthorized (the route runs canViewAgent → 404 first, so a non-owner never
  *      reaches here to distinguish a real id from a bogus one: no existence oracle);
- *   2. its `placement_kind` is NOT `agent_inbox` — the AgentInbox is the agent's
- *      own private queue, outside the audit face's declared scope (the enumeration
- *      excludes it too, so list and per-conversation gate agree);
- *   3. the agent is a SUBJECT participant of it (`isAgentParticipant` — the full
+ *   2. the agent is a SUBJECT participant of it (`isAgentParticipant` — the full
  *      participation arc WITHOUT running-in narrowing). This is what keeps the owner
  *      from reading a conversation the agent is not a party to via a guessed id.
  */
@@ -981,7 +977,6 @@ export function canAuditAgentConversation(
   const reads = ctx.authorizationReads;
   const conversation = reads.conversation(conversationId);
   if (!conversation) return false;
-  if (conversation.placement_kind === 'agent_inbox') return false;
   return reads.isAgentParticipant(conversationId, agentId);
 }
 

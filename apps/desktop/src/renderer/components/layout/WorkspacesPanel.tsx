@@ -17,21 +17,22 @@ import {
 } from './sidebar-shared';
 import { ChannelSortMenu, WorkspaceChannels } from './WorkspaceChannels';
 import { WorkspaceContextMenu } from './WorkspaceContextMenu';
-import { dmRecognitionName } from '@/lib/workspace-name';
+import { agentSpaceRecognitionName } from '@/lib/workspace-name';
 import {
   branchHoldsSelectedRow,
   collapsedGroupRevealBranches,
   isWorkspaceAwake,
   type SelectedConversation,
 } from '@/lib/home-grouping';
-
-type WorkspaceUiKind = 'regular' | 'dm';
+import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
 
 export interface WorkspaceItem {
   id: string;
   name: string;
-  kind: WorkspaceUiKind;
-  dm_agent_id: string | null;
+  /** The agent that owns this container, or `null` for a people-owned workspace.
+   *  The rail's only spelling of the distinction (#task:2078): classify through
+   *  `isAgentSpace`, read the id itself only to resolve the owner's avatar. */
+  owner_agent_id: string | null;
   active?: boolean;
   /** Unread mention notifications scoped to this workspace. Falsy / 0
    *  hides the badge. */
@@ -39,8 +40,8 @@ export interface WorkspaceItem {
   /** True when the viewer has muted this workspace — drives the persistent
    *  `MutedMarker`. Read from the attention roll-up's `muted_workspace_ids`, the
    *  same carrier as `unread`, so the row can never disagree with itself about
-   *  one workspace (#task:1870 / #task:1877). Never true for a DM (structurally
-   *  un-mutable). */
+   *  one workspace (#task:1870 / #task:1877). Never true for an agent space
+   *  (structurally un-mutable). */
   muted?: boolean;
   /** True for soft-archived workspaces. Since #task:1889 an archived workspace is
    *  NOT in this tree at all — the top-level `Archived` page (#task:1890) is the
@@ -58,9 +59,11 @@ export interface WorkspaceItem {
  *  `Sidebar`); this just carries the per-row callbacks down. */
 export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
   /** Sub-group render order. Each rail section now drives a single group:
-   *  `['dm']` or `['regular']` — one flat, drag-ordered list per kind. */
+   *  `['agent_space']` or `['regular']` — one flat, drag-ordered list per section.
+   *  These are `SortGroup` WIRE + DB tokens, produced in exactly one place
+   *  (`railSortGroupOf`); they are not display words. */
   order: GroupKey[];
-  /** The hard group a workspace lives in (by kind: dm | regular). */
+  /** The hard group a workspace lives in (agent-owned | people-owned). */
   groupKeyOf: (workspace: WorkspaceItem) => GroupKey;
   /** Commit a group's new full order. */
   onReorder: (group: GroupKey, orderedIds: string[]) => void;
@@ -68,9 +71,10 @@ export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
 
 interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   label: string;
-  /** Default kind for icon picking when a row's `kind` is the same.
-   *  Kept on the group for the empty-state messaging. */
-  kind: WorkspaceUiKind;
+  /** The section's header glyph — one of the two constants below, so the family
+   *  of three section glyphs stays defined in one place (#task:2078: this used to
+   *  be a container KIND that the group did nothing else with). */
+  icon: ReactNode;
   workspaces: WorkspaceItem[];
   /** The open conversation, as one object. NOT three loose props: the workspace
    *  half only ever answers "which collapsed branch keeps the open row", and that
@@ -82,8 +86,8 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   selected: SelectedConversation;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
-  /** Optional `+` button. DM groups omit this — DM workspaces are
-   *  auto-created when an agent is provisioned. Ignored when `headerAction`
+  /** Optional `+` button. The AGENT SPACES section omits this — an agent space is
+   *  created with its agent, never from the rail. Ignored when `headerAction`
    *  is set (the caller composes its own action cluster, e.g. sort + add). */
   onAdd?: () => void;
   /** Header right-slot content (e.g. the sort menu, or sort + add). Takes
@@ -97,18 +101,18 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   /** Storage identity for cross-restart collapse state (see
    *  `SidebarSection`). Omit for session-only collapse. */
   persistId?: string;
-  /** Lookup of all workspace agents, keyed by id. DM workspace rows resolve
-   *  their `dm_agent_id` here for the agent's runtime + display name. The
-   *  avatar object URLs themselves come via `dmAgentAvatarUrls` (resolved ONCE
-   *  at the rail level, not per-section) so reordering a DM never churns an
+  /** Lookup of all workspace agents, keyed by id. An agent space's row resolves
+   *  its `owner_agent_id` here for the agent's runtime + display name. The
+   *  avatar object URLs themselves come via `ownerAgentAvatarUrls` (resolved ONCE
+   *  at the rail level, not per-section) so reordering a row never churns an
    *  avatar. Optional so callers without agent context still get a sane
    *  fallback. #task:919 / #task:1146 */
   agentsById?: ReadonlyMap<string, AgentDto>;
-  /** Resolved DM-agent avatar object URLs, keyed by agent id. Owned by the
-   *  parent (`Sidebar`) over the STABLE union of all rail DM agents, so this
+  /** Resolved owner-agent avatar object URLs, keyed by agent id. Owned by the
+   *  parent (`Sidebar`) over the STABLE union of all rail owner agents, so this
    *  map is identical across reorders — no per-section refetch flash
    *  (#task:1146). */
-  dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
   /** Drag-sort wiring. Required since #task:1889 — the last non-sortable caller
    *  (the bottom ARCHIVED group) is gone. */
   sort: WorkspaceSortConfig<GroupKey>;
@@ -121,39 +125,37 @@ interface RailRowContext {
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
   agentsById?: ReadonlyMap<string, AgentDto>;
-  dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
 }
 
 function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element {
   // One canonical workspace glyph for every surface (sidebar + filter
-  // dropdowns). DM rows resolve to the bound agent's avatar; regular rows to
+  // dropdowns). An agent space resolves to its owner's avatar; other rows to
   // the themed `data-workspace-icon` badge — all handled inside `WorkspaceIcon`
   // so this stays identical to the workspace-filter dropdowns (#task:1192 /
   // #task:919 / #task:1160).
   return (
     <WorkspaceIcon
-      kind={workspace.kind}
-      dmAgentId={workspace.dm_agent_id}
+      ownerAgentId={workspace.owner_agent_id}
       agentsById={ctx.agentsById}
-      dmAgentAvatarUrls={ctx.dmAgentAvatarUrls}
+      ownerAgentAvatarUrls={ctx.ownerAgentAvatarUrls}
     />
   );
 }
 
-/** The recognition name a workspace row shows: a DM reads as the bound agent
- *  (no `@`, no `· DM` suffix — shiki, #task:1768), a regular workspace as its own
- *  name. Shared by the interactive header and the collapsed-group caption so the two
- *  can never drift. */
+/** The recognition name a workspace row shows: an agent space reads as its owning
+ *  agent (no `@`, no `· DM` suffix — shiki, #task:1768), any other workspace as its
+ *  own name. Shared by the interactive header and the collapsed-group caption so the
+ *  two can never drift. */
 function workspaceRowTitle(
   workspace: WorkspaceItem,
   ctx: RailRowContext,
 ): string {
-  const dmAgent =
-    workspace.kind === 'dm' && workspace.dm_agent_id
-      ? ctx.agentsById?.get(workspace.dm_agent_id)
-      : undefined;
-  return workspace.kind === 'dm'
-    ? dmRecognitionName(workspace.name, dmAgent)
+  const ownerAgent = workspace.owner_agent_id
+    ? ctx.agentsById?.get(workspace.owner_agent_id)
+    : undefined;
+  return isAgentSpace(workspace)
+    ? agentSpaceRecognitionName(workspace.name, ownerAgent)
     : workspace.name;
 }
 
@@ -198,39 +200,43 @@ function WorkspaceCaption({
   );
 }
 
-/** The GROUP header's semantic glyph — the thing shiki asked for on
- *  STARRED / WORKSPACES / DM: identity at rest, chevron on hover. The three must
- *  read as one family, so all three are stroke glyphs at the same optical
- *  weight: `Star` / `MessagesSquare` (Slack's double bubble for DMs) /
- *  `LayoutGrid` (four tiles = a set of spaces).
+/** The GROUP header's semantic glyph — the thing shiki asked for on the rail's
+ *  sections: identity at rest, chevron on hover. They must read as one family, so
+ *  every one is a stroke glyph at the same optical weight: `Star` (STARRED) /
+ *  `LayoutGrid` (WORKSPACES — four tiles = a set of spaces) / `MessagesSquare`
+ *  (AGENT SPACES, Slack's double bubble; chosen while that section was still
+ *  called DM — #task:2035 renamed the section, not the glyph).
  *
  *  WORKSPACES is NOT a `W` (shiki, 2026-08-08: 「和后面的 label W 重复了」). A
  *  letterform beside the word it is the first letter of says nothing the label has
  *  not already said, and it stuttered a second time against the rows below, where
- *  every regular workspace's own badge is a literal `W`. `LayoutGrid` is also the
- *  only candidate with no enclosing square: `MessagesSquare` one row down and
+ *  every people-owned workspace's own badge is a literal `W`. `LayoutGrid` is also
+ *  the only candidate with no enclosing square: `MessagesSquare` one row down and
  *  `Archive` in the tools group both are, and at 14px a third outlined box would
  *  have read as the same word. `Layers` was unavailable — it is the compaction
  *  glyph (`ComposerActivityHeader`) and the Saved filter's "all".
  *
- *  A hand-drawn oval-bubble glyph was tried for DM and rejected on looks (shiki,
- *  2026-08-08). The concern it answered — square bubbles are the THREAD
- *  vocabulary (`ThreadIcon`) — is carried by the COMPOUND form instead: the
- *  thread glyph is the single `MessageSquare`, so two stacked bubbles stay a
- *  distinct word (and the same one NavRail's Chat tab uses).
+ *  A hand-drawn oval-bubble glyph was tried for the double-bubble section and
+ *  rejected on looks (shiki, 2026-08-08). The concern it answered — square bubbles
+ *  are the THREAD vocabulary (`ThreadIcon`) — is carried by the COMPOUND form
+ *  instead: the thread glyph is the single `MessageSquare`, so two stacked bubbles
+ *  stay a distinct word (and the same one NavRail's Chat tab uses).
  *
  *  Deliberately WITHOUT `data-workspace-icon`: that hook is the themed poster
  *  badge for a workspace INSTANCE, and a muted section header is not one (see
  *  app-layout.md §9 on not inventing a second primitive — this reuses the header
- *  vocabulary rather than the row's). */
-function sectionGlyphFor(kind: WorkspaceUiKind): JSX.Element {
-  if (kind === 'dm') return <MessagesSquare className="size-3.5" />;
-  return <LayoutGrid className="size-3.5" />;
-}
+ *  vocabulary rather than the row's).
+ *
+ *  Constants rather than a lookup keyed on container kind (#task:2078): a rail
+ *  SECTION is a fixed composition decision made once in `Sidebar`, not something
+ *  derived per workspace, and keying it on the kind was the last thing that kept a
+ *  container word in this component. */
+export const WORKSPACES_SECTION_GLYPH: ReactNode = <LayoutGrid className="size-3.5" />;
+export const AGENT_SPACES_SECTION_GLYPH: ReactNode = <MessagesSquare className="size-3.5" />;
 
 export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   label,
-  kind,
+  icon,
   workspaces,
   selected,
   onSelectChannel,
@@ -241,7 +247,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   defaultExpanded,
   persistId,
   agentsById,
-  dmAgentAvatarUrls,
+  ownerAgentAvatarUrls,
   sort,
 }: WorkspaceGroupProps<GroupKey>): JSX.Element {
   const ctx: RailRowContext = {
@@ -249,7 +255,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
     onSelectChannel,
     onCreateChannel,
     agentsById,
-    dmAgentAvatarUrls,
+    ownerAgentAvatarUrls,
   };
 
   // Collapsed group: reveal the same rows an EXPANDED group would keep visible while
@@ -284,7 +290,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   return (
     <SidebarSection
       label={label}
-      icon={sectionGlyphFor(kind)}
+      icon={icon}
       count={workspaces.length}
       onAdd={headerAction ? undefined : onAdd}
       action={headerAction}
@@ -298,7 +304,6 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
               <WorkspaceChannels
                 key={w.id}
                 workspaceId={w.id}
-                workspaceKind={w.kind}
                 selectedChannelId={selected.channelId}
                 onSelectChannel={onSelectChannel}
                 onCreateChannel={onCreateChannel}
@@ -479,7 +484,6 @@ function WorkspaceBranch({
         <ul className="space-y-1">
           <WorkspaceChannels
             workspaceId={workspace.id}
-            workspaceKind={workspace.kind}
             selectedChannelId={ctx.selected.channelId}
             onSelectChannel={ctx.onSelectChannel}
             onCreateChannel={ctx.onCreateChannel}
@@ -518,10 +522,10 @@ function WorkspaceHeaderRow({
   onToggle: () => void;
   dragHandleProps: Record<string, unknown>;
 }): JSX.Element {
-  // DM rows show the bound agent's RAW display name — no `@`, no `· DM` suffix
-  // (shiki 2026-08-01, #task:1768). This is a recognition surface (who you're
-  // talking to), so it reads like a person, not a handle. Shares
-  // `workspaceRowTitle` / `dmRecognitionName` with the caption and titlebar so the
+  // An agent space's row shows the bound agent's RAW display name — no `@`, no
+  // `· DM` suffix (shiki 2026-08-01, #task:1768). This is a recognition surface
+  // (who you're talking to), so it reads like a person, not a handle. Shares
+  // `workspaceRowTitle` / `agentSpaceRecognitionName` with the caption and titlebar so the
   // three can't drift.
   const title = workspaceRowTitle(workspace, ctx);
   const icon = rowIconFor(workspace, ctx);
@@ -549,7 +553,7 @@ function WorkspaceHeaderRow({
   const row = (
     <div
       className={
-        // 28px chrome, NOT the 32px row vocabulary. A workspace / DM header is a
+        // 28px chrome, NOT the 32px row vocabulary. A container header row is a
         // GROUPING line, and the tree already spends its fill on the thing that
         // matters — the selected channel. So no ink frame and NO hover fill: the
         // `sidebar-row-gutter` twin reserves the same stroke for column alignment
@@ -586,12 +590,12 @@ function WorkspaceHeaderRow({
         className="group/wstoggle flex min-w-0 flex-1 items-center text-left text-sm font-medium leading-4"
       >
         {/* Identity glyph, permanently (#task:1948). It used to cross-fade into a
-            disclosure triangle on hover — the SAME swap the three group headers
+            disclosure triangle on hover — the SAME swap the group headers
             used — which meant "this collapses" was invisible until you already
             pointed at the row. The state now rides in the trailing caret below, so
             the glyph slot is identity only and the row keeps one glyph per job.
-            Still drawn by CAPABILITY, not by kind: every row that owns an
-            `aria-expanded` (regular workspace AND DM home — one
+            Still drawn by CAPABILITY, not by container species: every row that owns
+            an `aria-expanded` (people-owned workspace AND agent space — one
             `WorkspaceHeaderRow` serves both) carries the caret, and the leaf rows
             (channel / STARRED) never do, because their glyph is not a hinge.
             A LEADING permanent triangle was the candidate rejected in #task:1889 —
@@ -663,7 +667,7 @@ function WorkspaceHeaderRow({
         ) : null}
         {expanded ? (
           <span className={hoverOnly}>
-            <ChannelSortMenu workspaceId={workspace.id} workspaceKind={workspace.kind} />
+            <ChannelSortMenu workspaceId={workspace.id} />
           </span>
         ) : null}
         <span className={hoverOnly}>
@@ -705,20 +709,20 @@ function WorkspaceHeaderRow({
   );
 }
 
-/** A row can flip the workspace mute suppressor when it is a REGULAR, non-archived
- *  workspace. A DM (`agent_home`) is structurally un-mutable — directed-grade
+/** A row can flip the workspace mute suppressor when it is a people-owned,
+ *  non-archived workspace. An agent space is structurally un-mutable — directed-grade
  *  traffic has no ambient floor to silence, and the DB trigger forbids the row —
  *  and an archived workspace isn't being listened to at all. */
 function canMuteWorkspace(workspace: WorkspaceItem): boolean {
-  return workspace.kind === 'regular' && !workspace.archived;
+  return !isAgentSpace(workspace) && !workspace.archived;
 }
 
 /** Self-leave is offered in the row menu on the SAME structural footing as mute
- *  — an active regular workspace — so the menu always keeps the always-present
+ *  — an active people-owned workspace — so the menu always keeps the always-present
  *  Mute item and never renders empty (the owner-rejection role gate is resolved
- *  downstream, inside the menu). A DM has no membership to leave, and an archived
- *  workspace (which since #task:1889 isn't in this tree anyway) leaves through
- *  Settings. */
+ *  downstream, inside the menu). An agent space has no membership to leave, and an
+ *  archived workspace (which since #task:1889 isn't in this tree anyway) leaves
+ *  through Settings. */
 function canLeaveWorkspaceRow(workspace: WorkspaceItem): boolean {
-  return workspace.kind === 'regular' && !workspace.archived;
+  return !isAgentSpace(workspace) && !workspace.archived;
 }

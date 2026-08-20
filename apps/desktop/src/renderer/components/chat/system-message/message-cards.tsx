@@ -15,7 +15,7 @@ import {
   readSessionClearedMetadata,
 } from '@silverhand/shared';
 import { useMessage } from '@/features/messages/hooks';
-import { formatUserDisplayName } from '@/lib/current-user';
+import { formatUserDisplayName, isCurrentUserId } from '@/lib/current-user';
 import { Markdown } from '@/components/chat/Markdown';
 import { presentAuthor } from '@/components/chat/author-presentation';
 import { AuthorName } from '@/components/chat/author-avatar-view';
@@ -29,10 +29,14 @@ import {
 // ─── mention_cc card ───────────────────────────────────────────────────
 
 /**
- * Compact render for `mention_cc` system messages: source line
- * (user · workspace · conversation) plus the original message body.
- * The verbose imperative wrap stays in `message.content` for the
- * agent's stdin only.
+ * Compact render for `mention_cc` system messages: an origin reference
+ * (workspace · conversation) plus the original message body. The verbose
+ * imperative wrap stays in `message.content` for the agent's stdin only.
+ *
+ * The mentioning author is named ONLY when they are someone other than the
+ * reader — see the collapse below. Since #task:2072 the copy lands in the
+ * author's own direct line with the agent, so the common row's byline would
+ * name the reader to the reader.
  */
 export function MentionCcCard({
   message,
@@ -104,12 +108,12 @@ export function MentionCcCard({
         ? 'an agent'
         : 'someone';
 
-  // Secondary nav affordance: after the D-flip, the `mention_external`
-  // notification primary-jumps to this local DM (where we are right
-  // now). The source channel link below restores the legacy "back to
-  // source" path so the user can still see the surrounding context.
-  // No message anchor — `onOpenConversationRef` only takes a
-  // conversation id; landing in the source conversation is the
+  // In-card nav to the origin conversation. The `mention_external`
+  // notification for this same mention anchors at the SOURCE message
+  // (option A, #task:2089) — this link is not a fallback for it, it is the
+  // affordance for a reader already sitting in the direct line who wants the
+  // surrounding context. No message anchor: `onOpenConversationRef` only
+  // takes a conversation id, and landing in the source conversation is the
   // intended scope.
   const canJumpSource = !!(sourceConversationId && onOpenConversationRef);
   const handleOpenSource = canJumpSource
@@ -120,39 +124,61 @@ export function MentionCcCard({
       ? `${workspaceName} · ${conversationTitle}`
       : workspaceName
     : conversationTitle ?? null;
+  // Collapse the byline when the mention's author IS the reader. The card
+  // cannot know which conversation it is being read in — only its metadata —
+  // so it asks the one question it can answer locally, and that question is
+  // right in every generation. Since #task:2072 the copy lands in the author's
+  // direct line with the agent, so the author is the only human reader there
+  // and the byline would name the reader to the reader. Pre-`25e089d1` copies
+  // landed in a per-agent `Mentions` DM that admitted every mentioning human,
+  // so rows by OTHER authors are human-readable in it — and for those the
+  // predicate is false, which is the right answer: they keep the byline. Same
+  // for any row whose origin is unknown. A location is required too, because
+  // after the collapse the origin reference IS the line — with nothing to point
+  // at, a lone glyph would say less than the byline it replaced.
+  const readerIsMentionAuthor =
+    sourceFromKind === 'user' && isCurrentUserId(sourceFromUserId);
+  const collapseByline = readerIsMentionAuthor && sourceLocationLabel !== null;
+  const sourceLocationNode = sourceLocationLabel ? (
+    handleOpenSource ? (
+      <button
+        type="button"
+        onClick={handleOpenSource}
+        className="text-text-secondary underline-offset-2 hover:text-accent hover:underline"
+        data-mention-cc-source="1"
+      >
+        {sourceLocationLabel}
+      </button>
+    ) : (
+      <span className="text-text-secondary">{sourceLocationLabel}</span>
+    )
+  ) : null;
 
   return (
     <div className="border-l-2 border-accent/60 bg-bg-floating/60 px-3 py-2">
       <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
         <AtSign className="size-3.5" />
-        <span>
-          mentioned by{' '}
-          {sourcePresentation ? (
-            <AuthorName
-              presentation={sourcePresentation}
-              className="text-text-secondary"
-            />
-          ) : (
-            <span className="text-text-secondary">{sourceFallbackLabel}</span>
-          )}
-          {sourceLocationLabel ? (
-            <>
-              {' in '}
-              {handleOpenSource ? (
-                <button
-                  type="button"
-                  onClick={handleOpenSource}
-                  className="text-text-secondary underline-offset-2 hover:text-accent hover:underline"
-                  data-mention-cc-source="1"
-                >
-                  {sourceLocationLabel}
-                </button>
-              ) : (
-                <span className="text-text-secondary">{sourceLocationLabel}</span>
-              )}
-            </>
-          ) : null}
-        </span>
+        {collapseByline ? (
+          <span>{sourceLocationNode}</span>
+        ) : (
+          <span>
+            mentioned by{' '}
+            {sourcePresentation ? (
+              <AuthorName
+                presentation={sourcePresentation}
+                className="text-text-secondary"
+              />
+            ) : (
+              <span className="text-text-secondary">{sourceFallbackLabel}</span>
+            )}
+            {sourceLocationNode ? (
+              <>
+                {' in '}
+                {sourceLocationNode}
+              </>
+            ) : null}
+          </span>
+        )}
       </div>
       {original ? (
         <div className="text-text-primary">

@@ -9,11 +9,9 @@ import { conversationSlotTestPath, type TestApp } from './app.js';
  *  agent-scope runtime slot. The one native INSERT is ledgered in
  *  `tests/db-boundary/inventory.ts`.
  *
- *  The inbox is provisioned through the repo, in the same order
- *  `reserveAgentAggregate` uses: an AgentInbox is an INVARIANT of an `agents`
- *  row, not an optional extra, so a twin without one is a shape the product
- *  never produces — and a test standing on it (an inbox-anchored session, an
- *  inbox as a delivery target) would be testing a fiction. */
+ *  It provisions the agent ROW and nothing beside it, which is what the product
+ *  path does since #task:2072 retired `agent_inbox`: an agent-scoped agent's
+ *  destinations are the direct pairs its correspondents open with it. */
 export function insertAgentScopedAgent(t: TestApp, sourceAgentId: string, name: string): string {
   const id = randomBytes(12).toString('base64url');
   t.ctx.db
@@ -33,7 +31,6 @@ export function insertAgentScopedAgent(t: TestApp, sourceAgentId: string, name: 
          FROM agents WHERE id = ?`,
     )
     .run(id, name, name, sourceAgentId);
-  t.persistence.repos.conversations.insertAgentInbox(id, Date.now());
   return id;
 }
 
@@ -73,6 +70,59 @@ export function agentSlotAuth(
   return {
     authorization: `Bearer ${agentSlotToken(t, agentId, daemonInstanceId)}`,
   };
+}
+
+/** Enqueue one UNDELIVERED inbox row for `agentId` in `conversationId` — the
+ *  freshness miss under the RuntimeScope model (#task:2095): the runtime holds
+ *  input it has not yet consumed, so its next send is stale. Writes straight
+ *  through the repos (NOT the delivery coordinator) so the row deterministically
+ *  stays `delivered_at IS NULL`. The message's author is immaterial — the guard
+ *  keys on the RECIPIENT's undelivered set — so it is authored as the agent
+ *  itself to keep the FK trivially satisfied. Repo-method only (no native SQL),
+ *  so it adds no db-boundary ledger row. Returns the enqueued message id. */
+export function enqueueUndeliveredInput(
+  t: TestApp,
+  conversationId: string,
+  agentId: string,
+  content = 'undelivered input',
+): string {
+  const message = t.persistence.repos.messages.insertForConversation({
+    conversationId,
+    fromKind: 'agent',
+    fromAgentId: agentId,
+    content,
+  });
+  t.persistence.repos.conversationInboxes.enqueue(
+    conversationId,
+    agentId,
+    message.id,
+  );
+  return message.id;
+}
+
+/** Drain every undelivered inbox row for `agentId` in `conversationId` —
+ *  claim + settle-delivered, the repo path a real delivery takes — so the
+ *  freshness guard's `EXISTS` probe goes false and the runtime's next send is
+ *  admitted. The runtime-facing analogue is a completed `stale-receive`. Repo-
+ *  method only, so it adds no db-boundary ledger row. */
+export function drainInput(
+  t: TestApp,
+  conversationId: string,
+  agentId: string,
+  inFlightOwner = 'test-drain',
+): void {
+  const claimed = t.persistence.repos.conversationInboxes.claimPending(
+    conversationId,
+    agentId,
+    inFlightOwner,
+  );
+  if (claimed.length === 0) return;
+  t.persistence.repos.conversationInboxes.settleDelivered({
+    conversationId,
+    agentId,
+    inFlightOwner,
+    inboxIds: claimed.map(c => c.inboxId),
+  });
 }
 
 /** Canonical (agent-rooted) route family — the P1 mount. */

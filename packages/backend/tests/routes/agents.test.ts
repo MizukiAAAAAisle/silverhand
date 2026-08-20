@@ -63,9 +63,12 @@ describe('POST /api/agents', () => {
     expect(typeof body.dm_channel_id).toBe('string');
 
     // auto-DM channel exists as a workspace-placed, fixed-roster conversation.
+    // The agent's home is located by the OWNERSHIP relation — since #task:2075's
+    // stop-publish step that is the only container fact on this wire, and it was
+    // always the stronger half of the pair this lookup used to test for.
     const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
     const home = workspaces.workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === body.agent.id,
+      (w: any) => w.owner_agent_id === body.agent.id,
     );
     expect(home).toBeDefined();
     expect(home.dm_channel_id).toBe(body.dm_channel_id);
@@ -1779,7 +1782,10 @@ describe('GET /api/agents/:id/runtime-state', () => {
     const dm = res.participations.find(
       (s: any) => s.conversation_roster_policy === 'fixed',
     );
-    expect(dm.workspace_kind).toBe('agent_home');
+    // The row identifies its own placement; it carries no container word since
+    // #task:2069 (a conversation-level row does not answer for its container).
+    expect(dm.conversation_placement_kind).toBe('workspace');
+    expect(dm).not.toHaveProperty('workspace_kind');
     expect(dm.channel_title).toBe('Onboarding');
     expect(dm).not.toHaveProperty('status');
     expect(dm).not.toHaveProperty('pid');

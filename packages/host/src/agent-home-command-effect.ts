@@ -29,7 +29,6 @@ const AGENT_HOME_COMMAND_EFFECTS = {
   conversation_log_debug: 'none',
   agent_message_send: 'runtime_control',
   agent_stale_resolve: 'runtime_control',
-  agent_stream_observed: 'runtime_control',
   // Pulling a stale batch transfers daemon-held delivery custody and may
   // persist last-delivered state after the response handoff. Dispatcher
   // admission alone is insufficient, so Supervisor also gates the queue

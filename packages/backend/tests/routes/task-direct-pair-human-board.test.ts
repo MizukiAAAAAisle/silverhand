@@ -299,10 +299,11 @@ describe('#task:2037 — human↔agent DirectPair task on the human read faces',
     expect((await counts(t, STRANGER_ID, { channel_id: pair.id })).todo).toBe(0);
 
     // The stranger's own task lives on a REGULAR workspace: it is in the
-    // `workspace` container, NOT `agent_space` (that split is `workspace_kind`,
-    // not placement, so a proxy that only saw `placement_kind='workspace'` would
-    // wrongly bucket it into both), and NOT `direct_messages` (they are an
-    // endpoint of no pair) even though their All board is non-empty.
+    // `workspace` container, NOT `agent_space` (that split is the workspace's
+    // `owner_agent_id` ownership, not placement, so a proxy that only saw
+    // `placement_kind='workspace'` would wrongly bucket it into both), and NOT
+    // `direct_messages` (they are an endpoint of no pair) even though their All
+    // board is non-empty.
     expect(
       await columnIds(t, STRANGER_ID, { status: 'todo', container: 'workspace' }),
     ).toEqual([wsTaskId]);
@@ -365,13 +366,18 @@ describe('#task:2037 — human↔agent DirectPair task on the human read faces',
     const home = rs.participations.find(
       (s: any) => s.conversation_roster_policy === 'fixed',
     );
-    expect(home?.workspace_kind).toBe('agent_home');
+    // A fixed roster on a WORKSPACE placement is the agent_home channel: the only
+    // path that can create one requires an `agent_home` workspace
+    // (`channel-service.ts:575`/`:605`), which is why the participation row itself
+    // needs no container word (#task:2069).
+    expect(home?.conversation_placement_kind).toBe('workspace');
     const agentHomeConv: string = home.conversation_id;
 
     // One task on the agent_home channel, one on a REGULAR workspace — both filed
     // by the same viewer through the real human create route. The two rows differ
-    // only by their conversation's `workspace_kind`, which is precisely the split
-    // `agent_space` vs `workspace` must make.
+    // only by whether their conversation's workspace is agent-owned
+    // (`owner_agent_id`), which is precisely the split `agent_space` vs `workspace`
+    // must make.
     const homeTaskRes = (await (
       await http(t).post('/api/tasks', {
         conversation_id: agentHomeConv,

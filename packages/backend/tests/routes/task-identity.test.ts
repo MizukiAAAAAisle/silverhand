@@ -422,25 +422,25 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
     expect(read.status).toBe(200);
     const task = (read.body as any).task;
     expect(task.id).toBe(created.id);
-    // Full wire on the agent_home owner arm. This is the ONLY end-to-end read of
-    // the SQL CASE that projects the PHYSICAL `agent_home` workspace_kind to the
-    // DOMAIN `agent_space` (contract §2 rule 5: `agent_home` never reaches the
-    // wire). Breaking that CASE reddens here — mapping it to NULL makes
-    // `placeFrom` throw (no arm matches), to `regular` or a typo fails the
-    // value assertion below. The exact key set forbids a resurrected
-    // `workspace_name` or a stray top-level coordinate.
+    // Full wire on the agent_home owner arm. Until #task:2075's stop-publish step
+    // this was the ONLY end-to-end read of the SQL CASE that projected the
+    // PHYSICAL `agent_home` word to a published one; that CASE is deleted, so what
+    // is pinned here is the shape it left behind — an agent home is projected
+    // through the PLAIN workspace arm, with the coordinate and the one live name
+    // and nothing else. The exact key set is the load-bearing assertion: it
+    // forbids a resurrected `workspace_name`, a stray top-level coordinate, and a
+    // container word re-derived from ownership. The agent home is the right
+    // fixture for that last one — it is the container that had the branch.
     expect(Object.keys(task.place).sort()).toEqual([
       'channel_name',
       'conversation_id',
       'kind',
       'workspace_id',
-      'workspace_kind',
     ]);
     expect(task.place).toMatchObject({
       kind: 'workspace',
       conversation_id: homeConversationId,
       workspace_id: agent.agent_home_workspace_id,
-      workspace_kind: 'agent_space',
     });
     expect(typeof task.place.channel_name).toBe('string');
     expect(task.place.channel_name.length).toBeGreaterThan(0);

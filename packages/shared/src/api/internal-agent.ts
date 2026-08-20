@@ -6,7 +6,6 @@ import {
   ConversationPlacementKindSchema,
   ConversationRosterPolicySchema,
   ConversationVisibilitySchema,
-  WorkspaceKindSchema,
 } from '../db/schema.js';
 import { ChannelTitleSchema } from './conversation.js';
 import { UnresolvedReferencesSchema } from './message-reference.js';
@@ -70,26 +69,6 @@ export const AgentSendMessageInputSchema = z.object({
    * which is the same answer a bound would have produced with a worse reason.
    */
   target: z.string().min(1),
-  /**
-   * The daemon's assertion of WHICH STREAM `seen_up_to_seq` was read against, as
-   * the canonical id-form token (`#conv:<id>[/thread:<root>]`).
-   *
-   * The backend resolves the stream from `target` independently and hard-rejects
-   * a mismatch. That is not redundancy: a readable address is resolved by NAME,
-   * and a name may since have been rebound to a different conversation, so the
-   * boundary the daemon measured and the stream the address now denotes can
-   * genuinely differ. Without this field that send would CAS against the wrong
-   * stream's head and silently pass.
-   *
-   * Absent exactly when the sender cannot make the assertion — a freshness
-   * bypass, or a first touch of an address it has never seen resolved — which is
-   * also when `seen_up_to_seq` is absent (§6.4).
-   */
-  asserted_stream: z.string().min(1).optional(),
-  /** Runtime-observed target conversation seq for outbound freshness CAS.
-   *  The CLI must only forward the value stamped by the runtime delivery
-   *  path; it must not read the current latest seq at send time. */
-  seen_up_to_seq: z.number().int().nonnegative().optional(),
   /** Correlates a retry/bypass send with a prior `message_stale` response.
    *  This is observability-only: missing or malformed stale-resolution
    *  telemetry must not become a send gate. */
@@ -97,7 +76,7 @@ export const AgentSendMessageInputSchema = z.object({
   stale_resolution_reason: AgentSendStaleResolutionReasonSchema.optional(),
   /** Explicit agent escape hatch for stale-context sends. Used by
    *  `silverhand message send --anyway`; the backend logs the bypass but
-   *  does not run hard freshness CAS for this one send. */
+   *  does not run the freshness guard for this one send. */
   freshness_bypass: z.boolean().optional(),
   /** Optional attachment ids previously returned by `upload_file`.
    *  Server validates each id belongs to the same channel as the
@@ -136,18 +115,6 @@ export const AgentSendMessageOutputSchema = z.object({
    *  uses it to learn the reply-target stream of the new message and of
    *  the message it replied to. */
   thread_root_id: z.string().nullable(),
-  /** Present when this insert SKIPPED the per-stream freshness check — an
-   *  explicit `freshness_bypass`, or a loose first touch that carried no
-   *  `seen_up_to_seq` — and carries the stream head just before the message
-   *  was inserted. The daemon merges the sender's own seq into its observed
-   *  watermark once real admission evidence covers this value. Without it, a
-   *  CAS-skipping send in a quiet stream leaves the sender permanently stale
-   *  on its own head: nothing ever delivers its own message back to it.
-   *  Absent exactly when the CAS ran, i.e. when the sender already covered the
-   *  stream it wrote into — which is a fact about that stream, not about whether
-   *  it was the sender's own conversation (#task:2021 P4-4: a cursor is kept per
-   *  stream the agent has observed, wherever it lives). */
-  stream_head_before: z.number().int().nonnegative().optional(),
   /** The references in the sent body that addressed NOBODY (#task:2021 P4-5-b)
    *  — see {@link UnresolvedReferencesSchema}, whose single declaration this
    *  surface shares with the human send ACK. */
@@ -179,7 +146,7 @@ export const AgentCreateChannelInputSchema = z.object({
    * A `/thread:<root>` suffix is refused (`thread_suffix_not_supported`): a reply
    * cluster has neither a placement of its own nor a member set, so forking one
    * would silently mean forking its parent — the ambient guess one level down.
-   * A placement with no workspace (a DM pair, an agent inbox) is refused with
+   * A placement with no workspace (a DM pair) is refused with
    * `workspace_scope_required`: there is no workspace for the new channel to be
    * born into, and picking one would be that same guess.
    */
@@ -316,7 +283,7 @@ export type AgentReadHistoryInput = z.infer<typeof AgentReadHistoryInputSchema>;
 export const MessageRefSchema = z.object({
   id: z.string(),
   /** `null` when the message lives in a conversation that is not workspace-placed
-   *  (an agent inbox — agent-scoped-session-v1 §4.1). A ref names WHERE a message
+   *  (a DM pair — agent-scoped-session-v1 §4.1). A ref names WHERE a message
    *  is, and for such a placement the honest answer is "no workspace", not a
    *  borrowed coordinate: the alternative (echoing the reading session's
    *  workspace) would make a CC copy look like it lived on someone's board. */
@@ -408,7 +375,7 @@ export const ReadHistoryTargetRefSchema = z.object({
    *  `id === thread_root_id`; replies do not) without exposing
    *  per-message `thread_root_id`. */
   thread_root_id: z.string().nullable(),
-  /** `null` for a target that is not workspace-placed (an agent inbox) — same
+  /** `null` for a target that is not workspace-placed (a DM pair) — same
    *  rule as {@link MessageRefSchema}. */
   workspace_id: z.string().nullable(),
   title: z.string(),
@@ -452,10 +419,25 @@ export const AgentReadHistoryDtoSchema = z.object({
 export type AgentReadHistoryDto = z.infer<typeof AgentReadHistoryDtoSchema>;
 
 /** One workspace the calling agent currently has member access to.
- *  `kind` mirrors DB truth (`'regular' | 'agent_home'`); 'dm' is a
- *  conversation-level concept and is intentionally not synthesized
- *  here. `agent_dir` is the agent's working directory inside this
- *  workspace — for `agent_home` this is the agent's L1 home itself,
+ *  `owner_agent_id` is WHOSE container this is — the home agent of an agent
+ *  space, `null` for a regular workspace. It replaced a published container
+ *  word (`regular | agent_space`) in #task:2075's stop-publish step, and the
+ *  decision that word recorded still holds, now without a word at all: the
+ *  ubiquitous language does NOT fork by audience. This agent face and the
+ *  human faces (`ViewerWorkspaceDto`, `SearchWorkspaceRef`) carry the SAME
+ *  field, so there is no dialect to translate on a cross-surface inference —
+ *  #task:2069 converted the two vocabularies into one, and this ticket
+ *  retired the vocabulary instead of translating it.
+ *
+ *  The field stays (rather than being deleted like the Place DTOs' word)
+ *  because a real reader has a real question the rest of the DTO cannot
+ *  answer: `silverhand workspace list` hands this JSON to an agent verbatim,
+ *  and "which of these is my own home" is exactly what decides whether the
+ *  entry's MEMORY.md is that agent's L1 or a workspace L2. Recognize it with
+ *  `isAgentHomeWorkspaceOf`/`isAgentHomeWorkspaceId`, never by re-deriving a
+ *  container word.
+ *  `agent_dir` is the agent's working directory inside this
+ *  workspace — for an agent space this is the agent's L1 home itself,
  *  for `regular` it is the deterministic agent-centric bundle
  *  `<agent home>/workspaces/<workspace_id>` (relocation-v1 §3.2/§7:
  *  computed from ids, never read from a DB column or registry
@@ -466,7 +448,7 @@ export type AgentReadHistoryDto = z.infer<typeof AgentReadHistoryDtoSchema>;
 export const AgentListedWorkspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
-  kind: WorkspaceKindSchema,
+  owner_agent_id: z.string().nullable(),
   archived: z.boolean(),
   updated_at: z.number(),
   agent_dir: z.string().nullable(),

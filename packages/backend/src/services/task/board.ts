@@ -39,10 +39,9 @@ export interface TaskBoardPopulationFilters {
    *  sits in exactly ONE human container; this selects the bare state (ALL of
    *  that container at once), which is why it cannot be expressed by
    *  `workspaceId` (that names ONE workspace) or `channelId` (ONE conversation).
-   *  Workspace vs Agent Space is a `workspace_kind` split of the SAME
+   *  Workspace vs Agent Space is an ownership split (`owner_agent_id`) of the SAME
    *  `placement_kind='workspace'`; Direct Messages is `placement_kind='direct_pair'`.
-   *  `agent_inbox` is in no container (no human participant → excluded by the
-   *  viewer gate). Absent = no container narrowing (the `All` board spans every
+   *  Absent = no container narrowing (the `All` board spans every
    *  container the viewer can see). Stacks with `workspaceId` / `channelId` as
    *  an intersection, never a contradiction the caller must pre-resolve. */
   container?: TaskBoardContainer | undefined;

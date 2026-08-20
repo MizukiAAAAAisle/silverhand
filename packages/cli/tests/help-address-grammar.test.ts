@@ -31,6 +31,8 @@ import {
   CONVERSATION_ADDRESS_PREFIX,
   NAMED_STREAM_ADDRESS_PREFIX,
   DIRECT_PAIR_SHORTHAND_PREFIX,
+  THREAD_ADDRESS_SEPARATOR,
+  TaskNavRefSchema,
   parseDeliveryTargetInput,
 } from '@silverhand/shared';
 import {
@@ -93,6 +95,40 @@ const ADDRESS_RE = new RegExp(
   'g',
 );
 
+/** How each `TaskNavRef` field may appear in help, as a PARTITION of the DTO's
+ *  own fields. Two independent properties ride on this shape:
+ *
+ *  1. Checked against the live schema, not a frozen copy: the hardcoded table
+ *     this replaced kept teaching a key the server no longer sent and stayed
+ *     green. Which cell catches a rename depends on how far the rename got, and
+ *     the two edges meet with no gap between them:
+ *       - schema renamed, partition AND prose untouched → the EXHAUSTIVENESS
+ *         cell reds (the partition no longer equals `Object.keys(shape)`);
+ *       - schema and partition renamed, prose left behind → the stale
+ *         `<nav.ref.old_name>` is an UNKNOWN placeholder, already a failure here.
+ *     So the guarded property is "in ONE build, prose and schema do not disagree
+ *     about the field's name" — but no single cell owns it, and neither edge is
+ *     the one this gate used to rely on (a name in a hardcoded table).
+ *  2. NOT every field is addressable. The same paragraph this gate reads teaches
+ *     `thread_root_id`, NEVER `message_id`: a reply cluster is addressed by its
+ *     ROOT, and a mid-cluster anchor is refused rather than widened. Feeding the
+ *     whole schema in would have made that forbidden spelling a KNOWN
+ *     placeholder — instantiated to an opaque sample id, accepted by the codec,
+ *     green — retiring the only machine constraint on that sentence.
+ *     Non-addressable fields therefore stay OUT of the table, so prose that
+ *     teaches one fails as an unknown placeholder.
+ *
+ *  Exhaustiveness is asserted below, so a field added to `TaskNavRef` tomorrow
+ *  must be classified here rather than silently becoming quotable (or silently
+ *  losing coverage). One sample value serves every field on purpose: the codec
+ *  treats ids as opaque, so nothing here depends on what the fields are called. */
+const NAV_REF_ADDRESSABLE = ['conversation_id', 'thread_root_id'] as const;
+const NAV_REF_NOT_ADDRESSABLE = ['message_id'] as const;
+
+const NAV_REF_PLACEHOLDERS: Readonly<Record<string, string>> = Object.fromEntries(
+  NAV_REF_ADDRESSABLE.map(field => [`<nav.ref.${field}>`, 'NbBXIEpDUnSWW48x']),
+);
+
 /** Placeholder → a value the codec must accept. Unknown spellings fail loudly
  *  (see the docblock): the gate covers what it understands, and says so. */
 const PLACEHOLDERS: Readonly<Record<string, string>> = {
@@ -104,8 +140,7 @@ const PLACEHOLDERS: Readonly<Record<string, string>> = {
   '<title>': 'general',
   '<handle>': 'shiki',
   // Field paths: help that tells an agent to BUILD an address out of a DTO.
-  '<nav.ref.channel_id>': 'Q1VI9x6vUK1a9oN9',
-  '<nav.ref.thread_root_id>': 'NbBXIEpDUnSWW48x',
+  ...NAV_REF_PLACEHOLDERS,
 };
 
 /**
@@ -136,7 +171,7 @@ function addressGrammarOf(token: string): 'delivery' | 'prose' {
   return token.includes('/') ? 'delivery' : 'prose';
 }
 
-// Field-path placeholders (`<nav.ref.channel_id>`) count: a spelling this
+// Field-path placeholders (`<nav.ref.conversation_id>`) count: a spelling this
 // regex cannot see would slip past the unknown-placeholder check and be judged
 // as a literal, which is a confusing failure rather than a clear one.
 const PLACEHOLDER_RE = /<[A-Za-z_][A-Za-z_.]*>/g;
@@ -230,6 +265,37 @@ describe('CLI help teaches only the shipped delivery-address grammar', () => {
     }
   });
 
+  it('every TaskNavRef field is classified as addressable or not', () => {
+    // The partition IS the contract (see {@link NAV_REF_PLACEHOLDERS}): a field
+    // added to the DTO must be given an answer here, because the two outcomes
+    // are opposite — quotable in help, or a failure when help quotes it. This
+    // cell is also the edge that catches a SCHEMA-ONLY rename: the partition
+    // still lists the old name, so it stops equalling the live keys.
+    const classified = [...NAV_REF_ADDRESSABLE, ...NAV_REF_NOT_ADDRESSABLE];
+    expect([...classified].sort()).toEqual(
+      Object.keys(TaskNavRefSchema.shape).sort(),
+    );
+    expect(new Set(classified).size, 'a field classified twice').toBe(
+      classified.length,
+    );
+  });
+
+  it('no help block teaches a non-addressable nav field as an address', () => {
+    // `message_id` addresses nothing: the cluster is addressed by its ROOT. This
+    // is the guard the derived table would have dropped, so it is asserted from
+    // both ends — the spelling is unknown to the instantiator (below), and no
+    // shipped help block contains it.
+    for (const field of NAV_REF_NOT_ADDRESSABLE) {
+      const forbidden = `<nav.ref.${field}>`;
+      expect(PLACEHOLDERS[forbidden], forbidden).toBeUndefined();
+      for (const block of blocks) {
+        expect(block.text.includes(forbidden), `${block.label}: ${forbidden}`).toBe(
+          false,
+        );
+      }
+    }
+  });
+
   it('all three spellings are taught on the two doors an agent replies through', () => {
     // Send and history are where a received token is pasted back. Teaching only
     // `#conv:` there is how an agent learns to mine ids out of a name.
@@ -263,6 +329,26 @@ describe('the gate itself fails on bad help', () => {
     const bad = '--target `#conv:<channel_id>`';
     const [token] = addressTokens(bad);
     expect(instantiate(token!).unknown).toEqual(['<channel_id>']);
+  });
+
+  it('flags help that builds an address out of the WRONG nav field', () => {
+    // The failure mode the classified partition exists for: `message_id` is a
+    // real `TaskNavRef` field, so a careless edit reaches for it and the address
+    // still LOOKS well-formed. Deriving the table from the whole schema would
+    // have instantiated it to an opaque sample id and passed. Unknown here means
+    // help cannot teach it without turning this gate red.
+    const bad =
+      '  reply under the task with ' +
+      `\`${CONVERSATION_ADDRESS_PREFIX}<nav.ref.conversation_id>` +
+      `${THREAD_ADDRESS_SEPARATOR}<nav.ref.message_id>\``;
+    const [token] = addressTokens(bad);
+    expect(instantiate(token!).unknown).toEqual(['<nav.ref.message_id>']);
+    // …while the addressable sibling in the same position is accepted.
+    const good = bad.replace('message_id', 'thread_root_id');
+    const [goodToken] = addressTokens(good);
+    const { value, unknown } = instantiate(goodToken!);
+    expect(unknown).toEqual([]);
+    expect(parseDeliveryTargetInput(value)).not.toBeNull();
   });
 
   it('flags every retired token, and does not fire on innocent prose', () => {

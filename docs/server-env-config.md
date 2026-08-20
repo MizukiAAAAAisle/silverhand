@@ -72,19 +72,31 @@ and old schedules may target a disabled host runtime.
 
 ## Schema Migrations
 
-Fresh installs initialize the current schema without an opt-in. Existing
+The DB has **one** number an operator needs: the **schema epoch**. A release moves
+it at most once, so "this build ships schema epoch N" is the whole compatibility
+statement, and startup messages, the `Migration applied` log line and the
+backup/restore story all name it.
+
+A release implements that move with any number of internal **migration steps**.
+Steps are an implementation detail — each is one exclusive transaction, so an
+interrupted upgrade resumes at step granularity — but they are what the
+`_migrations` ledger records, and messages print them next to the epoch so a
+stopped upgrade can be located exactly. A database that is only partway through an
+epoch still reports the PREVIOUS epoch, because it has not reached the new one.
+
+Fresh installs initialize the current epoch without an opt-in. Existing
 databases behave differently by deployment mode:
 
-- If `silverhand.db` is already at the current code-supported schema version,
+- If `silverhand.db` is already at the epoch this build ships,
   startup is idempotent: no backup and no migration.
 - Embedded desktop defaults to auto-upgrade because it is a single-user local DB.
   The same backup/lock/fail-loud migration runner still applies. Set
   `SILVERHAND_MIGRATE=0` only for debugging when you want startup to stop before
   applying pending migrations.
 - Standalone server defaults to operator opt-in. If `silverhand.db` is older
-  than the current code-supported schema version, startup fails by default with
-  a message that includes the detected version, target version, sibling backup
-  path pattern, and `SILVERHAND_MIGRATE=1`.
+  than the epoch this build ships, startup fails by default with
+  a message that includes the detected epoch and step, the target epoch and step,
+  the sibling backup path pattern, and `SILVERHAND_MIGRATE=1`.
 - When migration is allowed (`SILVERHAND_MIGRATE=1`, or embedded default),
   startup first checkpoints WAL, copies the entire
   data directory to a sibling backup directory named
@@ -92,10 +104,32 @@ databases behave differently by deployment mode:
   `/var/lib/silverhand` backs up to `/var/lib/silverhand-backup-20260526T140000Z/`.
   Runtime-only filesystem nodes such as Unix sockets, FIFOs, and device nodes
   are skipped because they are not restorable Silverhand state.
+- One backup per **startup migration run**, never one per step — and a resumed
+  partial upgrade is a new run, so it backs up again. That is the chosen
+  contract: each attempt captures the mid-epoch state the previous backup could
+  not, while the first backup stays the pre-upgrade rollback target. Retention is
+  operator-owned, so a start that crash-loops mid-upgrade leaves one backup
+  directory per attempt; watch disk on the volume holding `<data_dir>`'s parent.
 - If backup copy fails, migrations do not run and startup exits non-zero.
-- If the DB schema is newer than this server binary supports, startup always
+- If the DB is past the newest step this binary knows, startup always
   fails, even with `SILVERHAND_MIGRATE=1`; restore a compatible backup instead
-  of running an older binary against a newer DB.
+  of running an older binary against a newer DB. The check is on the step, not the
+  epoch, so it also catches a database a newer binary upgraded only partway —
+  there both binaries report the same epoch and only the step order differs.
+- Two different refusals exist for a database that is too old, and the message
+  says which one you hit:
+  - **below the baseline step** — a safety refusal. The baseline migration is a
+    full `CREATE`, so a populated pre-baseline database must upgrade through an
+    intermediate release rather than have this build rebuild its tables.
+  - **below the oldest supported schema epoch** — a policy refusal. The upgrade
+    path exists; this release just does not promise it. Support is declared as an
+    epoch (`MIN_SUPPORTED_SCHEMA_EPOCH`) because that is the unit the promise is
+    made in, and the step floor the runner compares against is derived from it.
+- If the ledger is not a legal prefix of this build's steps — a step is missing
+  below one that was applied, or a step this build does not define was applied —
+  startup fails with `schema_ledger_inconsistent` and applies nothing. The
+  upgrade order is then unknown, and guessing it would replay a step on top of a
+  schema already past it. Restore the pre-upgrade backup.
 
 Backup retention is operator-owned. Silverhand creates a new timestamped
 sibling directory for every opted-in migration and does not prune older backups.
@@ -103,6 +137,26 @@ Startup and admin commands hold a sibling `<data_dir>.migration.lock` directory
 only for the migration phase so concurrent upgrade attempts fail fast.
 If startup fails with `migration_locked` after a crashed migration attempt,
 manually remove the lock directory shown in the error message before retrying.
+
+### Freezing an epoch at release (maintainers)
+
+The manifest lives in `packages/shared/src/db/schema-epochs.ts`. Its fence
+(`packages/shared/tests/schema-epochs.test.ts`) proves that the epochs claim
+exactly the steps this build defines and that **at most one** epoch is open, so a
+single unshipped build cannot move the outward number twice. It cannot prove that
+an already-released epoch was never extended — nothing in the tree knows where a
+released boundary used to be, and a second in-repo copy of that boundary would
+only move the claim to another file. Freezing is therefore a release action:
+
+1. Ship the build. Then, in one commit, set the epoch's `released: true` and
+   record `releasedIn` — the published commit or tag that shipped it, verified at
+   that moment, not assumed. This mirrors how the desktop↔server API epoch
+   records its precondition (`docs/desktop-server-api-epoch.md §3`).
+2. The next schema change appends a NEW entry with `released: false` and puts its
+   step there. Extending a released epoch's `lastStep` instead is the mistake this
+   step exists to prevent, and review of that diff is what catches it.
+3. Adding a step without extending or opening an epoch fails the fence, as does
+   an epoch range claiming a step no migration defines.
 
 ## Health And Readiness
 

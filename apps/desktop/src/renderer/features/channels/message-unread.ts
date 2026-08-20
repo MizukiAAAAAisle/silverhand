@@ -23,6 +23,7 @@ import {
 // `snapshot_required`) is the only remote signal for its membership changing, so
 // this module invalidates it alongside the unread badge caches.
 import { channelThreadsUnreadKey } from '@/features/channels/useChannelThreads';
+import { workspaceScopedQueryEnabled } from '@/features/workspaces/workspace-scoped-query';
 
 /** Debounced invalidate of every message-unread badge query (per-workspace
  *  `by_conversation` maps + the global `by_workspace` summary). The legacy
@@ -67,14 +68,17 @@ function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
 }
 
 /** Query key for the per-workspace message-unread `by_conversation` read-model
- *  (`useMessageUnreadCounts`). `kind` partitions regular vs dm workspaces; a
- *  workspace id is only ever one kind, so the S1 viewer-unread ingestor
- *  (#task:1284) patches whichever partition is loaded. MUST stay identical to the
- *  `useMessageUnreadCounts` queryKey — both build it here so they cannot drift. */
-export const messageUnreadByConversationKey = (
-  workspaceId: string,
-  kind: 'regular' | 'dm',
-) => ['workspaces', workspaceId, kind, 'message-unread'] as const;
+ *  (`useMessageUnreadCounts`). Keyed by workspace id ALONE: a workspace id is
+ *  only ever one container kind, so a kind cell would carry zero bits for a
+ *  given id — it only ever existed because the S1 `unread_updated` payload
+ *  (#task:1284) names the workspace without its kind, forcing the ingestor to
+ *  probe both partitions. MUST keep the `['workspaces', wsId, …]` prefix: the
+ *  viewer-removal contract classifies this key as `exempt` precisely because its
+ *  layer-1 predicate sweep matches that prefix (#task:2078). MUST stay identical
+ *  to the `useMessageUnreadCounts` queryKey — both build it here so they cannot
+ *  drift. */
+export const messageUnreadByConversationKey = (workspaceId: string) =>
+  ['workspaces', workspaceId, 'message-unread'] as const;
 
 /** Query key for the global cross-workspace message-unread summary
  *  (`by_workspace`, `useMessageUnreadSummary`). */
@@ -107,44 +111,36 @@ export function patchMessageUnreadByConversation(
   qc: QueryClient,
   payload: UnreadUpdatedMessagePayload,
 ): 'patched' | 'cleared' | 'unchanged' | 'cold' {
-  let outcome: 'patched' | 'cleared' | 'unchanged' | 'cold' = 'cold';
   const cid = payload.conversation_id;
-  // A workspace id is only ever one kind; patch whichever partition is loaded.
-  for (const kind of ['regular', 'dm'] as const) {
-    const key = messageUnreadByConversationKey(payload.workspace_id, kind);
-    const prev = qc.getQueryData<MessageUnreadByConversationDto>(key);
-    if (!prev) continue; // whole-query not loaded → no-op for this partition
-    const countUnchanged =
-      (prev.by_conversation[cid] ?? 0) === payload.conversation_unread_count;
-    const totalUnchanged = prev.total === payload.workspace_unread_count;
-    const pointerUnchanged = unreadPointerEqual(
-      prev.latest_by_conversation[cid],
-      payload.latest_unread,
-    );
-    if (countUnchanged && totalUnchanged && pointerUnchanged) {
-      if (outcome === 'cold') outcome = 'unchanged';
-      continue;
-    }
-    const by_conversation = { ...prev.by_conversation };
-    if (payload.conversation_unread_count > 0) {
-      by_conversation[cid] = payload.conversation_unread_count;
-    } else {
-      delete by_conversation[cid];
-    }
-    const latest_by_conversation = { ...prev.latest_by_conversation };
-    if (payload.latest_unread) {
-      latest_by_conversation[cid] = payload.latest_unread;
-    } else {
-      delete latest_by_conversation[cid];
-    }
-    qc.setQueryData<MessageUnreadByConversationDto>(key, {
-      by_conversation,
-      latest_by_conversation,
-      total: payload.workspace_unread_count,
-    });
-    outcome = payload.conversation_unread_count > 0 ? 'patched' : 'cleared';
+  const key = messageUnreadByConversationKey(payload.workspace_id);
+  const prev = qc.getQueryData<MessageUnreadByConversationDto>(key);
+  if (!prev) return 'cold'; // whole-query not loaded → no-op
+  const countUnchanged =
+    (prev.by_conversation[cid] ?? 0) === payload.conversation_unread_count;
+  const totalUnchanged = prev.total === payload.workspace_unread_count;
+  const pointerUnchanged = unreadPointerEqual(
+    prev.latest_by_conversation[cid],
+    payload.latest_unread,
+  );
+  if (countUnchanged && totalUnchanged && pointerUnchanged) return 'unchanged';
+  const by_conversation = { ...prev.by_conversation };
+  if (payload.conversation_unread_count > 0) {
+    by_conversation[cid] = payload.conversation_unread_count;
+  } else {
+    delete by_conversation[cid];
   }
-  return outcome;
+  const latest_by_conversation = { ...prev.latest_by_conversation };
+  if (payload.latest_unread) {
+    latest_by_conversation[cid] = payload.latest_unread;
+  } else {
+    delete latest_by_conversation[cid];
+  }
+  qc.setQueryData<MessageUnreadByConversationDto>(key, {
+    by_conversation,
+    latest_by_conversation,
+    total: payload.workspace_unread_count,
+  });
+  return payload.conversation_unread_count > 0 ? 'patched' : 'cleared';
 }
 
 /** S1 viewer-unread ingestor patch (#task:1284, doc §6) — authoritative UPSERT of
@@ -177,9 +173,9 @@ export function patchMessageUnreadSummary(
  *    - delete its slice from the global `by_workspace` summary, so the rail badge
  *      and the global unread total drop in place (the workspace-list refetch does
  *      NOT touch this separate query — that gap is the ghost unread #task:1404);
- *    - drop its per-workspace `by_conversation` query entirely (either partition)
- *      — the workspace is gone, so there is no authoritative snapshot to refetch;
- *      removing the cached query is cleaner than patching it to an empty map.
+ *    - drop its per-workspace `by_conversation` query entirely — the workspace is
+ *      gone, so there is no authoritative snapshot to refetch; removing the
+ *      cached query is cleaner than patching it to an empty map.
  *  Mirrors the #task:1284 in-place-patch discipline (targeted slice, never a
  *  whole-list invalidate). Idempotent: an absent summary key is left untouched
  *  and removing an unloaded by_conversation query is a no-op. */
@@ -193,9 +189,7 @@ export function removeWorkspaceFromMessageUnread(
     delete by_workspace[workspaceId];
     qc.setQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey, { by_workspace });
   }
-  for (const kind of ['regular', 'dm'] as const) {
-    qc.removeQueries({ queryKey: messageUnreadByConversationKey(workspaceId, kind) });
-  }
+  qc.removeQueries({ queryKey: messageUnreadByConversationKey(workspaceId) });
 }
 
 /**
@@ -210,21 +204,18 @@ export function removeWorkspaceFromMessageUnread(
  *   - delete the conversation's `by_conversation` key (absent == 0 unread — never
  *     a phantom `0`, which a refetch would omit);
  *   - delete its `latest_by_conversation` pointer;
- *   - RECOMPUTE `total` as the sum of the patched `by_conversation`, and move the
- *     global summary's `by_workspace[workspaceId]` by exactly `oldTotal -
- *     newTotal`, so the rail badge and the global total fall by what the viewer
- *     stopped being able to see.
+ *   - RECOMPUTE `total` as the sum of the patched `by_conversation`, and set the
+ *     global summary's `by_workspace[workspaceId]` to it, so the rail badge and
+ *     the global total fall by what the viewer stopped being able to see.
  *
  * `total` is recomputed rather than decremented because the invariant a refetch
  * satisfies is `total === sum(by_conversation)`, and a STALE `total` breaks that
  * (#task:1689 blocker 4): with `{lost: 4, kept: 5}` under a stale `total: 1`,
  * `total - dropped` clamps to 0 and zeroes a surviving channel's badge, while the
- * sum yields 5. The summary moves by the DELTA of the two totals for the same
- * reason — it is a rollup of those totals, not of the dropped entry.
- *
- * The summary write is still clamped at 0: it is patched independently by the
- * live ingestor, so a stale rollup must not go negative and strand a permanently
- * wrong badge. PRESENT-ONLY / idempotent: an unloaded query or an absent
+ * sum yields 5. The summary is a rollup of THIS workspace's total, and the map is
+ * a single query keyed by workspace id (#task:2078), so once it is loaded the
+ * entry is fully determined — no delta arithmetic and hence no way for it to go
+ * negative. PRESENT-ONLY / idempotent: an unloaded query or an absent
  * conversation key writes nothing.
  */
 export function removeConversationFromMessageUnread(
@@ -232,62 +223,34 @@ export function removeConversationFromMessageUnread(
   workspaceId: string,
   conversationId: string,
 ): void {
-  const KINDS = ['regular', 'dm'] as const;
-  let delta = 0;
-  let patched = false;
-  /** New `total` per LOADED partition — the input of the summary convergence. */
-  const newTotals: number[] = [];
-  let allPartitionsLoaded = true;
-  for (const kind of KINDS) {
-    const key = messageUnreadByConversationKey(workspaceId, kind);
-    const prev = qc.getQueryData<MessageUnreadByConversationDto>(key);
-    if (!prev) {
-      allPartitionsLoaded = false;
-      continue; // partition not loaded → no-op
-    }
-    const hasCount = conversationId in prev.by_conversation;
-    const hasPointer = conversationId in prev.latest_by_conversation;
-    if (!hasCount && !hasPointer) {
-      newTotals.push(prev.total);
-      continue; // nothing to settle → no write
-    }
-    const by_conversation = { ...prev.by_conversation };
-    const latest_by_conversation = { ...prev.latest_by_conversation };
-    delete by_conversation[conversationId];
-    delete latest_by_conversation[conversationId];
-    // `total = sum(by_conversation)`, the invariant a refetch satisfies — NOT
-    // `prev.total - dropped`, which propagates a stale total onto survivors.
-    const total = Object.values(by_conversation).reduce((sum, n) => sum + n, 0);
-    newTotals.push(total);
-    delta += prev.total - total;
-    patched = true;
-    qc.setQueryData<MessageUnreadByConversationDto>(key, {
-      by_conversation,
-      latest_by_conversation,
-      total,
-    });
-  }
-  if (!patched) return; // no partition held the conversation → present-only no-op
+  const key = messageUnreadByConversationKey(workspaceId);
+  const prev = qc.getQueryData<MessageUnreadByConversationDto>(key);
+  if (!prev) return; // not loaded → present-only no-op
+  const hasCount = conversationId in prev.by_conversation;
+  const hasPointer = conversationId in prev.latest_by_conversation;
+  if (!hasCount && !hasPointer) return; // nothing to settle → no write
+  const by_conversation = { ...prev.by_conversation };
+  const latest_by_conversation = { ...prev.latest_by_conversation };
+  delete by_conversation[conversationId];
+  delete latest_by_conversation[conversationId];
+  // `total = sum(by_conversation)`, the invariant a refetch satisfies — NOT
+  // `prev.total - dropped`, which propagates a stale total onto survivors.
+  const total = Object.values(by_conversation).reduce((sum, n) => sum + n, 0);
+  qc.setQueryData<MessageUnreadByConversationDto>(key, {
+    by_conversation,
+    latest_by_conversation,
+    total,
+  });
   const summary = qc.getQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey);
   if (!summary || !(workspaceId in summary.by_workspace)) return;
-  // With EVERY partition in hand the summary's workspace entry is fully
-  // determined — set it to the sum of the new totals, which is what a refetch
-  // returns. With only some partitions loaded the unloaded ones are unknown, so
-  // the best available write moves the entry by the delta: that PRESERVES
-  // whatever offset an independently-stale summary already had (it does not make
-  // the summary true), which is why the full-recompute branch is preferred.
-  const next = allPartitionsLoaded
-    ? newTotals.reduce((sum, n) => sum + n, 0)
-    : (summary.by_workspace[workspaceId] ?? 0) - delta;
-  const clamped = Math.max(0, next);
-  if (clamped === summary.by_workspace[workspaceId]) return; // idempotent
+  if (total === summary.by_workspace[workspaceId]) return; // idempotent
   qc.setQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey, {
-    by_workspace: { ...summary.by_workspace, [workspaceId]: clamped },
+    by_workspace: { ...summary.by_workspace, [workspaceId]: total },
   });
 }
 
 /** Which channels of ONE workspace the unread read-model still holds a count or
- *  pointer for (#task:1689). Both partitions are keyed BY the workspace, so this
+ *  pointer for (#task:1689). The map is keyed BY the workspace, so this
  *  attribution comes from the key — no payload scan and no ambiguity. Feeds the
  *  foreign-workspace convergence path (a workspace the viewer is not currently
  *  looking at still owns badge state that must settle). */
@@ -295,15 +258,14 @@ export function messageUnreadHeldChannelIds(
   qc: QueryClient,
   workspaceId: string,
 ): string[] {
-  const ids = new Set<string>();
-  for (const kind of ['regular', 'dm'] as const) {
-    const data = qc.getQueryData<MessageUnreadByConversationDto>(
-      messageUnreadByConversationKey(workspaceId, kind),
-    );
-    if (!data) continue;
-    for (const id of Object.keys(data.by_conversation)) ids.add(id);
-    for (const id of Object.keys(data.latest_by_conversation)) ids.add(id);
-  }
+  const data = qc.getQueryData<MessageUnreadByConversationDto>(
+    messageUnreadByConversationKey(workspaceId),
+  );
+  if (!data) return [];
+  const ids = new Set<string>([
+    ...Object.keys(data.by_conversation),
+    ...Object.keys(data.latest_by_conversation),
+  ]);
   return [...ids];
 }
 
@@ -351,16 +313,17 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
  * Backed by the conversation_reads cursor system. Message-variant
  * `unread_updated` is patched in place by the viewer-unread ingestor
  * (#task:1284); only a `snapshot_required` (resume/epoch) refetches — no polling.
+ *
+ * `workspaceResolved` is the same no-default gate the channel-list hooks take —
+ * see `useChannelsForWorkspace` for why absence must not be defaultable
+ * (#task:2078).
  */
 export function useMessageUnreadCounts(
   workspaceId: string | null,
-  workspaceKind: 'regular' | 'dm' | null = 'regular',
+  workspaceResolved: boolean,
 ) {
   const qc = useQueryClient();
-  const queryKey = messageUnreadByConversationKey(
-    workspaceId ?? 'none',
-    workspaceKind ?? 'regular',
-  );
+  const queryKey = messageUnreadByConversationKey(workspaceId ?? 'none');
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -380,7 +343,7 @@ export function useMessageUnreadCounts(
 
   return useQuery({
     queryKey,
-    enabled: !!workspaceId && workspaceKind !== null,
+    enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
     queryFn: async () => {
       const res = await api<MessageUnreadByConversationDto>(
         `/api/workspaces/${workspaceId}/message-unread`,

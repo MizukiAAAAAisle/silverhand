@@ -33,7 +33,8 @@ export function isParticipantHandleAvailable(
 
 /** Workspace names are unique by canonical folded key among REGULAR workspaces
  *  (DB: partial unique index `idx_workspaces_name_key`; agent_home excluded).
- *  `WorkspaceRepo.getByName` already scopes to `workspace_kind = 'regular'`. */
+ *  `WorkspaceRepo.getByName` already scopes to regular workspaces
+ *  (`owner_agent_id IS NULL`). */
 export function isWorkspaceNameAvailable(
   deps: { workspaces: WorkspaceRepo },
   name: string | CanonicalWorkspaceName,

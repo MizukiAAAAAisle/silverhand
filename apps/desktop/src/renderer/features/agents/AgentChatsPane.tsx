@@ -34,7 +34,6 @@
 import { useMemo, type JSX, type ReactNode } from 'react';
 import type { AgentAuditChatSummary } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { agentSpaceLabel } from '@/lib/workspace-name';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   AuthorAvatarView,
@@ -205,14 +204,11 @@ function describeChatRow(chat: AgentAuditChatSummary): {
   }
   return {
     title: chat.title,
-    // The audit DTO carries the STORED workspace kind (`regular` | `agent_home`),
-    // not the workspace-list UI kind (`regular` | `dm`), so `workspaceDisplayName`
-    // doesn't apply here. An agent space still reads as the agent name it reads as
-    // in every other picker/filter row, through the same helper.
-    meta:
-      chat.workspace_kind === 'agent_home'
-        ? agentSpaceLabel(chat.workspace_name)
-        : chat.workspace_name,
+    // The container's own name, which for an agent space IS the bound agent's —
+    // the same label every other picker/filter row shows. No kind branch: this
+    // carrier never had the list shape's `dm-` prefix, and #task:2066 retired
+    // that prefix everywhere, so both kinds render the name verbatim.
+    meta: chat.workspace_name,
     counterpart: null,
   };
 }

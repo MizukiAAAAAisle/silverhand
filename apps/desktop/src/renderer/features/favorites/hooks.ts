@@ -3,7 +3,8 @@
 // the sidebar's STARRED section as a GLOBAL, viewer-scoped FLAT list of the
 // viewer's starred conversations — open- or fixed-roster, the
 // `user_sort_entry.starred_at` set under `list_key='channels:<ws_id>'`. A
-// WORKSPACE / DM container cannot be here because containers have no star at all
+// CONTAINER (workspace or agent space) cannot be here because containers have no
+// star at all
 // (#task:1900) — star is a conversation-only action, and its one meaning is
 // membership of this list.
 //

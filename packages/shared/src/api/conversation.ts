@@ -21,10 +21,10 @@ import {
 export const ConversationDtoSchema = z.object({
   id: z.string(),
   // NULL exactly when the conversation is not workspace-placed
-  // (agent-scoped-session-v1 §4.1: `placement_kind='agent_inbox'` today,
-  // `direct_pair` from P3). A workspace coordinate is a PROPERTY OF THE
-  // PLACEMENT, not of every conversation, so it is derived per row rather than
-  // assumed — the doc's "每一行必须自带坐标" applied to the wire.
+  // (agent-scoped-session-v1 §4.1: `placement_kind='direct_pair'`). A workspace
+  // coordinate is a PROPERTY OF THE PLACEMENT, not of every conversation, so it
+  // is derived per row rather than assumed — the doc's "每一行必须自带坐标"
+  // applied to the wire.
   //
   // Widened here rather than kept `z.string()` with a coercion at the mapper
   // because the failure mode of the lie is invisible: responses are built from
@@ -32,9 +32,8 @@ export const ConversationDtoSchema = z.object({
   // as `undefined`/`null` past a `string` type with no red light anywhere. The
   // nullable type makes every consumer decide at typecheck instead.
   //
-  // Reachability: a human-facing route cannot return a non-workspace row today
-  // (`participantsOf(agent_inbox)` = the owner agent only, so the permission
-  // check denies first) — the null arm is reached by agent/internal surfaces.
+  // Reachability: the null arm is reached wherever a `direct_pair` row is
+  // returned — a human's own DM lines included, so it is NOT an agent-only arm.
   workspace_id: z.string().nullable(),
   placement_kind: ConversationPlacementKindSchema,
   roster_policy: ConversationRosterPolicySchema,
@@ -60,10 +59,27 @@ export const ChannelConversationDtoSchema = ConversationDtoSchema.extend({
 });
 export type ChannelConversationDto = z.infer<typeof ChannelConversationDtoSchema>;
 
-export const DmChannelDtoSchema = ConversationDtoSchema.extend({
+/**
+ * A conversation whose roster is FIXED — the union's other arm. Both axes are
+ * stated, symmetric to {@link ChannelConversationDtoSchema}: `roster_policy` is
+ * the identity here (a fixed roster is what this arm IS), and `placement_kind`
+ * is pinned to the real union of placements a fixed roster can occur under, NOT
+ * left open to inherit the parent's full enum. A fixed roster is a CONSEQUENCE
+ * of some placements, never the definition of one (`db/schema.ts` keying rule):
+ * a `direct_pair` and a workspace-placed agent-home DM / Onboarding channel both
+ * carry it. Enumerating it here rather than inheriting
+ * makes widening the placement axis a deliberate contract change a test can pin,
+ * instead of an accident of the parent enum growing.
+ *
+ * Named for the roster, not "DmChannel": this arm serves things that are not DMs
+ * and not all channels, so a name asserting either would lie — the same
+ * mis-keying `db/schema.ts` calls out (#task:2074).
+ */
+export const FixedRosterConversationDtoSchema = ConversationDtoSchema.extend({
+  placement_kind: z.enum(['workspace', 'direct_pair']),
   roster_policy: z.literal('fixed'),
 });
-export type DmChannelDto = z.infer<typeof DmChannelDtoSchema>;
+export type FixedRosterConversationDto = z.infer<typeof FixedRosterConversationDtoSchema>;
 
 /**
  * The wire rule for a channel's display title — which is now also its ADDRESS
@@ -164,8 +180,13 @@ export type CreateConversationChannelInput = z.input<
 //     removed, for every consumer of this DTO; it is option B, and it has to
 //     be reopened as an explicit contract change — which these two literals
 //     now force.
-//   - `workspace_kind` is the *external* projection — `agent_home` is
-//     mapped to `'dm'` here so the renderer never sees a third kind.
+//   - Carries NO container word. It published `workspace_kind` until #task:2075's
+//     stop-publish step, and the whole `channelKind` chain that read it turned out
+//     to distinguish nothing: every consumer only asked `!== null`, i.e. "is this
+//     workspace-placed", which is what `placement_kind` above already says. So the
+//     field was deleted rather than re-expressed as ownership — a ref carries a
+//     container fact only when a real question needs it and this DTO cannot
+//     otherwise answer it.
 //   - Does NOT include unread count, last_seq, message previews, or
 //     any per-user state — those go through the existing read-cursor
 //     and message-window endpoints. Keep this endpoint identity-only.
@@ -175,11 +196,6 @@ export type CreateConversationChannelInput = z.input<
 //     on the user-facing surface only — agents do NOT get a path to call
 //     it. If we ever expose it to agents, write a dedicated ACL helper;
 //     do not relax that one.
-export const ConversationRefWorkspaceKindSchema = z.enum(['regular', 'dm']);
-export type ConversationRefWorkspaceKind = z.infer<
-  typeof ConversationRefWorkspaceKindSchema
->;
-
 export const ConversationRefSchema = z.object({
   id: z.string(),
   // The narrowing above, as a type: NOT `ConversationPlacementKindSchema`.
@@ -190,7 +206,6 @@ export const ConversationRefSchema = z.object({
   roster_policy: ConversationRosterPolicySchema,
   title: z.string(),
   workspace_id: z.string(),
-  workspace_kind: ConversationRefWorkspaceKindSchema,
   closed_at: z.number().nullable(),
   archived_at: z.number().nullable(),
 });
@@ -374,7 +389,7 @@ export type ChannelDto = ChannelConversationDto;
 
 export const ChannelLikeDtoSchema = z.union([
   ChannelConversationDtoSchema,
-  DmChannelDtoSchema,
+  FixedRosterConversationDtoSchema,
 ]);
 export type ChannelLikeDto = z.infer<typeof ChannelLikeDtoSchema>;
 
@@ -483,7 +498,7 @@ export type ChannelDetailResponse = z.infer<typeof ChannelDetailResponseSchema>;
  *  change, only the carrier was added. */
 export const WorkspaceChannelListItemSchema = z.discriminatedUnion('roster_policy', [
   ChannelConversationDtoSchema.extend({ is_member: z.boolean() }),
-  DmChannelDtoSchema.extend({ is_member: z.boolean() }),
+  FixedRosterConversationDtoSchema.extend({ is_member: z.boolean() }),
 ]);
 export type WorkspaceChannelListItem = z.infer<typeof WorkspaceChannelListItemSchema>;
 
@@ -549,7 +564,7 @@ export type DirectPairCounterpart = z.infer<typeof DirectPairCounterpartSchema>;
  * One row of the viewer's Direct Messages list — `GET /api/direct-pairs`
  * (#task:2035).
  *
- * NOT a `ConversationDto` or a `DmChannelDto`, and the distinction is the whole
+ * NOT a `ConversationDto` or a `FixedRosterConversationDto`, and the distinction is the whole
  * reason this type exists. `dm_channel` is a WORKSPACE-placed conversation with a
  * fixed roster inside an agent-home workspace; a `direct_pair` has no workspace
  * coordinate at all, so a client that received one as a channel would try to open

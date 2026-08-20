@@ -30,6 +30,11 @@ import {
   HostWsCommandTransportError,
 } from '../ws/host-ws-server.js';
 import { isParticipantHandleAvailable } from './name-availability.js';
+import {
+  publishDirectPairsChangedToViewer,
+  recordDirectPairOpens,
+} from './direct-pairs-changed.js';
+import { openDirectPair } from './open-direct-pair.js';
 import type { PostCommitEffect } from './post-commit.js';
 
 /**
@@ -261,28 +266,33 @@ function mapDaemonWireErrorToFailureCode(
 }
 
 /**
- * AgentSlot onboarding (#task:2034). Lands in the agent's OWN INBOX, which has
- * no human participant (§4.2) — so unlike the ConversationSlot text below it
- * cannot say "you are in your DM with the user", and it must not ask for a reply
- * in this stream, which nobody reads. The greeting is an OUTBOUND send to the
- * creator's direct line, addressed with the one target grammar the platform
- * prompt teaches (`dm:@<handle>`); an agent-scoped agent is permitted to
- * allocate that pair on first use (reach C″, #task:2021).
+ * AgentSlot onboarding (#task:2034, destination changed by #task:2072). Lands in
+ * the agent's DIRECT LINE WITH ITS CREATOR — a `direct_pair` whose two endpoints
+ * are that human and this agent — so the greeting it asks for is a REPLY IN
+ * PLACE, not an outbound send to an address: the runtime is woken on this very
+ * conversation, so the shortest correct instruction is "answer here". That is
+ * why this no longer teaches the `dm:@<handle>` target grammar; teaching a
+ * target for the stream the agent is already standing in would be the same
+ * mistake as the inbox it replaced, where the text had to route AROUND a
+ * destination no person reads.
+ *
+ * It still cannot borrow the ConversationSlot text below: an agent-scoped agent
+ * has no home workspace and no personal DM CHANNEL, and this line is shared with
+ * exactly one person rather than being the agent's own space.
  *
  * Memory layout is deliberately NOT re-taught here: the AgentSlot prompt already
  * carries the authoritative L1 path and states that workspace L2 does not exist
  * in this context, so a second statement of the same rule is only a place for
  * the two to drift. Both interpolations are handles — a constrained shape, not
- * free text — so the reference token and the code-span target cannot fabricate
- * structure.
+ * free text — so the reference tokens cannot fabricate structure.
  */
-const ONBOARDING_INBOX_CONTENT = (
+const ONBOARDING_DIRECT_LINE_CONTENT = (
   agentName: string,
   creatorHandle: string,
 ): string =>
   [
-    `You (${formatReferenceToken({ kind: 'agent', handle: agentName })}) have just been created as an agent-scoped agent: one session of you serves every conversation you are in, and this stream is your own inbox. Notifications and this message land here; no person is a participant, so there is nothing to answer here.`,
-    `Send one short greeting to the person who created you (${formatReferenceToken({ kind: 'human', handle: creatorHandle })}) on your direct line with them — target ${inlineCode(`dm:@${creatorHandle}`)}. Say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role they would like you to play.`,
+    `You (${formatReferenceToken({ kind: 'agent', handle: agentName })}) have just been created as an agent-scoped agent: one session of you serves every conversation you are in, and this stream is your direct line with the person who created you (${formatReferenceToken({ kind: 'human', handle: creatorHandle })}) — they are the only other participant here.`,
+    `Send one short greeting in THIS conversation: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role they would like you to play.`,
     `Write global identity / role / working-style guidance to your L1 ${inlineCode('system_prompt.md')} once they answer; it applies in every conversation and takes effect on your next spawn. Do not mention internal file paths to the user unless they ask.`,
   ].join('\n');
 
@@ -329,13 +339,23 @@ function insertProvisioningDependents(
   creatorUserId: string,
   creatorHandle: string,
 ):
-  | { kind: 'agent'; inbox: { id: string }; onboardingMsg: { id: string } }
+  | {
+      kind: 'agent';
+      directLine: { id: string };
+      openedPairConversationIds: readonly string[];
+      onboardingMsg: { id: string };
+    }
   | {
       kind: 'conversation';
       home: { id: string };
       dm: { id: string };
       onboardingMsg: { id: string };
     } {
+  // The mint's announcement, held as data until this transaction has committed
+  // (#task:2072). Assembled here for the same reason the mention CC assembles it
+  // at its own boundary: the pair must roll back with the graph, so the frame
+  // cannot go out in the same breath — see `recordDirectPairOpens`.
+  const opens = recordDirectPairOpens();
   return deps.agentProvisioning.uow.atomically(tx => {
     // Conditional transition FIRST (pending-only): the UPDATE only matches a
     // row that still has eligibility. `lost` means another transition already
@@ -345,24 +365,56 @@ function insertProvisioningDependents(
     if (outcome.status === 'lost') throw new ProvisioningEligibilityLostError();
     const flipped = outcome.row;
     if (flipped.sessionScope === 'agent') {
-      // The AGENT arm's whole dependent graph: the onboarding message, in the
-      // inbox the aggregate already owns (#task:2034). No home, no DM, no
-      // roster row — an inbox is rosterless (§4.2) and `agent_home` is the
-      // OTHER scope's model, not a legacy layer to keep building here.
+      // The AGENT arm's whole dependent graph: the creator's direct line with
+      // this agent, and the onboarding message in it (#task:2034 destination,
+      // #task:2072 carrier). No home, no DM channel, no roster row — a
+      // `direct_pair`'s participants ARE its endpoint columns, and `agent_home`
+      // is the OTHER scope's model, not a legacy layer to keep building here.
       //
-      // The destination is READ inside this transaction rather than threaded in
-      // from the caller: the write that consumes it is part of this graph, so
-      // it must be read under the same atomicity. Absence throws
-      // (`requireInboxId`) instead of skipping the write — skipping is exactly
-      // the silent-no-onboarding bug this arm exists to fix.
-      const inboxId = tx.conversations.requireInboxId(flipped.id);
+      // MINTED INSIDE this transaction, not beside the reserved row: the line
+      // exists only for the message about to be written into it, so a line that
+      // outlived a rolled-back graph would be an empty conversation in the
+      // creator's DM list. Get-or-create rather than insert because the creator
+      // may already have a line with this agent — `?retry=true` re-enters here on
+      // the same row, and a mention of the handle while it was still
+      // `pending_materialization` already opens exactly this pair.
+      //
+      // NOT GATED BY `canInitiateDirectMessageToAgent`, and not by an oversight:
+      // that gate answers "may this human START contact with an agent", which is
+      // a question about reach, and this mint grants none. Its human endpoint IS
+      // the row's `created_by_user_id`, already an independent arm of
+      // `canViewAgent` — so the pair adds no visibility its creator lacks, unlike
+      // the mention CC, where the author is an arbitrary participant and the
+      // endpoint would have BEEN the new reach. Nor could the gate be asked
+      // honestly at the only point it may run (before the mint): until the flip
+      // above commits, the row is `pending_materialization`, which the gate reads
+      // as invisible-to-everyone, and asking it AFTER the flip inside this
+      // transaction would be a gate reading a status only this uncommitted
+      // transaction can see. The one clause with content here — the agent is
+      // agent-scoped — is this arm's own condition.
+      const directLine = openDirectPair(
+        { conversations: tx.conversations, allocations: opens.port },
+        { kind: 'human', id: creatorUserId },
+        { kind: 'agent', id: agentRow.id },
+        agentRow.created_at,
+      );
       const onboardingMsg = tx.messages.insertForConversation({
-        conversationId: inboxId,
+        conversationId: directLine.id,
         fromKind: 'system',
-        content: ONBOARDING_INBOX_CONTENT(flipped.name, creatorHandle),
+        content: ONBOARDING_DIRECT_LINE_CONTENT(flipped.name, creatorHandle),
         metadata: { subtype: systemSubtype('onboarding') },
       });
-      return { kind: 'agent', inbox: { id: inboxId }, onboardingMsg };
+      return {
+        kind: 'agent',
+        directLine,
+        // The ids THIS mint created, so the post-commit half can prove it covered
+        // them rather than the coverage being a property of whoever wrote this.
+        // Empty when the line already existed — the frame says "this row exists",
+        // and a caller that did not create it is not the one it came into
+        // existence on.
+        openedPairConversationIds: [...opens.opened()],
+        onboardingMsg,
+      };
     }
     const home = tx.workspaces.insertAgentHome({
       agent: flipped,
@@ -375,13 +427,6 @@ function insertProvisioningDependents(
       agentId: agentRow.id,
     });
     tx.conversations.addAgent(dm.id, agentRow.id);
-    // NO inbox insert here. The inbox is an invariant of the `agents` ROW, not of
-    // the materialized graph (`reserveAgentAggregate` writes the pair), for two
-    // reasons this transaction cannot satisfy: a `pending_materialization` or
-    // `failed` row is already addressable by handle, so a mention of it needs a
-    // destination BEFORE this point; and `?retry=true` re-enters here on the same
-    // row, where a second insert would hit `idx_conversations_inbox_agent` and
-    // roll the whole retry back into `dependent_row_insert_failed` forever.
     // v40 (graded-permissions): the human who creates an agent owns its home.
     tx.workspaces.addOwnerMember(home.id, creatorUserId);
     tx.workspaces.setOwnerUserId(home.id, creatorUserId);
@@ -596,18 +641,46 @@ function buildPostCommitEffects(
  * Both scopes get the SAME three effects, because the onboarding contract is
  * "the agent is woken with a message it must act on" and that is scope-blind
  * (#task:2034). Only the destination differs: the ConversationSlot is woken on
- * its DM channel, the AgentSlot on its own inbox — which is exactly the
- * placement its RuntimeScope resolves a cwd for (#task:2019), so there is no
- * refusal arm to mirror here.
+ * its DM channel, the AgentSlot on its direct line with the creator — which is
+ * exactly the placement its RuntimeScope resolves a cwd for (#task:2019), so
+ * there is no refusal arm to mirror here.
+ *
+ * The agent arm owes ONE more effect, and it is not a fourth member of the
+ * scope-blind contract: a pair this transaction MINTED is a row the creator's DM
+ * list is the read surface for, so the frame it was promised at the mint
+ * (`recordDirectPairOpens`) is published here — after the commit that made the
+ * row durable. Audience is the pair's human endpoint, which IS `creatorUserId`
+ * by construction of the mint, not by a roster read. Nothing is published when
+ * the line already existed: the frame says "this row exists", and the message
+ * that just landed in it publishes its own conversation frame either way.
  */
 function postCommitEffectsForInserted(
   deps: CreateAgentDeps,
   agentId: string,
+  creatorUserId: string,
   inserted: ReturnType<typeof insertProvisioningDependents>,
 ): PostCommitEffect[] {
+  if (inserted.kind === 'agent') {
+    return [
+      ...inserted.openedPairConversationIds.map(
+        (conversationId): PostCommitEffect =>
+          () => {
+            publishDirectPairsChangedToViewer(deps.events, creatorUserId, {
+              conversation_id: conversationId,
+            });
+          },
+      ),
+      ...buildPostCommitEffects(
+        deps,
+        inserted.directLine.id,
+        agentId,
+        inserted.onboardingMsg.id,
+      ),
+    ];
+  }
   return buildPostCommitEffects(
     deps,
-    inserted.kind === 'agent' ? inserted.inbox.id : inserted.dm.id,
+    inserted.dm.id,
     agentId,
     inserted.onboardingMsg.id,
   );
@@ -615,11 +688,13 @@ function postCommitEffectsForInserted(
 
 /**
  * The three optional coordinates are the HUMAN's navigation target for a fresh
- * create, so the agent-scoped arm reports none of them: it has no home and no
- * channel, and its onboarding message lives in an inbox the human is not a
- * participant of (§4.2) — a message id whose conversation cannot be named or
- * opened is a dangling coordinate, not information. The wire shape is unchanged
- * (`dm_channel_id === null` ⇔ agent-scoped).
+ * create, so the agent-scoped arm reports none of them: it has no home and no DM
+ * CHANNEL, and no field here can honestly carry a `direct_pair` — `dmChannelId`
+ * is a channel inside the agent's home, which the desktop navigates to as one,
+ * and a message id without a conversation coordinate is dangling. The creator
+ * still learns about the line, from the read surface that owns it: the
+ * `direct_pairs_changed` invalidation above plus `GET /api/direct-pairs`. The
+ * wire shape is unchanged (`dm_channel_id === null` ⇔ agent-scoped).
  */
 function successFromInserted(
   deps: CreateAgentDeps,
@@ -848,6 +923,7 @@ export async function createAgent(
       effects: postCommitEffectsForInserted(
         deps,
         dispatch.rowToRetry.id,
+        creatorUserId,
         retryResult.inserted,
       ),
     };
@@ -897,14 +973,15 @@ export async function createAgent(
   }
 
   // ── L1 reserve ─────────────────────────────────────────────────
-  // The AGGREGATE factory, not the bare row insert: an Agent exists only together
-  // with its inbox (v71 §4.2), and from this commit on a mention of the handle has
-  // a destination even if materialization never succeeds. Retry re-enters through
-  // `flipFailedToReserveAgain` on this same row, so the inbox is written exactly
-  // once per agent — migration, fresh create and retry all obey one rule.
+  // ONE INSERT, its own commit: the L2 materialize dispatch below depends on the
+  // row being durable before it runs. It used to be the AGGREGATE factory, which
+  // paired the row with an `agent_inbox` so a mention of the handle had a
+  // destination even if materialization never succeeded; #task:2072 moved that
+  // destination to the AUTHOR's direct line with the agent, minted at the send
+  // boundary — so a bare row is already a complete, addressable Agent.
   let reservedRow: AgentRow;
   try {
-    reservedRow = deps.agentProvisioning.reserveAgentAggregate({
+    reservedRow = deps.agentProvisioning.reserveAgentRow({
       input,
       defaultHostId: resolvedHostId,
       createdByUserId: creatorUserId,
@@ -913,7 +990,7 @@ export async function createAgent(
   } catch (err) {
     logger.warn(
       { err, agentName: input.name, idempotencyKey },
-      'agent aggregate reserve INSERT failed',
+      'agent row reserve INSERT failed',
     );
     return {
       kind: 'nameTaken',
@@ -942,6 +1019,11 @@ export async function createAgent(
   return {
     kind: 'created',
     payload: successFromInserted(deps, reservedRow.id, freshResult.inserted),
-    effects: postCommitEffectsForInserted(deps, reservedRow.id, freshResult.inserted),
+    effects: postCommitEffectsForInserted(
+      deps,
+      reservedRow.id,
+      creatorUserId,
+      freshResult.inserted,
+    ),
   };
 }

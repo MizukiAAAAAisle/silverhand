@@ -474,7 +474,7 @@ describe('P0-f DirectPairBoard (#task:2022) — the pair conversation as a task 
     expect(detail.task.nav).toEqual({
       kind: 'source',
       ref: {
-        channel_id: pair.id,
+        conversation_id: pair.id,
         thread_root_id: null,
         message_id: source.id,
       },

@@ -86,8 +86,8 @@ Two concerns, two scopes:
   viewer). A manual reorder (drag) also switches that scope to `manual`
   atomically (`order ⟹ manual`, see API), so drag works from any mode. How many
   scopes a list has depends on the list kind (see hard groups below):
-  - **workspace rail** — mode is **per hard-group**: the `dm` and `regular`
-    sections each carry their own toggle. Scope = the group key. There is no star
+  - **workspace rail** — mode is **per hard-group**: the `agent_space` and
+    `regular` sections each carry their own toggle. Scope = the group key. There is no star
     on the rail at all (#task:1899), so no star group and no star mode scope.
   - **conversation list** — mode is **list-wide** (one toggle for the whole list),
     unchanged. Scope = the sentinel `''`.
@@ -118,7 +118,9 @@ The lists partition on **different axes**, and **star is not a hard group in any
 list** (#task:1888) — where it exists at all it is an EXCLUSION (the entity lives
 in another list):
 
-- workspace rail: `dm` / `regular` — by **kind** only. A container **cannot be
+- workspace rail: `agent_space` / `regular` — by **ownership** only (agent-owned
+  vs people-owned; the criterion is `workspaces.owner_agent_id`, since v83 deleted
+  the `workspace_kind` column that once spelled it). A container **cannot be
   starred** (#task:1899): the rail has no star axis, so its order is `mode` over
   `rank` and nothing else. Archived workspaces are out of sorting scope entirely.
 - conversation list (`channels:<ws_id>`): a **single hard group `channels`**. A
@@ -159,7 +161,8 @@ pin cleared all viewers' ranks via the now-removed `clearEntityRank`).
 
 ### Renderer composition (pure helper)
 
-`live partition (rail: agent_home→dm / regular→regular — by KIND only, no star
+`live partition (rail: owner_agent_id IS NOT NULL→agent_space / else→regular — by
+OWNERSHIP only, no star
 anywhere on the rail; conversation list → the single group `channels`, with the
 starred conversations EXCLUDED to the global Favorites list)` → within each group
 by **that scope's** mode
@@ -246,7 +249,7 @@ So the visible recent order is composed as a **read model**, single-sourced in
 CREATE TABLE user_list_sort_mode (
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   list_key   TEXT NOT NULL,
-  scope      TEXT NOT NULL DEFAULT '',  -- '' = list-wide (channels); 'dm'|'regular' = a rail section
+  scope      TEXT NOT NULL DEFAULT '',  -- '' = list-wide (channels); 'agent_space'|'regular' = a rail section (v86; 'dm' pre-v86)
   mode       TEXT NOT NULL CHECK (mode IN ('recent', 'manual')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, list_key, scope)
@@ -270,8 +273,23 @@ falls back to the default `recent` — an accepted reset, since the rail's group
 taxonomy changed in the same change). The v48 note still holds verbatim under the
 #task:1209 rename: the rail's old `pinned` mode-scope rows become orphans and fall
 back to `recent` (another accepted reset). #task:1252 removed the rail's star
-mode-scope entirely — the rail's only scopes are now `dm` / `regular`, so any
-stray rail star-scope row is likewise an orphan that resets to `recent`.
+mode-scope entirely — the rail's only scopes are now `agent_space` / `regular`, so
+any stray rail star-scope row is likewise an orphan that resets to `recent`.
+
+**v86 — the rail's agent-space scope is renamed `dm` → `agent_space`
+(#task:2045 Delta 4).** The rail section holding agent spaces had carried the
+token `dm` since v48, from before the product had actual direct messages; the same
+word then came to mean a DirectPair, so one word named two things. v86 moves the
+STORED value in step with `SortGroupSchema` and the renderer, and this one is NOT
+an accepted reset: unlike the `pinned` / star orphans above, leaving these rows
+behind would be **asymmetric**, because `user_list_sort_mode` is keyed by scope
+while `user_sort_entry` is keyed by entity — every manual rank would survive and
+silently stop being applied ("my order is still there but no longer used"). The
+UPDATE aborts loud on a PK collision instead of merging two users' modes, and the
+rail's localStorage collapse key (`persistId="dm"`, #task:2035) is deliberately
+NOT renamed: it is storage identity with no collision to resolve (real DMs persist
+under `direct-messages`), and renaming it would reset every user's collapse
+choice.
 
 **v50 — `user_sort_entry.starred_at` (#task:1209).** Star is per-(user, list,
 entity) view state, the same grain as `rank` / `last_accessed_at`, so it joins
@@ -322,7 +340,7 @@ Read state is carried **inline** on the list responses — no separate GET:
 
 `viewer_sort.modes` is a **per-scope map** (`Record<scope, 'recent'|'manual'>`,
 sparse — an absent scope means `recent`). Conversation lists carry the single scope
-`''`; the rail carries up to `dm` / `regular` (star is not a rail scope — a
+`''`; the rail carries up to `agent_space` / `regular` (star is not a rail scope — a
 container cannot be starred at all, #task:1899). Read with the renderer
 helper `sortModeOf(state, group?)` — group omitted ⇒ scope `''` (so channel call
 sites are unchanged), rail passes its section group.
@@ -344,27 +362,28 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 
 - `PUT /api/sort/mode { list_key, group?, mode }` → `{ viewer_sort }`. Validates
   list scope (existence + visibility) like order/touch. `group` selects the mode
-  scope: `list_key 'workspaces'` **requires** a legal rail group (`dm|regular`);
+  scope: `list_key 'workspaces'` **requires** a legal rail group
+  (`agent_space|regular`);
   `channels:<ws>` **forbids** `group` (list-wide, scope `''`). A
   mismatch is a 400 (don't guess).
 - `PUT /api/sort/order { list_key, group, ordered_ids }` → `{ viewer_sort }`.
   `ordered_ids` must be **exactly** the live members of `group` (any order, no
   missing / extra / duplicate / cross-group id). `group` must be a legal hard
-  group for the list kind (rail: `dm|regular`; conversation list: `channels`;
+  group for the list (rail: `agent_space|regular`; conversation list: `channels`;
   favorites: `favorites`) — an
   illegal group is rejected even with empty `ordered_ids`. The backend validates
-  against live kind/star state. On the **conversation list** it **excludes starred
+  against live ownership/star state. On the **conversation list** it **excludes starred
   conversations** (they live in the global Favorites list, reordered there — an
   `ordered_ids` that includes a starred conversation is a 400). On the **rail**
   the exclusion set is empty by construction (#task:1899: no container star), so
-  the whole kind group is the legal set. It rejects
+  the whole group is the legal set. It rejects
   partial/extra/duplicate (400) — a partial submission would leave other members'
   ranks stale and collide within the group, so it is not a
   patch. On success it rewrites
   dense ranks (0..n) for the group **and sets the relevant scope's mode to
   `manual` in the same transaction** — `order ⟹ manual` is an invariant. The
   scope a drag flips is derived from `list_key + group` exactly as `mode` is
-  (rail: the dragged group; channel: `''`), so dragging the rail's `dm`
+  (rail: the dragged group; channel: `''`), so dragging the rail's `agent_space`
   section leaves the `regular` mode untouched, and a channel drag flips its
   one list-wide mode. The response's `viewer_sort.modes[scope]` comes back
   `manual`.

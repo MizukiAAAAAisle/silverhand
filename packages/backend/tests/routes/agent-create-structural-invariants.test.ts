@@ -24,13 +24,14 @@ import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js'
 
 /**
  * Seed a `materialization_status = 'failed'` row that matches the
- * shape a real L3b leaves behind: the AGGREGATE ONLY — the `agents`
- * row plus its inbox placement (v71 §4.2) — and NO dependent rows
- * (no `agent_home` workspace, no DM channel, no `workspace_users`
- * membership entry). The L3a transaction that inserts those
- * dependents rolls back atomically on failure, while the aggregate
- * was committed earlier by `reserveAgentAggregate`, so that pair is
- * what a "failed" row is in production.
+ * shape a real L3b leaves behind: the `agents` ROW ONLY, and NO
+ * dependent rows (no `agent_home` workspace, no DM channel, no
+ * `workspace_users` membership entry, no conversation of any kind).
+ * The L3a transaction that inserts those dependents rolls back
+ * atomically on failure, while the row was committed earlier by
+ * `reserveAgentRow`, so a bare row is what a "failed" agent is in
+ * production — since #task:2072 literally so, the reserve having no
+ * second write left to make.
  *
  * The cross-user ACL pins below depend on this shape: with no
  * dependent workspaces, `canViewAgent` short-circuits to creator-only,
@@ -39,9 +40,7 @@ import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js'
  * then flipping the status leaves an agent_home workspace + a
  * workspace_users row behind, which would let `canViewAgent` match
  * via the workspace branch and mask the contract this test is meant
- * to lock down. The inbox does NOT reopen that branch: it is not a
- * workspace and carries no human membership row (§4.2), so
- * `canViewAgent` still short-circuits to creator-only.
+ * to lock down.
  */
 function seedFailedAgent(
   t: TestApp,
@@ -60,7 +59,7 @@ function seedFailedAgent(
   const agents = new AgentRepo(t.ctx.db);
   const row = createSqliteAgentProvisioningPersistence(
     t.ctx.db,
-  ).reserveAgentAggregate({
+  ).reserveAgentRow({
     input: { name, runtime: 'claude' },
     defaultHostId: hostId,
     createdByUserId,
@@ -413,11 +412,14 @@ describe('D4.d structural invariants', () => {
       // Install the trigger BEFORE the POST. ABORT inside a tx
       // rolls the whole tx back.
       //
-      // `placement_kind = 'workspace'` is load-bearing: an `agent_inbox` also
-      // uses a fixed roster, so a predicate on roster policy alone would abort
-      // the L1 AGGREGATE reserve instead —
-      // a different phase, a different failure (409 `agent_name_taken`), and the
-      // L3a arm this test exists for would never run.
+      // `placement_kind = 'workspace'` names the row this test means to abort —
+      // the agent home's DM channel — rather than trusting the roster policy to
+      // identify it. It was strictly load-bearing while the L1 AGGREGATE reserve
+      // also inserted a fixed-roster row (the `agent_inbox` #task:2072 retired):
+      // a predicate on roster policy alone aborted THAT insert instead, which is a
+      // different phase and a different failure (409 `agent_name_taken`), and the
+      // L3a arm this test exists for never ran. It stays because a trigger that
+      // fires on "any fixed roster" would catch the next such insert too.
       t.ctx.db.exec(
         `CREATE TRIGGER d4d_inv3_fail_dm_insert
            BEFORE INSERT ON conversations
@@ -487,8 +489,7 @@ describe('D4.d structural invariants', () => {
         agent_home: t.ctx.db
           .prepare<[string], { c: number }>(
             `SELECT COUNT(*) AS c FROM workspaces
-              WHERE workspace_kind = 'agent_home'
-                AND owner_agent_id = ?`,
+              WHERE owner_agent_id = ?`,
           )
           .get(agent.id)!.c,
         dm_channels: t.ctx.db

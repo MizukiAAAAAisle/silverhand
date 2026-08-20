@@ -30,6 +30,20 @@ import type { MessageAuthorDto } from '@silverhand/shared';
  *                   navigable, and NON-grouping (see {@link authorGroupKey}).
  */
 
+/**
+ * The `unresolved` labels, exported so a surface OUTSIDE this seam can borrow
+ * the word instead of re-typing it (@Paul, #task:2065).
+ *
+ * The borrower is the sender picker, whose selected agent can stop resolving in
+ * the viewer's directory. It deliberately says the WEAKER thing there — a
+ * directory miss proves "not resolvable here", never "deleted" — and its whole
+ * licence for that is that this is already the product's word for exactly that
+ * claim. A hand-typed copy would let the two drift while the borrowed-word
+ * justification silently stayed in the comment, so the sharing is structural.
+ */
+export const UNRESOLVED_AGENT_LABEL = 'Unknown agent';
+export const UNRESOLVED_USER_LABEL = 'Unknown user';
+
 type ActiveAgentAuthor = Extract<
   MessageAuthorDto,
   { status: 'active'; kind: 'agent' }
@@ -70,7 +84,7 @@ export interface AuthorPresentation {
 export function presentAuthor(author: MessageAuthorDto): AuthorPresentation {
   if (author.status === 'unresolved') {
     return {
-      label: author.kind === 'agent' ? 'Unknown agent' : 'Unknown user',
+      label: author.kind === 'agent' ? UNRESOLVED_AGENT_LABEL : UNRESOLVED_USER_LABEL,
       kind: author.kind,
       status: 'unresolved',
       isDeleted: false,

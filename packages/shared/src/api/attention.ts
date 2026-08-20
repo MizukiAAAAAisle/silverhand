@@ -12,7 +12,6 @@
 // Everything else Attention surfaces (positional unread / directed mentions /
 // tasks) is a projection, never an Attention-owned copy.
 import { z } from 'zod';
-import { ConversationRosterPolicySchema } from '../db/schema.js';
 import { MessageAuthorDtoSchema } from './message-author.js';
 
 /**
@@ -310,11 +309,20 @@ export const ActivityItemDtoSchema = z.object({
    *  stream cursor). This is the source_ref-out for directed notification-backed
    *  claims — the renderer marks read BY this id, never by parsing `id`. */
   notification_id: z.string().nullable(),
-  /** The roster policy of the anchoring conversation. Thread-ness is a stream
-   *  coordinate, not a conversation classification: a thread item carries the
-   *  parent conversation's policy and sets `thread_root_id != null`. Drives the
-   *  row-1 "where" label (Channel / DM). */
-  conversation_roster_policy: ConversationRosterPolicySchema,
+  // NO conversation-classification field rides this DTO — neither a roster bit
+  // nor a `conversation_placement_kind` (#task:2076). Both Activity sources are
+  // restricted to WORKSPACE placements (`read-model/activity.ts`, one
+  // `WORKSPACE_PLACED` conjunct each, individually falsifier-gated by
+  // `tests/routes/activity-placement-domain.test.ts`), so every item here is a
+  // workspace conversation = a channel (#task:1373): the row-1 identity has no
+  // branch to key, and a placement word would be the constant `'workspace'`.
+  // `conversation_roster_policy` used to be here, and its docblock instructed the
+  // renderer to derive a "Channel / DM" label from it — which is exactly how an
+  // agent home's DM/Onboarding channel got drawn as a private line. Roster's live
+  // role for Activity is SERVER-SIDE salience (a fixed-roster stream's ambient
+  // unread is directed-grade, §5.1): a capability question, answered in
+  // `read-model/activity.ts` off the SQL row, that never needed to cross the wire.
+  // The keying rule itself lives on `ConversationPlacementKindSchema` (db/schema).
   /** Row-1 location title: ALWAYS the conversation title — never a message
    *  excerpt. Stable across placements so the renderer's "where" line has one
    *  meaning. */

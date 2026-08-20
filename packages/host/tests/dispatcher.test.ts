@@ -137,9 +137,6 @@ describe('IntentDispatcher', () => {
       async agentStaleResolve() {
         throw new Error('not used');
       },
-      async agentStreamObserved() {
-        throw new Error('not used');
-      },
       async agentStaleReceive() {
         throw new Error('not used');
       },
@@ -369,6 +366,11 @@ describe('IntentDispatcher — runtime_* routing', () => {
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [101, 102],
+      deliveries: [101, 102].map(id => ({
+        delivery_id: id,
+        seq: id,
+        presentation: { body: 'hi', instruction: 'system' as const },
+      })),
       kind: 'message',
       text: 'hi',
       spawn_options: testStartOptions(),
@@ -400,6 +402,11 @@ describe('IntentDispatcher — runtime_* routing', () => {
         target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [101],
+        deliveries: [{
+          delivery_id: 101,
+          seq: 101,
+          presentation: { body: 'hi', instruction: 'system' as const },
+        }],
         kind: 'message',
         text: 'hi',
         spawn_options: testStartOptions(),

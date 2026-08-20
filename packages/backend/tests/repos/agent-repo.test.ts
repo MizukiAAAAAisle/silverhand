@@ -254,4 +254,30 @@ describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)',
       t.cleanup();
     }
   });
+
+  // #task:2069 — the row carries NO container word. It carried `workspace_kind`
+  // until then, offered to its one reader as a second sufficient input for a
+  // CONVERSATION-level verdict ("private line or channel?"). Two independent
+  // reasons it is gone, and this cell is the falsifier for the second:
+  //   1. modelling — a conversation-level question is answered by
+  //      conversation-level facts, both of which are still on the row;
+  //   2. reachability — the container arm could never fire on its own, because
+  //      `agent_home ⇒ roster_policy='fixed'` for every workspace-placed row.
+  // A re-added `workspace_kind` would be a container word on a conversation row
+  // again, so this asserts absence rather than a value.
+  it('carries no container word — the conversation-level facts answer alone (#task:2069)', () => {
+    const t = seed();
+    try {
+      const row = t.repo.listRuntimeParticipations(t.agent.id)[0];
+      expect(row).toBeDefined();
+      expect(Object.keys(row!)).not.toContain('workspace_kind');
+      // The inputs that DO answer it, present on every row.
+      expect(row).toMatchObject({
+        conversation_placement_kind: 'workspace',
+        conversation_roster_policy: 'open',
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
 });

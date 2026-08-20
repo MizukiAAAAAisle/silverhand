@@ -12,12 +12,12 @@ import type {
   ConversationVisibility,
   CreateConversationChannelInput,
   CreateWorkspaceInput,
-  DmChannelDto,
+  FixedRosterConversationDto,
   ListFavoritesDto,
   UpdateAgentCapabilitiesInput,
   UpdateWorkspaceHumanMemberRoleResponse,
   UpdateWorkspaceInput,
-  WorkspaceDto,
+  ViewerWorkspaceDto,
   WorkspaceHumanMemberDto,
   WorkspaceMembersResponse,
   WorkspaceRole,
@@ -34,15 +34,20 @@ import {
   recordChannelWorkspaceRows,
 } from '@/features/channels/channel-workspace-index';
 import { handleViewerWorkspaceRemoved } from './viewer-removal-contract';
+import { workspaceScopedQueryEnabled } from './workspace-scoped-query';
 import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
 export type WorkspaceListItem = {
   id: string;
   name: string;
   description: string | null;
-  kind: 'regular' | 'dm';
   workspace_scope_ids: string[];
-  dm_agent_id: string | null;
+  /** The agent this container belongs to, or `null` for a workspace people own.
+   *  The renderer's ONLY spelling of the container-identity distinction since
+   *  #task:2078 — classify through `isAgentSpace` (`./workspace-ownership`), not
+   *  by checking this field inline; read the id itself only to resolve the
+   *  owner's avatar / name. */
+  owner_agent_id: string | null;
   dm_channel_ids: string[];
   archived_at: number | null;
   created_at: number;
@@ -56,7 +61,7 @@ export type WorkspaceListItem = {
  * It is optional here for transitional safety: a payload lacking it is `unknown`
  * (see `deriveChannelMembership`), never silently treated as a member.
  */
-export type ChannelListItem = (ChannelConversationDto | DmChannelDto) & {
+export type ChannelListItem = (ChannelConversationDto | FixedRosterConversationDto) & {
   is_member?: boolean;
 };
 
@@ -110,15 +115,26 @@ function normalizeWorkspaceMembers(
   };
 }
 
-function workspaceToListItem(workspace: WorkspaceDto): WorkspaceListItem {
-  const isDm = workspace.workspace_kind === 'agent_home';
+function workspaceToListItem(workspace: ViewerWorkspaceDto): WorkspaceListItem {
+  // `name` is the row's own name, verbatim for both kinds. It used to gain a
+  // `dm-` prefix for an agent space, which nothing consumed except the three
+  // helpers that stripped it back off before display (#task:2066) — a private
+  // spelling that made the SAME workspace arrive under two name shapes (prefixed
+  // from this list, bare from the archived aggregate) and put a `dm-Norman` in
+  // front of the user whenever a surface forgot to call the stripper.
   return {
     id: workspace.id,
-    name: isDm ? `dm-${workspace.name}` : workspace.name,
+    name: workspace.name,
     description: workspace.description,
-    kind: isDm ? 'dm' : 'regular',
     workspace_scope_ids: [workspace.id],
-    dm_agent_id: workspace.owner_agent_id,
+    // The container word is not carried into the domain object at all (#task:2078).
+    // It was provably the same bit as this line — the schema pinned the kind word
+    // to `owner_agent_id IS NOT NULL` — so keeping both gave every surface a
+    // choice of two spellings and no way to prove it
+    // picked the one the server would agree with. Minting a kind here from
+    // ownership would just re-create that second authority (#task:2075 判据④):
+    // classification goes through `isAgentSpace`.
+    owner_agent_id: workspace.owner_agent_id,
     dm_channel_ids:
       workspace.dm_channel_ids ?? (workspace.dm_channel_id ? [workspace.dm_channel_id] : []),
     archived_at: workspace.archived_at,
@@ -147,7 +163,7 @@ export interface WorkspaceListPayload {
 }
 
 async function fetchWorkspaces(): Promise<WorkspaceListPayload> {
-  const res = await api<{ workspaces: WorkspaceDto[]; viewer_sort: ViewerSortStateDto }>(
+  const res = await api<{ workspaces: ViewerWorkspaceDto[]; viewer_sort: ViewerSortStateDto }>(
     apiPaths.workspaces,
   );
   return { items: res.workspaces.map(workspaceToListItem), viewerSort: res.viewer_sort };
@@ -364,7 +380,7 @@ export function useCreateWorkspace() {
   return useMutation({
     mutationFn: async (input: CreateWorkspaceInput) => {
       const res = await api<{
-        workspace: WorkspaceDto;
+        workspace: ViewerWorkspaceDto;
         onboarding_channel_id: string;
       }>(
         apiPaths.workspaces,
@@ -430,7 +446,7 @@ export function useRenameWorkspace() {
   return useMutation({
     mutationFn: async (vars: { id: string } & UpdateWorkspaceInput) => {
       const { id, ...body } = vars;
-      const res = await api<{ workspace: WorkspaceDto }>(apiPaths.workspace(id), {
+      const res = await api<{ workspace: ViewerWorkspaceDto }>(apiPaths.workspace(id), {
         method: 'PATCH',
         body: JSON.stringify(body),
       });
@@ -458,7 +474,7 @@ export function useArchiveWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (vars: { id: string; archived: boolean }) => {
-      const res = await api<{ workspace: WorkspaceDto }>(
+      const res = await api<{ workspace: ViewerWorkspaceDto }>(
         `/api/workspaces/${vars.id}/archive`,
         {
           method: 'PATCH',
@@ -532,13 +548,25 @@ async function fetchWorkspaceChannels(workspaceId: string): Promise<ChannelListP
   };
 }
 
+/**
+ * One workspace's live channel list, plus the `workspace:<id>` WS subscription
+ * the whole channel family shares.
+ *
+ * `workspaceResolved` is the caller's assertion that the container ROW behind
+ * `workspaceId` has resolved — an id alone is not enough (see
+ * {@link workspaceScopedQueryEnabled}). It carries NO default: this used to be a
+ * nullable container-kind field defaulting to `'regular'` whose only read was
+ * `!== null`, i.e. two different absences on one axis, and any default
+ * (`'regular'` then, `true` now) silently turns "unresolved" into "go ahead".
+ * Absence must be a compile error (@Paul, #task:2078).
+ */
 export function useChannelsForWorkspace(
   workspaceId: string | null,
-  workspaceKind: 'regular' | 'dm' | null = 'regular',
+  workspaceResolved: boolean,
 ) {
   const qc = useQueryClient();
   useEffect(() => {
-    if (!workspaceId || workspaceKind === null) return;
+    if (!workspaceScopedQueryEnabled(workspaceId, workspaceResolved)) return;
     const scope = `workspace:${workspaceId}`;
     const sub = subscribeWsScope(scope);
     const unsub = onWsFrame(frame => {
@@ -557,11 +585,11 @@ export function useChannelsForWorkspace(
       sub.unsubscribe();
       unsub();
     };
-  }, [qc, workspaceId, workspaceKind]);
+  }, [qc, workspaceId, workspaceResolved]);
 
   return useQuery({
     queryKey: workspaceId ? channelsKey(workspaceId) : ['workspaces', 'none', 'channels'],
-    enabled: !!workspaceId && workspaceKind !== null,
+    enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
     queryFn: () => fetchWorkspaceChannels(workspaceId!),
     select: r => r.items,
   });
@@ -649,49 +677,42 @@ export function applyChannelJoinToList(
 }
 
 /** The viewer's sort state (`mode` + sparse `entries`) for one workspace's
- *  channel sidebar, read off the same `useChannelsForWorkspace` cache. */
+ *  channel sidebar, read off the same `useChannelsForWorkspace` cache — so it
+ *  takes the same `workspaceResolved` gate (see that hook for why there is no
+ *  default). */
 export function useChannelSortState(
   workspaceId: string | null,
-  workspaceKind: 'regular' | 'dm' | null = 'regular',
+  workspaceResolved: boolean,
 ) {
   return useQuery({
     queryKey: workspaceId ? channelsKey(workspaceId) : ['workspaces', 'none', 'channels'],
-    enabled: !!workspaceId && workspaceKind !== null,
+    enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
     queryFn: () => fetchWorkspaceChannels(workspaceId!),
     select: r => r.viewerSort,
   });
 }
 
-/** Whether the archived channel-like query should run for a workspace of
- *  this kind. Enabled for BOTH `regular` (archived `channel`s) and `dm`
- *  (agent_home archived `dm_channel`s) — the backend endpoint is
- *  channel-like since #task:1144. Extracted + exported so a regression test
- *  pins `dm` enabled and this can't silently revert to regular-only
- *  (#task:1145). */
-export function archivedChannelsEnabledForKind(
-  workspaceKind: 'regular' | 'dm' | null,
-): boolean {
-  return workspaceKind === 'regular' || workspaceKind === 'dm';
-}
-
 /** Archived channel-like conversations for a workspace.
- *  Backed by `GET /api/workspaces/:id/channels/archived`. Enabled for BOTH
- *  regular workspaces (archived `channel`s) and agent_home / DM workspaces
- *  (archived `dm_channel`s) — the backend endpoint is channel-like and
- *  returns archived DMs for agent_home since #task:1144. This union feeds
- *  `channels` in App.tsx, so an archived DM opened from the global Archived
- *  panel resolves to a real `selectedChannel` instead of a blank pane
- *  (#task:1145). WS invalidation lives on `useChannelsForWorkspace` — both
+ *  Backed by `GET /api/workspaces/:id/channels/archived`. Runs for EVERY
+ *  container kind — the endpoint is channel-like and returns archived
+ *  `dm_channel`s for an agent space just as it returns archived `channel`s for a
+ *  regular workspace (#task:1144). This union feeds `channels` in App.tsx, so an
+ *  archived DM opened from the global Archived panel resolves to a real
+ *  `selectedChannel` instead of a blank pane (#task:1145). The gate that
+ *  remains is `workspaceResolved` — the one cell of the old kind predicate with
+ *  independent content ("unresolved ⇒ do not fetch"); the kind arms were an OR
+ *  over the whole alphabet, so a regular-only gate is no longer expressible
+ *  (#task:2078). WS invalidation lives on `useChannelsForWorkspace` — both
  *  queries share the same trigger. */
 export function useArchivedChannelsForWorkspace(
   workspaceId: string | null,
-  workspaceKind: 'regular' | 'dm' | null = 'regular',
+  workspaceResolved: boolean,
 ) {
   return useQuery<ChannelListItem[]>({
     queryKey: workspaceId
       ? archivedChannelsKey(workspaceId)
       : ['workspaces', 'none', 'channels', 'archived'],
-    enabled: !!workspaceId && archivedChannelsEnabledForKind(workspaceKind),
+    enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
     queryFn: () => fetchWorkspaceArchivedChannels(workspaceId!),
   });
 }
@@ -754,8 +775,8 @@ export function useChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
  *  and the archived set is itself membership-filtered — so a joined channel that
  *  has since been archived lives only here. Reading the active list alone would
  *  answer "not a member" for it, which is a different claim from the truth
- *  (#task:2040, @Cindy). No kind gating: the endpoint is channel-like for
- *  `regular` and `agent_home` alike (see {@link archivedChannelsEnabledForKind}). */
+ *  (#task:2040, @Cindy). No kind gating anywhere: the endpoint is channel-like
+ *  for every container kind (see {@link useArchivedChannelsForWorkspace}). */
 export function useArchivedChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
   return useQueries({
     queries: workspaceIds.map(id => ({
@@ -812,7 +833,7 @@ export function sortCacheAdapter(listKey: string): SortCacheAdapter | null {
 }
 
 /** Toggle one SCOPE's sort mode (recent|manual). The scope is selected by
- *  `group`: `'workspaces'` requires a rail group (`dm|regular`; star is the
+ *  `group`: `'workspaces'` requires a rail group (`agent_space|regular`; star is the
  *  Favorites overlay, not a rail group — #task:1252),
  *  `'channels:<id>'` omits it (list-wide scope `''`). Optimistic on the list
  *  cache's inline `viewerSort.modes`, reconciled with the authoritative server

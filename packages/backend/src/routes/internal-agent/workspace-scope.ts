@@ -4,9 +4,9 @@
 // Several internal-agent reads are workspace-scoped by their own domain —
 // `list_channels`, agent-profile lookup by handle, the task board, message
 // search — and they have always DEFAULTED that workspace to "the one my calling
-// conversation lives in". From v71 that default is no longer total: an
-// `agent_inbox` placement has no workspace at all, and a session can run in one
-// (a mention CC is delivered there).
+// conversation lives in". From v71 that default is no longer total: a
+// `direct_pair` has no workspace at all, and a session can run in one (a mention
+// CC is delivered into the author's pair with the agent).
 //
 // So the default becomes a partial function, and this module is the one place
 // that says what happens where it is undefined: the route answers

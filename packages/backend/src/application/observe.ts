@@ -329,10 +329,11 @@ export async function observe(
         );
         continue;
       }
-      // `agent_inbox` still FAILS LOUD here, and that premise is not the one #2035
-      // refuted: an inbox has exactly one participant and it is an AGENT, so a human
-      // clearing one is an upstream ACL/routing bug rather than a placement this
-      // read model merely has no coordinate for.
+      // What remains is the workspace arm, and since #task:2072 the two placements
+      // are exhaustive — so `requireWorkspacePlacement` is an ASSERTION of that,
+      // not a filter. A row reaching it without a workspace coordinate is a corrupt
+      // row or a placement added without an arm above; both must fail loud rather
+      // than silently badge nothing.
       const workspaceId = requireWorkspacePlacement(conversation);
       badgedWorkspaces.add(workspaceId);
       // Enriched message variant (#task:1283): the closure runs POST-COMMIT, so

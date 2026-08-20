@@ -87,7 +87,7 @@ function buildDeps() {
     users,
     agentProvisioning,
   };
-  return { deps, db, fakeHostWs, runtimeHost, agentProvisioning, agents };
+  return { deps, db, fakeHostWs, runtimeHost, agentProvisioning, agents, events };
 }
 
 describe('createAgent provisioning failure (application integration)', () => {
@@ -95,9 +95,9 @@ describe('createAgent provisioning failure (application integration)', () => {
     const { db, deps, runtimeHost, fakeHostWs } = buildDeps();
     // Wrap the production provisioning scope: the SAME fault as the adapter
     // test — conversations.insertDmChannel throws after flipToActive + home.
-    // Only the DEPENDENT-GRAPH uow is faulted; `reserveAgentAggregate` stays
-    // real, because the L1 aggregate (row + inbox) must already have committed
-    // before this failure — that is what the assertions below read.
+    // Only the DEPENDENT-GRAPH uow is faulted; `reserveAgentRow` stays
+    // real, because the L1 row must already have committed before this failure —
+    // that is what the assertions below read.
     deps.agentProvisioning = {
       ...deps.agentProvisioning,
       uow: uowWithScopeWrap(deps.agentProvisioning.uow, () => tx =>
@@ -347,8 +347,18 @@ describe('createAgent provisioning failure (application integration)', () => {
     expect(fakeHostWs.calls.some(c => c.kind === 'agent_materialize')).toBe(true);
   });
 
-  it('AgentSlot onboards into its own inbox: no home/DM/roster row, and the three post-commit effects wake it there', async () => {
-    const { db, deps, runtimeHost, fakeHostWs } = buildDeps();
+  it('AgentSlot onboards into the creator’s direct line: no home/DM/roster row, the mint is announced after commit, and the three wake effects point there', async () => {
+    const { db, deps, runtimeHost, fakeHostWs, events } = buildDeps();
+    // The creator's own list-invalidation scope, recorded from the REAL bus: the
+    // frame is the only thing that tells a live client a row it has never seen
+    // now exists, and it is owed AFTER the commit — so the subscription is armed
+    // before the call and asserted empty until the effects run.
+    const viewerFrames: Array<{ kind: string; payload: unknown }> = [];
+    cleanups.push(
+      events.subscribeScope('viewer:local', e =>
+        viewerFrames.push({ kind: e.kind, payload: e.payload }),
+      ),
+    );
     const idempotencyKey = freshKey();
     const result = await createAgent(deps, {
       input: {
@@ -365,8 +375,10 @@ describe('createAgent provisioning failure (application integration)', () => {
     if (result.kind !== 'created') return;
     const agentId = result.payload.agent.id;
     // The three coordinates are the HUMAN's navigation target; an AgentSlot has
-    // none — its onboarding message lives in an inbox the human is not a
-    // participant of, so a message id here would be a dangling coordinate.
+    // none — `dmChannelId` is a channel inside an agent home, and a `direct_pair`
+    // is not one, so a message id here would be a dangling coordinate. The
+    // creator learns about the line from the frame below plus
+    // `GET /api/direct-pairs`, which is the read surface that owns it.
     expect(result.payload).toMatchObject({
       agent: { session_scope: 'agent' },
       agentHomeWorkspaceId: null,
@@ -378,8 +390,9 @@ describe('createAgent provisioning failure (application integration)', () => {
         'SELECT COUNT(*) AS c FROM workspaces WHERE owner_agent_id = ?',
       ).get(agentId)!.c,
     ).toBe(0);
-    // Rosterless by construction (§4.2): the inbox's participant is its
-    // ownership column, never a projected membership row.
+    // Rosterless by construction: a `direct_pair`'s participants ARE its endpoint
+    // columns, so the agent arm projects no membership row for either endpoint —
+    // this is the assertion that goes red if someone "fixes" the missing roster.
     expect(
       db.prepare<[string], { c: number }>(
         'SELECT COUNT(*) AS c FROM conversation_agents WHERE agent_id = ?',
@@ -392,37 +405,73 @@ describe('createAgent provisioning failure (application integration)', () => {
       generation: 0,
     });
 
-    // Exactly ONE onboarding message, in the agent's own inbox. Read through
-    // the repos rather than raw SQL: these two faces exist in production, so a
-    // whitebox statement here would buy nothing but ledger budget.
-    const inbox = new ConversationRepo(db).getAgentInbox(agentId)!;
-    expect(inbox).not.toBeNull();
-    const inboxMessages = new MessageRepo(db).listForConversation(inbox.id);
-    expect(inboxMessages).toHaveLength(1);
-    const onboarding = inboxMessages[0]!;
+    // Exactly ONE onboarding message, in the CREATOR's direct line with the agent
+    // (#task:2072). Read through the production lookup keyed on the coordinates —
+    // asserting the destination by its endpoints is what makes this a claim about
+    // WHOSE line it is, which an id read back out of the result could not be.
+    const directLine = new ConversationRepo(db).findDirectPair(
+      { kind: 'human', id: 'local' },
+      { kind: 'agent', id: agentId },
+    )!;
+    expect(directLine).not.toBeNull();
+    const lineMessages = new MessageRepo(db).listForConversation(directLine.id);
+    expect(lineMessages).toHaveLength(1);
+    const onboarding = lineMessages[0]!;
     expect(onboarding.from_kind).toBe('system');
-    // It must not repeat the ConversationSlot's claim of a shared DM, and it
-    // must carry the outbound target the agent is supposed to greet on.
-    expect(onboarding.content).toContain('dm:@local');
+    // It must not repeat the ConversationSlot's claim of a shared DM channel, and
+    // it must name both participants of the line it is sitting in. The NEGATIVE is
+    // the part that changed with #task:2072 and is the one worth pinning: the
+    // inbox-era text had to hand out `dm:@<creator>` as the address to greet on,
+    // because the message did NOT arrive where the reply belonged. It does now, so
+    // an outbound address here would mean the destination and the greeting have
+    // come apart again.
+    // ... and it names both participants of the line it is sitting in. The
+    // creator's handle is READ from `users.name` rather than spelled here,
+    // because that column IS the mention handle — a literal would pass just as
+    // well if the text started naming the user id instead.
+    const creatorHandle = new UserRepo(db).get('local')!.name;
+    expect(onboarding.content).toContain(`<silverhand://human/${creatorHandle}>`);
+    expect(onboarding.content).toContain(
+      '<silverhand://agent/app-provision-agent-slot>',
+    );
+    expect(onboarding.content).not.toContain('dm:@');
     expect(onboarding.content).not.toContain('personal DM');
     expect(onboarding.metadata).toMatchObject({
       subtype: systemSubtype('onboarding'),
     });
 
-    // Same three effects as the other scope — the onboarding contract is
-    // "woken with a message it must act on", which is scope-blind. Only the
-    // destination differs, and it is the inbox.
-    expect(result.effects).toHaveLength(3);
+    // FOUR effects: the three scope-blind wake effects, plus the mint's own
+    // announcement — and the announcement is FIRST, so a client that re-reads on
+    // it cannot be racing a row it was told about before it existed. Nothing has
+    // gone out yet: the row is durable at this point, but the use case returns
+    // effects rather than running them, and that ordering is the whole reason the
+    // port had to be the transaction-aware recorder.
+    expect(result.effects).toHaveLength(4);
+    expect(viewerFrames).toEqual([]);
     expect(runtimeHost.delivered).toHaveLength(0);
     expect(runtimeHost.starts).toHaveLength(0);
-    for (const effect of result.effects) effect();
+    // The order is asserted by draining the FIRST effect alone: the creator's DM
+    // list learns the row exists before anything can wake the agent into it. The
+    // route drains these sequentially, so the reverse order would let the agent's
+    // first message reach a list that has no row to hang it on.
+    result.effects[0]!();
     await new Promise(resolve => setImmediate(resolve));
+    expect(viewerFrames).toEqual([
+      { kind: 'direct_pairs_changed', payload: { conversation_id: directLine.id } },
+    ]);
+    expect(runtimeHost.delivered).toHaveLength(0);
+    expect(runtimeHost.starts).toHaveLength(0);
+    for (const effect of result.effects.slice(1)) effect();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(viewerFrames).toEqual([
+      { kind: 'direct_pairs_changed', payload: { conversation_id: directLine.id } },
+    ]);
     expect(runtimeHost.delivered).toEqual([
-      { conversationId: inbox.id, agentId, messageId: onboarding.id },
+      { conversationId: directLine.id, agentId, messageId: onboarding.id },
     ]);
     expect(runtimeHost.starts).toHaveLength(1);
     expect(runtimeHost.starts[0]).toMatchObject({
-      conversationId: inbox.id,
+      conversationId: directLine.id,
       agentId,
     });
     expect(fakeHostWs.calls.some(c => c.kind === 'agent_materialize')).toBe(true);
@@ -447,7 +496,10 @@ describe('createAgent provisioning failure (application integration)', () => {
       },
     });
     // An echo re-onboards nothing: the second onboarding message is what a
-    // get-or-create graph would have written.
-    expect(new MessageRepo(db).listForConversation(inbox.id)).toHaveLength(1);
+    // get-or-create graph would have written. And it re-announces nothing — the
+    // frame belongs to the mint, so a line that already existed produces none,
+    // which is why the effect list is built from the ids THIS call opened.
+    expect(new MessageRepo(db).listForConversation(directLine.id)).toHaveLength(1);
+    expect(viewerFrames).toHaveLength(1);
   });
 });

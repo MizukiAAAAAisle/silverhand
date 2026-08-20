@@ -52,11 +52,11 @@ import { buildTestApp, type TestApp } from './utils/app.js';
 
 const INSERT_DIRECT_PAIR = `
   INSERT INTO conversations
-    (id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+    (id, workspace_id, placement_kind, roster_policy,
      endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
      endpoint_a_deleted_at, endpoint_b_deleted_at,
      title, status, created_at, updated_at)
-  VALUES (?, NULL, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?, NULL, NULL,
+  VALUES (?, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?, NULL, NULL,
           'DM', 'idle', 1, 1)
 `;
 

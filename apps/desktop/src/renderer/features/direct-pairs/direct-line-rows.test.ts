@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { DirectPairListItem } from '@silverhand/shared';
 import { decideDraftHandoff, type DraftHandoffFacts } from './hooks';
-import { mergeDirectLineRows, type DirectLineDraft } from './direct-line-rows';
+import { mergeDirectLineRows, directLinePairVisibleInSidebar, type DirectLineDraft } from './direct-line-rows';
 
 // #task:2039, @Cindy's review finding 1 — the sidebar row and the draft pane are
 // the SAME line, and the first cut let them disagree: the pane's
@@ -191,6 +191,75 @@ describe('mergeDirectLineRows — one line per agent, and who owns it', () => {
     expect(
       mergeDirectLineRows({ pairs: [], draft: null, selectedConversationId: null }),
     ).toEqual([]);
+  });
+});
+
+function deletedPair(
+  conversationId: string,
+  kind: 'agent' | 'human',
+  id: string,
+): DirectPairListItem {
+  return {
+    conversation_id: conversationId,
+    // The deleted arm carries only kind + id — the principal is gone, so there is
+    // no name/avatar left to read.
+    counterpart: { status: 'deleted', kind, id },
+    unread_count: 0,
+    read_only: false,
+    created_at: 1,
+  };
+}
+
+describe('directLinePairVisibleInSidebar — a gone principal leaves the sidebar (#task:2094)', () => {
+  // @shiki: a deleted account's pair should not sit in DIRECT MESSAGES by default.
+  // SIDEBAR-ONLY — saved/search read pairs by other paths and still surface the
+  // line (with its "(deleted account)" label), so the rule lives here, at the
+  // sidebar's sole row builder, not in the pair query.
+  it('hides a deleted counterpart, agent and human alike', () => {
+    expect(directLinePairVisibleInSidebar(deletedPair('c-x', 'agent', 'a-gone'))).toBe(false);
+    expect(directLinePairVisibleInSidebar(deletedPair('c-y', 'human', 'h-gone'))).toBe(false);
+  });
+
+  it('shows every active counterpart', () => {
+    expect(directLinePairVisibleInSidebar(pair('c-1', 'a-1'))).toBe(true);
+    const human: DirectPairListItem = {
+      ...pair('c-h', 'a-1'),
+      counterpart: {
+        status: 'active',
+        kind: 'human',
+        id: 'h-1',
+        name: 'shiki',
+        display_name: 'shiki',
+        avatar_url: null,
+        runtime: null,
+      },
+    };
+    expect(directLinePairVisibleInSidebar(human)).toBe(true);
+  });
+
+  it('mergeDirectLineRows drops deleted pairs, keeping the active ones in server order', () => {
+    const rows = mergeDirectLineRows({
+      pairs: [
+        pair('c-1', 'a-1'),
+        deletedPair('c-gone-agent', 'agent', 'a-gone'),
+        pair('c-2', 'a-2'),
+        deletedPair('c-gone-human', 'human', 'h-gone'),
+      ],
+      draft: null,
+      selectedConversationId: null,
+    });
+    expect(rows.map(r => r.key)).toEqual(['c-1', 'c-2']);
+  });
+
+  it('a deleted pair for the draft\'s agent still yields the draft row, never the deleted pair', () => {
+    // The pair is filtered before the draft-merge sees it, so a deleted pair can
+    // never become the draft's carrier row; the draft is appended on its own key.
+    const rows = mergeDirectLineRows({
+      pairs: [deletedPair('c-gone', 'agent', AGENT)],
+      draft,
+      selectedConversationId: null,
+    });
+    expect(rows).toMatchObject([{ kind: 'draft', key: `draft:${AGENT}`, selected: true }]);
   });
 });
 

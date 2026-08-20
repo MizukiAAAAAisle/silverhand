@@ -23,7 +23,7 @@ import {
   ActorError as MessageActorError,
   AttachmentError as MessageAttachmentError,
   ConversationError,
-  MessageFreshnessError,
+  MessageStaleError,
   PolicyError,
   TargetError,
 } from '../services/conversation-message-service.js';
@@ -374,16 +374,20 @@ export function conversationMessageServiceErrorResponse(
       400,
     );
   }
-  if (err instanceof MessageFreshnessError) {
-    // Signal-only stale contract (thread MzSv_f1u0e0xbKmH, shiki seq 1205):
-    // the 409 carries pointer metadata only — NEVER message bodies, and
-    // deliberately NO unseen count: a count would have to be computed over
-    // the freshness universe (excluding exempt rows) — a second definition
-    // of the same universe that can only drift. seen/current is the
-    // authoritative delta. Bodies
-    // are released exactly once, through the normal inbox/admission face;
-    // the observed boundary advances via admission evidence, not via this
-    // response. The hint keeps the current turn actionable while pending
+  if (err instanceof MessageStaleError) {
+    // Signal-only stale contract (thread MzSv_f1u0e0xbKmH, shiki seq 1205),
+    // re-based on the #task:2095 freshness model: staleness is a property of
+    // THIS RUNTIME's field of view — it has an undelivered inbox row it must
+    // consume — not a per-stream sequence position. So the 409 carries only
+    // pointer metadata: the arming id and a hint. It NEVER carries message
+    // bodies, and — deliberately — NO count of what is undelivered. Under the
+    // old model a count meant re-deriving the freshness universe (a second,
+    // drift-prone definition); under this one an `EXISTS` probe would make a
+    // COUNT trivially cheap, which is exactly why the temptation must be
+    // refused: "how far behind" is not part of this contract. Bodies are
+    // released exactly once, through the normal inbox/admission face, and the
+    // runtime's undelivered set drains via admission evidence, not via this
+    // response. The hint keeps the current turn actionable while that pending
     // content continues through the existing normal-delivery path.
     //
     // #task:1614: this hint is deliberately the ONLY prompt surface that
@@ -397,14 +401,26 @@ export function conversationMessageServiceErrorResponse(
           code: 'conflict',
           message: err.message,
           details: {
+            // `subkind` is the WIRE DISCRIMINANT: the daemon's
+            // `extractStaleConflict` hard-compares it to `message_stale`
+            // before arming (see `MessageStaleError`). `stale_event_id` is the
+            // arming id the runtime replays into `stale-receive`.
+            //
+            // The old `seen_up_to_seq`/`current_seq`/`stream_key` fields
+            // addressed the retired per-stream seq CAS axis and all their
+            // consumers went with it. `target_conversation_id` is NOT one of
+            // them (#task:2095 F17): it is the conversation the rejected send
+            // TARGETED — a property every send has, surfaced here for the SAME
+            // reason the SUCCESS response returns `conversation_id`. The daemon
+            // holds it on the armed event so a later `stale-resolve` of a
+            // name-shaped draft can name the target it aimed at (the resolve
+            // route's authorization subject), instead of a daemon-side memo
+            // that was cold on a name's first use each session — the very hole
+            // this ticket closes. It is not a count and not a seq target, so it
+            // does not reopen F13.
             subkind: err.code,
-            conversation_id: err.conversationId,
             stale_event_id: err.staleEventId,
-            stream_key: err.threadRootId
-              ? `thread:${err.threadRootId}`
-              : 'main',
-            seen_up_to_seq: err.seenUpToSeq,
-            current_seq: err.currentSeq,
+            target_conversation_id: err.targetConversationId,
             hint:
               'send rejected; run ' +
               `\`silverhand message stale-receive --stale-event-id ${err.staleEventId}\` ` +

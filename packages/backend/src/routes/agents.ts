@@ -87,6 +87,7 @@ import {
   type AgentPresenceDto,
   type NameAvailabilityDto,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace, isAgentHomeWorkspaceOf } from '@silverhand/shared';
 import {
   Hono,
 } from 'hono';
@@ -242,8 +243,8 @@ function resolveAgentWorkspaceScope(params: {
   // home dir. The no-param path is the existing broad "can view this agent"
   // home view; `workspace_id` is the narrower per-workspace/L2 view.
   const isMember =
-    workspace.workspace_kind === 'agent_home'
-      ? workspace.owner_agent_id === params.agentId
+    isAgentHomeWorkspace(workspace)
+      ? isAgentHomeWorkspaceOf(workspace, params.agentId)
       : params.workspaces.isMember(workspace.id, params.agentId);
   if (!isMember) {
     return {

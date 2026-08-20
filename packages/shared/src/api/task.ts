@@ -97,12 +97,13 @@ export type TaskCreatorDto = z.infer<typeof TaskCreatorDtoSchema>;
  *  complete location with no parallel top-level coordinate (contract §3).
  *
  *  - workspace arm: `conversation_id` (the routing coord) plus the workspace
- *    board namespace (`workspace_id` + the `regular | agent_space` domain
- *    `workspace_kind`; physical `agent_home` stays behind the repo boundary)
- *    and the channel's display title. `workspace_name` is deliberately ABSENT:
- *    it has zero production readers (the card renders `channel_name`; the
- *    container header resolves the workspace name from the live directory), so
- *    freezing it would be over-projection (contract §3).
+ *    board namespace (`workspace_id`) and the channel's display title. It carried
+ *    a `workspace_kind` word until #task:2075's stop-publish step; no board reader
+ *    ever branched on it, and a container word on a Place DTO is over-projection
+ *    for the same reason `workspace_name` is (contract §3). `workspace_name` is
+ *    likewise deliberately ABSENT: it has zero production readers (the card
+ *    renders `channel_name`; the container header resolves the workspace name from
+ *    the live directory).
  *  - direct_pair arm: `conversation_id` plus ONLY the immutable `pair_key` (the
  *    v74 generated column's value read verbatim — its byte format is defined in
  *    the migration and never re-implemented in TS). NO title and NO display
@@ -117,9 +118,6 @@ export const TaskPlaceSchema = z.discriminatedUnion('kind', [
     kind: z.literal('workspace'),
     conversation_id: z.string(),
     workspace_id: z.string(),
-    /** Domain projection of the workspace kind; physical `agent_home` never
-     *  reaches the wire (contract §2 rule 5). */
-    workspace_kind: z.enum(['regular', 'agent_space']),
     /** The conversation's display title (a channel has one; a DM does not). */
     channel_name: z.string(),
   }),
@@ -165,12 +163,15 @@ export const TaskEditorDtoSchema = z.object({
 });
 export type TaskEditorDto = z.infer<typeof TaskEditorDtoSchema>;
 
-/** Viewer-resolved location of a message, for task navigation. `channel_id` is
- *  the parent channel conversation id the jump handler needs as `channelId`
- *  (threads are reply clusters, not standalone conversations, so this is the
- *  message's own conversation_id). */
+/** Viewer-resolved location of a message, for task navigation.
+ *  `conversation_id` is the message's OWN conversation — a workspace channel or
+ *  a DirectPair, whichever holds it (threads are reply clusters, not standalone
+ *  conversations, so a threaded message resolves to its cluster's conversation).
+ *  It is deliberately NOT named `channel_id`: on a pair-placed task the value is
+ *  a pair conversation id, and "channel" would be a lie the caller cannot see
+ *  through. */
 export const TaskNavRefSchema = z.object({
-  channel_id: z.string(),
+  conversation_id: z.string(),
   thread_root_id: z.string().nullable(),
   message_id: z.string(),
 });
@@ -283,10 +284,9 @@ export type TaskBoardCreatorFilterType = z.infer<
  *    - `direct_messages` — a DirectPair (all of the viewer's pairs at once; a
  *                          single pair leaf is `channel_id`).
  *  Workspace and Agent Space are NOT distinguishable by placement alone — both
- *  are `placement_kind='workspace'` — so the split is a `workspace_kind`
- *  distinction, resolved authoritatively backend-side. `agent_inbox` is in NO
- *  container: it has no human participant, so the viewer gate already excludes
- *  it and it is absent from `All`. Omitted = no container narrowing. This axis
+ *  are `placement_kind='workspace'` — so the split is an ownership
+ *  (`owner_agent_id`) distinction, resolved authoritatively backend-side.
+ *  Omitted = no container narrowing. This axis
  *  and `workspace_id` / `channel_id` stack as an intersection: choosing
  *  `agent_space` then a specific `workspace_id` narrows to that one Agent Space
  *  workspace. */

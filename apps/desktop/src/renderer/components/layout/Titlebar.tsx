@@ -5,13 +5,16 @@ import {
   Users,
 } from 'lucide-react';
 import { ManageMembersPopover } from '@/features/workspaces/ManageMembersPopover';
-
-type WorkspaceUiKind = 'regular' | 'dm';
+import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
 
 interface TitlebarProps {
   workspaceId: string | null;
   workspaceName: string | null;
-  workspaceKind: WorkspaceUiKind | null;
+  /** The agent that owns the open workspace, or `null` for a people-owned one
+   *  (and while nothing is open). Gates the two container-level affordances
+   *  below — an Agent Space genuinely has neither, so this stays a two-state
+   *  branch rather than becoming constant-true (@Paul, #task:2078). */
+  workspaceOwnerAgentId: string | null;
   /** epoch ms when the workspace was archived; null for active workspaces.
    *  Drives the inline `Archived` pill so the user knows why this
    *  workspace is missing from the main sidebar list. */
@@ -47,7 +50,7 @@ interface TitlebarProps {
 export function Titlebar({
   workspaceId,
   workspaceName,
-  workspaceKind,
+  workspaceOwnerAgentId,
   workspaceArchivedAt,
   onOpenWorkspaceSettings,
   workspaceSidebarVisible,
@@ -55,8 +58,14 @@ export function Titlebar({
   chromeMode,
 }: TitlebarProps): JSX.Element {
   const hasWorkspace = workspaceName !== null;
-  const showManageMembers = hasWorkspace && workspaceKind !== 'dm' && !!workspaceId;
-  const showSettings = hasWorkspace && workspaceKind !== 'dm' && !!onOpenWorkspaceSettings;
+  // An Agent Space has no member set to manage and no settings to open: it is the
+  // viewer plus its one agent, its name is derived from that agent, and its
+  // lifecycle belongs to the agent (`workspaceCapabilities` holds the same three
+  // facts for the dialogs). Both gates also need `hasWorkspace`, which already
+  // implies the row resolved — the name comes from the same row as the owner.
+  const isOwnedByAgent = isAgentSpace({ owner_agent_id: workspaceOwnerAgentId });
+  const showManageMembers = hasWorkspace && !isOwnedByAgent && !!workspaceId;
+  const showSettings = hasWorkspace && !isOwnedByAgent && !!onOpenWorkspaceSettings;
   const isArchived = workspaceArchivedAt !== null;
   // Activity has no browse sidebar — the Activity list IS the left column — so
   // its label offset is `NavRail + Activity-list` width, read from the SAME
@@ -141,11 +150,12 @@ export function Titlebar({
           data-workspace-name
           className="truncate font-serif text-sm font-semibold text-text-primary"
         >
-          {/* DM titlebars show only the bound agent's raw display name — no
-            * `@`, no `· DM` marker (shiki 2026-08-01, #task:1768). Reads like
-            * the person you're talking to; the icon + rail already convey it's
-            * a DM. The name itself is resolved upstream via `dmRecognitionName`
-            * (App.tsx), shared with the rail so the two can't drift. */}
+          {/* An Agent Space's titlebar shows only its agent's raw display name —
+            * no `@`, no `· DM` marker (shiki 2026-08-01, #task:1768). Reads like
+            * the person you're talking to; the icon + rail already convey whose
+            * space it is. The name itself is resolved upstream via
+            * `agentSpaceRecognitionName` (App.tsx), shared with the rail so the two
+            * can't drift. */}
           {workspaceName}
         </span>
       ) : null}

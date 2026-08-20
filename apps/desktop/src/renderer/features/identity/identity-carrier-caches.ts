@@ -131,11 +131,6 @@ interface IdentityCarrier {
  *     reseats main's snapshot on its way through the proxy —
  *     `main/profile-session-sync.ts`). Local writes already reseat both
  *     (#task:1701); only a REMOTE edit needs that read (#task:1702).
- *   - `SavedMessageDto.agent_name` / `SearchResultDto.agent_name` — the backend
- *     joins the IMMUTABLE `@handle` (`a.name`), not `display_name`, so that
- *     field alone cannot stale. (The rows STILL carry a mutable `message.author`
- *     snapshot, so Saved / Search are registered below via their message payload,
- *     not this handle.)
  *   - history `system_message` metadata and notification `trigger_name` —
  *     event-time snapshots by design; they must keep reading as of the event.
  */
@@ -183,8 +178,9 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
   },
   {
     // `SavedMessageDto.message.author` — the saved row embeds the whole message,
-    // so it carries the same mutable author snapshot as the byline. (Its own
-    // `agent_name` is the immutable @handle; the mutable part is the author dto.)
+    // so it carries the same mutable author snapshot as the byline. That
+    // snapshot is now the row's ONLY identity carrier (#task:2064 deleted the
+    // live-FK `agent_name` that used to sit beside it).
     id: 'saved',
     kinds: ['agent', 'human'],
     facets: ['presentation'],

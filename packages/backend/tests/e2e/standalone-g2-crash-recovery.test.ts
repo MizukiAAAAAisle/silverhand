@@ -157,9 +157,9 @@ describe('Standalone G2 — unintentional crash recovery + crashed projection', 
 
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, name_key, description, workspace_kind,
+        (id, name, name_key, description,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+        VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)`,
     ).run(workspaceId, 'g2-b5-workspace', 'g2-b5-workspace', now, now);
     db.prepare(
       `INSERT INTO workspace_users (workspace_id, user_id, joined_at)

@@ -34,9 +34,15 @@ export interface TaskJumpTarget {
  * `workspaceId` rides ONLY on the workspace arm — a pair-placed task carries no
  * workspace coordinate. That is not a reason to suppress the jump: the caller
  * resolves a workspace-less `channelId` through the viewer's pair carrier
- * (`directPairIds` → `nav.toDirect`), and `nav.ref.channel_id` already holds the
- * pair conversation id for a DM task. So both placements navigate whenever the
- * server resolved a ref; only `unavailable` returns `null`.
+ * (`directPairIds` → `nav.toDirect`), and `nav.ref.conversation_id` already holds
+ * the pair conversation id for a DM task. So both placements navigate whenever
+ * the server resolved a ref; only `unavailable` returns `null`.
+ *
+ * `TaskJumpTarget.channelId` keeps its name on purpose — it is this handler
+ * boundary's own vocabulary, shared with every other jump caller. The wire field
+ * is `conversation_id` because a pair task's coordinate is not a channel; that
+ * asymmetry is a renderer-side naming debt, never an argument for renaming the
+ * wire back.
  */
 export function resolveTaskJumpTarget(
   detail: TaskDetailDto,
@@ -45,7 +51,7 @@ export function resolveTaskJumpTarget(
   return {
     workspaceId:
       detail.place.kind === 'workspace' ? detail.place.workspace_id : undefined,
-    channelId: detail.nav.ref.channel_id,
+    channelId: detail.nav.ref.conversation_id,
     threadRootId: detail.nav.ref.thread_root_id,
     messageId: detail.nav.ref.message_id,
   };

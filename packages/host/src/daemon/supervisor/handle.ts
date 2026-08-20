@@ -14,7 +14,7 @@
  * Consumers reach the handle only through `Supervisor` methods.
  */
 import type { ChildProcess } from 'node:child_process';
-import type { AgentRunState, ObservedSeq } from '@silverhand/shared';
+import type { AgentRunState } from '@silverhand/shared';
 import type { Driver } from '../../drivers/index.js';
 import type {
   RuntimeDelivery,
@@ -56,22 +56,28 @@ export type RuntimePhase =
  * between "consumed/failed event sent" and "pending cleared".
  */
 export interface StartupDeliveryState {
-  /** Origin target for presentation, ack and per-stream freshness. Not part
-   * of AgentSlot runtime identity. */
+  /** Origin target for presentation and ack. NOT a freshness key: staleness is
+   * a whole-runtime backend property (#task:2095), so nothing here is per
+   * stream. Not part of AgentSlot runtime identity. */
   readonly conversationId: string;
   /** Host-resolved absolute action directory for this origin target. */
   readonly actionWorkdir: string;
   readonly deliveryIds: readonly number[];
-  readonly deliveredUpToSeq?: number;
   /**
-   * Per-delivery stream metadata for the batch (reply-cluster §6.4),
-   * one entry per id in `deliveryIds`. Present when the backend speaks
-   * the 段2 protocol; absent on a legacy backend, in which case the
-   * supervisor falls back to advancing the main stream by
-   * `deliveredUpToSeq`. The entry set MUST match `deliveryIds` exactly —
-   * the supervisor hard-rejects a drift at start time.
+   * Per-delivery entries for the batch, one per id in `deliveryIds`. The
+   * daemon reads exactly two things off them: `delivery_id` (dedup) and
+   * `presentation` (novel-remainder rebuild); the `delivered_up_to_seq`
+   * sidecar it persists is `max(seq)` over them (#task:2106 removed the wire
+   * scalar, so this array is the SOLE source). There is no stream axis and no
+   * observed cursor here — #task:2095 deleted per-stream freshness and
+   * #task:2097 deleted the wire fields that described it.
+   *
+   * Required (#task:2106): the sole production sender always populates it and
+   * the hello equality gate admits one protocol generation only, so there is
+   * no omitting peer. The entry set MUST match `deliveryIds` exactly — the
+   * supervisor hard-rejects a drift at start time.
    */
-  readonly deliveries?: readonly RuntimeDelivery[];
+  readonly deliveries: readonly RuntimeDelivery[];
   /**
    * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): the unencoded text the
    * daemon will encode + write at consume time using its in-process
@@ -104,16 +110,18 @@ export interface StartupDeliveryState {
  *   - The backend inbox lease is the sole durable authority; this queue is
  *     the only daemon-owned set eligible for alternate release arbitration.
  *   - A consumer may take only the scheduler's next bounded FIFO prefix.
- *     It must preserve ids, owner, text, and stream metadata verbatim; it may
- *     not select from the middle by stream/seq or split an opaque batch.
+ *     It must preserve ids, owner, text, and the per-delivery entries verbatim;
+ *     it may not select from the middle by seq or split an opaque batch.
  *   - Auto-flush and any alternate consumer must choose one release winner
  *     under the same per-handle lifecycle lock. Waiting never holds the lock
  *     and does not itself take custody. While a selected prefix is reserved
  *     but its handoff is unresolved, no later prefix may be released.
  *   - Custody settles only after the chosen transport's concrete handoff
  *     proof point. Before that point, timeout/cancel/failure changes neither
- *     custody nor observed coverage; after it, emit one consumed settlement
- *     and advance only the batch's actual per-stream coverage.
+ *     custody nor the published scalar; after it, emit one consumed settlement
+ *     and write the `delivered_up_to_seq` sidecar from this batch's own
+ *     `max(seq)` (a per-slot diagnostic/crash-recovery scalar, not a freshness
+ *     or per-stream coverage boundary — see `writeLastDeliveredSeq`).
  *
  * `startupDelivery` is already release-in-progress and is therefore never
  * eligible to be reclaimed by an alternate consumer.
@@ -122,8 +130,7 @@ export interface DeferredEntry {
   readonly conversationId: string;
   readonly actionWorkdir: string;
   readonly deliveryIds: readonly number[];
-  readonly deliveredUpToSeq?: number;
-  readonly deliveries?: readonly RuntimeDelivery[];
+  readonly deliveries: readonly RuntimeDelivery[];
   readonly text: string;
   /** Custody owner is per id, independent of this presentation/ack group. */
   readonly owners: ReadonlyMap<number, string>;
@@ -142,20 +149,18 @@ export interface ActivitySnippetBuffer {
  *  frames) would otherwise accumulate for the handle's lifetime. */
 export const INPUT_PAYLOAD_UUID_CAP = 200;
 
-/** Signal-only stale contract: the 409 exposes NO bodies, so it never
- *  moves the observed cursor. The daemon only remembers the event id (to
- *  correlate the agent's resolution) and the head it conflicted with. */
+/** Signal-only stale contract: the 409 exposes NO bodies and NO seq — under
+ *  the #task:2095 RuntimeScope model staleness is "this runtime has an
+ *  undelivered inbox row", not a per-stream sequence position. The daemon
+ *  remembers only the event id (to correlate the agent's resolution) and the
+ *  conversation the rejected send TARGETED. */
 export interface PendingStaleEvent {
   id: string;
-  currentSeq: number;
-  /** Target whose stream cursor the stale signal describes. */
-  conversationId: string;
-  /** Stream the conflicted head lives in (`main` or `thread:<root>`),
-   *  from the 409's `details.stream_key`. `null` when the backend did
-   *  not surface one — coverage checks then fail CLOSED: a pull can
-   *  still take the FIFO prefix but never claims `batch_covered` /
-   *  `already_admitted` without a provable stream. */
-  streamKey: string | null;
+  /** The conversation the rejected send aimed at, from the 409's
+   *  `target_conversation_id` (#task:2095 F17). Fed VERBATIM to the
+   *  `stale-resolve` POST as its authorization subject — the daemon holds no
+   *  address-resolution authority and never re-derives it from a memo. */
+  targetConversationId: string;
 }
 
 /**
@@ -163,8 +168,9 @@ export interface PendingStaleEvent {
  * #task:1606): the ONE new custody state the stale-receive pull adds.
  * Created under the lifecycle lock the instant the pull splices its
  * FIFO prefix out of `deferredQueue`; resolved exactly once by the
- * response transport handoff (`consumed` + observed advance on success,
- * FIFO restore in place on pre-proof failure). While it is non-null NO
+ * response transport handoff (`consumed` + the `delivered_up_to_seq` scalar
+ * write on success, FIFO restore in place on pre-proof failure). While it is
+ * non-null NO
  * later prefix may be released — `deliver()`'s admit arm and
  * `flushDeferred` both hold, preserving presentation FIFO.
  *
@@ -247,76 +253,6 @@ export interface RuntimeHandle {
    *  stdio streams + removes listeners. */
   readonly child: ChildProcess;
   readonly lastDeliveredSeqPath: string;
-  /** Daemon-owned model-seen freshness boundary, keyed PER STREAM
-   *  (reply-cluster §6.4). `stream_key` is `'main'` for the channel's
-   *  main line or `thread:<rootMessageId>` for a reply cluster. A send
-   *  picks the seen value of the stream it targets; absence of a key
-   *  means "never observed" — a distinct state from an observed `0`, so this
-   *  map is read by PRESENCE (`.has`/`=== undefined`), never flattened with
-   *  `?? 0`. Advanced only at input-admission points, not on bare stdin
-   *  writes. Each value is an {@link ObservedSeq}, minted at the daemon
-   *  observation boundary (delivery admit / stale response / send commit). */
-  observedSeqByStream: Map<string, ObservedSeq>;
-  /** Deferred watermark merges for the agent's own sends that skipped the
-   *  per-stream CAS (countgame P1 `--anyway`, and #task:1854 loose first
-   *  touch): such a send inserts seq S with the stream head at P (everything
-   *  freshness-relevant the sender skipped). S itself never comes back
-   *  through the inbox (sender excluded from fan-out), so once observed >= P
-   *  the own seq merges into the watermark — otherwise the sender is
-   *  permanently stale on its own head in a quiet stream.
-   *  In-memory, bounded, dropped with the handle. */
-  pendingSkippedCasMergeByStream: Map<
-    string,
-    Array<{ prereq: number; ownSeq: number }>
-  >;
-  /** High-water seq, per stream, for a batch delivered mid-turn but not
-   *  yet admitted as precedent context for a new model action. Flushed
-   *  into `observedSeqByStream` at the next turn boundary. */
-  pendingAdmissionSeqByStream: Map<string, ObservedSeq>;
-  /** Bounded set of the cluster ROOTS this handle has actually seen: message ids
-   *  that reached this session as a main-line message (delivered, or our own
-   *  send's commit) plus the roots of clusters it pulled and observed.
-   *
-   *  Membership answers exactly one question, asked by a send whose address
-   *  carries `/thread:<root>`: has this session SEEN the message that cluster is
-   *  rooted at? If it has, "that cluster is still empty" is an observed fact
-   *  rather than a guess, so a first reply into it may carry
-   *  `seen_up_to_seq=0` and the CAS can still catch a concurrent first reply.
-   *  Without membership (and without an observed cursor for the cluster) the send
-   *  is a loose first touch and omits freshness instead of manufacturing a
-   *  boundary.
-   *
-   *  A SET of roots, not a map from any message id to its cluster: until
-   *  #task:2021 P4-4 a reply was addressed by the message it answered, so the
-   *  daemon had to know which cluster a mid-cluster id belonged to. An address's
-   *  `/thread:<root>` is a root id now — the resolver owns that verdict — and
-   *  keeping the wider mapping would leave this process holding the one thing
-   *  P4-4 deleted: a second opinion about which stream an address denotes. */
-  seenClusterRootIds: Set<string>;
-  /** Bounded memory of what a NAME-shaped delivery address resolved to: the
-   *  address HEAD (the token minus any `/thread:<root>` suffix) → the
-   *  conversation id the backend resolved it to on a previous send.
-   *
-   *  Learned ONLY from a send response's `conversation_id` (#task:2021 P4-4): the
-   *  daemon holds no lookup authority — a title or a `dm:@handle` is resolved by
-   *  the backend, and the delivery header the agent reads is rendered
-   *  backend-side, so nothing else in this process ever learns the mapping. The
-   *  residual cost is stated rather than hidden: the FIRST send to a given
-   *  name-shaped head in a session has no entry, so it cannot key a freshness
-   *  boundary and skips the CAS (merging through
-   *  `pendingSkippedCasMergeByStream` like any other skipped-CAS send). At most
-   *  one such send per (session, address head), and never for the id form, which
-   *  needs no resolution.
-   *
-   *  A rename is why this is a per-session memo and not a cache with a TTL: a
-   *  head may be rebound to a different conversation at any time, and the send
-   *  response is the only thing that can correct it — which it does, because
-   *  every send rewrites the entry from the answer the backend just gave. The
-   *  `asserted_stream` field on the send is the guard for the window in between:
-   *  the backend compares the stream the daemon measured against the one the
-   *  address resolves to NOW and refuses the mismatch instead of CAS-ing against
-   *  a stranger's head. */
-  resolvedConversationByAddressHead: Map<string, string>;
   /** True once an admitted input batch is expected to be driving the
    *  current model action. Cleared on turn_end/runtime resolution.
    *  This covers the pre-first-output window where runState is still
@@ -351,10 +287,12 @@ export interface RuntimeHandle {
    *  overwritten back into "reserved" and the queue held forever
    *  (#1558 final-gate P1-1). */
   turnEndCount: number;
-  /** Pending stale-send events keyed by the addressed stream's storage key.
-   * An AgentSlot can hold independent conflicts in several conversations; the
-   * runtime scope identifies custody, not the stream whose CAS failed. */
-  pendingStaleEvents: Map<string, PendingStaleEvent>;
+  /** The single stale-send event this runtime is holding, or `null`. At most
+   *  ONE is pending per runtime: the carrier is the handle, which already IS
+   *  the runtime scope (`runtimeScope` above), so there is no per-stream key.
+   *  Armed when a send is rejected with `message_stale`; cleared when the agent
+   *  resolves it or any later send commits. */
+  pendingStaleEvent: PendingStaleEvent | null;
   /** Absolute per-origin action directories whose existence was verified for
    * this live aggregate. Avoids turning every delivery into an async fs gap;
    * a new origin is still ensured before daemon custody mutates. */
@@ -368,7 +306,6 @@ export interface RuntimeHandle {
     string,
     {
       deliveryIds: number[];
-      coveredSeqByStream: Array<[string, number]>;
       mintedAt: number;
     }
   >;

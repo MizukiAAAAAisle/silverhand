@@ -466,28 +466,26 @@ describe('removeWorkspaceFromMessageUnread (#task:1404)', () => {
     });
   });
 
-  it('removes the workspace by_conversation query (both partitions), not refetch', () => {
+  it('removes the workspace by_conversation query, not refetch', () => {
     const qc = new QueryClient();
-    for (const kind of ['regular', 'dm'] as const) {
-      qc.setQueryData(messageUnreadByConversationKey('w-1', kind), {
-        by_conversation: { 'c-1': 2 },
-        latest_by_conversation: {},
-        total: 2,
-      });
-    }
+    qc.setQueryData(messageUnreadByConversationKey('w-1'), {
+      by_conversation: { 'c-1': 2 },
+      latest_by_conversation: {},
+      total: 2,
+    });
     // An unrelated workspace's by_conversation must survive.
-    qc.setQueryData(messageUnreadByConversationKey('w-2', 'regular'), {
+    qc.setQueryData(messageUnreadByConversationKey('w-2'), {
       by_conversation: { 'c-9': 1 },
       latest_by_conversation: {},
       total: 1,
     });
     removeWorkspaceFromMessageUnread(qc, 'w-1');
-    for (const kind of ['regular', 'dm'] as const) {
-      expect(qc.getQueryData(messageUnreadByConversationKey('w-1', kind))).toBeUndefined();
-    }
-    expect(
-      qc.getQueryData(messageUnreadByConversationKey('w-2', 'regular')),
-    ).toEqual({ by_conversation: { 'c-9': 1 }, latest_by_conversation: {}, total: 1 });
+    expect(qc.getQueryData(messageUnreadByConversationKey('w-1'))).toBeUndefined();
+    expect(qc.getQueryData(messageUnreadByConversationKey('w-2'))).toEqual({
+      by_conversation: { 'c-9': 1 },
+      latest_by_conversation: {},
+      total: 1,
+    });
   });
 
   it('is idempotent: absent summary key / unloaded by_conversation is a no-op', () => {
@@ -625,7 +623,6 @@ describe('removeWorkspaceFromActivity (#task:1409)', () => {
     thread_root_id: null,
     message_id: `m-${id}`,
     notification_id: null,
-    conversation_roster_policy: 'open',
     title: `#${id}`,
     thread_root_preview: null,
     preview: null,

@@ -63,7 +63,6 @@ describe('WorkspaceRepo', () => {
 
     expect(home).toMatchObject({
       name: a.name,
-      workspace_kind: 'agent_home',
       owner_agent_id: a.id,
     });
     expect(workspaces.listForAgent(a.id).map(w => w.id)).toEqual([
@@ -78,7 +77,7 @@ describe('WorkspaceRepo', () => {
       name: fixedWorkspaceName(a.name),
       description: null,
     });
-    expect(sameNameRegular.workspace_kind).toBe('regular');
+    expect(sameNameRegular.owner_agent_id).toBeNull();
     expect(workspaces.getByName(a.name)?.id).toBe(sameNameRegular.id);
     expect(
       db

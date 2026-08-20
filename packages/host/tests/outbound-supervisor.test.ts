@@ -35,6 +35,7 @@ import { OutboundSupervisor, type OutboundClientLike } from '../src/daemon/outbo
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import { daemonHostConfigFingerprint } from '../src/daemon/outbound-client.js';
 import type { EventFrame, ResponseFrame } from '../src/protocol.js';
+import { HOST_PROTOCOL_VERSION } from '../src/protocol.js';
 import type { DaemonHostConfig } from '@silverhand/shared';
 
 interface FakeClient extends OutboundClientLike {
@@ -100,7 +101,7 @@ function makeFixture(): SupervisorFixture {
   const spawned: FakeClient[] = [];
   const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
     event: 'ready',
-    protocol_version: 2,
+    protocol_version: HOST_PROTOCOL_VERSION,
     daemon_version: '0.0.0-test',
     daemon_id: 'local',
     instance_id: 'instance-test',

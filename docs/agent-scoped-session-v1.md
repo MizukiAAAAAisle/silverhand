@@ -8,6 +8,14 @@ Status: **design under review**（设计 @Alice，#task:2009；review gate @Cind
 按它设计会把 v53/v54/v64 已删除的概念写回模型）；现网数据形态引 `~/.silverhand/embedded-server-backup-*`
 的只读快照（app 运行时不得打开活动 DB）；SQLite 语义写进 doc 前实测。
 
+**已退役的一支（#task:2072，v84/v85）**：`agent_inbox` placement 连同 `conversations.inbox_agent_id`
+及其拒绝码整代删除，现役 placement 字母表 = `{ workspace, direct_pair }`；mention CC 的落点是
+「被提及 agent ↔ 提及者」的那条 direct pair。⇒ 本 doc 中所有 AgentInbox / `inbox_agent_id` 段落
+（§3.1、§4.1、§4.2 末、§4.4、§5、§7、§9.3、备选方案表）**一律读作设计期记录，不是现役模型**；
+现役 placement 权威是 `docs/placement-contract.md` §1。凡以 inbox 存在为前提的验收条目**作废**，
+不是重新解释 —— 特别是「向 inbox 建 task 由 trigger 拒」：落地形态是 `tasks.board_key` 的互斥弧 CHECK
+（`ws:%` ⇔ `workspace_id IS NOT NULL`），穷尽两支即可，从未需要那条 trigger。
+
 ---
 
 ## 0. 产品合同输入（#task:2005，已拍板，不重开）
@@ -75,7 +83,7 @@ placement 与 roster policy，不占 placement 唯一键。
 - **Agent**（根）：`name` 全局唯一、不可复用、不可改；不可变 `session_scope`；profile / L1；Agent runtime 所有权。
   **不拥有一个代替它存在的 workspace。**
 - **Conversation**（根）+ **两个正交的一等值**（§4.1 的核心修正）：
-  - `Placement` = `Workspace(workspace_id)` | `DirectPair(endpoints)` | `AgentInbox(agent_id)` —— **住在哪**；
+  - `Placement` = `Workspace(workspace_id)` | `DirectPair(endpoints)` | ~~`AgentInbox(agent_id)`~~（#task:2072 已退役，见页首）—— **住在哪**；
   - `RosterPolicy` = `open` | `fixed` —— **成员可变吗**。
 - **Runtime**：拆成四件事，不是一个「DB runtime 聚合」（§4.3）。
 - **Task**（根）：**全局身份 `tasks.id`**，归属一个 conversation（决定 ACL）+ 一个 Board（决定局部编号）（§4.5）。
@@ -191,7 +199,7 @@ RAISE(ABORT)` 守。两个理由否掉它：
 | `workspace` + `open` | `conversation_agents` / `conversation_users` roster 行（现状） |
 | `workspace` + `fixed` | 同上，但 roster 变更 API 不可达（现有 14 行沿用现状） |
 | `direct_pair` | **两个 endpoint 列**（无 roster 行） |
-| `agent_inbox` | `inbox_agent_id` 一个 owner（无 roster 行） |
+| `agent_inbox` | `inbox_agent_id` 一个 owner（无 roster 行）—— **已退役，#task:2072** |
 
 ⇒ 存在性由 `NOT NULL` + 互斥弧证明；成员表在这两支**根本没有行**，所以既无双权威也无 cascade 冲突。
 ACL 读面收敛到**一个** placement-aware `participantsOf(conversation)` 解析器（今天 `permissions.ts` 直接读
@@ -276,7 +284,7 @@ conversation 的 placement 派生**（`--board` 不存在）。
 |---|---|---|
 | `workspace` | `WorkspaceBoard(workspace_id)` | 含 `agent_home`（现有 14 行会话 **原地不动**，新建的 home 同样走这一支，§9.2） |
 | `direct_pair` | `DirectPairBoard(pair_key)` | 每条私线一个编号空间，与 placement 同构；agent↔agent 与 human↔human 都只有一个解 |
-| `agent_inbox` | **无 board** | Mentions 是通知读面，不是工作面 ⇒ 向 inbox 建 task 一律拒（trigger），不是「静默落到某处」 |
+| `agent_inbox` | **无 board** | Mentions 是通知读面，不是工作面 ⇒ 向 inbox 建 task 一律拒（trigger），不是「静默落到某处」。**该 placement 已退役（#task:2072）**：两支穷尽后由 `board_key` 的互斥弧 CHECK 承担，无 trigger |
 
 **零搬迁在 B 下同样成立**（这是我原先反对 B 的唯一理由，已被「旧行保持旧形态、新概念只承接新行」消解）：
 `agent_home` 永久属于 `workspace` placement ⇒ 它就是 WorkspaceBoard，现有 14 条会话与 39 条 task
@@ -377,9 +385,9 @@ inbox 是否存在都可能已经变了 ⇒ 重放写出的副本可能与 send 
 被否：只有 source replay 而无写入时判据（重复投递）；replay + UNIQUE（重算收件人 ⇒ 权威时点漂移）；
 为 CC 幂等新建 outbox / per-item 状态机（同 tx 已经足够，多一张表只是多一份可漂移状态）。
 
-同 tx 的只有这些：DM get-or-create（conversation + endpoints，**无投影行**）、AgentInbox 创建、
-roster join/leave、send message（message + stream head + follower/recipient plan + **Mention CC 副本**）、
-board 内 task 取号。
+同 tx 的只有这些：DM get-or-create（conversation + endpoints，**无投影行**）、~~AgentInbox 创建~~（#task:2072
+退役后 reserve 只写一行 `agents`）、roster join/leave、send message（message + stream head + follower/recipient
+plan + **Mention CC 副本**）、board 内 task 取号。
 
 ---
 
@@ -509,7 +517,7 @@ B（按字面回收上半）已被否决，不是开放项**；本节此前的�
    P4-4 曾一度改用 `silverhand://conversation/…` URI，那是**未经裁定的实现擅改**，已按 @Cindy B2 恢复 —— 该 scheme
    是 #task:2000 的 **principal 寻址**语汇，投递目的地是另一根轴。）
 2. **board** = 由 target conversation 的 placement **派生**（`workspace` 支 → 该 WorkspaceBoard；
-   `direct_pair` → DirectPairBoard；`agent_inbox` → 无 board、由 trigger 拒，§4.4）。
+   `direct_pair` → DirectPairBoard；`agent_inbox` → 无 board、由 trigger 拒，§4.4 —— 该支已退役，见页首）。
    **不提供 `--board`**：两根参数会互相矛盾，而 placement 已是唯一权威。
 
 ```bash
@@ -579,7 +587,10 @@ workspace-less 会话并成一条 session；cwd 随会话变动会让 agent-scop
 **system prompt** 每 spawn 渲染，agent-scoped 不能再声明「cwd 就是工作区」。
 **steer 降级** `drivers/index.ts:92 releaseProfile`，须读 live per-spawn 实例（qoder 在 `bindRuntimeVersion`
 决议）；`one-shot`/`next-turn-batch` 无法中途接受跨会话 steer ⇒ **显式排队 + 顺序可见**，禁止静默丢。
-**freshness** `spawn-prep.ts:54` 是单标量 `last-delivered-seq` ⇒ 必须 per-stream ledger。
+**freshness** 不按会话/流隔离，是**整个 runtime 视野**的性质：后端在 `message send` 处按 `RuntimeScope`
+判「这个 runtime 还有没有未消费的 inbox 行」（EXISTS-guard），daemon 不参与、无 per-stream 边界；
+`spawn-prep.ts` 的单标量 `last-delivered-seq` 无读者、不是 freshness 源（详见
+`freshness-boundary-authority-v1.md`）。
 
 ### 7.5 prompt context：agent-scoped **没有 workspace L2 这个概念**
 
@@ -637,6 +648,7 @@ L1 / 要一个 L1 `MEMORY.md`」，没有授权改 conversation-scoped 的记忆
 ```
 P0-a placement × roster_policy（**`conversations` table rebuild**；`kind` 变 GENERATED VIRTUAL 派生列）
   ├─ P0-b AgentInbox（Mentions 迁离 workspace_id + owner cascade + CC 同 tx 写入 + dedupe UNIQUE）
+  │     —— v71 落地，**#task:2072 v84/v85 整支退役**；CC 保留，落点改为提及者与被提及 agent 的 direct pair
   ├─ P0-c conversations.name（partial UNIQUE + 保留表）
   └─ P0-e endpoint identity 存活（endpoint 列去 FK + 删除事务打 endpoint tombstone；**不改全系统软删**）
         └─ P3 DirectPair（endpoints + 派生 pair_key + ACL 派生解析器）
@@ -693,7 +705,7 @@ P5 端到端 slice ← 全部
 - **P0-f** 39 条 legacy task **零搬迁零重编号**（`board_key='ws:'||workspace_id` 回填后 `(board_key,
   task_number)` 与旧 `(workspace_id, task_number)` 逐行同解）；每条 DirectPair 私线**各自从 1 编号**且互不冲突；
   **agent↔agent 与 human↔human 的私线都恰好解析到一个 board**（AgentBoard 的反例不复现）；
-  **向 `agent_inbox` 建 task 被 DB 拒**；`UPDATE board_key` 被拒；**同一 board 上无权 viewer 看不到不属于
+  **向 `agent_inbox` 建 task 被 DB 拒**（该 placement 退役后此条作废，见页首）；`UPDATE board_key` 被拒；**同一 board 上无权 viewer 看不到不属于
   自己的 task**（ACL 逐 task 由 `conversation_id` 判，不由 board）。
 - **P6** v79 一步删除 `kind` 生成列；生产 / wire / 当前行为测试读点为零，历史迁移 fixture 保留，favorites
   排序键原子改为 `conversation:<id>`，Host 13 / Outbound 12 不再 bump。**不存在「删 agent_home 支」这一臂**
@@ -701,7 +713,7 @@ P5 端到端 slice ← 全部
 - **P5** A 中 agent-scoped 工作 → B steer → `dm:@shiki` 回复 → A 继续，且同一 conversation 内另有
   conversation-scoped agent 同时工作；`agent_status` 对有权 viewer 给绝对 target、对无权 viewer 给
   `focus='other'` + 队列深度；**agent-scoped agent（没有 `agent_home` 行）在 owner 的 Agent 管理读面里仍可见**
-  （§9.2 residual —— 该读面必须以 agent 为键，不是以 `workspace_kind='agent_home'` 为键）。
+  （§9.2 residual —— 该读面必须以 agent 为键，不是以「该 agent 有没有 home 容器」为键）。
 
 有利条件：`session_scope` 不可变 ⇒ **无 scope 转换器、无 per-item 迁移状态机**；两类靠 placement + slot 键
 天然并存，现有 agent 永久 conversation-scoped。**两种 scope 都是永久的一等模型**（@shiki 2026-08-14 02:41）⇒
@@ -741,7 +753,7 @@ C（只有 WorkspaceBoard —— `--target 'dm:@handle'` 建不出东西）。�
 
 ⇒ 目标模型里 `agent_home` 是**永久共存的 placement 家族**，不是待清理项：**P6 删掉 home 删除臂**
 （不留永不触发的清理票 —— 那是假承诺），只保留 `DROP COLUMN kind`，其前置件独立收敛于「读点清零 + wire
-epoch」。residual（写在 P2 / P5）：**agent-scoped agent 没有 home 行** ⇒ 任何以 `workspace_kind='agent_home'`
+epoch」。residual（写在 P2 / P5）：**agent-scoped agent 没有 home 行** ⇒ 任何以「存在 home 容器」
 为键的 owner-facing 读面必须改为以 **agent 本身**为键，否则 agent-scoped agent 在管理视图里整行消失
 （与 §4.1 的 INNER JOIN 失效同一类症状）。
 

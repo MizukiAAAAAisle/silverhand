@@ -24,10 +24,9 @@ import type {
   ConversationDto,
   ConversationUserMemberDto,
   ConversationVisibility,
-  DmChannelDto,
+  FixedRosterConversationDto,
   MessageDto,
-  WorkspaceDto,
-  WorkspaceKind,
+  Workspace,
   WorkspaceRoleDto,
 } from '@silverhand/shared';
 
@@ -38,7 +37,7 @@ export interface ChannelReadPort {
    *  only when the row is missing. */
   getChannelLike(
     conversationId: string,
-  ): ChannelConversationDto | DmChannelDto | null;
+  ): ChannelConversationDto | FixedRosterConversationDto | null;
   /** Agent membership of the actor's SOURCE conversation (agent-actor gate). */
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
   listAgents(conversationId: string): ConversationAgentDto[];
@@ -53,7 +52,7 @@ export interface ChannelDirectWritePort {
   setArchived(
     conversationId: string,
     archived: boolean,
-  ): ChannelConversationDto | DmChannelDto | null;
+  ): ChannelConversationDto | FixedRosterConversationDto | null;
   setVisibility(
     conversationId: string,
     visibility: ConversationVisibility,
@@ -61,7 +60,7 @@ export interface ChannelDirectWritePort {
 }
 
 export interface ChannelWorkspaceReadPort {
-  get(workspaceId: string): WorkspaceDto | null;
+  get(workspaceId: string): Workspace | null;
   isMember(workspaceId: string, agentId: string): boolean;
   isUserMember(workspaceId: string, userId: string): boolean;
 }
@@ -96,7 +95,7 @@ export interface ChannelTxChannelsPort {
   updateTitle(
     title: CanonicalConversationTitle,
   ): {
-    channel: ChannelConversationDto | DmChannelDto;
+    channel: ChannelConversationDto | FixedRosterConversationDto;
     releasedKey: string | null;
   } | null;
   /**
@@ -116,7 +115,7 @@ export interface ChannelTxChannelsPort {
    * The row it returns carries the OLD ADDRESS, because the address is `title`:
    * the rename audit names the title it replaced, read under the same obligation.
    */
-  getChannelLikeForUpdate(): ChannelConversationDto | DmChannelDto | null;
+  getChannelLikeForUpdate(): ChannelConversationDto | FixedRosterConversationDto | null;
   /**
    * Is `key` held by ANOTHER conversation in the keyed conversation's workspace
    * (#task:2016)?
@@ -178,7 +177,7 @@ export interface WorkspaceChannelTxChannelsPort {
   insertDmChannel(args: {
     title: CanonicalConversationTitle;
     agentId?: string | null;
-  }): DmChannelDto;
+  }): FixedRosterConversationDto;
   /** Is `key` already held by a conversation of the COORDINATED workspace? Takes
    *  no workspace for the same reason the insert faces do not: it comes from the
    *  key. No self-exclusion arm here — nothing exists yet to exclude.
@@ -224,8 +223,9 @@ export interface WorkspaceChannelTxChannelsPort {
  */
 export interface WorkspaceChannelTxWorkspacePort {
   /** The coordinated workspace's DECIDING facts, re-read in the lock: nothing but
-   *  the kind and the home owner, which is all either creation callback consults.
-   *  Deliberately NOT `WorkspaceDto` — a full row would hand the callback name /
+   *  the home owner, which is all either creation callback consults — both "is
+   *  this an agent home" and "whose" are that one relation.
+   *  Deliberately NOT `Workspace` — a full row would hand the callback name /
    *  description / pin state and invite a decision on a fact this port never
    *  promised to have read under the lock. */
   get(): CoordinatedWorkspaceFacts | null;
@@ -236,12 +236,21 @@ export interface WorkspaceChannelTxWorkspacePort {
 }
 
 /** The workspace facts a creation transaction is allowed to decide on. Named and
- *  exact: the test suite pins this field set, so widening it is a contract change
- *  rather than an accident of passing a row through. */
+ *  exact, with TWO machines behind that claim, because a type-level narrowing is
+ *  not a boundary — structural typing lets a projection spread the row and still
+ *  satisfy this interface:
+ *   - `tests/repos/conversation-persistence.test.ts` pins the adapter's snapshot
+ *     next to the axis's face list (the keyed-projection cell), and
+ *   - `tests/services/channel/coordinated-workspace-facts.test.ts` pins the
+ *     runtime KEY SET plus the absence of each surplus physical column, on both a
+ *     regular container and an agent home.
+ *  Widening the set breaks both, so it is a contract change rather than an
+ *  accident of passing a row through. */
 export interface CoordinatedWorkspaceFacts {
-  workspace_kind: WorkspaceKind;
-  /** The home agent of an `agent_home` workspace; `null` for a `regular` one
-   *  (schema CHECK), which is why the agent_home path re-derives it in the lock. */
+  /** The home agent of an agent-home workspace; `null` for a regular one. ONE
+   *  field, because "which kind of container is this" and "who owns it" are the
+   *  same fact — asked through `isAgentHomeWorkspace`, which narrows this to a
+   *  `string` for the agent_home path that needs the id anyway. */
   owner_agent_id: string | null;
 }
 

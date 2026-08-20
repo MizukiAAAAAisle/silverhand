@@ -1,11 +1,10 @@
 import type { MemberDto } from './api/conversation.js';
 import type { RuntimeKind } from './db/schema.js';
+import { isAgentHomeWorkspaceId } from './agent-home-workspace.js';
 import { SILVERHAND_COMMAND_DOMAINS } from './cli-command-manifest.js';
 import { reachTaughtCommands } from './delivery-reach.js';
 import { inlineCode } from './markdown-escape.js';
-import { TAUGHT_AGENT_RUNTIME_SCOPE_BANNER } from './runtime-scope-banner.js';
 
-type WorkspaceUiKind = 'regular' | 'dm';
 type ToolName =
   | 'send_message'
   | 'react_message'
@@ -53,10 +52,6 @@ export interface PlatformPromptInput {
   /** Current active `system_prompt.md` content (read from L1). Appended
    *  as the "Initial role" tail. */
   roleSystemPrompt: string;
-  /** Absolute daemon-resolved path of the L1 `system_prompt.md` read above.
-   *  This is the only prompt-facing L1 path authority; the prompt must not
-   *  reconstruct it from an app-root layout convention. */
-  roleSystemPromptPath: string;
   /** Auto-injected current-workspace MEMORY.md content. Discriminated:
    *  `present` carries the (already capped) body, `missing` shows a
    *  create-one hint, `unreadable` shows an explicit error so the agent
@@ -123,13 +118,41 @@ export interface WorkspaceConversationSessionContextInput
   /** Workspace display name. Server-controlled text — rendered JSON-quoted
    *  (see `quotePromptValue`) so it cannot break the Context bullet list. */
   workspaceName: string;
-  /** Absolute local root of this session on THIS computer, as resolved by the
-   *  daemon: the deterministic agent-centric bundle coordinate
-   *  `<agent home>/workspaces/<workspace_id>` for `regular`, the agent L1 home
-   *  for DM (relocation-v1 §3.2/§7 — no registry binding, no DB column).
-   *  Never a foreign computer's path and never the server-side home path. */
+  /** Daemon-resolved root of this workspace's persistent memory and files.
+   *  This is an agent-visible product coordinate, not a project assignment. */
   workspacePath: string;
-  channelKind: WorkspaceUiKind;
+  /**
+   * The workspace's ID — a COORDINATE, not a derived fact (#task:2075).
+   *
+   * It replaced a `workspaceKind` field carrying the published container word
+   * (`regular | agent_space`). The word was the same bit as the workspace's
+   * ownership, so publishing it here made this interface the eighth carrier of a
+   * retired alphabet; the sentence below now asks the question directly, through
+   * `isAgentHomeWorkspaceId` — the ONE place that knows how an agent home is
+   * recognized. An input that carries coordinates and a renderer that asks a
+   * domain predicate beats an input that carries pre-chewed answers: there is no
+   * second spelling to keep in step.
+   *
+   * WHY THE ID AND NOT `ownerAgentId`: the daemon builds this input, and the
+   * daemon's authority for "is this the agent's home" is the id convention — it
+   * receives no owner column on the `runtime_start` frame and must not invent one
+   * (`agent-home-workspace.ts` documents both authorities and why they cannot
+   * disagree). The narrower question ("is this THIS agent's home", vs the old
+   * word's "is this SOME agent's home") is equivalent here rather than merely
+   * close: `runtime-start-resolve.ts` refuses a foreign/corrupt `agent_home` ref
+   * fail-closed before a prompt is ever built, so a workspace session on another
+   * agent's home is unreachable.
+   *
+   * THE AXIS, kept from #task:2069 because it is the decision this field
+   * inherits: the bullet below is a sentence ABOUT THE WORKSPACE, so its key must
+   * be a workspace fact. It was once `channelKind`, derived from
+   * `roster_policy === 'fixed'` — a conversation fact standing in for a container
+   * one, which held only by a birth-time coupling (`agent_home ⇒ fixed`) that
+   * nothing in the type system protected. Both later keys (the container word,
+   * then this coordinate) predicate the right subject; only this one predicates it
+   * without a second vocabulary.
+   */
+  workspaceId: string;
   /** Agent + human participants of this conversation. Includes self;
    *  the renderer marks the row whose `agent_id` equals the spawning
    *  agent's id (`PlatformPromptInput.agentId` — the single identity
@@ -137,13 +160,13 @@ export interface WorkspaceConversationSessionContextInput
    *  "Channel members:" — see PR-B. */
 }
 
-/** ConversationSlot for a workspace-less placement. It keeps a dedicated,
- * stable conversation cwd but has no workspace L2 or workspace path to inject. */
+/** ConversationSlot for a workspace-less placement. It has no workspace memory
+ * or workspace coordinate to inject. */
 export interface WorkspaceLessConversationSessionContextInput
   extends ConversationSessionContextCommon {
   workspaceName?: never;
   workspacePath?: never;
-  channelKind?: never;
+  workspaceId?: never;
 }
 
 export type ConversationSessionContextInput =
@@ -152,9 +175,11 @@ export type ConversationSessionContextInput =
 
 export interface AgentSessionContextInput {
   kind: 'agent';
-  /** Authenticated computer only. Agent scope intentionally has no ambient
-   * conversation or workspace coordinate. */
+  /** Authenticated computer. */
   computerId: string;
+  /** Root of this agent's persistent memory and files. Agent-scoped agents do
+   *  not also have an Agent Space conversation, so this is not a workspace. */
+  memoryRootPath: string;
 }
 
 export type SessionContextInput =
@@ -166,7 +191,6 @@ export interface DriverPromptContext {
   agentName: string;
   activeProfileDir: string;
   roleSystemPrompt: string;
-  roleSystemPromptPath: string;
   currentMemory: InjectedFileContent;
   memoryNotesCatalog: MemoryNotesCatalog;
   workspaceMemoryIndex: WorkspaceMemoryIndexEntry[];
@@ -184,9 +208,8 @@ export interface DriverPromptContext {
  * where it is and meet the rules that bind it before the commands that serve
  * them.
  *
- * Keep paths relative to cwd. The runtime's working directory is the
- * daemon-resolved workspace bundle path for this agent, so relative paths
- * point at the active profile without exposing L1/L2 layering to the agent.
+ * Memory links remain relative to the daemon-resolved profile root. That path
+ * is an implementation coordinate, not an agent-visible project assignment.
  */
 export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const t = (name: ToolName): string => CLI_COMMANDS[name];
@@ -194,16 +217,7 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const createChannel = t('create_channel');
   const addMember = t('add_member');
   const listTasks = t('list_tasks');
-  const detailTask = t('detail_task');
   const unclaimTask = t('unclaim_task');
-  const uploadFile = t('upload_file');
-  const updateFile = t('update_file');
-  const viewFile = t('view_file');
-  const readHistory = t('read_history');
-  const searchMessages = t('search_messages');
-  const schedule = t('schedule');
-  const listSchedules = t('list_schedules');
-  const cancelSchedule = t('cancel_schedule');
   const sessionContextBlock = renderSessionContext(
     input.sessionContext,
     input.agentId,
@@ -229,120 +243,100 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const reachCommands = (commands: readonly string[]): string =>
     commands.map(command => inlineCode(`silverhand ${command}`)).join(', ');
   const reachContract = reach.confined.length === 0
-    ? `- **No door is confined to one conversation.** Every addressed command —
-  ${reachCommands(reach.participation)} —
-  acts on any conversation you participate in; the route banner is transport, never
-  a limit. An address you do not participate in comes back unresolved.`
-    : `- **Reach follows the session, not the address.**
-  ${reachCommands(reach.confined)}
-  act only in THIS conversation; elsewhere they are refused
-  \`slot_out_of_scope\`.
-  ${reachCommands(reach.participation)}
-  act on any conversation you participate in. An address you do not participate in
-  comes back unresolved.`;
-  const memoryBlock = renderInjectedFile({
-    title: agentScoped
-      ? 'Active Agent Memory'
-      : workspaceLess
-        ? 'Active Conversation Memory'
-        : 'Active Workspace Memory',
-    relPath: memoryPath,
-    description: agentScoped
-      ? 'This is your agent-global MEMORY.md, auto-loaded for you in every AgentSlot session. Treat it as your recovery index. It must not contain workspace-private context; keep durable global detail in the linked notes/ files.'
-      : workspaceLess
-        ? 'This workspace-less ConversationSlot has no workspace L2 memory. The missing projection below is intentional.'
-      : 'This is the current workspace\'s MEMORY.md, auto-loaded for you. Treat it as your recovery index. Edit it to add/update Key Knowledge entries or the current Active Context; keep durable detail in the linked notes/ files.',
-    content: input.currentMemory,
-    missingHint: agentScoped
-      ? 'No agent-global MEMORY.md exists yet. Create one at the path above only for durable knowledge safe across every workspace.'
-      : workspaceLess
-        ? 'No workspace L2 exists for this placement; do not create one or infer a workspace path.'
-      : 'No MEMORY.md exists yet. Create one at the path above when you first capture durable knowledge for this workspace.',
-  });
-  const memoryNotesCatalogBlock = renderMemoryNotesCatalog(
-    input.memoryNotesCatalog,
-    profileDir,
-  );
+    ? `- **Command reach.** ${reachCommands(reach.participation)} may target any
+  conversation you participate in.`
+    : `- **Command reach.** ${reachCommands(reach.confined)} are limited to this
+  conversation (\`slot_out_of_scope\` elsewhere). ${reachCommands(reach.participation)}
+  may target any conversation you participate in.`;
+  const memoryBlock = workspaceLess
+    ? ''
+    : renderInjectedFile({
+      title: agentScoped ? 'Active Memory' : 'Active Workspace Memory',
+      relPath: memoryPath,
+      description: agentScoped
+        ? 'Persistent memory loaded for this agent.'
+        : 'Persistent memory for the current workspace.',
+      content: input.currentMemory,
+      missingHint: agentScoped
+        ? 'No MEMORY.md exists yet. Create one only when durable cross-conversation knowledge needs to be recorded.'
+        : 'No MEMORY.md exists yet. Create one only when this workspace has durable knowledge to record.',
+    });
+  const memoryNotesCatalogBlock = workspaceLess
+    ? ''
+    : renderMemoryNotesCatalog(input.memoryNotesCatalog, profileDir);
   const memoryIndexBlock = agentScoped || workspaceLess
     ? ''
     : renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
+  const injectedMemoryTail = [
+    memoryBlock,
+    memoryNotesCatalogBlock,
+    memoryIndexBlock,
+  ].filter(Boolean).join('\n\n');
   const turnOrientation = agentScoped
-    ? '1. Orient from **Initial role**, **Active Agent Memory**, and the message\n   header. They are re-injected; do not reopen them just to recover baseline.'
+    ? '1. Read the message header and the injected role and memory. Do not reopen them solely to recover context.'
     : workspaceLess
-      ? '1. Orient from **Initial role**, the explicit conversation header, and the message\n   header. They are re-injected; do not infer an ambient workspace.'
-      : '1. Orient from **Initial role**, **Active Workspace Memory**, and the message\n   header. They are re-injected; do not reopen them just to recover baseline.';
+      ? '1. Read the message header and injected role.'
+      : '1. Read the message header and the injected role and workspace memory. Do not reopen them solely to recover context.';
+  const turnWorkflow = workspaceLess
+    ? `${turnOrientation}
+2. Claim new substantive work or continue its task; complete and verify it.
+3. Update task state before reporting the result.`
+    : `${turnOrientation}
+2. Claim new substantive work or continue its task. Before long work, record a
+   short active handoff; then complete and verify the work.
+3. Update task state, remove a completed handoff, and report the result.`;
   const memoryManual = agentScoped
-    ? `## Agent-Global Memory
+    ? `## Memory and files
 
-Your current working directory (\`cwd\`) is the stable agent home and persists
-across every AgentSlot target, respawn, and context reset. It contains your L1
-role plus agent-global recovery memory; it is never a workspace root.
-
-- **L1 — identity (global).** ${inlineCode(input.roleSystemPromptPath)}
-  is the only identity source and is injected as **Initial role**. Use this
-  daemon-resolved path; never reconstruct it.
-- **Agent-global memory.** \`${memoryPath}\` plus \`${notesDir}/\` may contain
-  only knowledge safe to load in every workspace. MEMORY.md is injected and
-  note metadata appears in **Memory Notes Catalog**.
-- **Workspace L2 is unavailable in AgentSlot context.** Do not search for,
-  infer, index, or open workspace MEMORY.md files or workspace paths from this
-  prompt. A delivery names its absolute conversation target independently.
-
-### MEMORY.md — recovery index
-
-MEMORY.md is a concise agent-global recovery index. Never put workspace-private
-state, task handoffs, channel history, or a workspace path here. The catalog
-makes durable global notes discoverable. Target under 10KB / 80–120 lines
-(injection truncates beyond 16KB).
-
-### Action targeting
-
-AgentSlot deliveries are prefixed with \`${TAUGHT_AGENT_RUNTIME_SCOPE_BANNER}\`.
-Use its \`workdir\` for every filesystem action. Omission must fail loud.`
+Your role and persistent memory are loaded automatically. Treat the memory shown
+below as the recovery entry point.`
     : workspaceLess
-      ? `## Conversation Context
+      ? ''
+      : `## Memory and files
 
-This workspace-less ConversationSlot has a stable, daemon-resolved conversation
-cwd. It has no workspace L2 memory, workspace catalog, or workspace path in the
-prompt. Every external action still targets this one conversation explicitly.`
-      : `## Workspace & Memory
+The memory shown below is the recovery entry point for this Silverhand
+workspace. Other memories appear only in **Workspace Memory Index**; open one
+only when the current task requires it.`;
+  const durableMemoryManual = workspaceLess
+    ? ''
+    : `### Persistent memory
 
-Your current working directory (\`cwd\`) is persistent across sessions. It may
-contain shared project files, worktrees, artifacts, and task files; it is not
-exclusively yours. Choose the intended project/worktree before git or package
-manager commands. Private agent memory belongs only in L1/L2, not arbitrary cwd
-files.
+Code, repository documentation and tests, the task board, and conversation
+history are authoritative. Record only stable, cross-task knowledge absent from
+those sources. Do not store task status, commits, test results, implementation
+details, review history, command output, or temporary paths.
 
-Organize durable agent knowledge by scope:
+Keep \`${memoryPath}\` as a concise recovery index for immediate rules, source
+routes, and active handoffs; keep durable detail in \`${notesDir}/\`. Search the
+catalog before adding a note, update an existing note when possible, and delete a
+memory copy when a stronger authority records it. Remove completed or closed
+tasks from Active Context in the same turn.
 
-- **L1 — identity (global).** ${inlineCode(input.roleSystemPromptPath)}
-  is the only identity source and is injected as **Initial role**. Use this
-  daemon-resolved path; never reconstruct it. Global role/style changes go here.
-- **L2 — workspace memory (agent-owned).** \`${memoryPath}\` plus
-  \`${notesDir}/\` hold this workspace's durable knowledge. MEMORY.md is injected;
-  note metadata appears in **Memory Notes Catalog**.
-- **Other workspaces** appear in **Workspace Memory Index** as paths. Open only
-  what a concrete cross-workspace task needs; don't expose internal paths.
+When more than one conversation has work in flight, identify each active
+handoff by its conversation or task.
 
-### MEMORY.md — recovery index
+Every new or materially updated note must begin with:
 
-MEMORY.md is a concise recovery index: immediate rules/high-cost traps, pinned
-**Key Knowledge** routes, and live **Active Context**.
-Target under 10KB / 80–120 lines (injection truncates beyond 16KB).
+\`\`\`yaml
+---
+name: stable-note-name
+description: When this note should be read, in at most 200 characters.
+metadata:
+  category: project # user | feedback | project
+---
+\`\`\`
 
-Active Context is workspace-wide and shared by every channel session in this
-workspace. Group or prefix every active item with its **source channel name**;
-when a name may be ambiguous or renamed, also include \`#conv:<conversation_id>\`.
-On wake, compare those labels with **This Context → Channel**. Only same-channel
-items are current by default. Treat other-channel items as scoped background or
-an explicit cross-channel handoff — never as a request to resume that work in
-the current channel unless the current message or task says so.`;
+Names must be unique and stable. The catalog is generated automatically; do not
+edit it. Invalid frontmatter is not indexed.`;
+  const memorySection = [
+    memoryManual,
+    durableMemoryManual,
+  ].filter(Boolean).join('\n\n');
 
   return `# Who you are in silverhand
 
-You are **@${input.agentName}**, an agent collaborating with humans and
-other agents in a shared workspace via Silverhand. This is your operating
-manual; your specific assignment is the **Initial role** section at the end.
+You are **@${input.agentName}**, a Silverhand agent. Follow this manual; your
+assignment appears in **Initial role** at the end.
 
 ${sessionContextBlock}
 
@@ -350,123 +344,67 @@ ${sessionContextBlock}
 
 These invariants always hold. Everything else in this manual serves them.
 
-- **Reply only through the CLI.** To say anything to anyone, call ${sendMessage}.
-  Normal output is invisible to the conversation. Use only documented
-  \`silverhand\` command families for communication and Silverhand management.
+- **Reply only through the CLI.** Use ${sendMessage} for all participant-facing
+  communication. Normal output is invisible to the conversation. Use only
+  documented \`silverhand\` commands for Silverhand operations.
 - **Read each message's header.** Every incoming message starts with a meta
   header:
   \`[msg_id=<id> sender=<who> type=<agent|human|system> computer=<computer_id (agent messages only)> target=<address> time=<iso>]\`.
-  Address the sender with a reference (see **Formatting Reference**), not by
-  copying the header's \`@handle\` text; \`system\` has no person to address.
-  \`target\` is the ABSOLUTE address of the stream it arrived on, in the grammar
-  write surfaces accept: **paste the whole token verbatim** into
-  \`--target\` to answer where you were woken — never rewrite it, strip a prefix,
-  or pull an id from it. Three spellings, never your choice:
-  \`#<workspace>/<title>\` for a named channel, \`dm:@<handle>\` for a direct pair (per-VIEWER: your counterpart's header
-  spells that same stream \`dm:@<your handle>\`, so never quote it as shared), and
-  \`#conv:<id>\` otherwise. Any of them may carry a \`/thread:<root_message_id>\`
-  suffix: the message sits in that reply cluster, addressed by that ROOT id, so
-  answering a reply reuses the token rather than naming the reply. No suffix
-  means the main line. A local path is
-  usable only when an agent message's \`computer\`
-  matches **This Context → Computer**; otherwise exchange content in text or an
-  attachment. Human and system messages omit \`computer\`.
+  Address the sender with a reference; \`system\` has no person to address. To
+  reply in the same stream, pass the complete \`target=\` token unchanged to
+  \`--target\`; its grammar is in **Formatting Reference**. A local path from an
+  agent is usable only when its \`computer\` matches **This Context → Computer**;
+  otherwise exchange content or an attachment. Human and system messages omit
+  \`computer\`.
   Task notices add \`task=#<n> status=<status>\`; those fields are authoritative.
-  A \`task_edit\` changes the definition, not status, and reaches every channel
-  agent. Read ${detailTask} \`--help\`
-  and inspect the task before deciding whether it affects you.
+  A \`task_edit\` changes the definition, not status. Inspect the task before
+  deciding whether it affects you.
 ${reachContract}
+- **Respect conversation privacy.** Do not disclose private content from one
+  conversation in another unless the current user instruction or task explicitly
+  authorizes it.
 - **Claim work, not messages.** Before starting substantive work *not already
   tracked by a task*, claim it. A failed claim means stop. **Work Coordination →
   Tasks** decides what counts.
 - **System messages do not require a chat reply by default.** Evaluate each
   message's semantics and your current responsibilities to decide whether action
   is required.
-- **You stay alive and never poll.** Your process persists across turns; new
-  messages arrive on their own.
+- **Do not poll for messages.** New deliveries arrive automatically.
 - **Resolve freshness before sending.** After \`message_stale\`, read the pending
   delivery and decide whether the draft is unchanged, revised, or obsolete.
-  Follow the error hint or \`silverhand message --help\`; never force-send blind.
+  Follow the error hint or \`silverhand message --help\`; do not bypass the guard
+  before resolving the stale event.
 - **Run dependent commands one at a time.** Read each result before constructing
   the next command. Do not chain claim-then-act or stale-retry operations.
 
 ## Turn Workflow
 
-Each time you are woken:
+For each delivery:
 
-${turnOrientation}
-2. Acknowledge briefly when useful, then gather the required context.
-3. Claim new substantive work or continue its existing task.
-4. Carry the requested work through research, implementation, and verification.
-5. Update task state before reporting the result, and keep **Active Context**
-   current for continuation and context-compaction handoff.
+${turnWorkflow}
 
-## Your Profile
-
-Your **profile** is your global (L1) configuration, shared across workspaces and
-separate from L2 workspace memory. Use \`silverhand profile --help\` for profile
-and custom MCP operations.
-
-${memoryManual}
-
-### Durable Memory
-
-The codebase, repository documentation and tests, task board, and channel/thread
-history are authoritative. Durable L2 memory records only stable, cross-task
-knowledge absent from all of them.
-
-Do not store task state, commit or test records, implementation details, review
-history, command output, or temporary paths. Search the catalog before writing;
-update an existing note when possible. Create a note only when losing the
-knowledge would repeat a costly mistake or discard evidence that cannot be
-recovered elsewhere. Delete the L2 copy when a stronger authority records it.
-Task completion does not require a durable-memory update.
-
-Every new Markdown note, and any existing note you materially update, must start
-with this frontmatter:
-
-\`\`\`yaml
----
-name: stable-note-name
-description: Concrete surfaces, symbols, workflows, and failure modes that should trigger reading this note; include when to read it.
-metadata:
-  category: project # user | feedback | project
----
-\`\`\`
-
-Keep \`name\` unique and stable. Write \`description\` for retrieval, not as a
-topic label, in at most 200 characters. The daemon regenerates the catalog; do
-not edit it. Invalid frontmatter means the note is not indexed.
-
-### Checkpoint discipline
-
-Before long work, add a short Active Context handoff. Change
-MEMORY.md only for an immediate rule, route, or live handoff. On \`done\` /
-\`closed\`, remove the task from Active Context; do not convert the handoff into
-a task summary or work log.
+${memorySection}
 
 ## Collaboration Policy
 
 ### When to speak
-- **Respect ongoing conversations.** If a human is in a back-and-forth with
-  someone else, their follow-ups are directed at that person — join only when
-  you are referenced or clearly addressed.
-- **Don't echo.** Never acknowledge, summarize, or restate another agent's work
-  or reply to your own message just to keep activity moving. The owner reports;
-  reviewers report only their verification.
+- **Respect ongoing conversations.** When a human is addressing another
+  participant, respond only when referenced or clearly addressed.
+- **Avoid repetition.** Do not restate another agent's work or reply to your own
+  message solely to create activity. The owner reports; reviewers report only
+  their verification.
 - **Skip idle narration.** Speak when you have actionable content.
 - **React sparingly.** Use ${CLI_COMMANDS.react_message} only as a lightweight
   signal, not an automatic response to routine events.
 
 ### How to report
-- The user cannot see your internal reasoning. Give a one-or-two-sentence plan,
-  meaningful progress updates for long work, and a final result.
+- Provide a brief plan, meaningful updates during long work, and a final result.
 
 ## Work Coordination
 
 ### Tasks
-Claiming is how agents avoid racing the same work. The claim is a mutex — if it
-fails, someone else owns that work, so step back.
+A claim is the ownership mutex for a unit of work. If it fails, do not perform
+that work.
 
 Decide what to claim by the **unit of work**, not by the message:
 - **New substantive work** (implementation, investigation, review, deploy) →
@@ -482,8 +420,6 @@ Rules:
    most one task, so reopen the existing task after \`source_conflict\`.
 4. **State before speech.** Update task status before reporting completion.
    ${unclaimTask} only releases ownership; it does not complete work.
-5. **Cross-workspace mutation is explicit.** Operate in the current workspace
-   unless the user/task names another one.
 
 Use \`silverhand task --help\` for provenance, selectors, and state transitions.
 
@@ -506,9 +442,8 @@ chains that carry no real dependency.
 Threads are focused side-discussions attached to a specific message. They share
 the channel context and do not nest. Reply with ${sendMessage} using the
 header's \`target=\` token unchanged. Keep your thread follow state aligned with
-your part in the
-work. Unfollowing is silent; announce your departure before unfollowing. A later
-reference brings you back.
+your part in the work. Unfollowing is silent; announce departure first. A later
+reference restores participation.
 
 Keep the main line for what the whole channel must act on: work assignment, task
 state, human decisions, contract changes, and delivery reports. A thread must
@@ -517,10 +452,8 @@ never be the only carrier of a decision the channel needs. Use
 
 ### Cross-computer work
 When someone on another computer depends on your work, iterate on your own
-computer and report once at the boundary; a focused thread keeps that iteration
-off the main line. Do not follow another workstream's intermediate activity or
-ask for a walkthrough of state you cannot inspect — wait for its boundary report
-and portable evidence.
+computer and report at a stable boundary. Do not follow intermediate activity or
+request a walkthrough of state you cannot inspect; wait for portable evidence.
 
 ### Channels
 **Only** call ${createChannel} when the user has **explicitly** asked to open a
@@ -529,44 +462,9 @@ parallelize. After creation, announce it here as \`#conv:<channel_id>\`.
 
 ### Members
 Use ${addMember} \`--handle <name>\` to bring an existing workspace member into
-the current channel/thread; the human manages workspace membership itself.
-A reference only addresses current
-members: one that names someone who is not here addresses nobody — the send
-still succeeds, and reports that token back to you as
-\`unresolved_references\` on its stdout.
-Use \`silverhand member --help\`.
-
-## Attachments
-
-Use ${uploadFile} for generated binary artifacts and ${viewFile} for received
-attachments; paste short text inline. Attachments are channel-scoped and threads
-inherit the parent channel's files. To revise
-an artifact you uploaded, use
-${updateFile} rather than a second upload: the attachment id and everyone's
-resolved local path stay fixed, so a reviewer re-opens the same path for your
-latest version. You can update only your own uploads. Exact usage is in
-\`silverhand file --help\`.
-
-## History and search
-
-These commands only recover context; they are not how you learn of new messages.
-
-**When the user refers to a past discussion, decision, or owner and that context
-isn't already in hand, search before answering.** Use ${searchMessages}, then
-${readHistory} for full context; cite the conversation as \`#conv:<id>\`, or say
-you could not verify it. Cross-workspace reads do not widen posting authority.
-Use \`silverhand message --help\` for scopes, anchors, and thread-read semantics.
-
-## Schedules
-
-Use ${schedule} \`--target-conversation <address>\` to wake yourself at a future
-time when no human message will
-trigger the follow-up. Do not schedule work that can await the next user message
-or needs fresh instructions. A fire wakes the target conversation's runtime,
-which both performs and reports the work. Check ${listSchedules} before creating
-repeats; cancel with ${cancelSchedule}. On a schedule-fire notice, re-evaluate
-whether the action is still needed. Exact timing is in
-\`silverhand schedule --help\`.
+the current channel/thread; the human manages workspace membership. A reference
+to a non-member addresses nobody; the send succeeds and reports the token in
+\`unresolved_references\`.
 
 ${renderSilverhandCliManual()}
 
@@ -574,39 +472,22 @@ ${renderSilverhandCliManual()}
 
 These are chat-output contracts. Copy values from CLI output; never invent ids.
 
-### Reference grammars
-- \`<silverhand://agent/<name>>\` / \`<silverhand://human/<name>>\` addresses a
-  participant. Copy the kind and \`name\` from a message header or the channel
-  member list, and keep the angle brackets.
-- \`@<name>\` is display only. It shows the person's chip but addresses no one.
-- \`#<channel_name>\` names a current-workspace channel; if ambiguous, use
-  \`#conv:<id>\`.
-- \`#conv:<conversation_id>\` identifies any conversation, including threads
-  and cross-workspace conversations.
-- \`#task:<n>\` identifies a workspace task; copy \`n\` from ${listTasks} or a
-  task notice.
+### Addresses
+- \`target=\` is absolute. Copy its complete value unchanged when replying.
+- Stream forms are \`#<workspace>/<title>\`, \`dm:@<handle>\`, and
+  \`#conv:<id>\`. A reply cluster appends \`/thread:<root_message_id>\`.
+- The DM shorthand is viewer-relative; never present it as a shared identifier.
 
-### Rules
-- A reference addresses someone only in prose: inside a code span, a fenced
-  block, or a quoted line it is literal text.
-- Sigils belong in chat text, outside code spans. CLI arguments take raw values
-  — except an address flag, which takes a delivery address verbatim, \`#conv:\`
-  and all. \`#\` / \`#conv:\` are places and \`#task:\` is work. Never combine
-  these prefixes.
+### References
+- \`<silverhand://agent/<name>>\` and \`<silverhand://human/<name>>\` address a
+  participant. Copy \`kind\` and \`name\` from the header or member list.
+- \`@<name>\` is display only. \`#task:<n>\` identifies a workspace task.
+- References address only in prose; code spans, fences, and quotations are
+  literal. CLI arguments take raw values, including complete address tokens.
 
-### URLs next to non-ASCII punctuation
-Wrap a URL next to non-ASCII punctuation in \`<...>\` or Markdown link syntax;
-otherwise the punctuation may join the URL.
+${injectedMemoryTail ? `${injectedMemoryTail}\n\n` : ''}## Initial role (your assignment in this workspace/channel)
 
-${memoryBlock}
-
-${memoryNotesCatalogBlock}
-
-${memoryIndexBlock}
-
-## Initial role (your assignment in this workspace/channel)
-
-${input.roleSystemPrompt.trim() || '_(role not yet defined — wait for the user to shape it during onboarding)_'}
+${input.roleSystemPrompt.trim() || '_(role not defined; await user instruction)_'}
 `;
 }
 
@@ -620,7 +501,6 @@ export function buildSystemPromptFor(
     runtime: kind,
     activeProfileDir: ctx.activeProfileDir,
     roleSystemPrompt: ctx.roleSystemPrompt,
-    roleSystemPromptPath: ctx.roleSystemPromptPath,
     currentMemory: ctx.currentMemory,
     memoryNotesCatalog: ctx.memoryNotesCatalog,
     workspaceMemoryIndex: ctx.workspaceMemoryIndex,
@@ -705,13 +585,9 @@ function pickFence(body: string): string {
 function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): string {
   const header =
     '## Workspace Memory Index\n\n' +
-    'Every workspace you are a member of, with the absolute path to its ' +
-    "MEMORY.md for you. The current workspace's MEMORY.md is already " +
-    'auto-loaded above as **Active Workspace Memory**; the others are ' +
-    'reference paths — do not bulk-read them. An entry ' +
-    'marked "unavailable on this computer" has no local files here — do ' +
-    'not guess a path for it; it becomes available when that workspace ' +
-    'next runs on this computer.';
+    'Memory locations for your workspaces on this computer. The current one is ' +
+    'already loaded; open another only when the task requires it. Do not infer a ' +
+    'path for an unavailable entry.';
   if (entries.length === 0) {
     return `${header}\n\n_No member workspaces._`;
   }
@@ -731,8 +607,8 @@ function renderMemoryNotesCatalog(
 ): string {
   const header =
     '## Memory Notes Catalog\n\n' +
-    'Workspace notes available for progressive disclosure. Read a linked note ' +
-    'when its description is relevant to the work.';
+    'Indexed notes for progressive disclosure. Read a note only when its ' +
+    'description matches the work.';
   if (catalog.entries.length === 0) return header;
 
   const entryLines = catalog.entries.map(entry => {
@@ -803,10 +679,9 @@ function renderSilverhandCliManual(): string {
 
   return `## Tool Reference (silverhand CLI)
 
-Use this CLI for all Silverhand operations. It returns JSON on stdout; failures
-return a stable \`code\`, \`retriable\`, and contextual details on stderr. Read
-the error before retrying. \`capability_denied\` is not retriable; report the
-missing capability.
+Use this CLI for all Silverhand operations. It returns JSON on stdout and stable
+error details on stderr. Read an error before retrying;
+\`capability_denied\` is final.
 
 ### Command index
 
@@ -815,6 +690,14 @@ ${domainIndex}
 Run \`silverhand <noun> --help\` to discover noun semantics and verbs. Run
 \`silverhand <noun> <verb> --help\` (or the faceted equivalent) for exact flags,
 examples, outputs, and recovery guidance.
+
+### Operating notes
+- Update an attachment you uploaded with \`silverhand file update\`; do not
+  upload a replacement with a new identity.
+- Search history when a referenced decision or owner is absent from current
+  context. Cite the conversation or state that it could not be verified.
+- Create a schedule only when no future human message will trigger the action.
+  On wake, confirm that the action remains necessary.
 
 ### Pitfalls
 - **Message bodies come from STDIN.** For non-trivial text use a single-quoted
@@ -826,17 +709,8 @@ examples, outputs, and recovery guidance.
   SILVERHAND_EOF
   \`\`\`
 - **Task bodies come from STDIN too.** \`task create\` / \`task edit\` take
-  \`--body\` as a value-less switch — the Markdown body is piped, never passed
-  inline. Same single-quoted heredoc; omit \`--body\` to leave it unchanged. An
-  EMPTY pipe is refused (never a silent clear); to clear a body use
-  \`task edit --clear-body\`:
-
-  \`\`\`bash
-  silverhand task edit 42 --body <<'SILVERHAND_EOF'
-  ## Acceptance
-  Multi-line Markdown is safe here.
-  SILVERHAND_EOF
-  \`\`\``;
+  \`--body\` without a value and read Markdown from STDIN. Omit it to preserve the
+  body; use \`task edit --clear-body\` to clear it.`;
 }
 
 function renderSessionContext(sc: SessionContextInput, agentId: string): string {
@@ -847,28 +721,26 @@ function renderSessionContext(sc: SessionContextInput, agentId: string): string 
   lines.push(`- Computer: ${inlineCode(sc.computerId)}`);
   if (sc.kind === 'agent') {
     lines.push(
-      '- Runtime scope: agent — one persistent session serves every explicitly addressed conversation; there is no ambient workspace or channel.',
+      `- Memory: ${inlineCode(sc.memoryRootPath)} — persistent memory and files for this agent.`,
     );
     return lines.join('\n');
   }
   if (!hasWorkspaceSessionContext(sc)) {
-    lines.push(
-      '- Runtime scope: workspace-less conversation — this session is isolated to the explicit conversation below and has no ambient workspace or workspace L2.',
-    );
     lines.push(
       `- Channel: ${quotePromptValue(sc.sessionTitle)} (${inlineCode(sc.conversationId)})`,
     );
     renderSessionMembers(lines, sc, agentId);
     return lines.join('\n');
   }
-  const workspaceValue = `${quotePromptValue(sc.workspaceName)} (${inlineCode(sc.workspacePath)})`;
-  if (sc.channelKind === 'dm') {
+  const workspaceValue = quotePromptValue(sc.workspaceName);
+  const workspacePath = inlineCode(sc.workspacePath);
+  if (isAgentHomeWorkspaceId(sc.workspaceId, agentId)) {
     lines.push(
-      `- Workspace: ${workspaceValue} — DM home (1:1 with the user). MEMORY.md / notes/ here are this DM's L2 memory and stay private to it.`,
+      `- Workspace: ${workspaceValue} (${workspacePath}) — your Agent Space (1:1 with the user); persistent memory and files belong here.`,
     );
   } else {
     lines.push(
-      `- Workspace: ${workspaceValue} — regular workspace. Use this workspace's L2 MEMORY.md / notes/ for workspace-scoped collaboration and notes; L1 \`system_prompt.md\` is shared across every workspace.`,
+      `- Workspace: ${workspaceValue} (${workspacePath}) — regular workspace; persistent memory and files belong here.`,
     );
   }
   lines.push(
@@ -881,7 +753,11 @@ function renderSessionContext(sc: SessionContextInput, agentId: string): string 
 function hasWorkspaceSessionContext(
   sc: ConversationSessionContextInput,
 ): sc is WorkspaceConversationSessionContextInput {
-  return sc.workspaceName !== undefined && sc.workspacePath !== undefined;
+  return (
+    sc.workspaceName !== undefined
+    && sc.workspacePath !== undefined
+    && sc.workspaceId !== undefined
+  );
 }
 
 function renderSessionMembers(

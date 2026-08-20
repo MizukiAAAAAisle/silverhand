@@ -144,12 +144,12 @@ export const SILVERHAND_COMMAND_DOMAINS = [
   },
   {
     domain: 'Profile',
-    when: 'Manage your own global profile and MCP configuration, or look up who another agent is.',
+    when: 'Manage your profile metadata and MCP configuration, or inspect another agent profile.',
     nouns: [
       {
         noun: 'profile',
         summary:
-          "Manage the executing subject's global (L1) config — e.g. custom MCP servers; `get --handle <name>` reads another agent's profile.",
+          "Manage the executing agent's profile metadata and MCP configuration; `get --handle <name>` reads another agent's profile.",
         verbs: ['get', 'update'],
         facets: [
           {

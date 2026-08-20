@@ -309,8 +309,8 @@ describe('the readable form names a coordinate, not an allocation', () => {
   });
 
   it('spells a stream with no name form without inventing one', () => {
-    // Three arms, three different facts. `agent_inbox` is addressed by id and is
-    // NOT a fallback — counting a placement that can never have a name would bury
+    // Three arms, three different facts. `id_only` is addressed by id and is
+    // NOT a fallback — counting a stream that can never have a name would bury
     // the reasons naming machinery could actually fix. A pair renders its
     // first-person label, which is why that label is not a fallback either.
     expect(formatStreamAddressToken(target(CONV), { kind: 'id_only' })).toEqual({

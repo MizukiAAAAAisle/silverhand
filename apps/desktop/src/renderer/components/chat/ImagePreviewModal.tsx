@@ -25,7 +25,7 @@ import {
 import { suggestImageFilename } from './markdownTranscript';
 import { SelectionActionButton } from './SelectionToolbar';
 import type { ChannelReference } from './ChannelRef';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 import type { StaticTaskRefSummary } from './TaskRef';
 
 /** 1×1 transparent PNG. Used as html-to-image's `imagePlaceholder` so a
@@ -238,7 +238,7 @@ export function ImagePreviewModal({
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
-  conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  conversationRefsById?: ReadonlyMap<string, WorkspaceChannelReference>;
   /** Directory avatar batch — feeds only the Markdown body's inline
    *  @-mention pills (a separate axis from the row's own author). */
   agentAvatarUrls?: ReadonlyMap<string, string | null>;

@@ -62,7 +62,7 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand message send` | Send a visible message. `--target <address>` is REQUIRED and names the destination stream absolutely — paste the `target=` token of the message you are answering (§3.1). **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target <address>` is required; a `/thread:<root_message_id>` suffix pulls that reply cluster (§3.5). |
 | `silverhand message search` | Search messages. The range is a single selector: a ConversationSlot may omit it to search its own conversation; an AgentSlot must pass `--workspace-id <id>` or `--conversation-id <id>`. `--current-workspace`, `--workspace-id`, and `--conversation-id` are mutually exclusive (`subkind: 'mutually_exclusive'`). Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (also mutually exclusive). The response's `scope` field echoes where the search landed; it is output only. |
-| `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
+| `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never makes a pending send stale, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) in the stream named by the required `--target <address>`; a `/thread:<root_message_id>` suffix files it in that reply cluster (§3.5), and the address may name any conversation this agent participates in (the former `--conversation-id` cross-conversation flag is gone — §3.4). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4. |
 | `silverhand task claim` | Claim one or more existing tasks by positional task number (`task claim 42 43`; to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Batch claims are all-or-nothing on operand validity. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
@@ -76,7 +76,7 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand channel list` | List the channels and direct-message conversations in which the agent is a member (any visibility; archived included and sorted last), together with the active public channels in the workspace the agent has not joined (optional `--workspace-id`). Non-member private channels, non-member DMs, and non-member archived public channels are excluded. Each entry carries authoritative `is_member` and `visibility`; `visibility: 'public'` with `is_member: false` is a public channel the agent has not joined, and such an entry grants discovery only — no access to messages, roster, or delivery, and no implicit join. |
 | `silverhand member add` | Add an existing workspace member (agent or human) to the conversation named by the required `--target <address>`, by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. A membership is a fact about a CONVERSATION: a `/thread:` suffix is refused (`thread_suffix_not_supported`) — someone joins a reply cluster by being referenced or replying — and a DM fails with `conversation_member_add_unsupported` because its two endpoints ARE its membership. |
 | `silverhand workspace list` | List workspaces the agent can access. |
-| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). `--target-conversation <address>` is REQUIRED and names the conversation whose `(conversation, owner_agent)` runtime is woken: that runtime receives the wake, produces the work, and posts the result — there is no fire-here-but-post-there split (see §3.3). A `/thread:` suffix is refused (a reply cluster shares its parent's runtime) and an agent inbox is not a wake destination (`inbox_not_writable`). The flag keeps its own name because the address is a business VALUE — which conversation gets woken — not where the create acts. |
+| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). `--target-conversation <address>` is REQUIRED and names the conversation whose `(conversation, owner_agent)` runtime is woken: that runtime receives the wake, produces the work, and posts the result — there is no fire-here-but-post-there split (see §3.3). A `/thread:` suffix is refused (a reply cluster shares its parent's runtime). The flag keeps its own name because the address is a business VALUE — which conversation gets woken — not where the create acts. |
 | `silverhand schedule list` | List this agent's schedules. |
 | `silverhand schedule cancel` | Cancel a schedule. |
 | `silverhand file upload` | Upload a local file into the conversation named by the required `--target <address>` and return an attachment id. Attachments are owned by a CONVERSATION and threads inherit the parent's files, so a `/thread:` suffix is refused: upload to the parent, then send into the thread. |
@@ -152,10 +152,11 @@ paste — no rewriting, no prefix stripping, no id extraction. A
 `/thread:` suffix sends into that ROOT's reply cluster (a reply id is
 not a root; the address names the cluster, not the message being
 answered), and the result echoes `thread_root_id` (null on the main
-line). The daemon resolves the target to its stream and carries that
-stream's `seen_up_to_seq` + `stream_key` for per-stream freshness; an
-unknown thread target sends without a freshness boundary (loose
-first-touch) rather than falsely stale-ing.
+line). The target only names where the send is routed; it carries no
+freshness boundary. Freshness is a property of the whole runtime's
+field-of-view, not of the resolved stream, and the backend evaluates
+it at send time (see the freshness conflict below and
+`docs/freshness-boundary-authority-v1.md`).
 
 **There is no default target.** The conversation the CLI is
 authenticated in is where the credential lives, not a destination, so
@@ -179,24 +180,28 @@ Pre-flight failures (exit 1, code `validation_error`):
 
 Freshness conflict (exit 1, code `conflict`):
 
-- The daemon owns each `(conversation, agent)` runtime's observed freshness
-  boundary. `silverhand message send` routes through the daemon in spawned
-  runtimes; the daemon stamps the boundary it knows the model has admitted. It
-  never queries the current DB seq at send time.
-- For same-conversation agent sends, the backend rejects insertion when the
-  conversation has advanced past that observed boundary. The stderr JSON uses
+- Freshness authority is the **backend**, evaluated at `message send` against
+  a `RuntimeScope` guard (`hasUndeliveredForAgent` / `hasUndeliveredForPair`):
+  a boolean EXISTS over the runtime's undelivered inbox rows
+  (`delivered_at IS NULL`). The daemon does NOT participate — no daemon cursor,
+  no CAS stamp, no observed boundary, and the CLI reads no `seen_up_to_seq`.
+- The backend rejects the send whenever the runtime still has ANY undelivered
+  inbox row routed to it — in any conversation, any thread, or the mainline —
+  so a send in one conversation is held stale by unconsumed input anywhere
+  else. The stderr JSON uses
   `code: "conflict"` with `details.subkind: "message_stale"`.
-- **The 409 is signal-only** (single-release-face contract): it carries
-  `stream_key`, `seen_up_to_seq`, `current_seq`, and a hint —
-  never message bodies. The unseen messages are already queued for NORMAL
+- **The 409 is signal-only** (single-release-face contract): it carries NO seq
+  and NO count — `details` is `{ subkind, stale_event_id, hint }` —
+  never message bodies, and it does not tell the agent how far behind it is.
+  The unseen messages are already queued for NORMAL
   delivery and arrive as regular input: steer runtimes (codex/claude) receive
   them within the current turn; boundary runtimes (qoder) receive them as one
   batch after the current turn ends. Message bodies reach the model through
   exactly one input face.
 - Agents should treat this as stale-context feedback, not as a transient
   retry. Wait for the queued input to arrive, read it, then decide. Do
-  **not** immediately resubmit the same body — the observed boundary only
-  advances when the unseen content is actually admitted, so an uninformed
+  **not** immediately resubmit the same body — the guard only clears once the
+  undelivered rows are actually delivered to the runtime, so an uninformed
   retry conflicts again by design.
 - If the newly-arrived messages do not change the draft and the message still
   adds value, resend with `--stale-resolution unaffected`; that send still
@@ -215,10 +220,9 @@ Freshness conflict (exit 1, code `conflict`):
   resolution reason for observability. Omitting `--stale-resolution` never
   blocks sending; the backend records the retry as unattributed telemetry.
 - On success, stdout includes `{ "message_id": "...", "message_seq": N }`.
-  The daemon uses `message_seq` to advance the sender runtime's observed
-  boundary after its own successful send, so consecutive self-authored messages
-  do not stale on the sender's previous message. Agents should not hand-craft
-  or override this bookkeeping.
+  A self-authored send creates no inbox row for its own runtime, so consecutive
+  self-authored messages never stale on the sender's previous message — there
+  is no self-stale boundary bookkeeping to maintain.
 
 #### Planned: channel create initial prompts become stdin-only
 
@@ -311,17 +315,16 @@ Addressing the wake:
 
 - **There is no default.** `--target-conversation <address>` is
   required: the conversation the create call runs in is where the
-  credential lives, not a wake destination, and an AgentSlot's route
-  anchor may be an agent inbox nobody can post to. Omitting it is
+  credential lives, not a wake destination, and an AgentSlot has no
+  route conversation to fall back on at all. Omitting it is
   refused with `target_required` — the same subkind every addressed
   door uses (§5.1) — and the flag keeps its own name because the
   address here is a business VALUE (which conversation gets woken),
   not where the create acts.
 - The address is resolved like any other: unknown and unauthorized
-  collapse into one `target_unresolved` (404), a `/thread:` suffix is
+  collapse into one `target_unresolved` (404), and a `/thread:` suffix is
   refused (`thread_suffix_not_supported`, 400 — a reply cluster shares
-  its parent's runtime), and an agent inbox is refused
-  (`inbox_not_writable`). `manage_schedules` is judged where the wake
+  its parent's runtime). `manage_schedules` is judged where the wake
   lands. After resolution the service re-validates the ROW it landed
   on — a closed conversation is `target_conversation_closed` (409),
   and archived is deliberately NOT a barrier (archive lists out, it
@@ -500,7 +503,7 @@ objective/scope/acceptance change → `task edit` (definition-of-record, not an
 append-only log); questions / review / coordination *about* a task → the task's
 conversation thread. To open/find that thread, read `nav` from `task detail` —
 `nav.kind` `source`/`created_event` gives `nav.ref`, and the address is
-`#conv:<nav.ref.channel_id>` plus `/thread:<nav.ref.thread_root_id>` when that
+`#conv:<nav.ref.conversation_id>` plus `/thread:<nav.ref.thread_root_id>` when that
 field is non-null (never `message_id`: a cluster is addressed by its ROOT, and a
 mid-cluster anchor is refused rather than widened to its cluster);
 `nav.kind = unavailable` has no honest anchor, so post to the
@@ -526,15 +529,11 @@ visibility / `read_messages`:
   reads a cluster the agent can see without becoming a follower; the read
   returns the root message plus its replies. Push/pull split: push
   (inbox/wake) is follower-gated, pull is channel-visibility-gated.
-  - The read reaches the backend over plain HTTP, so when a daemon socket is
-    present the CLI fires a daemon-local `agent_stream_observed` intent after a
-    successful read to advance that cluster's observed boundary and map the
-    surfaced ids — otherwise a read-then-send to the same address would
-    be judged stale against a boundary the daemon never learned. `observed_seq`
-    = max seq of the returned **replies** (0 when none; never the root's
-    main-line seq); `reply_target_messages` = root id + returned reply ids.
-    Best-effort: a failed intent never fails the read. Direct/non-daemon
-    fallback skips the intent (degrades to first-touch, no boundary).
+  - The read reaches the backend over plain HTTP and returns the root message
+    plus its replies; it has no freshness side effect. Reading a cluster
+    advances no boundary — there is none, since freshness is a whole-runtime
+    property evaluated at send time (§3.1) — so a peek neither arms nor clears
+    staleness for a later send to the same address.
 - **Follow / unfollow:** `silverhand thread follow --root <message_id>` /
   `silverhand thread unfollow --root <message_id>` (id = root or any reply).
   The backend resolves the root object globally, derives its owner conversation,
@@ -566,11 +565,11 @@ visibility / `read_messages`:
 ### 3.6 `silverhand message react` — reactions are not messages
 
 A reaction is a lightweight signal attached to a message, not a message of
-its own. The write deliberately stays **out of the message CAS / freshness
+its own. The write deliberately stays **out of the freshness
 path** (both channel main line and reply clusters): it allocates no `seq`,
-never advances any stream's freshness head, and touches no read cursor — so
+creates no undelivered inbox row, and touches no read cursor — so
 adding or removing a reaction never wakes anyone and never makes a pending
-draft stale. See `docs/reactions-design.md` §4 for the invariant.
+send stale. See `docs/reactions-design.md` §4 for the invariant.
 
 ```bash
 # add 👀 to a message you can see

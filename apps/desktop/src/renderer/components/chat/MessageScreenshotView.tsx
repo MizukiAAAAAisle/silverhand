@@ -15,7 +15,7 @@ import { Markdown } from './Markdown';
 import { MessageRowContent } from './MessageRowContent';
 import { ReactionChipRow } from './ReactionChipRow';
 import type { ChannelReference } from './ChannelRef';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 import type { StaticTaskRefSummary } from './TaskRef';
 
 /**
@@ -86,7 +86,7 @@ export function MessageScreenshotView({
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
-  conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  conversationRefsById?: ReadonlyMap<string, WorkspaceChannelReference>;
   taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
   /** Directory batch — feeds only the inline @-mention pills in the Markdown
    *  body, a separate axis from the row's own author. */
@@ -189,7 +189,7 @@ function ScreenshotRow({
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
-  conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  conversationRefsById?: ReadonlyMap<string, WorkspaceChannelReference>;
   taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
   agentAvatarUrls?: ReadonlyMap<string, string | null>;
   authorAgentAvatarUrls?: ReadonlyMap<string, string | null>;

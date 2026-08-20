@@ -31,7 +31,7 @@ import {
   type CachedMessage,
   isCommittedMessage,
 } from '@/features/channels/pending-message';
-import type { ConversationReference } from '@/components/chat/ConversationRef';
+import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import {
   classifyTopShift,
   FIRST_ITEM_INDEX_START,
@@ -136,7 +136,7 @@ export function MessageList({
    *  Mainline only — the ThreadPanel renders the real replies. Read-inert: no
    *  cursor is advanced by rendering it (`docs/thread-unread-v1.md` §6). */
   replyPreviewsByRoot?: Record<string, ThreadReplyPreviewRow[]>;
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   /** Pre-bound (workspace already resolved) click handler for inline
    *  `#<channel_name>` chips. */
@@ -321,23 +321,15 @@ export function MessageList({
     jumpToMessageId,
     canSave,
   });
-  // Channel title/kind — surfaced in the screenshot header and used as the
-  // suggested filename base. Top-level channels live in liveChannels; we
-  // only want the title, so an inline find is fine.
-  const channelMeta = useMemo(() => {
+  // Channel TITLE — surfaced in the screenshot header and used as the suggested
+  // filename base, and the only field the consumer reads. Top-level channels live
+  // in liveChannels; we only want the title, so an inline find is fine. It used to
+  // also derive a `kind` from `roster_policy` that nothing read (#task:2077).
+  const channelTitle = useMemo(() => {
     const c =
       liveChannels.find(x => x.id === channelId) ??
       archivedChannels.find(x => x.id === channelId);
-    if (!c) return { title: null as string | null, kind: null as 'channel' | 'dm' | null };
-    return {
-      title: c.title,
-      kind:
-        c.roster_policy === 'fixed'
-          ? ('dm' as const)
-          : c.roster_policy === 'open'
-            ? ('channel' as const)
-            : null,
-    };
+    return c ? c.title : null;
   }, [liveChannels, archivedChannels, channelId]);
   const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
   // Full key list of the previously observed window — lets us tell a head-trim
@@ -754,7 +746,7 @@ export function MessageList({
         }}
         workspaceId={workspaceId}
         conversationId={channelId}
-        channelTitle={channelMeta.title}
+        channelTitle={channelTitle}
       />
       <div className="relative min-h-0 min-w-0 flex-1">
       {isLoading ? (

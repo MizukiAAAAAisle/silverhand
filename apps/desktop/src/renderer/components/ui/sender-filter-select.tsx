@@ -1,10 +1,12 @@
 import { useMemo } from 'react';
 import * as Select from '@radix-ui/react-select';
-import { Bot, ChevronDown, Search as SearchIcon } from 'lucide-react';
+import { ChevronDown, Search as SearchIcon } from 'lucide-react';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
+import { AuthorAvatarView } from '@/components/chat/author-avatar-view';
+import { UNRESOLVED_AGENT_LABEL } from '@/components/chat/author-presentation';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
@@ -127,8 +129,16 @@ export function SenderFilterSelect({
                 // picker option's value must always come from a real directory
                 // row, so this arm mirrors the Agents group below: one quiet
                 // row, nothing selectable.
+                //
+                // The COPY may not say "no humans" (#task:2065, @Paul): both
+                // callers read `const { data: users = [] } = useUsers()`, and
+                // that default washes `undefined` — pending ∪ error — into a
+                // legal empty set, so this row is the load window AND the
+                // read-failure face wearing one face. Neither may claim the
+                // roster is empty, which it provably never is. It says only
+                // what both windows share: the list is not here.
                 <div className="px-2 py-1.5 text-xs italic text-text-muted">
-                  No humans
+                  Unavailable
                 </div>
               ) : (
                 sortedUsers.map(user => (
@@ -154,6 +164,11 @@ export function SenderFilterSelect({
                 Agents
               </Select.Label>
               {agents.length === 0 ? (
+                // Deliberately NOT the Humans row's wording: an Agent list of
+                // `[]` IS a reachable steady state (a workspace can really have
+                // no agents), so this row is allowed to assert absence and stays
+                // verbatim (#task:2065, @Paul). Same shape, different claim —
+                // "both groups are empty-ish" is not a reason to unify them.
                 <div className="px-2 py-1.5 text-xs italic text-text-muted">
                   No agents
                 </div>
@@ -193,6 +208,11 @@ function senderFilterLabel(
 ): { label: string; icon: JSX.Element } {
   if (value.startsWith('user:')) {
     const userId = value.slice('user:'.length);
+    // No unresolved arm here, on purpose: a human has no delete path today, so
+    // the selected id is still a roster row and `formatUserDisplayName`'s own
+    // id fallback is unreachable from this control. It is also the byline's
+    // resolver — narrowing it for this picker would change author names on
+    // every message (#task:2065).
     const label = formatUserDisplayName(userId, userResolver);
     return {
       label,
@@ -208,18 +228,41 @@ function senderFilterLabel(
   if (value.startsWith('agent:')) {
     const agentId = value.slice('agent:'.length);
     const agent = agents.find(a => a.id === agentId);
-    const label = `@${agent?.display_name?.trim() || agent?.name || agentId}`;
+    if (!agent) {
+      // The selection outlived its directory row — the agent was deleted, or
+      // the viewer lost the workspace that made it visible. Either way the
+      // filter is STILL applied to that id (the server keeps answering for it,
+      // #task:2061), so this degrades the identity, not the filter.
+      //
+      // `Unknown agent`, never "Deleted agent": `useAgents()` lists the
+      // `canViewAgent` ACL set, so a miss proves only that the id no longer
+      // resolves HERE — the stronger claim belongs to the faces the server
+      // proved gone (`presentCounterpart`). This is exactly a byline's
+      // `unresolved` author, so both the label and the neutral square come FROM
+      // that seam (imported, not re-typed — the borrowed word is the whole
+      // licence for the weaker claim) rather than inventing a third vocabulary,
+      // and never the raw uuid, which names a sender to nobody.
+      return {
+        label: UNRESOLVED_AGENT_LABEL,
+        icon: (
+          <AuthorAvatarView
+            avatar={{ variant: 'neutral-agent' }}
+            size={AVATAR_PX.xs}
+            label={UNRESOLVED_AGENT_LABEL}
+          />
+        ),
+      };
+    }
+    const label = `@${agent.display_name?.trim() || agent.name}`;
     return {
       label,
-      icon: agent ? (
+      icon: (
         <AgentAvatar
           runtime={agent.runtime}
           size={AVATAR_PX.xs}
           avatarObjectUrl={agentAvatarUrls?.get(agentId) ?? null}
           alt={label}
         />
-      ) : (
-        <Bot className="size-3.5" />
       ),
     };
   }

@@ -21,6 +21,7 @@ import {
   issueTestConversationRuntimeToken,
   type TestApp,
 } from '../utils/app.js';
+import { enqueueUndeliveredInput } from '../utils/agent-scope.js';
 import type { BackendLogger } from '../../src/context.js';
 
 interface CapturedLine {
@@ -171,15 +172,16 @@ describe('cli invoke middleware', () => {
     const path =
       `/internal/agents/${agentId}/send-message`;
 
-    expect((await h.post(path, {
-      content: 'newer context',
-      target: `#conv:${conversationId}`,
-    })).status).toBe(200);
+    // The runtime still holds undelivered input, so even a resend that CLAIMS
+    // to have disposed of a prior stale event (`revised`) is rejected again —
+    // the freshness guard keys on the undelivered set, not on the claim. The
+    // resolution reason must still ride the cli.invoke FAILURE line (F11 ③: the
+    // only observable bit distinguishing "claimed-consumed-then-rejected-again"
+    // from a first rejection).
+    enqueueUndeliveredInput(t!, conversationId, agentId);
     const res = await h.post(path, {
       content: 'still stale draft',
       target: `#conv:${conversationId}`,
-      seen_up_to_seq: 0,
-      asserted_stream: `#conv:${conversationId}`,
       stale_event_id: 'evt-prior-conflict',
       stale_resolution_reason: 'revised',
     });

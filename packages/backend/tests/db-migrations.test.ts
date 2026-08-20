@@ -17,18 +17,26 @@ import {
 } from '@silverhand/shared';
 import {
   BASELINE_SCHEMA_SQL,
-  BASELINE_SCHEMA_VERSION,
+  BASELINE_MIGRATION_STEP,
 } from '@silverhand/shared/db/baseline-schema';
 import {
-  CURRENT_SCHEMA_VERSION,
-  MIN_SUPPORTED_SCHEMA_VERSION,
+  CURRENT_MIGRATION_STEP,
   migrations,
 } from '@silverhand/shared/db/migrations';
 import {
+  CURRENT_SCHEMA_EPOCH,
+  MIN_SUPPORTED_MIGRATION_STEP,
+  ONE_TO_ONE_EPOCH_CEILING_STEP,
+  epochForMigrationStep,
+  reportedEpochForAppliedStep,
+} from '@silverhand/shared/db/schema-epochs';
+import {
   backupDataDirBeforeMigration,
-  currentSchemaVersion,
+  currentMigrationStep,
+  currentSchemaEpoch,
   openDatabase,
   runMigrations,
+  type MigrationBackupInfo,
 } from '../src/db.js';
 
 function openDbAt(version: number): Database.Database {
@@ -125,8 +133,8 @@ function applyMigrationsThrough(
   }
 }
 
-const SYNTHETIC_UPGRADE_BASE_VERSION = MIN_SUPPORTED_SCHEMA_VERSION;
-const SYNTHETIC_UPGRADE_TARGET_VERSION = MIN_SUPPORTED_SCHEMA_VERSION + 1;
+const SYNTHETIC_UPGRADE_BASE_VERSION = MIN_SUPPORTED_MIGRATION_STEP;
+const SYNTHETIC_UPGRADE_TARGET_VERSION = MIN_SUPPORTED_MIGRATION_STEP + 1;
 
 describe('database migrations', () => {
   it('initializes a clean DB to the current schema version', () => {
@@ -138,7 +146,7 @@ describe('database migrations', () => {
     });
     try {
       expect(completed).toBe(true);
-      expect(currentSchemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(currentMigrationStep(db)).toBe(CURRENT_MIGRATION_STEP);
     } finally {
       db.close();
     }
@@ -147,16 +155,18 @@ describe('database migrations', () => {
   it('reruns idempotently when the DB is already at the current version', () => {
     const db = openDatabase(':memory:');
     try {
-      const first = currentSchemaVersion(db);
+      const first = currentMigrationStep(db);
       const second = runMigrations(db, {
-        expectedVersion: CURRENT_SCHEMA_VERSION,
-        minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        expectedStep: CURRENT_MIGRATION_STEP,
+        minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
       });
-      expect(first).toBe(CURRENT_SCHEMA_VERSION);
+      expect(first).toBe(CURRENT_MIGRATION_STEP);
       expect(second).toEqual({
-        beforeVersion: CURRENT_SCHEMA_VERSION,
-        afterVersion: CURRENT_SCHEMA_VERSION,
-        appliedVersions: [],
+        beforeStep: CURRENT_MIGRATION_STEP,
+        afterStep: CURRENT_MIGRATION_STEP,
+        appliedSteps: [],
+        beforeEpoch: CURRENT_SCHEMA_EPOCH,
+        afterEpoch: CURRENT_SCHEMA_EPOCH,
         backupPath: null,
       });
     } finally {
@@ -185,12 +195,12 @@ describe('database migrations', () => {
               up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
             },
           ],
-          expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
-          minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
+          expectedStep: SYNTHETIC_UPGRADE_TARGET_VERSION,
+          minimumSupportedStep: SYNTHETIC_UPGRADE_BASE_VERSION,
           allowSchemaUpgrade: false,
         }),
       ).toThrow(/SILVERHAND_MIGRATE=1/);
-      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
+      expect(currentMigrationStep(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
       expect(
         db
           .prepare(
@@ -243,17 +253,17 @@ describe('database migrations', () => {
             up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
           },
         ],
-        expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
-        minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
+        expectedStep: SYNTHETIC_UPGRADE_TARGET_VERSION,
+        minimumSupportedStep: SYNTHETIC_UPGRADE_BASE_VERSION,
         allowSchemaUpgrade: true,
         backupBeforeMigration: info =>
           backupDataDirBeforeMigration(db, { dbPath, ...info }),
       });
-      expect(result.beforeVersion).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
-      expect(result.afterVersion).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
-      expect(result.appliedVersions).toEqual([SYNTHETIC_UPGRADE_TARGET_VERSION]);
+      expect(result.beforeStep).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
+      expect(result.afterStep).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
+      expect(result.appliedSteps).toEqual([SYNTHETIC_UPGRADE_TARGET_VERSION]);
       expect(result.backupPath).toMatch(/data-backup-\d{8}T\d{6}Z$/);
-      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
+      expect(currentMigrationStep(db)).toBe(SYNTHETIC_UPGRADE_TARGET_VERSION);
       expect(
         db
           .prepare(
@@ -286,7 +296,7 @@ describe('database migrations', () => {
         { readonly: true },
       );
       try {
-        expect(currentSchemaVersion(backupDb)).toBe(
+        expect(currentMigrationStep(backupDb)).toBe(
           SYNTHETIC_UPGRADE_BASE_VERSION,
         );
         expect(
@@ -330,15 +340,15 @@ describe('database migrations', () => {
               up: `CREATE TABLE future_rows (id TEXT PRIMARY KEY);`,
             },
           ],
-          expectedVersion: SYNTHETIC_UPGRADE_TARGET_VERSION,
-          minimumSupportedVersion: SYNTHETIC_UPGRADE_BASE_VERSION,
+          expectedStep: SYNTHETIC_UPGRADE_TARGET_VERSION,
+          minimumSupportedStep: SYNTHETIC_UPGRADE_BASE_VERSION,
           allowSchemaUpgrade: true,
           backupBeforeMigration: () => {
             throw new Error('backup path is not writable');
           },
         }),
       ).toThrow(/backup path is not writable/);
-      expect(currentSchemaVersion(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
+      expect(currentMigrationStep(db)).toBe(SYNTHETIC_UPGRADE_BASE_VERSION);
       expect(
         db
           .prepare(
@@ -378,7 +388,7 @@ describe('database migrations', () => {
         }),
       ).toThrow(/missing_table/);
       expect(completed).toBe(false);
-      expect(currentSchemaVersion(db)).toBe(1);
+      expect(currentMigrationStep(db)).toBe(1);
       expect(
         db
           .prepare(
@@ -412,10 +422,10 @@ describe('database migrations', () => {
       `);
       expect(() =>
         runMigrations(db, {
-          expectedVersion: CURRENT_SCHEMA_VERSION,
-          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+          expectedStep: CURRENT_MIGRATION_STEP,
+          minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
         }),
-      ).toThrow(/older than minimum supported/);
+      ).toThrow(/below the baseline step \d+, whose migration is a full CREATE/);
     } finally {
       db.close();
     }
@@ -427,10 +437,10 @@ describe('database migrations', () => {
       db.exec(`CREATE TABLE legacy_rows (id TEXT PRIMARY KEY);`);
       expect(() =>
         runMigrations(db, {
-          expectedVersion: CURRENT_SCHEMA_VERSION,
-          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+          expectedStep: CURRENT_MIGRATION_STEP,
+          minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
         }),
-      ).toThrow(/older than minimum supported/);
+      ).toThrow(/below the baseline step \d+, whose migration is a full CREATE/);
       expect(
         db
           .prepare(
@@ -459,19 +469,19 @@ describe('database migrations', () => {
           applied_at INTEGER NOT NULL
         );
         INSERT INTO _migrations (version, name, applied_at)
-        VALUES (${BASELINE_SCHEMA_VERSION}, 'baseline', 1);
+        VALUES (${BASELINE_MIGRATION_STEP}, 'baseline', 1);
       `);
       const result = runMigrations(db, {
-        expectedVersion: CURRENT_SCHEMA_VERSION,
-        minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        expectedStep: CURRENT_MIGRATION_STEP,
+        minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
         allowSchemaUpgrade: true,
       });
-      expect(result.beforeVersion).toBe(BASELINE_SCHEMA_VERSION);
-      expect(result.afterVersion).toBe(CURRENT_SCHEMA_VERSION);
+      expect(result.beforeStep).toBe(BASELINE_MIGRATION_STEP);
+      expect(result.afterStep).toBe(CURRENT_MIGRATION_STEP);
       // Baseline (44) is NOT re-applied; only the retained increments are.
-      expect(result.appliedVersions).toEqual(
+      expect(result.appliedSteps).toEqual(
         migrations
-          .filter(m => m.version > BASELINE_SCHEMA_VERSION)
+          .filter(m => m.version > BASELINE_MIGRATION_STEP)
           .map(m => m.version),
       );
     } finally {
@@ -493,10 +503,10 @@ describe('database migrations', () => {
       `);
       expect(() =>
         runMigrations(db, {
-          expectedVersion: CURRENT_SCHEMA_VERSION,
-          minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+          expectedStep: CURRENT_MIGRATION_STEP,
+          minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
         }),
-      ).toThrow(/newer than supported/);
+      ).toThrow(/past the newest step \d+ this build knows/);
     } finally {
       db.close();
     }
@@ -725,11 +735,11 @@ describe('database migrations', () => {
             ('agent_alice', 'alice', 'claude', NULL, 'host_local', NULL, 1, 1,
              'Alice', NULL, NULL, 'u-creator');
           INSERT INTO workspaces
-            (id, name, name_key, description, workspace_kind,
-             owner_agent_id, archived_at, pinned_at, created_at, updated_at)
+            (id, name, name_key, description,
+             owner_agent_id, archived_at, created_at, updated_at)
           VALUES
-            ('ws_main', 'Main', 'main', NULL, 'regular',
-             NULL, NULL, NULL, 1, 1);
+            ('ws_main', 'Main', 'main', NULL,
+             NULL, NULL, 1, 1);
           INSERT INTO conversations
             (id, workspace_id, placement_kind, roster_policy, title, title_key,
              status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
@@ -797,8 +807,11 @@ describe('database migrations', () => {
       try {
         runMigrations(db);
 
-        // FK list on messages includes from_user_id and task_assignee_user_id
-        // both pointing to users with ON DELETE SET NULL.
+        // FK list on messages is exactly from_user_id pointing to users with
+        // ON DELETE SET NULL. The second user FK this used to name,
+        // `task_assignee_user_id`, belonged to v60's dead "a message IS a task"
+        // carrier and was physically dropped in v87 (#task:2083) — the row's
+        // remaining tie to a person is who SENT it.
         const messageFks = (
           db.pragma('foreign_key_list(messages)') as Array<{
             table: string;
@@ -808,7 +821,7 @@ describe('database migrations', () => {
           }>
         ).filter(fk => fk.table === 'users');
         const fromCols = messageFks.map(fk => fk.from).sort();
-        expect(fromCols).toEqual(['from_user_id', 'task_assignee_user_id']);
+        expect(fromCols).toEqual(['from_user_id']);
         for (const fk of messageFks) {
           expect(fk.to).toBe('id');
           expect(fk.on_delete).toBe('SET NULL');
@@ -867,9 +880,9 @@ describe('database migrations', () => {
         ).run(now);
         db.prepare(
           `INSERT INTO workspaces
-             (id, name, name_key, description, workspace_kind,
+             (id, name, name_key, description,
               owner_agent_id, created_at, updated_at)
-           VALUES ('ws1', 'w', 'w', NULL, 'regular', NULL, ?, ?)`,
+           VALUES ('ws1', 'w', 'w', NULL, NULL, ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
@@ -1027,9 +1040,9 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO workspaces
-             (id, name, name_key, description, workspace_kind,
-              owner_agent_id, archived_at, pinned_at, created_at, updated_at)
-           VALUES ('ws1', 'main', 'main', NULL, 'regular', NULL, NULL, NULL, ?, ?)`,
+             (id, name, name_key, description,
+              owner_agent_id, archived_at, created_at, updated_at)
+           VALUES ('ws1', 'main', 'main', NULL, NULL, NULL, ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
@@ -3292,4 +3305,389 @@ describe('v75 runtime slots placement aware (#task:2020)', () => {
       db.close();
     }
   });
+});
+
+describe('v86 user_list_sort_mode_rail_scope_agent_space (#task:2045 Delta 4)', () => {
+  /** Seed one user with rail sort state under the OLD token: a mode row keyed by
+   *  scope, and manual ranks keyed by entity (the asymmetry that makes skipping
+   *  the migration a silent bug rather than a visible one). */
+  function seedRailSortState(db: Database.Database): void {
+    const now = Date.now();
+    db.exec(`
+      INSERT INTO users (id, name, display_name, created_at, updated_at)
+        VALUES ('u_rail', 'rail-owner', 'Rail Owner', ${now}, ${now});
+      INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+        VALUES ('u_rail', 'workspaces', 'dm', 'manual', ${now}),
+               ('u_rail', 'workspaces', 'regular', 'recent', ${now}),
+               ('u_rail', 'channels:ws1', '', 'manual', ${now});
+      INSERT INTO user_sort_entry (user_id, list_key, entity_id, rank, last_accessed_at)
+        VALUES ('u_rail', 'workspaces', 'ws_space_a', 200, ${now}),
+               ('u_rail', 'workspaces', 'ws_space_b', 100, ${now});
+    `);
+  }
+
+  function modeRows(db: Database.Database): Array<{ scope: string; mode: string }> {
+    return db
+      .prepare<[], { scope: string; mode: string }>(
+        `SELECT scope, mode FROM user_list_sort_mode
+          WHERE user_id = 'u_rail' AND list_key = 'workspaces' ORDER BY scope`,
+      )
+      .all();
+  }
+
+  it('moves the rail scope to the agent-space token and leaves every other row and rank untouched', () => {
+    const db = openDbAt(85);
+    try {
+      seedRailSortState(db);
+      const ranksBefore = db
+        .prepare(
+          `SELECT entity_id, rank FROM user_sort_entry
+            WHERE user_id = 'u_rail' ORDER BY entity_id`,
+        )
+        .all();
+
+      applyMigrationsThrough(db, 86);
+
+      // The mode MOVED (same mode, new scope) — not reset, not duplicated.
+      expect(modeRows(db)).toEqual([
+        { scope: 'agent_space', mode: 'manual' },
+        { scope: 'regular', mode: 'recent' },
+      ]);
+      // The channel sidebar's list-wide row is a different list_key: untouched.
+      expect(
+        db
+          .prepare<[], { scope: string; mode: string }>(
+            `SELECT scope, mode FROM user_list_sort_mode
+              WHERE user_id = 'u_rail' AND list_key = 'channels:ws1'`,
+          )
+          .all(),
+      ).toEqual([{ scope: '', mode: 'manual' }]);
+      // Manual ranks are entity-keyed, so they must be byte-identical. This is
+      // the pairing the whole migration exists for: had the mode been left
+      // behind, these ranks would survive and simply stop being applied.
+      expect(
+        db
+          .prepare(
+            `SELECT entity_id, rank FROM user_sort_entry
+              WHERE user_id = 'u_rail' ORDER BY entity_id`,
+          )
+          .all(),
+      ).toEqual(ranksBefore);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('is idempotent on replay and a no-op on a DB that never held the old token', () => {
+    const db = openDbAt(86);
+    try {
+      const now = Date.now();
+      db.exec(`
+        INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u_rail', 'rail-owner', 'Rail Owner', ${now}, ${now});
+        INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+          VALUES ('u_rail', 'workspaces', 'agent_space', 'manual', ${now});
+      `);
+      const before = modeRows(db);
+
+      const v86 = migrations.find(m => m.version === 86)!;
+      db.exec(v86.up);
+      db.exec(v86.up);
+
+      expect(modeRows(db)).toEqual(before);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('fails loud and writes no _migrations row when a user already holds both tokens', () => {
+    const db = openDbAt(85);
+    try {
+      const now = Date.now();
+      db.exec(`
+        INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u_rail', 'rail-owner', 'Rail Owner', ${now}, ${now});
+        INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+          VALUES ('u_rail', 'workspaces', 'dm', 'manual', ${now}),
+                 ('u_rail', 'workspaces', 'agent_space', 'recent', ${now});
+      `);
+
+      // Merging two conflicting modes is a user-data decision, not a
+      // migration's: the collision must abort the whole version.
+      expect(() => applyMigrationsThrough(db, 86)).toThrow(/UNIQUE|PRIMARY/i);
+      expect(
+        db
+          .prepare<[], { version: number }>(
+            'SELECT version FROM _migrations WHERE version = 86',
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(modeRows(db)).toEqual([
+        { scope: 'agent_space', mode: 'recent' },
+        { scope: 'dm', mode: 'manual' },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('schema epoch reporting and ledger prefix enforcement (#task:2103)', () => {
+  const SYNTHETIC_PLAN_FLOOR = MIN_SUPPORTED_MIGRATION_STEP;
+
+  function ledgerOnlyDb(steps: number[], extraSql = ''): Database.Database {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE _migrations (
+        version INTEGER PRIMARY KEY,
+        name    TEXT NOT NULL,
+        applied_at INTEGER NOT NULL
+      );
+      INSERT INTO _migrations (version, name, applied_at) VALUES
+      ${steps.map(step => `(${step}, 'synthetic-${step}', 1)`).join(', ')};
+      ${extraSql}
+    `);
+    return db;
+  }
+
+  it('names the two too-old refusals apart', () => {
+    // Safety (below the baseline CREATE) and policy (below the supported epoch)
+    // coincide at step 44 today, which is exactly why the texts must differ: the
+    // first says "this build cannot rebuild your schema", the second says "this
+    // release does not promise that upgrade".
+    const preBaseline = ledgerOnlyDb(
+      [BASELINE_MIGRATION_STEP - 1],
+      // Non-empty: the floor guard only refuses a DB that already has application
+      // schema, because an empty file is initialized from the baseline instead.
+      'CREATE TABLE users (id TEXT PRIMARY KEY);',
+    );
+    try {
+      expect(() =>
+        runMigrations(preBaseline, {
+          expectedStep: CURRENT_MIGRATION_STEP,
+          minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
+          allowSchemaUpgrade: true,
+        }),
+      ).toThrow(/below the baseline step \d+, whose migration is a full CREATE/);
+    } finally {
+      preBaseline.close();
+    }
+
+    // A policy floor above the baseline: the path exists, this build just does
+    // not promise it.
+    const supported = openDbAt(BASELINE_MIGRATION_STEP);
+    try {
+      expect(() =>
+        runMigrations(supported, {
+          expectedStep: CURRENT_MIGRATION_STEP,
+          minimumSupportedStep: BASELINE_MIGRATION_STEP + 1,
+          allowSchemaUpgrade: true,
+        }),
+      ).toThrow(/below the oldest schema epoch \d+ this build supports/);
+    } finally {
+      supported.close();
+    }
+  });
+
+  it('reports the epoch a fresh DB reaches, on both axes', () => {
+    const db = openDatabase(':memory:');
+    try {
+      expect(currentMigrationStep(db)).toBe(CURRENT_MIGRATION_STEP);
+      expect(currentSchemaEpoch(db)).toBe(CURRENT_SCHEMA_EPOCH);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('does not report a partially-upgraded DB as having reached the epoch', () => {
+    // A DB stopped one step short of the epoch's last step is exactly what a
+    // crash mid-upgrade leaves behind. It must read as the PREVIOUS epoch, or an
+    // operator would take a half-migrated database for a shipped one.
+    const partialStep = CURRENT_MIGRATION_STEP - 1;
+    const db = openDbAt(partialStep);
+    try {
+      expect(currentMigrationStep(db)).toBe(partialStep);
+      expect(currentSchemaEpoch(db)).toBe(CURRENT_SCHEMA_EPOCH - 1);
+      expect(reportedEpochForAppliedStep(partialStep)).toBe(
+        CURRENT_SCHEMA_EPOCH - 1,
+      );
+
+      // Resuming from that legal prefix finishes the epoch, and only then does
+      // the epoch move.
+      const result = runMigrations(db, {
+        expectedStep: CURRENT_MIGRATION_STEP,
+        minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
+        allowSchemaUpgrade: true,
+      });
+      expect(result.appliedSteps).toEqual([CURRENT_MIGRATION_STEP]);
+      expect(result.beforeEpoch).toBe(CURRENT_SCHEMA_EPOCH - 1);
+      expect(result.afterEpoch).toBe(CURRENT_SCHEMA_EPOCH);
+      expect(currentSchemaEpoch(db)).toBe(CURRENT_SCHEMA_EPOCH);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('refuses a ledger with a hole below the highest applied step', () => {
+    const db = ledgerOnlyDb([SYNTHETIC_PLAN_FLOOR, SYNTHETIC_PLAN_FLOOR + 2]);
+    try {
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            { version: SYNTHETIC_PLAN_FLOOR, name: 'floor', up: 'SELECT 1;' },
+            {
+              version: SYNTHETIC_PLAN_FLOOR + 1,
+              name: 'skipped',
+              up: `CREATE TABLE skipped_rows (id TEXT PRIMARY KEY);`,
+            },
+            {
+              version: SYNTHETIC_PLAN_FLOOR + 2,
+              name: 'applied-out-of-order',
+              up: 'SELECT 1;',
+            },
+          ],
+          expectedStep: SYNTHETIC_PLAN_FLOOR + 2,
+          minimumSupportedStep: SYNTHETIC_PLAN_FLOOR,
+          allowSchemaUpgrade: true,
+        }),
+      ).toThrow(
+        new RegExp(
+          `missing step\\(s\\) ${SYNTHETIC_PLAN_FLOOR + 1} below applied step ${SYNTHETIC_PLAN_FLOOR + 2}`,
+        ),
+      );
+      // Nothing was replayed: refusing is the whole point, so the skipped step's
+      // table must not exist.
+      expect(
+        db
+          .prepare(
+            `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'skipped_rows'`,
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('refuses a ledger carrying an in-range step this build does not define', () => {
+    const db = ledgerOnlyDb([SYNTHETIC_PLAN_FLOOR, SYNTHETIC_PLAN_FLOOR + 1]);
+    try {
+      expect(() =>
+        runMigrations(db, {
+          migrations: [
+            { version: SYNTHETIC_PLAN_FLOOR, name: 'floor', up: 'SELECT 1;' },
+            {
+              version: SYNTHETIC_PLAN_FLOOR + 2,
+              name: 'ceiling',
+              up: 'SELECT 1;',
+            },
+          ],
+          expectedStep: SYNTHETIC_PLAN_FLOOR + 2,
+          minimumSupportedStep: SYNTHETIC_PLAN_FLOOR,
+          allowSchemaUpgrade: true,
+        }),
+      ).toThrow(
+        new RegExp(
+          `step\\(s\\) ${SYNTHETIC_PLAN_FLOOR + 1} applied that this build does not define`,
+        ),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('treats ledger rows below the plan floor as history, not as unknown steps', () => {
+    // A real production DB still carries v1..v43 rows from before the baseline
+    // compaction (#task:1213). Those are history; judging them against this
+    // build's plan would refuse a perfectly healthy database.
+    const db = openDatabase(':memory:');
+    try {
+      db.exec(`
+        INSERT INTO _migrations (version, name, applied_at) VALUES
+        (1, 'historical-1', 1), (2, 'historical-2', 1), (43, 'historical-43', 1);
+      `);
+      const result = runMigrations(db, {
+        expectedStep: CURRENT_MIGRATION_STEP,
+        minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
+        allowSchemaUpgrade: true,
+      });
+      expect(result.appliedSteps).toEqual([]);
+      expect(result.afterStep).toBe(CURRENT_MIGRATION_STEP);
+      expect(result.afterEpoch).toBe(CURRENT_SCHEMA_EPOCH);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('v68 -> epoch 69 upgrade, as an operator sees it (#task:2103)', () => {
+  const LAST_ONE_TO_ONE_STEP = ONE_TO_ONE_EPOCH_CEILING_STEP;
+
+  it('backs up once, applies every step in order, and reports epoch 68 -> 69', () => {
+    // The shape of the production database this build will meet: step 68, i.e.
+    // the last step of the 1:1 era, where epoch 68 IS step 68.
+    const db = openDbAt(LAST_ONE_TO_ONE_STEP);
+    try {
+      expect(currentSchemaEpoch(db)).toBe(LAST_ONE_TO_ONE_STEP);
+      const backups: MigrationBackupInfo[] = [];
+      const result = runMigrations(db, {
+        expectedStep: CURRENT_MIGRATION_STEP,
+        minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
+        allowSchemaUpgrade: true,
+        backupBeforeMigration: info => {
+          backups.push(info);
+          return '/tmp/silverhand-fake-backup';
+        },
+      });
+      // One backup for the whole release upgrade, not one per step.
+      expect(backups).toEqual([
+        { fromStep: LAST_ONE_TO_ONE_STEP, toStep: CURRENT_MIGRATION_STEP },
+      ]);
+      expect(result.appliedSteps).toEqual(
+        migrations
+          .filter(m => m.version > LAST_ONE_TO_ONE_STEP)
+          .map(m => m.version),
+      );
+      expect(result.beforeEpoch).toBe(LAST_ONE_TO_ONE_STEP);
+      expect(result.afterEpoch).toBe(CURRENT_SCHEMA_EPOCH);
+      expect(currentSchemaEpoch(db)).toBe(CURRENT_SCHEMA_EPOCH);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('lets an older binary refuse a DB upgraded partway into a newer epoch', () => {
+    // Both sides must be INSIDE the same unfinished epoch, or this proves the
+    // easy case (refusing a finished newer epoch) instead of the hard one:
+    //   DB           = step 86 → still reports epoch 68, epoch 69 unfinished
+    //   older binary = step 85 → also reports epoch 68
+    // Epoch comparison sees "68 vs 68" and admits the DB; the step axis sees
+    // 86 > 85 and refuses. That gap is the whole reason the guard stayed on steps.
+    const dbStep = CURRENT_MIGRATION_STEP - 1;
+    const olderBinaryNewestStep = CURRENT_MIGRATION_STEP - 2;
+    expect(epochForMigrationStep(dbStep)).toBe(CURRENT_SCHEMA_EPOCH);
+    expect(reportedEpochForAppliedStep(dbStep)).toBe(LAST_ONE_TO_ONE_STEP);
+    expect(reportedEpochForAppliedStep(olderBinaryNewestStep)).toBe(
+      LAST_ONE_TO_ONE_STEP,
+    );
+    const db = openDbAt(dbStep);
+    try {
+      expect(currentSchemaEpoch(db)).toBe(LAST_ONE_TO_ONE_STEP);
+      expect(() =>
+        runMigrations(db, {
+          migrations: migrations.filter(
+            m => m.version <= olderBinaryNewestStep,
+          ),
+          expectedStep: olderBinaryNewestStep,
+          minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
+          allowSchemaUpgrade: true,
+        }),
+      ).toThrow(/past the newest step \d+ this build knows/);
+      // Nothing was written by the refusal.
+      expect(currentMigrationStep(db)).toBe(dbStep);
+    } finally {
+      db.close();
+    }
+  });
+
 });

@@ -35,8 +35,8 @@ import {
  * One workspace-placed conversation, as the audit needs to see it.
  *
  * The caller supplies rows already filtered to `placement_kind = 'workspace'`:
- * placement is a persistence concern and an inbox or DirectPair holds no title
- * address at all (the schema keeps `title_key` NULL for them, so there is
+ * placement is a persistence concern and a DirectPair holds no title
+ * address at all (the schema keeps `title_key` NULL for it, so there is
  * nothing here to judge).
  */
 export interface ConversationTitleAuditRow {

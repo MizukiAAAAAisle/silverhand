@@ -444,6 +444,35 @@ export class ConversationInboxRepo {
     return row !== undefined;
   }
 
+  /** Agent-scope freshness guard (#task:2095): does this agent-runtime have
+   *  ANY undelivered inbox row across ALL its conversations/streams? Boolean
+   *  existence, never a seq comparison — immune to rowid reuse. Mirrors
+   *  {@link hasUndeliveredForPair} for the `RuntimeScope.kind === 'agent'`
+   *  arm. Its predicate (`delivered_at IS NULL AND failed_at IS NULL`,
+   *  in-flight rows INCLUDED) is DELIBERATELY BROADER than the drain side:
+   *  `listPending` / `listPendingConversationIdsForAgent` (what the delivery
+   *  side's `pendingOriginsForRuntime` and stale-receive pull) additionally
+   *  require `in_flight_owner IS NULL`. So guard ⊇ drain, and the difference is
+   *  EXACTLY the in-flight set — which is the one residual window this design
+   *  accepts (the worst-case single self-healing 409): a runtime whose only
+   *  undelivered rows are in-flight reads stale here yet drains nothing, until
+   *  those leases settle (delivery ack) or are swept
+   *  (`outbound-event-fanout.ts:1283-1289`, start/disconnect, no time expiry).
+   *  Do NOT read this as "guard scope ≡ drain scope"; it is a strict superset. */
+  hasUndeliveredForAgent(agentId: string): boolean {
+    const row = this.db
+      .prepare<[string], { one: 1 }>(
+        `SELECT 1 AS one
+           FROM conversation_inboxes
+          WHERE agent_id = ?
+            AND delivered_at IS NULL
+            AND failed_at IS NULL
+          LIMIT 1`,
+      )
+      .get(agentId);
+    return row !== undefined;
+  }
+
   private deliveryRow(
     conversationId: string,
     agentId: string,

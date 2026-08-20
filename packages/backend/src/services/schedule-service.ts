@@ -303,9 +303,9 @@ export class ScheduleService {
       );
     }
     // PARTICIPATION per placement, through the one authority — not a
-    // `conversation_agents` lookup. A roster row is inert on a `direct_pair` and
-    // absent on an `agent_inbox` (§4.2), so the old roster gate refused every
-    // placement outside a workspace channel: a DM was unschedulable for a reason
+    // `conversation_agents` lookup. A roster row is inert on a `direct_pair`
+    // (§4.2), so the old roster gate refused every placement outside a workspace
+    // channel: a DM was unschedulable for a reason
     // that had nothing to do with authority. Reaching this arm now needs a race
     // (the door already resolved participation microseconds ago), which is
     // precisely why it stays: the window between resolve and insert is real.
@@ -318,13 +318,12 @@ export class ScheduleService {
 
     // NO capability gate here. `manage_schedules` is judged at the DOOR, against
     // the destination's PLACEMENT (`requireAgentConversationCapability`), because
-    // a capability is a grant inside a workspace and two of the three placements
-    // have no workspace at all: a `direct_pair`'s endpoints are its authority and
-    // an inbox's single participant is its own. The previous version read
-    // `target.workspace_id` directly and refused a null one as "no grant can
-    // exist here", which was defensible only while the roster gate above made
-    // every workspace-less placement unreachable anyway. It no longer does, and
-    // one rule for placement authority beats two that must agree.
+    // a capability is a grant inside a workspace and one of the two placements has
+    // no workspace at all: a `direct_pair`'s endpoints are its own authority. The
+    // previous version read `target.workspace_id` directly and refused a null one
+    // as "no grant can exist here", which was defensible only while the roster
+    // gate above made every workspace-less placement unreachable anyway. It no
+    // longer does, and one rule for placement authority beats two that must agree.
     //
     // `cancel` still asks `canUseCapability` itself — it resolves its target from
     // a stored schedule rather than from an address, and it deliberately treats a

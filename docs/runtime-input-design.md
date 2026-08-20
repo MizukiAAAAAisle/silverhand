@@ -7,6 +7,44 @@
 > [`freshness-boundary-authority-v1.md`](./freshness-boundary-authority-v1.md) 为准，
 > 本 doc 描述它们的演进终态与迁移路径。评审通过前不改生产代码。
 
+> **部分废弃（scheme C，shiki 2026-08-19/20）—— freshness / observed 轴已删除，不是"以后再做"。**
+> 本 doc 原把「合同 A」写成**两件缠在一起**的事:*input admission 的释放时机*(daemon
+> 在每个 driver 合适的边界注入有界 batch)**与** *freshness 的推进*(per-stream
+> `observed` 由 admission 证据逐 stream 前进、CAS 拦旧稿)。**后者整体删除**:freshness
+> 不再是 per-stream 游标,而是**整个 runtime 视野的后端 EXISTS 属性**(对未投递 inbox
+> 行的 `RuntimeScope` guard;权威见
+> [`freshness-boundary-authority-v1.md`](./freshness-boundary-authority-v1.md),第 7 行的
+> "为准"指向的正是它的 scheme-C 终态)。随之删除的具名物:`observedSeqByStream` /
+> `pendingAdmissionSeqByStream` / `covered_seq_by_stream` / action-snapshot /
+> per-stream CAS、§5.1 的 409 载荷里 `seen_up_to_seq`/`current_seq`/`stream_key`
+> (409 仍 body-free,但只带 `{subkind, stale_event_id, hint}`)、以及 §5.2
+> 「freshness universe ⊆ delivery universe」那套 CAS 放宽 / 逐类补投的推导。读下文
+> 凡遇「observed 推进 / CAS / covered_seq / action snapshot」一律按**历史**理解。
+>
+> **仍然活着、且本 doc 是其唯一散文正文** —— input admission 的**释放时机**模型:§3.2
+> 的五类 release profile(`native-steer`/`tool-boundary-steer`/`prompt-boundary`/
+> `next-turn-batch`/`one-shot`)、跨 stream 合批(§3.3)、Claude/Qoder steer(§4)、§3.4
+> 的 Qoder next-turn **write reservation** 机制、以及 body-free 409 的**形状**(§5.1)。
+> **这半边从不依赖 observed 游标来自证**:它只回答「在**哪个 turn 边界**、把**哪一批**
+> 正文交给 runtime」,理由是 **turn 生命周期本身**(一条 backlog 不该被拆成 N 个 turn,
+> 即 §1 的 P-A;steer 类 runtime 能在当前 turn 的 tool boundary 并入),与 freshness
+> 无关。原文凡用 observed/CAS 语言论证这些释放时机的地方,以本段的 turn-生命周期表述
+> 为准——**活着的机制不由已删的机制来论证**。
+>
+> **不变量(`turnEndCount` 快照;本轮 P1-1 回归的代价 = 此机制此前缺散文)**:
+> 「写启动投递(startup-delivery)的这个 turn 是否还在跑」是一个**与 release
+> profile 无关的生命周期事实**,由 `inputTurnActive` 编码。它有**三个维护点,必须
+> 一致(F25)**:handle init(对任意 oneShot startup delivery 设)、terminal/exit
+> clear(对所有 profile 清)、以及**写路径的置位——只由
+> `turnEndCount === turnEndsBeforeWrite` 快照守卫,不按 release profile 收窄**。见
+> `packages/host/src/daemon/supervisor/index.ts` 的 `consumeStartupDeliveryLatched`:
+> 写后若该 turn 的 terminal 已跨过 await 窗口(fast runtime),就**不得**再把位设回
+> true,否则会关死 `next-turn-batch` 边界(`strategyBoundaryOpen` 只在这一档读该位)、
+> 无 terminal 再开、永久饿死队列剩余(#1558 final-gate P1-1)。这个位今天只有
+> `next-turn-batch` 边界读它,但它的**含义**不是 release profile 的函数,故绝不把它
+> 耦合到单一 profile 上;§3.4 的 reservation(`nextTurnReserved`)才是
+> next-turn-batch 专属、且合理地按该 profile 门控。**这是不变量,不是 TODO。**
+
 ---
 
 ## 0. 摘要
@@ -278,8 +316,10 @@ flush，#1556 核实）。
    开启下一 turn（同时 reserved）。
 
 在此构造下（只在边界写入 + reservation 保证单批在途），write 成功即该 batch 唯一
-对应下一 turn 的输入 ⇒ write 即 admitted，observed 随 write 按
-`covered_seq_by_stream` 推进。
+对应下一 turn 的输入 ⇒ **write 即该 turn 的 admitted 边界**。reservation 守的是
+turn 生命周期不变量——单批在途、不把 backlog 拆成 N 个 turn（§1 P-A）；它**不**再
+推进任何 per-stream observed 游标（scheme C 下该游标已删除，freshness 是整个 runtime
+的后端 EXISTS 属性，见顶部部分废弃说明与 freshness doc）。
 
 前置验证项：`turn_end` 帧解析的时序与丢失率。**缺 `turn_end` 的恢复必须
 fail-closed（v5 gate P1-3）**：reservation 超时**不开门写入**（清 reservation

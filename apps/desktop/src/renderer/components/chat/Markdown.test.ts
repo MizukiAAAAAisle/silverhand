@@ -9,7 +9,7 @@ import { Markdown } from './Markdown';
 import { MESSAGE_RENDER_BUDGET_BYTES } from './markdown-render-budget';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 import { PLUGIN_LINK_PROP } from './reference-href';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import { taskBoardCacheScope, taskByNumberKey } from '@/features/tasks/useTaskByNumber';
@@ -24,7 +24,7 @@ import { setCurrentUserId } from '@/lib/current-user';
 // keep rendering as "@you" without re-introducing the alias.
 setCurrentUserId('local', 'you');
 
-function render(content: string, refs?: Map<string, ConversationReference>): string {
+function render(content: string, refs?: Map<string, WorkspaceChannelReference>): string {
   // PR-4 commit 5 (Cindy review of `45fca42`): ConversationRef now
   // calls `useConversationById` so it can resolve cross-workspace
   // refs that the synchronous `conversationRefsById` map can't see.
@@ -159,7 +159,7 @@ describe('SystemMessage channel refs', () => {
   function renderSystem(
     msg: import('@silverhand/shared').MessageDto,
     channelsByName: Map<string, ChannelReference | null>,
-    conversationRefsById?: Map<string, ConversationReference>,
+    conversationRefsById?: Map<string, WorkspaceChannelReference>,
     humansByName?: Map<string, UserDto>,
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -424,8 +424,8 @@ describe('SystemMessage channel refs', () => {
       quoted_agent_name: null,
       quoted_created_at: Date.now() - 2 * 60_000,
     });
-    const refs = new Map<string, ConversationReference>([
-      ['conv-parent', { id: 'conv-parent', roster_policy: 'open', title: 'version3' }],
+    const refs = new Map<string, WorkspaceChannelReference>([
+      ['conv-parent', { id: 'conv-parent', title: 'version3' }],
     ]);
     const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="quoted"');
@@ -448,10 +448,10 @@ describe('SystemMessage channel refs', () => {
       summary:
         'PR-1 design discussed in 5 rounds; PR-A registry + drift guard is structural prelude.',
     });
-    const refs = new Map<string, ConversationReference>([
+    const refs = new Map<string, WorkspaceChannelReference>([
       [
         'conv-parent',
-        { id: 'conv-parent', roster_policy: 'open', title: 'feature/cli design' },
+        { id: 'conv-parent', title: 'feature/cli design' },
       ],
     ]);
     const html = renderSystem(msg, new Map(), refs);
@@ -475,8 +475,8 @@ describe('SystemMessage channel refs', () => {
       },
       'Continue the system-message redesign discussion in a focused channel.',
     );
-    const refs = new Map<string, ConversationReference>([
-      ['conv-source', { id: 'conv-source', roster_policy: 'open', title: 'version3' }],
+    const refs = new Map<string, WorkspaceChannelReference>([
+      ['conv-source', { id: 'conv-source', title: 'version3' }],
     ]);
     const html = renderSystem(msg, new Map(), refs);
     expect(html).toContain('data-context-card="spawned"');
@@ -781,7 +781,6 @@ describe('SystemMessage task event rows (PR-2)', () => {
         kind: 'workspace',
         conversation_id: 'chan-1',
         workspace_id: 'ws-1',
-        workspace_kind: 'regular',
         channel_name: 'general',
       },
       thread_root_id: null,
@@ -1362,13 +1361,12 @@ describe('Markdown canonical references (#task:2000)', () => {
 describe('Markdown conversation refs', () => {
   it('renders #conv:<conversation_id> as a clickable conversation pill', () => {
     const id = 'AbC123_-xyZ789qR';
-    const refs = new Map<string, ConversationReference>([
+    const refs = new Map<string, WorkspaceChannelReference>([
       [
         id,
         {
           id,
           title: 'version3',
-          roster_policy: 'open',
         },
       ],
     ]);
@@ -1433,7 +1431,6 @@ describe('Markdown conversation refs', () => {
         roster_policy: 'open',
         title: 'foreign-channel',
         workspace_id: 'ws-foreign',
-        workspace_kind: 'regular',
         closed_at: null,
       },
     });
@@ -1653,7 +1650,6 @@ describe('Markdown bare task refs (#task:1430)', () => {
         kind: 'workspace',
         conversation_id: 'chan-1',
         workspace_id: 'w-eng',
-        workspace_kind: 'regular',
         channel_name: 'general',
       },
       thread_root_id: null,

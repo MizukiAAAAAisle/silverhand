@@ -78,17 +78,17 @@ function seedWorkspaceConversation(
 ): void {
   db.prepare(
     `INSERT INTO workspaces
-       (id, name, name_key, description, workspace_kind, owner_agent_id, archived_at,
+       (id, name, name_key, description, owner_agent_id, archived_at,
         created_at, updated_at)
-     VALUES ('w_fc', 'fail-closed', 'fail-closed', NULL, 'regular', NULL, NULL, 1, 1)`,
+     VALUES ('w_fc', 'fail-closed', 'fail-closed', NULL, NULL, NULL, 1, 1)`,
   ).run();
   db.prepare(
     `INSERT INTO conversations
-       (id, workspace_id, inbox_agent_id, placement_kind, roster_policy, title,
+       (id, workspace_id, placement_kind, roster_policy, title,
         title_key, status, spawned_by_agent_id, closed_at, close_summary,
         pinned_at, created_at, updated_at, archived_at, latest_message_seq,
         visibility)
-     VALUES ('cFailClosed0001', 'w_fc', NULL, 'workspace', 'open', @title,
+     VALUES ('cFailClosed0001', 'w_fc', 'workspace', 'open', @title,
              @title_key, 'idle', NULL, NULL, NULL, NULL, 1, 1, NULL, 0,
              'private')`,
   ).run({ title: args.title, title_key: args.titleKey });
@@ -210,9 +210,9 @@ describe('startBackend — title address defects fail closed (#task:2016)', () =
           handle = db;
           db.prepare(
             `INSERT INTO workspaces
-               (id, name, name_key, description, workspace_kind,
+               (id, name, name_key, description,
                 owner_agent_id, archived_at, created_at, updated_at)
-             VALUES ('w_bad', 'Renamed', 'design', NULL, 'regular',
+             VALUES ('w_bad', 'Renamed', 'design', NULL,
                      NULL, NULL, 1, 1)`,
           ).run();
         },

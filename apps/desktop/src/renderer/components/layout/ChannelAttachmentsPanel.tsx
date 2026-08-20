@@ -81,7 +81,11 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
 
 interface ChannelAttachmentsPanelProps {
   channelId: string;
-  workspaceId: string;
+  /** Null for a `direct_pair` (no workspace coordinate). The attachments read is
+   *  channel-scoped; the workspace only scopes the sender-filter directory, which
+   *  `useMessageRenderContext` already resolves to empty for a workspace-less
+   *  conversation (#task:2096). */
+  workspaceId: string | null;
   parentTitle?: string | null;
   onClose: () => void;
   /** Jump to the source message in the primary channel pane — reuses the
@@ -333,7 +337,7 @@ export function ChannelAttachmentsPanel({
                     authorHumanAvatarUrls={authorHumanAvatarUrls}
                     onJump={() =>
                       onJumpToMessage({
-                        workspaceId,
+                        workspaceId: workspaceId ?? undefined,
                         channelId,
                         threadRootId: item.source.thread_root_id,
                         messageId: item.source.message_id,

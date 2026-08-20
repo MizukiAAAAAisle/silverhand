@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronUp,
   Hourglass,
+  History,
   Info,
   Layers,
   Loader2,
@@ -249,6 +250,13 @@ function visualForKind(kind: ConversationEventKind): KindVisual {
       return { Icon: AlertTriangle, tone: 'error' };
     case 'parsed_event_dropped':
       return { Icon: Ban, tone: 'warning' };
+    case 'message_stale':
+      // #task:2099, glyph + tone fixed by Norman: staleness is a "your view of
+      // the conversation expired" TIME fact, so History — not AlertTriangle
+      // (owned by error/stderr) and not a retry glyph. `warning` matches
+      // `parsed_event_dropped`, the other "something did not get through" row,
+      // instead of inventing a tier between neutral and error.
+      return { Icon: History, tone: 'warning' };
     case 'api_response':
       // Default = the waiting/ready queue lifecycle (hourglass). The
       // generic `notice` class is overridden at EventRow, where the
@@ -466,6 +474,11 @@ function EventRow({
         {pk ? `${pk} · dropped (too large)` : 'Event dropped (too large)'}
       </span>
     );
+  } else if (kind === 'message_stale') {
+    // The ONLY place this label is produced now (#task:2099). It used to be
+    // guessed from the agent's command line in `activityPresentation.ts`; the
+    // row is the backend's own verdict, so it needs no payload to say so.
+    title = <span className="text-warning">Message send stale</span>;
   } else if (kind === 'session_init') {
     title = <span className="text-text-muted">Session started</span>;
   } else if (kind === 'turn_end') {

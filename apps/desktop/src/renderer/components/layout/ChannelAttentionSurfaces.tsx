@@ -100,10 +100,12 @@ export function ChannelAttentionMenuItems({
  * The workspace mute suppressor as ONE toggle item — a boolean gets a toggle, not
  * a submenu of two options. Since #task:1900 it is the container menu's only item.
  *
- * REGULAR workspaces only: an `agent_home` (DM) workspace can never carry a
- * suppressor row (DB trigger), because a DM is directed-grade and has no ambient
- * traffic to silence. Callers gate on kind; this component fires its GET lazily
- * with the menu, so a right-click on a DM row costs nothing.
+ * PEOPLE-OWNED workspaces only: an agent space can never carry a suppressor row
+ * — a DB trigger refuses it for an agent-owned workspace — because those
+ * conversations are directed-grade and have no ambient traffic to silence. Callers
+ * gate on OWNERSHIP (`canMuteWorkspace` → `isAgentSpace`, #task:2078); this
+ * component fires its GET lazily with the menu, so a right-click on an agent
+ * space's row costs nothing.
  *
  * A toggle cannot be built from an unknown current value — unlike the channel
  * tiers above, whose three options are absolute assignments that write correctly

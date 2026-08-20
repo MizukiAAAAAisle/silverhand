@@ -6,7 +6,11 @@ import { canonicalizeStoredWorkspaceName } from './workspace-name.js';
 
 export interface WorkspaceNameAuditRow {
   readonly id: string;
-  readonly kind: 'regular' | 'agent_home';
+  /** The home agent, or `null` for a regular workspace — the same ownership
+   *  relation every workspace decision now reads. A row is agent_home (outside
+   *  the name namespace, must carry no key) exactly when this is non-null;
+   *  #task:2080 dropped the redundant stored `workspace_kind` word. */
+  readonly ownerAgentId: string | null;
   readonly name: string;
   readonly nameKey: string | null;
 }
@@ -49,7 +53,7 @@ export function auditWorkspaceNameAddresses(
   let regularScanned = 0;
 
   for (const row of rows) {
-    if (row.kind === 'agent_home') {
+    if (row.ownerAgentId !== null) {
       if (options.keysExpected && row.nameKey !== null) {
         defects.push({ kind: 'agent_home_has_key', id: row.id, key: row.nameKey });
       }

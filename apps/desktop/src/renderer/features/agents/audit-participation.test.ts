@@ -27,7 +27,6 @@ function workspaceChat(
     title: 'general',
     workspace_id: 'w-1',
     workspace_name: 'Acme',
-    workspace_kind: 'regular',
     archived_at: null,
     created_at: 1,
     ...over,
@@ -354,14 +353,15 @@ describe('participationWorkspaceIds — which channel lists to read', () => {
   it('resolves a dm_channel through the home that fronts it', () => {
     // A `dm_channel`'s own `workspace_id` is the AGENT's home, which the viewer
     // does not hold; they reach the conversation through their own home, whose
-    // `dm_channel_ids` names it.
+    // `dm_channel_ids` names it. The coordinate is the whole input here — this
+    // fixture named the container's kind beside it until #task:2075's
+    // stop-publish step, and no step of the resolution ever read it.
     expect(
       participationWorkspaceIds(
         [
           workspaceChat({
             conversation_id: 'c-dm',
             workspace_id: 'w-agent',
-            workspace_kind: 'agent_home',
           }),
         ],
         [{ id: 'w-home', dm_channel_ids: ['c-dm'] }, { id: 'w-1' }],

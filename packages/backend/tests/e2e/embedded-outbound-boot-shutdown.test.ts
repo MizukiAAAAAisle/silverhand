@@ -310,9 +310,9 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     ).run(userId, 'd5a-boot-user', 'D5a Boot User', now, now);
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, name_key, description, workspace_kind,
+        (id, name, name_key, description,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+        VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)`,
     ).run(workspaceId, 'd5a-boot-ws', 'd5a-boot-ws', now, now);
     db.prepare(
       `INSERT INTO agents

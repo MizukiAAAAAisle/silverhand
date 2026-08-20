@@ -22,7 +22,6 @@ const channelRef: ConversationRef = {
   roster_policy: 'open',
   title: 'planning',
   workspace_id: 'w-1',
-  workspace_kind: 'regular',
   closed_at: null,
   archived_at: null,
 };

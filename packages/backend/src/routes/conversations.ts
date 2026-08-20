@@ -172,7 +172,7 @@ export function createConversationReadApp(
     });
   });
 
-  app.get(apiPaths.conversationChannelMessages(':id'), c => {
+  app.get(apiPaths.channelMessages(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
@@ -383,8 +383,6 @@ export function createConversationReadApp(
    *
    * Response intentionally excludes messages and per-user unread
    * state — those go through the existing window/cursor endpoints.
-   * `workspace_kind` is projected `agent_home → 'dm'` so the
-   * renderer never sees a third kind.
    */
   app.get(apiPaths.conversationRef(':id'), c => {
     const id = c.req.param('id');
@@ -395,9 +393,8 @@ export function createConversationReadApp(
       return c.json({ error: 'forbidden' }, 403);
     }
     // CONTRACT-FACE NARROWING, not an authorization answer (#task:2038, ruling
-    // A). `ConversationRef` names a workspace in its contract (`workspace_id` +
-    // the projected `workspace_kind`, both non-null), so this face can only
-    // describe the WORKSPACE arm. A workspace-less placement is therefore
+    // A). `ConversationRef` names a workspace in its contract (a non-null
+    // `workspace_id`), so this face can only describe the WORKSPACE arm. A workspace-less placement is therefore
     // unnameable here even for a caller who legitimately reads it: a human
     // endpoint of their own `direct_pair` passes the ACL above (#task:2035 made
     // that arm real), and still gets this 404 — the 404 says "not a thing this
@@ -431,12 +428,6 @@ export function createConversationReadApp(
       roster_policy: conversation.roster_policy,
       title: conversation.title,
       workspace_id: conversation.workspace_id,
-      // External projection: agents see `agent_home` internally; users
-      // see `dm`. The renderer/UI uses regular|dm exclusively.
-      workspace_kind:
-        workspace.workspace_kind === 'agent_home'
-          ? ('dm' as const)
-          : ('regular' as const),
       closed_at: conversation.closed_at,
       archived_at: conversation.archived_at,
     };
@@ -553,10 +544,11 @@ export function createConversationMessagingApp(
   app.get(apiPaths.conversationThreads(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
-    // `getChannelLike` resolves channel / dm_channel only — a legacy
-    // `kind='thread'` conversation returns null here, so this list never
-    // revives a legacy thread conversation; threads are reply-clusters
-    // within the channel.
+    // `getChannelLike` resolves ANY conversation row by id (there is no
+    // classifier filter — the retired per-row conversation-type column is
+    // gone), returning null only when no row has that id. Threads are
+    // reply-clusters keyed by `thread_root_id` on messages, NOT conversation
+    // rows, so there is no thread conversation for this list to revive.
     const channel = conversations.getChannelLike(id);
     if (!channel) return c.json({ error: 'channel not found' }, 404);
     if (!canViewConversation(ctx, getUserPrincipal(c), channel.id)) {
@@ -780,8 +772,8 @@ export function createConversationMessagingApp(
     }
     // #task:2048 — authorize the TARGET AGENT through the canonical
     // placement-participation authority, NOT the roster. `getAgent` is a
-    // `conversation_agents` row lookup, but `direct_pair` (and `agent_inbox`)
-    // deliberately have no roster row — the placement's typed endpoints name the
+    // `conversation_agents` row lookup, but a `direct_pair`
+    // deliberately has no roster row — the placement's typed endpoints name the
     // participants — so a real DirectPair endpoint agent would 404 on a face it
     // participates in. `isAgentParticipant` is the boolean form of
     // `agentParticipates` (roster ∪ inbox arc ∪ direct_pair arc), the ONE

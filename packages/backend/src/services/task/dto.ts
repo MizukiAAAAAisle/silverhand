@@ -25,10 +25,6 @@ export interface TaskJoinedRow {
   /** NULL for DirectPair-board tasks (P0-f); the LEFT-JOINed workspace columns
    *  are null with it. */
   workspace_id: string | null;
-  /** Domain projection of the workspace kind (`regular | agent_space`),
-   *  workspace-arm-only. SQL maps physical `agent_home`→`agent_space` and
-   *  projects NULL for DirectPair, so the wire never sees `agent_home`. */
-  workspace_kind: 'regular' | 'agent_space' | null;
   conversation_pair_key: string | null;
   /** Workspace-arm-only. SQL projects NULL for DirectPair so its sentinel
    *  storage title never enters this read model. */
@@ -52,22 +48,18 @@ export interface TaskJoinedRow {
  *  lives in the migration; TS never re-derives it) and deliberately NOT the
  *  stored sentinel title: a DM has no display title, and projecting the
  *  placeholder would fake one (the per-viewer label is #task:2021's formatter).
- *  The workspace arm carries the board namespace (`workspace_id` +
- *  `workspace_kind`) plus the channel display title; `workspace_name` is not
- *  projected (zero readers, contract §3). A row matching neither arm is an
+ *  The workspace arm carries the board namespace (`workspace_id`) plus the
+ *  channel display title; neither `workspace_name` nor a container WORD is
+ *  projected (zero readers — the word went with #task:2075's stop-publish step,
+ *  for the same reason the name never shipped). A row matching neither arm is an
  *  invariant breach (the v76 full-coordinate trigger + arc CHECKs make it
  *  unrepresentable), so this fails loud rather than inventing a place. */
 function placeFrom(row: TaskJoinedRow): TaskSummaryDto['place'] {
-  if (
-    row.workspace_id !== null &&
-    row.workspace_kind !== null &&
-    row.channel_name !== null
-  ) {
+  if (row.workspace_id !== null && row.channel_name !== null) {
     return {
       kind: 'workspace',
       conversation_id: row.conversation_id,
       workspace_id: row.workspace_id,
-      workspace_kind: row.workspace_kind,
       channel_name: row.channel_name,
     };
   }

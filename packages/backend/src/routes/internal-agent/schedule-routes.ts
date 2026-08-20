@@ -54,9 +54,9 @@ export function registerScheduleRoutes(
     const principal = getAgentPrincipal(c);
     // The address is resolved BEFORE the service sees it, so the service is
     // handed a conversation id it never has to interpret. `write` intent is the
-    // honest one: a fire INSERTS a wake there, which is also why an agent inbox
-    // is refused here rather than at fire time, and why `dm:@handle` opens the
-    // pair — a destination has to exist to be stored as a stable id.
+    // honest one: a fire INSERTS a wake there, which is why an unwritable
+    // destination is refused HERE rather than at fire time, and why `dm:@handle`
+    // opens the pair — a destination has to exist to be stored as a stable id.
     const resolved = resolveConversationTargetForRoute(c, deps, {
       address: parsed.data.target_conversation,
       operation: 'schedule_create',

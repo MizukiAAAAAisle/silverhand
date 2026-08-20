@@ -145,8 +145,8 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   // never gets you a roster write on a channel you are not in.
   // `canAddConversationMember` is that floor CONJOINED with "this roster is
   // mutable at all" (`roster_policy = 'open'`), so a fixed-roster conversation —
-  // a DM, an agent inbox — refuses every principal before the role axis is even
-  // consulted. `minRole: 'member'` is therefore the role-axis LOWER BOUND only;
+  // a DM, an agent home's DM channel — refuses every principal before the role
+  // axis is even consulted. `minRole: 'member'` is therefore the role-axis LOWER BOUND only;
   // the membership floor and the per-target escalation are in the note. The AGENT principal reaches the SAME handler
   // via the internal route, where the `manage_conversation_members` capability
   // gate is already enforced

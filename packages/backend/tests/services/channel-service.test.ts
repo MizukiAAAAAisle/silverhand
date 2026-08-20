@@ -1500,15 +1500,24 @@ describe('ChannelService — the title IS the address (#task:2016)', () => {
     }
   });
 
-  it('refuses an inbox with not_addressable', async () => {
+  it('refuses a workspace-less placement with not_addressable', async () => {
     const t = bootstrap();
     try {
-      const inbox = t.conversations.insertAgentInbox(t.alice.id, Date.now());
-      expect(inbox.roster_policy).toBe('fixed');
+      // A `direct_pair` is the placement that holds no title address at all, and
+      // it reaches the rename door: `getChannelLike` spans every placement, so the
+      // refusal has to be the pre-lock `workspace_id === null` arm rather than a
+      // lookup that happened to miss.
+      const pair = t.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: t.alice.id },
+        { kind: 'human', id: 'local' },
+        Date.now(),
+      ).conversation;
+      expect(pair.roster_policy).toBe('fixed');
+      expect(t.conversations.getChannelLike(pair.id)?.workspace_id).toBeNull();
 
       await expect(
         t.service.renameChannel({
-          channelId: inbox.id,
+          channelId: pair.id,
           title: fixedConversationTitle('Mentions'),
         }),
       ).rejects.toMatchObject({ code: 'not_addressable' });

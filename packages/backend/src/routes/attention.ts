@@ -23,6 +23,7 @@ import {
   type WorkspaceAttentionModesDto,
   type WorkspaceAttentionPreferenceDto,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -180,12 +181,12 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
     };
     // Both announced frames are keyed on (viewer, WORKSPACE), so the workspace
     // arm is asserted rather than coerced. It is guaranteed here by the
-    // `getChannel` filter above: `kind` is GENERATED from `roster_policy`, so
-    // An open roster is the only placement eligible for this preference
-    // is `workspace` (an agent inbox is `roster_policy='fixed'` ⇒
-    // (fixed roster ⇒ already 404 above). If a later placement ever
-    // carries an open roster without a workspace, this fails loud instead of
-    // publishing a badge frame no client can place.
+    // `getChannel` filter above, which pins `placement_kind = 'workspace'`
+    // LITERALLY (alongside `roster_policy = 'open'`) — no inference from the
+    // roster is involved, and every other placement, a `direct_pair` included,
+    // already 404'd there. The assertion is the tripwire for THAT clause: if the
+    // query is ever widened to resolve a non-workspace placement here, this fails
+    // loud instead of publishing a badge frame no client can place.
     announcePrefWrite(viewerUserId, requireWorkspacePlacement(channel), channel.id);
     return c.json(dto);
   });
@@ -206,7 +207,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
     }
     const workspace = workspaces.get(id);
     if (!workspace) return c.json({ error: 'workspace not found' }, 404);
-    if (workspace.workspace_kind !== 'regular') {
+    if (isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     const viewerUserId = requireViewerUserId(c);
@@ -229,7 +230,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
     }
     const workspace = workspaces.get(id);
     if (!workspace) return c.json({ error: 'workspace not found' }, 404);
-    if (workspace.workspace_kind !== 'regular') {
+    if (isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     const viewerUserId = requireViewerUserId(c);

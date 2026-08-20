@@ -57,7 +57,9 @@ the start/wake *command*, not queue *custody*.**
 ```
 runtime_deliver {
   conversation_id, agent_id,
-  delivery_ids[], delivered_up_to_seq, deliveries[], text,
+  delivery_ids[], deliveries[], text,   // #task:2106: `deliveries[]` REQUIRED (non-empty);
+                                        // the wire scalar `delivered_up_to_seq` is REMOVED —
+                                        // the daemon derives the disk sidecar from max(deliveries[].seq).
   spawn_options,            // consulted ONLY if the daemon must spawn
 }
 ```
@@ -253,10 +255,12 @@ verbatim. `deferred` is a **custody signal, not an ack** — it never touches
 ### 11.4 The daemon deferred queue
 
 - **Shape.** A new per-handle `deferredQueue: DeferredEntry[]` (distinct from the
-  single `startupDelivery` slot), each entry carrying `{ deliveryIds,
-  deliveredUpToSeq?, deliveries?, text, owner }` — the batch payload the WRITE arm
-  places on `startupDelivery`, **plus a delivery-owner token** (§11.4.1). Dedup by
-  delivery-id set (idempotent re-submit), mirroring the coordinator's `dedupKey`.
+  single `startupDelivery` slot), each entry carrying `{ deliveryIds, deliveries,
+  text, owner }` — the batch payload the WRITE arm places on `startupDelivery`,
+  **plus a delivery-owner token** (§11.4.1). `deliveries` is required and non-empty
+  (#task:2106); the disk sidecar high-water is derived `max(deliveries[].seq)`, not
+  carried as a separate scalar. Dedup by delivery-id set (idempotent re-submit),
+  mirroring the coordinator's `dedupKey`.
 - **Flush triggers (two, both re-check `boundaryOpen`):**
   1. **Turn-end / boundary reopen.** In `updateRunStateFromParsed`, after the
      `turn_end`/`tool_output`/`compaction_finished` transition recomputes the

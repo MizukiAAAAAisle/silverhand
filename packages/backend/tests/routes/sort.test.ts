@@ -92,11 +92,42 @@ describe('PUT /api/sort/mode', () => {
     expect(res.status).toBe(200);
     const modes = ((await res.json()) as any).viewer_sort.modes;
     expect(modes.regular).toBe('manual');
-    // Only the toggled scope is written — the sibling scope `dm` stays at default.
-    expect(modes.dm).toBeUndefined();
+    // Only the toggled scope is written — the sibling `agent_space` scope stays
+    // at default. Asserted on the CURRENT token: after #task:2045 Delta 4 an
+    // assertion on the retired `dm` key would pass vacuously (absent either way).
+    expect(modes.agent_space).toBeUndefined();
 
     const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
     expect(wsList.viewer_sort.modes.regular).toBe('manual');
+  });
+
+  it('accepts the agent-space rail group and refuses its retired `dm` spelling', async () => {
+    // #task:2045 Delta 4: the rail's agent-space group is `agent_space` on the
+    // wire, in `user_list_sort_mode.scope`, and in the renderer. The old token is
+    // refused at ADMISSION rather than tolerated — there is no both-spellings
+    // window, because this generation's desktop API epoch is unreleased
+    // (`desktop-server-api-epoch.ts`).
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    await makeWorkspace(t, 'eng', agentId);
+
+    const ok = await http(t).put('/api/sort/mode', {
+      list_key: 'workspaces',
+      group: 'agent_space',
+      mode: 'manual',
+    });
+    expect(ok.status).toBe(200);
+    // The response's `modes` map is keyed by the STORED scope, so this one
+    // assertion covers both the wire token and the row it was written under (the
+    // row-level proof of the rename itself lives in the v86 migration test).
+    expect(((await ok.json()) as any).viewer_sort.modes.agent_space).toBe('manual');
+
+    const retired = await http(t).put('/api/sort/mode', {
+      list_key: 'workspaces',
+      group: 'dm',
+      mode: 'manual',
+    });
+    expect(retired.status).toBe(400);
   });
 
   it('rejects a workspaces mode set without a group (rail mode is per-section)', async () => {
@@ -319,12 +350,12 @@ describe('PUT /api/sort/order', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects a group not legal for the list kind, even with empty ordered_ids', async () => {
+  it('rejects a group not legal for the list, even with empty ordered_ids', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     await makeWorkspace(t, 'eng', agentId);
     // 'channels' is a conversation-list group, not a workspace-rail group
-    // (the rail partitions by kind: dm / regular).
+    // (the rail partitions by ownership: agent_space / regular).
     const res = await http(t).put('/api/sort/order', {
       list_key: 'workspaces',
       group: 'channels',
@@ -369,7 +400,7 @@ describe('PUT /api/sort/order', () => {
     // Drag the `regular` rail section.
     const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
     const regularIds = wsList.workspaces
-      .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
+      .filter((w: any) => w.owner_agent_id == null && w.archived_at == null)
       .map((w: any) => w.id);
     expect(regularIds).toEqual(expect.arrayContaining([a, b]));
 
@@ -381,8 +412,9 @@ describe('PUT /api/sort/order', () => {
     expect(res.status).toBe(200);
     const modes = ((await res.json()) as any).viewer_sort.modes;
     expect(modes.regular).toBe('manual');
-    // The sibling `dm` section keeps its own (default) mode — no rail-wide flip.
-    expect(modes.dm).toBeUndefined();
+    // The sibling `agent_space` section keeps its own (default) mode — no
+    // rail-wide flip.
+    expect(modes.agent_space).toBeUndefined();
   });
 
   // Discovery-union presentation state: a visible unjoined PUBLIC
@@ -533,7 +565,7 @@ describe('star/unstar rank handling — home rank preserved everywhere (#task:18
     const regularWs = await makeWorkspace(t, 'eng', agentId);
     const list = (await (await http(t).get('/api/workspaces')).json()) as any;
     const dmWs = list.workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
+      (w: any) => w.owner_agent_id === agentId,
     );
     expect(dmWs).toBeTruthy();
 
@@ -572,7 +604,7 @@ describe('star/unstar rank handling — home rank preserved everywhere (#task:18
     expect((await http(t).del(`/api/channels/${c1}/star`)).status).toBe(404);
   });
 
-  it('the rail reorders on its WHOLE kind group — no star group, no star exclusion', async () => {
+  it('the rail reorders on its WHOLE ownership group — no star group, no star exclusion', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const regularWs = await makeWorkspace(t, 'eng', agentId);
@@ -589,11 +621,11 @@ describe('star/unstar rank handling — home rank preserved everywhere (#task:18
 
     const list = (await (await http(t).get('/api/workspaces')).json()) as any;
     const regularIds = list.workspaces
-      .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
+      .filter((w: any) => w.owner_agent_id == null && w.archived_at == null)
       .map((w: any) => w.id);
     expect(regularIds).toContain(regularWs);
 
-    // The whole kind group is the legal set…
+    // The whole ownership group is the legal set…
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'workspaces',

@@ -20,7 +20,8 @@ export type SortMode = z.infer<typeof SortModeSchema>;
  * sort time, never stored on the entity. Exactly ONE list has star at all
  * (#task:1899) and there it is EXCLUSIVE (#task:1888): the CONVERSATION list.
  * Star never creates a hard group anywhere.
- *   workspace rail : 'dm' | 'regular' — by KIND only. A container is not
+ *   workspace rail : 'agent_space' | 'regular' — by OWNERSHIP only
+ *     (`workspaces.owner_agent_id`). A container is not
  *     starrable, so the rail's order is mode + rank and nothing else.
  *   channel sidebar: 'channels' — a single group holding the workspace's
  *     conversations. A starred conversation has MOVED to the global
@@ -34,7 +35,14 @@ export type SortMode = z.infer<typeof SortModeSchema>;
  * (`starred_at`), never as a shared aggregate field.
  */
 export const SortGroupSchema = z.enum([
-  'dm',
+  // #task:2045 Delta 4: this member was spelled `dm` until 2026-08. It names the
+  // rail's AGENT SPACE section (`workspaces.owner_agent_id IS NOT NULL`), which
+  // is a different domain concept from a DirectPair DM — the old spelling was the
+  // last place the two shared a word. Renamed in-place with no compatibility
+  // bridge because this generation's desktop API epoch is unreleased and
+  // `MINIMUM_CLIENT_API_EPOCH` already refuses every published client (see
+  // `desktop-server-api-epoch.ts`); stored values move in migration v86.
+  'agent_space',
   'regular',
   'channels', // one workspace's conversations (#task:1888) — star moved them out
   'favorites',
@@ -92,8 +100,8 @@ export type ViewerSortEntryDto = z.infer<typeof ViewerSortEntryDtoSchema>;
  *
  * `modes` is the per-SCOPE mode map (#task:1146). A scope is one independently
  * toggleable [recent|manual] axis within the list:
- *   - workspace rail : scope = the hard group ('dm' | 'regular') — each rail
- *     section has its own mode (there is no star axis on the rail).
+ *   - workspace rail : scope = the hard group ('agent_space' | 'regular') — each
+ *     rail section has its own mode (there is no star axis on the rail).
  *   - channel sidebar: scope = '' (the sentinel "list-wide" scope) — one mode
  *     for the whole list, exactly as before.
  * Sparse: an absent scope means the default, 'recent'. Read with the renderer
@@ -122,7 +130,7 @@ export type SetSortModeInput = z.infer<typeof SetSortModeInputSchema>;
 /**
  * Whole-list-within-group reorder. `ordered_ids` is the new order of ONE
  * group's entities (renderer only sends within-group ids). The backend
- * validates every id lives in `group` (live star/kind) and rewrites their
+ * validates every id lives in `group` (live star/ownership) and rewrites their
  * dense ranks — leaving other groups untouched (grouping is sort-time).
  */
 export const SortReorderInputSchema = z.object({

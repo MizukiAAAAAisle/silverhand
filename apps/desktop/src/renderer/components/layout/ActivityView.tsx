@@ -3,7 +3,6 @@ import {
   Activity as ActivityIcon,
   AlertTriangle,
   Check,
-  MessageCircle,
 } from 'lucide-react';
 import type { ActivityItemDto, MessageAuthorDto, AgentDto } from '@silverhand/shared';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
@@ -102,22 +101,35 @@ function matchesFilter(item: ActivityItemDto, key: FilterKey): boolean {
   }
 }
 
-/** Row-1 channel identity glyph — the canonical themed primitive for where the
- *  item lives, driven by explicit DTO fields (never guessed from copy):
- *    - `channel`    → `Hash` carrying the `data-channel-icon` theme hook (forza6
- *      repaints it as a `#` poster, matching the sidebar/header `#`).
- *    - `dm_channel` → a message-circle (DM identity is really the agent, already
- *      shown by the workspace icon; this is the conversation-side marker).
+/** Row-1 location glyph — the canonical themed primitive for where the item
+ *  lives:
  *    - `agent_failed` → a warning glyph (error-tinted) — it has no normal channel
  *      context, and the warning must survive the dropped text label.
+ *    - everything else → the `#` channel sticker, UNCONDITIONALLY.
+ *
+ *  Why the location has no branch to key (#task:2076 / #task:2077): both Activity
+ *  sources are restricted to WORKSPACE placements (`read-model/activity.ts`
+ *  carries one `WORKSPACE_PLACED` conjunct each, falsifier-gated one conjunct per
+ *  case by `tests/routes/activity-placement-domain.test.ts`), and a workspace
+ *  conversation IS a channel whatever its roster policy is (#task:1373). So every
+ *  item that can reach this function is a channel; there is no second identity to
+ *  draw.
+ *
+ *  This deleted a `roster_policy === 'fixed'` arm that drew a message-circle. It
+ *  was wrong on every reachable state, not just an edge: within this domain the
+ *  only rows it could match are an agent space's fixed-roster DM/Onboarding
+ *  CHANNELS. Roster answers a capability question (can members change); identity
+ *  is placement's to answer — and here placement is constant, which is why the
+ *  DTO carries no classification field at all (see `ActivityItemDtoSchema`).
+ *
+ *  Falsifier: if Activity ever admits a workspace-less placement, this needs a
+ *  branch keyed on `placement_kind`, never on the roster.
+ *
  *  An if-chain (not an exhaustive switch on `kind`) so it stays decoupled from
  *  whether the shared `kind` union still carries the now-removed `task`. */
 function ChannelGlyph({ item }: { item: ActivityItemDto }): JSX.Element {
   if (item.kind === 'agent_failed') {
     return <AlertTriangle className="size-3.5 shrink-0 text-error" />;
-  }
-  if (item.conversation_roster_policy === 'fixed') {
-    return <MessageCircle className="size-3.5 shrink-0 text-text-muted" />;
   }
   return <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />;
 }
@@ -204,12 +216,13 @@ function relTime(ts: number): string {
 }
 
 /** Per-workspace identity for a row's workspace icon + disambiguating name.
- *  `kind` / `dmAgentId` feed the canonical {@link WorkspaceIcon} (regular →
- *  themed `W`; DM → the bound agent's avatar). */
+ *  `ownerAgentId` feeds the canonical {@link WorkspaceIcon} (null → themed `W`;
+ *  set → that agent's avatar). Activity never CLASSIFIES a workspace — it only
+ *  resolves an identity — so this shape carries the id alone and no predicate
+ *  (#task:2078). */
 export interface ActivityWorkspaceRef {
   name: string;
-  kind: 'regular' | 'dm';
-  dmAgentId: string | null;
+  ownerAgentId: string | null;
 }
 
 interface ActivityViewProps {
@@ -217,7 +230,7 @@ interface ActivityViewProps {
    *  workspace, so each row shows its workspace icon and a name that
    *  disambiguates same-named channels across workspaces. */
   workspaceRefById: ReadonlyMap<string, ActivityWorkspaceRef>;
-  /** agent_id → agent, for the DM workspace icon (the bound agent's avatar). */
+  /** agent_id → agent, for an agent space's icon (the owning agent's avatar). */
   agentsById: ReadonlyMap<string, AgentDto>;
   /** Jump to a message source — the parent owns view routing (flips to channel
    *  view, selects workspace + channel, scrolls + flashes). Cross-workspace
@@ -260,22 +273,26 @@ export function ActivityView({
   );
   const senderAvatarUrls = useAgentAvatarObjectUrls(senderSources);
 
-  // DM workspace icons resolve through the SAME canonical `WorkspaceIcon` as the
+  // Agent-space icons resolve through the SAME canonical `WorkspaceIcon` as the
   // rail / search / archived surfaces — so their uploaded agent avatars must be
-  // resolved too, else the DM branch silently degrades to the runtime brand and
+  // resolved too, else the owned branch silently degrades to the runtime brand and
   // Activity becomes the only half-canonical surface. Batched over the stable
-  // DM-agent set, mirroring `Sidebar`'s `dmAvatarSources`.
-  const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
+  // owning-agent set, mirroring `Sidebar`'s `ownerAvatarSources`.
+  const ownerAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const out: AgentAvatarSource[] = [];
     for (const ref of workspaceRefById.values()) {
-      if (ref.kind !== 'dm' || !ref.dmAgentId) continue;
-      const agent = agentsById.get(ref.dmAgentId);
+      // The id itself, not `isAgentSpace`: this loop needs the agent to build an
+      // avatar source, so the null check is the identity read (#task:2078). The
+      // old `kind !== 'agent_space' ||` conjunct in front of it could not exclude
+      // anything the id alone did not already exclude.
+      if (!ref.ownerAgentId) continue;
+      const agent = agentsById.get(ref.ownerAgentId);
       if (!agent) continue;
       out.push({ id: agent.id, avatar_url: agent.avatar_url });
     }
     return out;
   }, [workspaceRefById, agentsById]);
-  const dmAgentAvatarUrls = useAgentAvatarObjectUrls(dmAvatarSources);
+  const ownerAgentAvatarUrls = useAgentAvatarObjectUrls(ownerAvatarSources);
 
   // Per-chip counts off the full (unfiltered) list, so each chip answers "how
   // many of this kind wait on me".
@@ -372,7 +389,7 @@ export function ActivityView({
                 items={directed}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
-                dmAgentAvatarUrls={dmAgentAvatarUrls}
+                ownerAgentAvatarUrls={ownerAgentAvatarUrls}
                 senderAvatarUrls={senderAvatarUrls}
                 onJump={onJump}
               />
@@ -383,7 +400,7 @@ export function ActivityView({
                 items={ambient}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
-                dmAgentAvatarUrls={dmAgentAvatarUrls}
+                ownerAgentAvatarUrls={ownerAgentAvatarUrls}
                 senderAvatarUrls={senderAvatarUrls}
                 onJump={onJump}
               />
@@ -400,7 +417,7 @@ function ActivitySection({
   items,
   workspaceRefById,
   agentsById,
-  dmAgentAvatarUrls,
+  ownerAgentAvatarUrls,
   senderAvatarUrls,
   onJump,
 }: {
@@ -408,7 +425,7 @@ function ActivitySection({
   items: ActivityItemDto[];
   workspaceRefById: ReadonlyMap<string, ActivityWorkspaceRef>;
   agentsById: ReadonlyMap<string, AgentDto>;
-  dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
   senderAvatarUrls: ReadonlyMap<string, string | null>;
   onJump: (target: MessageJumpTarget) => void;
 }): JSX.Element {
@@ -424,7 +441,7 @@ function ActivitySection({
             item={item}
             workspace={workspaceRefById.get(item.workspace_id)}
             agentsById={agentsById}
-            dmAgentAvatarUrls={dmAgentAvatarUrls}
+            ownerAgentAvatarUrls={ownerAgentAvatarUrls}
             senderAvatarUrls={senderAvatarUrls}
             onJump={onJump}
           />
@@ -438,14 +455,14 @@ function ActivityRow({
   item,
   workspace,
   agentsById,
-  dmAgentAvatarUrls,
+  ownerAgentAvatarUrls,
   senderAvatarUrls,
   onJump,
 }: {
   item: ActivityItemDto;
   workspace?: ActivityWorkspaceRef;
   agentsById: ReadonlyMap<string, AgentDto>;
-  dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
   senderAvatarUrls: ReadonlyMap<string, string | null>;
   onJump: (target: MessageJumpTarget) => void;
 }): JSX.Element {
@@ -543,10 +560,9 @@ function ActivityRow({
             {workspace ? (
               <>
                 <WorkspaceIcon
-                  kind={workspace.kind}
-                  dmAgentId={workspace.dmAgentId}
+                  ownerAgentId={workspace.ownerAgentId}
                   agentsById={agentsById}
-                  dmAgentAvatarUrls={dmAgentAvatarUrls}
+                  ownerAgentAvatarUrls={ownerAgentAvatarUrls}
                 />
                 <span className="min-w-0 shrink truncate text-text-secondary">
                   {workspace.name}

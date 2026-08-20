@@ -287,6 +287,25 @@ export class AcpClient {
       }
       case 'tool_call_update': {
         const toolCallId = stringField(update.toolCallId);
+        // ACP revises a tool call in place. OpenCode's creating frame carries
+        // no `rawInput` (we persist `{cwd}` alone) and the real command lands
+        // here (#task:2101), so dropping this frame's params is why every
+        // Silverhand command rendered as a bare `Bash`. Refine the row we
+        // already emitted rather than emitting a second `tool_call`: that kind
+        // is what drives `outstandingToolUses` / `toolCallCounts`.
+        //
+        // Gated on `emittedToolCalls`, not on the payload: an update for an id
+        // we never announced has no row to refine. Deliberately NOT gated on
+        // "does the input look better than what we had" — judging payload
+        // content is the guessing this axis exists to avoid; the protocol
+        // itself is telling us the params were revised.
+        if (toolCallId && update.rawInput !== undefined && this.emittedToolCalls.has(toolCallId)) {
+          events.push({
+            kind: 'tool_call_input',
+            toolCallId,
+            input: update.rawInput,
+          });
+        }
         if (isTerminalToolStatus(update.status)) {
           events.push({
             kind: 'tool_output',

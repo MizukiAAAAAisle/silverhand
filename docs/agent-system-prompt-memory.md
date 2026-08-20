@@ -45,7 +45,7 @@ binding (`workspace-layout-relocation-v1.md` §3.2/§3.3/§7). It is both the
 agent's L2 memory dir and its spawn cwd; there is no `<workspace>/.silverhand/`
 sub-path any more, so L2 never lands inside a user project directory.
 
-For an agent's DM workspace (`workspace_kind = 'agent_home'`), the L2 coordinate
+For an agent's DM workspace (an agent home, `owner_agent_id` set), the L2 coordinate
 **collapses onto** the L1 directory: the DM's cwd IS `<agent home>`, so the same
 physical `MEMORY.md` and `notes/` serve as the DM's L2. There is no separate
 "DM-L2" copy.

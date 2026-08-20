@@ -88,11 +88,10 @@ export function taskBoardCacheScope(
   coord: TaskRefCoord | null | undefined,
 ): TaskBoardCacheScope | null {
   // Workspace placement wins when present: Workspace AND Agent Space are both
-  // `placement_kind='workspace'` (split only by `workspace_kind`), so both key
-  // by their workspace id. A DirectPair has no workspace coordinate, so it
-  // falls through to its pair conversation. `agent_inbox` never reaches here —
-  // it has no human participant to render an inline task ref — so it needs no
-  // arm; a coord with both axes null is unresolvable.
+  // `placement_kind='workspace'` (they differ only in who owns the container),
+  // so both key by their workspace id. A DirectPair has no workspace coordinate,
+  // falls through to its pair conversation; a coord with both axes null is
+  // unresolvable.
   const workspaceId = coord?.workspaceId ?? null;
   const conversationId = coord?.conversationId ?? null;
   if (typeof workspaceId === 'string' && workspaceId.length > 0) {

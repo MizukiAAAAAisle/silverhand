@@ -1,8 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
-import {
-  AgentInboxMissingError,
-  type AgentProvisioningPersistence,
-  type AgentProvisioningTxScope,
+import type {
+  AgentProvisioningPersistence,
+  AgentProvisioningTxScope,
 } from '../application/agent-provisioning-ports.js';
 import { AgentRepo } from './agent-repo.js';
 import { WorkspaceRepo } from './workspace-repo.js';
@@ -61,9 +60,9 @@ function workspaceProvisioningPort(
   };
 }
 
-/** The conversation face: DM insert, the two membership edges, and the inbox
- *  placement. The inbox gets NO membership edge on purpose — its participant is
- *  the ownership column (§4.2). */
+/** The conversation face: DM insert, its two membership edges, and the mint of
+ *  the creator's direct line with an agent-scoped agent. The pair gets NO
+ *  membership edge either — its participants ARE its endpoint columns. */
 function conversationProvisioningPort(
   db: Db,
 ): AgentProvisioningTxScope['conversations'] {
@@ -73,14 +72,9 @@ function conversationProvisioningPort(
       const dm = conversations.insertDmChannel(args);
       return { id: dm.id };
     },
-    insertAgentInbox(agentId, createdAt) {
-      const inbox = conversations.insertAgentInbox(agentId, createdAt);
-      return { id: inbox.id };
-    },
-    requireInboxId(agentId) {
-      const inbox = conversations.getAgentInbox(agentId);
-      if (!inbox) throw new AgentInboxMissingError(agentId);
-      return inbox.id;
+    getOrCreateDirectPair(x, y, now) {
+      const opened = conversations.getOrCreateDirectPair(x, y, now);
+      return { conversation: { id: opened.conversation.id }, created: opened.created };
     },
     addAgent(conversationId, agentId): void {
       conversations.addAgent(conversationId, agentId);
@@ -127,17 +121,14 @@ export function createSqliteAgentProvisioningPersistence(
         return db.transaction(() => fn(scope))();
       },
     },
-    /** The aggregate factory (v71): `agents` row + inbox placement, atomically.
-     *  Reuses the SAME tx-scoped faces as the dependent graph, so the pairing is
-     *  a transaction rather than two calls a caller must remember to make. The
-     *  inbox carries the owner's `created_at` — aggregate birth, which is the
-     *  same instant the v71 backfill writes for pre-existing agents. */
-    reserveAgentAggregate(args) {
-      return db.transaction(() => {
-        const row = scope.agents.reserveForMaterialize(args);
-        scope.conversations.insertAgentInbox(row.id, row.created_at);
-        return row;
-      })();
+    /** The L1 reserve: ONE INSERT, its own commit. It was the v71 aggregate
+     *  factory (row + `agent_inbox` placement in one transaction) until
+     *  #task:2072 retired the inbox; with nothing to pair, there is nothing for
+     *  a transaction to make atomic, so this reaches the same tx-scoped face
+     *  without opening one. Still routed through `scope` rather than a captured
+     *  repo, for the reason the scope doc gives. */
+    reserveAgentRow(args) {
+      return scope.agents.reserveForMaterialize(args);
     },
   };
 }

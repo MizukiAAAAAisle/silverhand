@@ -19,7 +19,7 @@ import {
 function ws(over: Partial<EnsurePlanWorkspace>): EnsurePlanWorkspace {
   return {
     id: 'ws1',
-    workspace_kind: 'regular',
+    owner_agent_id: null,
     ...over,
   };
 }
@@ -31,9 +31,19 @@ describe('planRuntimeStartFilesystemEnsure', () => {
   });
 
   it('agent_home active workspace: no seed target (daemon resolves homedir-side)', () => {
-    expect(planRuntimeStartFilesystemEnsure(ws({ workspace_kind: 'agent_home' }))).toEqual({
+    expect(planRuntimeStartFilesystemEnsure(ws({ owner_agent_id: 'agent1' }))).toEqual({
       seedWorkspaceId: null,
     });
+  });
+
+  it('another agent’s home is still a home: no seed target', () => {
+    // The plan asks "does this container have a home agent AT ALL", NOT "is it
+    // THIS agent's". A foreign agent's home has no L2 to seed either, so an
+    // ownership-of-the-spawning-agent test here would newly hand back a seed
+    // target for a container that has never had one — a behavior change hiding
+    // inside a rename. The spawning agent's id is not even an input.
+    expect(planRuntimeStartFilesystemEnsure(ws({ owner_agent_id: 'someoneElse' })))
+      .toEqual({ seedWorkspaceId: null });
   });
 
   it('missing primary workspace row: nothing to ensure', () => {

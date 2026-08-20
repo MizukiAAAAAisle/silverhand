@@ -4,6 +4,7 @@ import type {
   AgentRuntimeParticipation,
   AgentRuntimeSeatDto,
   AgentRuntimeStateDto,
+  ConversationPlacementKind,
 } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { ConversationGlyph } from '@/components/ConversationGlyph';
@@ -187,6 +188,43 @@ function RosterGroup({
   );
 }
 
+/**
+ * Row identity for a mixed participation roster: the CONVERSATION's PLACEMENT
+ * decides the glyph. A `workspace` placement is a channel and wears `#`
+ * whatever its roster policy is — an agent space's fixed-roster channel is
+ * still a channel (#task:1373) — while a workspace-less placement (a
+ * `direct_pair`) is addressed at a person or an agent, so it wears `@`.
+ *
+ * This replaces a roster-keyed verdict (#task:2077). The #task:2069 / #task:2070
+ * reasoning still holds where it was made — among workspace-placed rows
+ * `agent_home ⇒ fixed`, so the CONTAINER word added nothing and its removal was
+ * right. What was wrong is the other direction: `fixed` was then treated as a
+ * SUFFICIENT condition for "private line", and the counter-example is the very
+ * one that reasoning cites — an agent home's `dm_channel` is fixed-rostered and
+ * is a channel. Roster answers a capability question (can members change);
+ * identity is placement's to answer.
+ *
+ * No default arm, and two different guards keep it honest. At COMPILE time the
+ * exhaustive switch forces the next placement added to the union to be handled
+ * here, rather than silently defaulting to `@` and mis-labeling. At RUNTIME a
+ * wire value outside this build's alphabet (an older client than the server)
+ * returns `undefined`, which {@link ConversationGlyph} rejects with a throw — so
+ * the runtime guard is that throw, not this switch. That intentionally DIVERGES
+ * from `pane-mode.ts`, which fail-safes an unknown placement to `unsupported`: a
+ * pane has a graceful unknown state, an identity glyph does not, so it fails loud
+ * rather than mis-label.
+ */
+function placementGlyphKind(
+  placement: ConversationPlacementKind,
+): 'channel' | 'dm' {
+  switch (placement) {
+    case 'workspace':
+      return 'channel';
+    case 'direct_pair':
+      return 'dm';
+  }
+}
+
 function RosterItem({
   row,
   selected,
@@ -200,8 +238,9 @@ function RosterItem({
   onOpen?: (s: AgentRuntimeParticipation) => void;
   live: boolean;
 }): JSX.Element {
-  const isDm =
-    row.conversation_roster_policy === 'fixed' || row.workspace_kind === 'agent_home';
+  // A CONVERSATION-level verdict on conversation-level facts — see
+  // {@link placementGlyphKind} for why the key is the placement, not the roster.
+  const glyphKind = placementGlyphKind(row.conversation_placement_kind);
   return (
     <li className="group/row relative">
       <button
@@ -235,7 +274,7 @@ function RosterItem({
             (#task:1438). On a selected row the glyph flips to
             `--text-on-selected` so it stays legible on the fill. */}
         <ConversationGlyph
-          kind={isDm ? 'dm' : 'channel'}
+          kind={glyphKind}
           className={selected ? 'text-text-on-selected' : 'text-text-muted'}
         />
         <span className="min-w-0 flex-1 truncate text-xs">

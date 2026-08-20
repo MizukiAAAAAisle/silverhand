@@ -16,7 +16,6 @@ function conv(
     conversation_id: 'c-1',
     workspace_id: 'w-1',
     workspace_name: 'silverhand',
-    workspace_kind: 'regular',
     conversation_placement_kind: 'workspace',
     conversation_roster_policy: 'open',
     channel_id: 'c-1',
@@ -61,15 +60,10 @@ describe('partitionRoster', () => {
     const rows = [
       conv({ conversation_id: 'ch', conversation_roster_policy: 'open' }),
       conv({ conversation_id: 'dm', conversation_roster_policy: 'fixed' }),
-      conv({
-        conversation_id: 'inbox',
-        conversation_placement_kind: 'agent_inbox',
-        conversation_roster_policy: 'fixed',
-      }),
     ];
     const { active, recent } = partitionRoster(rows, []);
     const ids = [...active, ...recent].map(r => r.conversation_id);
-    expect(ids).toEqual(['ch', 'dm', 'inbox']);
+    expect(ids).toEqual(['ch', 'dm']);
   });
 
   it('splits active (running, not closed) from recent', () => {
@@ -173,18 +167,31 @@ describe('presentToolCall', () => {
     });
     // plain / wrapped / truncated sends all resolve to the same action.
     expect(truncated.verb).toBe(wrapped.verb);
-    // a stale-resolution send is a DISTINCT action from a plain send.
-    const staleSend = presentToolCall('Bash', {
+    // #task:2099: freshness flags are NOT a staleness oracle. This reader used
+    // to promote `--stale-resolution` / `--anyway` to a distinct "stale" action;
+    // that guess was wrong three ways (a flagless retry after digesting the
+    // conflict looks plain, a pre-emptive `--anyway` false-positives with no 409
+    // at all, and a runtime whose tool_call capture carries no command — e.g.
+    // OpenCode via ACP — shows nothing). The authoritative fact now arrives as
+    // its own `message_stale` activity row. So EVERY spelling of a send is the
+    // same action here: the flags describe the request, not its outcome.
+    const staleResolution = presentToolCall('Bash', {
       command: 'silverhand message send --stale-resolution unaffected',
     });
-    expect(staleSend.verb).not.toBe('Bash');
-    expect(staleSend.verb).not.toBe(wrapped.verb);
-    // but a `--anyway` in a compound SUFFIX is not this send's flag → not stale
-    // (args stop at the separator; #task:1945, Cindy).
+    expect(staleResolution.verb).toBe(wrapped.verb);
+    const anyway = presentToolCall('Bash', {
+      command: 'silverhand message send --anyway',
+    });
+    expect(anyway.verb).toBe(wrapped.verb);
     const suffixSend = presentToolCall('Bash', {
       command: 'silverhand message send && echo --anyway',
     });
     expect(suffixSend.verb).toBe(wrapped.verb);
+    // The real CLI verbs for digesting a conflict stay ordinary actions — they
+    // are commands the agent ran, not evidence a refusal happened.
+    expect(
+      presentToolCall('Bash', { command: 'silverhand message stale-receive' }).verb,
+    ).not.toBe('Bash');
   });
 
   it('task actions surface task id + status change; never fabricate an id', () => {

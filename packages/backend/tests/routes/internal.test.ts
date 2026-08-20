@@ -11,7 +11,12 @@ import {
   issueTestConversationRuntimeToken,
   type TestApp,
 } from '../utils/app.js';
-import { agentSlotAuth, insertAgentScopedAgent } from '../utils/agent-scope.js';
+import {
+  agentSlotAuth,
+  drainInput,
+  enqueueUndeliveredInput,
+  insertAgentScopedAgent,
+} from '../utils/agent-scope.js';
 
 async function setupSession(
   t: TestApp,
@@ -298,37 +303,18 @@ describe('POST /internal/.../send-message', () => {
     expect(t.fake.delivered.map(d => d.messageId)).toContain(missedBody.message_id);
   });
 
-  it('returns a stale_event_id when same-conversation agent send is stale', async () => {
+  it('returns a stale_event_id when a same-conversation agent send finds undelivered input', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
-    const observed = await (
-      await http(t).post(
-        `/internal/agents/${agentIds.alice}/send-message`,
-        { content: 'observed', target: `#conv:${conversationId}` },
-        {
-          headers: authHeaders(issueTestConversationRuntimeToken(
-            t,
-            conversationId,
-            agentIds.alice!,
-          )),
-        },
-      )
-    ).json() as any;
-    await http(t).post(
-      `/internal/agents/${agentIds.bob}/send-message`,
-      { content: 'newer context', target: `#conv:${conversationId}` },
-      {
-        headers: authHeaders(issueTestConversationRuntimeToken(
-          t,
-          conversationId,
-          agentIds.bob!,
-        )),
-      },
-    );
+    // The freshness miss is an undelivered inbox row for alice: her runtime
+    // still holds input it must consume (#task:2095). There is no seq pair —
+    // the guard is a boolean EXISTS over her undelivered set, not a per-stream
+    // CAS — so the send carries no `seen_up_to_seq`.
+    enqueueUndeliveredInput(t, conversationId, agentIds.alice!);
 
     const r = await http(t).post(
       `/internal/agents/${agentIds.alice}/send-message`,
-      { content: 'stale draft', seen_up_to_seq: observed.message_seq, target: `#conv:${conversationId}` },
+      { content: 'stale draft', target: `#conv:${conversationId}` },
       {
         headers: authHeaders(issueTestConversationRuntimeToken(
           t,
@@ -343,7 +329,55 @@ describe('POST /internal/.../send-message', () => {
     expect(body.error.code).toBe('conflict');
     expect(body.error.details.subkind).toBe('message_stale');
     expect(typeof body.error.details.stale_event_id).toBe('string');
-    expect(body.error.details.current_seq).toBe(observed.message_seq + 1);
+    // F6: the 409 is signal-only. `current_seq` addressed the retired
+    // per-stream CAS and has no referent in the RuntimeScope model.
+    expect(body.error.details.current_seq).toBeUndefined();
+  });
+
+  it('guards a NAME-FORM (#<workspace>/<title>) first send on the AGENT arm identically — the address form cannot un-guard it (验收①)', async () => {
+    t = buildTestApp();
+    const { conversationId, channelId: workspaceId, agentIds } =
+      await setupSession(t, ['seed', 'bob']);
+    // The格 the ticket exists FOR, in its ORIGINAL shape: an agent-scoped
+    // runtime (session_scope='agent') sending to a READABLE address head
+    // (`#<workspace>/<title>` — the token the runtime pastes verbatim from its
+    // prompt). The old hole was structural AND lived in the AgentSlot path
+    // specifically: that head resolved through a per-address memo that was COLD
+    // on its first use each session, so the first send skipped the per-stream
+    // CAS and was silently un-guarded. The RuntimeScope model has NO per-address
+    // memo: it resolves the address to a stream, THEN evaluates the guard on the
+    // actor's undelivered set via the AGENT arm (`hasUndeliveredForAgent`),
+    // which does not look at the target at all. So the address FORM is
+    // immaterial — a name-form first send must 409 exactly like a `#conv:<id>`
+    // form. Without this格 the suite only proves "the new machine works", not
+    // "the old class of hole cannot come back".
+    const aliceId = insertAgentScopedAgent(t, agentIds.seed!, 'alice-global');
+    t.persistence.repos.workspaces.insertMembership(workspaceId, aliceId);
+    t.persistence.repos.conversations.addAgent(conversationId, aliceId);
+    t.persistence.repos.agentCapabilities.replaceSet(
+      workspaceId,
+      aliceId,
+      ['send_messages'],
+    );
+    // Undelivered input for her runtime ⇒ the agent-arm guard's EXISTS is true.
+    enqueueUndeliveredInput(t, conversationId, aliceId);
+
+    // Workspace is 'eng' (setupSession) and the onboarding channel's title is
+    // the code-owned literal 'Onboarding'; the named lookup case-folds.
+    const r = await http(t).post(
+      internalPaths.agentSendConversationMessage(aliceId),
+      { content: 'stale draft via readable address', target: '#eng/Onboarding' },
+      { headers: agentSlotAuth(t, aliceId) },
+    );
+
+    // 409, not 200: proves the name-form path resolved and routed through the
+    // SAME agent-arm guard. A sanity 404/target_unresolved here would mean the
+    // address didn't resolve — then the test proves nothing; the assertion on
+    // subkind pins that it was the freshness guard, not a resolution miss.
+    expect(r.status).toBe(409);
+    const body = await r.json() as any;
+    expect(body.error.details.subkind).toBe('message_stale');
+    expect(typeof body.error.details.stale_event_id).toBe('string');
   });
 
   it('rechecks participation before retrying a held stale draft and writes nothing after revocation', async () => {
@@ -366,24 +400,13 @@ describe('POST /internal/.../send-message', () => {
       { headers: auth },
     );
 
-    const observed = await (
-      await send({ content: 'observed', target })
-    ).json() as any;
-    await http(t).post(
-      internalPaths.agentSendConversationMessage(agentIds.bob!),
-      { content: 'newer context', target },
-      {
-        headers: authHeaders(issueTestConversationRuntimeToken(
-          t,
-          conversationId,
-          agentIds.bob!,
-        )),
-      },
-    );
+    // Alice's runtime holds undelivered input ⇒ her next send is held (409),
+    // yielding an arming id she replays on the retry. No seq boundary — the
+    // guard is a boolean EXISTS over her undelivered set.
+    enqueueUndeliveredInput(t, conversationId, aliceId);
     const stale = await send({
       content: 'held draft',
       target,
-      seen_up_to_seq: observed.message_seq,
     });
     expect(stale.status).toBe(409);
     const staleBody = await stale.json() as any;
@@ -402,8 +425,6 @@ describe('POST /internal/.../send-message', () => {
       target,
       stale_event_id: staleEventId,
       stale_resolution_reason: 'revised',
-      asserted_stream: target,
-      seen_up_to_seq: observed.message_seq,
     });
 
     expect(retry.status).toBe(404);
@@ -673,56 +694,56 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
     t = null;
   });
 
-  it('the 409 carries NO bodies — only stream/range/count signal metadata', async () => {
+  it('the 409 carries NO bodies — only signal metadata; the guard drains only on real admission', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
     const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
-    const first = await (await http(t).post(
-      `/api/channels/${conversationId}/messages`,
-      { content: 'observed boundary' },
-    )).json() as any;
-    const seenUpToSeq = first.message.seq as number;
-    for (let i = 0; i < 12; i++) {
-      await http(t).post(
-        `/api/channels/${conversationId}/messages`,
-        { content: `newer ${i}` },
-      );
-    }
+    // Alice's runtime holds one undelivered inbox row — the freshness miss.
+    // Its content is distinctive so we can prove the 409 never echoes the
+    // unseen message back: bodies are released exactly once, through normal
+    // delivery, never through this rejection.
+    enqueueUndeliveredInput(t, conversationId, agentIds.alice!, 'SECRET_UNSEEN_BODY');
+
     const r = await http(t).post(
       `/internal/agents/${agentIds.alice}/send-message`,
-      { content: 'stale draft', seen_up_to_seq: seenUpToSeq, target: `#conv:${conversationId}` },
+      { content: 'stale draft', target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r.status).toBe(409);
     const details = ((await r.json()) as any).error.details;
     expect(details.subkind).toBe('message_stale');
-    // Signal only: no body-bearing fields at all — the unseen content is
-    // released exactly once through normal delivery.
+    expect(typeof details.stale_event_id).toBe('string');
+    expect(typeof details.hint).toBe('string');
+    // Signal only (#task:2095 F6/F13): every field of the retired per-stream
+    // CAS is gone, and — deliberately — there is NO count of undelivered input
+    // (the EXISTS probe makes a COUNT cheap, which is exactly why it must be
+    // refused; an in-flight-inclusive count would also over-report).
     expect(details.newer_messages).toBeUndefined();
     expect(details.returned_through_seq).toBeUndefined();
-    expect(details.stream_key).toBe('main');
-    expect(details.seen_up_to_seq).toBe(seenUpToSeq);
+    expect(details.stream_key).toBeUndefined();
+    expect(details.seen_up_to_seq).toBeUndefined();
+    expect(details.current_seq).toBeUndefined();
     expect(details.unseen_count).toBeUndefined();
-    expect(details.current_seq).toBeGreaterThan(seenUpToSeq);
-    expect(typeof details.hint).toBe('string');
-    const raw = JSON.stringify(details);
-    expect(raw).not.toContain('newer 0');
-    expect(raw).not.toContain('newer 11');
+    // The unseen body is never echoed back through the rejection.
+    expect(JSON.stringify(details)).not.toContain('SECRET_UNSEEN_BODY');
 
-    // The 409 must not disarm the CAS: an uninformed retry with the same
-    // boundary still conflicts — only real admission unlocks it.
+    // The 409 disarms nothing: an uninformed retry — one that has NOT consumed
+    // the pending input — still finds the same undelivered row and is rejected
+    // again. Only real admission unlocks the guard.
     const r2 = await http(t).post(
       `/internal/agents/${agentIds.alice}/send-message`,
-      { content: 'stale draft 2', seen_up_to_seq: seenUpToSeq, target: `#conv:${conversationId}` },
+      { content: 'stale draft 2', target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r2.status).toBe(409);
 
-    // With the true head as boundary (normal delivery would have carried
-    // the agent here), the send goes through.
+    // Once the runtime has actually consumed its input (the analogue of a
+    // completed `stale-receive`), its undelivered set is empty and the send
+    // goes through — no bypass, the guard simply admits.
+    drainInput(t, conversationId, agentIds.alice!);
     const r3 = await http(t).post(
       `/internal/agents/${agentIds.alice}/send-message`,
-      { content: 'fresh send', seen_up_to_seq: details.current_seq, target: `#conv:${conversationId}` },
+      { content: 'fresh send', target: `#conv:${conversationId}` },
       { headers: authHeaders(token) },
     );
     expect(r3.status).toBe(200);

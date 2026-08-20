@@ -12,13 +12,10 @@
  *   2. READS NEVER ALLOCATE. `dm:@handle` on a write may open the pair; a read
  *      that created its subject would turn a typo into a permanent empty
  *      conversation and make "no such stream" unobservable on the retry.
- *   3. AN INBOX IS NOT A WRITE DESTINATION, and the refusal arrives before any
- *      side effect — while someone ELSE's inbox is refused as unresolved, so the
- *      typed inbox refusal cannot be used to probe for one.
- *   4. A THREAD SUFFIX MUST NAME A ROOT OF THE RESOLVED CONVERSATION, with no
+ *   3. A THREAD SUFFIX MUST NAME A ROOT OF THE RESOLVED CONVERSATION, with no
  *      normalization of a mid-thread id: two addresses naming one stream is how
  *      an address stops being a coordinate.
- *   5. THE ADDRESS ROUND-TRIPS, for every placement, main line and thread — the
+ *   4. THE ADDRESS ROUND-TRIPS, for every placement, main line and thread — the
  *      property the delivery header depends on (an agent copies the token it
  *      received back into `--target`).
  *
@@ -81,16 +78,13 @@ interface Fixture {
   readonly messages: MessageRepo;
   /** The authenticated principal of every resolution below. */
   readonly alice: { id: string; handle: string };
-  /** A second agent: the other end of a DM, and the owner of an inbox alice may
-   *  not name. */
+  /** A second agent: the other end of a DM alice may open. */
   readonly bob: { id: string; handle: string };
   readonly stranger: { id: string; handle: string };
   readonly viewer: { id: string; handle: string };
   /** A workspace channel alice is a member of, and one she is not. */
   readonly room: string;
   readonly secret: string;
-  readonly aliceInbox: string;
-  readonly bobInbox: string;
 }
 
 function setup(): Fixture {
@@ -162,8 +156,6 @@ function setup(): Fixture {
     viewer: { id: viewerRow.id, handle: viewerRow.name },
     room,
     secret,
-    aliceInbox: conversations.insertAgentInbox(alice.id, NOW).id,
-    bobInbox: conversations.insertAgentInbox(bob.id, NOW).id,
   };
 }
 
@@ -362,7 +354,6 @@ describe('unknown and unauthorized are one outcome', () => {
         [`dm:@${f.stranger.handle}`, 'read', 'direct_pair_not_found'],
         [`#conv:${f.room}/thread:${MISSING_ID}`, 'read', 'thread_root_not_found'],
         [`#conv:${f.room}/thread:${reply}`, 'read', 'thread_root_not_a_root'],
-        [`#conv:${f.aliceInbox}`, 'write', 'inbox_write'],
         [`dm:@${f.alice.handle}`, 'write', 'self_pair'],
       ];
       const answers = new Map<string, string[]>();
@@ -378,7 +369,6 @@ describe('unknown and unauthorized are one outcome', () => {
       // Four branches answer `target_unresolved` and two answer
       // `thread_not_in_target`; within a code every answer is byte-identical.
       expect([...answers.keys()].sort()).toEqual([
-        'inbox_not_writable',
         'self_pair_not_addressable',
         'target_unresolved',
         'thread_not_in_target',
@@ -675,7 +665,7 @@ describe('a write may open a direct pair; a read never allocates', () => {
     }
   });
 
-  it('a write whose caller may not allocate FINDS, and still refuses an inbox', () => {
+  it('a write whose caller may not allocate FINDS instead of minting', () => {
     const f = setup();
     try {
       const before = conversationCount(f);
@@ -697,14 +687,12 @@ describe('a write may open a direct pair; a read never allocates', () => {
       expect(found).toEqual(opened);
       // A find allocates nothing, so it announces nothing.
       expect(f.announced).toEqual([]);
-      // It is NOT a downgrade to `intent: 'read'`: the write's own rules still
-      // apply, which is why it is a second axis and not a third intent.
-      expect(
-        expectRefusal(
-          f,
-          resolveAs(f, `#conv:${f.aliceInbox}`, 'write', undefined, 'forbidden'),
-        ),
-      ).toEqual({ code: 'inbox_not_writable', operatorReason: 'inbox_write' });
+      // It is NOT a downgrade to `intent: 'read'` — it says "do not mint", not
+      // "this is a read", and a read of a pair that does not exist is refused for
+      // the same reason a forbidden write is. Since #task:2072 retired the last
+      // placement-specific WRITE rule the resolver has none left that separates
+      // them, so what the second axis buys is carried by the caller's reach step
+      // (`delivery-reach.ts`), not by an outcome observable here.
     } finally {
       f.t.cleanup();
     }
@@ -723,45 +711,6 @@ describe('a write may open a direct pair; a read never allocates', () => {
         operatorReason: 'unknown_handle',
       });
       expect(conversationCount(f)).toBe(before);
-    } finally {
-      f.t.cleanup();
-    }
-  });
-});
-
-describe('an inbox is a read face, not a write destination', () => {
-  it('resolves the agent’s own inbox for a read and refuses the write', () => {
-    const f = setup();
-    try {
-      expect(expectResolved(resolveAs(f, `#conv:${f.aliceInbox}`, 'read'))).toEqual({
-        stream: { conversationId: f.aliceInbox, threadRootId: null },
-        placementKind: 'agent_inbox',
-      });
-      const before = conversationCount(f);
-      expect(expectRefusal(f, resolveAs(f, `#conv:${f.aliceInbox}`, 'write'))).toEqual({
-        code: 'inbox_not_writable',
-        operatorReason: 'inbox_write',
-      });
-      // The typed refusal arrives before any effect. Structurally it must: the
-      // resolver's only side-effecting port is the pair constructor, which this
-      // arm never reaches — asserted rather than argued.
-      expect(conversationCount(f)).toBe(before);
-    } finally {
-      f.t.cleanup();
-    }
-  });
-
-  it('refuses someone else’s inbox as unresolved, so the typed refusal is not a probe', () => {
-    const f = setup();
-    try {
-      // If a non-participant got `inbox_not_writable` here, the refusal code would
-      // report "this id is an inbox" about a row they may not see.
-      for (const intent of ['read', 'write'] as const) {
-        expect(expectRefusal(f, resolveAs(f, `#conv:${f.bobInbox}`, intent))).toEqual({
-          code: 'target_unresolved',
-          operatorReason: 'not_participant',
-        });
-      }
     } finally {
       f.t.cleanup();
     }
@@ -833,12 +782,10 @@ describe('the address round-trips, for every placement', () => {
       const pair = expectResolved(resolveAs(f, `dm:@${f.bob.handle}`, 'write')).stream
         .conversationId;
       // Every placement the product has (§4.1), each in both streams. `read`
-      // throughout: the inbox arm refuses a write by rule, and round-tripping is a
-      // property of the ADDRESS, not of the intent.
+      // throughout: round-tripping is a property of the ADDRESS, not of the intent.
       const cases: Array<[string, string]> = [
         ['workspace', f.room],
         ['direct_pair', pair],
-        ['agent_inbox', f.aliceInbox],
       ];
       for (const [placement, conversationId] of cases) {
         for (const threadRootId of [null, root(f, conversationId)]) {

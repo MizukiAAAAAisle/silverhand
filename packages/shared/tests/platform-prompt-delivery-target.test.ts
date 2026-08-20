@@ -7,7 +7,7 @@
  * while the backend renders the header, so "what an agent is taught" and "what
  * an agent receives" are two artifacts that can disagree without either side
  * erroring — the reply just lands in whichever conversation the agent assumed
- * (see the v13 ledger entry in `host/src/protocol.ts`). A prose-only assertion
+ * (see the protocol handshake note in `host/src/protocol.ts`). A prose-only assertion
  * (`toContain('#conv:')`) would not catch that: it passes while the taught
  * grammar is subtly unparseable. So every taught token is INSTANTIATED with real
  * values and fed back through the one codec.
@@ -32,11 +32,6 @@ import {
 } from '../src/delivery-target.js';
 import { fixedConversationTitle } from '../src/conversation-title.js';
 import { fixedWorkspaceName } from '../src/workspace-name.js';
-import {
-  RUNTIME_SCOPE_BANNER_WORKDIR_PLACEHOLDER,
-  TAUGHT_AGENT_RUNTIME_SCOPE_BANNER,
-  formatAgentRuntimeScopeBanner,
-} from '../src/runtime-scope-banner.js';
 import {
   buildPlatformPrompt,
   type PlatformPromptInput,
@@ -129,7 +124,6 @@ function promptFor(sessionContext: SessionContextInput): string {
     runtime: 'claude',
     activeProfileDir: '.',
     roleSystemPrompt: 'role',
-    roleSystemPromptPath: '/tmp/system_prompt.md',
     currentMemory: { kind: 'missing' },
     memoryNotesCatalog: { entries: [], omittedCount: 0 },
     workspaceMemoryIndex: [],
@@ -148,13 +142,17 @@ const SCOPES: Array<{ name: string; sessionContext: SessionContextInput }> = [
       sessionTitle: 'a channel',
       members: [],
       workspaceName: 'ws',
-      workspacePath: '/tmp/ws',
-      channelKind: 'regular',
+      workspacePath: '/workspaces/ws',
+      workspaceId: 'ws-1',
     },
   },
   {
     name: 'AgentSlot',
-    sessionContext: { kind: 'agent', computerId: 'host-1' },
+    sessionContext: {
+      kind: 'agent',
+      computerId: 'host-1',
+      memoryRootPath: '/agents/a1',
+    },
   },
 ];
 
@@ -199,15 +197,10 @@ describe('platform prompt teaches the absolute delivery target', () => {
     }
   });
 
-  it('AgentSlot learns the exact workdir-only banner the daemon emits', () => {
+  it('does not teach internal runtime scope or directory coordinates', () => {
     const prompt = promptFor(SCOPES[1]!.sessionContext);
-    expect(prompt).toContain(TAUGHT_AGENT_RUNTIME_SCOPE_BANNER);
-    expect(
-      TAUGHT_AGENT_RUNTIME_SCOPE_BANNER.replace(
-        RUNTIME_SCOPE_BANNER_WORKDIR_PLACEHOLDER,
-        '/tmp/ws',
-      ),
-    ).toBe(formatAgentRuntimeScopeBanner('/tmp/ws'));
-    expect(TAUGHT_AGENT_RUNTIME_SCOPE_BANNER).not.toContain('target=');
+    expect(prompt).not.toContain('runtime_scope');
+    expect(prompt).not.toContain('workdir');
+    expect(prompt).not.toContain('cwd');
   });
 });

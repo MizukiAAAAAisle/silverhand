@@ -294,13 +294,16 @@ export function useNotificationToasts(
 
 /**
  * Whether a given notification kind has a meaningful click destination.
- * `mention_self` opens the message in the conversation where it was
- * authored. `mention_external` opens the local Mentions DM at the
- * wrapped system message — that's where the agent will reply, so the
- * user's continued conversation lives there. (The mention_cc card
- * inside the wrapped message provides a secondary affordance back to
- * the source channel.) `agent_start_failed` has no message anchor and
- * is intentionally inert (user finds the failed agent via the regular
+ * Both mention kinds open the message in the conversation where it was
+ * authored: `mention_self` because the viewer is a participant there, and
+ * `mention_external` because its own coordinates ARE the source's — the
+ * viewer of that row is the mention's AUTHOR, so the anchor is the message
+ * they wrote (backend `MentionExternalNotificationArgs`, shiki 2026-08-14
+ * "option A"). The copy delivered to the mentioned agent is not the click
+ * target — not because the author cannot reach it (since #task:2072 it lands
+ * in the author↔agent direct line, which they read), but because the source is
+ * where the surrounding context is. `agent_start_failed` has no message anchor
+ * and is intentionally inert (user finds the failed agent via the regular
  * Members panel).
  */
 function isClickableKind(kind: NotificationDto['kind']): boolean {
@@ -332,16 +335,20 @@ export async function resolveNotificationJumpTarget(
     );
   }
   if (n.kind === 'mention_external') {
-    // Jump to the local Mentions DM at the wrapped system message —
-    // that's where the agent's reply will land and where the user's
-    // ongoing conversation with the agent lives. The wrapped
-    // `mention_cc` card already inlines the original source content,
-    // and its source pill provides a secondary jump back to the source
-    // conversation when the user needs full context.
+    // Jump to the SOURCE message. For this kind the row's own coordinate group
+    // already names the source (option A — see `isClickableKind` above), so this
+    // branch and the `source_*` one below describe the same message for every row
+    // written since `25e089d1` — NOT for every row in the table, see the previous
+    // generation below; `thread_root_id` is joined from that same message, so a
+    // mention posted as a cluster reply anchors inside its cluster.
     //
-    // Legacy/malformed rows missing `conversation_id` or `message_id`
-    // fall back to the source coords (older artifact behavior) so
-    // historical notifications stay clickable rather than going inert.
+    // No generation of the producer has ever left the own group empty: before
+    // `25e089d1` it named the then-destination copy (a local Mentions DM the
+    // author was admitted to), and since then it names the source itself. So the
+    // `source_*` branch below serves no population — it is a fail-close on
+    // columns that are nullable for kinds with no anchor at all
+    // (`agent_start_failed`), kept so a row that somehow arrives with half its
+    // coordinates still navigates instead of going inert.
     if (n.conversation_id && n.message_id) {
       return resolveTargetFromConversationId(
         qc,

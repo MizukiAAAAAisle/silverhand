@@ -8,7 +8,7 @@
  * / wrong highlight shiki hit. Every row now goes through THIS module.
  *
  * ONE row species since #task:1889: the merged tree's selection object is the OPEN
- * CONVERSATION and nothing else. A workspace / DM header is pure chrome (a collapse
+ * CONVERSATION and nothing else. A container header row is pure chrome (a collapse
  * toggle) and never highlights, so the container rule — and the `RailRowRef` shape it
  * needed — is gone; "which workspace am I in" is answered by which subtree is
  * expanded around the filled row, not by a second highlight.

@@ -4,13 +4,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  BASELINE_SCHEMA_VERSION,
+  BASELINE_MIGRATION_STEP,
 } from '@silverhand/shared/db/baseline-schema';
 import {
-  CURRENT_SCHEMA_VERSION,
-  MIN_SUPPORTED_SCHEMA_VERSION,
+  CURRENT_MIGRATION_STEP,
   migrations,
 } from '@silverhand/shared/db/migrations';
+import { MIN_SUPPORTED_MIGRATION_STEP } from '@silverhand/shared/db/schema-epochs';
 import { runMigrations } from '../src/db.js';
 
 /**
@@ -66,9 +66,9 @@ describe('baseline compaction drift guard (#task:1213)', () => {
   it('baseline migration is at the floor version', () => {
     // The whole safety argument (§3.1) rests on these three being equal: the
     // baseline's version IS the minimum supported version.
-    expect(BASELINE_SCHEMA_VERSION).toBe(44);
-    expect(MIN_SUPPORTED_SCHEMA_VERSION).toBe(BASELINE_SCHEMA_VERSION);
-    expect(migrations[0]?.version).toBe(BASELINE_SCHEMA_VERSION);
+    expect(BASELINE_MIGRATION_STEP).toBe(44);
+    expect(MIN_SUPPORTED_MIGRATION_STEP).toBe(BASELINE_MIGRATION_STEP);
+    expect(migrations[0]?.version).toBe(BASELINE_MIGRATION_STEP);
     expect(migrations[0]?.name).toBe('baseline');
   });
 
@@ -79,10 +79,10 @@ describe('baseline compaction drift guard (#task:1213)', () => {
       // bypass → applies; writes the _migrations row at 44).
       const result = runMigrations(db, {
         migrations: [migrations[0]!],
-        expectedVersion: BASELINE_SCHEMA_VERSION,
-        minimumSupportedVersion: BASELINE_SCHEMA_VERSION,
+        expectedStep: BASELINE_MIGRATION_STEP,
+        minimumSupportedStep: BASELINE_MIGRATION_STEP,
       });
-      expect(result.appliedVersions).toEqual([BASELINE_SCHEMA_VERSION]);
+      expect(result.appliedSteps).toEqual([BASELINE_MIGRATION_STEP]);
       expect(normalizeSchema(db)).toBe(readFileSync(V44_ORACLE, 'utf8'));
     } finally {
       db.close();
@@ -94,16 +94,16 @@ describe('baseline compaction drift guard (#task:1213)', () => {
     try {
       // The default plan (baseline + v45..) through the real runner.
       const result = runMigrations(db, {
-        expectedVersion: CURRENT_SCHEMA_VERSION,
-        minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+        expectedStep: CURRENT_MIGRATION_STEP,
+        minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
       });
-      expect(result.appliedVersions).toEqual(migrations.map(m => m.version));
+      expect(result.appliedSteps).toEqual(migrations.map(m => m.version));
       const got = normalizeSchema(db);
       if (process.env.UPDATE_SCHEMA_SNAPSHOT === '1') {
         writeFileSync(CURRENT_ORACLE, got);
       }
       expect(got).toBe(readFileSync(CURRENT_ORACLE, 'utf8'));
-      expect(CURRENT_SCHEMA_VERSION).toBe(migrations[migrations.length - 1]!.version);
+      expect(CURRENT_MIGRATION_STEP).toBe(migrations[migrations.length - 1]!.version);
     } finally {
       db.close();
     }

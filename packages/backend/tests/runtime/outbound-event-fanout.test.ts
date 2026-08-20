@@ -2401,10 +2401,10 @@ describe('OutboundRuntimeEventFanout', () => {
       const json = JSON.stringify(spawnOptions);
       expect(json).not.toMatch(/"path"/);
       expect(json).not.toMatch(/"home_dir"/);
-      expect(Object.keys(spawnOptions.workspace).sort()).toEqual(['id', 'kind', 'name']);
+      expect(Object.keys(spawnOptions.workspace).sort()).toEqual(['id', 'name']);
       expect(Object.keys(spawnOptions.agent).sort()).toEqual(['id', 'name']);
       for (const entry of spawnOptions.workspace_memory_index) {
-        expect(Object.keys(entry).sort()).toEqual(['id', 'kind', 'name']);
+        expect(Object.keys(entry).sort()).toEqual(['id', 'name']);
       }
     } finally {
       fix.cleanup();
@@ -5154,6 +5154,17 @@ function outboundEventFixture(kind: OutboundDaemonEventKind): OutboundDaemonToSe
         parsed_kind: 'tool_call',
         encoded_bytes: 1000000,
         reason: 'frame_too_large',
+        ts: 1700000000000,
+      };
+    case 'runtime_message_stale':
+      return {
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind,
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        runtime_generation: 1,
         ts: 1700000000000,
       };
     default: {

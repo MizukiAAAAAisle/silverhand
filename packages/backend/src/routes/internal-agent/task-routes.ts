@@ -21,6 +21,7 @@ import {
   UnclaimTaskInputSchema,
   UpdateTaskStatusInputSchema,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace, isAgentHomeWorkspaceOf } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 import { resolveDeliveryTargetForRoute } from './delivery-target.js';
 import { internalAgentRoutePaths } from './paths.js';
@@ -143,9 +144,10 @@ export function registerTaskRoutes(
     // layer so the service doesn't silently widen reads across
     // workspaces. We don't accept --workspace <name> for list — only
     // claim/unclaim/status need the disambiguation.
-    // A task Board belongs to a workspace and an `agent_inbox` has none (doc
-    // §4.2), so from an inbox session the board question has no ambient answer:
-    // name a workspace explicitly rather than read an empty board (v71).
+    // The workspace this narrowing needs is the calling conversation's, and a
+    // `direct_pair` has none (doc §4.2) — so from a DM session the question has no
+    // ambient answer: name a workspace explicitly rather than read across all of
+    // them (v71).
     if (conversation === null && parsed.data.workspace_id === undefined) {
       return c.json({
         error: 'agent-scoped task board reads must name workspace_id when narrowing',
@@ -166,8 +168,8 @@ export function registerTaskRoutes(
         );
       }
       const isMember =
-        targetWs.workspace_kind === 'agent_home'
-          ? targetWs.owner_agent_id === aid
+        isAgentHomeWorkspace(targetWs)
+          ? isAgentHomeWorkspaceOf(targetWs, aid)
           : workspaces.isMember(targetWs.id, aid);
       if (!isMember) {
         return c.json(
@@ -248,8 +250,7 @@ export function registerTaskRoutes(
       return c.json({ error: 'cross_conversation_claim' });
     }
     // What the resolver has NOT answered: the workspace axis. Participation and
-    // existence are its verdict (and a boardless destination — an agent inbox —
-    // is already refused as `inbox_not_writable`), so what is left here is which
+    // existence are its verdict, so what is left here is which
     // axis authorizes and judges capabilities:
     //  - workspace placement: the destination workspace must be accessible to the
     //    agent, and its create_tasks (plus write_tasks for --claim) decide;

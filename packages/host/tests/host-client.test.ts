@@ -400,6 +400,10 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
       delivery_ids: [101, 102],
       kind: 'message',
       text: 'hello',
+      deliveries: [
+        { delivery_id: 101, seq: 101, presentation: { body: 'hello', instruction: 'other' } },
+        { delivery_id: 102, seq: 102, presentation: { body: 'hello', instruction: 'other' } },
+      ],
       spawn_options: testStartOptions(),
     });
     await new Promise(setImmediate);

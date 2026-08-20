@@ -180,11 +180,9 @@ function buildMatrix(): Matrix {
     NOW,
   ).conversation;
 
-  const inbox = conversations.insertAgentInbox(gamma.id, gamma.created_at);
-
-  // Stray roster rows on the rosterless placements. They must be INERT: a
+  // Stray roster rows on the rosterless placement. They must be INERT: a
   // participation reading that answered from the roster alone would hand `stray`
-  // someone else's DM and someone else's inbox. Written through the production
+  // someone else's DM. Written through the production
   // roster faces on purpose — `addAgent` / `addUser` are `INSERT OR IGNORE` with no
   // placement guard, so this state is REACHABLE and inertness has to be a
   // property of the read rather than of nobody ever writing the row.
@@ -194,7 +192,6 @@ function buildMatrix(): Matrix {
     humanHumanPair.id,
     ghostPair.id,
     ghostHumanPair.id,
-    inbox.id,
   ]) {
     conversations.addAgent(conversationId, stray.id);
     conversations.addUser(conversationId, 'alice');
@@ -223,7 +220,6 @@ function buildMatrix(): Matrix {
       humanHumanPair: humanHumanPair.id,
       ghostPair: ghostPair.id,
       ghostHumanPair: ghostHumanPair.id,
-      inbox: inbox.id,
     },
     agentIds: {
       alpha: alpha.id,
@@ -261,9 +257,6 @@ describe('#task:2021 P4-5 — the two readings of participation agree', () => {
     // The deleted endpoint: participation says yes, delivery says no.
     expect(m.conversations.isAgentParticipant(m.conversationIds.ghostPair!, ghost!)).toBe(true);
     expect(ids('ghostPair')).toEqual([]);
-    // `agent_inbox`: its owner, who is not on its roster and never will be.
-    expect(ids('inbox')).toEqual([gamma!]);
-    expect(new Set(ids('inbox'))).not.toContain(stray);
   });
 
   it('agrees with the predicate reading for every conversation × agent, differing only by liveness', () => {
@@ -344,11 +337,6 @@ describe('#task:2035 — the two readings of HUMAN participation agree', () => {
       true,
     );
     expect(ids('ghostHumanPair')).toEqual([]);
-    // `agent_inbox`: NO human, and specifically not the person who created the
-    // agent. `agents.created_by_user_id` is management authority, not a message
-    // ACL, so an inbox has no viewer to fan out to at all.
-    expect(ids('inbox')).toEqual([]);
-    expect(m.conversations.isUserParticipant(m.conversationIds.inbox!, viewer!)).toBe(false);
   });
 
   it('agrees with the predicate reading for every conversation × user, differing only by existence', () => {
@@ -412,11 +400,22 @@ describe('#task:2021 P4-5 query-plan contract — recipient enumeration', () => 
    *  path look equally good: measured on `buildMatrix` alone, the human reading
    *  reports `SCAN wu_p EXISTS` and `SCAN c_p` — not because the indexes are
    *  missing, but because ANALYZE says a scan of one row is cheapest. Pinning that
-   *  would pin an artifact and (worse) would accept the real regression at scale. */
+   *  would pin an artifact and (worse) would accept the real regression at scale.
+   *
+   *  `conversations` is populated on the SAME dimension the transpose reads — one
+   *  agent↔human pair per bulk principal, the shape every product DM has, so the
+   *  viewer's own pairs are a small fraction of the partial indexes rather than
+   *  most of the table. Without this the matrix's five pairs in a six-row table
+   *  make a scan genuinely cheapest, and the plan claim would flip on any fixture
+   *  edit that added or removed one conversation. */
   function buildScaleFixture(): Matrix {
     const m = buildMatrix();
     for (let i = 0; i < 300; i += 1) {
-      m.agents.create({ name: `bulk-${i}`, runtime: 'claude' }, m.localHostId, 'local');
+      const bulkAgent = m.agents.create(
+        { name: `bulk-${i}`, runtime: 'claude' },
+        m.localHostId,
+        'local',
+      );
       // Each bulk person is a workspace MEMBER with a channel SEAT, so both halves
       // of the v25 pair have a populated table to seek in and the channel roster is
       // wide enough that enumerating it by scan would be visibly wrong.
@@ -427,6 +426,13 @@ describe('#task:2021 P4-5 query-plan contract — recipient enumeration', () => 
       });
       m.workspaces.addUserMember(m.workspaceId, `bulk-${i}`, 'member');
       m.conversations.addUser(m.conversationIds.channel!, `bulk-${i}`);
+      // Somebody else's DM: it belongs to neither slot of the viewer's arms, which
+      // is what makes both of the viewer's seeks selective.
+      m.conversations.getOrCreateDirectPair(
+        { kind: 'agent', id: bulkAgent.id },
+        { kind: 'human', id: `bulk-${i}` },
+        NOW,
+      );
     }
     m.db.prepare('ANALYZE').run();
     return m;

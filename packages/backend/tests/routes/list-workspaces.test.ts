@@ -11,11 +11,14 @@ async function makeAgent(t: TestApp, name: string): Promise<{
     await http(t).post('/api/agents', { name, runtime: 'claude' })
   ).json() as any;
   // Fetch the newly created agent_home so tests don't have to derive
-  // the workspace id from the agent id directly.
+  // the workspace id from the agent id directly. The home is located by the
+  // OWNERSHIP relation: since #task:2075's stop-publish step no container word
+  // is published on any face, and the relation was always the stronger half of
+  // the pair this lookup used to test for.
   const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
   const home = workspaces.workspaces.find(
     (w: any) =>
-      w.workspace_kind === 'agent_home' && w.owner_agent_id === created.agent.id,
+      w.owner_agent_id === created.agent.id,
   );
   // Reset fan-out side-effects from provision so subsequent assertions
   // about ConversationManager are clean.
@@ -115,8 +118,16 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const regular = body.workspaces.find((w: any) => w.id === reg.workspaceId);
     const home = body.workspaces.find((w: any) => w.id === alice.agentHomeWorkspaceId);
 
-    expect(regular.kind).toBe('regular');
-    expect(home.kind).toBe('agent_home');
+    expect(regular.owner_agent_id).toBeNull();
+    // The branch key is a STORED fact the agent face does not publish at all
+    // (#task:2075 stop-publish): the two rows are told apart by WHOSE container
+    // it is, and the branch's only observable is `agent_dir` below. The absent
+    // key is asserted on the parsed HTTP body, so it is a statement about the
+    // wire; the earlier form of this cell pinned a published word here and, with
+    // it, the claim that the ubiquitous language does not fork by audience —
+    // that claim now holds vacuously, since there is no word on either face.
+    expect(Object.keys(home)).not.toContain('kind');
+    expect(home.owner_agent_id).toBe(alice.agentId);
 
     // relocation-v1 §3.4 — a regular workspace is no longer provisioned at
     // create, so the daemon index leaves it unresolved and the list degrades
@@ -238,9 +249,9 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, name_key, description, workspace_kind,
+        (id, name, name_key, description,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+        VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)`,
     ).run('ws-other-host', 'other-ws', 'other-ws', now, now);
     db.prepare(
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
@@ -279,7 +290,10 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(regular).toMatchObject({
       id: reg.workspaceId,
       name: 'team-x',
-      kind: 'regular',
+      // The immutable container fact on this entry is WHOSE it is, not a word
+      // for what kind it is (#task:2075 stop-publish). `null` = unowned by any
+      // agent, which is what "regular" named.
+      owner_agent_id: null,
       archived: true,
     });
     expect(typeof regular.updated_at).toBe('number');
@@ -307,9 +321,9 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, name_key, description, workspace_kind,
+        (id, name, name_key, description,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, ?, NULL, 'regular', NULL, ?, ?, ?)`,
+        VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`,
     ).run('ws-legacy-arch', 'legacy-arch', 'legacy-arch', now, now, now);
     db.prepare(
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
@@ -343,9 +357,9 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, name_key, description, workspace_kind,
+        (id, name, name_key, description,
          owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+        VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)`,
     ).run('ws-stranger', 'stranger', 'stranger', now, now);
 
     const res = await http(t).get(

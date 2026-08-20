@@ -48,7 +48,7 @@ const FAVORITES_GROUP = 'favorites';
  * a first-class SORTABLE list (#task:1254).
  *
  * SCOPE (#task:1888, shiki-approved #task:1887): STARRED holds CONVERSATIONS only —
- * both open- and fixed-roster conversations. Containers (workspace / DM home)
+ * both open- and fixed-roster conversations. Containers (workspace / agent space)
  * have no star at all
  * (#task:1900), so the list cannot receive one: what belongs permanently in reach is
  * the handful of rooms you actually work in, not a second rail of containers.
@@ -294,7 +294,7 @@ function FavoriteRow({
     <ConversationRowLayout
       selected={isPrimary}
       // A STARRED row sits on the OUTER column: its parent IS the group, so it is
-      // flush with the STARRED header and with the workspace / DM rows below —
+      // flush with the STARRED header and with the container header rows below —
       // the single indent step is spent on channels nested under a workspace.
       column="outer"
       draggable={draggable}

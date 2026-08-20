@@ -530,31 +530,32 @@ describe('ScheduleService.create', () => {
     expect(err?.code).toBe('target_conversation_not_found');
   });
 
-  it('rejects an agent inbox as the target: the placement has no participant seat for a stranger', () => {
-    // Placement (agent-scoped-session-v1 §4.1/§4.2, #task:2014). An inbox is
-    // never a wake destination, and the door refuses it outright
-    // (`inbox_not_writable`). Here we bypass the door to pin the service's own
-    // arm: participation is asked through the placement authority, so ANOTHER
-    // agent's inbox is refused for a DOMAIN reason — the inbox exists (so this is
-    // not `target_conversation_not_found`) and is open (so it is not
-    // `target_conversation_closed`), yet the owner does not participate in it.
-    // `AgentRepo.create` writes the raw agent row without the aggregate's inbox,
-    // so the fixture makes one explicitly.
+  it("rejects SOMEBODY ELSE's DM as the target: the placement has no participant seat for a stranger", () => {
+    // Placement (agent-scoped-session-v1 §4.1/§4.2). Participation is asked
+    // through the placement AUTHORITY rather than the roster, and a `direct_pair`
+    // is the placement where the two disagree: it carries zero
+    // `conversation_agents` rows, so its participants are its endpoints. A pair
+    // the owner is not an endpoint of is refused for a DOMAIN reason — it exists
+    // (so this is not `target_conversation_not_found`) and is open (so it is not
+    // `target_conversation_closed`), yet the owner is not in it.
     const f = setup();
-    const stranger = f.agents.get(f.otherAgentId)!;
-    const inbox = f.conversations.insertAgentInbox(stranger.id, stranger.created_at);
-    expect(f.conversations.get(inbox.id)?.closed_at).toBeNull();
+    const strangerPair = f.conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: f.otherAgentId },
+      { kind: 'human', id: 'local' },
+      currentNow,
+    ).conversation;
+    expect(f.conversations.get(strangerPair.id)?.closed_at).toBeNull();
 
     let err: ScheduleError | undefined;
     try {
       f.service.create(
         {
-          title: 'Inbox cron',
+          title: 'Pair cron',
           message: 'm',
           spec: { kind: 'once', delay_seconds: 60 },
         },
         f.ownerAgentId,
-        inbox.id,
+        strangerPair.id,
       );
     } catch (e) {
       err = e as ScheduleError;
@@ -567,7 +568,7 @@ describe('ScheduleService.create', () => {
     expect(
       f.service.create(
         {
-          title: 'Inbox cron',
+          title: 'Pair cron',
           message: 'm',
           spec: { kind: 'once', delay_seconds: 60 },
         },
@@ -577,22 +578,25 @@ describe('ScheduleService.create', () => {
     ).toBe(f.homeDmId);
   });
 
-  it('accepts its OWN inbox: for that placement the placement IS the membership', () => {
+  it('accepts a DM it is an ENDPOINT of, which no roster row records', () => {
     // The mirror of the case above, and the reason the service cannot use a
-    // roster lookup: an `agent_inbox` has zero `conversation_agents` rows by
-    // construction (§4.2), so a roster gate would refuse the owner's own inbox
-    // even though it is the one conversation whose participation is definitional.
-    // The DOOR still refuses an inbox as a wake destination — that is a policy
-    // about destinations, not about participation, and it lives there alone.
+    // roster lookup: a `direct_pair` has zero `conversation_agents` rows by
+    // construction (§4.2), so a roster gate would refuse the owner's own DM even
+    // though its participation is definitional — the emptiness asserted below is
+    // exactly what such a gate would read.
     const f = setup();
-    const owner = f.agents.get(f.ownerAgentId)!;
-    const inbox = f.conversations.insertAgentInbox(owner.id, owner.created_at);
+    const ownPair = f.conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: f.ownerAgentId },
+      { kind: 'human', id: 'local' },
+      currentNow,
+    ).conversation;
+    expect(f.conversations.listAgents(ownPair.id)).toEqual([]);
     const created = f.service.create(
-      { title: 'Own inbox', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
+      { title: 'Own DM', message: 'm', spec: { kind: 'once', delay_seconds: 60 } },
       f.ownerAgentId,
-      inbox.id,
+      ownPair.id,
     );
-    expect(created.target_conversation_id).toBe(inbox.id);
+    expect(created.target_conversation_id).toBe(ownPair.id);
   });
 
   it('rejects when target conversation is closed', () => {
@@ -833,12 +837,12 @@ describe('ScheduleService — manage_schedules capability gate (cancel-only afte
   it('create does not consult the capability checker: that gate lives at the door', () => {
     // `manage_schedules` on create is judged at the ROUTE, against the resolved
     // destination's PLACEMENT (`requireAgentConversationCapability`) — a
-    // capability is a grant inside a workspace, and two of the three placements
-    // have no workspace at all. A second opinion here could only duplicate that
+    // capability is a grant inside a workspace, and one of the two placements has
+    // no workspace at all. A second opinion here could only duplicate that
     // verdict or contradict it, and the version that used to live here
     // contradicted it: it read `target.workspace_id` directly and refused a null
-    // one as "no grant can exist here", which refuses every `direct_pair` and
-    // every inbox regardless of authority.
+    // one as "no grant can exist here", which refuses every `direct_pair`
+    // regardless of authority.
     let asked = 0;
     const f = setupWithCap(() => {
       asked++;

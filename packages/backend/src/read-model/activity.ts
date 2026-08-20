@@ -196,7 +196,6 @@ interface DirectedNotificationRow extends SenderColumns {
   id: string;
   kind: 'mention_self' | 'agent_start_failed';
   conversation_id: string | null;
-  conversation_roster_policy: 'open' | 'fixed' | null;
   message_id: string | null;
   thread_root_id: string | null;
   root_content: string | null;
@@ -224,6 +223,11 @@ interface PositionalStreamRow extends SenderColumns {
   conversation_id: string;
   root: string | null;
   root_content: string | null;
+  /** Read for ONE thing: the §5.1 salience grade (a fixed-roster stream's ambient
+   *  unread is directed-grade). A CAPABILITY question, which is roster's proper
+   *  domain — see the keying rule on `ConversationPlacementKindSchema`. It is not
+   *  a conversation classification and does not reach `ActivityItemDto`, which
+   *  carries no classification bit at all (#task:2076). */
   conversation_roster_policy: 'open' | 'fixed';
   conversation_title: string;
   workspace_id: string;
@@ -291,7 +295,6 @@ const assembleDirectedNotifications: ActivitySource = ac => {
           n.id                AS id,
           n.kind              AS kind,
           n.conversation_id   AS conversation_id,
-          c.roster_policy     AS conversation_roster_policy,
           n.message_id        AS message_id,
           m.thread_root_id    AS thread_root_id,
           root.content        AS root_content,
@@ -369,7 +372,6 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         salience: 'directed',
         workspace_id: n.workspace_id,
         conversation_id: n.conversation_id,
-        conversation_roster_policy: n.conversation_roster_policy ?? 'open',
         thread_root_id: n.thread_root_id,
         message_id: n.message_id,
         notification_id: n.id,
@@ -399,7 +401,6 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         salience: 'directed',
         workspace_id: n.workspace_id,
         conversation_id: n.conversation_id ?? '',
-        conversation_roster_policy: n.conversation_roster_policy ?? 'open',
         thread_root_id: null,
         message_id: null,
         notification_id: n.id,
@@ -602,7 +603,14 @@ const assemblePositionalStreams: ActivitySource = ac => {
   // ── map positional rows to items ──────────────────────────────────────────
   const items: ActivityItemDto[] = [];
   for (const s of positionalRows) {
-    // DM unread is positional by mechanism but directed-grade by salience.
+    // A fixed-roster stream's unread is positional by MECHANISM and
+    // directed-grade by SALIENCE (§5.1). This is the one live roster read on this
+    // face, and it is a capability/attention-policy question — it decides how loud
+    // the item is, never what the conversation IS. The identity question has no
+    // branch here at all: this source only admits workspace placements (the
+    // WORKSPACE_PLACED conjunct above), so every item is a channel (#task:1373),
+    // which is why the roster bit stops at this line instead of riding the DTO
+    // (#task:2076).
     const salience: ActivitySalience =
       s.conversation_roster_policy === 'fixed' ? 'directed' : 'ambient';
     items.push({
@@ -611,7 +619,6 @@ const assemblePositionalStreams: ActivitySource = ac => {
       salience,
       workspace_id: s.workspace_id,
       conversation_id: s.conversation_id,
-      conversation_roster_policy: s.conversation_roster_policy,
       thread_root_id: s.root,
       message_id: s.first_unread_message_id,
       notification_id: null,

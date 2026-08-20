@@ -52,18 +52,17 @@ describe('desktop-server-api-epoch contract root', () => {
     ).toBe('client_too_old');
   });
 
-  it('plan-A lockstep: both minima equal the current epoch (the epoch-1 bootstrap window is closed)', () => {
+  it('plan-A lockstep: both minima equal the current epoch (the bootstrap window is closed)', () => {
     // Cindy round-2/3 P1: default plan A rejects incompatible pairs by
-    // DEFINITION of "same generation". A minimum of 0 was legal ONLY while the
-    // current epoch was still 1 — the named observation-bootstrap window of the
-    // axis's first introduction. relocation-v1 §6 bumped the atomic triple to 2
-    // (required workspace DTO fields and `/api/workspaces/local-paths` removed),
-    // which CLOSED that window for good: a pre-epoch peer cannot decode this
-    // generation's workspace payloads, so admitting it would only move the
-    // failure from admission into a deep parse. From here on the invariant is
-    // unconditional — a leftover low minimum fails RED here.
-    // A deliberate plan-B bridge must change this test together with its
-    // adapter + §11 exit conditions.
+    // DEFINITION of "same generation". A minimum of 0 was legal ONLY during the
+    // axis's first introduction — the named observation-bootstrap window. A
+    // later atomic-triple bump (required workspace DTO fields and
+    // `/api/workspaces/local-paths` removed) CLOSED that window for good: a
+    // pre-epoch peer cannot decode this generation's workspace payloads, so
+    // admitting it would only move the failure from admission into a deep parse.
+    // From here on the invariant is unconditional — a leftover low minimum fails
+    // RED here. A deliberate plan-B bridge must change this test together with
+    // its adapter + §11 exit conditions.
     expect(MINIMUM_CLIENT_API_EPOCH).toBe(DESKTOP_SERVER_API_EPOCH);
     expect(MINIMUM_SERVER_API_EPOCH).toBe(DESKTOP_SERVER_API_EPOCH);
   });

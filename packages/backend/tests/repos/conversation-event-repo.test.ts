@@ -106,6 +106,185 @@ describe('ConversationEventRepo', () => {
     }
   });
 
+  it('refines an existing tool_call row in place with late parameters', () => {
+    const t = bootstrap();
+    try {
+      const repo = new ConversationEventRepo(t.db);
+      // ACP's creating frame: no real command, just the scaffolding `cwd`
+      // (#task:2101 — this is byte-for-byte what OpenCode persisted today).
+      const created = repo.recordParsedEvent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        event: {
+          kind: 'tool_call',
+          name: 'bash',
+          toolCallId: 'tool-1',
+          input: { cwd: '/tmp/agent' },
+        },
+        createdAt: 1_700_000_000_000,
+      });
+      expect(created).not.toBeNull();
+
+      const refined = repo.refineToolCallInput({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        toolCallId: 'tool-1',
+        input: { command: 'silverhand message send' },
+      });
+
+      // SAME row id — a refinement is an update, so the renderer can
+      // re-render the line it already drew instead of appending a second one.
+      expect(refined?.id).toBe(created!.id);
+      // `input` is REPLACED: the creating frame's lone `cwd` is gone rather
+      // than surviving as though the runtime had reported it next to the
+      // command. Sibling top-level fields (`name`, `tool_call_id`) survive.
+      expect(refined?.payload).toEqual({
+        name: 'bash',
+        tool_call_id: 'tool-1',
+        input: { command: 'silverhand message send' },
+      });
+
+      // And no second row was minted.
+      const page = repo.listForConversationAgent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        limit: 10,
+      });
+      expect(page.events.map(e => e.kind)).toEqual(['tool_call']);
+      expect(page.events[0]!.payload).toEqual(refined!.payload);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('caps a refinement payload with the same sanitizer as an insert', () => {
+    const t = bootstrap();
+    try {
+      const repo = new ConversationEventRepo(t.db);
+      const huge = 'y'.repeat(2_000);
+      repo.recordParsedEvent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        event: {
+          kind: 'tool_call',
+          name: 'bash',
+          toolCallId: 'tool-1',
+          input: { cwd: '/tmp/agent' },
+        },
+        createdAt: 1_700_000_000_000,
+      });
+
+      // The refinement is the arm where the LARGEST input arrives, so the row
+      // cap has to hold here too — not only on the insert path.
+      const refined = repo.refineToolCallInput({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        toolCallId: 'tool-1',
+        input: { command: huge },
+      });
+
+      const input = (refined?.payload as { input: { command: string } }).input;
+      expect(input.command.length).toBeLessThan(huge.length);
+      expect(input.command).toContain('<truncated');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('never inserts when a refinement has no tool_call row to refine', () => {
+    const t = bootstrap();
+    try {
+      const repo = new ConversationEventRepo(t.db);
+      // A row for a DIFFERENT call exists, so the table is not simply empty.
+      repo.recordParsedEvent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        event: {
+          kind: 'tool_call',
+          name: 'bash',
+          toolCallId: 'tool-1',
+          input: {},
+        },
+        createdAt: 1_700_000_000_000,
+      });
+
+      const missing = repo.refineToolCallInput({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        toolCallId: 'tool-paged-out',
+        input: { command: 'ls' },
+      });
+      expect(missing).toBeNull();
+
+      // A refinement with nothing to refine is not an activity fact:
+      // synthesizing a row would invent a call the timeline never saw start.
+      const page = repo.listForConversationAgent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        limit: 10,
+      });
+      expect(page.events).toHaveLength(1);
+      expect(page.events[0]!.payload).toEqual({
+        name: 'bash',
+        tool_call_id: 'tool-1',
+        input: {},
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('refines the newest row when a tool call id repeats across sessions', () => {
+    const t = bootstrap();
+    try {
+      const repo = new ConversationEventRepo(t.db);
+      const fossil = repo.recordParsedEvent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        event: {
+          kind: 'tool_call',
+          name: 'bash',
+          toolCallId: 'tool-1',
+          input: { cwd: '/old' },
+        },
+        createdAt: 1_700_000_000_000,
+      });
+      const live = repo.recordParsedEvent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        event: {
+          kind: 'tool_call',
+          name: 'bash',
+          toolCallId: 'tool-1',
+          input: { cwd: '/new' },
+        },
+        createdAt: 1_700_000_000_100,
+      });
+
+      const refined = repo.refineToolCallInput({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        toolCallId: 'tool-1',
+        input: { command: 'ls' },
+      });
+
+      expect(refined?.id).toBe(live!.id);
+      const page = repo.listForConversationAgent({
+        conversationId: t.channel.id,
+        agentId: t.agent.id,
+        limit: 10,
+      });
+      // The fossil keeps its own payload — the update touched exactly one row.
+      expect(page.events.find(e => e.id === fossil!.id)?.payload).toEqual({
+        name: 'bash',
+        tool_call_id: 'tool-1',
+        input: { cwd: '/old' },
+      });
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('paginates newest activity and prunes per conversation-agent by count', () => {
     const t = bootstrap();
     try {

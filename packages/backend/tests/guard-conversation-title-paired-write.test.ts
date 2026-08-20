@@ -523,7 +523,7 @@ const fingerprint = (target: WriteSite): string =>
  */
 const PINNED_WRITE_SITES: readonly (readonly [string, string])[] = [
   [
-    'packages/backend/src/repos/conversation-repo.ts insert(14) [title]',
+    'packages/backend/src/repos/conversation-repo.ts insert(13) [title]',
     'getOrCreateDirectPair. Writes `title` ALONE and that is correct: a '
       + 'DirectPair holds no address, the placement arc CHECK forces its '
       + '`title_key` to stay NULL, and the stored title is a fixed constant no '
@@ -531,10 +531,9 @@ const PINNED_WRITE_SITES: readonly (readonly [string, string])[] = [
       + 'here — which would give a DM a workspace address — is red.',
   ],
   [
-    'packages/backend/src/repos/conversation-repo.ts insert(14) [title+title_key]',
+    'packages/backend/src/repos/conversation-repo.ts insert(13) [title+title_key]',
     'insertConversation, the terminal creator. Both columns come from one '
-      + '`CanonicalConversationTitle` (or are `title = AGENT_INBOX_TITLE`, '
-      + '`title_key = NULL` for an inbox), so they cannot disagree.',
+      + '`CanonicalConversationTitle`, so they cannot disagree.',
   ],
   [
     'packages/backend/src/repos/conversation-repo.ts update(3) [title+title_key]',
@@ -769,8 +768,8 @@ describe('workspaces.name / name_key have one production writer (#task:2027)', (
       .map(fingerprint)
       .sort();
     expect(found).toEqual([
-      'packages/backend/src/repos/workspace-repo.ts insert(9) [name+name_key]',
-      'packages/backend/src/repos/workspace-repo.ts insert(9) [name+name_key]',
+      'packages/backend/src/repos/workspace-repo.ts insert(8) [name+name_key]',
+      'packages/backend/src/repos/workspace-repo.ts insert(8) [name+name_key]',
       'packages/backend/src/repos/workspace-repo.ts update(3) [name+name_key]',
       'packages/backend/src/repos/workspace-repo.ts update(4) [name+name_key]',
     ].sort());

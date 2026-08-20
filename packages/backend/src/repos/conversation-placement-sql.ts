@@ -82,7 +82,7 @@ function workspaceAgentRosterEdge(
             ))`;
 }
 
-/** The three placement arms of agent participation, over an agent-side
+/** The two placement arms of agent participation, over an agent-side
  *  EXPRESSION. Both public faces below are this text; see
  *  {@link agentParticipates} for what each arm means and why. */
 function agentParticipatesSql(
@@ -94,9 +94,7 @@ function agentParticipatesSql(
                AND ((${conversationAlias}.endpoint_a_kind = 'agent'
                      AND ${conversationAlias}.endpoint_a_id = ${agentIdExpr})
                  OR (${conversationAlias}.endpoint_b_kind = 'agent'
-                     AND ${conversationAlias}.endpoint_b_id = ${agentIdExpr})))
-           OR (${conversationAlias}.placement_kind = 'agent_inbox'
-               AND ${conversationAlias}.inbox_agent_id = ${agentIdExpr}))`;
+                     AND ${conversationAlias}.endpoint_b_id = ${agentIdExpr}))))`;
 }
 
 /**
@@ -139,17 +137,17 @@ function workspaceAgentRosterMembers(): string {
  * Shape, and why each part of it is deliberate:
  *
  *   - ONE ARM PER PLACEMENT, each starting from `conversations` by primary key, so
- *     the whole set is reached by ≤ 4 index lookups plus a roster prefix seek on
- *     `PRIMARY KEY (conversation_id, agent_id)`. The three non-workspace arms are
- *     column reads: a `direct_pair`'s participants ARE its two endpoints, an
- *     inbox's IS its owner. The plan contract is pinned by an EXPLAIN falsifier —
+ *     the whole set is reached by ≤ 3 index lookups plus a roster prefix seek on
+ *     `PRIMARY KEY (conversation_id, agent_id)`. The two non-workspace arms are
+ *     column reads: a `direct_pair`'s participants ARE its two endpoints. The plan
+ *     contract is pinned by an EXPLAIN falsifier —
  *     regressing to a candidate scan is the failure it exists to report.
  *   - `UNION`, not `UNION ALL`: this is a SET. The arms are mutually exclusive on
  *     `placement_kind` today, so the dedup is doing nothing — but "no duplicate
  *     recipients" is a property the callers rely on (each id becomes one delivery
  *     and one wake), and it must not depend on arms staying exclusive.
- *   - `@conv`, bound ONCE by name for all four arms. Positional `?` here would be
- *     four parameters for one value: the exact miscount
+ *   - `@conv`, bound ONCE by name for all three arms. Positional `?` here would be
+ *     three parameters for one value: the exact miscount
  *     {@link PlacementSqlFragment} exists to prevent, in a text where the arms are
  *     meant to grow.
  *   - CANDIDATES, not recipients: LIVENESS IS NOT HERE. Participation deliberately
@@ -171,12 +169,7 @@ export const PARTICIPANT_AGENT_IDS_SQL = `${workspaceAgentRosterMembers()}
               FROM conversations c_p
              WHERE c_p.id = @conv
                AND c_p.placement_kind = 'direct_pair'
-               AND c_p.endpoint_b_kind = 'agent'
-             UNION
-            SELECT c_p.inbox_agent_id AS agent_id
-              FROM conversations c_p
-             WHERE c_p.id = @conv
-               AND c_p.placement_kind = 'agent_inbox'`;
+               AND c_p.endpoint_b_kind = 'agent'`;
 
 /**
  * SQL predicate: `agentId` PARTICIPATES in this conversation (§4.2) — the SQL
@@ -194,10 +187,6 @@ export const PARTICIPANT_AGENT_IDS_SQL = `${workspaceAgentRosterMembers()}
  *     the OTHER endpoint does not remove the survivor from its own DM — that
  *     closes the WRITE gate, not participation — so this arm deliberately ignores
  *     `endpoint_*_deleted_at`.
- *   - `agent_inbox` — the conversation IS this agent's inbox. Also rosterless, so
- *     a query whose bottom guard is a bare `JOIN conversation_agents` returns ZERO
- *     rows for it, which is not "the agent may not read its inbox" but "this query
- *     cannot express who its participant is".
  *
  * The RUNNING-IN narrowing that the code face applies to a session principal is
  * deliberately absent: that asks "may THIS session act inside conversation X",
@@ -217,7 +206,7 @@ export function agentParticipates(
 ): PlacementSqlFragment {
   return {
     sql: agentParticipatesSql(conversationAlias, '?'),
-    params: [agentId, agentId, agentId, agentId],
+    params: [agentId, agentId, agentId],
   };
 }
 
@@ -240,7 +229,7 @@ export function agentParticipates(
  * Returns a bare string, NOT a {@link PlacementSqlFragment}: with the agent side
  * correlated there is nothing to bind, and a fragment shape would invite a caller
  * to splice an empty `params` list into a position where the point form binds
- * four. Passing `'?'` here would compile and then bind nothing — use
+ * three. Passing `'?'` here would compile and then bind nothing — use
  * {@link agentParticipates} for that.
  *
  * LIVENESS IS NOT PART OF IT. Participation deliberately ignores
@@ -305,12 +294,6 @@ function workspaceHumanRosterEdge(conversationAlias: string): string {
  *     exactly as a stray `conversation_agents` row is for the agent face. Whether
  *     the OTHER endpoint's principal still exists is not asked here either: that
  *     closes the WRITE gate, not participation.
- *   - `agent_inbox` — ABSENT, and its absence is the rule rather than a gap. A
- *     human is never a participant of an inbox, not even the person who created
- *     the agent: `agents.created_by_user_id` is MANAGEMENT authority, not a
- *     message ACL (the same wording shared's `resolveParticipation` carries). So
- *     this predicate is FALSE there by having no arm to be true in, which is why
- *     there is nothing to keep in sync with the code face.
  *
  * Its set-shaped twin is {@link PARTICIPANT_USER_IDS_SQL}.
  */
@@ -372,11 +355,7 @@ function workspaceHumanRosterMembers(): string {
  * than a `LEFT JOIN` or a per-placement branch at each call site.
  *
  * Shape mirrors the agent set exactly — one arm per placement anchored on
- * `c_p.id = @conv`, `UNION` because it is a SET, `@conv` bound ONCE by name — with
- * ONE structural difference: there is NO `agent_inbox` arm, because a human is
- * never a participant of an inbox (the predicate's own docblock states why). The
- * enumeration is therefore EMPTY for an inbox, which is the correct answer and not
- * a missing arm.
+ * `c_p.id = @conv`, `UNION` because it is a SET, `@conv` bound ONCE by name.
  *
  * CANDIDATES, not viewers: EXISTENCE IS NOT HERE, for the same reason liveness is
  * not in the agent set. A caller that needs a real person joins `users` over this
@@ -413,14 +392,12 @@ export const PARTICIPANT_USER_IDS_SQL = `${workspaceHumanRosterMembers()}
  * conversations": channels are enumerated workspace-first (a person reaches them
  * through a workspace they are a member of, and that face already exists), and
  * folding them in here would put a `conversation_users` read in a constant whose
- * whole subject is the ROSTERLESS placement. There is no `agent_inbox` arm for the
- * same reason the human participant set has none: a human is never a participant
- * of an inbox.
+ * whole subject is the ROSTERLESS placement.
  *
  * HUMAN ONLY, deliberately. The agent transpose ("which pairs does this agent
  * have") is expressible in one more pair of arms, and it is not here because no
- * caller asks it: the agent-side surface an agent reads is its own inbox plus the
- * conversations it was placed in. Adding it now would be a second text to keep in
+ * caller asks it: the agent-side surface an agent reads is the conversations it
+ * was placed in. Adding it now would be a second text to keep in
  * agreement with nothing.
  *
  * `@viewer`, bound ONCE by name for both arms, as `@conv` is above.
@@ -458,11 +435,10 @@ export const DIRECT_PAIR_IDS_FOR_USER_SQL = `SELECT c_p.id AS conversation_id
  * because the workspace-less DM is that human's entry to an agent-scoped agent.
  *
  * Both slot orders are read, but the OTHER slot is GATED to `human`, and that
- * gate is what makes the four no-extend constraints fall out of the SQL text
+ * gate is what makes the three no-extend constraints fall out of the SQL text
  * rather than a caller-side afterthought:
  *   - agent↔agent pair — the non-agent slot is not `human`, so it produces NO
  *     row: a human gains nothing from an agent's agent-to-agent pairs;
- *   - `agent_inbox` — not a `direct_pair`, so no arm matches it;
  *   - third party / owner-audit reader — there is no arm that produces a user
  *     who is not THIS pair's own human endpoint, so neither can appear here.
  * `canonicalEndpointOrder` puts the agent in slot A ('agent' < 'human') for
@@ -499,17 +475,19 @@ export const DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL = `SELECT c_p.endpoint
  *   - `direct_messages` — `placement_kind='direct_pair'`.
  *
  * Workspace and Agent Space are NOT distinguishable by `placement_kind` alone —
- * both are `'workspace'` — so the split reads `workspaces.workspace_kind`, the
- * ONE authority for that distinction (v69 made `workspace_id` nullable, but a
- * workspace-placed conversation always carries it, so the INNER JOIN never
- * drops a row of this arm). `agent_inbox` is deliberately in NO container: it
- * has no human participant, so a human viewer's population never contains one
- * and there is no fourth bucket for it to fall into. `All` = omit this axis.
+ * both are `'workspace'` — so the split reads the OWNERSHIP RELATION
+ * `workspaces.owner_agent_id` (NULL ⇔ regular ⇔ Workspace; NOT NULL ⇔ agent_home
+ * ⇔ Agent Space), the ONE authority for that distinction since #task:2080 dropped
+ * the redundant stored `workspace_kind` word (v69 made `workspace_id` nullable,
+ * but a workspace-placed conversation always carries it, so the INNER JOIN never
+ * drops a row of this arm). The three containers therefore TOTALLY cover the
+ * placement alphabet, and a future placement must claim a bucket here or be
+ * absent from every narrowed board. `All` = omit this axis.
  *
- * Bind-free by construction: the `workspace_kind` literal comes from a switch
- * over the CLOSED container enum (never the raw wire value), and the
- * conversation-id argument is a column reference chosen by the caller, not user
- * input — so nothing here is interpolated from a request.
+ * Bind-free by construction: the ownership predicate is one of two fixed SQL
+ * fragments chosen by a switch over the CLOSED container enum (never the raw
+ * wire value), and the conversation-id argument is a column reference chosen by
+ * the caller, not user input — so nothing here is interpolated from a request.
  *
  * The parameter is an INLINE union rather than an import of the shared
  * `TaskBoardContainer` type on purpose: this module is the participation
@@ -530,13 +508,16 @@ export function conversationInContainer(
        AND c_c.placement_kind = 'direct_pair'
   )`;
   }
-  const workspaceKind = container === 'workspace' ? 'regular' : 'agent_home';
+  const ownershipPredicate =
+    container === 'workspace'
+      ? 'w_c.owner_agent_id IS NULL'
+      : 'w_c.owner_agent_id IS NOT NULL';
   return `EXISTS (
     SELECT 1
       FROM conversations c_c
       JOIN workspaces w_c ON w_c.id = c_c.workspace_id
      WHERE c_c.id = ${conversationIdSql}
        AND c_c.placement_kind = 'workspace'
-       AND w_c.workspace_kind = '${workspaceKind}'
+       AND ${ownershipPredicate}
   )`;
 }

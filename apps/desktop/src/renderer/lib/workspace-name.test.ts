@@ -1,50 +1,39 @@
 /**
- * #task:1156 — one canonical workspace label so the message-search filter, the
- * archived-channel filter, and the rail can't drift apart again. Pins the `dm-`
- * prefix-stripping convergence (the two agent-space name shapes — UI
- * `dm-Norman` vs bare aggregate `Norman` — must collapse to the same label).
+ * #task:1156 collapsed four drifted workspace labels into one canonical helper;
+ * #task:2066 then retired the `dm-` prefix that made the helper necessary, so
+ * the label IS `workspace.name` and there is nothing left to pin — the tests
+ * that pinned "both name shapes converge" are gone with the second shape.
  *
- * #task:2044 changed WHAT that label is: an agent space reads as the agent's
- * name, never `@<agent>`, because the handle form now belongs to the direct pair.
+ * What survives is the one label that is NOT the workspace's name:
+ * `agentSpaceRecognitionName`, read by the rail row AND the titlebar. The drift shiki
+ * caught in #task:1768 was exactly those two disagreeing (rail showing the
+ * display name, titlebar the handle), so its precedence stays fenced.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  agentSpaceLabel,
-  stripDmPrefix,
-  workspaceDisplayName,
-} from './workspace-name';
+import { agentSpaceRecognitionName } from './workspace-name';
 
-describe('stripDmPrefix', () => {
-  it('strips a leading `dm-` (UI WorkspaceListItem shape)', () => {
-    expect(stripDmPrefix('dm-Norman')).toBe('Norman');
+describe('agentSpaceRecognitionName — precedence', () => {
+  it('prefers the resolved agent display name', () => {
+    expect(
+      agentSpaceRecognitionName('Norman', { display_name: 'Norman Osborn', name: 'Norman' }),
+    ).toBe('Norman Osborn');
   });
-  it('passes a bare name through (backend aggregate shape)', () => {
-    expect(stripDmPrefix('Norman')).toBe('Norman');
-  });
-  it('only strips a leading `dm-`, not an interior/partial match', () => {
-    expect(stripDmPrefix('admin-bot')).toBe('admin-bot');
-  });
-});
 
-describe('agentSpaceLabel — both name shapes converge to the agent name', () => {
-  it('UI `dm-` shape', () => {
-    expect(agentSpaceLabel('dm-Norman')).toBe('Norman');
-  });
-  it('bare aggregate shape', () => {
-    expect(agentSpaceLabel('Norman')).toBe('Norman');
-  });
-  it('carries no `@` — that form is the direct pair\'s (#task:2044)', () => {
-    expect(agentSpaceLabel('dm-Norman')).not.toContain('@');
-  });
-});
-
-describe('workspaceDisplayName — kind drives the form', () => {
-  it('regular workspace shows its bare name unchanged', () => {
-    expect(workspaceDisplayName({ name: 'Engineering', kind: 'regular' })).toBe(
-      'Engineering',
+  it('falls back to the handle when the display name is blank', () => {
+    // Whitespace-only counts as blank: a display name the user cleared must not
+    // render as an empty titlebar.
+    expect(agentSpaceRecognitionName('Norman', { display_name: '   ', name: 'Norman' })).toBe(
+      'Norman',
     );
   });
-  it('agent space shows the agent name (UI prefix stripped, no `@`)', () => {
-    expect(workspaceDisplayName({ name: 'dm-Norman', kind: 'dm' })).toBe('Norman');
+
+  it('falls back to the workspace name when the agent is unresolved', () => {
+    // The workspace name IS the handle for an agent space, so an unresolved
+    // agent degrades to the same word rather than to a blank.
+    expect(agentSpaceRecognitionName('Norman', undefined)).toBe('Norman');
+  });
+
+  it("carries no `@` — that form is the direct pair's (#task:2044)", () => {
+    expect(agentSpaceRecognitionName('Norman', { display_name: 'Norman' })).not.toContain('@');
   });
 });

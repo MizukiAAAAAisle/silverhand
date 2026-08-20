@@ -25,10 +25,13 @@
  *      generation + custody. A consumer cannot filter by a placement it cannot
  *      see, which is what makes the old INNER-JOIN drop unreachable by any
  *      future edit.
- *   3. AN AGENTSLOT IS ONE SEAT, NOT N. An agent-scoped agent participates in
- *      its inbox, its home DM and the pair, and still holds exactly one slot
- *      with no conversation. The DISPLAY face fans that one slot out over those
- *      participations on purpose; the control plane never does.
+ *   3. AN AGENTSLOT IS ONE SEAT, NOT N. An agent-scoped agent participates in a
+ *      pair and no workspace at all, and still holds exactly one slot with no
+ *      conversation — the DISPLAY face fans that one slot out over its
+ *      participations on purpose; the control plane never does. Since #task:2072
+ *      that participation is its direct line with the CREATOR, which is the very
+ *      pair this fixture opens: the line is born with the agent, so the seat's
+ *      provenance is the pair's own INSERT either way.
  *   4. THE CONTROL PLANES REACH THE DM SEAT THROUGH THEIR OWN ENTRY POINTS —
  *      the HTTP switch, the HTTP bulk stop, the teardown ports, the slot
  *      management face. The regression was one shared query, so four assertions
@@ -48,10 +51,8 @@ interface Paired {
   /** The agent-home DM created with the agent: a WORKSPACE placement, so it is
    *  the control group for every "the coordinate is null" assertion below.
    *  NULL for an agent-scoped agent, which builds no `agent_home` at all
-   *  (§9.2) — so that arm's placement coverage is inbox + pair. */
+   *  (§9.2) — so that arm's placement coverage is the pair alone. */
   readonly homeDmId: string | null;
-  /** The agent's inbox: the third placement arm, rosterless like the pair. */
-  readonly inboxId: string;
   readonly pairId: string;
   readonly conversations: ConversationRepo;
   readonly runtimeSlots: RuntimeSlotRepo;
@@ -84,22 +85,27 @@ async function paired(
     })
   ).json()) as { agent: { id: string }; dm_channel_id: string | null };
   const agentId = created.agent.id;
-  // Which placement arms this agent even HAS, stated up front: the inbox is
-  // universal, the home DM exists only for a conversation-scoped agent (§9.2).
-  // Asserted rather than assumed, because "two participations, one seat" and
-  // "three participations, three seats" are different claims and the reader
-  // must be able to tell which one each test is making.
+  // Which placement arms this agent even HAS, stated up front: the home DM
+  // exists only for a conversation-scoped agent (§9.2). Asserted rather than
+  // assumed, because "one participation, one seat" and "two participations, one
+  // seat" are different claims and the reader must be able to tell which one
+  // each test is making.
   expect(created.dm_channel_id === null).toBe(scope === 'agent');
   const conversations = new ConversationRepo(t.ctx.db);
-  const inbox = conversations.getAgentInbox(agentId);
-  expect(inbox).not.toBeNull();
   const { conversation: pair, created: opened } =
     conversations.getOrCreateDirectPair(
       { kind: 'agent', id: agentId },
       { kind: 'human', id: t.viewerUserId },
       NOW,
     );
-  expect(opened).toBe(true);
+  // The pair is not always NEW. Since #task:2072 an agent-scoped agent is
+  // onboarded into its CREATOR's direct line, and this fixture's viewer is that
+  // creator — so for that scope the line (and its seat) was born with the agent
+  // and this call finds it. The conversation-scoped arm onboards into its home
+  // DM instead, so there the pair starts here. Stated as an equality rather than
+  // dropped, because "whose INSERT minted this pair" is what the seat-provenance
+  // claim below rests on.
+  expect(opened).toBe(scope === 'conversation');
   // Stage 1 of the zero-roster claim: the pair was BORN without a roster row,
   // and the seat (if any) is already there.
   expect(conversations.listAgents(pair.id)).toEqual([]);
@@ -108,7 +114,6 @@ async function paired(
   return {
     agentId,
     homeDmId: created.dm_channel_id,
-    inboxId: inbox!.id,
     pairId: pair.id,
     conversations,
     runtimeSlots: new RuntimeSlotRepo(t.ctx.db),
@@ -151,9 +156,9 @@ describe('DirectPair runtime seat: the seat face', () => {
     runInPair(f, 'claude-session-in-a-dm');
     const homeDmId = homeDmOf(f);
 
-    // ONE seat per participation, all three placement arms: the home DM
-    // (workspace, via its roster edge), the inbox and the pair (rosterless, via
-    // their own edges). The pair's seat is the one that was IMPOSSIBLE before.
+    // ONE seat per participation, both placement arms: the home DM (workspace,
+    // via its roster edge) and the pair (rosterless, via its own edge). The
+    // pair's seat is the one that was IMPOSSIBLE before.
     const seats = f.runtimeSlots.listSeats(f.agentId);
     expect(
       seats
@@ -161,7 +166,7 @@ describe('DirectPair runtime seat: the seat face', () => {
           seat.scope.kind === 'conversation' ? seat.scope.conversationId : null,
         )
         .sort(),
-    ).toEqual([homeDmId, f.inboxId, f.pairId].sort());
+    ).toEqual([homeDmId, f.pairId].sort());
 
     // The control DTO: identity IS the scope, and custody travels with it. A
     // seat that dropped `generation` would force every stop/clear to re-read the
@@ -196,22 +201,20 @@ describe('DirectPair runtime seat: the seat face', () => {
 
     // The DISPLAY face keeps the same unit and attaches coordinates. The DM row
     // is PRESENT with nulls rather than absent: an INNER JOIN here deleted the
-    // row, and the renderer only reads `workspace_kind === 'agent_home'`, so a
-    // null coordinate is a rendering question while a missing row is a lost
-    // control.
+    // row, and a null coordinate is a rendering question while a missing row is a
+    // lost control.
     const shown = f.agents.listRuntimeParticipations(f.agentId);
     expect(shown.find(row => row.conversation_id === f.pairId)).toMatchObject({
       conversation_id: f.pairId,
       channel_id: f.pairId,
       workspace_id: null,
       workspace_name: null,
-      workspace_kind: null,
     });
     // …and the workspace arm is unchanged, so the nullability is a property of
     // the placement rather than of the join having been loosened everywhere.
-    expect(shown.find(row => row.conversation_id === homeDmId)).toMatchObject({
-      workspace_kind: 'agent_home',
-    });
+    const homeDmRow = shown.find(row => row.conversation_id === homeDmId);
+    expect(homeDmRow?.workspace_id).not.toBeNull();
+    expect(homeDmRow?.workspace_name).not.toBeNull();
   });
 
   it('does not derive participation, and is not derived from membership writes', async () => {
@@ -221,7 +224,6 @@ describe('DirectPair runtime seat: the seat face', () => {
 
     // The endpoints are participants with no roster row anywhere.
     expect(f.conversations.isAgentParticipant(f.pairId, f.agentId)).toBe(true);
-    expect(f.conversations.isAgentParticipant(f.inboxId, f.agentId)).toBe(true);
 
     // Membership writes are INERT on this placement, in both directions: the
     // pair's seat is owned by the endpoint edge, so a stray roster row cannot
@@ -260,12 +262,20 @@ describe('DirectPair runtime seat: the seat face', () => {
     t = buildTestApp();
     const f = await paired(t, 'seat-aggregate', 'agent');
 
-    // Every placement arm this agent has — its inbox and the pair, both
-    // rosterless; it builds no `agent_home` (§9.2), which is exactly why the
-    // seat face must not be derived from the workspace arm's roster. Asserted so
-    // the next line is a statement about seats and not about an agent that
-    // happens to participate nowhere.
-    for (const conversationId of [f.inboxId, f.pairId]) {
+    // TWO participations, so "not one per participation" is a claim about a
+    // plural and not a vacuous statement about an agent that participates once.
+    // Both are pairs and neither is a workspace: this agent builds no
+    // `agent_home` (§9.2), which is exactly why the seat face must not be derived
+    // from the workspace arm's roster. (Before #task:2072 the second arm was the
+    // agent's inbox, which came free with the row; a second direct line says the
+    // same thing about seats without depending on a placement being retired.)
+    const second = f.conversations.getOrCreateDirectPair(
+      { kind: 'agent', id: f.agentId },
+      { kind: 'human', id: 'bob' },
+      NOW,
+    );
+    expect(second.created).toBe(true);
+    for (const conversationId of [f.pairId, second.conversation.id]) {
       expect(f.conversations.isAgentParticipant(conversationId, f.agentId))
         .toBe(true);
     }
@@ -291,7 +301,7 @@ describe('DirectPair runtime seat: the seat face', () => {
     );
     const shown = f.agents.listRuntimeParticipations(f.agentId);
     expect(shown.map(row => row.conversation_id).sort())
-      .toEqual([f.inboxId, f.pairId].sort());
+      .toEqual([f.pairId, second.conversation.id].sort());
     expect(f.runtimeSlots.listSeats(f.agentId)).toHaveLength(1);
   });
 
@@ -302,28 +312,30 @@ describe('DirectPair runtime seat: the seat face', () => {
    * generation did, and `slot_migrated` is v70's provenance for projection state
    * that arrived without a claim. A seat born by a placement trigger at
    * generation 0 has nothing of either sort to report, so the log starts at the
-   * FIRST CLAIM — asserted here over all four birth paths at once, because the
+   * FIRST CLAIM — asserted here over every birth path at once, because the
    * alternative reading ("every slot has a birth event") would have been a
    * contract only the migration's own upgrade instant could satisfy.
    */
-  it('starts its history at the first claim, not at birth — all four births', async () => {
+  it('starts its history at the first claim, not at birth — all three births', async () => {
     t = buildTestApp();
     const conv = await paired(t, 'seat-history');
     const agg = await paired(t, 'seat-history-aggregate', 'agent');
 
-    // One entry per creation trigger: the workspace arm's roster edge, the
-    // inbox, the pair, and the agent-scoped slot that belongs to no
-    // conversation. Named rather than looped so a failure says WHICH birth
-    // invented a history.
+    // One entry per creation trigger that any NEW row can still take: the
+    // workspace arm's roster edge, the pair, and the agent-scoped slot that
+    // belongs to no conversation. Named rather than looped so a failure says
+    // WHICH birth invented a history.
+    //
+    // There was a fourth — `conversations_create_agent_inbox_runtime_slot`. Since
+    // #task:2072 nothing inserts an `agent_inbox` conversation, so that trigger
+    // can no longer fire and this cell would have had to author the row it tests.
+    // It is not covered here and it is not lost: the trigger retires with the
+    // placement value itself, and the birth it used to perform already happened
+    // for every legacy row that has one.
     const births = {
       workspace: conv.runtimeSlots.get({
         kind: 'conversation',
         conversationId: homeDmOf(conv),
-        agentId: conv.agentId,
-      }),
-      inbox: conv.runtimeSlots.get({
-        kind: 'conversation',
-        conversationId: conv.inboxId,
         agentId: conv.agentId,
       }),
       pair: conv.runtimeSlots.get({
@@ -358,9 +370,9 @@ describe('DirectPair runtime seat: the seat face', () => {
         .listEvents(births.pair!.id)
         .map(event => ({ kind: event.event_kind, generation: event.generation })),
     ).toEqual([{ kind: 'generation_claimed', generation: 1 }]);
-    // …and the claim is local to the seat it named: the other three births are
+    // …and the claim is local to the seat it named: the other two births are
     // still silent, so the log is keyed on the slot and not on the agent.
-    for (const arm of ['workspace', 'inbox', 'agent'] as const) {
+    for (const arm of ['workspace', 'agent'] as const) {
       expect(conv.runtimeSlots.listEvents(births[arm]!.id), arm).toEqual([]);
     }
   });

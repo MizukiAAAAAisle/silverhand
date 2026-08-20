@@ -34,7 +34,7 @@ const agentKey = (id: string) => ['agents', id] as const;
  *  - `home` → no `workspace_id` param → the agent home / L1 dir (full page);
  *  - `workspace` → `?workspace_id=<id>` → that workspace's L2 dir (side panel).
  * The resolver is source-blind on the wire — the frontend never builds a path,
- * only names a workspace. Passing an agent_home/DM workspace id resolves back to
+ * only names a workspace. Passing an agent space's own id resolves back to
  * home (expected overlap), so the renderer never branches on source.
  */
 export type AgentWorkspaceSource =

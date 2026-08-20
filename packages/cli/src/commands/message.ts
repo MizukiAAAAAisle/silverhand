@@ -21,7 +21,6 @@ import {
   type AgentStaleReceiveParams,
   type AgentStaleReceiveResult,
   type AgentStaleResolveParams,
-  type AgentStreamObservedParams,
 } from '@silverhand/host';
 import { CliError, mapHttpError } from '../errors.js';
 import type { BackendClient } from '../client.js';
@@ -293,10 +292,10 @@ nothing was reported, not that every reference landed.`,
       return await sendViaDaemon(env.daemonSocketPath, daemonInput);
     }
 
-    // Migration fallback for non-daemon/manual CLI contexts. Do not read
-    // the retired sidecar as freshness authority; missing seen_up_to_seq
-    // makes the backend explicitly skip hard CAS instead of validating a
-    // polluted boundary.
+    // Migration fallback for non-daemon/manual CLI contexts. This path has
+    // no daemon runtime scope, so freshness is evaluated by the backend from
+    // the caller's own delivery state alone; there is no sidecar cursor to
+    // carry.
     return await client.sendMessage({
       content,
       target,
@@ -384,15 +383,16 @@ from server history. If nothing is held yet it waits (bounded) for the
 next delivery to arrive.
 
 Outcomes (stdout JSON, discriminated by "outcome"):
-  batch_covered            The returned batch covers the stale head.
+  batch_queue_drained      A batch was returned AND it emptied the
+                           daemon's deferred queue (nothing more pending).
                            Process it, then re-send with
                            \`--stale-resolution unaffected|revised\`.
-  batch_partial_armed      A batch was returned but the stale head is
-                           NOT covered yet; the stale event stays armed.
-  no_pending_stale         The named stale event is not pending.
-  already_admitted         Your context already covers the original
-                           stale head; re-send with
-                           \`--stale-resolution unaffected|revised\`.
+  batch_more_pending       A batch was returned but the deferred queue
+                           still holds a remainder; pull again for the rest.
+  no_pending_stale         Nothing is pending.
+  stale_event_superseded   A newer conflict replaced the id you named.
+                           Retry with the current_stale_event_id in this
+                           result.
   normal_delivery_in_progress
                            The covering content already entered the
                            normal input path; it arrives as regular
@@ -571,50 +571,6 @@ stdout: full AgentReadHistoryDto JSON.`,
       include_system: includeSystem,
       limit,
     });
-
-    // Pull-observed (B-light, docs/thread-reply-cluster-v1.md §6.4/§7):
-    // a successful reply-cluster read enters the model's context, so it
-    // is a real observe. The read itself reaches the backend over plain
-    // HTTP (the daemon never sees it), so when a daemon socket is present
-    // we fire a daemon-local `agent_stream_observed` intent to advance the
-    // `thread:<root>` observed boundary — otherwise a read-then-send into
-    // the same cluster would be judged stale against a boundary the daemon
-    // never learned about. Gated on the RESOLVED `thread_root_id` from the
-    // response, not on how the address was spelled: a readable pair and an
-    // id name the same cluster, and only the server can say which.
-    //
-    // The ROOT is the whole of what this intent teaches (#task:2021 P4-4).
-    // It used to also hand over every id the window surfaced, because a
-    // reply was addressed by the message it answered, so the daemon needed
-    // a map from any of them back to this cluster. A cluster is now
-    // addressed by its root and nothing else, so that map had no reader
-    // left — and keeping it would leave the daemon holding a second
-    // opinion about what an address denotes.
-    //
-    // Direct/non-daemon fallback degrades to "A": no intent, no boundary
-    // (no daemon owns observed state to advance). Best-effort: the read
-    // already succeeded and was returned, so an intent failure must not
-    // fail the command.
-    const root = dto.target.thread_root_id;
-    if (root && env.daemonSocketPath) {
-      const replySeqs = dto.messages
-        .filter(m => m.message_ref.id !== root)
-        .map(m => m.message_ref.seq);
-      const observedSeq = replySeqs.length > 0 ? Math.max(...replySeqs) : 0;
-      await observeStreamViaDaemon(env.daemonSocketPath, {
-        // Two coordinates, deliberately: which runtime scope observed (the
-        // handle lookup) and WHERE the observed stream lives. AgentSlot
-        // boundaries are keyed by
-        // conversation and a send keys by the address's conversation, so the
-        // stream's own id has to come from the RESOLVED target, never from the
-        // runtime custody.
-        runtime_scope: runtimeIntentScope(env),
-        stream_conversation_id: dto.target.conversation_id,
-        agent_id: env.agentId,
-        thread_root_id: root,
-        observed_seq: observedSeq,
-      });
-    }
 
     return dto;
   },
@@ -868,7 +824,15 @@ async function sendViaDaemon(
 async function resolveStaleViaDaemon(
   socketPath: string,
   input: AgentStaleResolveParams,
-): Promise<{ resolved: boolean; reason?: 'no_pending_stale_event' }> {
+): Promise<
+  | { resolved: true }
+  | { resolved: false; reason: 'no_pending_stale_event' }
+  | {
+      resolved: false;
+      reason: 'stale_event_superseded';
+      current_stale_event_id: string;
+    }
+> {
   const host = new HostClient({ socketPath });
   try {
     await host.connect();
@@ -877,8 +841,16 @@ async function resolveStaleViaDaemon(
     if (!result.ok) {
       throw mapHttpError(result.status, result.body_text);
     }
-    return result.resolved
-      ? { resolved: true }
+    if (result.resolved) return { resolved: true };
+    // #task:2095 F18: a later 409 replaced the named event. Surface the LIVE
+    // id so the agent re-issues against it rather than reading a false
+    // "nothing pending".
+    return result.reason === 'stale_event_superseded'
+      ? {
+          resolved: false,
+          reason: result.reason,
+          current_stale_event_id: result.current_stale_event_id,
+        }
       : { resolved: false, reason: result.reason };
   } catch (err) {
     if (err instanceof HostClientError) {
@@ -991,28 +963,4 @@ async function uploadBodyAsAttachment(
 function formatByteSize(n: number): string {
   if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${Math.ceil(n / 1024)} KB`;
-}
-
-/**
- * Fire the daemon-local `agent_stream_observed` intent after a
- * reply-cluster pull (B-light, §6.4/§7). Best-effort by contract: the
- * history read it follows has already succeeded and been returned to the
- * caller, so any transport/daemon failure here is swallowed rather than
- * surfaced — losing the observed-boundary advance degrades to the
- * "A" semantics (the next reply is judged against an unknown stream),
- * which is strictly better than failing a read that worked.
- */
-async function observeStreamViaDaemon(
-  socketPath: string,
-  params: AgentStreamObservedParams,
-): Promise<void> {
-  const host = new HostClient({ socketPath });
-  try {
-    await host.connect();
-    await host.agentStreamObserved(params);
-  } catch {
-    // swallow — see doc comment.
-  } finally {
-    await host.close().catch(() => undefined);
-  }
 }

@@ -39,10 +39,11 @@
 // the audits exist to surface, and the only visible symptom would be a header whose
 // name does not match the one on screen.
 //
-// WHAT IS NOT A FALLBACK. `direct_pair` renders its first-person `dm:@handle` label
-// and `agent_inbox` renders its id, and neither is counted (`AddressFallbackReason`
-// says why): they have no name form BY DESIGN, so counting them would bury the
-// three real reasons under traffic no naming machinery could remove.
+// WHAT IS NOT A FALLBACK. `direct_pair` is not counted (`AddressFallbackReason` says
+// why) — neither its first-person `dm:@handle` label nor the id form it falls back to
+// when this viewer is not an endpoint of the pair: it has no name form BY DESIGN, so
+// counting it would bury the three real reasons under traffic no naming machinery
+// could remove.
 //
 // LOOKUPS ARE PREDICATES, NOT PORTS — the style `conversation-placement.ts` sets
 // and for the same reason: the rule stays a pure function of the row, so the fanout
@@ -55,8 +56,8 @@ import {
   type ConversationEndpointIdentity,
   type ConversationEndpointRef,
   type StreamNaming,
-  type WorkspaceKind,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 
 /**
  * The columns naming reads: the placement arc, plus the display title and the
@@ -70,15 +71,15 @@ import {
 export interface StreamNamingConversation extends ConversationEndpointRef {
   id: string;
   workspace_id: string | null;
-  inbox_agent_id: string | null;
   title: string;
   title_key: string | null;
 }
 
 /** The address root as this rule needs it — `WorkspaceRepo.addressRoot`'s
- *  projection. `name_key === null` is the agent-home case (#task:2027). */
+ *  projection. `name_key === null` is the agent-home case (#task:2027), and
+ *  `owner_agent_id` is what says WHY (see {@link workspaceNaming}). */
 export interface StreamNamingRoot {
-  workspace_kind: WorkspaceKind;
+  owner_agent_id: string | null;
   name: string;
   name_key: string | null;
 }
@@ -139,10 +140,19 @@ export function streamNamingOf(
  * The workspace arm: two names, each of which must survive the round trip of
  * properties (1)–(3), and one reason when either does not.
  *
- * `agent_home` is decided by the ROOT's own kind and not by the conversation's,
- * because the reason answers "does this stream have an address root at all" — and
- * a regular workspace whose `name_key` is somehow NULL is corruption, not privacy,
- * so it must not be reported as the benign reason.
+ * `agent_home` is decided by the ROOT's own ownership and not by the
+ * conversation's placement, because the reason answers "does this stream have an
+ * address root at all" — and a workspace with no home agent whose `name_key` is
+ * somehow NULL is corruption, not privacy, so it must not be reported as the
+ * benign reason.
+ *
+ * Two columns, ONE question plus a TRIPWIRE: schema CHECKs tie `name_key IS NULL`
+ * and `owner_agent_id IS NOT NULL` to each other, so the `unrenderable` arm below
+ * is UNREACHABLE for any row the DB accepted, today and after the column swap. It
+ * stays because it is the only place a row that violated that pairing (a rebuilt
+ * table that lost the CHECK) would be caught instead of silently reported as a
+ * private container. Nothing in the domain can produce that state — do not write
+ * handling for it elsewhere.
  */
 function workspaceNaming(
   conversation: StreamNamingConversation,
@@ -151,7 +161,7 @@ function workspaceNaming(
   const unrenderable = { kind: 'unnameable', reason: 'unrenderable' } as const;
   if (root === null) return unrenderable;
   if (root.name_key === null) {
-    return root.workspace_kind === 'agent_home'
+    return isAgentHomeWorkspace(root)
       ? { kind: 'unnameable', reason: 'agent_home' }
       : unrenderable;
   }

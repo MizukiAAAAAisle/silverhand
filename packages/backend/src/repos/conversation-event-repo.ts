@@ -7,7 +7,7 @@ import type {
   ParsedEventKind,
   SessionEventRow,
 } from '@silverhand/shared';
-import { sanitizeParsedEventForBroadcast } from '../runtime/event-sanitize.js';
+import { sanitizeParsedEventForBroadcast, sanitizeRawAgentEventValue } from '../runtime/event-sanitize.js';
 
 const DEFAULT_MAX_EVENTS_PER_CONVERSATION_AGENT = 2_000;
 const DEFAULT_RETENTION_DAYS = 30;
@@ -50,6 +50,12 @@ export class ConversationEventRepo {
     // (daemon log + wire fanout). Three rows per payload would flood
     // the activity timeline with no user meaning — skip persistence.
     if (sanitized.kind === 'input_lifecycle') return null;
+    // #task:2101 — a refinement is an UPDATE of an existing `tool_call` row, so
+    // it has no insert form. `RuntimeEventHandler` routes it to
+    // `refineToolCallInput` before reaching here; this guard keeps a future
+    // caller that funnels every parsed event through `recordParsedEvent` from
+    // silently minting a duplicate row for the same call.
+    if (sanitized.kind === 'tool_call_input') return null;
     const kind = sanitized.kind as ConversationEventKind;
     const payload = payloadForParsedEvent(sanitized);
     return this.insert({
@@ -108,6 +114,99 @@ export class ConversationEventRepo {
       },
       createdAt: params.createdAt,
     });
+  }
+
+  /**
+   * One activity row per authoritative `message_stale` refusal (#task:2099).
+   *
+   * Payload-less, like `compaction_started`: the row IS the fact. Per-conflict
+   * detail (`stale_event_id`, the refused send's target conversation, queue
+   * depth) stays in the backend WARN log per
+   * `docs/freshness-boundary-authority-v1.md` §3.2/§6 — an id in a product
+   * timeline reads as debug output, and once persisted a payload field cannot be
+   * retracted from history the way an absent one can be added.
+   *
+   * Deliberately NOT payload-less-by-accident: `payload: null` is asserted here
+   * rather than left to a default so a later contributor adding a field has to
+   * come through this docblock.
+   */
+  recordMessageStale(params: {
+    conversationId: string;
+    agentId: string;
+    createdAt: number;
+  }): ConversationActivityEvent {
+    return this.insert({
+      conversationId: params.conversationId,
+      agentId: params.agentId,
+      kind: 'message_stale',
+      payload: null,
+      createdAt: params.createdAt,
+    });
+  }
+
+  /**
+   * Merge late-arriving parameters into the `tool_call` row they belong to
+   * (#task:2101), returning the updated row so callers republish the SAME
+   * event id and live timelines re-render in place.
+   *
+   * Scoped to the newest matching row for this (conversation, agent): tool call
+   * ids are unique per runtime session, but a bounded `ORDER BY id DESC LIMIT 1`
+   * keeps this from degrading into a full-history scan and makes the "same id
+   * reused across sessions" case resolve to the live call rather than a fossil.
+   *
+   * Returns null — never inserts — when no such row exists (paged out by
+   * retention, or an id we never persisted). A refinement with nothing to refine
+   * is not an activity fact; synthesizing a row here would invent a tool call
+   * the timeline never saw start.
+   */
+  refineToolCallInput(params: {
+    conversationId: string;
+    agentId: string;
+    toolCallId: string;
+    input: unknown;
+  }): ConversationActivityEvent | null {
+    const row = this.db
+      .prepare<[string, string, string], SessionEventRow>(
+        `SELECT *
+           FROM conversation_events
+          WHERE conversation_id = ?
+            AND agent_id = ?
+            AND kind = 'tool_call'
+            AND json_extract(payload, '$.tool_call_id') = ?
+          ORDER BY id DESC
+          LIMIT 1`,
+      )
+      .get(params.conversationId, params.agentId, params.toolCallId);
+    if (!row) return null;
+    const existing = parsePayload(row.payload) ?? {};
+    // Sanitized here, not by the caller: `recordParsedEvent` runs every insert
+    // through the same cap, so the repo is where "no unbounded driver payload
+    // enters a row" holds. The refinement is the arm where the LARGEST input
+    // actually arrives (an ACP creating frame may carry only `{cwd}`), so
+    // skipping it would leave the row-level cap covering only the small case.
+    //
+    // `input` is replaced, not deep-merged: the update carries the runtime's
+    // complete parameter object for the call, and a merge would preserve
+    // scaffolding from the creating frame (OpenCode's lone `cwd`) as though the
+    // runtime had reported it alongside the real command.
+    const payload: ConversationActivityPayload = {
+      ...existing,
+      input: sanitizeRawAgentEventValue(params.input),
+    };
+    const result = this.db
+      .prepare(
+        `UPDATE conversation_events
+            SET payload = ?
+          WHERE id = ?`,
+      )
+      .run(JSON.stringify(payload), row.id);
+    if (result.changes === 0) return null;
+    const updated = this.db
+      .prepare<[number], SessionEventRow>(
+        `SELECT * FROM conversation_events WHERE id = ?`,
+      )
+      .get(row.id);
+    return updated ? rowToDto(updated) : null;
   }
 
   listForConversationAgent(params: {
@@ -300,6 +399,10 @@ function payloadForParsedEvent(event: ParsedEvent): ConversationActivityPayload 
         ...(event.name ? { name: event.name } : {}),
         ...(event.toolCallId ? { tool_call_id: event.toolCallId } : {}),
       };
+    case 'tool_call_input':
+      // Refinements never reach here (`recordParsedEvent` returns early); they
+      // carry no row of their own. Present for switch exhaustiveness.
+      return null;
     case 'turn_end':
       return event.sessionId ? { session_id: event.sessionId } : null;
     case 'compaction_started':

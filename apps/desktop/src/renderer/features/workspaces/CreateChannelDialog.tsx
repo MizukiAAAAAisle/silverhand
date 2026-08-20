@@ -24,6 +24,7 @@ import {
 } from '@/features/me/hooks';
 import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
 import { useCreateChannel, useWorkspaceMemberLists } from './hooks';
+import type { WorkspaceCapabilities } from './workspace-capabilities';
 
 // Stable empty member object so the useEffect dependency on `members` doesn't
 // create a new reference every render when the query hasn't resolved yet.
@@ -34,27 +35,29 @@ const EMPTY_MEMBERS = { agents: [], humans: [] } as const;
  * so the request shape is locked independently of the form UI (a control can
  * look correct while the payload silently regresses).
  *
- * The two axes it settles:
- *  - `visibility` is sent EXPLICITLY for a regular channel (never relying on
- *    the server default-on-omission), so the wire states intent. A DM omits it
- *    entirely — the agent_home DM path is always private and rejects `public`.
- *  - `member_user_ids` carries the (possibly empty) explicit human selection
- *    for a regular channel; the creator is unioned in server-side. A DM omits
- *    it — a DM is always 1:1, there is no member selection.
+ * The two axes it settles, both keyed on whether the container HAS a member set
+ * (`hasMembers`, from `workspaceCapabilities` — never a workspace kind string):
+ *  - `visibility` is sent EXPLICITLY for a channel in a member-bearing
+ *    workspace (never relying on the server default-on-omission), so the wire
+ *    states intent. A memberless container omits it entirely — the agent-space
+ *    channel path is always private and rejects `public`.
+ *  - `member_user_ids` carries the (possibly empty) explicit human selection;
+ *    the creator is unioned in server-side. A memberless container omits it —
+ *    there is no member selection to send.
  */
 export function computeCreateChannelPayload(input: {
-  isDm: boolean;
+  hasMembers: boolean;
   title: string;
   visibility: ConversationVisibility;
   selectedAgents: string[];
   selectedHumans: string[];
 }): CreateConversationChannelInput {
-  const { isDm, title, visibility, selectedAgents, selectedHumans } = input;
+  const { hasMembers, title, visibility, selectedAgents, selectedHumans } = input;
   return {
     title: title.trim(),
-    member_agent_ids: isDm ? [] : selectedAgents,
-    member_user_ids: isDm ? undefined : selectedHumans,
-    ...(isDm ? {} : { visibility }),
+    member_agent_ids: hasMembers ? selectedAgents : [],
+    member_user_ids: hasMembers ? selectedHumans : undefined,
+    ...(hasMembers ? { visibility } : {}),
   };
 }
 
@@ -95,10 +98,10 @@ interface CreateChannelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workspaceId: string | null;
-  /** Drives member-picker behaviour. DM and regular workspaces diverge in
-   *  several places (agent strip, sub-channel affordances, member
-   *  management). */
-  workspaceKind: string | null;
+  /** What the container HAS, not what it is (#task:2066): the member picker and
+   *  the payload's member / visibility fields all key on `hasMembers`. Derived
+   *  by `workspaceCapabilities` — this dialog never sees a workspace kind. */
+  capabilities: WorkspaceCapabilities;
   onCreated?: (id: string) => void;
 }
 
@@ -106,7 +109,7 @@ export function CreateChannelDialog({
   open,
   onOpenChange,
   workspaceId,
-  workspaceKind,
+  capabilities,
   onCreated,
 }: CreateChannelDialogProps): JSX.Element {
   const [title, setTitle] = useState('');
@@ -126,7 +129,7 @@ export function CreateChannelDialog({
       ? viewer.data.id
       : null;
 
-  const isDm = workspaceKind === 'dm';
+  const { hasMembers } = capabilities;
 
   // Reset the whole form on close so a reopened dialog starts clean —
   // default visibility is Private (the safe, non-discoverable default) and no
@@ -183,13 +186,14 @@ export function CreateChannelDialog({
       setError('Please enter a channel title');
       return;
     }
-    // DM channels are always 1:1 — no member selection, and visibility is N/A
-    // (the agent_home DM path is always private and rejects `public`). The
-    // exact wire shape is settled by `computeCreateChannelPayload`.
+    // A channel in a memberless container (Agent Space) carries no member
+    // selection, and visibility is N/A there (that path is always private and
+    // rejects `public`). The exact wire shape is settled by
+    // `computeCreateChannelPayload`.
     try {
       const channel = await createChannel.mutateAsync(
         computeCreateChannelPayload({
-          isDm,
+          hasMembers,
           title,
           visibility,
           selectedAgents,
@@ -223,11 +227,11 @@ export function CreateChannelDialog({
             />
           </div>
 
-          {isDm ? null : (
+          {hasMembers ? (
             <VisibilitySelect value={visibility} onChange={setVisibility} />
-          )}
+          ) : null}
 
-          {isDm ? null : (
+          {hasMembers ? (
             <RegularMemberPicker
               candidates={candidates}
               selected={selectedMembers}
@@ -244,7 +248,7 @@ export function CreateChannelDialog({
                 setSelectedHumans(humans);
               }}
             />
-          )}
+          ) : null}
 
           {error ? <div className="text-xs text-error">{error}</div> : null}
 

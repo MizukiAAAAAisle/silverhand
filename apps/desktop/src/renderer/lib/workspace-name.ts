@@ -1,63 +1,49 @@
 /**
- * Canonical workspace display-name helpers — ONE source so every picker,
- * filter, and result row renders a workspace the same way (#task:1156).
+ * The one workspace label that is NOT the workspace's own name.
  *
- * Before this, four copies had drifted: the rail's `displayDmName`, the
- * message-search filter's `formatWorkspaceName`, and the archived-channel
- * filter's `dmScopeLabel` / `archivedRowWorkspaceLabel` — two said `@<agent>`,
- * one said `DM <agent>`. Same filter concept, different labels. Collapsed here.
+ * This module used to hold four: `stripDmPrefix`, `agentSpaceLabel` and
+ * `workspaceDisplayName` existed because `workspaceToListItem` minted an agent
+ * space's name with a `dm-` prefix, so every surface had to strip it back off
+ * (#task:1156 collapsed four drifted copies of that stripping into one).
+ * #task:2066 retired the prefix at the mint, which made all three pure identity
+ * functions on `workspace.name` — a wrapper that reads like a decision but makes
+ * none, and whose real effect was to imply that rendering a workspace name
+ * directly was the unsafe path. Deleted; pickers, filters, and result rows now
+ * render `workspace.name`.
  *
- * WHY NO `@` ANYWHERE ANYMORE (#task:2044, shiki 2026-08-17): an agent-home
- * workspace is an AGENT SPACE, and since #task:2035 the product also has real
- * direct messages (DirectPair) sitting right next to it in the rail. `@<agent>`
- * and "DM" now belong to the pair; keeping them on the agent space is what made
- * one name mean two different things in a single dropdown. So the agent space
- * reads as the agent's NAME on every surface — the recognition form the rail and
- * titlebar have used since #task:1768 — and this file no longer has a handle-ref
- * variant to pick by accident.
+ * Why that is enough for an agent space: its stored name IS the bound agent's
+ * handle (`insertAgentHome` sets `name = agent.name`), and neither side can
+ * drift — an agent's handle is immutable (`agent-repo.update` writes
+ * `display_name`, never `name`) and a rename cannot reach an agent-home row
+ * (`updateMutableMetadata`'s NAME-writing branches match only containers with no
+ * owner agent; the description-only branch carries no such guard, and needs
+ * none — it writes no part of the naming namespace).
  *
- * The subtlety the `stripDmPrefix` covers: an agent space surfaces under two
- * name shapes. The `WorkspaceListItem` carries a UI `dm-` prefix
- * (`workspaceToListItem`), e.g. `dm-Norman`; the backend archived aggregate
- * returns the bare agent name (`insertAgentHome` sets `name = agent.name`),
- * e.g. `Norman`. Both normalize to the same agent name.
+ * WHY NO `@` ANYWHERE (#task:2044, shiki 2026-08-17): an agent-home workspace is
+ * an AGENT SPACE, and since #task:2035 the product also has real direct messages
+ * (DirectPair) sitting right next to it in the rail. `@<agent>` and "DM" belong
+ * to the pair; keeping them on the agent space is what made one name mean two
+ * things in a single dropdown. The agent space reads as the agent's NAME on
+ * every surface — the recognition form the rail and titlebar have used since
+ * #task:1768.
  *
- * The internal identifiers (`kind: 'dm'`, the `dm-` prefix, `dm_agent_id`, the
- * rail section's `persistId="dm"`) are deliberately untouched: they are storage
- * and wire identity, not copy, and renaming `persistId` would silently reset
- * every user's collapse choice.
+ * Still deliberately untouched: the rail section's `persistId="dm"` is storage
+ * identity, not copy — renaming it would silently reset every user's collapse
+ * choice. (`dm_agent_id`, the other name on that list, is gone: #task:2078 put the
+ * field back on its one true name, `owner_agent_id`.)
  */
 
-/** Strip the internal `dm-` list prefix when present; bare names pass through.
- *  Only a leading `dm-` is stripped, never an interior/partial match. */
-export function stripDmPrefix(name: string): string {
-  return name.startsWith('dm-') ? name.slice(3) : name;
-}
-
-/** Canonical agent-space label: the bound agent's name, no `@` and no prefix.
- *  An agent space is 1:1 with an agent, so it reads as that agent everywhere —
- *  the handle form is reserved for the direct pair (#task:2044). */
-export function agentSpaceLabel(name: string): string {
-  return stripDmPrefix(name);
-}
-
-/** Display name for a workspace in any picker / filter / result row: the bare
- *  name for a regular workspace, the agent's name for an agent space. */
-export function workspaceDisplayName(workspace: {
-  name: string;
-  kind: 'regular' | 'dm';
-}): string {
-  return workspace.kind === 'dm' ? agentSpaceLabel(workspace.name) : workspace.name;
-}
-
-/** Recognition label for an agent space when the bound agent is resolved: its
- *  DISPLAY name, which `agentSpaceLabel` cannot reach from a workspace name
- *  alone (#task:1768 — the drift shiki caught was the rail showing the display
- *  name while the titlebar showed the handle). Falls back to the agent's handle,
- *  then to the bare workspace name. */
-export function dmRecognitionName(
+/**
+ * Recognition label for an agent space when the bound agent is RESOLVED: its
+ * display name, which the workspace name cannot supply (#task:1768 — the drift
+ * shiki caught was the rail showing the display name while the titlebar showed
+ * the handle). This is the one place a label still beats `workspace.name`,
+ * because `display_name` is mutable while the handle baked into the workspace
+ * name is not. Falls back to the agent's handle, then to the workspace name.
+ */
+export function agentSpaceRecognitionName(
   workspaceName: string,
   agent: { display_name?: string | null; name?: string | null } | undefined,
 ): string {
-  return agent?.display_name?.trim() || agent?.name || stripDmPrefix(workspaceName);
+  return agent?.display_name?.trim() || agent?.name || workspaceName;
 }

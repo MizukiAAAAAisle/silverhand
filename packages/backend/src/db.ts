@@ -11,11 +11,19 @@ import { basename, dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as Db } from 'better-sqlite3';
 import {
-  CURRENT_SCHEMA_VERSION,
-  MIN_SUPPORTED_SCHEMA_VERSION,
+  CURRENT_MIGRATION_STEP,
   migrations as defaultMigrations,
 } from '@silverhand/shared/db/migrations';
 import type { Migration } from '@silverhand/shared/db/migrations';
+import { BASELINE_MIGRATION_STEP } from '@silverhand/shared/db/baseline-schema';
+import {
+  CURRENT_SCHEMA_EPOCH,
+  MIN_SUPPORTED_MIGRATION_STEP,
+  MIN_SUPPORTED_SCHEMA_EPOCH,
+  classifyMigrationLedger,
+  epochForMigrationStep,
+  reportedEpochForAppliedStep,
+} from '@silverhand/shared/db/schema-epochs';
 
 export interface OpenDatabaseOptions {
   busyTimeoutMs?: number;
@@ -38,8 +46,8 @@ export function openDatabase(filepath: string, opts: OpenDatabaseOptions = {}): 
     db.pragma('foreign_keys = ON');
     const migrationDb = db;
     const result = runMigrations(db, {
-      expectedVersion: CURRENT_SCHEMA_VERSION,
-      minimumSupportedVersion: MIN_SUPPORTED_SCHEMA_VERSION,
+      expectedStep: CURRENT_MIGRATION_STEP,
+      minimumSupportedStep: MIN_SUPPORTED_MIGRATION_STEP,
       allowSchemaUpgrade: opts.allowSchemaUpgrade ?? false,
       backupPathHint:
         filepath === ':memory:' ? undefined : backupDataDirPathHint(filepath),
@@ -93,6 +101,7 @@ export type DatabaseMigrationErrorCode =
   | 'schema_too_old'
   | 'schema_too_new'
   | 'schema_upgrade_disabled'
+  | 'schema_ledger_inconsistent'
   | 'migration_backup_failed'
   | 'migration_locked';
 
@@ -108,8 +117,8 @@ export class DatabaseMigrationError extends Error {
 
 export interface RunMigrationsOptions {
   migrations?: Migration[];
-  minimumSupportedVersion?: number;
-  expectedVersion?: number;
+  minimumSupportedStep?: number;
+  expectedStep?: number;
   allowSchemaUpgrade?: boolean;
   backupPathHint?: string;
   backupBeforeMigration?: (info: MigrationBackupInfo) => string;
@@ -117,15 +126,25 @@ export interface RunMigrationsOptions {
 }
 
 export interface MigrationRunResult {
-  beforeVersion: number;
-  afterVersion: number;
-  appliedVersions: number[];
+  /** Highest migration step applied before this run (internal axis). */
+  beforeStep: number;
+  /** Highest migration step applied after this run (internal axis). */
+  afterStep: number;
+  /** The steps this run applied, in order. */
+  appliedSteps: number[];
+  /**
+   * Outward schema epoch before / after this run (#task:2103). Derived, never
+   * stored: a run that stops partway through an epoch reports the PREVIOUS epoch
+   * on both sides, because the epoch has not been reached.
+   */
+  beforeEpoch: number;
+  afterEpoch: number;
   backupPath: string | null;
 }
 
 export interface MigrationBackupInfo {
-  fromVersion: number;
-  toVersion: number;
+  fromStep: number;
+  toStep: number;
 }
 
 export function runMigrations(
@@ -133,16 +152,16 @@ export function runMigrations(
   opts: RunMigrationsOptions = {},
 ): MigrationRunResult {
   const migrationPlan = opts.migrations ?? defaultMigrations;
-  const expectedVersion =
-    opts.expectedVersion ?? latestMigrationVersion(migrationPlan);
-  const minimumSupportedVersion = opts.minimumSupportedVersion ?? 0;
+  const expectedStep =
+    opts.expectedStep ?? latestMigrationStep(migrationPlan);
+  const minimumSupportedStep = opts.minimumSupportedStep ?? 0;
   const allowSchemaUpgrade = opts.allowSchemaUpgrade ?? true;
 
-  const beforeVersion = currentSchemaVersion(db);
-  guardSchemaVersion(db, {
-    currentVersion: beforeVersion,
-    minimumSupportedVersion,
-    expectedVersion,
+  const beforeStep = currentMigrationStep(db);
+  guardMigrationStep(db, {
+    currentStep: beforeStep,
+    minimumSupportedStep,
+    expectedStep,
   });
 
   db.exec(`
@@ -160,26 +179,62 @@ export function runMigrations(
       .map(r => r.version),
   );
 
+  // The ledger must be a legal PREFIX of the plan before anything is applied
+  // (#task:2103). A crash mid-epoch is expected and resumable; a hole is not
+  // recoverable information, and the old behavior — "apply whatever is not in the
+  // ledger, in plan order" — would silently replay a step out of order on top of
+  // a schema that is already past it. Fail loud instead of guessing.
+  const ledger = classifyMigrationLedger([...applied], migrationPlan);
+  if (ledger.kind === 'inconsistent') {
+    const details = [
+      ledger.missingSteps.length > 0
+        ? `missing step(s) ${ledger.missingSteps.join(', ')} below applied step ${ledger.appliedThroughStep}`
+        : null,
+      ledger.unexpectedSteps.length > 0
+        ? `step(s) ${ledger.unexpectedSteps.join(', ')} applied that this build does not define`
+        : null,
+    ]
+      .filter(Boolean)
+      .join('; ');
+    throw new DatabaseMigrationError(
+      'schema_ledger_inconsistent',
+      `DB migration ledger is not a prefix of this build's migration plan (${details}); `
+        + 'refusing to guess an upgrade order — restore the pre-upgrade backup or repair the ledger by hand',
+    );
+  }
+
   const insertMigration = db.prepare(
     'INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)',
   );
   const pendingMigrations = migrationPlan.filter(m => !applied.has(m.version));
-  const upgradesExistingDb = beforeVersion > 0 && pendingMigrations.length > 0;
+  const upgradesExistingDb = beforeStep > 0 && pendingMigrations.length > 0;
   if (upgradesExistingDb && !allowSchemaUpgrade) {
     throw new DatabaseMigrationError(
       'schema_upgrade_disabled',
-      `DB schema upgrade from v${beforeVersion} to v${expectedVersion} is disabled; set SILVERHAND_MIGRATE=1 to back up the data directory and apply migrations${
-        opts.backupPathHint ? `; backup will be written to ${opts.backupPathHint}` : ''
-      }`,
+      `DB schema upgrade from epoch ${reportedEpochForAppliedStep(beforeStep)} to epoch ${reportedEpochForAppliedStep(expectedStep)} `
+        + `(migration steps ${beforeStep} -> ${expectedStep}) is disabled; `
+        + 'set SILVERHAND_MIGRATE=1 to back up the data directory and apply migrations'
+        + (opts.backupPathHint ? `; backup will be written to ${opts.backupPathHint}` : ''),
     );
   }
 
   let backupPath: string | null = null;
   if (upgradesExistingDb && opts.backupBeforeMigration) {
+    // One backup per migration RUN, never one per step — and a resumed partial
+    // upgrade is a new run, so it backs up again (#task:2103, contract set by
+    // shiki). This is a deliberate CHOICE, not a structural necessity: a legal
+    // partial ledger is already sufficient authority to suppress the second
+    // backup, because a target-epoch step only lands after that run's backup
+    // succeeded, so `classifyMigrationLedger(...).progress.kind === 'partial'`
+    // means "this upgrade already started and was already backed up". We keep the
+    // per-run backup anyway: each attempt captures the mid-epoch state the prior
+    // backup could not, and the pre-upgrade backup stays the rollback target.
+    // Retention is operator-owned, so a crash-looping start leaves one backup
+    // directory per attempt.
     try {
       backupPath = opts.backupBeforeMigration({
-        fromVersion: beforeVersion,
-        toVersion: expectedVersion,
+        fromStep: beforeStep,
+        toStep: expectedStep,
       });
     } catch (err) {
       throw new DatabaseMigrationError(
@@ -217,7 +272,7 @@ export function runMigrations(
       insertMigration.run(m.version, m.name, Date.now());
     }).exclusive();
 
-  const appliedVersions: number[] = [];
+  const appliedSteps: number[] = [];
   for (const m of migrationPlan) {
     if (applied.has(m.version)) continue;
     if (m.foreignKeyEscape) {
@@ -233,26 +288,36 @@ export function runMigrations(
       applySingleMigration(m);
     }
     applied.add(m.version);
-    appliedVersions.push(m.version);
+    appliedSteps.push(m.version);
   }
-  if (appliedVersions.length === 0) {
+  if (appliedSteps.length === 0) {
     // Even a no-op migration phase takes an exclusive lock probe so concurrent
     // startup/admin migration attempts fail fast instead of silently racing
     // past each other before the HTTP listener is ready.
     db.transaction(() => undefined).exclusive();
   }
-  const afterVersion = currentSchemaVersion(db);
-  if (afterVersion > expectedVersion) {
+  const afterStep = currentMigrationStep(db);
+  if (afterStep > expectedStep) {
     throw new DatabaseMigrationError(
       'schema_too_new',
-      `DB schema v${afterVersion} is newer than supported v${expectedVersion}; running an old server against a newer DB is unsupported`,
+      `DB schema is at migration step ${afterStep}, past the newest step ${expectedStep} `
+        + `this build knows (it ships schema epoch ${CURRENT_SCHEMA_EPOCH}); `
+        + 'running an old server against a newer DB is unsupported',
     );
   }
   opts.onMigrationsApplied?.();
-  return { beforeVersion, afterVersion, appliedVersions, backupPath };
+  return {
+    beforeStep,
+    afterStep,
+    appliedSteps,
+    beforeEpoch: reportedEpochForAppliedStep(beforeStep),
+    afterEpoch: reportedEpochForAppliedStep(afterStep),
+    backupPath,
+  };
 }
 
-export function currentSchemaVersion(db: Db): number {
+/** Highest migration step recorded in the ledger (internal axis). */
+export function currentMigrationStep(db: Db): number {
   if (!migrationTableExists(db)) return 0;
   const row = db
     .prepare<[], { version: number | null }>(
@@ -260,6 +325,16 @@ export function currentSchemaVersion(db: Db): number {
     )
     .get();
   return row?.version ?? 0;
+}
+
+/**
+ * Outward schema epoch of a database, derived from its ledger (#task:2103).
+ *
+ * Nothing stores this. A database stopped partway through an epoch reports the
+ * previous epoch, because it has not reached the new one.
+ */
+export function currentSchemaEpoch(db: Db): number {
+  return reportedEpochForAppliedStep(currentMigrationStep(db));
 }
 
 function migrationTableExists(db: Db): boolean {
@@ -276,27 +351,57 @@ function migrationTableExists(db: Db): boolean {
   );
 }
 
-function guardSchemaVersion(
+/**
+ * Refuse a database this build must not serve, BEFORE anything is written.
+ *
+ * The comparison is on the STEP axis on purpose (#task:2103): step order is
+ * strictly finer than epoch order, so this also catches the one case epoch
+ * comparison cannot — a database a newer binary upgraded only PARTWAY through an
+ * epoch, where both sides still report the same epoch. The messages name the
+ * epoch because that is the number a release announces, and add the step so an
+ * operator can locate the exact ledger row.
+ *
+ * The two too-old cases are different failures and say so (#task:2103). Below the
+ * BASELINE step is a safety refusal: the baseline is a full CREATE, so running it
+ * on a populated pre-baseline DB would rebuild live tables. Between the baseline
+ * and the support-policy floor is a policy refusal: the path exists, this release
+ * just does not promise it. They coincide today, and that is precisely why the
+ * texts have to distinguish them.
+ */
+function guardMigrationStep(
   db: Db,
   opts: {
-    currentVersion: number;
-    minimumSupportedVersion: number;
-    expectedVersion: number;
+    currentStep: number;
+    minimumSupportedStep: number;
+    expectedStep: number;
   },
 ): void {
-  if (opts.currentVersion > opts.expectedVersion) {
+  if (opts.currentStep > opts.expectedStep) {
     throw new DatabaseMigrationError(
       'schema_too_new',
-      `DB schema v${opts.currentVersion} is newer than supported v${opts.expectedVersion}; running an old server against a newer DB is unsupported`,
+      `DB schema is at migration step ${opts.currentStep} (schema epoch ${reportedEpochForAppliedStep(opts.currentStep)}), `
+        + `past the newest step ${opts.expectedStep} this build knows (it ships schema epoch ${CURRENT_SCHEMA_EPOCH}); `
+        + 'running an old server against a newer DB is unsupported',
     );
   }
-  const isEmpty = opts.currentVersion === 0 && !hasApplicationSchema(db);
-  if (!isEmpty && opts.currentVersion < opts.minimumSupportedVersion) {
+  const isEmpty = opts.currentStep === 0 && !hasApplicationSchema(db);
+  if (isEmpty || opts.currentStep >= opts.minimumSupportedStep) return;
+  const at = `DB schema is at migration step ${opts.currentStep} (schema epoch ${reportedEpochForAppliedStep(opts.currentStep)}), `;
+  if (opts.currentStep < BASELINE_MIGRATION_STEP) {
     throw new DatabaseMigrationError(
       'schema_too_old',
-      `DB schema v${opts.currentVersion} is older than minimum supported v${opts.minimumSupportedVersion}; run migration manually before starting this server`,
+      at
+        + `below the baseline step ${BASELINE_MIGRATION_STEP}, whose migration is a full CREATE; `
+        + 'upgrade through an intermediate release first — this build cannot rebuild an existing pre-baseline schema',
     );
   }
+  throw new DatabaseMigrationError(
+    'schema_too_old',
+    at
+      + `below the oldest schema epoch ${epochForMigrationStep(opts.minimumSupportedStep) ?? MIN_SUPPORTED_SCHEMA_EPOCH} this build supports upgrading from `
+      + `(its first migration step is ${opts.minimumSupportedStep}); `
+      + 'run migration manually before starting this server',
+  );
 }
 
 function hasApplicationSchema(db: Db): boolean {
@@ -313,7 +418,7 @@ function hasApplicationSchema(db: Db): boolean {
   return rows.length > 0;
 }
 
-function latestMigrationVersion(migrationPlan: Migration[]): number {
+function latestMigrationStep(migrationPlan: Migration[]): number {
   return migrationPlan.reduce(
     (maxVersion, migration) => Math.max(maxVersion, migration.version),
     0,
@@ -324,8 +429,8 @@ export function backupDataDirBeforeMigration(
   db: Db,
   opts: {
     dbPath: string;
-    fromVersion: number;
-    toVersion: number;
+    fromStep: number;
+    toStep: number;
   },
 ): string {
   db.pragma('wal_checkpoint(TRUNCATE)');

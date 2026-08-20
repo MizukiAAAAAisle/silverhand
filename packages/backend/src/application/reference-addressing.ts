@@ -63,11 +63,14 @@ export interface UnresolvedReferenceInput {
    *  They differ only for an agent's cross-conversation send, where the
    *  reference has to be answered by the place the message landed. */
   targetConversationId: string;
-  /** Agents the send reached OUT OF BAND, by writing a mention CC copy into
-   *  their inbox. They are addressed BECAUSE they are not participants here —
-   *  the CC exists for exactly that case — so without this set the one mechanism
-   *  built to reach a non-participant would report as a failure to reach them.
-   *  Empty for an actor kind whose policy carries no CC. */
+  /** Agents the send reached OUT OF BAND, by writing a mention CC copy into the
+   *  author's direct line with them. They are addressed BECAUSE they are not
+   *  participants here — the CC exists for exactly that case — so without this
+   *  set the one mechanism built to reach a non-participant would report as a
+   *  failure to reach them. Empty for an actor kind whose policy carries no CC,
+   *  and for a mention the CC declined to copy (an agent the author may open no
+   *  direct line to), which is then reported as unresolved — reason-free, like
+   *  every other arm here. */
   ccReachedAgentIds: ReadonlySet<string>;
 }
 

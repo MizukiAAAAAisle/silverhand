@@ -12,8 +12,7 @@ async function makeAgent(t: TestApp, name: string): Promise<{
   ).json() as any;
   const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
   const home = workspaces.workspaces.find(
-    (w: any) =>
-      w.workspace_kind === 'agent_home' && w.owner_agent_id === created.agent.id,
+    (w: any) => w.owner_agent_id === created.agent.id,
   );
   t.fake.starts = [];
   t.fake.delivered = [];

@@ -44,7 +44,6 @@ function conversation(
   return {
     id: CONV,
     workspace_id: WORKSPACE_ID,
-    inbox_agent_id: null,
     title: title.title,
     title_key: title.key,
     placement_kind: 'workspace',
@@ -61,7 +60,7 @@ function conversation(
 function root(overrides: Partial<StreamNamingRoot> = {}): StreamNamingRoot {
   const name = fixedWorkspaceName('silverhand');
   return {
-    workspace_kind: 'regular',
+    owner_agent_id: null,
     name: name.name,
     name_key: name.key,
     ...overrides,
@@ -123,20 +122,24 @@ describe('a workspace-placed stream is named by its two names', () => {
   });
 
   it('names an agent-home placement by id, and says so without alarm', () => {
-    // The benign reason, and the ROOT's kind decides it — see below for why that
-    // is not the same question as "is `name_key` null".
-    const home = root({ workspace_kind: 'agent_home', name_key: null });
+    // The benign reason, and the ROOT's OWNERSHIP decides it — see below for why
+    // that is not the same question as "is `name_key` null".
+    const home = root({ owner_agent_id: VIEWER, name_key: null });
     expect(naming(conversation(), lookups({ rootOf: () => home }))).toEqual({
       kind: 'unnameable',
       reason: 'agent_home',
     });
   });
 
-  it('does not report corruption as privacy: a regular root with no key is unrenderable', () => {
-    // `workspaces.name_key IS NULL` is the agent-home INVARIANT, so a `regular`
-    // row in that state came from somewhere else. Reporting it as `agent_home`
-    // would hide it in the one bucket an operator is told to ignore.
-    const broken = root({ workspace_kind: 'regular', name_key: null });
+  it('does not report corruption as privacy: an unowned root with no key is unrenderable', () => {
+    // THE TRIPWIRE, and the only machine that can reach it. Two schema CHECKs tie
+    // `name_key IS NULL` and `owner_agent_id IS NOT NULL` to each other, so no row
+    // the DB accepted can be in this state — it is reachable only by hand-building
+    // the struct and calling the pure function, which is exactly why the cell
+    // exists: a future table rebuild that loses the CHECK gets caught here instead
+    // of silently reporting corruption as the one bucket operators are told to
+    // ignore.
+    const broken = root({ owner_agent_id: null, name_key: null });
     expect(naming(conversation(), lookups({ rootOf: () => broken }))).toEqual({
       kind: 'unnameable',
       reason: 'unrenderable',
@@ -262,24 +265,5 @@ describe('a direct pair is spelled in the first person', () => {
       endpoint_a_id: VIEWER,
     });
     expect(() => naming(half)).toThrow(/missing an endpoint coordinate/);
-  });
-});
-
-describe('an agent inbox is addressed by id, by design', () => {
-  it('is id_only and is not a fallback', () => {
-    // Counting it would bury the three real reasons under traffic no naming
-    // machinery could ever remove.
-    const inbox = conversation({
-      workspace_id: null,
-      inbox_agent_id: VIEWER,
-      placement_kind: 'agent_inbox',
-    });
-    expect(naming(inbox)).toEqual({ kind: 'id_only' });
-    expect(
-      formatStreamAddressToken(
-        { conversationId: requireAddressableId(CONV, 'test id'), threadRootId: null },
-        naming(inbox),
-      ).fallback,
-    ).toBeNull();
   });
 });

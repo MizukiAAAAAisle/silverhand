@@ -42,7 +42,7 @@ async function favorites(t: TestApp): Promise<any[]> {
 function dmOf(t: TestApp, agentId: string): { wsId: string; dmChannelId: string } {
   const ws = t.ctx.db
     .prepare<[string], { id: string }>(
-      `SELECT id FROM workspaces WHERE owner_agent_id = ? AND workspace_kind = 'agent_home'`,
+      `SELECT id FROM workspaces WHERE owner_agent_id = ?`,
     )
     .get(agentId);
   expect(ws).toBeTruthy();

@@ -364,10 +364,10 @@ describe('AgentTeardownUnitOfWork (SQLite adapter) — FK cascade contract', () 
     t.db
       .prepare(
         `INSERT INTO conversations
-           (id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+           (id, workspace_id, placement_kind, roster_policy,
             endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
             title, status, created_at, updated_at)
-         VALUES ('dp-1', NULL, NULL, 'direct_pair', 'fixed',
+         VALUES ('dp-1', NULL, 'direct_pair', 'fixed',
                  'agent', ?, 'agent', ?, 'DM', 'idle', ?, ?)`,
       )
       .run(lo, hi, 1, 1);

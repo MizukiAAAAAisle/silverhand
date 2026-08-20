@@ -145,7 +145,6 @@ describe('DirectPair aggregate: get-or-create', () => {
           roster_policy: 'fixed',
           visibility: 'private',
           workspace_id: null,
-          inbox_agent_id: null,
           archived_at: null,
           endpoint_a_deleted_at: null,
           endpoint_b_deleted_at: null,
@@ -335,13 +334,12 @@ describe('DirectPair aggregate: participation authority', () => {
     }
   });
 
-  it('still resolves the WORKSPACE arm through its roster, and the inbox through its column', () => {
+  it('still resolves the WORKSPACE arm through its roster', () => {
     const f = setup();
     try {
       // The placement gate narrows the roster EXISTS to the arm that owns it, so
       // the regression it could cause is the opposite one: a channel member must
-      // still be a participant, and an inbox — which has no roster row at all —
-      // must still resolve through `inbox_agent_id`.
+      // still be a participant.
       const workspaces = new WorkspaceRepo(f.t.ctx.db);
       const ws = workspaces.insert({ name: fixedWorkspaceName('dp-room-ws'), description: null });
       const channel = f.conversations.insertChannel({
@@ -352,15 +350,6 @@ describe('DirectPair aggregate: participation authority', () => {
       expect(f.conversations.isAgentParticipant(channel.id, f.alice.id)).toBe(false);
       f.conversations.addAgent(channel.id, f.alice.id);
       expect(f.conversations.isAgentParticipant(channel.id, f.alice.id)).toBe(true);
-
-      // The inbox is built explicitly: `AgentRepo.create` is the row, while the
-      // AGGREGATE (row plus inbox placement) is assembled by the provisioning
-      // factory this fixture deliberately does not run.
-      const inbox = f.conversations.insertAgentInbox(f.alice.id, NOW);
-      expect(f.conversations.getAgentInbox(f.alice.id)?.id).toBe(inbox.id);
-      expect(f.conversations.listAgents(inbox.id)).toEqual([]);
-      expect(f.conversations.isAgentParticipant(inbox.id, f.alice.id)).toBe(true);
-      expect(f.conversations.isAgentParticipant(inbox.id, f.bob.id)).toBe(false);
     } finally {
       f.t.cleanup();
     }
@@ -416,9 +405,9 @@ describe('DirectPair aggregate: participation authority', () => {
  * So the oracle varies the two conjuncts INDEPENDENTLY rather than asserting
  * `false` on a DM and stopping:
  *   - hold participation at its maximum (an endpoint, the owner, an admin) and
- *     vary the roster axis ⇒ every `fixed` roster is false, in all three
- *     placements, including the legacy WORKSPACE-placed `dm_channel` that has both
- *     a workspace and a real roster table;
+ *     vary the roster axis ⇒ every `fixed` roster is false, in both placements
+ *     that can hold one, including the legacy WORKSPACE-placed `dm_channel` that
+ *     has both a workspace and a real roster table;
  *   - hold the roster axis at `open` and vary participation ⇒ still true for a
  *     member and false for an outsider, so the narrowing did not degenerate into
  *     "member-add is never allowed", which would pass a `return false` stub.
@@ -434,7 +423,6 @@ describe('DirectPair aggregate: member-add capability', () => {
       const admin = f.t.viewerUserId;
 
       const dm = f.conversations.getOrCreateDirectPair(f.alice, f.viewer, NOW).conversation;
-      const inbox = f.conversations.insertAgentInbox(f.alice.id, NOW);
       // The legacy arm: `placement_kind = 'workspace'`, an allocated address, a
       // roster that physically accepts rows — and `roster_policy = 'fixed'`, which
       // is the only reason it must refuse. Reading the generated `kind` instead
@@ -451,7 +439,6 @@ describe('DirectPair aggregate: member-add capability', () => {
 
       for (const [label, id, insider] of [
         ['direct_pair', dm.id, running(f.alice.id, dm.id)],
-        ['agent_inbox', inbox.id, running(f.alice.id, inbox.id)],
         ['legacy dm_channel', legacyDm.id, running(f.alice.id, legacyDm.id)],
       ] as const) {
         // The insider IS a participant — asserted, so the `false` below cannot be

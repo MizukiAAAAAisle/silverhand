@@ -250,7 +250,6 @@ export function createSqliteConversationPersistence(
           return row === null
             ? null
             : {
-                workspace_kind: row.workspace_kind,
                 owner_agent_id: row.owner_agent_id,
               };
         },
@@ -349,11 +348,14 @@ export function createSqliteConversationPersistence(
     // `listUserMembers` — those answer the workspace arm only, so a rosterless
     // placement enumerated to nobody (#task:2021 P4-5).
     listParticipantAgentIds: id => conversations.listParticipantAgentIds(id),
-    // Projection point: the inbox arc's only fact the CC write may see is the
-    // id (its `workspace_id` is NULL by construction and its roster is empty).
-    agentInbox: agentId => {
-      const inbox = conversations.getAgentInbox(agentId);
-      return inbox ? { id: inbox.id } : null;
+    // Projection point, and the one WRITE on this face: the mention CC's pair is
+    // minted INSIDE the send transaction (#task:2072), so it has to come from the
+    // transaction's own scope rather than a captured repo. Id only —
+    // `openDirectPair` reads nothing else off the row, and the announcement is not
+    // on this scope by construction.
+    getOrCreateDirectPair: (x, y, now) => {
+      const opened = conversations.getOrCreateDirectPair(x, y, now);
+      return { conversation: { id: opened.conversation.id }, created: opened.created };
     },
   };
 
@@ -362,22 +364,12 @@ export function createSqliteConversationPersistence(
     // literally the list below, auditable without reading MessageRepo (R3).
     messages: {
       insertForConversation: args => messages.insertForConversation(args),
-      insertForConversationIfFresh: args => messages.insertForConversationIfFresh(args),
-      streamHeadLatestSeq: (conversationId, threadRootId) =>
-        messages.streamHeadLatestSeq(conversationId, threadRootId),
       getInConversation: (conversationId, messageId) =>
         messages.getInConversation(conversationId, messageId),
       replyCountsByRoot: (conversationId, rootMessageIds) =>
         messages.replyCountsByRoot(conversationId, rootMessageIds),
       threadListEntryForRoot: (conversationId, rootId) =>
         messages.threadListEntryForRoot(conversationId, rootId),
-      listStreamWindowMeta: (conversationId, threadRootId, afterSeq, throughSeq) =>
-        messages.listStreamWindowMeta(
-          conversationId,
-          threadRootId,
-          afterSeq,
-          throughSeq,
-        ),
       listStreamBelowSeq: (conversationId, threadRootId, beforeSeq) =>
         messages.listStreamBelowSeq(conversationId, threadRootId, beforeSeq),
     },
@@ -418,6 +410,12 @@ export function createSqliteConversationPersistence(
       ensureDelivery: (conversationId, agentId, messageId, deliveryKind) => {
         inboxes.ensureDelivery(conversationId, agentId, messageId, deliveryKind);
       },
+      hasUndeliveredForPair: (conversationId, agentId) =>
+        inboxes.hasUndeliveredForPair(conversationId, agentId),
+      hasUndeliveredForAgent: agentId => inboxes.hasUndeliveredForAgent(agentId),
+      countQueuedForPair: (conversationId, agentId) =>
+        inboxes.countQueuedForPair(conversationId, agentId),
+      countQueuedForAgent: agentId => inboxes.countQueuedForAgent(agentId),
     },
     threadFollowers: {
       upsert: args => threadFollowers.upsert(args),
@@ -471,10 +469,11 @@ export function createSqliteConversationPersistence(
      * (`conversation-persistence.test.ts` points a second connection at it)
      * rather than a comment.
      *
-     * The freshness CAS stays exactly as it was and is still the ONLY mechanism
-     * for the per-stream head: `insertForConversationIfFresh` runs its own nested
-     * savepoint so a CAS miss rolls back the burned seq without aborting this
-     * transaction.
+     * The freshness guard (#task:2095) is one EXISTS read inside this same
+     * transaction — `inboxes.hasUndeliveredFor{Pair,Agent}` on the runtime's
+     * delivery scope — so it takes no separate lock and needs no nested savepoint:
+     * there is no burned seq to roll back, because freshness is now a boolean
+     * property of the runtime's undelivered inbox, not a per-stream CAS.
      */
     atomically<T>(fn: (tx: MessageTxScope) => T): T {
       assertMessageTxRoot();

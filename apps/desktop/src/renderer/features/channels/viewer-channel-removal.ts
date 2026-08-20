@@ -323,8 +323,8 @@ export interface ChannelKeyClassification {
  *
  * Root granularity is deliberate and is the honest unit: a root is what a key's
  * first segment declares, and `workspaces` proves why it must carry a SET of
- * verdicts — its channel lists are refetch-authoritative, its unread partitions
- * are patched by a registry entry, and its member/capability slices carry no
+ * verdicts — its channel lists are refetch-authoritative, its unread map is
+ * patched by a registry entry, and its member/capability slices carry no
  * channel attribution. Recording one verdict per root would force a lie.
  *
  * §12.1#9 RESIDUAL: the scan recognizes the three key shapes the codebase
@@ -454,7 +454,7 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
   workspaces: {
     verdicts: ['cleaned', 'refetch-authoritative', 'exempt'],
     reason:
-      "one root, three answers: the message-unread partitions (['workspaces', ws, kind, 'message-unread']) are patched by registry `message-unread`; the channel + archived channel lists are refetch-authoritative and are what DETECTS the loss; members / capabilities / workspace list carry no channel attribution",
+      "one root, three answers: the message-unread map (['workspaces', ws, 'message-unread']) is patched by registry `message-unread`; the channel + archived channel lists are refetch-authoritative and are what DETECTS the loss; members / capabilities / workspace list carry no channel attribution",
   },
 };
 

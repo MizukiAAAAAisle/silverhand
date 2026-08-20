@@ -83,7 +83,7 @@ export interface TaskRepoReadPort {
   fetchTaskByNumber(boardKey: string, taskNumber: number): ResolvedTaskRow | null;
   fetchTaskById(taskId: string): ResolvedTaskRow | null;
   /** The board a conversation's placement yields ('ws:…' | 'pair:…'), or null
-   *  when it has none (agent_inbox / unknown / missing). Read-side twin of the
+   *  when it has none (unknown / missing placement). Read-side twin of the
    *  v76 derivation trigger — the trigger stays the write authority. */
   boardOfConversation(
     conversationId: string,

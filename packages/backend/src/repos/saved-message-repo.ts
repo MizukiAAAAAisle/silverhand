@@ -24,9 +24,10 @@ function newId(): string {
 }
 
 /** A saved artifact can only exist for a placement a HUMAN participates in:
- *  a workspace channel or a direct_pair. `agent_inbox` has no human participant
- *  (contract §1), so a saved row there is impossible — this is the fail-closed
- *  third arm. It deliberately does NOT reuse `ConversationPlacementError`
+ *  a workspace channel or a direct_pair — which since #task:2072 is the whole
+ *  placement alphabet. This is the fail-closed arm for a `placement_kind` outside
+ *  it: a future non-participatory placement, or a value no build of this server
+ *  writes. It deliberately does NOT reuse `ConversationPlacementError`
  *  ("not workspace-placed"), which is now wrong: `direct_pair` IS saveable, so
  *  the refusal is specifically "non-participatory placement", not "no workspace".
  */
@@ -38,7 +39,7 @@ export class SavedPlacementError extends Error {
     super(
       `conversation ${conversationId} has placement_kind=${placementKind}, ` +
         `which is not a saveable placement: only workspace | direct_pair carry a ` +
-        `human saved message (a human is never a participant of an agent_inbox)`,
+        `human saved message (a placement outside that set has no human to save for)`,
     );
     this.name = 'SavedPlacementError';
   }
@@ -59,51 +60,43 @@ interface JoinedRow extends SavedMessageRow, LinkedTaskProjectionRow {
   m_seq: number;
   m_created_at: number;
   m_thread_root_id: string | null;
-  // Place-projection columns. `workspace_*` and `channel_name` are NULL on the
-  // pair arm by construction (LEFT JOIN workspaces + a placement-guarded CASE);
-  // `placeFromRow` narrows on `placement_kind` and never reads them off the
-  // pair arm.
+  // Place-projection columns. `workspace_id` and `channel_name` are NULL on the
+  // pair arm by construction (a pair has no workspace coordinate, and the title
+  // column is behind a placement-guarded CASE); `placeFromRow` narrows on
+  // `placement_kind` and never reads them off the pair arm.
   placement_kind: ConversationPlacementKind;
   workspace_id: string | null;
-  workspace_kind: 'regular' | 'agent_space' | null;
   channel_name: string | null;
-  agent_name: string | null;
 }
 
 /** Build the `SavedPlace` union from a joined row, narrowing on the canonical
- *  `placement_kind` — NOT on `workspace_id` presence, which would mislabel an
- *  `agent_inbox` (whose `workspace_id IS NULL`) as a `direct_pair`. */
+ *  `placement_kind` — NOT on `workspace_id` presence, which would mislabel any
+ *  future workspace-less placement as a `direct_pair`. */
 function placeFromRow(row: JoinedRow): SavedPlace {
   switch (row.placement_kind) {
     case 'workspace': {
       // The arc CHECK guarantees a workspace-placed conversation has a workspace
-      // row (hence a kind) and a title. After the LEFT JOIN a NULL here can
-      // therefore only be a query mistake — fail loud, never fake-fill. The
-      // workspace NAME is intentionally NOT projected (F1): it is joined live
-      // from `['workspaces']` in the renderer, mirroring the shipped `TaskPlace`.
-      if (
-        row.workspace_id === null ||
-        row.workspace_kind === null ||
-        row.channel_name === null
-      ) {
+      // coordinate and a title, so a NULL here can only be a query mistake —
+      // fail loud, never fake-fill. The workspace NAME is intentionally NOT
+      // projected (F1): it is joined live from `['workspaces']` in the renderer,
+      // mirroring the shipped `TaskPlace`.
+      if (row.workspace_id === null || row.channel_name === null) {
         throw new Error(
           `saved place: workspace-placed conversation ${row.conversation_id} ` +
-            `is missing workspace projection columns (workspace_id/kind/channel_name)`,
+            `is missing workspace projection columns (workspace_id/channel_name)`,
         );
       }
       return {
         kind: 'workspace_channel',
         conversation_id: row.conversation_id,
         workspace_id: row.workspace_id,
-        workspace_kind: row.workspace_kind,
         channel_name: row.channel_name,
       };
     }
     case 'direct_pair':
       return { kind: 'direct_pair', conversation_id: row.conversation_id };
     default:
-      // agent_inbox (or any future non-participatory placement): save() refuses
-      // it at the write gate, so a row reaching this projection is a routing/query
+      // Any future non-participatory placement: save() refuses it at the write gate, so a row reaching this projection is a routing/query
       // bug, not an outcome to render.
       throw new SavedPlacementError(row.conversation_id, row.placement_kind);
   }
@@ -114,7 +107,6 @@ function rowToDto(row: JoinedRow, author: MessageAuthorDto | null): SavedMessage
     id: row.id,
     saved_at: row.saved_at,
     place: placeFromRow(row),
-    agent_name: row.agent_name,
     message: {
       id: row.m_id,
       conversation_id: row.m_conversation_id,
@@ -178,9 +170,14 @@ function extractAttachmentSnapshots(
  *  "INNER JOIN row vanishes" failure family). The row carries the placement
  *  columns `placeFromRow` narrows on; `workspace_*`/`channel_name` are NULL on
  *  the pair arm by construction. The write side (`save()`) is the fail-closed
- *  gate that keeps a non-participatory `agent_inbox` from ever producing a row
+ *  gate that keeps a non-participatory placement from ever producing a row
  *  here, and the read side (`listForUser`) re-derives live human participation
- *  from the canonical authority — this projection is display/namespace only. */
+ *  from the canonical authority — this projection is display/namespace only.
+ *
+ *  Identity: there is no `agents` join. Sender identity comes only from the
+ *  send-time snapshot columns (`m.author_*` → `MessageAuthorDto`); the live-FK
+ *  `agent_name` that used to sit beside it was retired in #task:2064 because a
+ *  hard-deleted agent nulls the FK and silently blanks the row. */
 const SELECT_JOINED = `
   SELECT
     sm.id              AS id,
@@ -204,20 +201,13 @@ const SELECT_JOINED = `
     ${LINKED_TASK_SELECT},
     conv.placement_kind AS placement_kind,
     conv.workspace_id   AS workspace_id,
-    CASE WHEN w.workspace_kind = 'agent_home' THEN 'agent_space'
-         WHEN w.workspace_kind = 'regular'    THEN 'regular'
-         ELSE NULL
-     END                AS workspace_kind,
     CASE WHEN conv.placement_kind = 'workspace'
          THEN conv.title
          ELSE NULL
-     END                AS channel_name,
-    a.name             AS agent_name
+     END                AS channel_name
   FROM saved_messages sm
   JOIN messages m ON m.id = sm.message_id
   JOIN conversations conv ON conv.id = sm.conversation_id
-  LEFT JOIN workspaces w ON w.id = conv.workspace_id
-  LEFT JOIN agents a  ON a.id  = m.from_agent_id
   ${LINKED_TASK_JOINS}
 `;
 
@@ -337,8 +327,8 @@ export class SavedMessageRepo {
     if (!ctx) return null;
     // Placement (§4.1): Saved is a HUMAN artifact, so it can only exist for a
     // placement a human participates in — a `workspace` channel or a
-    // `direct_pair`. `agent_inbox` (or any future non-participatory placement)
-    // has no human participant, so the route's ACL (`canViewConversation`) has
+    // `direct_pair`. A future non-participatory placement would have no human
+    // participant, so the route's ACL (`canViewConversation`) has
     // already refused; reaching this line means the ACL was bypassed, a routing
     // bug. Assert loudly rather than lean on a storage constraint: `INSERT OR
     // IGNORE` would suppress a violation exactly as it suppresses the duplicate

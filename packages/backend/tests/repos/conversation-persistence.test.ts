@@ -201,14 +201,14 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
     );
 
     let rivalError: unknown;
-    const head = persistence.message.uow.atomically(tx => {
-      const observed = tx.messages.streamHeadLatestSeq(channelId, null);
+    const observed = persistence.message.uow.atomically(tx => {
+      const found = tx.messages.getInConversation(channelId, 'no-such-message');
       try {
         revoke.run(channelId);
       } catch (err) {
         rivalError = err;
       }
-      return observed;
+      return found;
     });
 
     // THE load-bearing assertion, and the one that was FALSE before this change:
@@ -216,7 +216,7 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
     // lock is held, and this revocation would commit between the gate's answer
     // and the insert — the stale-authorization defect one layer below the gate.
     expect(rivalError).toMatchObject({ code: 'SQLITE_BUSY' });
-    expect(head).toBe(0);
+    expect(observed).toBeNull();
   });
 
   it('message UoW: the write lock is taken at BEGIN — contention surfaces before the callback runs a step', () => {
@@ -230,7 +230,7 @@ describe('SqliteConversationPersistence UnitOfWork policies', () => {
       try {
         persistence.message.uow.atomically(tx => {
           callbackRan = true;
-          return tx.messages.streamHeadLatestSeq(channelId, null);
+          return tx.messages.getInConversation(channelId, 'no-such-message');
         });
       } catch (err) {
         thrown = err;
@@ -397,11 +397,12 @@ describe('SqliteConversationPersistence workspace-keyed channel axis (#task:1987
     expect(facts).toEqual({
       keys: ['get', 'hasAgentMember', 'humanRole'],
       arities: [0, 1, 1],
-      // EXACTLY the deciding facts — no id, name, description or pin state. The
-      // callbacks consult `workspace_kind` and (agent_home) `owner_agent_id`, and
-      // nothing else may be reachable from a transaction that only promised to
-      // have read these under the lock.
-      snapshot: { workspace_kind: 'regular', owner_agent_id: null },
+      // EXACTLY the deciding facts — no id, name, description or pin state. Since
+      // #task:2082 that is ONE field: both "is this an agent home" and "whose" are
+      // the ownership relation, so the stored kind word is not reachable from a
+      // transaction either. Nothing else may be reachable from a callback that only
+      // promised to have read these under the lock.
+      snapshot: { owner_agent_id: null },
       agent: true,
       // The ROLE, not a boolean: the same row answers membership (non-null) and
       // governance (rank), so the two cannot drift apart.

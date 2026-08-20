@@ -64,7 +64,7 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' });
     const home = t.ctx.db
       .prepare<[], { id: string }>(
-        `SELECT id FROM workspaces WHERE workspace_kind = 'agent_home' LIMIT 1`,
+        `SELECT id FROM workspaces WHERE owner_agent_id IS NOT NULL LIMIT 1`,
       )
       .get();
     expect(home).toBeDefined();

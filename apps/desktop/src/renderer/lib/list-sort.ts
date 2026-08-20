@@ -1,7 +1,8 @@
 /**
  * Pure within-group sort for the user-selectable list ordering feature
  * (#task:1146). The renderer partitions a list into its live hard groups
- * (channel sidebar: `starred` / `unstarred`; workspace rail: `dm` / `regular` —
+ * (channel sidebar: `starred` / `unstarred`; workspace rail: `agent_space` /
+ * `regular` —
  * star is the global Favorites overlay, NOT a rail group, see #task:1252) and
  * applies this helper to EACH
  * group independently, then concatenates the groups in their fixed order.

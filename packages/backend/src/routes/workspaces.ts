@@ -29,7 +29,10 @@ import {
   inlineCode,
   systemSubtype,
   type NameAvailabilityDto,
+  type ViewerWorkspaceDto,
+  type Workspace,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
@@ -53,6 +56,37 @@ import { publishViewerWorkspacesChanged } from '../application/viewer-workspaces
 import { AgentHomeChannelError } from '../services/channel-service.js';
 import { channelServiceErrorResponse } from './responses.js';
 
+/**
+ * Domain `Workspace` → the human viewer's published face (#task:2069).
+ *
+ * THIS is the boundary the workspace context never had: before it, the repo's
+ * domain object was handed to `c.json` verbatim, so the stored container word
+ * reached the desktop and the renderer decoded it locally
+ * (`features/workspaces/hooks.ts`). There was no seam to convert the word at —
+ * hence the debt, not a decision.
+ *
+ * Every field is copied explicitly. A spread would republish whatever the domain
+ * shape gains next, which is how the two jobs got fused in the first place.
+ */
+function toViewerWorkspace(workspace: Workspace): ViewerWorkspaceDto {
+  return {
+    id: workspace.id,
+    name: workspace.name,
+    description: workspace.description,
+    // Every remaining field is a COPY. The one projection this function used to
+    // perform — stored container kind → published word — went out with the word
+    // itself (#task:2075): the wire carries `owner_agent_id`, the relation the
+    // word restated, and the renderer asks `isAgentHomeWorkspace*`.
+    owner_agent_id: workspace.owner_agent_id,
+    owner_user_id: workspace.owner_user_id,
+    dm_channel_id: workspace.dm_channel_id,
+    dm_channel_ids: workspace.dm_channel_ids,
+    archived_at: workspace.archived_at,
+    created_at: workspace.created_at,
+    updated_at: workspace.updated_at,
+  };
+}
+
 export interface WorkspacesRouteDeps {
   ctx: BackendContext;
   agents: AgentRepo;
@@ -74,7 +108,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       .list()
       .filter(workspace => canViewWorkspace(ctx, principal, workspace.id));
     return c.json({
-      workspaces: visible,
+      workspaces: visible.map(toViewerWorkspace),
       // Filter sort entries to the live SORTABLE set so neither a stale
       // entity_id (removed/non-member) nor an out-of-scope archived workspace
       // leaks on the wire — archived is shown in its own rail group, not sorted.
@@ -135,7 +169,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       case 'created':
         return c.json(
           {
-            workspace: result.success.workspace,
+            workspace: toViewerWorkspace(result.success.workspace),
             onboarding_channel_id: result.success.onboardingChannelId,
             channel: result.success.channel,
           },
@@ -175,14 +209,14 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     if (!canViewWorkspace(ctx, getUserPrincipal(c), workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    return c.json({ workspace });
+    return c.json({ workspace: toViewerWorkspace(workspace) });
   });
 
   app.patch(apiPaths.workspace(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace || isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'admin')) {
@@ -271,14 +305,14 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       }
     }
 
-    return c.json({ workspace: updated });
+    return c.json({ workspace: toViewerWorkspace(updated) });
   });
 
   app.patch('/api/workspaces/:id/archive', async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const workspace = workspaces.get(id);
-    if (!workspace || workspace.workspace_kind !== 'regular') {
+    if (!workspace || isAgentHomeWorkspace(workspace)) {
       return c.json({ error: 'workspace not found' }, 404);
     }
     if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'owner')) {
@@ -291,7 +325,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     }
     const updated = workspaces.setArchived(workspace.id, parsed.data.archived);
     if (!updated) return c.json({ error: 'archive update failed' }, 500);
-    return c.json({ workspace: updated });
+    return c.json({ workspace: toViewerWorkspace(updated) });
   });
 
   app.delete(apiPaths.workspace(':id'), async c => {
@@ -344,7 +378,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     // via the internal agent route, not this public endpoint.
     const viewerUserId = principal.userId;
     const channels =
-      workspace.workspace_kind === 'regular'
+      !isAgentHomeWorkspace(workspace)
         ? timedRouteSpan(
             ctx,
             'workspace.channels.list_active',
@@ -401,7 +435,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     // (archived DMs + the threads under them). It is kept SEPARATE from
     // the regular channel Archived view — same response shape, never
     // merged into one list (the DM list is its own sidebar collection).
-    if (workspace.workspace_kind !== 'regular') {
+    if (isAgentHomeWorkspace(workspace)) {
       const dmChannels = timedRouteSpan(
         ctx,
         'workspace.dm_channel.list_archived',
@@ -486,7 +520,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'admin')) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    if (workspace.workspace_kind === 'agent_home') {
+    if (isAgentHomeWorkspace(workspace)) {
       // `public` is a regular-channel-only concept: the DB CHECK ties it to
       // open-roster conversation, but the agent_home path mints a fixed-roster
       // row via createAgentHomeDmChannel (which takes no visibility). Reject an
@@ -516,15 +550,13 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         });
         return c.json({ channel }, 201);
       } catch (err) {
-        // The agent_home owner guards keep their exact `{ error }`-only bodies
-        // (no `code`) — they must NOT go through `channelServiceErrorResponse`,
-        // which adds a `code`. Every other failure (a transaction SqliteError,
-        // or the unreachable workspace/kind defensive guards) rethrows → a
+        // The agent_home owner guard keeps its exact `{ error }`-only body (no
+        // `code`) — it must NOT go through `channelServiceErrorResponse`, which
+        // adds a `code`. Every other failure (a transaction SqliteError, or the
+        // unreachable workspace/suitability defensive guards) rethrows → a
         // generic 500.
         if (err instanceof AgentHomeChannelError) {
           switch (err.code) {
-            case 'agent_home_missing_owner':
-              return c.json({ error: 'agent_home workspace missing owner' }, 500);
             case 'agent_home_owner_not_found':
               return c.json({ error: 'agent_home owner not found' }, 404);
             default: {

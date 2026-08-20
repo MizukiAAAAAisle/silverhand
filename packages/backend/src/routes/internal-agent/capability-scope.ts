@@ -3,30 +3,28 @@
 //
 // A capability is a GRANT INSIDE A WORKSPACE: `canAgentUseCapability` resolves
 // it from the (workspace, agent) row, and a human configures it on the workspace
-// roster. An `agent_inbox` has no workspace — so there is no row to read and no
+// roster. A `direct_pair` has no workspace — so there is no row to read and no
 // surface on which anyone could ever grant one. Handing its null coordinate to
 // `requireAgentCapability` therefore denies EVERY act: the agent could not read,
-// reply, react or open an attachment in its OWN inbox, and no human could fix
-// it. That denial would be an accident of a missing coordinate, not a decision.
+// reply, react or open an attachment in a DM it is an endpoint of, and no human
+// could fix it. That denial would be an accident of a missing coordinate, not a
+// decision.
 //
-// The placement itself is the authority instead. An `agent_inbox` has exactly
-// one participant — the Agent named by `inbox_agent_id` (§4.2: ACL derives from
-// placement; there are no projected roster rows) — and that Agent is the sole
-// principal there. A `direct_pair` is the same argument with two participants:
-// its endpoints ARE its ACL, it has no workspace either, and there is likewise no
+// The placement itself is the authority instead. A `direct_pair` has exactly two
+// participants and its endpoints ARE its ACL (§4.2: ACL derives from placement;
+// there are no projected roster rows), it has no workspace, and there is no
 // surface on which a human could grant anything inside one. So the rule is:
 //
 //   - `workspace` placement      → the workspace grant decides (unchanged);
-//   - the caller's OWN agent_inbox → self-authority; no grant is consulted;
 //   - a `direct_pair` the caller is an ENDPOINT of → endpoint authority;
-//   - anything else (someone else's inbox, a pair the caller is not in, an
-//     unknown conversation, a future workspace-less arm) → denied.
+//   - anything else (a pair the caller is not in, an unknown conversation, a
+//     future workspace-less arm) → denied.
 //
 // THE COST OF THE PAIR ARM, STATED: a capability revoked on a workspace roster
 // does not reach that agent's DMs. `send_messages` turned off for an agent in
 // `silverhand` still leaves it able to DM another member, because the DM is not
-// in `silverhand` — it is in no workspace at all. That is the same trade the inbox
-// arm already made, and it is a consequence of capabilities being workspace
+// in `silverhand` — it is in no workspace at all. That is a consequence of
+// capabilities being workspace
 // grants while a DM is a placement outside every workspace; the alternative is a
 // DM nobody can ever speak in, which is what the pre-P4-4 code actually did (the
 // null coordinate denied every send into a `direct_pair`). If DM-scoped revocation
@@ -50,11 +48,11 @@ import type { Principal } from '../../auth/principal.js';
 import { requireAgentCapability } from '../capability.js';
 
 /**
- * The facts this rule reads: identity + PLACEMENT. Both placement fields are
- * REQUIRED, not optional — a caller holding only the wire `ConversationDto`
- * (which strips them) would otherwise type-check while silently taking the
- * workspace-grant path for every inbox, i.e. denying the agent its own inbox
- * with no red light. Ask `ConversationRepo.getIdentity` for this shape.
+ * The facts this rule reads: identity + PLACEMENT. `placement_kind` is REQUIRED,
+ * not optional — a caller holding only the wire `ConversationDto` (which strips
+ * it) would otherwise type-check while silently taking the workspace-grant path
+ * for every DM, i.e. denying an endpoint its own line with no red light. Ask
+ * `ConversationRepo.getIdentity` for this shape.
  *
  * The endpoint columns are required for the same reason, and the TOMBSTONES with
  * them: a pair whose other endpoint is gone is still a pair this agent is an
@@ -66,7 +64,6 @@ export interface ConversationCapabilityScope {
   id: string;
   workspace_id: string | null;
   placement_kind: ConversationPlacementKind;
-  inbox_agent_id: string | null;
   endpoint_a_kind: ConversationEndpointKind | null;
   endpoint_a_id: string | null;
   endpoint_b_kind: ConversationEndpointKind | null;
@@ -91,16 +88,6 @@ export function requireAgentConversationCapability(
   capability: AgentCapability,
   conversation: ConversationCapabilityScope | null | undefined,
 ): Response | null {
-  if (
-    conversation
-    && conversation.workspace_id === null
-    && conversation.placement_kind === 'agent_inbox'
-    && conversation.inbox_agent_id !== null
-    && principal.kind === 'agent'
-    && conversation.inbox_agent_id === principal.agentId
-  ) {
-    return null;
-  }
   if (
     conversation
     && conversation.placement_kind === 'direct_pair'

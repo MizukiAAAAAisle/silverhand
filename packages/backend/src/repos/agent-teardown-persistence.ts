@@ -1,5 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import type { AgentDto } from '@silverhand/shared';
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type {
   AgentTeardownCapture,
   AgentDeletionAttempt,
@@ -102,7 +103,7 @@ function agentTeardownFace(
       );
       const regularWorkspaceCount = workspaces
         .listForAgent(agentId)
-        .filter(workspace => workspace.workspace_kind === 'regular').length;
+        .filter(workspace => !isAgentHomeWorkspace(workspace)).length;
       return {
         runtimeSessions,
         dmBlobRefs,

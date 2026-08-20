@@ -5,7 +5,7 @@ import {
   resolveSubtype,
 } from '@silverhand/shared';
 import type { ChannelReference } from './ChannelRef';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 import {
   type SystemMessageRenderer,
   GenericNarrationFallback,
@@ -27,7 +27,7 @@ import {
 
 interface SystemMessageProps {
   message: MessageDto;
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;

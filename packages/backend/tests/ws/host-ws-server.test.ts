@@ -1841,6 +1841,9 @@ function commandCases(hostId: string): CommandCase[] {
         agent_id: 'a1',
         runtime_generation: 1,
         delivery_ids: [1],
+        deliveries: [
+          { delivery_id: 1, seq: 1, presentation: { body: 'hello', instruction: 'system' as const } },
+        ],
         kind: 'message',
         text: 'hello',
         spawn_options: runtimeStartOptions(),
@@ -1928,13 +1931,11 @@ function runtimeStartOptions(): unknown {
     workspace: {
       id: 'w1',
       name: 'workspace',
-      kind: 'regular',
     },
     workspace_memory_index: [
       {
         id: 'w1',
         name: 'workspace',
-        kind: 'regular',
       },
     ],
     session: {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DirectPairAuthority } from '@/lib/chat-place-restore';
-import { resolveJumpNav } from './message-jump-nav';
+import { resolveJumpNav, resolveJumpRoute } from './message-jump-nav';
 
 // Pure decision fence for the jump seam (#task:2052). Not a UI test: which of
 // three nav modes a jump takes is a BEHAVIOR branch, and the bug it guards
@@ -115,5 +115,101 @@ describe('resolveJumpNav', () => {
         pairs: failed,
       }),
     ).not.toBe('fail-closed');
+  });
+});
+
+// The second half of the seam (#task:2102): once a jump is ACCEPTED, which pane
+// it opens and whether it carries the reply cluster. Also a behavior branch, and
+// the bug it guards is asymmetry — the direct arm used to drop `threadRootId`
+// while the channel arm carried it, so a DM attachment sourced from a thread
+// opened the pair's main line and never located the message. Every assertion
+// below is stated for BOTH kinds on purpose: a per-arm thread decision is the
+// shape that drifts.
+describe('resolveJumpRoute', () => {
+  it('carries the reply cluster on BOTH pane kinds', () => {
+    expect(
+      resolveJumpRoute({
+        decision: 'to-direct',
+        channelId: 'pair-conv',
+        navWorkspaceId: null,
+        threadRootId: 'root-1',
+      }),
+    ).toEqual({
+      kind: 'direct',
+      conversationId: 'pair-conv',
+      threadRootId: 'root-1',
+    });
+    expect(
+      resolveJumpRoute({
+        decision: 'workspace-resolve',
+        channelId: 'chan',
+        navWorkspaceId: 'w-1',
+        threadRootId: 'root-1',
+      }),
+    ).toEqual({
+      kind: 'channel',
+      workspaceId: 'w-1',
+      channelId: 'chan',
+      threadRootId: 'root-1',
+    });
+  });
+
+  it('normalizes a main-line target to a null cluster on BOTH pane kinds', () => {
+    // `undefined` (no cluster named) and `null` (the main line — what the
+    // caller's own param actually carries) must be one value downstream, since
+    // it is fed straight to `withThreadQuery`, whose null arm serializes to the
+    // bare path.
+    for (const threadRootId of [undefined, null]) {
+      expect(
+        resolveJumpRoute({
+          decision: 'to-direct',
+          channelId: 'pair-conv',
+          navWorkspaceId: null,
+          threadRootId,
+        })?.threadRootId,
+      ).toBeNull();
+      expect(
+        resolveJumpRoute({
+          decision: 'workspace-resolve',
+          channelId: 'chan',
+          navWorkspaceId: 'w-1',
+          threadRootId,
+        })?.threadRootId,
+      ).toBeNull();
+    }
+  });
+
+  it('never reads the workspace coordinate for a direct target', () => {
+    // A pair has no container to name; a resolved workspace that leaked in here
+    // must not turn the jump into a channel URL under a workspace the pair is
+    // not in. (The caller resolves the workspace unconditionally, so this arm
+    // really is handed a non-null value.)
+    expect(
+      resolveJumpRoute({
+        decision: 'to-direct',
+        channelId: 'pair-conv',
+        navWorkspaceId: 'w-selected',
+        threadRootId: 'root-1',
+      }),
+    ).toEqual({
+      kind: 'direct',
+      conversationId: 'pair-conv',
+      threadRootId: 'root-1',
+    });
+  });
+
+  it('withholds a channel target whose workspace could not be resolved', () => {
+    // Pre-existing `if (!wid) return false` — a channel URL cannot be built
+    // without a container, and inventing one is the wrong-place jump.
+    for (const threadRootId of [undefined, 'root-1']) {
+      expect(
+        resolveJumpRoute({
+          decision: 'workspace-resolve',
+          channelId: 'chan',
+          navWorkspaceId: null,
+          threadRootId,
+        }),
+      ).toBeNull();
+    }
   });
 });

@@ -176,10 +176,12 @@ describe('identity-creation app-scope broadcast (#task:1707)', () => {
     // dependent-row insert inside the L3a tx (same seam as
     // `agent-create-structural-invariants` Invariant 3), so createAgent
     // returns `materializeFailed` and 500 — not `created`.
-    // The `placement_kind` clause is load-bearing: an `agent_inbox` also uses
-    // a fixed roster, so without it this
-    // trigger would abort the L1 aggregate reserve instead and the route would
-    // answer 409 `agent_name_taken` — a different contract than the one here.
+    // The `placement_kind` clause names the row this test means to abort — the
+    // agent home's DM channel — rather than trusting the roster policy to identify
+    // it. It was strictly load-bearing while the L1 aggregate reserve also
+    // inserted a fixed-roster row (the `agent_inbox` #task:2072 retired): without
+    // the clause the trigger aborted THAT insert and the route answered 409
+    // `agent_name_taken` — a different contract than the one here.
     t = buildTestApp();
     t.ctx.db.exec(
       `CREATE TRIGGER idem1707_fail_dm_insert

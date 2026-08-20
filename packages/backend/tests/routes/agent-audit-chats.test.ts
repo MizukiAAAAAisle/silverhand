@@ -23,10 +23,9 @@
  *      the audit trail).
  *
  * Plus the task-body reversals: enumeration = workspace conversations ∪
- * agent-as-endpoint direct_pairs, with the AgentInbox EXCLUDED; the
- * per-conversation gate AGREES with the list; and not-a-party / inbox /
- * non-existent conversation all collapse to ONE 403 so the transcript face is
- * no existence oracle.
+ * agent-as-endpoint direct_pairs; the per-conversation gate AGREES with the
+ * list; and not-a-party / non-existent conversation both collapse to ONE 403 so
+ * the transcript face is no existence oracle.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -143,8 +142,6 @@ interface Fixture {
   /** A `direct_pair` between the agent and the TEAMMATE (a third party — the
    *  owner is not an endpoint of it). */
   pairId: string;
-  /** The agent's own inbox — a participation the list must NOT surface. */
-  inboxId: string;
   /** A workspace channel the agent is NOT in — the not-a-party 403 case. */
   outsideChannelId: string;
 }
@@ -159,9 +156,9 @@ interface Fixture {
 async function seedFixture(t: TestApp): Promise<Fixture> {
   // The agent under audit is an agent-scoped CLONE of an owner-created parent: it
   // inherits `created_by = OWNER_ID` (so the owner audits it) and is provisioned
-  // with ONLY its AgentInbox — no `agent_home` DM/onboarding channels — so its
-  // participation set is exactly what this fixture seeds below, and the list is
-  // deterministic. (The parent is created solely to be cloned from.)
+  // with NO conversations of its own — so its participation set is exactly what
+  // this fixture seeds below, and the list is deterministic. (The parent is
+  // created solely to be cloned from.)
   const parent = await http(t).post('/api/agents', { name: 'parent', runtime: 'claude' });
   expect(parent.status).toBe(201);
   const parentId = ((await parent.json()) as { agent: { id: string } }).agent.id;
@@ -194,9 +191,6 @@ async function seedFixture(t: TestApp): Promise<Fixture> {
   seedMessage(t, pair.id, { kind: 'agent', id: agentId }, 'dm from the agent');
   seedMessage(t, pair.id, { kind: 'user', id: TEAMMATE_ID }, 'dm from the teammate');
 
-  const inbox = conversations.getAgentInbox(agentId);
-  if (!inbox) throw new Error('fixture agent has no inbox');
-
   // A channel the agent is NOT a member of — the not-a-party case for the
   // per-conversation gate.
   const outside = conversations.insertChannel({
@@ -210,7 +204,6 @@ async function seedFixture(t: TestApp): Promise<Fixture> {
     channelTitle: String(channel.title),
     workspaceId: ws.id,
     pairId: pair.id,
-    inboxId: inbox.id,
     outsideChannelId: outside.id,
   };
 }
@@ -234,17 +227,17 @@ describe('GET /api/agents/:id/chats (owner-audit list)', () => {
     t = null;
   });
 
-  it('lists the agent\'s workspace channels ∪ agent-as-endpoint DMs, oldest first, inbox excluded', async () => {
+  it('lists the agent\'s workspace channels ∪ agent-as-endpoint DMs, oldest first', async () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const f = await seedFixture(t);
 
     const chats = await listChats(t, f.agentId);
 
     // Exactly the two seeded participations, in creation order (channel, then the
-    // later-opened DM). The AgentInbox is NOT here — it is the agent's own
-    // participation, excluded by the enumeration and by the per-conversation gate.
+    // later-opened DM). Since #task:2072 retired `agent_inbox` the enumeration
+    // carries no narrowing beyond participation, so this list IS the agent's
+    // participation set.
     expect(chats.map(c => c.conversation_id)).toEqual([f.channelId, f.pairId]);
-    expect(chats.map(c => c.conversation_id)).not.toContain(f.inboxId);
 
     const channelArm = chats.find(c => c.conversation_id === f.channelId);
     expect(channelArm).toMatchObject({
@@ -267,8 +260,39 @@ describe('GET /api/agents/:id/chats (owner-audit list)', () => {
     ).not.toBe(OWNER_ID);
   });
 
-  it('leaves audit evidence for the owner\'s list read (boundary 6)', async () => {
-    const info = vi.fn();
+  // The workspace arm's container word is PUBLISHED here (#task:2069). The repo
+  // row carries the stored word — it is a projection of the `workspaces` column,
+  // and `listAuditChats` is not a wire face — so `read-model/agent-audit-chats.ts`
+  // is the boundary that converts. This audits a plain owner-created agent rather
+  // than the suite's clone fixture, because only a real `agent_home` provisioning
+  // produces the arm whose word differs from its storage.
+  it('publishes the product container word on an Agent Space arm (#task:2069)', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const created = await http(t).post('/api/agents', {
+      name: 'homed',
+      runtime: 'claude',
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as {
+      agent: { id: string };
+      dm_channel_id: string;
+    };
+
+    const chats = await listChats(t, body.agent.id);
+    const homeArm = chats.find(c => c.conversation_id === body.dm_channel_id);
+    expect(homeArm).toMatchObject({ placement_kind: 'workspace' });
+    // Not a `not.toBe` on one row: NO arm of this list carries a container word
+    // at all since #task:2075's stop-publish step, whatever its placement. This
+    // reads the parsed HTTP body, so an absent key is a real statement about the
+    // wire — a producer that re-added the word (published projection or physical
+    // column alike) reddens here, which is the assertion the old `agent_home`
+    // exclusion was reaching for.
+    for (const chat of chats) {
+      expect(Object.keys(chat)).not.toContain('workspace_kind');
+    }
+  });
+
+  it('leaves audit evidence for the owner\'s list read (boundary 6)', async () => {    const info = vi.fn();
     t = buildTestApp({
       seedAllFixtureMemberships: false,
       logger: { info, warn() {}, error() {} },
@@ -428,21 +452,19 @@ describe('GET /api/agents/:id/chats/:conversationId/messages (owner-audit transc
     );
   });
 
-  it('collapses not-a-party, inbox, and non-existent into ONE 403 — no oracle', async () => {
+  it('collapses not-a-party and non-existent into ONE 403 — no oracle', async () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const f = await seedFixture(t);
 
     // A real conversation the agent is NOT a party to.
     const notParty = await getTranscript(t, f.agentId, f.outsideChannelId);
-    // The agent's OWN inbox — a participation deliberately outside the audit face.
-    const inbox = await getTranscript(t, f.agentId, f.inboxId);
     // A conversation id that does not exist at all.
     const bogus = await getTranscript(t, f.agentId, 'conv_does_not_exist');
 
-    expect([notParty.status, inbox.status, bogus.status]).toEqual([403, 403, 403]);
+    expect([notParty.status, bogus.status]).toEqual([403, 403]);
   });
 
-  it('the per-conversation gate AGREES with the list: every listed chat opens, the inbox does not', async () => {
+  it('the per-conversation gate AGREES with the list: every listed chat opens, nothing else does', async () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
     const f = await seedFixture(t);
 
@@ -451,10 +473,11 @@ describe('GET /api/agents/:id/chats/:conversationId/messages (owner-audit transc
       const r = await getTranscript(t, f.agentId, chat.conversation_id);
       expect(r.status).toBe(200);
     }
-    // The inbox is absent from the list AND refused by the gate — the two faces
-    // draw the same boundary.
-    expect(chats.map(c => c.conversation_id)).not.toContain(f.inboxId);
-    expect((await getTranscript(t, f.agentId, f.inboxId)).status).toBe(403);
+    // The other direction, which is the half that can rot: a conversation absent
+    // from the list is refused by the gate, so the two faces draw one boundary
+    // rather than each drawing its own.
+    expect(chats.map(c => c.conversation_id)).not.toContain(f.outsideChannelId);
+    expect((await getTranscript(t, f.agentId, f.outsideChannelId)).status).toBe(403);
   });
 
   it('refuses a non-owner at the transcript face too — 404 anti-enum', async () => {

@@ -6,6 +6,7 @@ import {
   SortTouchInputSchema,
   type SortGroup,
 } from '@silverhand/shared';
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -29,12 +30,12 @@ export interface SortRouteDeps {
 /**
  * Per-user (viewer-scoped) list sort mutations (#task:1147). The backend
  * persists preferences only; the renderer composes the final order. Group
- * membership for a reorder is validated against LIVE kind/star state — the
+ * membership for a reorder is validated against LIVE ownership/star state — the
  * backend rejects cross-group / unknown ids rather than guessing. Star applies
  * to CONVERSATIONS only (#task:1899) and is EXCLUSIVE (#task:1888): a starred
  * conversation has moved to the global Favorites list and is not reorderable in
- * its own workspace's list. Containers (workspace / DM home) have no star axis
- * at all — the rail orders by mode + rank and nothing else.
+ * its own workspace's list. Containers (regular workspace / agent space) have no
+ * star axis at all — the rail orders by mode + rank and nothing else.
  *
  * Read state is carried inline on the list responses (see workspaces route),
  * so there is no GET here.
@@ -43,10 +44,12 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { ctx, favorites, workspaces, conversations, sort } = deps;
 
-  /** The legal hard groups for a list kind.
-   *  - workspace rail: partitions by KIND only (`dm` / `regular`). There is no
-   *    star on a container at all (#task:1899), so star is neither a rail group
-   *    nor an input to the rail's order.
+  /** The legal hard groups for a list.
+   *  - workspace rail: partitions by OWNERSHIP only — `agent_space` when the
+   *    container has an `owner_agent_id`, else `regular` (v83 deleted the
+   *    `workspace_kind` column that used to spell this). There
+   *    is no star on a container at all (#task:1899), so star is neither a rail
+   *    group nor an input to the rail's order.
    *  - conversation list: a SINGLE group (`channels`). Star is not a group here
    *    either — a starred conversation MOVES to the global Favorites/STARRED list
    *    (#task:1888) and is excluded from this group's reorder. One list-wide mode
@@ -54,7 +57,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
    *  - global Favorites: a single FLAT group (`favorites`) — sortable, not
    *    sub-partitioned. */
   function legalGroups(listKey: string): SortGroup[] {
-    if (listKey === 'workspaces') return ['dm', 'regular'];
+    if (listKey === 'workspaces') return ['agent_space', 'regular'];
     if (listKey === 'favorites') return ['favorites'];
     return ['channels'];
   }
@@ -114,19 +117,19 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     const principal = getUserPrincipal(c);
     const groups = new Map<string, SortGroup>();
     if (listKey === 'workspaces') {
-      // Workspace rail partitions by KIND (`dm` / `regular`). A container has no
-      // star (#task:1899): it is neither a group nor an exclusion here, so the
-      // exclusion set is EMPTY. Any pre-#1899 `starred_at` row on a workspace is
-      // an inert orphan — `getState` still echoes the field (it is generic
+      // Workspace rail partitions by OWNERSHIP: `agent_space` when the container
+      // has an `owner_agent_id`, else `regular`. A container
+      // has no star (#task:1899): it is neither a group nor an exclusion here, so
+      // the exclusion set is EMPTY. Any pre-#1899 `starred_at` row on a workspace
+      // is an inert orphan — `getState` still echoes the field (it is generic
       // per-entity state), and nothing on the rail reads it.
       for (const ws of workspaces.list()) {
         if (ws.archived_at != null) continue;
         if (!canViewWorkspace(ctx, principal, ws.id)) continue;
-        if (ws.workspace_kind === 'agent_home') {
-          groups.set(ws.id, 'dm');
-        } else if (ws.workspace_kind === 'regular') {
-          groups.set(ws.id, 'regular');
-        }
+        // Total by construction: a container either has a home agent or it does
+        // not, so there is no third arm to forget (it used to be an `else if`
+        // whose absent arm silently left the workspace ungrouped).
+        groups.set(ws.id, isAgentHomeWorkspace(ws) ? 'agent_space' : 'regular');
       }
       return { ok: true, groups, starred: new Set() };
     }
@@ -163,7 +166,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // the DISCOVERY UNION (joined + browse-only public) — every visible item is
     // orderable; a DM workspace's is the viewer's membership-filtered DMs.
     const channels =
-      workspace.workspace_kind === 'regular'
+      !isAgentHomeWorkspace(workspace)
         ? conversations.listActiveChannelsForViewer(workspace.id, principal.userId)
         : conversations.listActiveDmChannelsForViewer(workspace.id, principal.userId);
     for (const ch of channels) {
@@ -226,7 +229,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const { list_key: listKey, group, ordered_ids: orderedIds } = parsed.data;
-    // The group must be a legal hard group for THIS list kind (e.g. 'starred'
+    // The group must be a legal hard group for THIS list (e.g. 'starred'
     // is not a workspace-rail group). Catches a malformed client even when
     // ordered_ids is empty (which would otherwise no-op through as 200).
     if (!legalGroups(listKey).includes(group)) {
@@ -331,11 +334,12 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
    * list (same shape mode/order return) so the renderer reconciles star
    * alongside rank/mode in one state — never a single entry.
    *
-   * CONVERSATIONS ONLY (#task:1899, shiki-approved). A workspace / DM container
+   * CONVERSATIONS ONLY (#task:1899, shiki-approved). A container (regular
+   * workspace or agent space)
    * was starrable too until this route's sibling was retired, and that made one
    * field mean two things: on a conversation `starred_at` is MEMBERSHIP in the
    * global STARRED list (a move), on a container it was "hoist me inside my rail
-   * kind group" — a per-entity override of a list-wide mode that the sort
+   * group" — a per-entity override of a list-wide mode that the sort
    * vocabulary (mode + rank) never modelled, so the rail's order was secretly
    * `f(mode, rank, starred_at)`. One meaning left; the rail is back to
    * `f(mode, rank)` and the whole star surface is a single entry point, which is

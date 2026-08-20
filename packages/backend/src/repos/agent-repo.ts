@@ -13,7 +13,6 @@ import {
   type RuntimeKind,
   type SwitchAgentRuntimeInput,
   type UpdateAgentInput,
-  type WorkspaceKind,
 } from '@silverhand/shared';
 import { agentParticipates } from './conversation-placement-sql.js';
 
@@ -106,15 +105,15 @@ export class AgentRepo {
   /**
    * FIXTURE-ONLY row factory: inserts an `active` `agents` row and NOTHING else.
    *
-   * It has no production caller and must not gain one — production creates an
-   * Agent through `AgentProvisioningPersistence.reserveAgentAggregate`, which
-   * pairs {@link AgentRepo.reserveForMaterialize} with the agent's inbox
-   * placement in one transaction (v71 §4.2). A row written here is missing that
-   * inbox, so a mention of its handle would throw `AgentInboxMissingError`
-   * INSIDE the sender's message transaction. Tests that exercise a CC / inbox
-   * read face therefore insert the inbox explicitly; tests that do not, do not
-   * care. `tests/guard-agent-create-fixture-only.test.ts` pins the no-production-
-   * caller half of that rule.
+   * It has no production caller and must not gain one — production reserves an
+   * Agent through `AgentProvisioningPersistence.reserveAgentRow`, which is
+   * {@link AgentRepo.reserveForMaterialize}: a `pending_materialization` row
+   * carrying the `idempotency_key`. This method skips both, so a row written here
+   * is `active` without any host having materialized it and unkeyed against a
+   * retry of the same request. Tests that do not care about either property are
+   * the whole population it exists for.
+   * `tests/guard-agent-create-fixture-only.test.ts` pins the no-production-caller
+   * half of that rule.
    */
   create(
     input: CreateAgentInput,
@@ -230,14 +229,14 @@ export class AgentRepo {
    * `'pending_materialization'` here so the new lifecycle is
    * observable from the moment the row exists.
    *
-   * NOT the aggregate factory (v71 §4.2): this writes the BARE row. An Agent is
-   * the row PLUS its inbox placement, and only
-   * `AgentProvisioningPersistence.reserveAgentAggregate` writes both in one
-   * transaction. Reserve is where that pairing belongs rather than the L3a
-   * dependent graph, because the handle is addressable from this INSERT onward —
-   * `getByName` has no `materialization_status` filter — so a `failed` row still
-   * owes a mention a destination, and a `?retry=true` that re-entered L3a on the
-   * same row would collide with the inbox its first attempt already committed.
+   * The WHOLE reserve since #task:2072: this INSERT and nothing else. It used to
+   * be half of an aggregate factory (v71 §4.2) that paired the row with an
+   * `agent_inbox` placement, because a handle is addressable from this statement
+   * onward — `getByName` has no `materialization_status` filter — so a mention had
+   * to have a destination before materialization finished. The destination is now
+   * the AUTHOR's direct pair with the agent, which is a function of the sender
+   * rather than a possession of the agent, so there is no second row to pair with
+   * and no dependent row that a `?retry=true` re-entering L3a could collide with.
    */
   reserveForMaterialize(
     input: CreateAgentInput,
@@ -711,12 +710,15 @@ export class AgentRepo {
    * the profile. This is a PARTICIPATION projection and never reads runtime slots;
    * the control/read-model unit for processes is `RuntimeSlotRepo.listSeats`.
    *
-   * Participation is placement-aware (`agentParticipates`): workspace roster,
-   * AgentInbox ownership and DirectPair endpoints all flow through the same SQL
-   * authority. The LEFT workspace join is only a coordinate projection for
+   * Participation is placement-aware (`agentParticipates`): the workspace roster
+   * edge and DirectPair endpoints both flow through the same SQL authority. The LEFT workspace join is only a coordinate projection for
    * workspace-less placements; it cannot filter participation or runtime state.
    * Closed rows remain in the control list, while `excludeArchived` produces the
    * renderer's narrower activity list.
+   *
+   * It projected the container's `workspace_kind` until #task:2069; see
+   * `AgentRuntimeParticipationSchema` for why a conversation-level row does not
+   * carry a container word.
    */
   listRuntimeParticipations(
     agentId: string,
@@ -726,7 +728,6 @@ export class AgentRepo {
       conversation_id: string;
       workspace_id: string | null;
       workspace_name: string | null;
-      workspace_kind: WorkspaceKind | null;
       conversation_placement_kind: ConversationPlacementKind;
       conversation_roster_policy: ConversationRosterPolicy;
       channel_id: string;
@@ -752,7 +753,6 @@ export class AgentRepo {
            c.id               AS conversation_id,
            c.workspace_id     AS workspace_id,
            w.name             AS workspace_name,
-           w.workspace_kind   AS workspace_kind,
            c.placement_kind   AS conversation_placement_kind,
            c.roster_policy    AS conversation_roster_policy,
            c.id               AS channel_id,
@@ -770,15 +770,14 @@ export class AgentRepo {
   /**
    * The conversations this agent is a party to that its OWNER may AUDIT
    * (#task:2036 part ②) — workspace-placed conversations and the agent's
-   * `direct_pair` lines, with the AgentInbox EXCLUDED.
+   * `direct_pair` lines.
    *
    * Participation is the same placement authority every other face embeds
-   * (`agentParticipates`: workspace roster ∪ direct_pair endpoint ∪ inbox owner),
-   * so this list cannot drift from what {@link isAgentParticipant} — the
-   * per-conversation gate the audit ACL asks — admits. The one narrowing is
-   * `placement_kind != 'agent_inbox'`: the inbox is the agent's own private queue,
-   * outside the audit face's declared scope, and dropping it HERE keeps the list
-   * and the gate agreeing (the gate refuses `agent_inbox` too).
+   * (`agentParticipates`: workspace roster ∪ direct_pair endpoint), so this list
+   * cannot drift from what {@link isAgentParticipant} — the per-conversation gate
+   * the audit ACL asks — admits. Since #task:2072 retired `agent_inbox` it carries
+   * NO narrowing beyond participation: a placement the audit face means to exclude
+   * has to be dropped here and refused by the gate, or the two disagree.
    *
    * A projection, not a DTO: it carries the workspace coordinates a workspace row
    * draws by AND the endpoint columns a `direct_pair` row derives its counterpart
@@ -798,7 +797,6 @@ export class AgentRepo {
            c.title                  AS title,
            c.workspace_id           AS workspace_id,
            w.name                   AS workspace_name,
-           w.workspace_kind         AS workspace_kind,
            c.endpoint_a_kind        AS endpoint_a_kind,
            c.endpoint_a_id          AS endpoint_a_id,
            c.endpoint_b_kind        AS endpoint_b_kind,
@@ -810,7 +808,6 @@ export class AgentRepo {
          FROM conversations c
          LEFT JOIN workspaces w ON w.id = c.workspace_id
          WHERE ${participates.sql}
-           AND c.placement_kind != 'agent_inbox'
          ORDER BY c.created_at ASC, c.id ASC`,
       )
       .all(...participates.params);
@@ -831,7 +828,6 @@ export interface AgentAuditChatRow {
   title: string;
   workspace_id: string | null;
   workspace_name: string | null;
-  workspace_kind: WorkspaceKind | null;
   endpoint_a_kind: ConversationEndpointKind | null;
   endpoint_a_id: string | null;
   endpoint_b_kind: ConversationEndpointKind | null;

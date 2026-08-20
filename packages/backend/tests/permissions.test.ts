@@ -594,7 +594,7 @@ describe('permission helpers', () => {
     // authority (`listDirectPairHumanEndpointsForAgent`) gates on
     // placement_kind='direct_pair' AND the opposite endpoint being human, so the
     // arm never fires for an agent↔agent pair and never widens through a
-    // non-direct_pair placement (workspace channel, agent_inbox).
+    // non-direct_pair placement (a workspace channel).
     //
     // FIXTURE SCOPE (frozen model): Direct Message ↔ `session_scope='agent'`. The
     // two cells that form a DirectPair therefore mint fresh AGENT-SCOPED agents;
@@ -666,13 +666,12 @@ describe('permission helpers', () => {
       expect(canViewAgent(t.ctx, partnerPrincipal, agentA.id)).toBe(false);
     });
 
-    it('is direct_pair-only: a non-DirectPair placement shared with a human names no endpoint (same gate that excludes agent_inbox)', () => {
+    it('is direct_pair-only: a non-DirectPair placement shared with a human names no endpoint', () => {
       t = buildTestApp({ seedAllFixtureMemberships: false });
       const f = seed(t);
       // alice already lives in a WORKSPACE channel; seat a human (not her creator,
       // not a workspace member) there too. This co-inhabited, non-direct_pair arc
-      // is exactly what the placement_kind filter must exclude — the same clause
-      // that excludes an agent_inbox arc.
+      // is exactly what the placement_kind filter must exclude.
       f.conversations.addUser(f.channel.id, 'teammate');
       expect(f.conversations.listDirectPairHumanEndpointsForAgent(f.alice.id)).toEqual([]);
       // With no DirectPair in play, the arm grants that human nothing.

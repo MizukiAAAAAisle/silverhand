@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  TaskPlaceSchema,
   TaskSummaryDtoSchema,
   type TaskSummaryDto,
 } from '../src/api/task.js';
@@ -25,7 +24,6 @@ describe('TaskSummaryDto placement projection', () => {
         kind: 'workspace',
         conversation_id: 'conversation-1',
         workspace_id: 'workspace-1',
-        workspace_kind: 'regular',
         channel_name: 'general',
       },
     };
@@ -88,19 +86,11 @@ describe('TaskSummaryDto placement projection', () => {
     });
   });
 
-  it('rejects the physical agent_home workspace_kind — only the domain projection reaches the wire', () => {
-    // Contract §2 rule 5: the physical `agent_home` workspace_kind is projected
-    // to the domain `agent_space` at the SQL boundary and never appears on the
-    // wire. The schema's workspace_kind enum is the last static gate proving
-    // that: `agent_home` must fail to parse. If the enum ever readmits it, this
-    // reddens.
-    const result = TaskPlaceSchema.safeParse({
-      kind: 'workspace',
-      conversation_id: 'conversation-1',
-      workspace_id: 'workspace-1',
-      workspace_kind: 'agent_home',
-      channel_name: 'home',
-    });
-    expect(result.success).toBe(false);
-  });
+  // A cell here used to assert the wire REJECTS the physical `agent_home`
+  // container word (contract §2 rule 5: only the `regular | agent_space`
+  // projection may reach a client). It was deleted with the word in #task:2075's
+  // stop-publish step — the enum it queried is the object it guarded, and no
+  // container word rides this place at all now. There is no honest replacement:
+  // an extra key on a non-strict object is stripped, not refused, so a cell
+  // feeding one in would assert zod's default rather than a contract of ours.
 });

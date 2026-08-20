@@ -149,6 +149,10 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       delivery_ids: [101, 102],
       kind: 'message',
       text: 'hello',
+      deliveries: [
+        { delivery_id: 101, seq: 101, presentation: { body: 'hello', instruction: 'other' } },
+        { delivery_id: 102, seq: 102, presentation: { body: 'hello', instruction: 'other' } },
+      ],
       spawn_options: testStartOptions({ conversationId: 'conv-2', agentId: 'agent-2' }),
     });
     expect(r.disposition).toBe('spawning');
@@ -179,6 +183,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       delivery_ids: [200],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 200, seq: 200, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions({ conversationId: 'conv-3', agentId: 'agent-3' }),
     });
     const failed = await waitForEvent(
@@ -220,6 +225,11 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       delivery_ids: [50, 51, 52],
       kind: 'message',
       text: 'batch',
+      deliveries: [
+        { delivery_id: 50, seq: 50, presentation: { body: 'batch', instruction: 'other' } },
+        { delivery_id: 51, seq: 51, presentation: { body: 'batch', instruction: 'other' } },
+        { delivery_id: 52, seq: 52, presentation: { body: 'batch', instruction: 'other' } },
+      ],
       spawn_options: testStartOptions({ conversationId: 'conv-4', agentId: 'agent-4' }),
     });
     expect(r.disposition).toBe('admitted');
@@ -245,6 +255,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions({ conversationId: 'no-such-conv', agentId: 'no-such-agent' }),
     });
     // Unlike the retired `runtime_wake` (which refused not_running), the
@@ -401,6 +412,7 @@ describe('e2e — runtime_* through HostClient + FakeSupervisor', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: { body: 'stub', instruction: 'other' } }],
       spawn_options: testStartOptions({ conversationId: 'c-crash', agentId: 'ag-crash' }),
     });
     await waitForEvent(

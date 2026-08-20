@@ -9,9 +9,9 @@
 > exists so a future edit doesn't silently undo a load-bearing rule, weaken a
 > security defense, or scramble the deliberate section order.
 >
-> Related: `docs/agent-system-prompt-memory.md` (the three-file L1/L2 model and
-> spawn-time assembly — *how* the prompt is injected). This doc is the forward
-> contract: *what must hold*.
+> Related: `docs/agent-system-prompt-memory.md` (the internal storage and
+> spawn-time assembly model). This doc is the forward contract: *what must
+> hold in the agent-visible manual*.
 
 ---
 
@@ -20,8 +20,8 @@
 `buildPlatformPrompt(input)` renders one Markdown document injected at every
 agent spawn (appended onto the runtime's built-in system prompt, not replacing
 it). It is the agent's standing operating manual: how to act, how to coordinate,
-which tools exist, how to format references. The agent's *specific* assignment is
-the L1 role appended as the trailing **Initial role** section.
+which tools exist, how to format references. The agent's specific assignment is
+appended as the trailing **Initial role** section.
 
 The render is assembled from a single template literal plus a few helper
 renderers (`renderSessionContext`, `renderSilverhandCliManual`,
@@ -30,9 +30,8 @@ template's order *is* the document's order. The CLI domain index is generated
 from `packages/shared/src/cli-command-manifest.ts`; it is not a second
 hand-written command inventory.
 
-The voice is terse by contract: one-or-two-sentence default, no filler
-acknowledgments, no idle narration, no echoing tool calls. Keep every edit in
-that register.
+The voice is terse and formal by contract: no filler acknowledgments, idle
+narration, conversational persuasion, or echoed tool calls.
 
 **Register (ruled by @shiki, 2026-08-15): manual, not conversation.** A rule
 states facts, conditions, the action, and the error code it fails with. It does
@@ -57,33 +56,32 @@ on them being present.
    runtime facts, one bullet each — Agent ID, Computer (the daemon's
    authenticated computer id), Workspace (name + the local root resolved on
    *this* computer), Channel (title + conversation id), Channel members,
-   mention rule. It sits immediately after the identity preface so the agent
-   knows who/where it is before any rule or reference.
+   mention rule. Agent-scoped sessions expose only the observable contract:
+   deliveries provide a target and working directory. Internal placement,
+   storage, and memory-tier names do not render. The incoming message header is
+   the authority for the current delivery target; the prompt does not restate
+   the session's placement class.
 2. **Operating Contract** — the hard invariants. Everything else serves them:
    reply only through the CLI (and ONLY the documented `silverhand` command
    families for communication and Silverhand management); read each message's
    meta header; the reach boundary of this session's credential; claim work, not
    messages; system messages need no chat reply by default but still require an
    action-judgment; you stay alive and never poll.
-3. **Turn Workflow** — the per-wake loop: orient from the injected tail → ack if
-   needed → claim/continue → do all the work → report + checkpoint.
-4. **Your Profile** — concept anchor: profile = the executing subject's own
-   global (L1) config namespace, shared across every workspace; where custom MCP
-   servers live; managed via `silverhand profile …`. Concept + behavior only —
-   the command index stays in Tool Reference (§5 one-home), and it carries only
-   *current* facts (no future-field roadmap).
-5. **Workspace & Memory** — persistent cwd semantics, L1/L2 by scope,
-   MEMORY-as-index, progressive disclosure, and checkpoint discipline.
-6. **Collaboration Policy** — When to speak / How to report.
-7. **Work Coordination** — Tasks → Acceptance Summary → Splitting work → Threads →
+3. **Turn Workflow** — read context → claim/continue → record a short handoff
+   before long work when persistent memory exists → complete and verify → update
+   state, remove completed handoffs, and report.
+4. **Memory and files** — the observable working-directory and persistence
+   contract for the current session scope, plus progressive disclosure and
+   checkpoint discipline. It never teaches the implementation's memory tiers.
+5. **Collaboration Policy** — When to speak / How to report.
+6. **Work Coordination** — Tasks → Acceptance Summary → Splitting work → Threads →
    Cross-computer work → Channels → Members.
-8. **Capabilities** — Attachments, History and search, Schedules.
-9. **Tool Reference (silverhand CLI)** — injected (`renderSilverhandCliManual`):
+7. **Tool Reference (silverhand CLI)** — injected (`renderSilverhandCliManual`):
    compact CLI contract + generated Domain → subcommand index + pitfalls.
-10. **Formatting Reference** — reference grammars (sigils), citation rules, URL
-    wrapping.
-11. **Injected tail** — Active Workspace Memory → Memory Notes Catalog →
-    Workspace Memory Index → Initial role.
+8. **Formatting Reference** — address and reference grammars.
+9. **Injected tail** — scope-dependent active memory, notes catalog, optional
+   workspace-memory index, then Initial role. Workspace-less conversations
+   render none of the memory projections.
 
 **Ordering invariants:**
 
@@ -93,16 +91,11 @@ on them being present.
 - This Context (1) precedes every operational rule: runtime facts before rules.
   The contract (2–3) precedes all knowledge/reference sections. Never demote
   the contract below references.
-- **Your Profile** sits right after Turn Workflow and before Workspace &
-  Memory:
-  identity/global-config is more foundational than workspace memory but is not an
-  Operating Contract invariant. It is a fixed cognitive entry point for the
-  agent's own profile surface — each new profile capability fills in its
-  then-current fact; never pre-write future fields into it.
-- The CLI manual is a *reference* (section 9), not an opener. It was once at the
+- The CLI manual is a *reference* (section 7), not an opener. It was once at the
   top, ahead of the rules; that was a structural bug. Keep it after the
   product/coordination sections.
-- The injected tail (Active Memory / Workspace Index / Initial role) stays last.
+- The injected tail (Active Memory / optional Workspace Index / Initial role)
+  stays last.
   After compaction the agent loses in-conversation history but these blocks are
   re-injected — they are the recovery point, so they must remain present and at
   the tail.
@@ -131,11 +124,25 @@ be a deliberate, called-out decision — never a side effect of rewording.
   system notice; without the second they misread "no reply" as "nothing to do"
   and ignore actionable events (e.g. an unassigned `task_create` in their own
   channel).
-- **Workspace ownership boundary** — cwd persists but may contain shared project
-  files; only the per-agent L2 directory is agent-owned. The prompt must not
-  teach agents to treat the whole workspace as exclusively theirs or arbitrary
-  cwd files as additional private-memory tiers. Within that boundary, agents
-  choose the workspace layout and create files/directories that fit the work.
+- **Conversation privacy is an output boundary** — the prompt does not impose a
+  schema on shared memory. It instead forbids disclosing private content from one
+  conversation in another unless the current user instruction or task explicitly
+  authorizes it. The incoming header decides the current target.
+- **Project location comes from the work** — the prompt does not turn process
+  cwd, delivery metadata, or a Silverhand workspace into an assigned project
+  directory. The current user or task supplies the location when one is needed.
+- **Persistent space remains explicit** — regular workspace sessions identify
+  their L2 root; Agent Space and agent-scoped sessions identify the agent's L1
+  root. Agent Space and agent-scoped are mutually exclusive product forms, so
+  the latter names only its memory root and does not invent a Workspace or Agent
+  Space container. These roots identify persistent Silverhand memory/files, not
+  an assigned project directory.
+- **Implementation layering stays transparent** — prompts state the available
+  product coordinate, not how it is implemented. They never name runtime
+  scope, AgentSlot, ConversationSlot, delivery workdirs,
+  profile directories, memory tiers, or internal storage topology. Workspace and
+  workspace-less prompts follow the same rule: describe the available behavior,
+  not the projection mechanism.
 - **Progressive memory disclosure** — MEMORY.md must stand alone as the recovery
   index, not the knowledge body. It keeps immediate rules, high-cost traps,
   pinned topic → source routes, and live handoff state; details live in
@@ -147,15 +154,13 @@ be a deliberate, called-out decision — never a side effect of rewording.
   complete rendered catalog block has a separate 4KB UTF-8 hard cap; MEMORY.md
   targets under 10KB and has its own 16KB hard inject cap.
 - **Durable-memory admission** — code/docs/tests, task state, and conversation
-  history outrank L2. Notes accept only stable cross-task knowledge absent from
-  those authorities. `done`/`closed` removes the task from Active Context in the
-  same turn rather than preserving completed history.
-- **Active Context channel provenance** — L2 MEMORY is workspace-wide across
-  channel sessions, so every live handoff is grouped or prefixed by source
-  channel name (plus conversation id when ambiguous). Recovery treats only
-  entries matching `This Context → Channel` as current by default;
-  other-channel entries remain scoped background unless the current message or
-  task explicitly crosses channels.
+  history outrank persistent memory. Notes accept only stable cross-task
+  knowledge absent from those authorities. `done`/`closed` removes the task from
+  Active Context in the same turn rather than preserving completed history.
+- **Active Context remains distinguishable** — when more than one conversation
+  has work in flight, each live handoff identifies its conversation or task.
+  This is an index rule for recovery, not a routing or privacy boundary; the
+  incoming message header remains authoritative for the current target.
 - **Collaboration silence rules** — respect an ongoing exchange, do not echo
   another agent or your own message, do not narrate idle state, and react
   sparingly. These violations are silent and cannot be repaired by pull-based
@@ -339,23 +344,14 @@ and injects metadata only — never note bodies.
   from the resulting CLI groups. Adding a fourth hand-written inventory is a
   design regression.
 - **Progressive disclosure is measured.** The first-stage static standing
-  manual must stay at or below 19KB UTF-8 with a minimal injected tail. Size is
+  manual must stay at or below 14KB UTF-8 in every session scope, with no
+  injected role, memory body, note entries, or workspace-index entries. Size is
   an upper bound, not a target to fill: content may be smaller when every
   removed detail has a reachable `--help` or error-hint home. The bound is an
-  internal tripwire, not a protocol limit — raising it is a per-turn context
-  cost decision for the product owner, and each raise records what it bought
-  (18KB → 19KB, #task:1825: the collaboration paradigms below). An
-  implementation ticket that needs room pays for it by de-duplication, not by
-  moving the bound: #task:2021 P4-4 added the reach boundary (below) and stayed
-  under 19KB by collapsing the claim rules the Operating Contract already
-  stated, the Active Context handoff stated in three sections, and the
-  workspace-index preamble that repeated the L2 bullet. **The assertion
-  measures the shipping shape.** Production's `activeProfilePromptDir`
-  (`packages/host/src/daemon/prompt-context.ts`) always resolves to `.`, so the
-  budget case renders with `.`; the legacy `./.silverhand/agents/<id>` coordinate
-  survives only in the cases that exercise path normalization. Asserting on that
-  retired coordinate would tighten the bound by an accidental ~100 B while
-  leaving the number that actually ships unmeasured.
+  internal tripwire, not a protocol limit; raising it requires product-owner
+  approval. The assertion renders the shipping profile directory (`.`) and
+  checks regular-workspace, workspace-less, and agent-scoped sessions
+  independently.
 - **No "platform" as a generic noun.** It bleeds into agent speech as a verbal
   tic (see known-issues §1). Say "Silverhand" or name the concrete thing.
 
@@ -367,10 +363,11 @@ and injects metadata only — never note bodies.
   keep `cli-system.md` and the platform prompt in sync *in the same change*. A
   pure prose reorg that changes no command/flag/behavior fact does not require a
   `cli-system.md` edit.
-- **Three-file model ↔ `docs/agent-system-prompt-memory.md`.** The Workspace &
-  Memory section and the injection blocks (`renderInjectedFile`, the memory
-  notes catalog, `renderWorkspaceMemoryIndex`) must agree with the L1/L2
-  contract there.
+- **Internal memory model ↔ `docs/agent-system-prompt-memory.md`.** The
+  **Memory and files** section and injection blocks (`renderInjectedFile`, the
+  memory notes catalog, `renderWorkspaceMemoryIndex`) must preserve that
+  document's behavior while keeping its implementation vocabulary out of the
+  agent-visible manual.
 - **Thread delivery/follow semantics ↔ `### Threads` / `### Cross-computer
   work`.** Those sections assume thread delivery is governed by conversation
   membership and follower state — with no computer dimension — that unfollow
@@ -400,7 +397,8 @@ The test file is `packages/backend/tests/drivers/platform-prompt.test.ts`.
   that have CLI-flag equivalents; the generated domain-index guard projects
   every manifest command into the prompt. Keep all three.
 - **Structure and budget are contracts, not prose locks.** Assert the leading H1,
-  complete top-level heading order from §2, and the 19KB upper bound. Do not
+  complete top-level heading order from §2, and the 14KB upper bound for every
+  session scope. Do not
   assert exact paragraph wording.
 - **Watch line-wrapping.** The template literal's source line breaks become real
   newlines in the output. A multi-word substring split across a wrap will fail a
@@ -422,7 +420,8 @@ Before landing a platform-prompt edit:
 - [ ] CLI command index entries keep full command names.
 - [ ] Command discovery changes originate in the shared manifest, not a parallel
       list.
-- [ ] Minimal static prompt remains within the 19KB UTF-8 budget.
+- [ ] Minimal static prompt remains within the 14KB UTF-8 budget in every
+      session scope.
 - [ ] `docs/cli-system.md` updated iff a CLI fact changed (§6).
 - [ ] No Markdown code span broken across a source line.
 - [ ] `pnpm --filter @silverhand/shared typecheck` clean.

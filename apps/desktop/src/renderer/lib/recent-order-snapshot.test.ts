@@ -187,15 +187,17 @@ describe('recentSnapshotToken (re-capture policy)', () => {
   });
 
   it('is order-independent across the recent-scope set (no spurious recapture)', () => {
-    expect(recentSnapshotToken('ws1', ['regular', 'starred', 'dm'], true)).toBe(
-      recentSnapshotToken('ws1', ['dm', 'starred', 'regular'], true),
+    expect(recentSnapshotToken('ws1', ['regular', 'starred', 'agent_space'], true)).toBe(
+      recentSnapshotToken('ws1', ['agent_space', 'starred', 'regular'], true),
     );
   });
 
   it('changes when a scope toggles into / out of recent (rail scopes isolated)', () => {
-    const both = recentSnapshotToken('ws1', ['starred', 'dm'], true);
-    expect(both).not.toBe(recentSnapshotToken('ws1', ['starred'], true)); // dm left recent
-    expect(both).not.toBe(recentSnapshotToken('ws1', ['starred', 'dm', 'regular'], true));
+    const both = recentSnapshotToken('ws1', ['starred', 'agent_space'], true);
+    expect(both).not.toBe(recentSnapshotToken('ws1', ['starred'], true)); // agent_space left recent
+    expect(both).not.toBe(
+      recentSnapshotToken('ws1', ['starred', 'agent_space', 'regular'], true),
+    );
   });
 
   it('uses the list-wide sentinel scope for the channel sidebar', () => {

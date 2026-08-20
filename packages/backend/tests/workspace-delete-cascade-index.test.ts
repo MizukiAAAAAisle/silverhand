@@ -93,8 +93,8 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
        VALUES (?, ?, 'claude', ?, ?, ?, 'local')`,
     );
     const insertWorkspace = db.prepare(
-      `INSERT INTO workspaces (id, name, name_key, workspace_kind, owner_user_id, created_at, updated_at)
-       VALUES (?, ?, ?, 'regular', 'local', ?, ?)`,
+      `INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at)
+       VALUES (?, ?, ?, 'local', ?, ?)`,
     );
     const insertConversation = db.prepare(
       `INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
@@ -216,7 +216,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
 
     // ── The measured operation: production's exact single-row delete ──
     const started = performance.now();
-    db.prepare(`DELETE FROM workspaces WHERE id = ? AND workspace_kind = 'regular'`).run('ws-target');
+    db.prepare(`DELETE FROM workspaces WHERE id = ? AND owner_agent_id IS NULL`).run('ws-target');
     const elapsed = performance.now() - started;
     expect(elapsed).toBeLessThan(DELETE_BUDGET_MS);
 

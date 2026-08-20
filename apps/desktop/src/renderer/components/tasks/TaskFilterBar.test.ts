@@ -19,8 +19,8 @@ function candidate(
   return {
     workspaceId: 'ws-default',
     title: `title-${over.id}`,
-    roster_policy: 'open',
     archived_at: null,
+    fromAgentSpace: false,
     ...over,
   };
 }
@@ -67,18 +67,16 @@ describe('buildChannelFilterOptions', () => {
     expect(out.map(o => o.workspaceId)).toEqual(['ws-eng', 'ws-design']);
   });
 
-  it('puts a dm_channel in the dm group', () => {
+  // One determinant, one test. There used to be two — one keyed on
+  // `roster_policy === 'fixed'`, one on the container — because the group read
+  // both. The roster disjunct is gone (#task:2077): roster is a capability
+  // fact, the group is a container question, and a fixed-roster channel in a
+  // people-owned workspace belongs under Workspaces.
+  it('files a channel from an agent space under the agent-space group', () => {
     const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', roster_policy: 'fixed' }),
+      candidate({ id: 'c1', fromAgentSpace: true }),
     ]);
-    expect(out[0]?.group).toBe('dm');
-  });
-
-  it('puts a plain channel inside a dm workspace in the dm group', () => {
-    const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', roster_policy: 'open', fromDmWorkspace: true }),
-    ]);
-    expect(out[0]?.group).toBe('dm');
+    expect(out[0]?.group).toBe('agent_space');
   });
 
   it('omits sublabel when none is provided (single-workspace surface)', () => {
@@ -97,16 +95,15 @@ describe('buildChannelFilterOptions', () => {
 });
 
 describe('workspaceChannelCandidates — channel picker label/subtitle rule', () => {
-  const ch = (id: string, title: string, over: Partial<{ roster_policy: 'open' | 'fixed'; archived_at: number | null }> = {}) => ({
+  const ch = (id: string, title: string, over: Partial<{ archived_at: number | null }> = {}) => ({
     id,
     title,
-    roster_policy: over.roster_policy ?? ('open' as const),
     archived_at: over.archived_at ?? null,
   });
 
-  it('regular channel: title is the label, workspace name is the subtitle', () => {
+  it('people-owned workspace channel: title is the label, workspace name is the subtitle', () => {
     const out = workspaceChannelCandidates(
-      { id: 'ws-eng', name: 'Engineering', kind: 'regular' },
+      { id: 'ws-eng', name: 'Engineering', owner_agent_id: null },
       [ch('c1', 'general')],
     );
     expect(out[0]).toMatchObject({
@@ -114,7 +111,7 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
       workspaceId: 'ws-eng',
       title: 'general',
       sublabel: 'Engineering',
-      fromDmWorkspace: false,
+      fromAgentSpace: false,
     });
   });
 
@@ -122,9 +119,11 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
     // Alice/Cindy/Norman each own `Mentions` + `Onboarding`; before the fix
     // both rendered as the same `Alice` label. Now the channel title is the
     // label, the agent name the subtitle — so the rows are distinguishable.
-    const out = workspaceChannelCandidates({ id: 'ws-alice', name: 'dm-Alice', kind: 'dm' }, [
-      ch('c1', 'Mentions', { roster_policy: 'fixed' }),
-      ch('c2', 'Onboarding', { roster_policy: 'fixed' }),
+    // The name arrives bare — an agent space's row name IS the agent's handle
+    // (#task:2066 retired the `dm-` list prefix).
+    const out = workspaceChannelCandidates({ id: 'ws-alice', name: 'Alice', owner_agent_id: 'agent-alice' }, [
+      ch('c1', 'Mentions'),
+      ch('c2', 'Onboarding'),
     ]);
     expect(out.map(c => c.title)).toEqual(['Mentions', 'Onboarding']);
     expect(out.every(c => c.sublabel === 'Alice')).toBe(true);
@@ -136,8 +135,8 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
   });
 
   it('a single-channel agent space still carries the agent-name subtitle', () => {
-    const out = workspaceChannelCandidates({ id: 'ws-judy', name: 'dm-Judy', kind: 'dm' }, [
-      ch('c1', 'Onboarding', { roster_policy: 'fixed' }),
+    const out = workspaceChannelCandidates({ id: 'ws-judy', name: 'Judy', owner_agent_id: 'agent-judy' }, [
+      ch('c1', 'Onboarding'),
     ]);
     expect(out[0]).toMatchObject({ title: 'Onboarding', sublabel: 'Judy' });
   });
@@ -145,7 +144,7 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
 
 describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', () => {
   const workspaceOptions: WorkspaceOption[] = [
-    { id: 'ws-1', label: 'Engineering', kind: 'regular', dmAgentId: null },
+    { id: 'ws-1', label: 'Engineering', owner_agent_id: null },
   ];
   const channelOptions: ChannelOption[] = [
     { id: 'c-1', workspaceId: 'ws-1', label: 'general', group: 'workspace' },

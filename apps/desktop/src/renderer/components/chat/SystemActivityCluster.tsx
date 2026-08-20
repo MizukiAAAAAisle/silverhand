@@ -1,7 +1,7 @@
 import type { MessageDto, UserDto } from '@silverhand/shared';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
-import type { ConversationReference } from './ConversationRef';
+import type { WorkspaceChannelReference } from './ConversationRef';
 
 /**
  * Activity cluster — renders a contiguous run of low-priority system
@@ -37,7 +37,7 @@ import type { ConversationReference } from './ConversationRef';
  */
 export interface SystemActivityClusterProps {
   messages: MessageDto[];
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
   onOpenChannelRef?: (channelId: string) => void;

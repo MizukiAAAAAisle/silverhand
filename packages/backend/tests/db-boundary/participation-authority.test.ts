@@ -398,7 +398,10 @@ describe('db-boundary: participation authority', () => {
     // one of them into a DB-capable module fails this gate rather than quietly
     // passing it.
     expect(code).toContain('export function resolveParticipation');
-    expect(code).toContain(`placement_kind === 'agent_inbox'`);
+    // The arm it DOES own, anchored on the helper that decides the placement —
+    // `null` for anything else — so a future edit that answered a second
+    // placement's participants here would have to change this line.
+    expect(code).toContain('directPairEndpointsOf(conversation)');
   });
 
   it('the SQL face contains exactly ONE roster read per READING of the rule, and all of them are the pinned workspace-gated ones', () => {
@@ -415,10 +418,9 @@ describe('db-boundary: participation authority', () => {
     // mentions would satisfy the assertion above while meaning the workspace arm
     // had lost its authority — the opposite failure.
     expect(rosterMentions(squash(code))).toHaveLength(PINNED_MENTION_COUNT);
-    // The arms that resolve WITHOUT a roster, named so a future edit cannot make
-    // them roster-backed and still pass by deleting an arm.
+    // The arm that resolves WITHOUT a roster, named so a future edit cannot make
+    // it roster-backed and still pass by deleting an arm.
     expect(code).toContain(`placement_kind = 'direct_pair'`);
-    expect(code).toContain(`placement_kind = 'agent_inbox'`);
     // Both predicate builders delegate rather than inlining, which is what keeps
     // the per-kind count meaningful as arms are added. The PRINCIPAL side travels
     // through as the expression the caller gave: a builder that dropped it and
@@ -435,20 +437,29 @@ describe('db-boundary: participation authority', () => {
     expect(code).toContain(`agentParticipatesSql(conversationAlias, '?')`);
     expect(code).toContain('agentParticipatesSql(conversationAlias, agentIdExpr)');
 
-    // The human face's MISSING arm is a rule, not an omission: a human is never a
-    // participant of an inbox. Pinned over the ARM TEXT — the builder that lists
-    // them — rather than over the exported entry point: since P4-5 the arms live in
-    // the shared `…ParticipatesSql` builder and each public face is one call to it,
-    // so slicing from `export function userParticipates` now covers code with no
-    // arms in it at all and would pass vacuously.
+    // The two principal kinds carry the SAME placement alphabet, which is what
+    // makes them one rule with two readings. Since #task:2072 retired
+    // `agent_inbox` — the placement whose participants a human could never be —
+    // neither face has an arm the other lacks, so the pin is the EQUALITY: a
+    // placement added to one face only reddens here rather than shipping a rule
+    // that answers differently depending on who asks. The `workspace` arm is
+    // absent from both slices BY DELEGATION (the two `…RosterEdge` calls pinned
+    // above own it), so what these slices enumerate is each face's INLINE arms.
+    // Pinned over the ARM TEXT rather than over the exported entry point: since
+    // P4-5 the arms live in the shared `…ParticipatesSql` builder and each public
+    // face is one call to it, so slicing from `export function userParticipates`
+    // now covers code with no arms in it at all and would pass vacuously.
+    const placementsIn = (armText: string): string[] => [
+      ...new Set(
+        [...armText.matchAll(/placement_kind = '([a-z_]+)'/g)].map(m => m[1]!),
+      ),
+    ].sort();
     const humanArms = armTextOf(code, 'userParticipates');
     expect(humanArms).not.toBe('');
-    expect(humanArms).not.toContain('agent_inbox');
-    // Both directions, so neither assertion can be satisfied by an empty slice: the
-    // human arms carry the DM one, and the agent arms are where `agent_inbox` lives.
-    expect(humanArms).toContain(`placement_kind = 'direct_pair'`);
-    expect(armTextOf(code, 'agentParticipatesSql')).toContain(
-      `placement_kind = 'agent_inbox'`,
+    // Non-empty on its own terms, so the equality below cannot hold vacuously.
+    expect(placementsIn(humanArms)).toEqual(['direct_pair']);
+    expect(placementsIn(armTextOf(code, 'agentParticipatesSql'))).toEqual(
+      placementsIn(humanArms),
     );
   });
 
@@ -492,8 +503,8 @@ describe('db-boundary: participation authority', () => {
    * authority rather than a hand-rolled second query are asserted here:
    *
    *   - ARM COVERAGE. Every placement that can have an agent participant produces
-   *     candidates: the workspace roster, BOTH `direct_pair` endpoints, the inbox
-   *     owner. A missing arm is a placement whose recipients are silently nobody —
+   *     candidates: the workspace roster, BOTH `direct_pair` endpoints. A missing
+   *     arm is a placement whose recipients are silently nobody —
    *     the defect P4-5 exists to remove — and it returns an empty list rather than
    *     an error, so nothing else reports it. The equivalence test in
    *     `tests/read-model/participation-enumeration.test.ts` is the values-side twin.
@@ -507,14 +518,13 @@ describe('db-boundary: participation authority', () => {
     // A set, not a bag: each id is one delivery and one wake, and the arms being
     // mutually exclusive today is not what the callers rely on.
     const arms = sql.split(/\bUNION\b/);
-    expect(arms).toHaveLength(4);
+    expect(arms).toHaveLength(3);
     expect(sql).not.toContain('UNION ALL');
     // One arm each, named by the column that answers for it — so an arm cannot be
     // deleted, nor two arms collapsed into one, and still pass.
     expect(arms.filter(arm => arm.includes('conversation_agents'))).toHaveLength(1);
     expect(arms.filter(arm => arm.includes('endpoint_a_id'))).toHaveLength(1);
     expect(arms.filter(arm => arm.includes('endpoint_b_id'))).toHaveLength(1);
-    expect(arms.filter(arm => arm.includes('inbox_agent_id'))).toHaveLength(1);
     // Every arm projects the same column name, or the compound SELECT would fail at
     // prepare time in some arms only.
     for (const arm of arms) expect(arm).toContain('AS agent_id');
@@ -531,14 +541,13 @@ describe('db-boundary: participation authority', () => {
   });
 
   /**
-   * The HUMAN set reading's shape (#task:2035). Same claims as the agent one, plus
-   * the one that is unique to this kind and is a RULE rather than a gap: there is no
-   * `agent_inbox` arm, because a human is never a participant of an inbox — not even
-   * the creator of the agent. A future "symmetry" edit that added the arm would hand
-   * every viewer-scoped frame of an agent's private inbox to a person, so the
-   * absence is asserted here and not left to the predicate's docblock.
+   * The HUMAN set reading's shape (#task:2035). The same claims as the agent one,
+   * over the human carriers: since #task:2072 retired `agent_inbox` — the one
+   * placement a human could never participate in, not even as the creator of the
+   * agent — the two kinds carry arm for arm the same placements, so what is unique
+   * here is only WHICH roster table answers for the workspace arm.
    */
-  it('the human set reading covers the human arms, omits the inbox by rule, and binds the conversation once, by name', () => {
+  it('the human set reading covers the human arms and binds the conversation once, by name', () => {
     const sql = PARTICIPANT_USER_IDS_SQL;
     const arms = sql.split(/\bUNION\b/);
     expect(arms).toHaveLength(3);
@@ -546,11 +555,9 @@ describe('db-boundary: participation authority', () => {
     expect(arms.filter(arm => arm.includes('conversation_users'))).toHaveLength(1);
     expect(arms.filter(arm => arm.includes('endpoint_a_id'))).toHaveLength(1);
     expect(arms.filter(arm => arm.includes('endpoint_b_id'))).toHaveLength(1);
-    // THE MISSING ARM IS THE RULE — stated over the whole text, since an added arm
-    // would be a fourth `UNION` branch and the length check alone would not say why
-    // it must not exist.
-    expect(sql).not.toContain('agent_inbox');
-    expect(sql).not.toContain('inbox_agent_id');
+    // The workspace arm reads the HUMAN roster and only it: the agent roster here
+    // would make an agent's membership admit a person.
+    expect(sql).not.toContain('conversation_agents');
     for (const arm of arms) expect(arm).toContain('AS user_id');
     expect([...sql.matchAll(/c_p\.id = @conv/g)]).toHaveLength(arms.length);
     expect(sql.split('?')).toHaveLength(1);
@@ -576,7 +583,7 @@ describe('db-boundary: participation authority', () => {
    *   - THE ROSTERLESS PLACEMENT ONLY. A `conversation_users` read here would be a
    *     third reading of the human roster rule — the count above already reports it,
    *     and this states the intent that makes the count correct: channels are
-   *     enumerated workspace-first, and an inbox has no human participant at all.
+   *     enumerated workspace-first.
    *   - ONE BINDING FOR ONE VALUE, by name, for the same reason as `@conv`.
    */
   it('the direct-pair transpose covers both endpoint slots, stays rosterless, and binds the viewer once, by name', () => {
@@ -594,9 +601,8 @@ describe('db-boundary: participation authority', () => {
     expect(arms.filter(arm => arm.includes(`endpoint_b_kind = 'human'`))).toHaveLength(1);
     // Every arm is confined to the placement whose participants ARE its endpoints …
     expect([...sql.matchAll(/placement_kind = 'direct_pair'/g)]).toHaveLength(arms.length);
-    // … and to no other: the other two placements are answered by other faces.
+    // … and to no other: the workspace arm is answered by other faces.
     expect(sql).not.toContain(`placement_kind = 'workspace'`);
-    expect(sql).not.toContain('agent_inbox');
     for (const arm of arms) expect(arm).toContain('AS conversation_id');
     expect([...sql.matchAll(/= @viewer/g)]).toHaveLength(arms.length);
     expect(sql.split('?')).toHaveLength(1);

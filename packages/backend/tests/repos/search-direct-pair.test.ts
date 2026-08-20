@@ -134,7 +134,7 @@ function bootstrap() {
 }
 
 describe('#task:2053 — DirectPair search + participation authority', () => {
-  it('finds the DirectPair message under scope=all, excludes seat-without-membership AND membership-without-seat', () => {
+  it('finds the DirectPair message, excludes seat-without-membership AND membership-without-seat', () => {
     const t = bootstrap();
     const found = t.search.search(
       SearchQueryInputSchema.parse({ q: NEEDLE, limit: 50 }),
@@ -176,29 +176,35 @@ describe('#task:2053 — DirectPair search + participation authority', () => {
     }
   });
 
-  it('keeps the DirectPair out of scope=regular and scope=dm — it appears only under scope=all', () => {
+  it('keeps the DirectPair out of the surviving narrowing — a `workspace_id` coordinate filter', () => {
     const t = bootstrap();
 
-    const regular = t.search.search(
-      SearchQueryInputSchema.parse({ q: NEEDLE, scope: 'regular', limit: 50 }),
+    // Until #task:2075's stop-publish step this cell narrowed by CONTAINER KIND
+    // (`scope=regular` / `scope=agent_space`), and its comment argued that the
+    // pair was excluded by those filters' EXPLICIT `placement_kind='workspace'`
+    // conjunct rather than by a NULL coincidence. Both filters died with the
+    // published alphabet they read, so that argument now has no subject. The
+    // FAMILY survives in one member — the coordinate filter — and its exclusion
+    // rests on the opposite reasoning, which is why it is worth pinning here:
+    // positive equality on a workspace id is SELF-excluding for a pair row
+    // (`workspace_id IS NULL` can equal no id), so `search-repo.ts` deliberately
+    // carries no `placement_kind` conjunct beside it (#task:2053-N1). If someone
+    // ever "restores symmetry" by moving that conjunct back in, this cell keeps
+    // passing — and it should: it pins the OUTCOME, and the comment at the query
+    // is what pins the reason.
+    const scoped = t.search.search(
+      SearchQueryInputSchema.parse({
+        q: NEEDLE,
+        workspace_id: t.eng.id,
+        limit: 50,
+      }),
       t.viewerUserId,
     );
-    const regularIds = messageHits(regular.results).map(r => r.message.id);
-    // The regular workspace channel is the control that IS present — proving
-    // scope=regular produces hits — while the pair is excluded by the EXPLICIT
-    // `placement_kind='workspace'` conjunct, not a NULL coincidence.
-    expect(regularIds).toContain(t.generalMsg.id);
-    expect(regularIds).not.toContain(t.pairMsg.id);
-
-    const dm = t.search.search(
-      SearchQueryInputSchema.parse({ q: NEEDLE, scope: 'dm', limit: 50 }),
-      t.viewerUserId,
-    );
-    // `dm` STILL means the agent_home workspace kind, not a DirectPair — neither
-    // the regular channel nor the pair is an agent_home placement.
-    const dmIds = messageHits(dm.results).map(r => r.message.id);
-    expect(dmIds).not.toContain(t.pairMsg.id);
-    expect(dmIds).not.toContain(t.generalMsg.id);
+    const scopedIds = messageHits(scoped.results).map(r => r.message.id);
+    // Differential: the workspace channel IS returned, so an absent pair is a
+    // decision and not an empty result set.
+    expect(scopedIds).toContain(t.generalMsg.id);
+    expect(scopedIds).not.toContain(t.pairMsg.id);
   });
 
   it('counts DirectPair hits in `total`/`truncated` — the COUNT shares the row query`s LEFT-join FROM/WHERE', () => {

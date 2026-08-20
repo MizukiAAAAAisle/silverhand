@@ -303,8 +303,8 @@ export function deliveryTargetOfMessage(msg: MessageLite): DeliveryTarget {
  *   names round-trip, `dm:@<other handle>` for a DirectPair (the one PER-VIEWER token — the same row
  *   spells differently for its two participants, which is why it exists
  *   only in this header and never in anything durable), and
- *   `#conv:<conversation-id>` otherwise — for an agent inbox, an
- *   agent-home placement, a name that does not fit the token budget, or
+ *   `#conv:<conversation-id>` otherwise — for an agent-home
+ *   placement, a name that does not fit the token budget, or
  *   a row the current name domain would refuse. Any of those forms
  *   carries the `/thread:<root-id>` suffix inside a reply cluster.
  *

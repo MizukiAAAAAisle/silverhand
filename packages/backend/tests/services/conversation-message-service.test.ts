@@ -164,6 +164,12 @@ function bootstrap() {
     runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,
+    // #task:2072 — the mention CC's destination gate. This suite mocks
+    // `writeMentionCcCopies`, so the SET it computes is never consumed; what the
+    // real gate would answer is `tests/services/mention-cc.test.ts`'s subject. Wired
+    // to refuse everything rather than allow everything: an option that said yes
+    // would make this file the place a future reader learns the wrong default.
+    directLineTargetFor: () => null,
   });
   const workspace = workspaces.insert({
     name: fixedWorkspaceName('eng'),
@@ -781,20 +787,21 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('holds stale same-conversation agent sends before inserting side effects', async () => {
+  it('holds a stale agent send (runtime has undelivered input) before any side effect', async () => {
     const t = bootstrap();
     try {
-      const observed = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'observed',
-      });
-      const newer = t.messages.insertForConversation({
+      // An undelivered inbox row for alice IS the freshness miss: her runtime
+      // still holds input it must consume (#task:2095). Freshness is a property
+      // of the runtime's field of view, not of a stream — there is no seq pair.
+      // Default session_scope = 'conversation', so the guard asks
+      // hasUndeliveredForPair on this channel.
+      const pending = t.messages.insertForConversation({
         conversationId: t.channel.id,
         fromKind: 'agent',
         fromAgentId: t.bob.id,
-        content: 'conflicting update',
+        content: 'undelivered to alice',
       });
+      t.conversationInboxes.enqueue(t.channel.id, t.alice.id, pending.id);
       const conversationEvents: Array<{ kind: string; payload: any }> = [];
       const unsub = t.events.subscribe(t.channel.id, e => {
         conversationEvents.push({ kind: e.kind, payload: e.payload });
@@ -806,90 +813,97 @@ describe('ConversationMessageService.sendMessage', () => {
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           destination: stream(t.channel.id),
           content: 'stale draft',
-          seenUpToSeq: observed.seq,
         }),
       ).rejects.toMatchObject({
         code: 'message_stale',
         staleEventId: expect.any(String),
-        seenUpToSeq: observed.seq,
-        currentSeq: newer.seq,
+        scope: 'conversation',
+        targetConversationId: t.channel.id,
       });
       unsub();
 
+      // No side effects: the draft never lands, no events, no delivery.
       expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
-        .toEqual(['observed', 'conflicting update']);
+        .toEqual(['undelivered to alice']);
       expect(conversationEvents).toEqual([]);
       expect(t.fake.delivered).toEqual([]);
       expect(t.fake.resolvedRuns).toEqual([]);
+      // The surviving observability carrier (§3): the rejection WARN, re-derived
+      // for the RuntimeScope model — the scope discriminant + the undelivered
+      // count (F13, in_flight included, so a structural upper bound), NO seq pair.
       expect(t.logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           staleEventId: expect.any(String),
-          conversationId: t.channel.id,
-          actorKind: 'agent',
+          scope: 'conversation',
+          targetConversationId: t.channel.id,
+          undeliveredCount: 1,
           actorId: t.alice.id,
-          seenUpToSeq: observed.seq,
-          currentSeq: newer.seq,
         }),
-        'conversation-message-service: freshness CAS rejected',
+        'conversation-message-service: freshness guard rejected send (runtime has undelivered input)',
       );
     } finally {
       t.cleanup();
     }
   });
 
-  it('falls back without hard CAS when an agent send has no delivered seq', async () => {
+  it('an agent send passes cleanly when the runtime holds no undelivered input', async () => {
     const t = bootstrap();
     try {
-      await t.service.sendMessage({
+      // No inbox rows for alice ⇒ EXISTS is false ⇒ the guard admits the send
+      // with neither a 409 nor a bypass. Happy-path control for the freshness axis.
+      const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id),
-        content: 'no seen seq',
+        content: 'clean send',
       });
 
+      expect(result.committed.message.content).toBe('clean send');
       expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
-        .toEqual(['no seen seq']);
-      expect(t.logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: 'missing_seen_up_to_seq' }),
-        'conversation-message-service: freshness CAS skipped',
+        .toEqual(['clean send']);
+      // Not a bypass — the guard was satisfied, not skipped.
+      expect(t.logger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'conversation-message-service: freshness guard bypassed (--anyway)',
       );
     } finally {
       t.cleanup();
     }
   });
 
-  it('explicit freshness bypass inserts stale agent sends and logs an auditable reason', async () => {
+  it('explicit freshness bypass (--anyway) inserts a stale agent send and logs an auditable trail', async () => {
     const t = bootstrap();
     try {
-      const observed = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'observed',
-      });
-      t.messages.insertForConversation({
+      const pending = t.messages.insertForConversation({
         conversationId: t.channel.id,
         fromKind: 'agent',
         fromAgentId: t.bob.id,
-        content: 'newer context',
+        content: 'undelivered to alice',
       });
+      t.conversationInboxes.enqueue(t.channel.id, t.alice.id, pending.id);
 
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id),
         content: 'send anyway',
-        seenUpToSeq: observed.seq,
         staleEventId: 'evt-force',
         freshnessBypass: true,
       });
 
       expect(result.committed.message.content).toBe('send anyway');
       expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
-        .toEqual(['observed', 'newer context', 'send anyway']);
+        .toEqual(['undelivered to alice', 'send anyway']);
+      // The bypass is auditable: one WARN for the skipped guard …
       expect(t.logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: 'freshness_bypass_explicit' }),
-        'conversation-message-service: freshness CAS skipped',
+        expect.objectContaining({
+          targetConversationId: t.channel.id,
+          actorKind: 'agent',
+          actorId: t.alice.id,
+        }),
+        'conversation-message-service: freshness guard bypassed (--anyway)',
       );
+      // … and one for the stale-send resolution (force_send), joinable by staleEventId.
       expect(t.logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           staleEventId: 'evt-force',
@@ -943,81 +957,6 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('accepts a matching asserted stream and rejects one measured elsewhere', async () => {
-    // The assertion is NOT redundant with the destination (#task:2021 P4-4): a
-    // readable address resolves by NAME, and a name can have been rebound since
-    // the sender last saw it resolve — so the stream it measured `seenUpToSeq`
-    // against and the stream it is now writing into genuinely differ, and the CAS
-    // would compare a seq against the wrong head and PASS.
-    const t = bootstrap();
-    try {
-      const root = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'root question',
-      });
-      // Matching assertion (the daemon measured the reply cluster it is writing
-      // into) passes through.
-      const ok = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, root.id),
-        content: 'threaded answer',
-        assertedStream: `#conv:${t.channel.id}/thread:${root.id}`,
-        seenUpToSeq: 0,
-      });
-      expect(ok.committed.message.thread_root_id).toBe(root.id);
-      // A main-line send asserting the main line also passes.
-      const mainOk = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id),
-        content: 'main line',
-        assertedStream: `#conv:${t.channel.id}`,
-        seenUpToSeq: root.seq,
-      });
-      expect(mainOk.committed.message.thread_root_id).toBeNull();
-      // Wrong STREAM inside the right conversation: the daemon measured the main
-      // line and is writing into a cluster.
-      await expect(
-        t.service.sendMessage({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          destination: stream(t.channel.id, root.id),
-          content: 'wrong stream',
-          assertedStream: `#conv:${t.channel.id}`,
-          seenUpToSeq: 0,
-        }),
-      ).rejects.toMatchObject({ code: 'asserted_stream_mismatch' });
-      // Wrong CONVERSATION: the case the retired `stream_key` spelling could not
-      // even express, and the one a rebound name produces.
-      await expect(
-        t.service.sendMessage({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          destination: stream(t.channel.id),
-          content: 'measured elsewhere',
-          assertedStream: '#conv:elsewhere0000000',
-          seenUpToSeq: 0,
-        }),
-      ).rejects.toMatchObject({ code: 'asserted_stream_mismatch' });
-      // Not a stream token at all: fails CLOSED rather than being ignored, so a
-      // sender cannot skip the cross-check by asserting nonsense.
-      await expect(
-        t.service.sendMessage({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          destination: stream(t.channel.id),
-          content: 'garbage assertion',
-          assertedStream: 'main',
-          seenUpToSeq: 0,
-        }),
-      ).rejects.toMatchObject({ code: 'asserted_stream_mismatch' });
-    } finally {
-      t.cleanup();
-    }
-  });
-
   // The check lives on the HUMAN door only (#task:2021 P4-4). `own_reply_cluster`
   // is a message a person clicked reply on, so the service is the first party to
   // look it up; a `stream` destination arrives from `resolveDeliveryTarget` with
@@ -1041,128 +980,85 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('scopes freshness per stream: a thread reply does not stale a main-line send', async () => {
+  it('conversation scope: undelivered input in another conversation does not stale a send here', async () => {
     const t = bootstrap();
     try {
-      const root = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'observed on main',
+      // alice keeps the default session_scope = 'conversation', bound to `channel`.
+      // The guard asks hasUndeliveredForPair(channel, alice), so an undelivered
+      // row in a DIFFERENT conversation is out of scope — the N=1 degenerate of
+      // the RuntimeScope model.
+      const other = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        title: fixedConversationTitle('other'),
       });
-      // a reply lands in the thread stream, advancing the global seq but NOT
-      // the main head — an agent that observed the main line up to `root`
-      // must still be able to post on the main line without a false stale.
-      await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, root.id),
-        content: 'thread reply',
-        seenUpToSeq: 0,
+      t.conversations.addAgent(other.id, t.alice.id);
+      const elsewhere = t.messages.insertForConversation({
+        conversationId: other.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'undelivered elsewhere',
       });
+      t.conversationInboxes.enqueue(other.id, t.alice.id, elsewhere.id);
+
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id),
-        content: 'main-line answer',
-        seenUpToSeq: root.seq,
+        content: 'unaffected by another conversation',
       });
-      expect(result.committed.message.content).toBe('main-line answer');
-      expect(result.committed.message.thread_root_id).toBeNull();
+      expect(result.committed.message.content).toBe('unaffected by another conversation');
     } finally {
       t.cleanup();
     }
   });
 
-  it('stale reply scopes the unseen count to the same thread stream and materializes the window as normal observe deliveries', async () => {
+  it('agent scope: undelivered input in ANOTHER conversation stales a send here (cross-conversation, deliberately not isolated)', async () => {
     const t = bootstrap();
     try {
-      const root = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'root',
+      // An agent-scoped runtime has one context spanning ALL its conversations,
+      // so a hint it has not consumed in ANY of them makes its next send —
+      // anywhere — stale (shiki 2026-08-19: cross-channel collaboration is the
+      // whole point of agent scope, so freshness is NOT isolated per
+      // conversation). session_scope is immutable after creation, so `scout` is
+      // born agent-scoped rather than promoted.
+      const scout = t.agents.create(
+        { name: 'scout', runtime: 'claude', session_scope: 'agent' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, scout.id);
+      t.conversations.addAgent(t.channel.id, scout.id);
+      const other = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        title: fixedConversationTitle('other'),
       });
-      // first reply establishes the thread head (seen=0)
-      const firstReply = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, root.id),
-        content: 'first thread reply',
-        seenUpToSeq: 0,
+      t.conversations.addAgent(other.id, scout.id);
+      const elsewhere = t.messages.insertForConversation({
+        conversationId: other.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'undelivered elsewhere',
       });
-      // a concurrent main-line message advances the conversation-global seq
-      // but is in a DIFFERENT stream — it must NOT count into the thread's
-      // unseen window.
-      t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'unrelated main message',
-      });
-      // a second thread reply advances the thread head past `firstReply`
-      const secondReply = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'newer thread reply',
-        threadRootId: root.id,
-      });
+      t.conversationInboxes.enqueue(other.id, scout.id, elsewhere.id);
+
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-          destination: stream(t.channel.id, root.id),
-          content: 'stale thread draft',
-          seenUpToSeq: firstReply.committed.message.seq,
+          actor: { kind: 'agent', agentId: scout.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
+          content: 'stale from another conversation',
         }),
       ).rejects.toMatchObject({
         code: 'message_stale',
-        currentSeq: secondReply.seq,
+        scope: 'agent',
+        targetConversationId: t.channel.id,
       });
-      // Contract 3 (no signal-only deadlock): the window rows the signal
-      // asks alice to wait for now exist as NORMAL observe deliveries —
-      // the same rows a later follow-backfill would ensureDelivery
-      // idempotently.
-      const pendingForAlice = t.conversationInboxes.listPending(
-        t.channel.id,
-        t.alice.id,
-      );
-      expect(
-        pendingForAlice.filter(pi => pi.message.id === secondReply.id),
-      ).toHaveLength(1);
-      expect(
-        pendingForAlice.find(pi => pi.message.id === secondReply.id)!.deliveryKind,
-      ).toBe('observe');
-      // C1-gate P1-1: the rows must MOVE, not just exist — the 409 path
-      // drives the live delivery plane so a mid-turn agent (no future
-      // ready_for_drain guarantee) still receives the window.
-      await new Promise(res => setImmediate(res));
-      expect(t.fake.pendingDrives).toContainEqual({
-        conversationId: t.channel.id,
-        agentId: t.alice.id,
-      });
-      // Successful retry runs follow-backfill — it must hit the SAME row,
-      // never a second one.
-      // ensureDelivery is idempotent — use it as the row lookup.
-      const before = t.conversationInboxes.ensureDelivery(
-        t.channel.id,
-        t.alice.id,
-        secondReply.id,
-      ).inboxId;
-      await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, root.id),
-        content: 'informed retry',
-        seenUpToSeq: secondReply.seq,
-      });
-      expect(
-        t.conversationInboxes.ensureDelivery(t.channel.id, t.alice.id, secondReply.id)
-          .inboxId,
-      ).toBe(before);
     } finally {
       t.cleanup();
     }
   });
 
-  it('C1-gate P1-2: materialization failure fails CLOSED — no fabricated message_stale signal', async () => {
+  it('thread and main line are not isolated: undelivered input stales both a main-line and a thread send', async () => {
     const t = bootstrap();
     try {
       const root = t.messages.insertForConversation({
@@ -1170,213 +1066,94 @@ describe('ConversationMessageService.sendMessage', () => {
         fromKind: 'user',
         content: 'root',
       });
-      const firstReply = await t.service.sendMessage({
+      const pending = t.messages.insertForConversation({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, root.id),
-        content: 'prior reply',
-        seenUpToSeq: 0,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'undelivered to alice',
       });
-      t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'newer reply',
-        threadRootId: root.id,
-      });
-      // The failure must be injected on the TX SCOPE: after #task:1981 the
-      // service materializes through `tx.inboxes`, so that is the only place a
-      // delivery-row write can fail from.
-      t.txWrap.current = tx =>
-        overrideScope(tx, {
-          inboxes: {
-            ensureDelivery: () => {
-              throw new Error('disk full');
-            },
-          },
-        });
-      // A signal that promises "wait for delivery" while the delivery row
-      // could not be created is a fabricated promise — the send must fail
-      // with the underlying error, NOT message_stale.
+      t.conversationInboxes.enqueue(t.channel.id, t.alice.id, pending.id);
+
+      // The guard is per-(conversation, agent) and never looks at the stream, so
+      // one undelivered row stales a main-line send …
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          destination: stream(t.channel.id),
+          content: 'main-line draft',
+        }),
+      ).rejects.toMatchObject({ code: 'message_stale', threadRootId: null });
+      // … and a thread reply into root's cluster equally (shiki 2026-08-19:
+      // thread and main line are deliberately not isolated, same as
+      // cross-conversation). `threadRootId` rides the error for the rejection
+      // log only — it no longer scopes freshness.
       await expect(
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           destination: stream(t.channel.id, root.id),
-          content: 'stale draft',
-          seenUpToSeq: firstReply.committed.message.seq,
+          content: 'thread draft',
         }),
-      ).rejects.toThrowError('disk full');
-      vi.restoreAllMocks();
-    } finally {
-      vi.restoreAllMocks();
-      t.cleanup();
-    }
-  });
-
-  it('bypass sends return stream_head_before as the merge prerequisite; normal sends do not (countgame bypass-hole P1)', async () => {
-    const t = bootstrap();
-    try {
-      const observed = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'observed',
-      });
-      const gap = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'unseen gap',
-      });
-
-      const forced = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id),
-        content: 'forced',
-        seenUpToSeq: observed.seq,
-        freshnessBypass: true,
-      });
-      // The head at insert time = everything freshness-relevant the
-      // sender skipped — the daemon merges the own seq once its observed
-      // covers this value (sender is excluded from its own fan-out, so
-      // the forced seq never arrives by inbox).
-      expect(forced.streamHeadBeforeSend).toBe(gap.seq);
-
-      const normal = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id),
-        content: 'normal',
-        seenUpToSeq: forced.committed.message.seq,
-      });
-      expect(normal.streamHeadBeforeSend).toBeUndefined();
+      ).rejects.toMatchObject({ code: 'message_stale', threadRootId: root.id });
     } finally {
       t.cleanup();
     }
   });
 
-  it('bypass reply returns the THREAD stream head, not the main-line head (per-stream scoping falsifier, #task:1749)', async () => {
+  it('a human send never 409s on undelivered input — the guard keys on the acting agent, so it never runs for a user actor', async () => {
     const t = bootstrap();
     try {
-      const root = t.messages.insertForConversation({
+      // An undelivered row that WOULD stale an agent send in this conversation.
+      const pending = t.messages.insertForConversation({
         conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'root question',
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'undelivered to alice',
       });
-      // Advance the THREAD head: a reply lands in root's stream.
-      const threadReply = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'earlier thread reply',
-        threadRootId: root.id,
-      });
-      // Advance the MAIN-LINE head PAST the thread head with an unrelated
-      // main-line message. This is the trap value: if the bypass branch
-      // captured the head with a null (main-line) thread scope instead of
-      // `threadRootId`, `streamHeadBeforeSend` would be this seq.
-      const mainGap = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'unrelated main-line gap',
-      });
-      expect(mainGap.seq).toBeGreaterThan(threadReply.seq);
+      t.conversationInboxes.enqueue(t.channel.id, t.alice.id, pending.id);
 
-      const forced = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, root.id),
-        content: 'forced thread reply',
-        seenUpToSeq: root.seq,
-        freshnessBypass: true,
-      });
-
-      // The bypass send is a thread reply, so the merge prerequisite is the
-      // THREAD stream head at insert time — everything in THIS thread the
-      // sender skipped — not the higher main-line head.
-      expect(forced.committed.message.thread_root_id).toBe(root.id);
-      expect(forced.streamHeadBeforeSend).toBe(threadReply.seq);
-      expect(forced.streamHeadBeforeSend).not.toBe(mainGap.seq);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('a loose first-touch send (no seenUpToSeq) returns stream_head_before too — every skipped CAS owes the merge prerequisite (#task:1854)', async () => {
-    const t = bootstrap();
-    try {
-      const root = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'root question',
-      });
-      const threadReply = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'a reply the agent never observed',
-        threadRootId: root.id,
-      });
-      // Trap value: a main-line head ABOVE the thread head. A prerequisite
-      // captured with a null (main-line) scope would be this seq.
-      const mainGap = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'user',
-        content: 'unrelated main-line gap',
-      });
-      expect(mainGap.seq).toBeGreaterThan(threadReply.seq);
-
-      // The daemon has never observed this cluster, so it omits BOTH freshness
-      // fields rather than claim a false `seen`. The insert therefore skips the
-      // CAS — and, exactly like a bypass, proves nothing about what the sender
-      // covers. Without the prerequisite the sender is stuck: nothing ever
-      // delivers its own seq back to it, so its next send in this cluster
-      // 409s against its own message forever.
-      const firstTouch = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, root.id),
-        content: 'first touch of an unseen cluster',
-      });
-
-      expect(firstTouch.committed.message.thread_root_id).toBe(root.id);
-      expect(firstTouch.streamHeadBeforeSend).toBe(threadReply.seq);
-      expect(firstTouch.streamHeadBeforeSend).not.toBe(mainGap.seq);
-
-      // Same on the main line: an agent that speaks before reading anything.
-      const mainFirstTouch = await t.service.sendMessage({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id),
-        content: 'first thing I ever say',
-      });
-      expect(mainFirstTouch.streamHeadBeforeSend).toBe(mainGap.seq);
-
-      // A user send has no per-stream cursor, so there is nothing to merge.
+      // The freshness guard is per-(conversation, agent); a user actor has no
+      // agent field of view, so the guard is never evaluated — the human line
+      // is committed regardless of what any agent has not yet drained.
       const fromUser = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
         destination: { kind: 'own_main_line' },
         content: 'human line',
       });
-      expect(fromUser.streamHeadBeforeSend).toBeUndefined();
+      expect(fromUser.committed.message.content).toBe('human line');
+    } finally {
+      t.cleanup();
+    }
+  });
 
-      // The COMMON first touch: first reply in a cluster that has none yet, so
-      // the thread head is 0 while the main-line head is well above it. Zero
-      // must be RETURNED, not treated as "no value" — the daemon reads it as
-      // "nothing to cover" and merges the own seq immediately (Cindy/Norman
-      // review of #task:1854).
-      const quietRoot = t.messages.insertForConversation({
+  it('an agent with no undelivered input may open a thread it has never touched — the guard is absence-of-input, not follow/seen state', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
         conversationId: t.channel.id,
         fromKind: 'user',
-        content: 'a root nobody has replied to',
+        content: 'root question',
+      });
+      // A prior reply advances the thread head. alice never observed it, but it
+      // is not an undelivered row addressed to HER — no inbox row is enqueued —
+      // so her field of view holds nothing pending. Freshness keys on undelivered
+      // input, not on follow-state or a per-stream cursor: the first reply is
+      // admitted.
+      t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'earlier thread reply',
+        threadRootId: root.id,
       });
       const firstReply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        destination: stream(t.channel.id, quietRoot.id),
-        content: 'first reply in an empty cluster',
+        destination: stream(t.channel.id, root.id),
+        content: 'first touch of an unseen cluster',
       });
-      expect(firstReply.committed.message.thread_root_id).toBe(quietRoot.id);
-      expect(firstReply.streamHeadBeforeSend).toBe(0);
-      expect(quietRoot.seq).toBeGreaterThan(0);
+      expect(firstReply.committed.message.thread_root_id).toBe(root.id);
     } finally {
       t.cleanup();
     }
@@ -1648,12 +1425,15 @@ describe('ConversationMessageService.sendMessage', () => {
         fromAgentId: t.bob.id,
         content: 'bob root',
       });
-      // alice replies → alice + bob become followers.
+      // alice replies → alice + bob become followers. (Scenario sends bypass
+      // freshness: alice accrues undelivered rows from bob's traffic via async
+      // fan-out, but this test is about follower delivery, not the guard.)
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id, root.id),
         content: 'alice reply',
+        freshnessBypass: true,
       });
       // bob leaves the channel; his follower row lingers but is not authoritative.
       t.conversations.removeAgent(t.channel.id, t.bob.id);
@@ -1666,6 +1446,7 @@ describe('ConversationMessageService.sendMessage', () => {
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id, root.id),
         content: 'second reply',
+        freshnessBypass: true,
       });
       // give any post-commit delivery a chance to run, then assert bob got none.
       await new Promise(resolve => setTimeout(resolve, 30));
@@ -1895,6 +1676,7 @@ describe('ConversationMessageService.sendMessage', () => {
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id, root.id),
         content: 'reply one',
+        freshnessBypass: true,
       });
       // carol's own in-thread message, inserted directly (bypassing the
       // service) so it does NOT register a follow — carol stays a non-follower
@@ -1911,16 +1693,20 @@ describe('ConversationMessageService.sendMessage', () => {
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         destination: stream(t.channel.id, root.id),
         content: 'reply three',
+        freshnessBypass: true,
       });
 
       // Now pull carol in mid-thread via mention. Backfill must include
       // root + reply1 + reply3 (seq < current), ordered by seq, and EXCLUDE
-      // carol's own message and the current mention reply.
+      // carol's own message and the current mention reply. (Scenario sends
+      // bypass freshness: alice/bob accrue undelivered rows from each other's
+      // fan-out; this test is about backfill, not the guard.)
       const mention = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id, root.id),
         content: '<silverhand://agent/carol> catch up',
+        freshnessBypass: true,
       });
 
       const inbox = t.conversationInboxes
@@ -2308,8 +2094,8 @@ describe('attachment admission parity across the two resolution faces (§9.8)', 
  * only it can make:
  *
  *  1. PARTICIPATION IS THE PLACEMENT, INSIDE THE TRANSACTION TOO. The gate used
- *     to ask "is there a `conversation_agents` row", which `direct_pair` and
- *     `agent_inbox` never have by construction (§4.2). That refused EVERY agent
+ *     to ask "is there a `conversation_agents` row", which a `direct_pair` never
+ *     has by construction (§4.2). That refused EVERY agent
  *     send into a DM — the same fact as `dm:@handle` not working at all — while
  *     the ACL above it said yes. Both faces now resolve through one placement
  *     authority, so the falsifiers are symmetric: an endpoint may post with NO
@@ -2703,28 +2489,29 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
     }
   });
 
-  it('never admits a human to an agent_inbox, whoever created the agent', async () => {
+  it('never admits the CREATOR of both agents to their DM', async () => {
     const t = bootstrap();
     try {
       // `created_by_user_id` is MANAGEMENT authority, not a message ACL (§4.2), so
-      // the human predicate has NO inbox arm at all — the creator included. The
-      // inbox is inserted explicitly because `AgentRepo.create` does not carry the
-      // aggregate's inbox invariant (see its docblock).
-      const inbox = t.conversations.insertAgentInbox(t.alice.id, 1_700_000_000_000);
-      expect(t.conversations.getAgentInbox(t.alice.id)?.id).toBe(inbox.id);
+      // the human predicate has no creator arm: on an agent↔agent pair the two
+      // endpoints are the whole participant set, and the person who made both of
+      // them is still outside it.
+      const dm = openAliceBobDm(t);
+      expect(t.agents.get(t.alice.id)?.created_by_user_id).toBe('local');
+      expect(t.agents.get(t.bob.id)?.created_by_user_id).toBe('local');
 
       await expect(
         t.service.sendMessage({
-          conversationId: inbox.id,
+          conversationId: dm,
           actor: { kind: 'user', userId: 'local' },
           destination: { kind: 'own_main_line' },
-          content: 'writing into your inbox',
+          content: 'writing into your DM',
         }),
       ).rejects.toMatchObject({
         name: 'ActorError',
         code: 'user_not_participant_of_conversation',
       });
-      expect(t.messages.listForConversation(inbox.id)).toHaveLength(0);
+      expect(t.messages.listForConversation(dm)).toHaveLength(0);
     } finally {
       t.cleanup();
     }
@@ -2879,6 +2666,7 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id, root.id),
         content: 'first reply',
+        freshnessBypass: true,
       });
       await waitFor(() => t.fake.delivered.some(d => d.agentId === t.bob.id));
 
@@ -2888,11 +2676,15 @@ describe('ConversationMessageService.sendMessage — the recipient boundary (P4-
       ).toContain(t.bob.id);
       const deliveredBefore = t.fake.delivered.length;
 
+      // Scenario sends bypass freshness: alice accrued an undelivered row from
+      // bob's root (he authored it), but this test is about revoked-participant
+      // delivery, not the guard.
       const after = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         destination: stream(t.channel.id, root.id),
         content: 'second reply',
+        freshnessBypass: true,
       });
 
       // Nothing more was delivered at all: bob was the only other follower, and a
@@ -3115,12 +2907,13 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
           {
             agentId: carol.id,
             agentHandle: 'carol',
-            inboxConversationId: other.id,
+            conversationId: other.id,
             notifiedUserId: 'local',
             wrapped: { id: 'cc-wrapped' } as unknown as MessageDto,
           },
         ],
         skipped: [],
+        openedPairConversationIds: [],
         source: { conversationId: t.channel.id, messageId: 'unused' },
       });
 
@@ -3207,9 +3000,9 @@ describe('references that addressed nobody — the sender-only report (P4-5-b)',
  *
  * Both cases construct the state directly instead of routing to it, and that is a
  * statement about today's coverage rather than a shortcut: the reachable paths
- * are currently closed EARLIER — `conversation_agents.agent_id` /
- * `conversations.inbox_agent_id` cascade on agent deletion (so the workspace and
- * inbox arms lose participation with the principal), and a `direct_pair` whose
+ * are currently closed EARLIER — `conversation_agents.agent_id` cascades on agent
+ * deletion (so the workspace arm loses participation with the principal), and a
+ * `direct_pair` whose
  * peer is gone is read-only for the survivor (so no send reaches the funnel).
  * These gates therefore hold a claim that is currently defended twice. The claim
  * is the one the docblocks in three files make, so it is asserted where it is

@@ -91,7 +91,7 @@ export const ScheduleDtoSchema = z.object({
   /** Server-side derived label for `target_conversation_id`, projected
    *  by the agent-facing schedule list/create response. Format:
    *    - `#<title>`           for a regular channel
-   *    - `@<title>`           for a DM channel (workspace_kind agent_home)
+   *    - `@<title>`           for a DM channel (an agent-home workspace)
    *    - `#<parent>:<title>`  for a thread under a known parent
    *    - `<title>`            for a thread whose parent is missing
    *    - `'Unavailable conversation'` when the target id no longer

@@ -241,7 +241,7 @@ describe('workspace attention preference routes (#task:1870 A1)', () => {
     const home = t.ctx.db
       .prepare<[string], { id: string }>(
         `SELECT id FROM workspaces
-          WHERE workspace_kind = 'agent_home' AND owner_agent_id = ?`,
+          WHERE owner_agent_id = ?`,
       )
       .get(agentId);
     expect(home).toBeTruthy();
@@ -269,7 +269,7 @@ describe('workspace attention preference routes (#task:1870 A1)', () => {
     const home = t.ctx.db
       .prepare<[string], { id: string }>(
         `SELECT id FROM workspaces
-          WHERE workspace_kind = 'agent_home' AND owner_agent_id = ?`,
+          WHERE owner_agent_id = ?`,
       )
       .get(agentId);
 

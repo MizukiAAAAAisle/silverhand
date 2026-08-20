@@ -48,6 +48,7 @@ import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
+import { workspaceCapabilities } from '@/features/workspaces/workspace-capabilities';
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
@@ -66,7 +67,7 @@ import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
 import { HumanView } from '@/features/me/HumanView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
-import type { ConversationReference } from '@/components/chat/ConversationRef';
+import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import { isWorkspacePlaced } from '@silverhand/shared';
 import type { ConversationVisibility } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
@@ -130,6 +131,8 @@ import {
   directPairPaneDescriptor,
   type ConversationPaneDescriptor,
 } from '@/features/conversations/pane-descriptor';
+import { inheritedPaneCapabilities } from '@/features/conversations/pane-mode';
+import { ConversationPaneCapabilitiesProvider } from '@/features/conversations/pane-capabilities-context';
 import {
   directPairPaneProps,
   findAgentDirectPair,
@@ -171,7 +174,7 @@ import {
   resolveChatPlaceRestore,
   type DirectPairAuthority,
 } from '@/lib/chat-place-restore';
-import { resolveJumpNav } from '@/lib/message-jump-nav';
+import { resolveJumpNav, resolveJumpRoute } from '@/lib/message-jump-nav';
 export {
   LAST_CHANNEL_KEY,
   clearPlaceMemory,
@@ -180,7 +183,8 @@ import { resolveChannelOpen } from '@/lib/channel-open';
 import { pickFallbackAfterArchive } from '@/lib/archive-fallback';
 import { pickWorkspaceToRestore } from '@/lib/workspace-restore';
 import { resolveRestoreNavigation } from '@/lib/restore-navigation';
-import { dmRecognitionName } from '@/lib/workspace-name';
+import { agentSpaceRecognitionName } from '@/lib/workspace-name';
+import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
 export function App(): JSX.Element {
   const { appearance } = useAppearance();
   // #task:1763 — subscribe to main's confirmed runtime epoch promotion so a
@@ -462,7 +466,7 @@ function RegisteredAppShell({
     [workspaces],
   );
   const { data: agents = [] } = useAgents();
-  // Stable id → agent lookup shared with the sidebar (DM avatar
+  // Stable id → agent lookup shared with the sidebar (agent space avatar
   // resolution) and any future agent-keyed surface. Memoized on the
   // list reference so render of a different surface in the tree
   // doesn't rebuild the Map. #task:919
@@ -478,28 +482,28 @@ function RegisteredAppShell({
     createChannelWorkspaceId === null
       ? null
       : (workspaces.find(w => w.id === createChannelWorkspaceId) ?? null);
-  // Titlebar name for a DM = the bound agent's raw display name, resolved the
-  // SAME way as the rail (`dmRecognitionName`, shared so they can't drift) so
-  // the header reads like the person, not `@handle` (#task:1768). Regular
-  // workspaces keep their bare name. The Titlebar drops the `· DM` marker too
-  // (shiki) — the DM icon carries that cue.
+  // Titlebar name for an agent space = its agent's raw display name, resolved the
+  // SAME way as the rail (`agentSpaceRecognitionName`, shared so they can't drift) so
+  // the header reads like the person, not `@handle` (#task:1768). Every other
+  // workspace keeps its bare name. The Titlebar drops the `· DM` marker too
+  // (shiki) — the icon carries that cue.
   const titlebarWorkspaceName =
     selectedWorkspace === null
       ? null
-      : selectedWorkspace.kind === 'dm'
-        ? dmRecognitionName(
+      : isAgentSpace(selectedWorkspace)
+        ? agentSpaceRecognitionName(
             selectedWorkspace.name,
-            selectedWorkspace.dm_agent_id
-              ? agentsById.get(selectedWorkspace.dm_agent_id)
+            selectedWorkspace.owner_agent_id
+              ? agentsById.get(selectedWorkspace.owner_agent_id)
               : undefined,
           )
         : selectedWorkspace.name;
   // Activity is a GLOBAL list — it shows rows from every workspace, so it needs
   // workspace_id → identity (name + icon inputs), so a GLOBAL list (Activity)
   // can show each row's workspace icon and disambiguate same-named channels
-  // across workspaces. `kind` / `dmAgentId` feed the canonical `WorkspaceIcon`
-  // (regular → themed `W`, DM → bound agent avatar) — same primitive the rail
-  // uses, never a hand-rolled glyph.
+  // across workspaces. `ownerAgentId` feeds the canonical `WorkspaceIcon`
+  // (people-owned → themed `W`, agent space → its agent's avatar) — same primitive
+  // the rail uses, never a hand-rolled glyph.
   const workspaceRefById = useMemo(
     () =>
       new Map(
@@ -509,21 +513,25 @@ function RegisteredAppShell({
               w.id,
               {
                 name: w.name,
-                kind: w.kind === 'dm' ? ('dm' as const) : ('regular' as const),
-                dmAgentId: w.dm_agent_id,
+                ownerAgentId: w.owner_agent_id,
               },
             ] as const,
         ),
       ),
     [workspaces],
   );
+  // The container ROW behind `selectedWorkspaceId`, resolved or not: the id comes
+  // from the URL and the row from the workspace list query, so "id known, row
+  // not yet" is a real window and every workspace-scoped query stays off until
+  // the row lands (#task:2078).
+  const workspaceResolved = !!selectedWorkspace;
   const { data: activeChannels = [] as ChannelListItem[], isLoading: activeChannelsLoading, status: activeChannelsStatus, fetchStatus: activeChannelsFetchStatus } = useChannelsForWorkspace(
     selectedWorkspaceId,
-    selectedWorkspace?.kind ?? null,
+    workspaceResolved,
   );
   const { data: archivedChannels = [] as ChannelListItem[], status: archivedChannelsStatus, fetchStatus: archivedChannelsFetchStatus } = useArchivedChannelsForWorkspace(
     selectedWorkspaceId,
-    selectedWorkspace?.kind ?? null,
+    workspaceResolved,
   );
   // Union for URL/jump/search resolution. The sidebar gets active and
   // archived as separate props (so it can render the Archived group with
@@ -646,7 +654,7 @@ function RegisteredAppShell({
   // the expanded subtree); this stays for the in-conversation consumers below.
   const { data: messageUnreadData } = useMessageUnreadCounts(
     selectedWorkspaceId,
-    selectedWorkspace?.kind ?? null,
+    workspaceResolved,
   );
 
   // ── Attention badges (#task:1870) ──────────────────────────────────────
@@ -766,12 +774,12 @@ function RegisteredAppShell({
   ): string | null => {
     if (!workspaceId) return selectedWorkspaceId;
     if (workspaces.some(w => w.id === workspaceId)) return workspaceId;
-    const dmWorkspace = workspaces.find(w => {
-      if (w.kind !== 'dm') return false;
+    const owningAgentSpace = workspaces.find(w => {
+      if (!isAgentSpace(w)) return false;
       if (w.dm_channel_ids.includes(workspaceId)) return true;
       return !!channelId && w.dm_channel_ids.includes(channelId);
     });
-    return dmWorkspace?.id ?? workspaceId;
+    return owningAgentSpace?.id ?? workspaceId;
   };
 
   // Open one of an agent's conversations from the agent page, in the ordinary
@@ -1143,12 +1151,17 @@ function RegisteredAppShell({
   // same gated flags feed the ⌘W responder below so a stale flag never occupies
   // a close rung for a pane that isn't rendered.
   //
-  // Both are CHANNEL-scoped indexes (the backend resolves them through
-  // `getChannelLike`), so the workspace-less arm is excluded at the same
-  // derivation rather than only at the render branch: a `direct_pair` is not
-  // channel-like, so there is no index to mount and — since the ⌘W ladder reads
-  // these same flags — no rung to occupy either (#task:2035).
-  const channelIndexesAvailable = directConversationId === null;
+  // Both are CHANNEL-scoped indexes the backend resolves through `getChannelLike`,
+  // which spans EVERY top-level placement — a workspace channel and a
+  // workspace-less `direct_pair` alike — gated only by `canViewConversation`,
+  // never a classifier (#task:2096; `conversation-repo.ts` getChannelLike +
+  // `conversation-persistence.ts` "intentionally spans every top-level
+  // placement"). So the index exists for any OPEN top-level conversation, which is
+  // exactly `selectedChannelId != null`: both arms put the open conversation's id
+  // there, and only a `/chat/d/new` draft (no conversation yet) has none. What has
+  // NO channel-scoped index is a *secondary* thread / dm-side / `?side` pane —
+  // excluded at its own render branch, not here.
+  const channelIndexesAvailable = selectedChannelId !== null;
   const filesListMounted =
     channelIndexesAvailable &&
     mountsMemberOnlyPanel(filesListOpen, parentChannelMembership);
@@ -1200,11 +1213,14 @@ function RegisteredAppShell({
   // full mount-vs-visibility split.
   const deferredSection = useDeferredValue(appSection);
   const conversationRefsById = useMemo(() => {
-    const m = new Map<string, ConversationReference>();
+    // `channels` is the CURRENT WORKSPACE's channel list — that scope is what
+    // entitles every consumer to draw these as channels (#task:2077, see
+    // {@link WorkspaceChannelReference}). Feeding this map from any other list
+    // would mis-label, not fail.
+    const m = new Map<string, WorkspaceChannelReference>();
     for (const item of channels) {
       m.set(item.id, {
         id: item.id,
-        roster_policy: item.roster_policy,
         title: item.title,
       });
     }
@@ -1594,39 +1610,37 @@ function RegisteredAppShell({
     // so the flag can ONLY skip nav for a main-channel target — a thread target
     // that mistakenly carries it still runs `withThreadQuery` below (Cindy).
     if (isInlineFind) return false;
-    if (jumpNav === 'to-direct') {
-      // Reply clusters don't exist in a pair yet (no thread pane mounts on the
-      // workspace-less route), so a stray `threadRootId` is deliberately
-      // ignored rather than written into a URL that resolves to nothing —
-      // `requestJump` above already primed the main-stream locate.
-      nav.toDirect(params.channelId);
-      return true;
-    }
-    const wid = resolveNavWorkspaceId(params.workspaceId, params.channelId);
-    if (!wid) return false;
     // Section-aware base path: an Activity-list jump stays in `/activity/...`
     // (the channel/thread panes are the SAME components, just under the
     // activity route so the workspace axis + titlebar switch with the
     // selection); every other section lands in chat (#task:1394).
     const channelPath =
       appSection === 'activity' ? routes.activityChannel : routes.chatChannel;
-    // Reply-cluster target (new model): the message lives in the parent
-    // channel; open the cluster pane to its root and let ThreadPanel
-    // scroll-locate the message (requestJump already primed the channel).
-    // Navigate channel + `?thread` atomically — a `toChannel` then
-    // `openThread` would build the thread query off the pre-navigation
-    // location and drop it.
-    if (params.threadRootId) {
-      nav.go(
-        withThreadQuery(
-          channelPath(wid, params.channelId),
-          '',
-          params.threadRootId,
-        ),
-      );
-    } else {
-      nav.go(channelPath(wid, params.channelId));
-    }
+    // Which pane, and the cluster to open with it. Both arms take their thread
+    // coordinate from ONE place (#task:2102) — the direct arm used to drop it,
+    // which is why a DM attachment sourced from a thread opened the pair's main
+    // line and never located the message. A pair HAS reply clusters since
+    // #task:2096 (`ThreadPanel` mounts on the workspace-less route with a null
+    // workspace), so there is nothing left to special-case here.
+    const route = resolveJumpRoute({
+      decision: jumpNav === 'to-direct' ? 'to-direct' : 'workspace-resolve',
+      channelId: params.channelId,
+      navWorkspaceId: resolveNavWorkspaceId(params.workspaceId, params.channelId),
+      threadRootId: params.threadRootId,
+    });
+    if (!route) return false;
+    const basePath =
+      route.kind === 'direct'
+        ? routes.chatDirect(route.conversationId)
+        : channelPath(route.workspaceId, route.channelId);
+    // Navigate pane + `?thread` ATOMICALLY — a `toDirect`/`toChannel` followed by
+    // an `openThread` would build the thread query off the PRE-navigation
+    // location and drop it. `withThreadQuery` on a null root serializes to the
+    // bare path (empty params), so the main-line arm is byte-identical to the
+    // plain route; on a non-null root it also clears the mutually exclusive
+    // secondary panes (`?files`, `?side`, …), which is the same replace
+    // semantics opening a thread has everywhere else.
+    nav.go(withThreadQuery(basePath, '', route.threadRootId));
     return true;
   };
 
@@ -1649,22 +1663,22 @@ function RegisteredAppShell({
   );
 
   const handleWorkspaceDeleted = (): void => {
-    // Pick the next workspace in the same kind-group as the deleted one,
+    // Pick the next workspace in the same rail group as the deleted one,
     // wrapping to the first when the deleted entry was last. Falls back
-    // across groups if the kind-group is now empty, then to /chat when
+    // across groups if that group is now empty, then to /chat when
     // nothing remains. Computed from the pre-invalidate snapshot — the
     // workspaces query refetch hasn't landed yet at this point.
     const deletedId = selectedWorkspaceId;
     const deleted = workspaces.find(w => w.id === deletedId);
-    const sameKind = deleted
-      ? workspaces.filter(w => w.kind === deleted.kind)
+    const sameGroup = deleted
+      ? workspaces.filter(w => isAgentSpace(w) === isAgentSpace(deleted))
       : [];
     const idxInGroup = deleted
-      ? sameKind.findIndex(w => w.id === deletedId)
+      ? sameGroup.findIndex(w => w.id === deletedId)
       : -1;
     const nextInGroup =
-      sameKind.length > 1 && idxInGroup >= 0
-        ? sameKind[(idxInGroup + 1) % sameKind.length]
+      sameGroup.length > 1 && idxInGroup >= 0
+        ? sameGroup[(idxInGroup + 1) % sameGroup.length]
         : null;
     const nextOverall =
       nextInGroup ??
@@ -1890,27 +1904,36 @@ function RegisteredAppShell({
   // blocking the sidebar highlight commit, and the pair descriptor is built from
   // a viewer-global list that a channel switch doesn't touch.
   const primaryPaneDescriptor = directPairDescriptor ?? deferredParentDescriptor;
-  // A pair has no workspace, so it has no workspace KIND either — and `null` is
-  // exactly what the pane reads as "not a top-level channel-like conversation"
-  // (no rename/archive/visibility), which is the truth for a `direct_pair`.
-  const channelKindForView = selectedWorkspace?.kind === 'dm'
-    ? 'dm'
-    : (selectedWorkspace ? 'regular' : null);
-  const primaryPaneChannelKind = directPairDescriptor
-    ? null
-    : channelKindForView;
+  // What a pane hanging off the primary conversation may show (#task:2098). A
+  // thread is not a conversation and has no placement of its own, so it INHERITS
+  // this projection instead of re-deriving one — and it is projected from the very
+  // descriptor `ChannelView` is handed below, which is what makes mainline and
+  // thread structurally unable to disagree about the same conversation.
+  const primaryPaneCapabilities = useMemo(
+    () => inheritedPaneCapabilities(primaryPaneDescriptor),
+    [primaryPaneDescriptor],
+  );
+  // A pair has no workspace, so it has no `#` channel namespace either — and that
+  // is exactly what the pane reads as "not a top-level channel-like conversation"
+  // (no rename/archive/visibility), which is the truth for a `direct_pair`
+  // (#task:2078 turned this from a workspace KIND into the one bit those consumers
+  // ever read).
+  const hasChannelNamespace = workspaceResolved;
+  const primaryPaneHasChannelNamespace = directPairDescriptor
+    ? false
+    : hasChannelNamespace;
   // Single pure mapping from `secondaryDescriptor` into the props
   // ChannelView consumes for the secondary pane. Keeps the cross-workspace
-  // wiring (foreign workspace_id / workspace_kind / archive invalidation
+  // wiring (foreign workspace_id / namespace bit / archive invalidation
   // target) end-to-end testable without renderHook.
   const secondaryViewInputs = useMemo(
     () =>
       selectSecondaryViewInputs({
         secondary: secondaryDescriptor,
-        primaryChannelKind: channelKindForView,
+        primaryHasChannelNamespace: hasChannelNamespace,
         primaryWorkspaceId: selectedWorkspaceId,
       }),
-    [secondaryDescriptor, channelKindForView, selectedWorkspaceId],
+    [secondaryDescriptor, hasChannelNamespace, selectedWorkspaceId],
   );
   const secondaryConversationDescriptor = secondaryViewInputs.conversationDescriptor;
   // Which row the sidebar paints as selected. A resolved secondary holds focus, so
@@ -2042,7 +2065,7 @@ function RegisteredAppShell({
     />
   ) : (
     <ChannelView
-      channelKind={primaryPaneChannelKind}
+      hasChannelNamespace={primaryPaneHasChannelNamespace}
       conversation={primaryPaneDescriptor}
       resolving={parentChannelResolving}
       // The pair arm's failed read (#task:2035 B8): neither a loader nor "Select
@@ -2057,33 +2080,30 @@ function RegisteredAppShell({
       jumpTarget={parentJumpTarget}
       jumpPrimePending={parentJumpPrimePending}
       onJumped={handleJumped}
-      // Reply clusters are a channel feature today: the thread index and the
-      // thread pane both resolve through the backend's `getChannelLike`, which a
-      // `direct_pair` is not, and `?thread=` on a workspace-less URL has no pane
-      // to mount. So the affordance is withheld for the pair arm rather than
-      // offered and then dead-ending — DM threads are a separate ticket, not a
-      // half-wired branch here (#task:2035).
-      onOpenThread={
-        directPairDescriptor ? undefined : handleOpenThreadFromChannel
-      }
-      // Threads-list pane toggle (#task:1073). The primary pane gets it for
-      // any top-level channel-like conversation — both `channel` and
-      // `dm_channel` carry a channel-scoped thread index (the backend's
-      // threads route resolves via `getChannelLike`, #task:1143). Thread /
-      // dm-side / `?side` *secondary* primaries don't (they aren't the
-      // channel-scoped index), and neither does a `direct_pair`.
+      // Reply clusters resolve through the backend's `getChannelLike`, which
+      // spans every top-level placement — a `direct_pair` included (#task:2096).
+      // So the primary pane always offers "open thread"; `handleOpenThreadFromChannel`
+      // already tolerates a workspace-less conversation (`selectedWorkspaceId ??
+      // undefined`). Secondary panes withhold it at their own call sites.
+      onOpenThread={handleOpenThreadFromChannel}
+      // Threads-list pane toggle (#task:1073). The primary pane gets it for any
+      // open top-level conversation — a workspace `channel` and a workspace-less
+      // `direct_pair` alike carry a channel-scoped thread index (the backend's
+      // threads route resolves via `getChannelLike`, #task:2096). `primaryPaneDescriptor`
+      // is the resolved descriptor for whichever arm is open, so the toggle waits
+      // for it rather than for the workspace arm specifically. Thread / dm-side /
+      // `?side` *secondary* primaries don't get it (they aren't the index).
       onToggleThreadsList={
-        channelIndexesAvailable && deferredParentDescriptor != null
+        channelIndexesAvailable && primaryPaneDescriptor != null
           ? nav.toggleThreadsList
           : undefined
       }
       threadsListActive={threadsListMounted}
-      // Attachments-list pane toggle. Same gate as threads: any
-      // top-level channel-like conversation carries a channel-scoped
-      // attachments index; thread / dm-side / `?side` secondary primaries
-      // don't.
+      // Attachments-list pane toggle. Same gate as threads: any open top-level
+      // conversation (channel or `direct_pair`) carries a channel-scoped
+      // attachments index; thread / dm-side / `?side` secondary primaries don't.
       onToggleFilesList={
-        channelIndexesAvailable && deferredParentDescriptor != null
+        channelIndexesAvailable && primaryPaneDescriptor != null
           ? nav.toggleFilesList
           : undefined
       }
@@ -2145,7 +2165,7 @@ function RegisteredAppShell({
         onMessageAgent={handleMessageAgent}
       />
     );
-  } else if (filesListMounted && selectedChannelId && selectedWorkspaceId) {
+  } else if (filesListMounted && selectedChannelId) {
     // Channel Attachments panel (`?files=1`). An OVERLAY utility pane, so it
     // sits just below the agent panel in precedence (agent > files > task >
     // side > thread > threads) and ahead of the conversation panes: opening it
@@ -2159,7 +2179,11 @@ function RegisteredAppShell({
     secondaryView = (
       <ChannelAttachmentsPanel
         channelId={selectedChannelId}
-        workspaceId={selectedWorkspaceId}
+        // Null for a `direct_pair` (no workspace coordinate). The panel's core
+        // attachments read is channel-scoped; the workspace only scopes the
+        // sender-filter directory, which already treats null as "workspace-less"
+        // (#task:2096).
+        workspaceId={selectedWorkspaceId ?? null}
         parentTitle={selectedChannel?.title ?? null}
         onClose={nav.closeFilesList}
         onJumpToMessage={handleJumpToMessage}
@@ -2198,7 +2222,7 @@ function RegisteredAppShell({
     } else if (secondaryConversationDescriptor) {
       secondaryView = (
         <ChannelView
-          channelKind={secondaryViewInputs.channelKind}
+          hasChannelNamespace={secondaryViewInputs.hasChannelNamespace}
           conversation={secondaryConversationDescriptor}
           parentTitle={null}
           jumpTarget={secondaryJumpTarget}
@@ -2229,64 +2253,79 @@ function RegisteredAppShell({
         />
       );
     }
-  } else if (threadRootId && selectedChannelId && selectedWorkspaceId) {
+  } else if (threadRootId && selectedChannelId) {
     // Thread pane (`?thread=<rootMessageId>`). A thread is NOT a
     // conversation — it shares the parent channel's context — so it does
     // not flow through `secondaryDescriptor`/`ChannelView`. It renders
     // only when no side/threads-list secondary is present (those win),
     // matching the nav-layer mutual exclusion (`openThread` clears `?side`).
+    // A `direct_pair`'s reply cluster resolves via `getChannelLike` too, so it
+    // mounts here with a null workspace — no workspace coordinate is required
+    // (#task:2096); the panel's workspace-scoped facets already accept null.
     //
     // Captured into consts so the `onViewInChannel` closure keeps the
-    // narrowed non-null types (TS widens branch-narrowed `let`s back to
+    // narrowed types (TS widens branch-narrowed `let`s back to
     // nullable inside a deferred callback).
     const threadChannelId = selectedChannelId;
-    const threadWorkspaceId = selectedWorkspaceId;
+    const threadWorkspaceId = selectedWorkspaceId ?? null;
     const threadRoot = threadRootId;
     secondaryView = (
-      <ThreadPanel
-        channelId={threadChannelId}
-        workspaceId={threadWorkspaceId}
-        // A thread's composer resolves `@`/`#` shorthand in its parent
-        // channel's namespace, so it takes the parent's workspace kind — the
-        // same value the channel pane uses (#task:2035 made the coordinate a
-        // prop instead of a per-composer conversation-ref fetch).
-        workspaceKind={channelKindForView}
-        rootMessageId={threadRoot}
-        parentTitle={selectedChannel?.title ?? null}
-        closed={selectedChannelDescriptor?.closed_at != null}
-        archived={selectedChannelDescriptor?.archived_at != null}
-        // Thread reply/follow/react/save are member mutations.
-        // Participation follows the PARENT channel's membership, and the panel
-        // takes the gate ALREADY DERIVED from it (same object ChannelView's own
-        // hook produces) so the two panes can't drift: `unknown` yields neither
-        // composer nor Join, and the panel derives nothing itself.
-        gate={parentMembership.gate}
-        onClose={nav.closeThread}
-        onViewInChannel={() => {
-          // Scroll-locate + flash the root in the main channel stream,
-          // then drop the thread pane so the channel is unobstructed.
-          requestJump({
-            workspaceId: threadWorkspaceId,
-            channelId: threadChannelId,
-            messageId: threadRoot,
-          });
-          nav.closeThread();
-        }}
-        // Same inline-ref resolution + nav handlers the channel pane
-        // gets, so thread replies render `#conv:` / `#<channel>` /
-        // `#task:` sigils identically (#task:1052).
-        conversationRefsById={conversationRefsById}
-        onOpenConversationRef={nav.openSide}
-        onOpenChannelRef={handleOpenChannelByName}
-        onOpenTask={openTaskInPane}
-        jumpMessageId={threadJumpMessageId}
-        jumpPhase={threadJumpPhase}
-        onJumped={handleJumped}
-        onJumpToMessage={handleJumpToMessage}
-        onOpenAdvancedSearch={handleOpenAdvancedSearch}
-      />
+      // The thread's affordances are the PARENT conversation's, provided here
+      // because this pane does not flow through `ChannelView` and so would
+      // otherwise read the context default — which is channel-shaped, and made a
+      // DM thread start a roster read and answer `Not here` for an agent the
+      // mainline showed as Online (#task:2098). Presence is not keyed by
+      // placement; the roster's `Not here` answer is the one thing this gates.
+      <ConversationPaneCapabilitiesProvider value={primaryPaneCapabilities}>
+        <ThreadPanel
+          channelId={threadChannelId}
+          workspaceId={threadWorkspaceId}
+          // A thread's composer resolves `@`/`#` shorthand in its parent's
+          // namespace, so it takes the DERIVED namespace bit the primary pane uses
+          // (`primaryPaneHasChannelNamespace`, the same value ChannelView reads),
+          // NOT the raw `hasChannelNamespace`: a `direct_pair` has no `#` namespace,
+          // so this is hard-false for the pair arm (#task:2096). That keeps `#name`
+          // refs inert in a DM thread — which is the premise of `handleOpenChannelRef`'s
+          // null-workspace guard; reading the raw bit would render them as live refs
+          // that dead-click on that guard.
+          hasChannelNamespace={primaryPaneHasChannelNamespace}
+          rootMessageId={threadRoot}
+          parentTitle={selectedChannel?.title ?? null}
+          closed={selectedChannelDescriptor?.closed_at != null}
+          archived={selectedChannelDescriptor?.archived_at != null}
+          // Thread reply/follow/react/save are member mutations.
+          // Participation follows the PARENT channel's membership, and the panel
+          // takes the gate ALREADY DERIVED from it (same object ChannelView's own
+          // hook produces) so the two panes can't drift: `unknown` yields neither
+          // composer nor Join, and the panel derives nothing itself.
+          gate={parentMembership.gate}
+          onClose={nav.closeThread}
+          onViewInChannel={() => {
+            // Scroll-locate + flash the root in the main channel stream,
+            // then drop the thread pane so the channel is unobstructed.
+            requestJump({
+              workspaceId: threadWorkspaceId ?? undefined,
+              channelId: threadChannelId,
+              messageId: threadRoot,
+            });
+            nav.closeThread();
+          }}
+          // Same inline-ref resolution + nav handlers the channel pane
+          // gets, so thread replies render `#conv:` / `#<channel>` /
+          // `#task:` sigils identically (#task:1052).
+          conversationRefsById={conversationRefsById}
+          onOpenConversationRef={nav.openSide}
+          onOpenChannelRef={handleOpenChannelByName}
+          onOpenTask={openTaskInPane}
+          jumpMessageId={threadJumpMessageId}
+          jumpPhase={threadJumpPhase}
+          onJumped={handleJumped}
+          onJumpToMessage={handleJumpToMessage}
+          onOpenAdvancedSearch={handleOpenAdvancedSearch}
+        />
+      </ConversationPaneCapabilitiesProvider>
     );
-  } else if (threadsListMounted && selectedChannelId && selectedWorkspaceId) {
+  } else if (threadsListMounted && selectedChannelId) {
     // Channel Threads-list pane (`?threads=1`, #task:1073). Like a single
     // thread it is NOT a conversation — it is a channel-scoped index — so it
     // renders here rather than through `secondaryDescriptor`/`ChannelView`,
@@ -2334,7 +2373,7 @@ function RegisteredAppShell({
       <Titlebar
         workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={titlebarWorkspaceName}
-        workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
+        workspaceOwnerAgentId={selectedWorkspace?.owner_agent_id ?? null}
         workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
         onOpenWorkspaceSettings={
           selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
@@ -2643,8 +2682,7 @@ function RegisteredAppShell({
                       workspaces={workspaces.map(w => ({
                         id: w.id,
                         name: w.name,
-                        kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
-                        dm_agent_id: w.dm_agent_id,
+                        owner_agent_id: w.owner_agent_id,
                         unread: attentionBadges?.by_workspace?.[w.id] ?? 0,
                         // Both row signals come from the ONE roll-up (#task:1870):
                         // the count and the mute marker must never disagree about
@@ -2809,12 +2847,21 @@ function RegisteredAppShell({
         // Target workspace comes from the row that opened the dialog, not from the
         // route (#task:1889) — a `+` on any row in the merged tree creates there,
         // and the new channel is opened in ITS parent, not the current one.
+        //
+        // Both the target id and the capabilities come from the SAME resolved row
+        // (Paul, #task:2066): the row can disappear while the dialog is open (the
+        // owning agent is hard-deleted, or the workspace is archived/deleted from
+        // elsewhere). Reading the id from the raw `createChannelWorkspaceId` there
+        // left a live target paired with the `null` → regular-workspace fallback,
+        // i.e. an Agent Space that grows a member picker and a visibility choice,
+        // with only the server's 400/404 to stop the submit. Sharing one row makes
+        // that state "no target, nothing actionable" instead.
         open={createChannelWorkspaceId !== null}
         onOpenChange={open => {
           if (!open) setCreateChannelWorkspaceId(null);
         }}
-        workspaceId={createChannelWorkspaceId}
-        workspaceKind={createChannelWorkspace?.kind ?? null}
+        workspaceId={createChannelWorkspace?.id ?? null}
+        capabilities={workspaceCapabilities(createChannelWorkspace)}
         onCreated={id => {
           if (createChannelWorkspaceId) nav.toChannel(createChannelWorkspaceId, id);
         }}
@@ -2824,7 +2871,7 @@ function RegisteredAppShell({
         onOpenChange={setWorkspaceSettingsOpen}
         workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={selectedWorkspace?.name ?? null}
-        workspaceKind={selectedWorkspace?.kind ?? null}
+        capabilities={workspaceCapabilities(selectedWorkspace)}
         archivedAt={selectedWorkspace?.archived_at ?? null}
         onDeleted={handleWorkspaceDeleted}
       />

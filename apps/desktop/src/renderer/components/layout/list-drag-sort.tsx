@@ -129,7 +129,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   });
 
   // `byGroup` is keyed by the GroupKey union — zero hard-coded group literals,
-  // so the same state covers channel (starred/unstarred) and rail (dm /
+  // so the same state covers channel (starred/unstarred) and rail (agent_space /
   // regular).
   const [pendingDrop, setPendingDrop] = useState<{
     listKey: string;

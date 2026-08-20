@@ -58,7 +58,6 @@ Errors:
                                      write to — the same answer an id
                                      nobody holds gets
   thread_suffix_not_supported (400)  --target named a reply cluster
-  inbox_not_writable (400)           --target named an agent inbox
 ${reachHelpErrorRow('file_upload', 37)}  capability_denied (403)            you lack \`upload_attachments\` where
                                      --target points`,
   flags: ['target', 'path', 'filename', 'content-type'] as const,

@@ -86,6 +86,12 @@ interface RowSnapshot {
   materialization_failed_at: number | null;
 }
 
+/** The stored `agents` row, read BELOW every visibility layer — which is the
+ *  reason it is native rather than a widened GET. `?include_failed=1` /
+ *  `?include_pending=1` would return this row and `AgentDto` carries the fields,
+ *  but that filter is this file's SUBJECT: a filter that leaked, or projected the
+ *  wrong row, is the defect under test, so it must not also be the instrument.
+ *  The claim is always about the bytes on disk, never about what a face shows. */
 function readRow(t: TestApp, agentId: string): RowSnapshot | null {
   const row = t.ctx.db
     .prepare(
@@ -98,32 +104,59 @@ function readRow(t: TestApp, agentId: string): RowSnapshot | null {
   return row ?? null;
 }
 
-/** This agent's inbox placement id, read through the repository. Identity, not
- *  a count: the partial UNIQUE already makes >1 impossible, so the two ways this
- *  can go wrong are `null` (born too late — never, or only on the success path)
- *  and a DIFFERENT id after a retry (born again, which the collision would
- *  actually turn into a rolled-back retry). Comparing ids catches both, and the
- *  second is the one a count cannot see. */
-function inboxIdOf(t: TestApp, agentId: string): string | null {
-  return new ConversationRepo(t.ctx.db).getAgentInbox(agentId)?.id ?? null;
+/** TABLE-WIDE row counts, used as before/after deltas rather than as queries
+ *  about one agent. Deliberately not per-carrier: the claim these serve is "the
+ *  reserve wrote NOTHING but the `agents` row", and a query that names the
+ *  carriers it expects to be empty can only ever be empty about the carriers
+ *  whoever wrote it thought of. A delta of 0 over the whole table is the same
+ *  claim without that hole, and it survives the placement value being dropped. */
+function conversationCount(t: TestApp): number {
+  return t.ctx.db
+    .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM conversations')
+    .get()!.c;
+}
+
+function workspaceCount(t: TestApp): number {
+  return t.ctx.db
+    .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM workspaces')
+    .get()!.c;
+}
+
+/** The creator's direct line with this agent, by its endpoint coordinates —
+ *  identity, not a count: the partial UNIQUE already makes >1 impossible, so the
+ *  two ways the agent arm can go wrong are `null` (no line) and a DIFFERENT id
+ *  after a retry (minted again rather than got), and only comparing ids sees the
+ *  second one. */
+function directLineIdOf(t: TestApp, userId: string, agentId: string): string | null {
+  return (
+    new ConversationRepo(t.ctx.db).findDirectPair(
+      { kind: 'human', id: userId },
+      { kind: 'agent', id: agentId },
+    )?.id ?? null
+  );
 }
 
 /**
- * Seed a `failed` agent row that matches the production L3b shape:
- * the AGGREGATE (agents row + its inbox placement, v71 §4.2) and nothing
- * else — no dependent agent_home / DM / membership rows. See the matching
- * helper in `agent-create-structural-invariants.test.ts` for the long-form
- * rationale.
+ * Seed a `failed` agent row that matches the production L3b shape: the `agents`
+ * row and nothing else — no dependent agent_home / DM / membership rows. See the
+ * matching helper in `agent-create-structural-invariants.test.ts` for the
+ * long-form rationale.
  *
- * Goes through `reserveAgentAggregate`, not the bare `reserveForMaterialize`,
- * because the retry matrix below is exactly where the difference shows: a
- * fixture without the inbox could not observe a second insert colliding on
- * `idx_conversations_inbox_agent`.
+ * Goes through `reserveAgentRow` rather than the bare `reserveForMaterialize`
+ * because the retry matrix below must re-enter the same door production does.
+ * Until #task:2072 the two differed (the reserve also wrote an `agent_inbox`,
+ * and only a fixture that had one could observe a second insert colliding); they
+ * are now the same statement, and the named face is still what production calls.
  */
 function seedFailedAgent(
   t: TestApp,
   createdByUserId: string,
-  input: { name: string; model?: string | null; description?: string | null },
+  input: {
+    name: string;
+    model?: string | null;
+    description?: string | null;
+    sessionScope?: 'agent' | 'conversation';
+  },
   idempotencyKey: string,
   failedCode = 'host_attach_pending',
 ): string {
@@ -138,12 +171,13 @@ function seedFailedAgent(
   const agents = new AgentRepo(t.ctx.db);
   const row = createSqliteAgentProvisioningPersistence(
     t.ctx.db,
-  ).reserveAgentAggregate({
+  ).reserveAgentRow({
     input: {
       name: input.name,
       runtime: 'claude',
       model: input.model ?? undefined,
       description: input.description ?? undefined,
+      session_scope: input.sessionScope,
     },
     defaultHostId: hostId,
     createdByUserId,
@@ -155,8 +189,8 @@ function seedFailedAgent(
 
 /**
  * Seed a `pending_materialization` agent row (post-reserve, pre-L3a).
- * Used to exercise the 409 in_progress dispatch arms. Same aggregate factory:
- * `pending_materialization` is a legal state of a WHOLE Agent, inbox included.
+ * Used to exercise the 409 in_progress dispatch arms. Same reserve face:
+ * `pending_materialization` is a legal state of a WHOLE Agent.
  */
 function seedPendingAgent(
   t: TestApp,
@@ -168,7 +202,7 @@ function seedPendingAgent(
   const hostId = hosts.listOwnedActiveLocalForUser(createdByUserId)[0]!.id;
   const row = createSqliteAgentProvisioningPersistence(
     t.ctx.db,
-  ).reserveAgentAggregate({
+  ).reserveAgentRow({
     input: { name, runtime: 'claude' },
     defaultHostId: hostId,
     createdByUserId,
@@ -319,25 +353,31 @@ describe('D4.d D5: failed-row recovery surface', () => {
       expect(row?.materialization_failed_at).toBeNull();
     });
 
-    it('retry of a failed row keeps EXACTLY ONE inbox and never reports dependent_row_insert_failed (v71 §4.2)', async () => {
-      // The aggregate-ownership falsifier (#task:2014, @Cindy round-1 B1). The
-      // v71 backfill gives every row of `agents` an inbox with no
-      // `materialization_status` filter, so the create path has to agree about
-      // WHEN the inbox is born. If it were born in the L3a dependent tx instead
-      // of at reserve, this retry would insert a second one for the same owner,
-      // hit `idx_conversations_inbox_agent`, and roll the whole retry back —
-      // `dependent_row_insert_failed` forever, taking the home workspace, the DM
-      // and the status flip with it. Asserted from BOTH sides: the id before
-      // (the failed row already owns its inbox) and the SAME id after (the retry
-      // added nothing), plus the failure code that a collision would produce.
+    it('a failed row is the agents row and NOTHING else, so the retry re-enters an EMPTY dependent graph (#task:2072)', async () => {
+      // The successor to the aggregate-ownership falsifier (#task:2014, @Cindy
+      // round-1 B1). That test asked WHEN the inbox is born, because the v71
+      // backfill gave every `agents` row one and a retry that re-inserted it
+      // would hit `idx_conversations_inbox_agent`, roll the whole retry back, and
+      // report `dependent_row_insert_failed` forever — taking the home, the DM
+      // and the status flip with it. #task:2072 answered the question by removing
+      // the subject: the reserve is ONE INSERT, so nothing survives outside the
+      // L3a graph for a retry to collide with.
+      //
+      // That is the property worth pinning now, and it is pinned from both sides:
+      // the seed writes no conversation and no workspace at all (so "empty" is
+      // measured, not assumed), and the retry then builds this scope's graph
+      // exactly once. The failure code a collision would produce is asserted
+      // absent for the same reason it was before.
       const t = buildTestApp();
       tests.push(t);
       const key = freshKey();
-      const name = `retry-inbox-${freshKey()}`;
+      const name = `retry-graph-${freshKey()}`;
+      const conversationsBefore = conversationCount(t);
+      const workspacesBefore = workspaceCount(t);
       const agentId = seedFailedAgent(t, t.viewerUserId, { name }, key);
 
-      const bornAtReserve = inboxIdOf(t, agentId);
-      expect(bornAtReserve).not.toBeNull();
+      expect(conversationCount(t)).toBe(conversationsBefore);
+      expect(workspaceCount(t)).toBe(workspacesBefore);
 
       const res = await http(t).post(
         '/api/agents?retry=true',
@@ -348,22 +388,84 @@ describe('D4.d D5: failed-row recovery surface', () => {
       const row = readRow(t, agentId);
       expect(row?.materialization_status).toBe('active');
       expect(row?.materialization_failed_code).toBeNull();
-      expect(inboxIdOf(t, agentId)).toBe(bornAtReserve);
+      // The conversation arm's graph, once: the home workspace and its one DM
+      // channel. A second attempt's leftovers would show up as a second of each.
+      expect(conversationCount(t)).toBe(conversationsBefore + 1);
+      expect(workspaceCount(t)).toBe(workspacesBefore + 1);
     });
 
-    it('retry of a BOOT-RECONCILED pending → failed row behaves identically (one inbox, reaches active)', async () => {
+    it('agent-scoped retry GETS the creator line a mention already opened, and does not mint a second one (#task:2072)', async () => {
+      // Where the collision class MOVED. The agent arm's dependent graph mints
+      // the creator's direct line, and that row CAN pre-exist the retry through a
+      // door this test stands in for: the handle is addressable from the reserve's
+      // INSERT onward (`getByName` has no status filter), so a mention of it while
+      // the row was still `pending_materialization` opens exactly this pair. The
+      // partial UNIQUE on the endpoint columns is the same shape of index the
+      // inbox had, so an arm that INSERTED instead of getting-or-creating would
+      // reproduce the old bug verbatim — permanent `dependent_row_insert_failed`
+      // for every agent whose handle was mentioned before it materialized.
+      //
+      // `session_scope` is in the idempotency metadata snapshot, so the retry body
+      // has to carry it: without it the request is a 400 mismatch and never
+      // reaches the arm under test.
+      const t = buildTestApp();
+      tests.push(t);
+      const key = freshKey();
+      const name = `retry-agent-line-${freshKey()}`;
+      const agentId = seedFailedAgent(
+        t,
+        t.viewerUserId,
+        { name, sessionScope: 'agent' },
+        key,
+      );
+      expect(directLineIdOf(t, t.viewerUserId, agentId)).toBeNull();
+
+      // The pre-existing line, minted the way a mention would have.
+      const preOpened = new ConversationRepo(t.ctx.db).getOrCreateDirectPair(
+        { kind: 'human', id: t.viewerUserId },
+        { kind: 'agent', id: agentId },
+        Date.now(),
+      );
+      expect(preOpened.created).toBe(true);
+
+      const res = await http(t).post(
+        '/api/agents?retry=true',
+        { name, runtime: 'claude', session_scope: 'agent' },
+        { headers: { 'Idempotency-Key': key } },
+      );
+      expect(res.status, await res.clone().text()).toBe(201);
+      const row = readRow(t, agentId);
+      expect(row?.materialization_status).toBe('active');
+      expect(row?.materialization_failed_code).toBeNull();
+      // SAME row, and the onboarding message landed in it — the retry got the
+      // line rather than minting one, and did not onboard into a different place.
+      expect(directLineIdOf(t, t.viewerUserId, agentId)).toBe(
+        preOpened.conversation.id,
+      );
+      const body = (await res.json()) as {
+        dm_channel_id: string | null;
+        agent_home_workspace_id: string | null;
+      };
+      expect(body.dm_channel_id).toBeNull();
+      expect(body.agent_home_workspace_id).toBeNull();
+    });
+
+    it('retry of a BOOT-RECONCILED pending → failed row behaves identically (empty graph, reaches active)', async () => {
       // The other way into `failed`: the row was reserved, the process died
       // before L3a/L3b, and the boot reconciler stamped it. It reaches `failed`
       // through a different transition than the L3b compensation above, so it is
-      // a genuinely separate path into this retry — and its inbox came from the
-      // same reserve, which is what makes the two isomorphic.
+      // a genuinely separate path into this retry — and since #task:2072 the two
+      // are isomorphic for the reason the previous case measures: whichever way
+      // the row got there, the reserve left nothing behind it.
       const t = buildTestApp();
       tests.push(t);
       const key = freshKey();
       const name = `retry-reconciled-${freshKey()}`;
+      const conversationsBefore = conversationCount(t);
+      const workspacesBefore = workspaceCount(t);
       const agentId = seedPendingAgent(t, t.viewerUserId, name, key);
-      const bornAtReserve = inboxIdOf(t, agentId);
-      expect(bornAtReserve).not.toBeNull();
+      expect(conversationCount(t)).toBe(conversationsBefore);
+      expect(workspaceCount(t)).toBe(workspacesBefore);
       new AgentRepo(t.ctx.db).flipToFailed(
         agentId,
         'materialize_timeout',
@@ -377,7 +479,8 @@ describe('D4.d D5: failed-row recovery surface', () => {
       );
       expect(res.status, await res.clone().text()).toBe(201);
       expect(readRow(t, agentId)?.materialization_status).toBe('active');
-      expect(inboxIdOf(t, agentId)).toBe(bornAtReserve);
+      expect(conversationCount(t)).toBe(conversationsBefore + 1);
+      expect(workspaceCount(t)).toBe(workspacesBefore + 1);
     });
 
     it('failed + mismatching metadata → 400 idempotency_metadata_mismatch FIRST (retry verb does NOT mutate)', async () => {
@@ -819,10 +922,13 @@ describe('D4.d D5: failed-row recovery surface', () => {
       });
       expect(res.status).toBe(404);
 
-      // Row metadata untouched. Re-read via raw SQL because the
-      // public GET would also 404 on a failed row by default; we
-      // want to confirm the underlying snapshot is intact, not
-      // just hidden.
+      // Row metadata untouched, read natively for the reason
+      // `readRow` states: a widened GET (`?include_failed=1`)
+      // WOULD return these three fields, and that is precisely
+      // why it cannot be the witness here — the status filter it
+      // runs is what this describe block is testing. The claim is
+      // that the stored snapshot is intact, and it has to be made
+      // independently of the layer that decides who may see it.
       const after = t.ctx.db
         .prepare(
           `SELECT description, model, runtime

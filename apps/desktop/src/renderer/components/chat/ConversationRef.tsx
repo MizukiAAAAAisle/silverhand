@@ -7,9 +7,32 @@ import {
 } from '@/features/conversations/conversation-identity';
 import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
 
-export interface ConversationReference {
+/**
+ * A conversation from a WORKSPACE-SCOPED channel list — the synchronous fast
+ * path for `#conv:` chips. The name carries the invariant because the shape
+ * cannot: `{id, title}` structurally admits any conversation, yet every
+ * consumer of this map draws `face='channel'` without asking (see
+ * `StaticConversationRef` in `Markdown.tsx`).
+ *
+ * Read "channel" here as WORKSPACE-PLACED, not open-roster: an agent space's
+ * fixed-roster `dm_channel` is workspace-placed, belongs in this map, and drawing
+ * it as `#` is correct (#task:1373 / #task:2073). Roster answers a capability
+ * question; placement answers the identity one.
+ *
+ * Why that is sound, physically rather than by convention, on both ends: the
+ * single place a `direct_pair` row is minted
+ * (`ConversationRepo.getOrCreateDirectPair`) writes `workspace_id` as a literal
+ * NULL, so no workspace-scoped query can return one; and this map has exactly one
+ * producer (the current workspace's channel list in `App.tsx`). A private line
+ * therefore cannot enter it (#task:2077).
+ *
+ * Two falsifiers, both of which would silently MIS-LABEL rather than fail: a
+ * pair acquiring a `workspace_id`, or this map being fed from a list that is not
+ * workspace-scoped. Either one turns a private line into a `#` channel chip, so
+ * a new producer must prove its list is workspace-scoped before assigning here.
+ */
+export interface WorkspaceChannelReference {
   id: string;
-  roster_policy: 'open' | 'fixed';
   title: string;
 }
 
@@ -22,7 +45,7 @@ interface ConversationRefProps {
    *  authoritative source is `useConversationIdentity(id)` below, which
    *  also handles cross-workspace refs and private lines the lookup map
    *  can't see. */
-  conversation: ConversationReference | undefined;
+  conversation: WorkspaceChannelReference | undefined;
   onOpen?: (id: string) => void;
 }
 
@@ -30,8 +53,14 @@ interface ConversationRefProps {
  *  borrowed from another entity. A workspace conversation is a channel and wears
  *  `#` whatever its roster policy is (#task:1373 — an agent-home `dm_channel` is
  *  still a channel, and reading it as a DM is the vocabulary collision #task:2044
- *  settles); a `direct_pair` is addressed as a person and wears `@`. */
-type ConversationRefFace = 'channel' | 'direct_line';
+ *  settles); a `direct_pair` is addressed as a person and wears `@`.
+ *
+ *  This type is the ONLY input to the word and the glyph ({@link faceLabel} /
+ *  {@link conversationIcon}), and `roster_policy` is deliberately not on it: a
+ *  second derivation keyed on the roster is how the static chip came to draw `@`
+ *  for an agent space's fixed-roster channel while this one drew `#` for the same
+ *  id (#task:2073). Both chips consume these two functions. */
+export type ConversationRefFace = 'channel' | 'direct_line';
 
 /**
  * Inline rendering of a `#conv:<conversation_id>` reference.
@@ -264,11 +293,11 @@ function presentIdentity(identity: ConversationIdentity): {
   return { face: 'channel', title: identity.ref.title };
 }
 
-function faceLabel(face: ConversationRefFace): string {
+export function faceLabel(face: ConversationRefFace): string {
   return face === 'direct_line' ? 'Direct message' : 'Channel';
 }
 
-function conversationIcon(face: ConversationRefFace | undefined): JSX.Element {
+export function conversationIcon(face: ConversationRefFace | undefined): JSX.Element {
   if (face === 'direct_line') {
     return <AtSign className="size-3 shrink-0 self-center" />;
   }

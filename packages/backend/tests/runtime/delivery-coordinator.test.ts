@@ -63,8 +63,7 @@ interface CoordinatorBridgeCall {
   conversationId: string;
   agentId: string;
   deliveryIds: number[];
-  deliveries?: RuntimeDelivery[];
-  deliveredUpToSeq?: number;
+  deliveries: RuntimeDelivery[];
   kind: 'message' | 'schedule_fire';
   text: string;
 }
@@ -114,8 +113,7 @@ function makeBridge(
         conversationId: params.conversation_id,
         agentId: params.agent_id,
         deliveryIds: [...params.delivery_ids],
-        deliveries: params.deliveries?.map((d: RuntimeDelivery) => ({ ...d })),
-        deliveredUpToSeq: params.delivered_up_to_seq,
+        deliveries: params.deliveries.map((d: RuntimeDelivery) => ({ ...d })),
         kind: params.kind,
         text: params.text,
       };
@@ -202,10 +200,17 @@ function req(
   } = {},
 ): LiveDeliveryRequest {
   const { inboxId, messageId, payload, ...rest } = overrides;
+  const deliveryIds = inboxId !== undefined ? [inboxId] : [1];
+  const text = payload ?? '{"type":"user","message":"hi"}';
   const base: LiveDeliveryRequest = {
-    deliveryIds: inboxId !== undefined ? [inboxId] : [1],
+    deliveryIds,
+    deliveries: deliveryIds.map(id => ({
+      delivery_id: id,
+      seq: id,
+      presentation: { body: text, instruction: 'system' as const },
+    })),
     dedupKey: messageId ?? 'm1',
-    text: payload ?? '{"type":"user","message":"hi"}',
+    text,
     driver: DRIVER_GATED,
   };
   return { ...base, ...rest };
@@ -215,6 +220,8 @@ function parsed(kind: ParsedEvent['kind']): ParsedEvent {
   switch (kind) {
     case 'tool_call':
       return { kind, name: 'Bash', input: { command: 'ls' } };
+    case 'tool_call_input':
+      return { kind, toolCallId: 'call-1', input: { command: 'ls' } };
     case 'tool_output':
       return { kind };
     case 'turn_end':
@@ -296,17 +303,20 @@ describe('direct driver ready → dispatched (no ack)', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('forwards deliveries + delivered_up_to_seq to the daemon', async () => {
+  it('forwards deliveries to the daemon (no wire scalar; sidecar is derived daemon-side)', async () => {
+    // #task:2106: the coordinator forwards ONLY `deliveries`. The retired
+    // `delivered_up_to_seq` scalar is neither built here nor on the wire —
+    // its value is derived daemon-side from `max(deliveries[].seq)`. The
+    // recorder type no longer has a `deliveredUpToSeq` field, so the removal
+    // is compile-fenced; this test pins that `deliveries` still rides through
+    // verbatim.
     const { bridge, calls } = makeBridge(admitted());
     const c = makeCoordinator(bridge);
 
     const deliveries: RuntimeDelivery[] = [
       {
         delivery_id: 3,
-        message_id: 'm3',
         seq: 42,
-        thread_root_id: null,
-        delivery_kind: 'turn',
         presentation: {
           body: '[msg_id=m3 sender=system type=system target=#conv:coordinatorConv1 time=2026-01-01T00:00:00+00:00]\ndelivery-text',
           instruction: 'system',
@@ -319,12 +329,12 @@ describe('direct driver ready → dispatched (no ack)', () => {
       req({
         inboxId: 3,
         driver: DRIVER_DIRECT,
-        deliveredUpToSeq: 42,
         deliveries,
       }),
     );
 
-    expect(calls[0]).toMatchObject({ deliveredUpToSeq: 42, deliveries });
+    expect(calls[0]).toMatchObject({ deliveries });
+    expect(calls[0]).not.toHaveProperty('deliveredUpToSeq');
   });
 });
 

@@ -10,7 +10,6 @@ import {
   FastModeSchema,
   ReasoningEffortTokenSchema,
   RuntimeKindSchema,
-  WorkspaceKindSchema,
 } from '../db/schema.js';
 import { DisplayNameSchema } from './user.js';
 import { ParticipantNameSchema } from './name.js';
@@ -357,11 +356,34 @@ export type AgentWorkspaceFileRead = z.infer<
 // One placement-aware participation projection for the Agent detail surface.
 // It carries display/navigation coordinates only; runtime ownership and process
 // state are represented independently by `AgentRuntimeSeatDtoSchema` below.
+//
+// It carried a `workspace_kind` until #task:2069, and the removal is a MODELLING
+// fix rather than a dead-field cleanup. Its only reader asked a CONVERSATION-level
+// question ("draw this row as a private line or a channel?") but keyed part of the
+// answer on the CONTAINER's word — the same mis-keying the retired `channelKind`
+// prompt field was, mirrored. The keying rule (stated once on
+// `ConversationPlacementKindSchema`, db/schema.ts) settles it: identity is a
+// function of PLACEMENT, and neither the container word nor `roster_policy` is a
+// sufficient stand-in for it. In particular `fixed` does NOT mean "private line":
+// an agent home's DM AND Onboarding channels are workspace-placed with a fixed
+// roster — fixed CHANNELS, not private lines. `direct_pair` vs a workspace
+// placement is the real cut, and `conversation_placement_kind` carries exactly it;
+// that is why THIS face — which genuinely admits `direct_pair` —
+// keeps the placement + roster axes and drops the container word.
+//
+// The word was also redundant on top of being mis-keyed: within an owned workspace
+// every workspace-placed row is fixed-roster — the only open-roster creation path
+// rejects a workspace with an owner agent (`channel-service.ts`
+// `isAgentHomeWorkspace(workspace)` pre-check, `isAgentHomeWorkspace(current)`
+// in-lock recheck; `create-workspace.ts` `workspaces.insert` builds only a no-owner
+// workspace, never an agent home) and ownership never changes after creation, so
+// `agent_home ⇒ fixed` holds. That reachability fact is the half kept from
+// #task:2069; the "fixed ⇒ private line" sufficiency claim is the half corrected
+// here (#task:2074).
 export const AgentRuntimeParticipationSchema = z.object({
   conversation_id: z.string(),
   workspace_id: z.string().nullable(),
   workspace_name: z.string().nullable(),
-  workspace_kind: WorkspaceKindSchema.nullable(),
   conversation_placement_kind: ConversationPlacementKindSchema,
   conversation_roster_policy: ConversationRosterPolicySchema,
   channel_id: z.string(),

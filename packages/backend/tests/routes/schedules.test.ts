@@ -445,13 +445,13 @@ describe('Internal routes — agent schedules', () => {
         `DELETE FROM conversations
           WHERE workspace_id IN (
             SELECT id FROM workspaces
-             WHERE workspace_kind = 'agent_home' AND owner_agent_id = ?
+             WHERE owner_agent_id = ?
           )`,
       )
       .run(aliceId);
     t.ctx.db
       .prepare(
-        `DELETE FROM workspaces WHERE workspace_kind = 'agent_home' AND owner_agent_id = ?`,
+        `DELETE FROM workspaces WHERE owner_agent_id = ?`,
       )
       .run(aliceId);
     const res = await http(t).post(createPath(conversationId, aliceId), {

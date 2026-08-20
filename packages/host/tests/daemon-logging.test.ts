@@ -236,7 +236,6 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       resolved: false,
       reason: 'no_pending_stale_event',
     }),
-    agentStreamObserved: async () => ({ ok: true }),
     agentStaleReceive: async () => ({
       ok: true,
       outcome: 'no_pending_stale' as const,
@@ -263,6 +262,11 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42],
+      deliveries: [{
+        delivery_id: 42,
+        seq: 42,
+        presentation: { body: 'delivery-42', instruction: 'system' as const },
+      }],
       kind: 'message',
       text: SECRET_TEXT,
       spawn_options: testStartOptions(),

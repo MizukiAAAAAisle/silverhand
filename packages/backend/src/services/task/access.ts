@@ -7,9 +7,10 @@ import type {
   ClaimResultEntry,
   ConversationDto,
   TaskMutationResult,
-  WorkspaceDto,
+  Workspace,
 } from '@silverhand/shared';
 import { isWorkspacePlaced } from '@silverhand/shared';
+import { isAgentHomeWorkspace, isAgentHomeWorkspaceOf } from '@silverhand/shared';
 import type { AgentRepo } from '../../repos/agent-repo.js';
 import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
 import type { TaskConversationAccessPort, TaskRepoReadPort } from './ports.js';
@@ -84,9 +85,9 @@ export class TaskAccessControl {
    *  membership (owner_agent_id === agent.id); every other kind goes
    *  through the `workspace_members` table. Mirrors the union in
    *  `WorkspaceRepo.listForAgent`. */
-  isAgentWorkspaceMember(ws: WorkspaceDto, agentId: string): boolean {
-    if (ws.workspace_kind === 'agent_home') {
-      return ws.owner_agent_id === agentId;
+  isAgentWorkspaceMember(ws: Workspace, agentId: string): boolean {
+    if (isAgentHomeWorkspace(ws)) {
+      return isAgentHomeWorkspaceOf(ws, agentId);
     }
     return this.workspaces.isMember(ws.id, agentId);
   }
@@ -110,7 +111,7 @@ export class TaskAccessControl {
       candidates?: string[];
     }) => F,
   ):
-    | { kind: 'workspace'; boardKey: string; workspace: WorkspaceDto }
+    | { kind: 'workspace'; boardKey: string; workspace: Workspace }
     | { kind: 'direct_pair'; boardKey: string }
     | { failure: F } {
     // Schema enforces XOR but defend against an out-of-band call.
@@ -123,7 +124,7 @@ export class TaskAccessControl {
       };
     }
 
-    let ws: WorkspaceDto | null = null;
+    let ws: Workspace | null = null;
     if (selector?.workspaceId) {
       ws = this.workspaces.get(selector.workspaceId);
       if (!ws) {
@@ -162,8 +163,7 @@ export class TaskAccessControl {
       // a DM frame reads its own DirectPairBoard — the frame participation
       // was already validated by the caller, and a pair board has no
       // capability table (participation is the authority, §4.4). A placement
-      // with no board (§4.2: the agent inbox) is a typed failure rather than
-      // an assertion, because this resolver's whole job is turning "no board
+      // with no board is a typed failure rather than an assertion, because this resolver's whole job is turning "no board
       // could be resolved" into an actionable answer for the agent.
       if (sourceConv === null) {
         return {

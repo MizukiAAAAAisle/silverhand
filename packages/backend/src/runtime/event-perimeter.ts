@@ -48,12 +48,12 @@ export interface RuntimePerimeterConversationReadPort {
    * Is `agentId` a participant of `conversationId` under the CANONICAL
    * placement-participation authority (`ConversationRepo.isAgentParticipant`)?
    * A roster seat is only the WORKSPACE arm of that authority: a rosterless
-   * DirectPair admits its typed endpoint agent, an agent-inbox placement admits
-   * its inbox owner — neither has a `conversation_agents` row. This is the same
+   * DirectPair admits its typed endpoint agent without any
+   * `conversation_agents` row. This is the same
    * question the read face (`GET …/activity`) and `claimTaskAgent` ask, so the
    * ingress perimeter cannot admit a frame the read face would then refuse (or,
    * as #task:2048 found, drop a frame whose row the read face would happily
-   * serve). Using roster here silently dropped every DirectPair / inbox agent's
+   * serve). Using roster here silently dropped every DirectPair agent's
    * parsed-event frame at the perimeter, leaving those feeds permanently empty.
    */
   isAgentParticipant(conversationId: string, agentId: string): boolean;
@@ -119,11 +119,11 @@ export class EventPerimeterGuard implements RuntimeEventPerimeterPort {
    *        with `reason: 'conversation_unknown'`.
    *   4. `conversations.isAgentParticipant(conversation_id, agent_id)`
    *      — the canonical placement-participation authority (roster seat on a
-   *      workspace conversation, OR the typed endpoint / inbox arc for a
-   *      rosterless DirectPair / agent-inbox placement). #task:2048: this was
-   *      a raw `conversation_agents` roster read, which dropped every
-   *      DirectPair / inbox agent's frame because those placements carry no
-   *      roster row — the read face already authorizes via participation, so
+   *      workspace conversation, OR the typed endpoint arc for a rosterless
+   *      DirectPair). #task:2048: this was a raw `conversation_agents` roster
+   *      read, which dropped every DirectPair agent's frame because that
+   *      placement carries no roster row — the read face already authorizes via
+   *      participation, so
    *      the ingress must ask the SAME question.
    *      → fail: drop, log `outbound_event_perimeter_mismatch`
    *        with `reason: 'agent_not_in_conversation'`.

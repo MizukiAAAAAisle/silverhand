@@ -56,12 +56,10 @@ export async function prepareSpawnFiles(
   const dir = await mkdtemp(join(parentDir, 'spawn-'));
 
   const systemPromptPath = join(dir, 'system-prompt.md');
-  const lastDeliveredSeqPath = join(
-    dir,
-    input.runtimeScope.kind === 'agent'
-      ? 'last-delivered-seq.json'
-      : 'last-delivered-seq',
-  );
+  // #task:2095: both scopes now write a bare `<seq>\n` scalar (the per-stream
+  // `{version:1,streams}` JSON is retired), so the agent-arm `.json` filename
+  // is gone — one filename for both, matching origin/main.
+  const lastDeliveredSeqPath = join(dir, 'last-delivered-seq');
   const binDir = join(dir, 'bin');
   const silverhandShimPath = join(binDir, 'silverhand');
   const shimEnv: Record<string, string> = {

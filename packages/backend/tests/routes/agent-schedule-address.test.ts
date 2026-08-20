@@ -226,23 +226,6 @@ describe('internal schedule create — the address is the wake destination', () 
     expect(scheduleCount(t, alice)).toBe(0);
   });
 
-  it('refuses an inbox as a wake destination', async () => {
-    t = startApp();
-    const alice = await makeAgent(t, 'alice');
-    const ws = await makeWorkspace(t, 'inbox-refused-wake', [alice]);
-    const inbox = new ConversationRepo(t.ctx.db).getAgentInbox(alice);
-    expect(inbox).not.toBeNull();
-
-    const res = await create(
-      t,
-      { conversationId: ws.channelId, agentId: alice },
-      `#conv:${inbox!.id}`,
-    );
-    expect(res.status).toBe(400);
-    expect((await res.json()) as any).toMatchObject({ code: 'inbox_not_writable' });
-    expect(scheduleCount(t, alice)).toBe(0);
-  });
-
   it('has no default destination: an absent field is invalid input', async () => {
     // There WAS a default — omit the field and fire wherever you called from —
     // and it is gone, because under an agent-scoped session one process serves

@@ -9,7 +9,7 @@
 // only that: `DeliveryTargetInput` → `(conversation_id, thread_root_id)`, or a
 // typed refusal.
 //
-// FOUR RULES, all fail-closed, in this order (the order is part of the
+// THREE RULES, all fail-closed, in this order (the order is part of the
 // contract — see the numbered comments in `resolveDeliveryTarget`):
 //
 //   1. the grammar must accept the string;
@@ -17,9 +17,7 @@
 //      by the one participation authority (`ConversationRepo.isAgentParticipant`,
 //      the boolean face of `conversation-placement-sql.ts`), never by a rule
 //      restated here;
-//   3. a WRITE may not target an `agent_inbox` placement — the grammar is
-//      placement-blind on purpose, so this is the resolver's rule to carry;
-//   4. a thread suffix must name a ROOT message of the resolved conversation.
+//   3. a thread suffix must name a ROOT message of the resolved conversation.
 //
 // A HEAD IS ONE OF THREE THINGS, and rule 1 does not care which: a conversation
 // id, a readable `<workspace>/<title>` pair, or a `dm:@handle` shorthand. The
@@ -99,8 +97,8 @@ import {
  * What the resolver needs to know about a conversation: WHERE it lives, and
  * nothing else.
  *
- * Deliberately not `ConversationIdentity`: the answer here depends on the
- * placement ARM (rule 3) and on nothing else about the row, and a wider shape
+ * Deliberately not `ConversationIdentity`: the resolved target carries the
+ * placement ARM onward and nothing else about the row, and a wider shape
  * would invite this module to start judging visibility or archive state — the
  * write gate's job (see the module docblock). `ConversationIdentity` is a
  * structural supertype, so the repository satisfies this port without a
@@ -145,8 +143,8 @@ export interface DeliveryTargetConversationsPort
  * The address ROOT: a regular workspace's display name (#task:2027).
  *
  * Three outcomes rather than a nullable id, because `ambiguous` is not "no
- * match": `idx_workspaces_name_key` is UNIQUE over `workspace_kind = 'regular'`,
- * so a second holder of one key is corruption, and an operator wants to know
+ * match": `idx_workspaces_name_key` is UNIQUE over regular workspaces
+ * (`owner_agent_id IS NULL`), so a second holder of one key is corruption, and an operator wants to know
  * which of the two happened even though the ACTOR must not (both collapse into
  * `target_unresolved`).
  *
@@ -229,9 +227,10 @@ export type DeliveryIntent = 'read' | 'write';
  * dogfood log built on it): widening it for an unrelated reason would silently
  * reshape a vocabulary an operator reads. Also because the two are genuinely
  * independent facts — "this is a write" is about the effect, "you may not open a
- * new pair while doing it" is about the caller's reach — and a write with
- * allocation forbidden must still be refused an inbox destination (rule 3), which a
- * caller downgrading to `intent: 'read'` would silently lose.
+ * new pair while doing it" is about the caller's reach — and collapsing them into
+ * one value would make a caller who merely wants to avoid the side effect
+ * downgrade to `intent: 'read'`, silently changing what the operator log records
+ * about the act.
  *
  * Required, not optional-defaulting-to-permitted: the whole value is that every
  * call site states its answer, and a default would put the side effect back one
@@ -247,8 +246,6 @@ export type DeliveryTargetRefusalCode =
   /** The address names no stream this principal may use — unknown and
    *  unauthorized COLLAPSED (module docblock). */
   | 'target_unresolved'
-  /** An `agent_inbox` placement is not a write destination (rule 3). */
-  | 'inbox_not_writable'
   /** The thread suffix names no reply cluster of the resolved conversation. */
   | 'thread_not_in_target'
   /** `dm:@<own handle>`: a DM has two participants (§4.1). */
@@ -288,7 +285,6 @@ export type DeliveryTargetOperatorReason =
   | 'not_participant'
   | 'unknown_handle'
   | 'direct_pair_not_found'
-  | 'inbox_write'
   | 'self_pair'
   | 'thread_root_not_found'
   | 'thread_root_not_a_root';
@@ -483,8 +479,8 @@ export function resolveDeliveryTarget(
       // "Message this agent" open, #task:2036). Ordered after the write and before
       // every remaining rule, because what is announced is THE ROW, not the
       // resolution. Nothing below can refuse this arm anyway (participation holds
-      // by the endpoint the pair was built from, an inbox is a different placement,
-      // and a thread suffix never reaches here), so there is no reachable state in
+      // by the endpoint the pair was built from, and a thread suffix never reaches
+      // here), so there is no reachable state in
       // which a refusal leaves an announcement behind.
       conversation = openDirectPair(ports, me, them, request.now);
     } else {
@@ -502,16 +498,7 @@ export function resolveDeliveryTarget(
     return refuse('target_unresolved', 'not_participant');
   }
 
-  // ── 3. An inbox is not a write destination ────────────────────
-  // Only reachable for the principal's OWN inbox (rule 2 already refused anyone
-  // else's), so this code leaks nothing. An inbox is a notification read face
-  // with a single participant: a mention CC's header points at the repliable
-  // ORIGIN stream, and a reply into the inbox would be a message nobody reads.
-  if (request.intent === 'write' && conversation.placement_kind === 'agent_inbox') {
-    return refuse('inbox_not_writable', 'inbox_write');
-  }
-
-  // ── 4. The thread root must be a root OF THIS CONVERSATION ────
+  // ── 3. The thread root must be a root OF THIS CONVERSATION ────
   if (threadRootId !== null) {
     const root = ports.messages.getInConversation(conversation.id, threadRootId);
     if (root === null) return refuse('thread_not_in_target', 'thread_root_not_found');

@@ -105,8 +105,8 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     const options: StartOptions = {
       ...base,
       workspace_memory_index: [
-        { id: 'ws1', name: 'primary', kind: 'regular' },
-        { id: 'ws_never_spawned', name: 'peer', kind: 'regular' },
+        { id: 'ws1', name: 'primary' },
+        { id: 'ws_never_spawned', name: 'peer' },
       ],
     };
     const resolved = await resolveRuntimeStartPaths(
@@ -115,8 +115,8 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     );
     expect(resolved.workspace!.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index).toEqual([
-      { id: 'ws1', name: 'primary', kind: 'regular', path: bundle('a1', 'ws1') },
-      { id: 'ws_never_spawned', name: 'peer', kind: 'regular', path: null },
+      { id: 'ws1', name: 'primary', path: bundle('a1', 'ws1') },
+      { id: 'ws_never_spawned', name: 'peer', path: null },
     ]);
   });
 
@@ -124,7 +124,7 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     const base = testStartOptions({ agentId: 'a1', workspaceKind: 'regular' });
     const options: StartOptions = {
       ...base,
-      workspace_memory_index: [{ id: 'ws_half', name: 'half', kind: 'regular' }],
+      workspace_memory_index: [{ id: 'ws_half', name: 'half' }],
     };
     // The completion predicate returns false for the half-seeded dir.
     const resolved = await resolveRuntimeStartPaths(
@@ -132,7 +132,7 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
       depsWith(async () => false),
     );
     expect(resolved.workspace_memory_index).toEqual([
-      { id: 'ws_half', name: 'half', kind: 'regular', path: null },
+      { id: 'ws_half', name: 'half', path: null },
     ]);
   });
 
@@ -140,7 +140,7 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     const base = testStartOptions({ agentId: 'a1', workspaceKind: 'regular' });
     const options: StartOptions = {
       ...base,
-      workspace: { id: '../escape', name: 'evil', kind: 'regular' },
+      workspace: { id: '../escape', name: 'evil' },
     };
     let probed = false;
     let thrown: unknown;
@@ -198,10 +198,12 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
 
   it('fails closed when an agent_home ref carries a FOREIGN home id (no silent normalization)', async () => {
     const base = testStartOptions({ agentId: 'a1', workspaceKind: 'agent_home' });
-    // Swap in another agent's home id while keeping kind: 'agent_home'.
+    // Swap in another agent's home id (still a `wsah_`-shaped ref, so the daemon
+    // recognizes it as agent-home by id, then fails closed because it is not THIS
+    // agent's own home id).
     const options: StartOptions = {
       ...base,
-      workspace: { id: agentHomeWorkspaceId('other'), name: 'DM', kind: 'agent_home' },
+      workspace: { id: agentHomeWorkspaceId('other'), name: 'DM' },
     };
     let thrown: unknown;
     try {
@@ -215,15 +217,19 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
     );
   });
 
-  it('memory-index entry with a foreign/non-home agent_home id degrades to unavailable (never resolves onto own L1)', async () => {
+  it("memory-index entry carrying ANOTHER agent's home id degrades to unavailable (never resolves onto own L1)", async () => {
     const base = testStartOptions({ agentId: 'a1', workspaceKind: 'agent_home' });
+    const foreignHome = agentHomeWorkspaceId('other');
     const options: StartOptions = {
       ...base,
-      workspace_memory_index: [{ id: 'home1', name: 'DM', kind: 'agent_home' }],
+      workspace_memory_index: [{ id: foreignHome, name: 'DM' }],
     };
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
+    // Recognized as an agent-home ref by its `wsah_` id, then fails closed
+    // because it is not THIS agent's home → the index entry degrades to null
+    // rather than resolving onto this agent's L1.
     expect(resolved.workspace_memory_index).toEqual([
-      { id: 'home1', name: 'DM', kind: 'agent_home', path: null },
+      { id: foreignHome, name: 'DM', path: null },
     ]);
   });
 });
@@ -253,14 +259,14 @@ describe('resolveAuthenticatedComputerId — prompt computer authority', () => {
 });
 
 describe('resolveRuntimeStartPaths — mixed memory index', () => {
-  it('resolves each entry by its own kind', async () => {
+  it('resolves each entry by its own id convention (regular bundle vs agent-home L1)', async () => {
     const base = testStartOptions({ agentId: 'a1', workspaceKind: 'regular' });
     const options: StartOptions = {
       ...base,
       workspace_memory_index: [
-        { id: 'ws1', name: 'primary', kind: 'regular' },
-        { id: agentHomeWorkspaceId('a1'), name: 'DM', kind: 'agent_home' },
-        { id: 'ws2', name: 'other', kind: 'regular' },
+        { id: 'ws1', name: 'primary' },
+        { id: agentHomeWorkspaceId('a1'), name: 'DM' },
+        { id: 'ws2', name: 'other' },
       ],
     };
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
@@ -280,21 +286,21 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
     const options: StartOptions = {
       ...base,
       workspace_memory_index: [
-        { id: 'ws1', name: 'primary', kind: 'regular' },
-        { id: '../escape', name: 'peer', kind: 'regular' },
+        { id: 'ws1', name: 'primary' },
+        { id: '../escape', name: 'peer' },
       ],
     };
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
     expect(resolved.workspace!.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index).toEqual([
-      { id: 'ws1', name: 'primary', kind: 'regular', path: bundle('a1', 'ws1') },
-      { id: '../escape', name: 'peer', kind: 'regular', path: null },
+      { id: 'ws1', name: 'primary', path: bundle('a1', 'ws1') },
+      { id: '../escape', name: 'peer', path: null },
     ]);
 
     // Same unsafe id on the ACTIVE workspace still throws (fail closed).
     const activeUnsafe: StartOptions = {
       ...base,
-      workspace: { id: '../escape', name: 'peer', kind: 'regular' },
+      workspace: { id: '../escape', name: 'peer' },
     };
     await expect(
       resolveRuntimeStartPaths(activeUnsafe, depsWith()),

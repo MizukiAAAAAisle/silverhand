@@ -19,6 +19,7 @@ import {
   McpProbeResultSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
+  PROTOCOL_VERSIONS,
 } from '@silverhand/shared';
 import {
   AgentMaterializeErrorCodeSchema,
@@ -147,123 +148,21 @@ export {
 
 const FrameIdSchema = z.string().min(1);
 
-// v2 (reply-cluster §6.4): the outbound `runtime_start` / `runtime_wake`
-// commands reuse the same strict `RuntimeStartParamsSchema` /
-// `RuntimeWakeParamsSchema` as the local-socket protocol, which gained the
-// `deliveries` wire field. A v1 standalone daemon would strict-reject the
-// extra key, so this transport's version bumps in lock-step with
-// HOST_PROTOCOL_VERSION to fail loud at attach instead of on the command.
+// `OUTBOUND_PROTOCOL_VERSION` is the EQUALITY SENTINEL on the remote daemon ↔
+// standalone server boundary, enforced at the WS attach handshake (exact match
+// of the daemon's advertised `ready` version). It moves in lock-step with
+// HOST_PROTOCOL_VERSION whenever a cutover crosses this wire: the two share the
+// same `runtime_start` params object and the same daemon-authoritative delivery
+// surface, so a break on one is usually a break on both. They remain distinct
+// axes — a change touching only the CLI↔daemon socket moves HOST alone — and the
+// NUMBER for both lives in the single authority (`protocol-versions.ts`).
 //
-// v3 (#task:1417, daemon-authoritative delivery Stage 1): the shared
-// `RuntimeStartResultSchema` reply gained a required `phase` on its
-// `started:true` arm. The reply is `.strict()` and travels over this transport
-// too, so a version-mismatched standalone daemon must fail loud at attach
-// rather than send a reply the new backend rejects. Bumps alongside
-// HOST_PROTOCOL_VERSION (3→4).
-//
-// v4 (#task:1417, daemon-authoritative delivery Stage 2a): the new
-// `runtime_deliver` command and its unified `runtime_delivery_consumed` /
-// `runtime_delivery_failed` event frames joined this transport's strict
-// surface. A version-mismatched standalone daemon lacks the command handler /
-// event kinds, so it must fail loud at attach. Bumps alongside
-// HOST_PROTOCOL_VERSION (4→5).
-//
-// v5 (#task:1417, daemon-authoritative delivery Stage 2c): the retired
-// delivery surfaces were DELETED from this transport too — the `runtime_wake`
-// command, the legacy `runtime_startup_delivery_consumed`/`_failed` event
-// frames, and `runtime_start`'s `startup_delivery` param + `phase` /
-// `startup_delivery_accepted` result fields (all shared from the local-socket
-// schemas). A version-mismatched standalone daemon would send / expect the
-// deleted shapes, so it must fail loud at attach. Bumps alongside
-// HOST_PROTOCOL_VERSION (5→6).
-//
-// v6 (#task:1417, daemon-authoritative delivery Stage 3): `runtime_deliver`
-// gains a fourth `deferred` disposition arm (daemon-held mid-turn queue). The
-// result shape changed, so a version-mismatched standalone daemon would send /
-// expect a disposition space the peer cannot parse — fail loud at attach. Bumps
-// alongside HOST_PROTOCOL_VERSION (6→7).
-//
-// v7 (#task:1461): `runtime_deliver`'s SPAWN arm now preserves the typed
-// workspace-resolution taxonomy. A v6 server rejects those response codes and
-// a v6 daemon emits taxonomy drift instead, so old/new peers must fail loud at
-// attach rather than appear compatible until first delivery. Bumps alongside
-// HOST_PROTOCOL_VERSION (7→8).
-//
-// NOT a bump — #task:1486 (Codex Ultra): the reasoning-effort token on
-// `runtime_start` is now an OPEN string, and new effort values are negotiated
-// via the `runtime.codex.reasoning.v1` capability, so adding one no longer
-// touches the wire framing. See the two-layer note at HOST_PROTOCOL_VERSION.
-//
-// v8 (#task:1558): `runtime_stop` loses its `mode:'soft'` arm (params
-// `soft_directive` deleted, `mode` narrows to literal `'hard'`, soft result
-// variant removed). Strict schemas break in both directions — fail loud at
-// attach. Bumps alongside HOST_PROTOCOL_VERSION (8→9).
-//
-// The v8 epoch ALSO covers the new strict `runtime_parsed_event.parsed`
-// arms `input_lifecycle` (#task:1557/#task:1561) and `api_response`
-// (#task:1582) — bilateral strict union, so each additive sender arm is
-// independently a breaking change for an older receiver. See the note at
-// HOST_PROTOCOL_VERSION.
-//
-// v9 (#task:1808, relocation-v1 §7-4 registry demotion): a SEMANTIC-only break
-// — command framing is unchanged, so an old daemon + new backend would ATTACH
-// cleanly and fail only at business time. The backend stops DISPATCHING
-// `workspace_provision` (create is a pure DB write; L2 materializes lazily at
-// first spawn) and the daemon resolves regular-workspace file surfaces by the
-// deterministic agent-centric coordinate, not a registry establishment gate.
-// The attach gate (exact-match of the daemon's advertised `ready`
-// `protocol_version` against this constant) turns that otherwise-silent
-// incompatibility into a fail-closed refusal at hello. Bumps alongside
-// HOST_PROTOCOL_VERSION (9→10). No shim.
-//
-// v10 (#task:1988): terminal agent deletion fencing changes the strict
-// `agent_files_purge` result/error contract and adds `agent_deleting` to every
-// mutator error arm. A mixed-generation backend/daemon pair is unsafe: the old
-// daemon would rm without quiescing admitted handlers or children. Exact attach
-// admission rejects it before business commands. Bumps alongside
-// HOST_PROTOCOL_VERSION (10→11). No shim.
-//
-// v11 (#task:2000): the addressing contract moves to canonical
-// `<silverhand://<kind>/<name>>` autolinks and plain `@name` stops addressing
-// anyone.
-// Command framing is unchanged; the incompatibility is that the daemon composes
-// the platform prompt from its own bundled `@silverhand/shared`, so its
-// generation decides which addressing form the agents it spawns are taught. A
-// mixed pair produces mentions that direct nothing at their subject — a
-// main-line message still reaches every member, but with no notification, no
-// auto-follow (so a thread reply can miss the person it names), no CC, and
-// undirected framing — with no error on either side.
-// Bumps alongside HOST_PROTOCOL_VERSION (11→12). No shim.
-//
-// v12 (agent-scoped sessions + one absolute address: #task:2015, #task:2019,
-// #task:2021) — ONE epoch for the whole unreleased cutover, mirroring
-// `HOST_PROTOCOL_VERSION` v13, which carries the full rationale. The number is an
-// equality sentinel on a PUBLISHED boundary: v11 is on published history and may
-// not be joined, everything after it in this tree is unreleased, and two peers
-// built from the same unreleased tree are never a mixed pair.
-//
-//   - GENERATION-BOUND CUSTODY (#task:2015): server commands carry the claimed
-//     runtime generation and status-mutating daemon events echo it back;
-//     `runtime_status` rows, destructive stop/clear, and delivery consumed/failed
-//     settlements are all generation-bound. Without it a delayed generation-N ack
-//     can settle a durable inbox row the backend already reclaimed for N+1.
-//   - RUNTIME SCOPE (#task:2019): every runtime command/snapshot/event carries the
-//     same discriminated `RuntimeScope` that owns session identity and custody.
-//   - ABSOLUTE DELIVERY TARGET (#task:2021 P4-3): the delivery header's `target`
-//     is `#conv:<id>[/thread:<root>]` derived per row; `channel` is retired.
-//   - THE SEND DOOR'S SHAPE (#task:2021 P4-4): the backend's agent send endpoint
-//     requires one absolute `target` address string (no `{kind:'channel'}`, no
-//     `reply_to_message_id`, no ambient "here") and answers with the
-//     `conversation_id` it resolved to.
-//
-// The last two carry no framing change, so the attach gate is the whole
-// enforcement: the daemon teaches the target form from its own bundled
-// `@silverhand/shared` while the backend emits it, and a mixed pair sends an
-// agent's reply into whichever conversation it assumed instead of the one the
-// message arrived on — with no error on either side. Bumps alongside
-// HOST_PROTOCOL_VERSION (12→13). No shim: accepting both shapes for a release
-// would keep alive the bare-send spelling whose removal is the point.
-export const OUTBOUND_PROTOCOL_VERSION = 12;
+// Same exact-equality rationale as HOST_PROTOCOL_VERSION: a mixed pair's failure
+// is not a parse error but a reply delivered into the WRONG stream, and no shim
+// is possible, so the pair is refused at attach before any agent is spawned.
+// Unreleased breaking changes fold into one generation; per-generation history
+// lives in the owning tasks/docs, not as a number ledger here.
+export const OUTBOUND_PROTOCOL_VERSION = PROTOCOL_VERSIONS.outbound;
 
 // ── server → daemon command catalogue ──────────────────────────────
 
@@ -970,6 +869,26 @@ export const OutboundRuntimeParsedEventDroppedFrameSchema = z
   })
   .strict();
 
+/**
+ * `runtime_message_stale` (#task:2099) — the backend's own freshness verdict,
+ * relayed back by the daemon so the activity axis has ONE author and the row
+ * lands on the handle's focus conversation. See the local `EventFrameSchema`
+ * arm in `protocol.ts` for why this is not a `runtime_parsed_event` and why it
+ * carries no per-conflict ids.
+ */
+export const OutboundRuntimeMessageStaleEventFrameSchema = z
+  .object({
+    direction: z.literal('daemon_to_server'),
+    type: z.literal('event'),
+    kind: z.literal('runtime_message_stale'),
+    runtime_scope: RuntimeScopeSchema,
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
+    ts: z.number().int(),
+  })
+  .strict();
+
 export const OutboundDaemonToServerEventFrameSchema = z.discriminatedUnion('kind', [
   OutboundReadyEventFrameSchema,
   OutboundShuttingDownEventFrameSchema,
@@ -988,6 +907,7 @@ export const OutboundDaemonToServerEventFrameSchema = z.discriminatedUnion('kind
   OutboundRuntimeOutputResumedEventFrameSchema,
   OutboundRuntimeParsedEventFrameSchema,
   OutboundRuntimeParsedEventDroppedFrameSchema,
+  OutboundRuntimeMessageStaleEventFrameSchema,
 ]);
 
 export type OutboundDaemonToServerEventFrame = z.infer<

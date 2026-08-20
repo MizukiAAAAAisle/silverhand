@@ -11,7 +11,7 @@
  * Grow this file builder-by-builder as tests migrate; do not pre-build a
  * fixture empire.
  */
-import type { AgentDto, ConversationDto, RuntimeKind, WorkspaceDto } from '@silverhand/shared';
+import type { AgentDto, ConversationDto, RuntimeKind, Workspace } from '@silverhand/shared';
 import { fixedConversationTitle, fixedWorkspaceName } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -65,11 +65,11 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
     cleanup: tmp.cleanup,
     tempDirs: tmp,
 
-    createWorkspace(name = 'eng'): WorkspaceDto {
+    createWorkspace(name = 'eng'): Workspace {
       return repos.workspaces.insert({ name: fixedWorkspaceName(name), description: null });
     },
 
-    createChannel(workspace: WorkspaceDto, title = 'general'): ConversationDto {
+    createChannel(workspace: Workspace, title = 'general'): ConversationDto {
       channelOrdinal += 1;
       return repos.conversations.insertChannel({
         workspaceId: workspace.id,

@@ -16,6 +16,7 @@ import {
   applyTaskChangedToProjections,
   beginOptimisticStatusWrite,
   insertTaskIntoColumnPages,
+  invalidateTaskPointCaches,
   locateTaskInBoardColumns,
   moveTaskStatusInBoardColumns,
   optimisticClosedAt,
@@ -63,7 +64,6 @@ function row(over: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
       kind: 'workspace',
       conversation_id: 'chan-1',
       workspace_id: WS,
-      workspace_kind: 'regular',
       channel_name: 'chan',
     },
     thread_root_id: null,
@@ -1167,6 +1167,41 @@ describe('rollback context', () => {
   });
 });
 
+// ── The assign write's chip scope (#task:2091) ─────────────────────
+
+/**
+ * `useAssignTask` cannot predict its own outcome (the server may dispatch the
+ * task in the same write), so it invalidates instead of patching — but "I don't
+ * know the VALUE" was silently spent as "re-read every chip in the app". This is
+ * the falsifiable half of that split: the write still re-reads, and it still
+ * re-reads only the entries that hold this task.
+ */
+describe('the chip scope a write that cannot patch still owes', () => {
+  it('re-reads the chips holding this task, and no other entry', async () => {
+    const qc = new QueryClient();
+    const holder = observe(qc, taskByNumberKey(SCOPE, 100), row());
+    const otherTask = observe(
+      qc,
+      taskByNumberKey(SCOPE, 101),
+      row({ id: 'task-b', task_number: 101 }),
+    );
+    // A cached MISS: the entry exists, holds nothing, and cannot be located by
+    // content. The event path owns it — it knows both key axes where a local
+    // writer holds only a task id.
+    const miss = observe(qc, taskByNumberKey(SCOPE, 102), null);
+
+    invalidateTaskPointCaches(qc, 'task-a');
+    await vi.waitFor(() => expect(holder.fetches()).toBe(1));
+    await settled();
+
+    expect(otherTask.fetches()).toBe(0);
+    expect(miss.fetches()).toBe(0);
+    holder.stop();
+    otherTask.stop();
+    miss.stop();
+  });
+});
+
 // ── Mechanical fence: no root invalidation from the status write ────
 
 describe('useUpdateTaskStatus wiring', () => {
@@ -1206,5 +1241,32 @@ describe('useUpdateTaskStatus wiring', () => {
     expect(body).not.toContain("queryKey: ['tasks']");
     expect(body).not.toContain("queryKey: ['task-by-number']");
     expect(body).not.toContain('boardFacetsKey');
+  });
+});
+
+// ── Mechanical fence: the assign write's two scopes are BOTH decisions ──
+
+describe('useAssignTask wiring', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('./hooks.ts', import.meta.url)),
+    'utf8',
+  );
+  const body = (() => {
+    const start = source.indexOf('export function useAssignTask()');
+    expect(start).toBeGreaterThan(-1);
+    const end = source.indexOf('\nexport ', start + 1);
+    return source.slice(start, end === -1 ? undefined : end);
+  })();
+
+  it('keeps the `[tasks]` root and narrows the chips (#task:2091)', () => {
+    // Fenced in BOTH directions, because the two scopes are opposite decisions
+    // made for stated reasons, and each looks like an inconsistency from the
+    // other's side. Narrowing the board root by symmetry would stop refreshing
+    // FACETS — the assignee population this very write changes, and the one
+    // `['tasks']` face no content scan can locate a row in. Re-adding the chip
+    // root by symmetry would re-read every inline `#task:<n>` in the app.
+    expect(body).toContain("queryKey: ['tasks']");
+    expect(body).toContain('invalidateTaskPointCaches(qc, vars.taskId)');
+    expect(body).not.toContain("queryKey: ['task-by-number']");
   });
 });

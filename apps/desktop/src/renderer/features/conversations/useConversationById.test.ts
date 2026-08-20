@@ -18,7 +18,6 @@ const baseRef: ConversationRef = {
   placement_kind: 'workspace', roster_policy: 'open',
   title: 'planning',
   workspace_id: 'ws-a',
-  workspace_kind: 'regular',
   closed_at: null,
   archived_at: null,
 };

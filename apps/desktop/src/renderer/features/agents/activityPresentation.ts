@@ -235,18 +235,20 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
   const { noun, verb: verbTok, args } = found;
   const cap = noun.charAt(0).toUpperCase() + noun.slice(1);
   let label = verbTok ? `${cap} ${verbTok.replace(/-/g, ' ')}` : cap;
-  // A few product-flavoured overrides (shiki/Cindy #task:1187):
-  //  - `task status` mutates a task's status → reads as "Task update".
-  //  - a `message send` carrying stale resolution is the conflict-retry path
-  //    shiki tracks distinctly → surface the "stale" suffix.
+  // One product-flavoured override (shiki/Cindy #task:1187): `task status`
+  // mutates a task's status → reads as "Task update".
+  //
+  // `message send` used to get a `Message send stale` label here when its args
+  // contained `--stale-resolution` / `--anyway`. That is DELETED (#task:2099):
+  // staleness is the backend's verdict on a delivery, and command syntax is only
+  // a proxy for it — one that missed every retry omitting the optional reason,
+  // reported a pre-emptive `--anyway` with nothing pending as a conflict, and
+  // saw nothing at all on runtimes whose tool-call capture carries no command
+  // (OpenCode persists `{cwd}` alone). A send's tool-call row is now always just
+  // `Message send`; the `message_stale` activity row is the only producer of the
+  // stale label. `message stale-receive` / `stale-resolve` keep their ordinary
+  // labels here — they are real CLI actions, not evidence a 409 happened.
   if (noun === 'task' && verbTok === 'status') label = 'Task update';
-  if (
-    noun === 'message' &&
-    verbTok === 'send' &&
-    /--stale-resolution|--anyway/.test(args)
-  ) {
-    label = 'Message send stale';
-  }
 
   // Task actions carry their target id + status change as secondary metadata.
   // The number comes from the retired `--task-number` flag OR the new

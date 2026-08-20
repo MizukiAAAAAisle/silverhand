@@ -26,14 +26,17 @@
  * Plus TransportEpoch — the restart generation (a UUID string, NOT a number;
  *   bundling it with TransportSeq recreates the one-number-two-meanings trap).
  *
- * The cursor family (StreamHeadSeq / DeliverySeq / ObservedSeq / ReadSeq) are
- * all MessageSeq VALUES in a role — positions into the message ordinal, not new
- * spaces (doc §2). We brand a cursor ONLY where it has a mint boundary whose
- * bypass is a bug:
+ * The cursor family (StreamHeadSeq / DeliverySeq / ReadSeq) are all MessageSeq
+ * VALUES in a role — positions into the message ordinal, not new spaces (doc
+ * §2). We brand a cursor ONLY where it has a mint boundary whose bypass is a
+ * bug:
  *   - ReadSeq     — minted via `observe` (streamSourceAtSeq).
- *   - ObservedSeq — minted via daemon admission.
  * StreamHeadSeq and DeliverySeq are NOT branded — they are `MessageSeq`
  * (a distinguished max/high-water); their only defect is Axis B.
+ *
+ * (There is no observed/freshness cursor brand: freshness is no longer a
+ * per-stream daemon cursor — it is a whole-runtime backend property — so the
+ * former `ObservedSeq` brand and its mint/decode have been retired.)
  */
 
 import { z } from 'zod';
@@ -88,16 +91,6 @@ export type TransportEpoch = string & { readonly __seqBrand: 'TransportEpoch' };
  */
 export type ReadSeq = number & { readonly __seqBrand: 'ReadSeq' };
 
-/**
- * "Highest MessageSeq the agent has been shown in this stream" (daemon
- * `observedSeqByStream`). A MessageSeq in the freshness/observed-cursor role.
- * Minted ONLY through daemon admission via {@link asObservedSeq}. Absent (never
- * observed) is DANGEROUS to collapse to 0 — first-touch must SKIP the CAS
- * (omit seen+stream_key), which is the #1265 fix; never treat it as observed-to-0
- * (doc §5). The one dangerous absence role.
- */
-export type ObservedSeq = number & { readonly __seqBrand: 'ObservedSeq' };
-
 // ── Mint helpers — the ONLY places a MessageSeq changes role (doc §4) ──────────
 
 /**
@@ -106,14 +99,6 @@ export type ObservedSeq = number & { readonly __seqBrand: 'ObservedSeq' };
  * absence is decided before the mint (doc §5).
  */
 export const asReadSeq = (seq: MessageSeq): ReadSeq => seq as unknown as ReadSeq;
-
-/**
- * Mint an observed cursor from a present MessageSeq (daemon admission).
- * Takes a PRESENT MessageSeq — absence (never observed) is handled explicitly
- * before the mint and must SKIP the CAS, never collapse to 0 (doc §5).
- */
-export const asObservedSeq = (seq: MessageSeq): ObservedSeq =>
-  seq as unknown as ObservedSeq;
 
 // NOTE: there is deliberately NO generic cross-brand ordering helper
 // (`isUnread`/`isBeyond`) here. MessageSeq is conversation-global, so a bare
@@ -185,12 +170,6 @@ export function decodeReadSeq(n: number): ReadSeq {
   return n as ReadSeq;
 }
 
-/** Decode a raw `number` (daemon boundary / wire) into an ObservedSeq. */
-export function decodeObservedSeq(n: number): ObservedSeq {
-  assertDecodableSeq(n, 'ObservedSeq');
-  return n as ObservedSeq;
-}
-
 /**
  * Decode a raw `string` (WS frame `epoch`) into a TransportEpoch. Non-empty
  * check only — the value is an opaque `crypto.randomUUID()` produced by the
@@ -224,8 +203,6 @@ export const MessageSeqSchema = nonNegativeIntSchema.transform(decodeMessageSeq)
 export const TransportSeqSchema = nonNegativeIntSchema.transform(decodeTransportSeq);
 /** Wire schema whose parsed output is a {@link ReadSeq}. */
 export const ReadSeqSchema = nonNegativeIntSchema.transform(decodeReadSeq);
-/** Wire schema whose parsed output is an {@link ObservedSeq}. */
-export const ObservedSeqSchema = nonNegativeIntSchema.transform(decodeObservedSeq);
 /** Wire schema whose parsed output is a {@link TransportEpoch}. */
 export const TransportEpochSchema = z
   .string()

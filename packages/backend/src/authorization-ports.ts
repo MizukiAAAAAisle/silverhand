@@ -11,7 +11,7 @@
  * So the module declares what it actually needs, and it is a SMALL, closed set
  * of facts — derived by reading every predicate, not by mirroring the repos:
  *
- *   - workspace existence + `{workspace_kind, owner_agent_id}` (the agent_home
+ *   - workspace existence + `{owner_agent_id}` (the agent_home
  *     exemption), human membership, the human's `workspace_users.role`, the
  *     workspace ids an agent reaches, and a workspace's human member ids (the
  *     view-audience arm);
@@ -42,36 +42,35 @@ import type {
   ConversationDto,
   ConversationEndpointKind,
   ConversationRow,
-  WorkspaceDto,
+  Workspace,
   WorkspaceRole,
 } from '@silverhand/shared';
 
-/** Only what the agent_home capability exemption and existence checks read. */
-export type AuthorizationWorkspaceFacts = Pick<
-  WorkspaceDto,
-  'workspace_kind' | 'owner_agent_id'
->;
+/** Only what the agent_home capability exemption and existence checks read: the
+ *  OWNERSHIP relation, which is the whole of both questions (`isAgentHomeWorkspace`
+ *  / `isAgentHomeWorkspaceOf`). A container word alongside it would be a second
+ *  spelling of the same bit — and one this port has no use for. */
+export type AuthorizationWorkspaceFacts = Pick<Workspace, 'owner_agent_id'>;
 
 /**
  * Only what the public-channel branch, the workspace hop, and the PLACEMENT
  * branch read.
  *
- * `placement_kind` / `inbox_agent_id` are row facts with no wire field: WHO the
- * participants of a conversation are is derived from its placement
- * (agent-scoped-session-v1 §4.2) — a `workspace` row derives them from workspace
- * membership plus the roster tables, an `agent_inbox` row has exactly one
- * participant and names it directly. An ACL that saw only `workspace_id: null`
- * could tell "not workspace-placed" but not WHOSE line it is, and would have to
- * fail closed on the agent's own inbox.
+ * `placement_kind` is the branch selector: WHO the participants of a conversation
+ * are is derived from its placement (agent-scoped-session-v1 §4.2) — a `workspace`
+ * row derives them from workspace membership plus the roster tables, a
+ * `direct_pair` row from its two endpoints. An ACL that saw only
+ * `workspace_id: null` could tell "not workspace-placed" but not WHOSE line it is,
+ * and would have to fail closed on every DM.
  *
- * The `endpoint_*` columns (v73) are the `direct_pair` arm of the same rule: its
- * two participants ARE its endpoints. The tombstones come along because the
+ * The `endpoint_*` columns (v73) are row facts with no wire field, and they are the
+ * `direct_pair` arm of that rule: its two participants ARE its endpoints. The tombstones come along because the
  * survivor's gate depends on whether the OTHER endpoint still exists — but only
  * as one half of that question; see {@link AuthorizationReadPort.endpointPrincipalExists}.
  *
  * `roster_policy` answers a different question from all of the above: not "who is
  * in here" but "can that set be CHANGED at all". `fixed` means the participants
- * are a property of the conversation (a DM's two endpoints, an inbox's owner, a
+ * are a property of the conversation (a DM's two endpoints, a
  * legacy agent-home DM channel's pair), so no principal — no admin, no owner —
  * can add one.
  */
@@ -81,7 +80,6 @@ export type AuthorizationConversationFacts = Pick<
 > &
   Pick<
     ConversationRow,
-    | 'inbox_agent_id'
     | 'endpoint_a_kind'
     | 'endpoint_a_id'
     | 'endpoint_b_kind'
@@ -143,8 +141,8 @@ export interface AuthorizationReadPort {
    * where its runtime is currently seated — the SUBJECT-participation question
    * the owner-audit ACL asks. Distinct from {@link isConversationAgent}, which
    * is only the `workspace`-placement roster edge; this is the full participation
-   * arc (workspace roster ∪ `direct_pair` endpoint ∪ `agent_inbox` owner), the
-   * same three arms the runtime target gate resolves — but WITHOUT the
+   * arc (workspace roster ∪ `direct_pair` endpoint), the same two arms the
+   * runtime target gate resolves — but WITHOUT the
    * running-in narrowing, because audit asks "is this agent a party here at all",
    * not "is its seat here right now". Collapsed to a boolean like the membership
    * reads: the audit face reaches no endpoint columns through this port.

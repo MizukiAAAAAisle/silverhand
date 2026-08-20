@@ -258,7 +258,6 @@ interface HostFanoutState {
 
 interface PendingDeliveryBatch {
   deliveryIds: number[];
-  deliveredUpToSeq: number;
   deliveries: RuntimeDelivery[];
   text: string;
   agentRuntime: string;
@@ -1336,7 +1335,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       ).coordinator.submitReadyForDrainDeliveryBatch(conversationId, agentId, [
         {
           deliveryIds: batch.deliveryIds,
-          deliveredUpToSeq: batch.deliveredUpToSeq,
           deliveries: batch.deliveries,
           dedupKey: claimed[0]!.message.id,
           text: batch.text,
@@ -2228,7 +2226,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         agentId,
         [{
           deliveryIds: batch.deliveryIds,
-          deliveredUpToSeq: batch.deliveredUpToSeq,
           deliveries: batch.deliveries,
           dedupKey: claimed[0]!.message.id,
           text: batch.text,
@@ -2396,7 +2393,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         agentId,
         [{
           deliveryIds: batch.deliveryIds,
-          deliveredUpToSeq: batch.deliveredUpToSeq,
           deliveries: batch.deliveries,
           dedupKey: claimed[0]!.message.id,
           text: batch.text,
@@ -2450,13 +2446,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     this.maybeFlushAddressFallbacks();
     return {
       deliveryIds: claimed.map(row => row.inboxId),
-      deliveredUpToSeq: Math.max(...claimed.map(row => row.message.seq)),
       deliveries: claimed.map((row, index) => ({
         delivery_id: row.inboxId,
-        message_id: row.message.id,
         seq: row.message.seq,
-        thread_root_id: row.message.thread_root_id,
-        delivery_kind: row.deliveryKind,
         presentation: formatted.presentations[index]!,
       })),
       text: formatted.text,

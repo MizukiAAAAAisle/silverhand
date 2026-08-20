@@ -573,8 +573,8 @@ Distinct from \`profile mcp get\` (custom MCP config, self-only always).
                         and what they own before handing work over.
   --workspace-id <id>   Which workspace the peer lookup is scoped to.
                         Defaults to this conversation's workspace. A
-                        workspace-less placement (your agent inbox) has no
-                        such default — name the workspace there.
+                        workspace-less placement (a DM) has no such
+                        default — name the workspace there.
 
 A peer read is READ-ONLY and needs the target to be an agent in that
 workspace; anything else — no such handle, a human's handle, an agent in a

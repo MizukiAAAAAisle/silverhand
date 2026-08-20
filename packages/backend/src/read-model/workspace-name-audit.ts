@@ -6,15 +6,15 @@ import {
 } from '@silverhand/shared';
 
 const KEYED_QUERY = `
-  SELECT id, workspace_kind AS kind, name, name_key AS nameKey
+  SELECT id, owner_agent_id AS ownerAgentId, name, name_key AS nameKey
     FROM workspaces
-   ORDER BY CASE workspace_kind WHEN 'regular' THEN 0 ELSE 1 END, id
+   ORDER BY CASE WHEN owner_agent_id IS NULL THEN 0 ELSE 1 END, id
 `;
 
 const LEGACY_QUERY = `
-  SELECT id, workspace_kind AS kind, name, NULL AS nameKey
+  SELECT id, owner_agent_id AS ownerAgentId, name, NULL AS nameKey
     FROM workspaces
-   ORDER BY CASE workspace_kind WHEN 'regular' THEN 0 ELSE 1 END, id
+   ORDER BY CASE WHEN owner_agent_id IS NULL THEN 0 ELSE 1 END, id
 `;
 
 export function scanWorkspaceNameAddresses(db: Db): WorkspaceNameAuditReport {

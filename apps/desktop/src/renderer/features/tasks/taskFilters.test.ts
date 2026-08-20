@@ -115,14 +115,14 @@ describe('applyWorkspaceCascade (#task:1387 workspace→channel)', () => {
  * fully-resolved scope and the cascade drops any coordinate the pick leaves
  * stranded.
  *
- *   channels:   c-reg  (workspace group), c-agent (dm group)
- *   workspaces: ws-reg (regular → `workspace`), ws-home (dm → `agent_space`)
+ *   channels:   c-reg  (workspace group), c-agent (agent-space group)
+ *   workspaces: ws-reg (people-owned → `workspace`), ws-home (agent-owned → `agent_space`)
  *   directPair: dp-1   (a viewer direct line → `direct_messages`)
  */
 describe('container axis model (#task:2041)', () => {
   const channelOptions = [
     { id: 'c-reg', group: 'workspace' as const },
-    { id: 'c-agent', group: 'dm' as const },
+    { id: 'c-agent', group: 'agent_space' as const },
   ];
 
   describe('channelAxisScope — the channel picker under a container', () => {
@@ -138,7 +138,7 @@ describe('container axis model (#task:2041)', () => {
       expect(s.channelOptions.map(o => o.id)).toEqual(['c-reg']);
     });
 
-    it('agent_space: only dm-group channels', () => {
+    it('agent_space: only agent-space-group channels', () => {
       const s = channelAxisScope('agent_space', channelOptions);
       expect(s.show).toBe(true);
       expect(s.channelOptions.map(o => o.id)).toEqual(['c-agent']);
@@ -220,16 +220,16 @@ describe('container axis model (#task:2041)', () => {
     });
   });
 
-  describe('boardScopeGroups — the dropdown sections (kind → section, show rule)', () => {
+  describe('boardScopeGroups — the dropdown sections (ownership → section, show rule)', () => {
     const workspaces = [
-      { id: 'ws-reg', kind: 'regular' as const, label: 'Engineering' },
-      { id: 'ws-home', kind: 'dm' as const, label: 'Agent Home' },
+      { id: 'ws-reg', owner_agent_id: null, label: 'Engineering' },
+      { id: 'ws-home', owner_agent_id: 'agent-1', label: 'Agent Home' },
     ];
 
-    it('routes a regular workspace to Workspaces and an agent home to Agent Spaces', () => {
+    it('routes a people-owned workspace to Workspaces and an agent space to Agent Spaces', () => {
       const groups = boardScopeGroups({ workspaces });
-      // Order is fixed: Workspaces, then Agent Spaces. The kind→section mapping
-      // must not be swapped. DM is never a section (contract §5).
+      // Order is fixed: Workspaces, then Agent Spaces. The ownership→section
+      // mapping must not be swapped. DM is never a section (contract §5).
       expect(groups.map(g => g.key)).toEqual(['workspaces', 'agent-spaces']);
       expect(groups.find(g => g.key === 'workspaces')?.workspaces.map(w => w.id)).toEqual(['ws-reg']);
       expect(groups.find(g => g.key === 'agent-spaces')?.workspaces.map(w => w.id)).toEqual([
@@ -237,13 +237,13 @@ describe('container axis model (#task:2041)', () => {
       ]);
     });
 
-    it('drops an answered-empty section (no workspaces of that kind)', () => {
+    it('drops an answered-empty section (no workspaces on that side of the split)', () => {
       expect(boardScopeGroups({ workspaces: [] })).toEqual([]);
     });
 
-    it('shows only Workspaces when there are no agent homes', () => {
+    it('shows only Workspaces when there are no agent spaces', () => {
       const groups = boardScopeGroups({
-        workspaces: [{ id: 'ws-reg', kind: 'regular' as const, label: 'Engineering' }],
+        workspaces: [{ id: 'ws-reg', owner_agent_id: null, label: 'Engineering' }],
       });
       expect(groups.map(g => g.key)).toEqual(['workspaces']);
     });

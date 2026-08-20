@@ -9,7 +9,7 @@ import {
   describeWorkspaceNameAudit,
 } from '../workspace-name-audit.js';
 import { canonicalizeStoredWorkspaceName } from '../workspace-name.js';
-import { BASELINE_SCHEMA_SQL, BASELINE_SCHEMA_VERSION } from './baseline-schema.js';
+import { BASELINE_MIGRATION_STEP, BASELINE_SCHEMA_SQL } from './baseline-schema.js';
 
 /**
  * Backend-injected db handle type. We keep `precondition` typed as
@@ -49,15 +49,16 @@ export interface Migration {
 
 export const migrations: Migration[] = [
   {
-    version: BASELINE_SCHEMA_VERSION,
+    version: BASELINE_MIGRATION_STEP,
     name: 'baseline',
     // Compacted snapshot of historical migrations v1..v44 (#task:1213). The
     // executable DDL is the single authoritative source in baseline-schema.ts
     // and is pinned by the two-stage migration-baseline drift guard. Plain
     // CREATE (no IF NOT EXISTS): the floor guard
-    // (MIN_SUPPORTED_SCHEMA_VERSION=44 in packages/backend/src/db.ts) guarantees
-    // this only ever runs on an empty DB, so it must fail loud if that
-    // invariant is ever violated.
+    // (`MIN_SUPPORTED_MIGRATION_STEP` in schema-epochs.ts, derived from the
+    // support-policy epoch and never below `BASELINE_MIGRATION_STEP`, enforced by
+    // the step guard in packages/backend/src/db.ts) guarantees this only ever runs
+    // on an empty DB, so it must fail loud if that invariant is ever violated.
     up: BASELINE_SCHEMA_SQL,
   },
   {
@@ -1673,10 +1674,15 @@ export const migrations: Migration[] = [
     //    which `AgentRepo.getByName` resolves regardless of status. So a mention
     //    of a reserved-but-failed handle must have a destination, and the row
     //    that CASCADEs off `agents(id)` must be born with the row it dies with.
-    //    `reserveAgentAggregate` writes the pair in ONE transaction from now on
-    //    (never the `pending → active` flip: a `failed` row keeps its inbox, so
-    //    a retry's dependent-row tx must not try to insert a second one); this
-    //    backfill is that same statement for the agents that already exist.
+    //    The reserve wrote the pair in ONE transaction (never the `pending →
+    //    active` flip: a `failed` row keeps its inbox, so a retry's dependent-row
+    //    tx must not try to insert a second one); this backfill is that same
+    //    statement for the agents that already exist. Both halves of THAT
+    //    sentence are history as of #task:2072 — the reserve is now a single
+    //    `agents` INSERT (`reserveAgentRow`) and no arc of the create path mints
+    //    an inbox — so v71's population is closed at exactly the agents that
+    //    existed on upgrade day. What follows explains the rows this migration
+    //    made; it is not a rule any newer row obeys.
     //
     //    `created_at`/`updated_at` = the agent's own `created_at`, the SAME rule
     //    the aggregate factory applies: this timestamp expresses AGENT-AGGREGATE
@@ -3105,13 +3111,18 @@ export const migrations: Migration[] = [
       const handle = db as {
         exec: (sql: string) => void;
         prepare: (sql: string) => {
-          all: () => { id: string; workspace_kind: 'regular' | 'agent_home'; name: string }[];
+          all: () => {
+            id: string;
+            workspace_kind: 'regular' | 'agent_home';
+            owner_agent_id: string | null;
+            name: string;
+          }[];
           run: (...params: unknown[]) => void;
         };
       };
       const rows = handle
         .prepare(
-          `SELECT id, workspace_kind, name
+          `SELECT id, workspace_kind, owner_agent_id, name
              FROM workspaces
             ORDER BY CASE workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
                      created_at, id`,
@@ -3120,7 +3131,7 @@ export const migrations: Migration[] = [
       const audit = auditWorkspaceNameAddresses(
         rows.map(row => ({
           id: row.id,
-          kind: row.workspace_kind,
+          ownerAgentId: row.owner_agent_id,
           name: row.name,
           nameKey: null,
         })),
@@ -3451,17 +3462,625 @@ export const migrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN last_activity_at INTEGER;
     `,
   },
+  {
+    version: 83,
+    name: 'workspaces_drop_workspace_kind',
+    // #task:2080 — drop the redundant `workspaces.workspace_kind` column (and the
+    // vestigial `pinned_at`), retiring the last storage-layer spelling of a fact
+    // `owner_agent_id` already carries. Two CHECKs pressed kind and ownership into
+    // a single bit (`owner_agent_id IS NOT NULL` ⇔ `workspace_kind = 'agent_home'`),
+    // so every read of the word is a rewrite to the relation with no behavior to
+    // change — #task:2075 stopped publishing it, #task:2082 removed the last
+    // decision that read it, #task:2081 retired the last wire that carried it.
+    //
+    // SQLite cannot DROP a column referenced by a CHECK/index/trigger, so this is a
+    // full table rebuild. All eight dependents move in ONE statement list: a split
+    // would leave the four cross-table triggers (they live on workspace_members /
+    // workspace_attention_preferences, NOT on workspaces, so a workspaces rebuild
+    // does not touch them) pointing at a column that no longer exists, and because
+    // triggers compile lazily the migration would pass while the NEXT write to
+    // either table failed with `no such column: workspace_kind`. The mapping:
+    //   CHECK (kind ⇔ owner)              → dropped (it WAS the redundancy proof)
+    //   CHECK (kind ⇒ name_key nullity)   → the single-line F2 form below, which
+    //        keeps the SAME owner_agent_id ↔ name_key pairing #2082 relies on:
+    //        old #1 ∧ #2 together imply `(owner_agent_id IS NULL) = (name_key IS
+    //        NOT NULL)` for every existing row, so no precondition / data transform.
+    //   idx_workspaces_name_key           → WHERE owner_agent_id IS NULL (row set
+    //        identical to WHERE kind='regular' by the dropped #1)
+    //   idx_workspaces_pinned_at          → dropped, not re-axised: `pinned_at` has
+    //        no production reader left (F1), so the column and its index both go.
+    //   4 cross-table triggers            → DROP + CREATE asking owner_agent_id,
+    //        preserving each trigger's missing-workspace behavior verbatim.
+    foreignKeyEscape: true,
+    up: `
+      DROP TRIGGER workspace_members_no_agent_home_insert;
+      DROP TRIGGER workspace_members_no_agent_home_update;
+      DROP TRIGGER workspace_attention_prefs_regular_only_insert;
+      DROP TRIGGER workspace_attention_prefs_regular_only_update;
+
+      CREATE TABLE workspaces_new (
+        id                 TEXT PRIMARY KEY,
+        name               TEXT NOT NULL,
+        name_key           TEXT
+          CHECK (
+            name_key IS NULL
+            OR (
+              name_key <> ''
+              AND NOT name_key GLOB '*[A-Z]*'
+              AND NOT name_key GLOB ' *'
+              AND NOT name_key GLOB '* '
+            )
+          ),
+        description        TEXT,
+        owner_agent_id     TEXT UNIQUE REFERENCES agents(id) ON DELETE CASCADE,
+        archived_at        INTEGER,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL,
+        owner_user_id      TEXT REFERENCES users(id),
+        CHECK ( (owner_agent_id IS NULL) = (name_key IS NOT NULL) )
+      );
+
+      INSERT INTO workspaces_new (
+        id, name, name_key, description, owner_agent_id,
+        archived_at, created_at, updated_at, owner_user_id
+      )
+        SELECT
+          id, name, name_key, description, owner_agent_id,
+          archived_at, created_at, updated_at, owner_user_id
+        FROM workspaces;
+
+      DROP TABLE workspaces;
+      ALTER TABLE workspaces_new RENAME TO workspaces;
+
+      CREATE UNIQUE INDEX idx_workspaces_name_key
+        ON workspaces(name_key) WHERE owner_agent_id IS NULL;
+
+      CREATE TRIGGER workspace_members_no_agent_home_insert
+        BEFORE INSERT ON workspace_members
+        WHEN (SELECT owner_agent_id FROM workspaces WHERE id = NEW.workspace_id) IS NOT NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'workspace_members rows must reference regular workspaces only');
+        END;
+
+      CREATE TRIGGER workspace_members_no_agent_home_update
+        BEFORE UPDATE OF workspace_id ON workspace_members
+        WHEN (SELECT owner_agent_id FROM workspaces WHERE id = NEW.workspace_id) IS NOT NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'workspace_members rows must reference regular workspaces only');
+        END;
+
+      CREATE TRIGGER workspace_attention_prefs_regular_only_insert
+        BEFORE INSERT ON workspace_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT owner_agent_id IS NULL FROM workspaces WHERE id = NEW.workspace_id), 0
+            ) = 0
+            THEN RAISE(ABORT, 'workspace_attention_preferences.workspace_id must reference a regular workspace')
+          END;
+        END;
+
+      CREATE TRIGGER workspace_attention_prefs_regular_only_update
+        BEFORE UPDATE OF workspace_id ON workspace_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT owner_agent_id IS NULL FROM workspaces WHERE id = NEW.workspace_id), 0
+            ) = 0
+            THEN RAISE(ABORT, 'workspace_attention_preferences.workspace_id must reference a regular workspace')
+          END;
+        END;
+    `,
+  },
+  {
+    version: 84,
+    name: 'retire_agent_inbox_rows',
+    // #task:2072 c4 — REMOVE THE POPULATION; v85 removes the shape.
+    //
+    // `agent_inbox` was the single-participant container a v71 backfill minted one
+    // of per agent, and which the agent-creation aggregate kept minting until c1
+    // shrank the reserve to a single `agents` INSERT. Nothing writes one any more
+    // (c1), the last read that needed one moved to the creator's direct line (c2),
+    // and the concept itself is retired: waking an agent must happen in a
+    // conversation that has a second participant.
+    //
+    // This version deliberately does NOT set `foreignKeyEscape`. Its correctness IS
+    // the cascade: `foreignKeyEscape` disables foreign keys for the WHOLE migration,
+    // so a row deletion placed in v85's rebuild would silently skip every dependent
+    // cascade and leave orphans — and the escape's closing `foreign_key_check`
+    // would not catch them, because at that moment the surviving declaration is
+    // still the one that permits the parent. Hence the split, in this order: delete
+    // rows with foreign keys ON, then rebuild.
+    //
+    // "with foreign keys ON" is a fact about the runner, not a hope: `openDatabase`
+    // sets `foreign_keys = ON` before `runMigrations`, and the runner only turns
+    // them off around a `foreignKeyEscape` migration (backend `db.ts`). A
+    // non-escape version therefore runs with the cascades armed.
+    //
+    // Dependents are left to the cascade on purpose. Every table that REFERENCES
+    // conversations(id) declares CASCADE or SET NULL, so hand-rolling a dependent
+    // list here would be a carrier-keyed enumeration whose only failure mode is a
+    // silent hole. The ONE exception is `notifications`, and only because SET NULL
+    // is the wrong outcome there rather than an incomplete one: a notification
+    // whose `conversation_id` AND `message_id` both go NULL still lists in the tray
+    // and navigates nowhere. Its `source_conversation_id` (provenance) is a
+    // different case — NULLing it degrades where the mention came from while the
+    // notification's own target stays reachable, so those rows stay. The line is
+    // "a null TARGET kills the row, a null PROVENANCE does not".
+    //
+    // `agent_runtime_slots` seats cascade (the inbox seat was minted by the v71-era
+    // birth trigger v85 removes). The append-only runtime history is untouched and
+    // cannot block this: `agent_runtime_events` / `agent_runtime_control_events`
+    // guard DELETE with RAISE(ABORT) but carry NO foreign key by deliberate design
+    // (see their column comments), so the cascade never reaches them — at the
+    // documented cost that their historical `conversation_id` / `slot_id` stop
+    // resolving.
+    up: `
+      DELETE FROM notifications
+       WHERE conversation_id IN (
+               SELECT id FROM conversations WHERE placement_kind = 'agent_inbox'
+             );
+
+      DELETE FROM conversations WHERE placement_kind = 'agent_inbox';
+    `,
+  },
+  {
+    version: 85,
+    name: 'conversations_drop_inbox_agent',
+    // #task:2072 c4 — retire the SHAPE, once v84 removed the population.
+    //
+    // Three things go, and they must go together: the `inbox_agent_id` column, the
+    // `'agent_inbox'` member of the placement alphabet, and the arc CHECK's
+    // `WHEN 'agent_inbox'` branch. Keeping the alphabet member after the rows are
+    // gone would leave a value that is legal, unreachable and unenforced by
+    // anything — a phantom fence that reads like a supported placement.
+    //
+    // SQLite cannot DROP a column named by a CHECK, an index or a trigger, and it
+    // cannot alter a CHECK at all, so this is a full table rebuild. Three rebuild
+    // hazards, each silent if missed:
+    //   1. `pair_key` is an INLINE VIRTUAL generated column and the sole carrier of
+    //      the direct_pair uniqueness index — a rebuild that forgets to re-declare
+    //      it drops the column and the constraint without an error.
+    //   2. `conversations` owns SEVEN triggers; DROP TABLE takes all of them. Six
+    //      are re-created below (`conversations_placement_immutable` minus
+    //      `inbox_agent_id` from both its UPDATE OF list and its WHEN), and
+    //      `conversations_create_agent_inbox_runtime_slot` is NOT — it was the birth
+    //      trigger of the retired placement. `test_seed_conversation_users` is a
+    //      TEST fixture trigger (backend `tests/utils/db.ts`), not part of the
+    //      production schema, and must not appear here.
+    //   3. `agent_runtime_slots_participation_insert` lives on
+    //      `agent_runtime_slots`, so the conversations rebuild does NOT touch it,
+    //      and its participation arc still names `c.inbox_agent_id`. Triggers
+    //      compile lazily: left alone, this migration would pass and the NEXT
+    //      runtime-slot insert would fail with `no such column: c.inbox_agent_id`.
+    //      DROP + CREATE it without the inbox arm.
+    //
+    // The `ELSE 0` arm of the arc CHECK stays: it is what makes any future
+    // unregistered placement fail loud instead of skipping the arc.
+    foreignKeyEscape: true,
+    up: `
+      DROP TRIGGER agent_runtime_slots_participation_insert;
+
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+        endpoint_a_kind         TEXT,
+        endpoint_a_id           TEXT,
+        endpoint_b_kind         TEXT,
+        endpoint_b_id           TEXT,
+        endpoint_a_deleted_at   INTEGER,
+        endpoint_b_deleted_at   INTEGER,
+        placement_kind          TEXT NOT NULL
+          CHECK (placement_kind IN ('workspace', 'direct_pair')),
+        roster_policy           TEXT NOT NULL
+          CHECK (roster_policy IN ('open', 'fixed')),
+        title                   TEXT NOT NULL,
+        title_key               TEXT
+          CHECK (
+            title_key IS NULL
+            OR (
+              title_key <> ''
+              AND NOT title_key GLOB '*[A-Z]*'
+              AND NOT title_key GLOB ' *'
+              AND NOT title_key GLOB '* '
+            )
+          ),
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        visibility              TEXT NOT NULL DEFAULT 'private'
+          CHECK (
+            visibility IN ('private', 'public')
+            AND (visibility = 'private' OR roster_policy = 'open')
+          ),
+        pair_key                TEXT
+        GENERATED ALWAYS AS (
+          CASE
+            WHEN placement_kind <> 'direct_pair' THEN NULL
+            ELSE substr(endpoint_a_kind, 1, 1)
+              || length(endpoint_a_id) || ':' || endpoint_a_id
+              || substr(endpoint_b_kind, 1, 1)
+              || length(endpoint_b_id) || ':' || endpoint_b_id
+          END
+        ) VIRTUAL,
+        CHECK (
+          (endpoint_a_kind IS NULL OR endpoint_a_kind IN ('human', 'agent'))
+          AND (endpoint_b_kind IS NULL OR endpoint_b_kind IN ('human', 'agent'))
+        ),
+        CHECK (
+          placement_kind <> 'direct_pair'
+          OR (endpoint_a_kind, endpoint_a_id) < (endpoint_b_kind, endpoint_b_id)
+        ),
+        CHECK (
+          CASE placement_kind
+            WHEN 'workspace'
+              THEN workspace_id IS NOT NULL
+                   AND title_key IS NOT NULL
+                   AND endpoint_a_kind IS NULL AND endpoint_a_id IS NULL
+                   AND endpoint_b_kind IS NULL AND endpoint_b_id IS NULL
+                   AND endpoint_a_deleted_at IS NULL
+                   AND endpoint_b_deleted_at IS NULL
+            WHEN 'direct_pair'
+              THEN workspace_id IS NULL
+                   AND roster_policy = 'fixed'
+                   AND title_key IS NULL
+                   AND endpoint_a_kind IS NOT NULL AND endpoint_a_id IS NOT NULL
+                   AND endpoint_b_kind IS NOT NULL AND endpoint_b_id IS NOT NULL
+            ELSE 0
+          END
+        )
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id,
+        endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
+        endpoint_a_deleted_at, endpoint_b_deleted_at,
+        placement_kind, roster_policy, title, title_key, status,
+        spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq, visibility
+      )
+        SELECT
+          id, workspace_id,
+          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
+          endpoint_a_deleted_at, endpoint_b_deleted_at,
+          placement_kind, roster_policy, title, title_key, status,
+          spawned_by_agent_id, closed_at, close_summary, pinned_at,
+          created_at, updated_at, archived_at, latest_message_seq, visibility
+        FROM conversations;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+
+      CREATE INDEX idx_conversations_direct_pair_endpoint_b
+        ON conversations(endpoint_b_kind, endpoint_b_id)
+        WHERE placement_kind = 'direct_pair';
+
+      CREATE UNIQUE INDEX idx_conversations_direct_pair_endpoints
+        ON conversations(
+          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+        )
+        WHERE placement_kind = 'direct_pair';
+
+      CREATE UNIQUE INDEX idx_conversations_pair_key
+        ON conversations(pair_key)
+        WHERE placement_kind = 'direct_pair';
+
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+
+      CREATE UNIQUE INDEX idx_conversations_title_key
+        ON conversations(workspace_id, title_key)
+        WHERE placement_kind = 'workspace';
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, updated_at DESC);
+
+      CREATE TRIGGER conversations_create_direct_pair_runtime_slots
+        AFTER INSERT ON conversations
+        WHEN NEW.placement_kind = 'direct_pair'
+        BEGIN
+          INSERT INTO agent_runtime_slots (
+            agent_id, conversation_id, generation,
+            observed_status, observed_pid, cli_session_id
+          )
+            SELECT a.id, NEW.id, 0, 'idle', NULL, NULL
+              FROM agents a
+             WHERE a.session_scope = 'conversation'
+               AND ((NEW.endpoint_a_kind = 'agent' AND a.id = NEW.endpoint_a_id)
+                 OR (NEW.endpoint_b_kind = 'agent' AND a.id = NEW.endpoint_b_id));
+        END;
+
+      CREATE TRIGGER conversations_placement_immutable
+        BEFORE UPDATE OF
+          placement_kind, workspace_id, roster_policy
+        ON conversations
+        WHEN NOT (
+          NEW.placement_kind IS OLD.placement_kind
+          AND NEW.workspace_id IS OLD.workspace_id
+          AND NEW.roster_policy IS OLD.roster_policy
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversations: placement is immutable from birth'
+          );
+        END;
+
+      CREATE TRIGGER trg_conversations_endpoint_tombstone_monotonic
+        BEFORE UPDATE OF endpoint_a_deleted_at, endpoint_b_deleted_at
+        ON conversations
+        WHEN NOT (
+          (NEW.endpoint_a_deleted_at IS OLD.endpoint_a_deleted_at
+           OR (OLD.endpoint_a_deleted_at IS NULL
+               AND NEW.endpoint_a_deleted_at IS NOT NULL))
+          AND
+          (NEW.endpoint_b_deleted_at IS OLD.endpoint_b_deleted_at
+           OR (OLD.endpoint_b_deleted_at IS NULL
+               AND NEW.endpoint_b_deleted_at IS NOT NULL))
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversations: an endpoint deletion is stamped once and never unstamped'
+          );
+        END;
+
+      CREATE TRIGGER trg_conversations_endpoints_birth
+        BEFORE INSERT ON conversations
+        WHEN NEW.placement_kind = 'direct_pair'
+         AND NOT (
+           (CASE NEW.endpoint_a_kind
+              WHEN 'human' THEN EXISTS (SELECT 1 FROM users u WHERE u.id = NEW.endpoint_a_id)
+              WHEN 'agent' THEN EXISTS (SELECT 1 FROM agents g WHERE g.id = NEW.endpoint_a_id)
+              ELSE 0
+            END)
+           AND
+           (CASE NEW.endpoint_b_kind
+              WHEN 'human' THEN EXISTS (SELECT 1 FROM users u WHERE u.id = NEW.endpoint_b_id)
+              WHEN 'agent' THEN EXISTS (SELECT 1 FROM agents g WHERE g.id = NEW.endpoint_b_id)
+              ELSE 0
+            END)
+         )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversations: each direct_pair endpoint must name an existing principal of its own kind'
+          );
+        END;
+
+      CREATE TRIGGER trg_conversations_endpoints_born_alive
+        BEFORE INSERT ON conversations
+        WHEN NEW.endpoint_a_deleted_at IS NOT NULL
+          OR NEW.endpoint_b_deleted_at IS NOT NULL
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversations: an endpoint is born alive; its deletion is stamped by a later write'
+          );
+        END;
+
+      CREATE TRIGGER trg_conversations_endpoints_immutable
+        BEFORE UPDATE OF
+          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id
+        ON conversations
+        WHEN NOT (
+          NEW.endpoint_a_kind IS OLD.endpoint_a_kind
+          AND NEW.endpoint_a_id IS OLD.endpoint_a_id
+          AND NEW.endpoint_b_kind IS OLD.endpoint_b_kind
+          AND NEW.endpoint_b_id IS OLD.endpoint_b_id
+        )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'conversations: endpoint coordinates are immutable'
+          );
+        END;
+
+      CREATE TRIGGER agent_runtime_slots_participation_insert
+        BEFORE INSERT ON agent_runtime_slots
+        WHEN NEW.conversation_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1
+             FROM conversations c
+            WHERE c.id = NEW.conversation_id
+              AND ((c.placement_kind = 'workspace'
+                    AND EXISTS (
+                      SELECT 1 FROM conversation_agents ca
+                       WHERE ca.conversation_id = c.id
+                         AND ca.agent_id = NEW.agent_id))
+                OR (c.placement_kind = 'direct_pair'
+                    AND ((c.endpoint_a_kind = 'agent'
+                          AND c.endpoint_a_id = NEW.agent_id)
+                      OR (c.endpoint_b_kind = 'agent'
+                          AND c.endpoint_b_id = NEW.agent_id))))
+         )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'runtime slot requires participation in its conversation'
+          );
+        END;
+    `,
+  },
+  {
+    version: 86,
+    name: 'user_list_sort_mode_rail_scope_agent_space',
+    // #task:2045 Delta 4 — the LAST place where `dm` still spells "Agent Space".
+    //
+    // The workspace rail's sort mode is keyed by rail scope, and the Agent Spaces
+    // section's scope has been the string `dm` since v48 (see the fossil comment
+    // there — it predates the Agent Space / DirectPair split, when the rail's only
+    // agent-ish section WAS the DM list). After #task:2066 the renderer and after
+    // this migration the wire both spell it `agent_space`, so the stored value has
+    // to move with them, atomically in one tree.
+    //
+    // Why a data migration is REQUIRED rather than nice-to-have — the two sort
+    // tables are keyed differently, so a rename without this UPDATE fails
+    // asymmetrically:
+    //   - `user_sort_entry` (manual rank) is keyed by (user, list_key, ENTITY_ID)
+    //     and carries no scope ⇒ every hand-dragged rank survives untouched.
+    //   - `user_list_sort_mode` (which sort mode that section is IN) is keyed by
+    //     (user, list_key, SCOPE) ⇒ the row keyed `dm` is orphaned the moment the
+    //     reader asks for `agent_space`, and the section silently falls back to
+    //     the default mode.
+    // The user-visible result of skipping this would be "my manual order is still
+    // there but is no longer being used" — a strictly harder bug to report and to
+    // diagnose than "my order was lost".
+    //
+    // No shape change: `scope` has no CHECK (v48 above), so this is a plain value
+    // rewrite, not a table rebuild. It is idempotent (`WHERE scope = 'dm'` matches
+    // nothing on a second pass) and it is fail-loud on collision: if a user somehow
+    // already holds an `agent_space` row for the same list, the UPDATE hits the
+    // PRIMARY KEY and SQLite's DEFAULT conflict action (ABORT) throws, which db.ts
+    // rolls back together with the `_migrations` row — no half-renamed population.
+    // Written as a bare UPDATE on purpose: spelling `OR ABORT` would only restate
+    // the default while spending the db-boundary conflict-action budget, so the
+    // hazard fence stays armed for a real `OR REPLACE`/`OR IGNORE`, which is the
+    // change that WOULD matter. Silently merging the two rows is the wrong default
+    // anyway: which of two conflicting modes wins is a user-data decision.
+    //
+    // Scope note: the rail's collapse state is NOT touched. That key lives in
+    // localStorage as `SECTION_KEY_PREFIX + persistId` with `persistId="dm"`
+    // (#task:2035, documented at the `Sidebar.tsx` call site); renaming it would
+    // silently reset every user's collapse choice, and there is no collision to
+    // avoid — real DMs use `persistId="direct-messages"`.
+    up: `
+      UPDATE user_list_sort_mode
+         SET scope = 'agent_space'
+       WHERE list_key = 'workspaces'
+         AND scope = 'dm';
+    `,
+  },
+  {
+    version: 87,
+    name: 'messages_drop_v60_task_residue',
+    // #task:2083 — physically remove the "message IS task" carrier that v60
+    // retired. v60 created the `tasks` aggregate and backfilled every
+    // `messages.task_number IS NOT NULL` row into it (see the INSERT above),
+    // reusing the anchor message's id as `tasks.id`; since then nothing writes
+    // these 12 columns and nothing reads them. They have been dead weight on
+    // every message row, and — worse — a second spelling of a fact the `tasks`
+    // table owns, which is exactly the shape a future reader accidentally
+    // resurrects.
+    //
+    // This is IRREVERSIBLE physical deletion: after this migration the old flat
+    // task fields are gone from the file, and a downgrade cannot recover them.
+    // The safety argument is therefore not "we believe nothing needs them" but
+    // the precondition below, which proves per carrier that the canonical row
+    // exists before a single byte is dropped.
+    //
+    // Order matters: SQLite refuses to DROP a column that any index still names,
+    // including one named only in a partial index's WHERE clause, so the four
+    // indexes go first. Written without `IF EXISTS` on purpose — if one of them
+    // is already absent, some other change moved this ground and the assumption
+    // this migration rests on is void, so it must fail loudly rather than
+    // continue. No table rebuild is needed (verified against the in-tree SQLite):
+    // plain DROP COLUMN handles a column carrying its own `REFERENCES` clause and
+    // the column-level CHECK on `task_last_editor_kind`, and leaves
+    // `foreign_key_check` clean, so this runs with `foreign_keys = ON` like every
+    // other non-rebuild migration.
+    //
+    // Deliberately NOT touched:
+    //   - `cc_source_message_id` — a different, LIVE column (mention-cc dedupe)
+    //     whose name merely ends the same way; `idx_messages_cc_dedupe` stays.
+    //   - `messages.metadata` task system-event payloads (`$.task_id` etc.) —
+    //     that is the task event stream, not the retired carrier.
+    //   - the v60 backfill SQL above, which reads these columns as HISTORY.
+    //     Applied migrations are never rewritten; that statement only ever runs
+    //     against a v59 file, where the columns still exist.
+    precondition: db => {
+      const handle = db as {
+        prepare: (sql: string) => { all: () => { id: string }[] };
+      };
+      // Every historical carrier must already have its canonical task. Identity,
+      // not field equality: a migrated task's content is free to have changed
+      // since v60, but its id cannot, because v60 reused the anchor id.
+      //
+      // `task_number IS NOT NULL` is the whole carrier set, and the check is
+      // deliberately NOT widened to "any task_* column is non-NULL". Those
+      // columns were only ever populated on task rows (v54 above states it for
+      // the later five: "NULL for non-task rows"), and v60's own backfill keyed
+      // on exactly this predicate — so a stray value on a task_number IS NULL
+      // row is something v60 already treated as absent and no reader has looked
+      // at since. Aborting an upgrade over those bytes would block a real
+      // migration to protect data no code path can consume.
+      const orphans = handle
+        .prepare(
+          `SELECT m.id AS id
+             FROM messages m
+            WHERE m.task_number IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = m.id)
+            ORDER BY m.id
+            LIMIT 20`,
+        )
+        .all();
+      if (orphans.length > 0) {
+        throw new Error(
+          `migration v87: ${orphans.length} message row(s) still carry retired task_* `
+            + 'data with no canonical tasks row of the same id, so dropping the columns '
+            + 'would destroy the only copy. Ids (up to 20): '
+            + `${orphans.map(row => row.id).join(', ')}. `
+            + 'Re-run the v60 backfill for these rows (tasks.id = the anchor message id) '
+            + 'before upgrading.',
+        );
+      }
+    },
+    up: `
+      DROP INDEX uniq_messages_task_workspace_number;
+      DROP INDEX idx_messages_task_workspace;
+      DROP INDEX idx_messages_task_workspace_closed_at;
+      DROP INDEX idx_messages_source_message_id;
+
+      ALTER TABLE messages DROP COLUMN task_number;
+      ALTER TABLE messages DROP COLUMN task_status;
+      ALTER TABLE messages DROP COLUMN task_assignee_agent_id;
+      ALTER TABLE messages DROP COLUMN task_assignee_user_id;
+      ALTER TABLE messages DROP COLUMN task_title;
+      ALTER TABLE messages DROP COLUMN task_workspace_id;
+      ALTER TABLE messages DROP COLUMN task_closed_at;
+      ALTER TABLE messages DROP COLUMN source_message_id;
+      ALTER TABLE messages DROP COLUMN task_revision;
+      ALTER TABLE messages DROP COLUMN task_last_editor_kind;
+      ALTER TABLE messages DROP COLUMN task_last_editor_id;
+      ALTER TABLE messages DROP COLUMN task_last_edited_at;
+    `,
+  },
 ];
 
-export const CURRENT_SCHEMA_VERSION =
+/**
+ * Highest migration STEP this build knows. This is an internal implementation
+ * number, not the version a release announces: one release ships as many steps as
+ * it needs and moves the outward `CURRENT_SCHEMA_EPOCH` (see `schema-epochs.ts`)
+ * at most once (#task:2103).
+ */
+export const CURRENT_MIGRATION_STEP =
   migrations[migrations.length - 1]?.version ?? 0;
 
 // Baseline compaction floor (#task:1213): historical migrations v1..v44 were
 // folded into the single `baseline` snapshot at version 44, so 44 is now the
-// lowest version that can upgrade in place. This is a SAFETY invariant, not just
+// lowest step that can upgrade in place. This is a SAFETY invariant, not just
 // a support policy — the baseline is a full CREATE, so a non-empty DB below it
 // (ledger missing 44) MUST be rejected by the floor guard in
 // packages/backend/src/db.ts rather than have the baseline rebuild existing
 // tables. A pre-baseline DB must first upgrade through an intermediate release.
 // Brand-new empty databases are still initialized from scratch (isEmpty bypass).
-export const MIN_SUPPORTED_SCHEMA_VERSION = 44;
+// It is also the LOWER BOUND for reading a ledger (#task:2103): a real
+// pre-baseline database still carries rows for v1..v43, and those rows are
+// history, not unknown steps. That floor is `BASELINE_MIGRATION_STEP` in
+// baseline-schema.ts.
+//
+// The floor the RUNNER enforces is a different question — how old a release we
+// promise to upgrade from — and it lives on the outward axis as
+// `MIN_SUPPORTED_SCHEMA_EPOCH` in schema-epochs.ts, which derives
+// `MIN_SUPPORTED_MIGRATION_STEP` from it (#task:2103). Support policy is stated
+// in releases, so it is declared in releases' units; only its derived step is
+// compared against a ledger.

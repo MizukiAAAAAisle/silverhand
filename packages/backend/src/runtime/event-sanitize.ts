@@ -4,11 +4,14 @@
  *
  * `RuntimeEventHandler` is the only publisher; behavior was preserved
  * byte-for-byte from the original `ConversationManager` implementation
- * during the daemon cutover so SSE consumers (Events panel, agent-event
- * listeners) cannot tell the runtime changed. Two contracts protected:
+ * during the daemon cutover so no `agent_event` listener can tell the
+ * runtime changed. (#task:2101: that listener set is currently empty
+ * in-repo — see the wire-compat note at the publish site in
+ * `event-handler.ts`; the caps below are priced against the wire and
+ * the WS replay buffer, not against any UI.) Two contracts protected:
  *
  *   1. `tool_call.input` size cap — large tool inputs (e.g. multi-MB
- *      JSON) would flood SSE listeners + bloat the Events panel.
+ *      JSON) would flood listeners and sit in the replay buffer.
  *   2. Recursion depth / circular reference protection — without it,
  *      a self-referencing input crashes JSON.stringify on the wire.
  *
@@ -37,8 +40,19 @@ export const RAW_AGENT_EVENT_OBJECT_MAX_KEYS = 40;
 export const RAW_AGENT_EVENT_MAX_DEPTH = 4;
 
 /**
- * Wrapper that only sanitizes `tool_call` events — every other
- * `ParsedEvent` kind passes through unchanged.
+ * Wrapper that only sanitizes the two kinds carrying driver tool
+ * input — `tool_call` and its late-parameter refinement
+ * `tool_call_input` (#task:2101). Every other `ParsedEvent` kind
+ * passes through unchanged.
+ *
+ * `tool_call_input` is covered by the SAME cap rather than a new one:
+ * it carries the identical field, from the identical producer, to the
+ * identical SSE consumers, and after #task:2101 it is the arm where
+ * the real (largest) parameter object actually arrives — an ACP
+ * runtime's creating frame may carry only `{cwd}`. Letting it fall
+ * through would move an uncapped multi-MB input onto the wire through
+ * the one kind that was added last, which is exactly the leak both
+ * contracts in this module's header exist to prevent.
  *
  * The `as {} | null` cast is the same one CM used: shared
  * `RequiredUnknownSchema` infers `Exclude<unknown, undefined>` =
@@ -47,7 +61,7 @@ export const RAW_AGENT_EVENT_MAX_DEPTH = 4;
  * cast is sound at runtime.
  */
 export function sanitizeParsedEventForBroadcast(ev: ParsedEvent): ParsedEvent {
-  if (ev.kind !== 'tool_call') return ev;
+  if (ev.kind !== 'tool_call' && ev.kind !== 'tool_call_input') return ev;
   return {
     ...ev,
     input: sanitizeRawAgentEventValue(ev.input) as {} | null,

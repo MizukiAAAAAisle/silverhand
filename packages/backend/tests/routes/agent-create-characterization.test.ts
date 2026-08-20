@@ -144,7 +144,7 @@ describe('create-agent saga — P5 pre-refactor characterization (#task:971)', (
     const homeWs = t.ctx.db
       .prepare<[string], { c: number }>(
         `SELECT COUNT(*) AS c FROM workspaces
-          WHERE workspace_kind = 'agent_home' AND owner_agent_id = ?`,
+          WHERE owner_agent_id = ?`,
       )
       .get(reserved.id)!.c;
     expect(homeWs).toBe(0);

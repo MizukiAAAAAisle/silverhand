@@ -102,9 +102,9 @@ export function useSidebarSectionExpanded(
 /**
  * The sidebar's TWO glyph columns (#task:1889, shiki's Slack reference).
  *
- *   outer:   tool rows, the three group headers, and everything a GROUP holds
- *            directly — workspace / DM headers and STARRED rows
- *   nested:  the channels under a workspace / DM header
+ *   outer:   tool rows, the group headers, and everything a GROUP holds
+ *            directly — container header rows and STARRED / DIRECT MESSAGES rows
+ *   nested:  the channels under a container header
  *
  * One 16px step, and only one. The tree is four levels deep by structure, but
  * indenting each level would spend the whole narrow column on whitespace and
@@ -118,7 +118,7 @@ export function useSidebarSectionExpanded(
  * carried by the leading glyph alone. Indenting the channels turns each
  * workspace's children into a block whose edges ARE the boundary.
  *
- * The cost, accepted: tool rows, group headers, workspace / DM rows and STARRED
+ * The cost, accepted: tool rows, group headers, container header rows and STARRED
  * rows all share the outer column, and the same channel sits further out in
  * STARRED than under its parent. That is just "indent = depth" — in STARRED the
  * row's parent IS the group.
@@ -129,9 +129,9 @@ export function useSidebarSectionExpanded(
  * is always visible without a column being spent on it (the candidate rejected in
  * #task:1889 was a LEADING triangle in its own column, which would have pushed
  * every channel another 12px in; docs/app-layout.md §3). The caret is drawn by
- * CAPABILITY, not by kind — every row that owns an `aria-expanded` carries one
- * (group headers AND the workspace / DM header rows), and the leaf rows (channel,
- * STARRED) never do, because their glyph is not a hinge.
+ * CAPABILITY, not by container species — every row that owns an `aria-expanded`
+ * carries one (group headers AND the container header rows), and a leaf row — a
+ * channel, STARRED, a direct line — never does, because its glyph is not a hinge.
  *
  * The section margin and the per-theme row border (`--sidebar-row-border-width`)
  * are already in the box, so only the indent step is these classes' job — a
@@ -144,7 +144,7 @@ export const OUTER_GLYPH_INSET = 'pl-2';
 export const NESTED_GLYPH_INSET = 'pl-6';
 
 /**
- * The shared selected/hover recipe for a sidebar row — channel/workspace/DM
+ * The shared selected/hover recipe for a sidebar row — channel and container
  * rows, favorites, and the Search/Saved/Archived rail all share it, so it lives
  * in one place instead of drifting across five copies. Identity only: it paints
  * border + fill + text state; the consumer still owns layout (row border, sizing,
@@ -714,11 +714,11 @@ interface ConversationRowLayoutProps
  *
  * Scope is the CONVERSATION rung, which is why it is named for the entity and not
  * for the tree: both consumers render open- or fixed-roster conversations and nothing
- * else. **The workspace / DM container row deliberately stays out** — it is a
+ * else. **The container header row deliberately stays out** — it is a
  * different rung (`h-7`, `sidebar-row-gutter` instead of the state-painted
  * `sidebar-row-border`, its own ink) and it needs siblings BESIDE the name button
  * (caret, hover actions). Stretching this layout over it would turn it into a
- * switch on entity kind, which is how a shared primitive starts hurting whoever
+ * switch on entity species, which is how a shared primitive starts hurting whoever
  * adopts it next; the row it would save is one `<div>`.
  *
  * `SidebarRow` is the OTHER row family and stays separate: a flat list's row is a

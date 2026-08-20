@@ -25,6 +25,14 @@
  * pair got there), and the draft only decides selection and where a click goes.
  * Its key is the pair's conversation id where one exists, so convergence swaps the
  * row's behavior without remounting it.
+ *
+ * DELETED COUNTERPARTS ARE HIDDEN HERE (@shiki, #task:2094). A pair whose principal
+ * is gone should not sit in the sidebar DIRECT MESSAGES list by default — for an
+ * agent AND a human counterpart alike. This is a SIDEBAR-ONLY rule: this function
+ * is the sidebar's sole row builder ({@link DirectMessagesPanel} its only caller),
+ * so saved/search — which read pairs through other paths — are untouched and still
+ * surface a deleted line (rendered with its "(deleted account)" label by
+ * `counterpart-presentation`). Hiding is decided by {@link directLinePairVisibleInSidebar}.
  */
 import type { DirectPairCounterpart, DirectPairListItem } from '@silverhand/shared';
 
@@ -53,6 +61,18 @@ export type DirectLineRow =
   | (DirectLineRowBase & { kind: 'draft'; agentId: string });
 
 /**
+ * Whether a pair is shown in the sidebar DIRECT MESSAGES list. A `deleted`
+ * counterpart is hidden (agent and human alike, #task:2094); every `active`
+ * counterpart is shown. Behaviour decides the branch, so it is a named predicate
+ * with its own test rather than an inline `!== 'deleted'`.
+ */
+export function directLinePairVisibleInSidebar(
+  pair: DirectPairListItem,
+): boolean {
+  return pair.counterpart.status !== 'deleted';
+}
+
+/**
  * Merge the pair list with the open draft into the rows the section renders.
  *
  * Order is the server's (`created_at`, oldest first). A draft that matched a pair
@@ -73,7 +93,8 @@ export function mergeDirectLineRows({
   selectedConversationId: string | null;
 }): DirectLineRow[] {
   let draftMerged = false;
-  const rows: DirectLineRow[] = pairs.map(pair => {
+  const visiblePairs = pairs.filter(directLinePairVisibleInSidebar);
+  const rows: DirectLineRow[] = visiblePairs.map(pair => {
     const isDraftsPair =
       draft !== null
       && pair.counterpart.kind === 'agent'

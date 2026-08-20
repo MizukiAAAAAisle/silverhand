@@ -21,7 +21,7 @@ async function makeAgent(t: TestApp, name: string): Promise<{
   const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
   const home = workspaces.workspaces.find(
     (w: any) =>
-      w.workspace_kind === 'agent_home' && w.owner_agent_id === created.agent.id,
+      w.owner_agent_id === created.agent.id,
   );
   t.fake.starts = [];
   t.fake.delivered = [];
@@ -96,13 +96,12 @@ describe('GET /api/conversations/:id/ref', () => {
       roster_policy: 'open',
       title: 'planning',
       workspace_id: reg.workspaceId,
-      workspace_kind: 'regular',
       closed_at: null,
       archived_at: null,
     });
   });
 
-  it("projects an agent's fixed-roster ref with workspace_kind='dm' (not agent_home)", async () => {
+  it("projects an agent's fixed-roster ref with the workspace COORDINATE and no container word", async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
 
@@ -114,9 +113,16 @@ describe('GET /api/conversations/:id/ref', () => {
       placement_kind: 'workspace',
       roster_policy: 'fixed',
       workspace_id: alice.agentHomeWorkspaceId,
-      // The hard contract: external callers never see 'agent_home'.
-      workspace_kind: 'dm',
     });
+    // This cell used to assert the hard contract "external callers never see a
+    // PHYSICAL kind" by pinning the published word `agent_space`. #task:2075's
+    // stop-publish step made the stronger statement true: no container word at
+    // all rides this ref, so the physical word cannot leak through a broken
+    // projection because there is no projection. An agent home is the right
+    // fixture for that claim — it is the container that had the special branch.
+    // This reads the PARSED HTTP BODY, so an absent key is a fact about the
+    // wire rather than an artifact of a zod object stripping it.
+    expect(Object.keys(ref)).not.toContain('workspace_kind');
   });
 
   it('returns 404 for a missing conversation id', async () => {
@@ -251,7 +257,6 @@ describe('GET /api/conversations/:id/ref — public-aware read gate boundary', (
       roster_policy: 'open',
       title: 'public-room',
       workspace_id: workspaceId,
-      workspace_kind: 'regular',
       archived_at: null,
     });
   });
@@ -360,7 +365,7 @@ describe('GET /api/conversations/:id/ref — workspace-arm narrowing', () => {
     // 2. Not a theoretical `true`: the SAME gate serves message history, and that
     //    face answers 200 for this exact conversation.
     expect(
-      (await http(t).get(apiPaths.conversationChannelMessages(pairId))).status,
+      (await http(t).get(apiPaths.channelMessages(pairId))).status,
     ).toBe(200);
     // 3. The ref face nonetheless 404s. If someone "fixes" this by making
     //    `ConversationRef.workspace_id` nullable, this assertion is the one that

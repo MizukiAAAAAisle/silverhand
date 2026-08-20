@@ -246,7 +246,7 @@ describe('capability enforcement — route-level gates', () => {
       .prepare<[string], { id: string }>(
         `SELECT c.id FROM conversations c
            JOIN workspaces w ON w.id = c.workspace_id
-          WHERE w.owner_agent_id = ? AND w.workspace_kind = 'agent_home'`,
+          WHERE w.owner_agent_id = ?`,
       )
       .get(alice);
     expect(dm?.id).toBeTruthy();

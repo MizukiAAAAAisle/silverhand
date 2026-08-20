@@ -27,7 +27,6 @@ function makeChannelRef(overrides: Partial<ConversationRef> = {}): ConversationR
     placement_kind: 'workspace', roster_policy: 'open',
     title: 'general',
     workspace_id: 'ws_a',
-    workspace_kind: 'regular',
     closed_at: null,
     archived_at: null,
     ...overrides,
@@ -70,7 +69,7 @@ describe('resolveNotificationJumpTarget', () => {
     expect(r).toBeNull();
   });
 
-  it('returns null when mention_external has no local conversation_id and no source_* fallback', async () => {
+  it('returns null when mention_external has neither its own coordinates nor a source_* fallback', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_external',
@@ -97,43 +96,48 @@ describe('resolveNotificationJumpTarget', () => {
     });
   });
 
-  it('mention_external jumps to the local Mentions DM at the wrapped message (not source)', async () => {
+  it('mention_external jumps to the source message (its own coordinates ARE the source)', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_external',
-        // Local conversation = the synthesized DM Mentions channel.
-        // After D-flip this is the primary jump target — that's where
-        // the agent will reply and where the user's continued
-        // conversation lives.
-        workspace_id: 'ws_dm_agent',
-        conversation_id: 'dm_mentions',
-        message_id: 'wrap_msg',
+        // The viewer of this row is the mention's author, so the backend fills
+        // BOTH coordinate groups with the source message (option A) — that is
+        // what every row written since `25e089d1` looks like. Pre-`25e089d1`
+        // rows name the then-destination copy in their own group instead, and
+        // are deliberately left alone: the resolver takes them to that historical
+        // destination, which the author can still read. That reachability is a
+        // GATED invariant, not an inference — migration v71 neither converts nor
+        // touches the legacy `Mentions` DMs (@Cindy 裁定 (b)), asserted as a
+        // full-row differential over every pre-existing conversation in
+        // `packages/backend/tests/agent-inbox-migration.test.ts` (#task:2089).
+        workspace_id: 'ws_remote',
+        conversation_id: 'conv_remote',
+        message_id: 'msg_remote',
         source_workspace_id: 'ws_remote',
         source_conversation_id: 'conv_remote',
         source_message_id: 'msg_remote',
       }),
       mockQc({
-        dm_mentions: makeChannelRef({
-          id: 'dm_mentions',
-          placement_kind: 'workspace', roster_policy: 'fixed',
-          workspace_id: 'ws_dm_agent',
+        conv_remote: makeChannelRef({
+          id: 'conv_remote',
+          workspace_id: 'ws_remote',
         }),
       }),
     );
     expect(r).toEqual({
-      workspaceId: 'ws_dm_agent',
-      channelId: 'dm_mentions',
-      messageId: 'wrap_msg',
+      workspaceId: 'ws_remote',
+      channelId: 'conv_remote',
+      messageId: 'msg_remote',
     });
   });
 
-  it('mention_external falls back to source coords for legacy rows missing local conversation_id', async () => {
+  it('mention_external falls back to source coords when its own coordinate group is missing', async () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_external',
-        // Pre-flip artifact rows: conversation_id/message_id may be
-        // null if the wrapped message insert never happened (drop path)
-        // or if the row predates the local-DM wiring entirely.
+        // A row whose own group is empty — no generation of the insert path has
+        // ever produced one, and this branch is the fail-close that keeps such a
+        // row navigable rather than inert.
         workspace_id: null,
         conversation_id: null,
         message_id: null,
@@ -198,19 +202,22 @@ describe('resolveNotificationJumpTarget', () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: 'mention_external',
-        workspace_id: 'ws_dm_agent',
-        conversation_id: 'dm_mentions',
+        // `thread_root_id` is joined from the message the row points at — the
+        // source message — so a mention posted as a cluster reply carries its
+        // root and anchors inside the cluster without a ref fetch.
+        workspace_id: 'ws_remote',
+        conversation_id: 'conv_remote',
         message_id: 'reply_msg',
         thread_root_id: 'root_msg',
         source_workspace_id: 'ws_remote',
         source_conversation_id: 'conv_remote',
-        source_message_id: 'msg_remote',
+        source_message_id: 'reply_msg',
       }),
       qc,
     );
     expect(r).toEqual({
-      workspaceId: 'ws_dm_agent',
-      channelId: 'dm_mentions',
+      workspaceId: 'ws_remote',
+      channelId: 'conv_remote',
       threadRootId: 'root_msg',
       messageId: 'reply_msg',
     });

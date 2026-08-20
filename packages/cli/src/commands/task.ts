@@ -579,8 +579,6 @@ Create failures (exit 1, structured stderr — NOT printed as success):
                                  not in — the two are indistinguishable)
   thread_not_in_target         → code=not_found (/thread: named no reply cluster
                                  root of that conversation)
-  inbox_not_writable           → code=validation_error (your own inbox is a read
-                                 face; address the stream you were mentioned in)
   source_conflict              → code=conflict, details.existing_task
   cross_conversation_claim     → code=conflict (--claim with a cross-conversation
                                  --target; omit --claim)
@@ -1112,7 +1110,7 @@ and a viewer-resolved \`nav\` target for "view in conversation".
 
 To DISCUSS a task, post where its conversational footprint already is:
 \`nav.kind\` \`source\`/\`created_event\` carries \`nav.ref\`, and the address
-is \`${CONVERSATION_ADDRESS_PREFIX}<nav.ref.channel_id>\` plus
+is \`${CONVERSATION_ADDRESS_PREFIX}<nav.ref.conversation_id>\` plus
 \`${THREAD_ADDRESS_SEPARATOR}<nav.ref.thread_root_id>\` when that field is
 non-null. Use \`thread_root_id\`, never \`message_id\`: a cluster is addressed
 by its ROOT, so a mid-cluster anchor is refused rather than widened.

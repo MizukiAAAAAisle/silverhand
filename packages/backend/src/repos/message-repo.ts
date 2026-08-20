@@ -41,13 +41,6 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-/** Internal sentinel: thrown inside the per-stream conditional-insert
- *  transaction on a freshness CAS miss so the unconditional allocator
- *  `+1` rolls back with the savepoint (no burned global seq). Caught
- *  inside `insertForConversationIfFresh` and turned into an `{ ok:false }`
- *  result — it never escapes the repo. See docs/thread-reply-cluster-v1.md §6.4. */
-class StreamCasMiss extends Error {}
-
 export interface MessageWindow {
   messages: MessageDto[];
   reply_counts_by_root: Record<string, number>;
@@ -1393,59 +1386,19 @@ export class MessageRepo {
     return this.db.transaction(() => {
       const seq = this.reserveNextSeq(params.conversationId);
       const message = this.insertForConversationAtSeq(params, seq);
-      // Stream-head maintenance invariant: every NON-EXEMPT insert
-      // advances its stream's head (main when threadRootId is null), or
-      // the head drifts behind messages.seq and the per-stream freshness
-      // CAS misfires. Exempt rows deliberately leave the head behind —
-      // they are outside the freshness universe (§5.2).
+      // Stream-head maintenance: every non-exempt insert advances its stream's
+      // head (main when threadRootId is null). The head is now purely a
+      // READ-MODEL structure — it seeds `streamHeadLatestSeq` (observe /
+      // conversations window) and the join-time per-stream baseline
+      // (`listStreamHeads`); freshness no longer reads it (#task:2095 retired
+      // the per-stream CAS). `freshnessExempt` keeps owner-scoped self-wakes
+      // (schedule_fire) out of that read-model, exactly as before — the flag
+      // name predates the freshness-axis retirement.
       if (params.freshnessExempt !== true) {
         this.bumpStreamHead(params.conversationId, params.threadRootId ?? null, seq);
       }
       return message;
     })();
-  }
-
-  insertForConversationIfFresh(params: {
-    conversationId: string;
-    seenUpToSeq: number;
-    fromKind: FromKind;
-    fromAgentId?: string | null;
-    fromUserId?: string | null;
-    content: string;
-    metadata?: Record<string, unknown> | null;
-    attachments?: AttachmentSnapshot[] | null;
-    /** Reply-cluster anchor (v43); NULL/omitted = main-line stream. The
-     *  freshness CAS is scoped to THIS stream's head, not the whole
-     *  conversation. `seenUpToSeq` is the actor's last-observed seq in the
-     *  same stream. See docs/thread-reply-cluster-v1.md §6.4. */
-    threadRootId?: string | null;
-  }): { ok: true; message: MessageDto } | { ok: false; currentSeq: number } {
-    const threadRootId = params.threadRootId ?? null;
-    try {
-      return this.db.transaction(() => {
-        // The conversation-global allocator (`+1`) and the per-stream
-        // freshness CAS are two steps now (they used to be one guarded
-        // UPDATE). They MUST share one transaction: on a CAS miss we throw
-        // so the allocator `+1` rolls back with the savepoint — no burned
-        // global seq. (doc §6.4 step 4)
-        const seq = this.reserveNextSeq(params.conversationId);
-        if (!this.casStreamHead(params.conversationId, threadRootId, params.seenUpToSeq, seq)) {
-          throw new StreamCasMiss();
-        }
-        return {
-          ok: true as const,
-          message: this.insertForConversationAtSeq(params, seq),
-        };
-      })();
-    } catch (err) {
-      if (err instanceof StreamCasMiss) {
-        return {
-          ok: false as const,
-          currentSeq: this.streamHeadLatestSeq(params.conversationId, threadRootId),
-        };
-      }
-      throw err;
-    }
   }
 
   latestSeqForConversation(conversationId: string): number {
@@ -1473,39 +1426,6 @@ export class MessageRepo {
     );
     const authors = loadMessageAuthors(this.db, rows);
     return rows.map(r => messageRowWithLinkedTaskToDto(r, authors.get(r) ?? null));
-  }
-
-  /** Metadata-only stream window `(afterSeq, throughSeq]` (signal-only
-   *  stale contract): the exact unseen set a freshness 409 refers to.
-   *  Bounded above by the CAS-rejected `currentSeq` so the count/set is
-   *  self-consistent with the 409's declared head. No bodies — bodies
-   *  travel only through the normal delivery face. */
-  listStreamWindowMeta(
-    conversationId: string,
-    threadRootId: string | null,
-    afterSeq: number,
-    throughSeq: number,
-  ): Array<{
-    id: string;
-    seq: number;
-    from_kind: string;
-    from_agent_id: string | null;
-  }> {
-    return prepareObserved<
-        [string, string | null, number, number],
-        { id: string; seq: number; from_kind: string; from_agent_id: string | null }
-      >(
-        this.db,
-        'messages.stream_window_meta',
-        `SELECT id, seq, from_kind, from_agent_id
-           FROM messages
-          WHERE conversation_id = ?
-            AND thread_root_id IS ?
-            AND seq > ?
-            AND seq <= ?
-          ORDER BY seq ASC`,
-      )
-      .all(conversationId, threadRootId, afterSeq, throughSeq);
   }
 
   /** All messages in a thread stream with `seq < beforeSeq`, ordered ASC.
@@ -1629,53 +1549,6 @@ export class MessageRepo {
         )
         .run(conversationId, threadRootId, newSeq);
     }
-  }
-
-  /** Per-stream freshness CAS (doc §6.4). Advances the stream head from
-   *  `seenStreamSeq` to `newSeq`; returns false (stale) when the head moved
-   *  underneath the caller.
-   *
-   *  UPDATE-first (a refinement of the doc's plain branch-by-seen): the
-   *  conditional UPDATE handles every case where the head row already exists
-   *  — including the backfilled main head sitting at `latest_seq = 0`, which
-   *  a bare `seen==0 → INSERT` branch would wrongly treat as a conflict and
-   *  reject (a regression vs. the old conversation-level CAS). Only when the
-   *  UPDATE matches no row AND `seenStreamSeq == 0` is the head genuinely
-   *  absent (a thread's first reply) → INSERT, with ON CONFLICT DO NOTHING
-   *  so a concurrent first reply loses the race (changes == 0 → stale). A
-   *  `seen > 0` miss means the head was advanced or is missing → stale, never
-   *  a wrongful insert. (No conflict target needed in either statement.) */
-  private casStreamHead(
-    conversationId: string,
-    threadRootId: string | null,
-    seenStreamSeq: number,
-    newSeq: number,
-  ): boolean {
-    // `latest_seq <= seen` (not `=`): freshness-exempt rows (§5.2, e.g.
-    // schedule_fire) allocate seqs without bumping the head, and their
-    // normal delivery legitimately advances the recipient's observed
-    // cursor PAST the head. seen ≥ head still means "saw everything
-    // freshness-relevant" — strictly more information, never less.
-    const advanced = prepareObserved<[number, string, string | null, number]>(
-        this.db,
-        'messages.cas_stream_head_update',
-        `UPDATE conversation_stream_heads
-            SET latest_seq = ?
-          WHERE conversation_id = ? AND thread_root_id IS ? AND latest_seq <= ?`,
-      )
-      .run(newSeq, conversationId, threadRootId, seenStreamSeq).changes;
-    if (advanced === 1) return true;
-    if (seenStreamSeq !== 0) return false;
-    const inserted = prepareObserved<[string, string | null, number]>(
-        this.db,
-        'messages.cas_stream_head_insert',
-        `INSERT INTO conversation_stream_heads
-           (conversation_id, thread_root_id, latest_seq)
-         VALUES (?, ?, ?)
-         ON CONFLICT DO NOTHING`,
-      )
-      .run(conversationId, threadRootId, newSeq).changes;
-    return inserted === 1;
   }
 
   private insertForConversationAtSeq(params: {

@@ -11,7 +11,7 @@ import type {
 import { messageRowToDto } from './message-repo.js';
 import { loadMessageAuthors } from './message-author.js';
 import { likeNeedle } from './sql-like.js';
-import { workspacePlaced, userParticipates } from './conversation-placement-sql.js';
+import { userParticipates } from './conversation-placement-sql.js';
 import {
   streamScopePredicate,
   streamScopeParams,
@@ -19,8 +19,6 @@ import {
 } from './message-stream-scope.js';
 
 type SqlValue = string | number | null;
-
-type SearchWorkspaceKind = 'regular' | 'dm';
 
 interface ConversationSearchRow {
   conversation_id: string;
@@ -36,13 +34,13 @@ interface ConversationSearchRow {
   // arm, which has no `workspace` field at all (no nullable sibling on the wire).
   workspace_id: string | null;
   workspace_name: string | null;
-  workspace_kind: SearchWorkspaceKind | null;
+  workspace_owner_agent_id: string | null;
 }
 
 interface WorkspaceSearchRow {
   workspace_id: string;
   workspace_name: string;
-  workspace_kind: SearchWorkspaceKind;
+  workspace_owner_agent_id: string | null;
   description: string | null;
   archived_at: number | null;
   created_at: number;
@@ -58,8 +56,7 @@ type MessageSearchRow = MessageRow & {
   conversation_created_at: number;
   workspace_id: string | null;
   workspace_name: string | null;
-  workspace_kind: SearchWorkspaceKind | null;
-  agent_name: string | null;
+  workspace_owner_agent_id: string | null;
 };
 
 /** The workspace ref for a result row, or `null` when the conversation is
@@ -72,13 +69,18 @@ type MessageSearchRow = MessageRow & {
 function workspaceRefOrNull(row: {
   workspace_id: string | null;
   workspace_name: string | null;
-  workspace_kind: SearchWorkspaceKind | null;
+  workspace_owner_agent_id: string | null;
 }): SearchWorkspaceRef | null {
   if (row.workspace_id === null) return null;
   return {
     id: row.workspace_id,
     name: row.workspace_name as string,
-    kind: row.workspace_kind as SearchWorkspaceKind,
+    // NOT cast: `owner_agent_id` is nullable on the wire for the same reason it
+    // is nullable in storage (a regular workspace has no home agent), so the
+    // LEFT JOIN's NULL and a real regular workspace's NULL are the same value
+    // here. The `workspace_id === null` guard above is what separates "no
+    // workspace at all" from "workspace with no owner".
+    owner_agent_id: row.workspace_owner_agent_id,
   };
 }
 
@@ -92,7 +94,7 @@ function conversationRef(row: {
   conversation_created_at: number;
   workspace_id: string | null;
   workspace_name: string | null;
-  workspace_kind: SearchWorkspaceKind | null;
+  workspace_owner_agent_id: string | null;
 }): SearchConversationRef {
   const base = {
     id: row.conversation_id,
@@ -151,7 +153,6 @@ export class SearchRepo {
       query.length > 0 ||
       !!input.workspace_id ||
       !!input.conversation_id ||
-      input.scope !== 'all' ||
       !!input.user_id ||
       !!input.agent_id ||
       input.from !== undefined ||
@@ -222,14 +223,12 @@ export class SearchRepo {
              SELECT
                w.id AS workspace_id,
                w.name AS workspace_name,
-               CASE WHEN w.workspace_kind = 'agent_home' THEN 'dm' ELSE 'regular' END
-                 AS workspace_kind,
+               w.owner_agent_id AS workspace_owner_agent_id,
                w.description AS description,
                w.archived_at AS archived_at,
                w.created_at AS created_at,
                w.updated_at AS updated_at
               FROM workspaces w
-             WHERE w.workspace_kind IN ('regular', 'agent_home')
            ) search_ws
           WHERE ${where.join(' AND ')}
           ORDER BY updated_at DESC
@@ -242,7 +241,7 @@ export class SearchRepo {
       workspace: {
         id: row.workspace_id,
         name: row.workspace_name,
-        kind: row.workspace_kind,
+        owner_agent_id: row.workspace_owner_agent_id,
         description: row.description,
         archived_at: row.archived_at,
         created_at: row.created_at,
@@ -276,11 +275,7 @@ export class SearchRepo {
             conv.created_at AS conversation_created_at,
             w.id AS workspace_id,
             w.name AS workspace_name,
-            CASE
-              WHEN w.id IS NULL THEN NULL
-              WHEN w.workspace_kind = 'agent_home' THEN 'dm'
-              ELSE 'regular'
-            END AS workspace_kind
+            w.owner_agent_id AS workspace_owner_agent_id
            FROM conversations conv
            LEFT JOIN workspaces w ON w.id = conv.workspace_id
           WHERE ${where.join(' AND ')}
@@ -369,12 +364,13 @@ export class SearchRepo {
     // cannot silently skip the other, and the workspaces join is a LEFT join
     // (not INNER) in BOTH, so a `direct_pair` hit is counted, not dropped —
     // otherwise `total`/`truncated` would undercount pairs and the "N / M"
-    // counter would lie. (The agents join is additive/LEFT and never filters,
-    // so only the row query carries it, for `agent_name`.)
+    // counter would lie. Row query and COUNT now share the FROM verbatim: the
+    // `agents` join that used to exist only on the row side (for the retired
+    // `agent_name`) is gone with it (#task:2064).
     const total = (
       this.db
         .prepare(
-          `SELECT COUNT(*) AS n ${messageSearchFrom(whereSql, false)}`,
+          `SELECT COUNT(*) AS n ${messageSearchFrom(whereSql)}`,
         )
         .get(...params) as { n: number }
     ).n;
@@ -397,13 +393,8 @@ export class SearchRepo {
             conv.created_at AS conversation_created_at,
             w.id AS workspace_id,
             w.name AS workspace_name,
-            CASE
-              WHEN w.id IS NULL THEN NULL
-              WHEN w.workspace_kind = 'agent_home' THEN 'dm'
-              ELSE 'regular'
-            END AS workspace_kind,
-            a.name AS agent_name
-           ${messageSearchFrom(whereSql, true)}
+            w.owner_agent_id AS workspace_owner_agent_id
+           ${messageSearchFrom(whereSql)}
           ${orderSql}
           LIMIT ?`,
       )
@@ -415,7 +406,6 @@ export class SearchRepo {
         type: 'message',
         conversation: conversationRef(row),
         message: messageRowToDto(row, { author: authors.get(row) ?? null }),
-        agent_name: row.agent_name,
       })),
       total,
       truncated: total > limit,
@@ -427,14 +417,15 @@ export class SearchRepo {
  *  the row query and the `total` COUNT both build on this, so a filter added to
  *  one is added to both and cannot drift. The `workspaces` join is LEFT (not
  *  INNER) — a `direct_pair` message has no workspace, and an INNER join here
- *  would silently drop it from BOTH the page and the count. `agent_name` is the
- *  only reason the row query needs `agents`; that join is additive and never
- *  filters, so the COUNT omits it via `withAgentJoin=false`. */
-function messageSearchFrom(whereSql: string, withAgentJoin: boolean): string {
+ *  would silently drop it from BOTH the page and the count. There is no longer
+ *  any per-caller variation: the `agents` join existed solely to feed the
+ *  retired `agent_name` on the row side (#task:2064), and identity now comes
+ *  from the message's own author snapshot, so both callers get this FROM
+ *  verbatim. */
+function messageSearchFrom(whereSql: string): string {
   return `FROM messages m
            JOIN conversations conv ON conv.id = m.conversation_id
            LEFT JOIN workspaces w ON w.id = conv.workspace_id
-           ${withAgentJoin ? 'LEFT JOIN agents a ON a.id = m.from_agent_id' : ''}
           WHERE ${whereSql}`;
 }
 
@@ -460,10 +451,6 @@ function applyNamedScopeFilters(
   params: SqlValue[],
   input: SearchQueryInput,
 ): void {
-  if (input.scope !== 'all') {
-    where.push(`workspace_kind = ?`);
-    params.push(input.scope);
-  }
   if (input.workspace_id) {
     where.push(`workspace_id = ?`);
     params.push(input.workspace_id);
@@ -480,7 +467,7 @@ function applyConversationScopeFilters(
   // #task:2053-B② — POSITIVE WHITELIST, not a `workspacePlaced` hard predicate.
   // Search's domain is workspace channels PLUS workspace-less human↔agent
   // DirectPairs; both placements are named here as a DECISION IN THE QUERY TEXT.
-  // `agent_inbox` (no human participant) and any FUTURE placement kind default
+  // Any FUTURE placement kind defaults
   // OUT — so widening search to a new placement is a deliberate edit here, never
   // an accident of `userParticipates` happening to grow a matching arm. The
   // visibility bottom guard (`userParticipates`) is a SECOND, independent gate;
@@ -488,32 +475,22 @@ function applyConversationScopeFilters(
   where.push(
     `${conversationAlias}.placement_kind IN ('workspace', 'direct_pair')`,
   );
-  // #task:2053-E — scope tokens `regular`/`dm` are WORKSPACE-KIND filters, and
-  // `dm` STILL MEANS the agent_home workspace kind, NOT a DirectPair. Each
-  // carries an EXPLICIT `placement_kind = 'workspace'` conjunct (via
-  // `workspacePlaced`) so a `direct_pair` leaves these two tokens by a WRITTEN
-  // decision, not by the incidental fact that its NULL `workspace_kind` compares
-  // unequal to both literals after the LEFT join. A pair therefore appears only
-  // under `scope = 'all'`. Re-partitioning this wire enum into
-  // `workspace | agent_space | direct_messages` is a shiki-level decision (it
-  // needs a token→population truth table + renderer copy) and is deliberately
-  // NOT in this ticket.
-  if (input.scope === 'regular') {
-    where.push(
-      `${workspacePlaced(conversationAlias)} AND ${workspaceAlias}.workspace_kind = 'regular'`,
-    );
-  } else if (input.scope === 'dm') {
-    where.push(
-      `${workspacePlaced(conversationAlias)} AND ${workspaceAlias}.workspace_kind = 'agent_home'`,
-    );
-  }
   if (input.workspace_id) {
-    // #task:2053-N1 — a COORDINATE filter, unlike the E scope-token KIND filters
-    // above, needs NO `placement_kind = 'workspace'` conjunct: positive equality
-    // on `${workspaceAlias}.id` is self-excluding for a `direct_pair` — after the
-    // LEFT join its workspace id is NULL, and `NULL = ?` is never true. The
-    // exclusion is unambiguous positive-coordinate semantics, not the NULL
-    // coincidence the KIND tokens had to guard against with an explicit conjunct.
+    // #task:2053-N1 — a COORDINATE filter needs NO `placement_kind = 'workspace'`
+    // conjunct: positive equality on `${workspaceAlias}.id` is self-excluding for
+    // a `direct_pair` — after the LEFT join its workspace id is NULL, and
+    // `NULL = ?` is never true. The exclusion is unambiguous positive-coordinate
+    // semantics.
+    //
+    // Container-KIND scope tokens used to sit above this and could NOT argue that
+    // way: they leaned on the same NULL by coincidence, so each needed an explicit
+    // `placement_kind = 'workspace'` conjunct to exclude a pair by a WRITTEN
+    // decision. #task:2075's stop-publish step deleted them with the published
+    // alphabet they filtered on, and #task:2086 removed the vestigial single-member
+    // `scope` field entirely: the request carries no container-category axis, only
+    // concrete coordinates (`workspace_id` / `conversation_id`). A future
+    // container-population filter must re-derive its predicate from the ownership
+    // relation (`owner_agent_id`), not from a stored word.
     where.push(`${workspaceAlias}.id = ?`);
     params.push(input.workspace_id);
   }

@@ -1123,6 +1123,12 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       recordParsedEventDropped() {
         throw new Error('not used');
       },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      refineToolCallInput() {
+        throw new Error('not used');
+      },
     };
     const logs: Array<Record<string, unknown>> = [];
     const handler = makeHandler({
@@ -1200,6 +1206,12 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         throw new Error('not used');
       },
       recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      refineToolCallInput() {
         throw new Error('not used');
       },
     };
@@ -1299,6 +1311,12 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         };
       },
       recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      refineToolCallInput() {
         throw new Error('not used');
       },
     };
@@ -1442,6 +1460,12 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       recordParsedEventDropped() {
         throw new Error('not used');
       },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      refineToolCallInput() {
+        throw new Error('not used');
+      },
     };
     const handler = makeHandler({
       client,
@@ -1469,6 +1493,305 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     ]);
     expect(recordCalls).toEqual([]);
     expect(published.filter(p => p.kind === 'conversation_activity')).toHaveLength(2);
+  });
+
+  // #task:2099 (Cindy review point 2): `conversation_events` is a single-author
+  // aggregate whose ordering state is the pending text-block buffer. A
+  // `message_stale` row written WITHOUT flushing that buffer first would land
+  // ahead of prose the agent had already streamed — the row would read as
+  // "refused, then spoke". This pins flush-then-record inside ONE
+  // `recordConversationActivity` call, published in that order.
+  it('#task:2099: message_stale flushes the pending text block first and publishes both rows in order', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          runtime_generation: 1,
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const calls: string[] = [];
+    const staleCalls: Array<Parameters<ConversationActivitySink['recordMessageStale']>[0]> = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent() {
+        throw new Error('not used');
+      },
+      upsertTextBlock(params) {
+        calls.push(`upsertTextBlock:${params.text}`);
+        return {
+          id: params.previousEventId ?? 11,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.kind,
+          payload: { text: params.text },
+          created_at: params.createdAt,
+        };
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+      recordMessageStale(params) {
+        calls.push('recordMessageStale');
+        staleCalls.push(params);
+        return {
+          id: 12,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: 'message_stale',
+          payload: null,
+          created_at: params.createdAt,
+        };
+      },
+      refineToolCallInput() {
+        throw new Error('not used');
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+
+    // Two fragments 1ms apart: the second is buffered WITHOUT a publish (inside
+    // the throttle interval), so the only thing that can commit `answer body` is
+    // the flush the stale row performs.
+    emit({
+      runtime_generation: 1,
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'answer ' } as never,
+      ts: 1700000001000,
+    });
+    emit({
+      runtime_generation: 1,
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'body' } as never,
+      ts: 1700000001001,
+    });
+    expect(calls).toEqual(['upsertTextBlock:answer ']);
+    const beforeStale = published.length;
+
+    emit({
+      event: 'runtime_message_stale',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      runtime_generation: 1,
+      ts: 1700000002000,
+    });
+
+    expect(calls).toEqual([
+      'upsertTextBlock:answer ',
+      'upsertTextBlock:answer body',
+      'recordMessageStale',
+    ]);
+    // `createdAt` is the FRAME's ts — the moment the backend refused the send,
+    // not when the surrounding turn started.
+    expect(staleCalls).toEqual([
+      { conversationId: 'c1', agentId: 'a1', createdAt: 1700000002000 },
+    ]);
+    const activity = published.filter(p => p.kind === 'conversation_activity');
+    expect(activity.map(p => (p.payload as { kind: string }).kind)).toEqual([
+      'text',
+      'text',
+      'message_stale',
+    ]);
+    // Marker-only: no ids, no counts, no refused target on the row.
+    expect(activity.at(-1)?.payload).toEqual({
+      id: 12,
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      kind: 'message_stale',
+      payload: null,
+      created_at: 1700000002000,
+    });
+    // The stale fact is NOT a run-state input: the frame publishes activity only,
+    // never an `agent_event` (that lane is the driver's parsed stream).
+    expect(published.slice(beforeStale).map(p => p.kind)).toEqual([
+      'conversation_activity',
+      'conversation_activity',
+    ]);
+  });
+
+  // #task:2101: a `tool_call_input` frame is a REFINEMENT of a row already in the
+  // timeline, so it must not travel the insert path. Same single-author ordering
+  // argument as the `message_stale` test above: republishing the older tool_call
+  // row while newer prose sits unflushed in the buffer would let the renderer
+  // order the refreshed call after text that came later.
+  it('#task:2101: tool_call_input refines the existing row, flushing pending text first, and never inserts', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          runtime_generation: 1,
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const calls: string[] = [];
+    const refineCalls: Array<
+      Parameters<ConversationActivitySink['refineToolCallInput']>[0]
+    > = [];
+    let refineResult: ReturnType<
+      ConversationActivitySink['refineToolCallInput']
+    > = null;
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent(params) {
+        calls.push(`recordParsedEvent:${params.event.kind}`);
+        return null;
+      },
+      upsertTextBlock(params) {
+        calls.push(`upsertTextBlock:${params.text}`);
+        return {
+          id: params.previousEventId ?? 11,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: params.kind,
+          payload: { text: params.text },
+          created_at: params.createdAt,
+        };
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      refineToolCallInput(params) {
+        calls.push('refineToolCallInput');
+        refineCalls.push(params);
+        return refineResult;
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+
+    // Two fragments 1ms apart: the second is buffered without a publish, so the
+    // only thing that can commit `answer body` is the flush the refinement does.
+    emit({
+      runtime_generation: 1,
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'answer ' } as never,
+      ts: 1700000001000,
+    });
+    emit({
+      runtime_generation: 1,
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'text', text: 'body' } as never,
+      ts: 1700000001001,
+    });
+    expect(calls).toEqual(['upsertTextBlock:answer ']);
+
+    // The refinement lands on tool_call row id 42 — republished with the SAME
+    // id so a live timeline re-renders that line in place.
+    refineResult = {
+      id: 42,
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      kind: 'tool_call',
+      payload: {
+        name: 'bash',
+        tool_call_id: 'tc-1',
+        input: { command: 'silverhand message send' },
+      },
+      created_at: 1700000000500,
+    };
+    const beforeRefine = published.length;
+    emit({
+      runtime_generation: 1,
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'tool_call_input',
+        toolCallId: 'tc-1',
+        input: { command: 'silverhand message send' },
+      } as never,
+      ts: 1700000002000,
+    });
+
+    expect(calls).toEqual([
+      'upsertTextBlock:answer ',
+      'upsertTextBlock:answer body',
+      'refineToolCallInput',
+    ]);
+    // Never the insert path — that would mint a duplicate tool call.
+    expect(calls.some(c => c.startsWith('recordParsedEvent:'))).toBe(false);
+    expect(refineCalls).toEqual([
+      {
+        conversationId: 'c1',
+        agentId: 'a1',
+        toolCallId: 'tc-1',
+        input: { command: 'silverhand message send' },
+      },
+    ]);
+    const afterRefine = published.slice(beforeRefine);
+    // Unlike `message_stale`, this frame IS driver output, so it rides the
+    // `agent_event` lane too — and, as for every parsed event, that publish
+    // precedes the activity lane. Within the activity lane the load-bearing
+    // order holds: flush first, refreshed row second.
+    expect(afterRefine.map(p => p.kind)).toEqual([
+      'agent_event',
+      'conversation_activity',
+      'conversation_activity',
+    ]);
+    expect(afterRefine.at(-1)?.payload).toEqual(refineResult);
+
+    // A refinement with nothing to refine (row paged out) publishes no activity.
+    refineResult = null;
+    const beforeMiss = published.length;
+    emit({
+      runtime_generation: 1,
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'tool_call_input',
+        toolCallId: 'tc-gone',
+        input: { command: 'ls' },
+      } as never,
+      ts: 1700000003000,
+    });
+    expect(
+      published
+        .slice(beforeMiss)
+        .filter(p => p.kind === 'conversation_activity'),
+    ).toHaveLength(0);
   });
 
   it('final flush reconciles the full text block even when an intermediate upsert is lost', async () => {
@@ -1514,6 +1837,12 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         };
       },
       recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      refineToolCallInput() {
         throw new Error('not used');
       },
     };
@@ -1617,6 +1946,12 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         };
       },
       recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      refineToolCallInput() {
         throw new Error('not used');
       },
     };

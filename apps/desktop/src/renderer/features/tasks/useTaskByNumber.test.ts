@@ -304,7 +304,6 @@ function taskSummary(
       kind: 'workspace',
       conversation_id: 'channel-1',
       workspace_id: 'workspace-1',
-      workspace_kind: 'regular',
       channel_name: 'version3',
     },
     thread_root_id: null,

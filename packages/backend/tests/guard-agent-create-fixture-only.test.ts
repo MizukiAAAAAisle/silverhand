@@ -1,26 +1,36 @@
 /**
- * #task:2014 (v71 §4.2) tripwire: `AgentRepo.create` is FIXTURE-ONLY.
+ * #task:2014 tripwire: `AgentRepo.create` is FIXTURE-ONLY.
  *
- * An Agent is the `agents` row PLUS its inbox placement, and the only writer of
- * that pair is `AgentProvisioningPersistence.reserveAgentAggregate`
- * (`AgentRepo.reserveForMaterialize` + `ConversationRepo.insertAgentInbox` in one
- * transaction). `create()` writes the bare row, so an agent born through it has
- * no destination for a mention of its handle — and because the CC now runs INSIDE
- * the sender's message transaction (§5), the failure would not land on the agent:
- * `requireAgentInbox` throws `AgentInboxMissingError` and aborts a HUMAN's send.
- * `getByName` has no `materialization_status` filter, so the handle is reachable
- * the instant the row exists; there is no window in which a row-without-inbox is
- * merely incomplete rather than harmful.
+ * WHAT IT DEFENDS, AND WHAT IT USED TO. Until #task:2072 the claim was aggregate
+ * shape: an Agent was the `agents` row PLUS its inbox placement, `create()` wrote
+ * only the row, so an agent born through it had no destination for a mention of
+ * its handle. That subject is gone — the CC copies into the AUTHOR's direct pair
+ * with the agent, which a bare row is enough to mint, so a row on its own is now a
+ * complete Agent.
  *
- * `create()` survives only because 70-odd fixtures use it to get a row cheaply,
- * and most of them never touch a CC or inbox read face. That is a test-side
- * convenience, so this gate pins the half that matters: no production module may
- * call it. Scope is production sources only (`packages/backend/src`).
+ * The gate survives its own premise because a SECOND reason was always underneath
+ * it, and that one is untouched: `create()` writes `materialization_status`
+ * DEFAULT — `'active'` — and no `idempotency_key`. Both halves are harmful in
+ * production and neither is visible to the type checker:
  *
- * Remedy when this fires: do not add an allowlist entry. Call
- * `reserveAgentAggregate` — if the new caller genuinely wants a row with no
- * aggregate (an import path, a repair tool), that is a new named operation whose
- * docblock has to say what answers a mention of its handle.
+ *   - `'active'` is what every read face and the runtime lane treat as "this agent
+ *     was materialized" (`ACTIVE_ONLY`). A row written here had no L2 dispatch, so
+ *     no daemon ever built its home — an agent that is live to every viewer and
+ *     has nothing on disk behind it.
+ *   - no `idempotency_key` means no `findByIdempotencyKey` short-circuit, so the
+ *     retry of a POST that timed out mid-flight creates a SECOND agent instead of
+ *     returning the first.
+ *
+ * `create()` survives only because 70-odd fixtures use it to get a row cheaply and
+ * do not care about either property. That is a test-side convenience, so this gate
+ * pins the half that matters: no production module may call it. Scope is
+ * production sources only (`packages/backend/src`).
+ *
+ * Remedy when this fires: do not add an allowlist entry. Go through
+ * `AgentProvisioningPersistence.reserveAgentRow` and the materialize lifecycle —
+ * if the new caller genuinely wants a row that is born active and unkeyed (an
+ * import path, a repair tool), that is a new named operation whose docblock has to
+ * say who materialized the thing it is declaring live.
  */
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -56,7 +66,7 @@ function* walkSources(root: string): Generator<string> {
   }
 }
 
-describe('AgentRepo.create is fixture-only (#task:2014 aggregate invariant)', () => {
+describe('AgentRepo.create is fixture-only (#task:2014 lifecycle invariant)', () => {
   it('no production module calls it', () => {
     const offenders: string[] = [];
     for (const file of walkSources(PRODUCTION_ROOT)) {
@@ -83,34 +93,16 @@ describe('AgentRepo.create is fixture-only (#task:2014 aggregate invariant)', ()
     expect(calls).toBeGreaterThan(0);
   });
 
-  it('the one production writer of the aggregate pairs the row with an inbox', () => {
-    // The positive half: `reserveForMaterialize` reaches production through the
-    // aggregate factory only, and that factory inserts the inbox. Read as text
-    // because the claim is about the SHAPE of the composition — a future edit
-    // that dropped the inbox insert would still typecheck and still pass every
-    // behavioral test that does not mention an inbox.
-    const adapter = readFileSync(
-      resolve(PRODUCTION_ROOT, 'repos', 'agent-provisioning-persistence.ts'),
-      'utf8',
-    );
-    const factory = adapter.slice(adapter.indexOf('reserveAgentAggregate'));
-    expect(factory).toContain('reserveForMaterialize');
-    expect(factory).toContain('insertAgentInbox');
-
-    const callers: string[] = [];
-    for (const file of walkSources(PRODUCTION_ROOT)) {
-      if (file.endsWith(join('repos', 'agent-repo.ts'))) continue;
-      // The two modules that legitimately name it: the port DECLARATION and the
-      // adapter that implements the aggregate factory around it.
-      if (file.endsWith(join('application', 'agent-provisioning-ports.ts'))) continue;
-      if (file.endsWith(join('repos', 'agent-provisioning-persistence.ts'))) continue;
-      if (readFileSync(file, 'utf8').includes('reserveForMaterialize(')) {
-        callers.push(relative(REPO_ROOT, file));
-      }
-    }
-    // Nothing outside that pair may reach the bare reserve — in particular
-    // `create-agent.ts`, which used to call it directly and would silently
-    // recreate the inbox-less row if it ever did again.
-    expect(callers).toEqual([]);
-  });
+  // A THIRD case used to live here and was deleted with the aggregate (#task:2072),
+  // not merely re-pointed. It read the adapter as text to assert that the factory
+  // paired `reserveForMaterialize` with `insertAgentInbox`, and then that nobody
+  // outside the port declaration and the adapter named the bare reserve — because a
+  // direct caller "would silently recreate the inbox-less row". There is no such row
+  // any more: the reserve is one INSERT, and a hypothetical direct
+  // `deps.agents.reserveForMaterialize(…)` from `create-agent.ts` (whose type is in
+  // scope, so nothing but review stops it) writes exactly what the port writes. What
+  // remains is a ports-discipline preference with no failure mode behind it, and a
+  // fence that pins one of those teaches the next reader that an invariant is being
+  // defended when none is. Should the reserve ever grow a second effect, the fence to
+  // write is over THAT pairing, not over the name.
 });

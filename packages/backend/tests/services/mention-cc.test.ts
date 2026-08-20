@@ -1,25 +1,39 @@
 /**
- * Mention CC, v71 (#task:2014 / agent-scoped-session-v1 §4.2 + §5).
+ * Mention CC (#task:2014 / agent-scoped-session-v1 §4.2 + §5, destination
+ * replaced by #task:2072).
  *
- * The model this suite gates is the one the ticket introduced, and every case
- * below exists because a DIFFERENT way of getting it wrong would go unnoticed:
+ * Every case below exists because a DIFFERENT way of getting it wrong would go
+ * unnoticed:
  *
- *  1. The destination is the mentioned agent's INBOX PLACEMENT — workspace-less,
- *     rosterless, one participant. The retired model copied into a `Mentions` DM
- *     under the agent's home workspace and ADMITTED the human author to it
- *     (`conversation_users` + `workspace_users`, #task:1989). So "no human
- *     participant anywhere" is asserted directly, not implied: that admission is
- *     the regression this file is here to catch.
- *  2. The copy is written INSIDE THE SEND'S TRANSACTION. It used to be a
- *     post-commit best-effort call, where a crash in the gap committed the
- *     human's message and lost the copy silently. Both directions are gated:
- *     a failure anywhere in the CC rolls the human's send back, and there is no
- *     path that commits one without the other.
- *  3. The wake is the ONLY best-effort part, and today it DEFERS: an inbox has no
- *     workspace to derive a session cwd from until #task:2019. The fake runtime
- *     host below therefore mirrors production's placement gate rather than
- *     accepting every start — a permissive fake would let this suite claim a wake
- *     that cannot happen, and would go green on the day #2019 regresses it.
+ *  1. The destination is the AUTHOR'S DIRECT LINE with the mentioned agent — the
+ *     `direct_pair` the two of them share, minted on demand. Two retired models
+ *     precede it, and this suite is the memory of both: #task:1989 copied into a
+ *     `Mentions` DM under the AGENT's home workspace and admitted the human author
+ *     to it (`conversation_users` + `workspace_users`); v71 replaced that with the
+ *     agent's INBOX, whose only participant is the agent — no human anywhere, so
+ *     the wrap had to tell the agent there was nothing to answer. A wake into a
+ *     stream nobody can be answered in is the defect #task:2072 removes. So the
+ *     destination is asserted structurally, not just by id: the pair has the author
+ *     as its human endpoint, and it still grants the agent NO roster row and NO
+ *     workspace membership.
+ *  2. WHO may have that line is not this rule's decision. The verdict comes from
+ *     `canInitiateDirectMessageToAgent` at the send boundary, and a mention the
+ *     gate refuses is a `no_direct_line` SKIP: the CC copies nothing, the send
+ *     stands, and the author's own reference report says the mention reached
+ *     nobody. Today's refused population is every conversation-scoped agent (its
+ *     human entry is its workspace, not a DM), which is why the fixture below
+ *     carries one.
+ *  3. The copy is written INSIDE THE SEND'S TRANSACTION — and since #task:2072 so
+ *     is the MINT of its destination, so a pair can never outlive a rolled-back
+ *     copy. It used to be a post-commit best-effort call, where a crash in the gap
+ *     committed the human's message and lost the copy silently. Both directions are
+ *     gated: a failure anywhere in the CC rolls the human's send back, and there is
+ *     no path that commits one without the other.
+ *  4. The announcement of a pair the CC created cannot go out in the same breath as
+ *     the mint (it would announce a row a rollback removes), so it is carried out
+ *     as DATA and published after commit — and the post-commit half PROVES it
+ *     covered every id rather than trusting whoever wrote it (#task:2035's
+ *     obligation, satisfied the transaction-aware way).
  *
  * Driven through `ConversationMessageService.sendMessage` wherever the claim is
  * about the send's transaction, because "same transaction" is not a property of
@@ -47,10 +61,6 @@ import {
   dispatchMentionCcEffects,
   writeMentionCcCopies,
 } from '../../src/application/mention-cc.js';
-// The aggregate invariant belongs to the module that creates the aggregate
-// (#task:2034), so the error is imported from there, not from the mention rule
-// that happens to be the first consumer to notice it.
-import { AgentInboxMissingError } from '../../src/application/agent-provisioning-ports.js';
 import type { MentionCcReport } from '../../src/application/mention-cc.js';
 import type { MessageTxScope } from '../../src/services/conversation-message/ports.js';
 import type { BackendLogger } from '../../src/context.js';
@@ -108,9 +118,10 @@ class FakeRuntimeHost {
 /**
  * `seedAllFixtureMemberships: false` is load-bearing, not hygiene: the fixture
  * trigger snapshots every fixture user into `conversation_users` on EVERY
- * conversation insert — including the inboxes created below. With it on, "the
- * inbox has no human participant" would be untestable, and worse, the retired
- * #1989 admission writes would be indistinguishable from the seed.
+ * conversation insert — including the `direct_pair`s this suite's sends mint.
+ * With it on, "the destination line has exactly its two principals" would be
+ * untestable, and worse, the retired #1989 admission writes would be
+ * indistinguishable from the seed.
  */
 function bootstrap() {
   const { db, localHostId } = openTestDb({ seedAllFixtureMemberships: false });
@@ -144,18 +155,27 @@ function bootstrap() {
   // `insider` receives the original message; `outsider` is the mention target and
   // is deliberately not even a member of the source WORKSPACE — the CC has no
   // membership precondition, and pretending it does would hide that.
+  //
+  // `session_scope: 'agent'` on the target is load-bearing, not decoration: the
+  // destination is a human-initiated direct line, and `canInitiateDirectMessageToAgent`
+  // grants one only for an agent-scoped agent. A fixture that left the default here
+  // would be asserting the CC's happy path through a state production refuses.
   const insider = agents.create({ name: 'cc-insider', runtime: 'claude' }, localHostId, 'local');
-  const outsider = agents.create({ name: 'cc-outsider', runtime: 'claude' }, localHostId, 'local');
+  const outsider = agents.create(
+    { name: 'cc-outsider', runtime: 'claude', session_scope: 'agent' },
+    localHostId,
+    'local',
+  );
+  // The other side of that same gate, as a REAL product state rather than a stubbed
+  // boolean: a conversation-scoped agent, whose human entry is its own workspace, so
+  // no human may open a direct line to it and a mention of it cannot be copied.
+  const convScoped = agents.create(
+    { name: 'cc-conv-scoped', runtime: 'claude' },
+    localHostId,
+    'local',
+  );
   workspaces.insertMembership(workspace.id, insider.id);
   conversations.addAgent(channel.id, insider.id);
-
-  // The Agent aggregate's inbox invariant. `reserveAgentAggregate` performs
-  // exactly this insert in the same transaction as the `agents` row; the v71
-  // migration performed it for pre-existing agents. A test that skipped it would
-  // be testing a broken aggregate — which is its own case, `agent with no inbox`
-  // below.
-  const insiderInbox = conversations.insertAgentInbox(insider.id, insider.created_at);
-  const outsiderInbox = conversations.insertAgentInbox(outsider.id, outsider.created_at);
 
   const persistence = createSqliteConversationPersistence(db);
   const txWrap: { current: ((tx: MessageTxScope) => MessageTxScope) | null } = { current: null };
@@ -167,6 +187,18 @@ function bootstrap() {
     runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,
+    // The boundary's verdict (#task:2072), reduced to the half a fixture with no
+    // `BackendContext` can compute HONESTLY: the agent exists and is agent-scoped.
+    // That is the clause of `canInitiateDirectMessageToAgent` this suite has cases
+    // for — the refused population is conversation-scoped agents. Its ACL half
+    // (`canViewAgent`) is not stubbed true here and then asserted: the real gate is
+    // wired in `tests/utils/app.ts`, so the route-level suites carry the production
+    // verdict, and `tests/routes/direct-pairs.test.ts` owns the gate itself.
+    directLineTargetFor: (_userId, agentHandle) => {
+      const target = agents.getByName(agentHandle);
+      if (!target || target.session_scope !== 'agent') return null;
+      return target.id;
+    },
   });
 
   return {
@@ -188,8 +220,7 @@ function bootstrap() {
     channel,
     insider,
     outsider,
-    insiderInbox,
-    outsiderInbox,
+    convScoped,
     cleanup: tmp.cleanup,
   };
 }
@@ -247,16 +278,33 @@ const workspaceMemberAgentIdsOf = (t: Fixture, workspaceId: string): string[] =>
 
 const canonical = (handle: string): string => `<silverhand://agent/${handle}>`;
 
-describe('mention CC v71 — the copy, in the send transaction', () => {
-  it('lands in the mentioned agent inbox with source provenance, a delivery row, and the author notification', async () => {
+/**
+ * The CC's destination, LOOKED UP rather than precomputed (#task:2072).
+ *
+ * The line does not exist until a CC (or a human pressing "Message") opens it, so a
+ * fixture that handed one out would be testing a different world — and every "the CC
+ * wrote nothing" case below is `null` here, which is a stronger statement than an
+ * empty message list in a pre-made conversation.
+ */
+const pairOf = (t: Fixture, agentId: string): string | null =>
+  t.conversations.findDirectPair(
+    { kind: 'human', id: 'local' },
+    { kind: 'agent', id: agentId },
+  )?.id ?? null;
+
+/** Messages in the author's line with this agent, `[]` when the line was never
+ *  opened — so a caller does not have to branch on existence to say "no copy". */
+const copiesTo = (t: Fixture, agentId: string): MessageDto[] => {
+  const pair = pairOf(t, agentId);
+  return pair === null ? [] : t.messages.listForConversation(pair);
+};
+
+describe('mention CC — the copy, in the send transaction', () => {
+  it('lands in the author’s direct line with the agent, with source provenance, a delivery row, and the author notification', async () => {
     const t = bootstrap();
     try {
-      const inboxFrames: Array<{ kind: string; payload: unknown }> = [];
       const viewerFrames: Array<{ kind: string; payload: unknown }> = [];
       const workspaceFrames: Array<{ kind: string; payload: unknown }> = [];
-      const unsubInbox = t.events.subscribe(t.outsiderInbox.id, e => {
-        inboxFrames.push({ kind: e.kind, payload: e.payload });
-      });
       const unsubViewer = t.events.subscribeScope('viewer:local', e => {
         viewerFrames.push({ kind: e.kind, payload: e.payload });
       });
@@ -265,17 +313,26 @@ describe('mention CC v71 — the copy, in the send transaction', () => {
       });
 
       const result = await send(t, `${canonical('cc-outsider')} can you look at the parser?`);
-      // The wake now HAPPENS (see `FakeRuntimeHost`): wait for the copy's own live
-      // dispatch into the inbox, which is the last post-commit effect.
-      await waitFor(() =>
-        t.fake.delivered.some(d => d.conversationId === t.outsiderInbox.id),
-      );
-      unsubInbox();
+      // The destination is minted BY this send, so it can only be subscribed to
+      // after the fact; the conversation-scoped frame is asserted from the message
+      // repo and from the second case below, which drives the dispatcher directly.
+      await waitFor(() => pairOf(t, t.outsider.id) !== null);
+      const pair = pairOf(t, t.outsider.id)!;
+      // The wake HAPPENS (see `FakeRuntimeHost`): wait for the copy's own live
+      // dispatch into the line, which is the last post-commit effect.
+      await waitFor(() => t.fake.delivered.some(d => d.conversationId === pair));
       unsubViewer();
       unsubWorkspace();
 
+      // ── the destination ─────────────────────────────────────────────────
+      // A `direct_pair` between the AUTHOR and the agent: the copy lands somewhere
+      // the recipient can answer, which is the whole of #task:2072.
+      const destination = t.conversations.get(pair)!;
+      expect(destination.placement_kind).toBe('direct_pair');
+      expect(destination.workspace_id).toBeNull();
+
       // ── the copy ────────────────────────────────────────────────────────
-      const copies = t.messages.listForConversation(t.outsiderInbox.id);
+      const copies = t.messages.listForConversation(pair);
       expect(copies).toHaveLength(1);
       const copy = copies[0]!;
       expect(copy.from_kind).toBe('system');
@@ -295,7 +352,9 @@ describe('mention CC v71 — the copy, in the send transaction', () => {
       expect(ccSourceOf(t, copy.id)).toBe(result.committed.message.id);
 
       // ── the durable half of the delivery ────────────────────────────────
-      const pending = t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id);
+      // `conversation_inboxes` is the per-(conversation, agent) DELIVERY QUEUE, not
+      // the retired `agent_inbox` placement: the queue row moved with the copy.
+      const pending = t.inboxes.listPending(pair, t.outsider.id);
       expect(pending.map(item => item.message.id)).toEqual([copy.id]);
 
       // ── the author's notification (option A: SOURCE coordinates) ────────
@@ -315,18 +374,18 @@ describe('mention CC v71 — the copy, in the send transaction', () => {
         source_conversation_title: 'general',
         mention_excerpt: `${canonical('cc-outsider')} can you look at the parser?`,
       });
-      // Never the inbox copy: the author cannot read the inbox, and a pointer
-      // there would be a click into a 403.
-      expect(notifications[0]!.conversation_id).not.toBe(t.outsiderInbox.id);
+      // SOURCE coordinates even though the author CAN now read the destination: the
+      // notification answers "where were you mentioned", and that is the channel.
+      expect(notifications[0]!.conversation_id).not.toBe(pair);
       expect(notifications[0]!.message_id).not.toBe(copy.id);
 
       // ── the frames ──────────────────────────────────────────────────────
-      expect(inboxFrames.map(f => f.kind)).toEqual(['message']);
-      expect((inboxFrames[0]!.payload as { message: MessageDto }).message.id).toBe(copy.id);
-      // No per-viewer unread for a conversation no human is in, and no channel
-      // list fan-out for a placement that is in no workspace.
-      expect(inboxFrames.map(f => f.kind)).not.toContain('unread_updated');
-      expect(workspaceFrames.map(f => f.kind)).not.toContain('workspace_channels_changed');
+      // The destination is new, so the author's DM LIST is stale until it is told —
+      // #task:2035's obligation, discharged after commit because the mint ran inside
+      // the transaction.
+      expect(
+        viewerFrames.filter(f => f.kind === 'direct_pairs_changed').map(f => f.payload),
+      ).toEqual([{ conversation_id: pair }]);
       expect(
         viewerFrames.filter(f => f.kind === 'notification').map(f => f.payload),
       ).toEqual([
@@ -336,38 +395,60 @@ describe('mention CC v71 — the copy, in the send transaction', () => {
           message_id: result.committed.message.id,
         },
       ]);
+      // No channel-list fan-out for a placement that is in no workspace.
+      expect(workspaceFrames.map(f => f.kind)).not.toContain('workspace_channels_changed');
+      // And NO unread frame FOR THE DESTINATION, even though it now has a human
+      // participant — `UNREAD_GUARDS` excludes `from_kind = 'system'`, so the wrap is
+      // not an unanswered message the author owes anyone a read of. This is the fact
+      // that keeps "the copy landed in a stream you can see" from turning every
+      // mention into a badge on the author's own sidebar.
+      //
+      // Filtered by conversation, not by frame kind: the author's OWN send into the
+      // channel legitimately moves their channel unread, and asserting the absence of
+      // the kind outright would pass for that reason instead of this one.
+      expect(
+        viewerFrames
+          .filter(f => f.kind === 'unread_updated')
+          .map(f => (f.payload as { conversation_id: string }).conversation_id),
+      ).not.toContain(pair);
     } finally {
       t.cleanup();
     }
   });
 
-  it('admits nobody: no human participant, no roster row, no workspace membership', async () => {
+  it('grants no membership anywhere: the line’s participation is its ENDPOINTS, and the channel is untouched', async () => {
     const t = bootstrap();
     try {
       await send(t, `${canonical('cc-outsider')} heads up`);
+      const pair = pairOf(t, t.outsider.id)!;
 
-      // The whole retired #1989 admission block, asserted absent one row at a
-      // time. The inbox's single participant is derived from `inbox_agent_id`;
-      // nothing is projected into a roster table for it (§4.2).
-      expect(humanMemberIdsOf(t, t.outsiderInbox.id)).toEqual([]);
-      expect(t.conversations.listAgents(t.outsiderInbox.id)).toEqual([]);
-      expect(t.conversations.listUserMembers(t.outsiderInbox.id)).toEqual([]);
-      // …and the placement itself still has no workspace to be admitted INTO.
-      expect(t.conversations.get(t.outsiderInbox.id)?.workspace_id).toBeNull();
+      // The retired #1989 admission block, asserted absent one row at a time. A
+      // `direct_pair`'s two participants are derived from its ENDPOINT columns, so
+      // there is nothing to project into a roster table — and the reason that matters
+      // is that a roster row is a thing another rule can later filter or join on,
+      // while an endpoint is the aggregate's identity.
+      expect(humanMemberIdsOf(t, pair)).toEqual([]);
+      expect(t.conversations.listAgents(pair)).toEqual([]);
+      expect(t.conversations.listUserMembers(pair)).toEqual([]);
+      expect(t.conversations.get(pair)?.workspace_id).toBeNull();
+      // The mention did NOT put the agent in the source workspace or its channel —
+      // the CC exists precisely because it may not. This is the invariant that keeps
+      // "type a handle" from being a roster mutation (#task:2000 layer ①).
       expect(workspaceMemberAgentIdsOf(t, t.workspace.id)).toEqual([t.insider.id]);
-      // Participation without a roster row is exactly what the inbox owner has.
-      expect(t.conversations.isAgentParticipant(t.outsiderInbox.id, t.outsider.id)).toBe(true);
-      expect(t.conversations.isAgentParticipant(t.outsiderInbox.id, t.insider.id)).toBe(false);
+      expect(t.conversations.isAgentParticipant(t.channel.id, t.outsider.id)).toBe(false);
+      // Both endpoints participate in the line, through the one authority.
+      expect(t.conversations.isAgentParticipant(pair, t.outsider.id)).toBe(true);
+      expect(t.conversations.isAgentParticipant(pair, t.insider.id)).toBe(false);
     } finally {
       t.cleanup();
     }
   });
 
-  it('tells the agent the truth: no reply route, and the original quoted', async () => {
+  it('tells the agent the truth: it cannot read the channel, but this line IS answerable', async () => {
     const t = bootstrap();
     try {
       await send(t, 'ship it <silverhand://agent/cc-outsider>');
-      const copy = t.messages.listForConversation(t.outsiderInbox.id)[0]!;
+      const copy = copiesTo(t, t.outsider.id)[0]!;
 
       expect(copy.content).toContain(canonical('cc-outsider'));
       // Free-text labels ride in code spans so a channel title cannot fabricate
@@ -377,23 +458,34 @@ describe('mention CC v71 — the copy, in the send transaction', () => {
       // The quoted original is a blockquote, which is also why re-stating its
       // references cannot re-deliver them.
       expect(copy.content).toContain('> ship it <silverhand://agent/cc-outsider>');
-      // The retired wrap promised a reply route that never existed for an inbox.
-      expect(copy.content).not.toMatch(/reply here/i);
-      expect(copy.content).toContain('there is nothing to answer here');
+      // The v71 wrap ended in a dead end ("there is nothing to answer here") because
+      // the destination had no other participant. It does now, and the text says the
+      // one true thing about the two streams: the channel is unreadable, this line is
+      // answerable. Asserting the retired sentence is ABSENT is the half that catches
+      // a revert of the destination without a revert of the text.
+      expect(copy.content).not.toMatch(/nothing to answer here/i);
+      expect(copy.content).toContain('answer here');
+      expect(copy.content).toMatch(/cannot read it or reply there/i);
+      // And it does not promise the agent a way INTO the channel: only a person can
+      // put it there (#task:2072 keeps the roster gate where it is).
+      expect(copy.content).toContain('only a person can put you in it');
     } finally {
       t.cleanup();
     }
   });
 });
 
-describe('mention CC v71 — what does NOT get copied', () => {
+describe('mention CC — what does NOT get copied', () => {
   it('skips an agent that is already a member: it received the original', async () => {
     const t = bootstrap();
     try {
       const result = await send(t, `${canonical('cc-insider')} please review`);
       await waitFor(() => logEvents(t.logger.info).includes('mention_cc.skip'));
 
-      expect(t.messages.listForConversation(t.insiderInbox.id)).toEqual([]);
+      expect(copiesTo(t, t.insider.id)).toEqual([]);
+      // No line was opened either: a skip happens BEFORE the mint, so a member's
+      // mention leaves no `direct_pair` behind for the author to wonder about.
+      expect(pairOf(t, t.insider.id)).toBeNull();
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
       expect(logCalls(t.logger.info).find(f => f.event === 'mention_cc.skip')).toMatchObject({
         reason: 'already_member',
@@ -426,7 +518,7 @@ describe('mention CC v71 — what does NOT get copied', () => {
       // never reaches the write half at all. The write half's own duplicate guard
       // is about its argument type, not about user input; it is exercised in the
       // write-half suite below.
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toHaveLength(1);
+      expect(copiesTo(t, t.outsider.id)).toHaveLength(1);
       expect(t.notifications.list({ userId: 'local' })).toHaveLength(1);
       expect(logEvents(t.logger.info)).not.toContain('mention_cc.skip');
     } finally {
@@ -456,10 +548,11 @@ describe('mention CC v71 — what does NOT get copied', () => {
     const t = bootstrap();
     try {
       // #task:2000: the alias renders a chip and addresses nobody, and a human
-      // reference addresses a person, who has no inbox to copy into.
+      // reference addresses a person, who is not an agent the CC can copy to.
       await send(t, '@cc-outsider ping — <silverhand://human/local-test> fyi');
 
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(copiesTo(t, t.outsider.id)).toEqual([]);
+      expect(pairOf(t, t.outsider.id)).toBeNull();
       expect(t.notifications.list({ userId: 'local' }).map(n => n.kind)).not.toContain(
         'mention_external',
       );
@@ -482,16 +575,57 @@ describe('mention CC v71 — what does NOT get copied', () => {
       // `POLICIES.agent.ccMentions` is false, so the write half never runs — no
       // copy, no notification, and nothing skipped (a skip would mean the
       // decision was made per-handle instead of per-policy).
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(copiesTo(t, t.outsider.id)).toEqual([]);
+      expect(pairOf(t, t.outsider.id)).toBeNull();
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
       expect(logEvents(t.logger.info)).not.toContain('mention_cc.skip');
     } finally {
       t.cleanup();
     }
   });
+
+  it('skips an agent no human may open a direct line to, and tells the author it reached nobody', async () => {
+    const t = bootstrap();
+    try {
+      // A conversation-scoped agent (#task:2072). It is a REAL, viewable, addressable
+      // handle — `extractMessageReferences` resolves it and the send commits — but its
+      // human entry is its own workspace, so `canInitiateDirectMessageToAgent` refuses
+      // the line and the CC has no destination it may create.
+      //
+      // This is the arm that makes the redirect honest. Minting unconditionally would
+      // have been a text-typed privilege escalation: the pair-endpoint arm of
+      // `canViewAgent` means holding a line with an agent GRANTS visibility of it, so
+      // anyone who could guess a globally unique handle could self-grant it.
+      const result = await send(t, `${canonical('cc-conv-scoped')} can you take this?`);
+      await waitFor(() => logEvents(t.logger.info).includes('mention_cc.skip'));
+
+      // Nothing was created, and nothing was written.
+      expect(pairOf(t, t.convScoped.id)).toBeNull();
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      // The author's message stands — a refused CC is not a refused send.
+      expect(t.messages.listForConversation(t.channel.id).map(m => m.id)).toContain(
+        result.committed.message.id,
+      );
+      // NOT silent: the author is told the reference reached nobody, through the one
+      // reason-free channel that already reports every other unreachable reference —
+      // so a refused mention cannot be mistaken for a delivered one, and the report
+      // still says nothing about WHY (which would make it an existence oracle).
+      expect(result.unresolvedReferences).toEqual([
+        { kind: 'agent', handle: 'cc-conv-scoped' },
+      ]);
+      // The operator-facing half carries the reason, where an oracle costs nothing.
+      expect(
+        logCalls(t.logger.info)
+          .filter(fields => fields.event === 'mention_cc.skip')
+          .map(fields => ({ handle: fields.handle, reason: fields.reason })),
+      ).toEqual([{ handle: 'cc-conv-scoped', reason: 'no_direct_line' }]);
+    } finally {
+      t.cleanup();
+    }
+  });
 });
 
-describe('mention CC v71 — one transaction with the send (§5)', () => {
+describe('mention CC — one transaction with the send (§5)', () => {
   it('rolls the human send back when the CC write fails', async () => {
     const t = bootstrap();
     try {
@@ -517,50 +651,33 @@ describe('mention CC v71 — one transaction with the send (§5)', () => {
       // post-commit CC, the source message would be committed here and only the
       // copy lost — silently.
       expect(t.messages.listForConversation(t.channel.id)).toHaveLength(before);
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
-      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      expect(copiesTo(t, t.outsider.id)).toEqual([]);
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
       expect(t.fake.starts).toEqual([]);
+      // …and so is the DESTINATION (#task:2072). The mint runs in this same
+      // transaction for exactly this reason: a pair that survived the rollback would
+      // be an empty line in the author's DM list, announced or not, that nothing in
+      // the model explains. This is also why the announcement could not be published
+      // at the mint — it would have described a row that no longer exists.
+      expect(pairOf(t, t.outsider.id)).toBeNull();
     } finally {
       t.cleanup();
     }
   });
 
-  it('fails loud on a broken Agent aggregate (an agent with no inbox) and commits nothing', async () => {
+  it('copies to a RESERVED-but-failed agent: the handle is addressable, so the send mints its destination', async () => {
     const t = bootstrap();
     try {
-      // An agent WITHOUT the inbox its aggregate is supposed to carry. There is
-      // no lazy create here on purpose: a get-or-create is what allowed two
-      // `Mentions` DMs to exist in the retired model.
-      t.agents.create({ name: 'cc-broken', runtime: 'claude' }, t.localHostId, 'local');
-      const before = t.messages.listForConversation(t.channel.id).length;
-
-      await expect(send(t, `${canonical('cc-broken')} hello`)).rejects.toThrow(
-        AgentInboxMissingError,
-      );
-
-      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(before);
-      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('copies to a RESERVED-but-failed agent: the handle is addressable, so the aggregate owes it a destination', async () => {
-    const t = bootstrap();
-    try {
-      // The other half of the aggregate-ownership rule (#task:2014 B1). The
-      // mention resolver reads `agents` with no `materialization_status` filter,
-      // so a handle is addressable from the reserve INSERT onward — including for
-      // a row whose materialization failed and is waiting for `?retry=true`. If
-      // the inbox were born in the L3a dependent tx instead, this send would
-      // throw `AgentInboxMissingError` INSIDE the human's message transaction:
-      // a human losing their own message because someone else's agent failed to
-      // provision hours earlier.
+      // The mention resolver reads `agents` with no `materialization_status` filter,
+      // so a handle is addressable from the reserve INSERT onward — including for a
+      // row whose materialization failed and is waiting for `?retry=true`. What that
+      // costs the CC changed with #task:2072: the destination is minted on demand from
+      // the two principals, so an addressable handle can ALWAYS be copied to, and no
+      // provisioning outcome can make a human's own send fail.
       const reserved = createSqliteAgentProvisioningPersistence(
         t.db,
-      ).reserveAgentAggregate({
-        input: { name: 'cc-reserved', runtime: 'claude' },
+      ).reserveAgentRow({
+        input: { name: 'cc-reserved', runtime: 'claude', session_scope: 'agent' },
         defaultHostId: t.localHostId,
         createdByUserId: 'local',
         idempotencyKey: 'k-cc-reserved',
@@ -570,11 +687,11 @@ describe('mention CC v71 — one transaction with the send (§5)', () => {
 
       const result = await send(t, `${canonical('cc-reserved')} hello`);
 
-      const inboxId = t.conversations.getAgentInbox(reserved.id)!.id;
-      const copies = t.messages.listForConversation(inboxId);
+      const pair = pairOf(t, reserved.id)!;
+      const copies = t.messages.listForConversation(pair);
       expect(copies).toHaveLength(1);
       expect(ccSourceOf(t, copies[0]!.id)).toBe(result.committed.message.id);
-      expect(t.inboxes.listPending(inboxId, reserved.id)).toHaveLength(1);
+      expect(t.inboxes.listPending(pair, reserved.id)).toHaveLength(1);
     } finally {
       t.cleanup();
     }
@@ -586,29 +703,42 @@ describe('mention CC v71 — one transaction with the send (§5)', () => {
       await send(t, `${canonical('cc-outsider')} one`);
       await send(t, `${canonical('cc-outsider')} two`);
 
-      const copies = t.messages.listForConversation(t.outsiderInbox.id);
+      const pair = pairOf(t, t.outsider.id)!;
+      const copies = t.messages.listForConversation(pair);
       expect(copies).toHaveLength(2);
       // The three facts are written together, so their counts cannot diverge —
       // which is the property that makes "copy exists but nobody was told" and
       // "told but nothing queued" both unreachable.
-      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toHaveLength(2);
+      expect(t.inboxes.listPending(pair, t.outsider.id)).toHaveLength(2);
       expect(t.notifications.list({ userId: 'local' })).toHaveLength(2);
       expect(new Set(copies.map(copy => ccSourceOf(t, copy.id))).size).toBe(2);
+      // The SECOND send opened nothing — `getOrCreateDirectPair` found the row — so
+      // only the first sees the announcement. The list still owes a frame for the
+      // second (its order and preview moved), which is why the report's opened-ids
+      // set is deliberately not the copies set; that frame is the ordinary
+      // conversation `message` frame the copy already publishes.
+      expect(
+        logCalls(t.logger.error).filter(f => f.event === 'mention_cc.pair_open_unannounced'),
+      ).toEqual([]);
     } finally {
       t.cleanup();
     }
   });
 });
 
-describe('mention CC v71 — the write half on states a user send cannot produce', () => {
+describe('mention CC — the write half on states a user send cannot produce', () => {
   /** The write half, run in a real transaction through the production scope.
-   *  `references` defaults to what the send boundary would derive. */
+   *  `references` defaults to what the send boundary would derive, and
+   *  `directLineAgentIds` to the boundary's verdict for the fixture's target — the
+   *  cases here are about states BEFORE that gate, so passing an empty set would
+   *  make every one of them pass for the wrong reason. */
   const runWrite = (
     t: Fixture,
     input: {
       message: MessageDto;
       sourceConversation: ConversationDto;
       references?: readonly Reference[];
+      directLineAgentIds?: ReadonlySet<string>;
     },
   ): MentionCcReport =>
     t.persistence.message.uow.atomically(tx =>
@@ -616,6 +746,8 @@ describe('mention CC v71 — the write half on states a user send cannot produce
         message: input.message,
         sourceConversation: input.sourceConversation,
         references: input.references ?? extractMessageReferences(input.message.content),
+        directLineAgentIds:
+          input.directLineAgentIds ?? new Set([t.outsider.id]),
       }),
     );
 
@@ -651,8 +783,11 @@ describe('mention CC v71 — the write half on states a user send cannot produce
       expect(report.skipped).toEqual([
         { handle: 'cc-outsider', reason: 'duplicate_reference', agentId: t.outsider.id },
       ]);
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toHaveLength(1);
+      expect(copiesTo(t, t.outsider.id)).toHaveLength(1);
       expect(t.notifications.list({ userId: 'local' })).toHaveLength(1);
+      // One mint, announced once: the guard runs before `openDirectPair`, so a
+      // repeated reference cannot double-announce a line either.
+      expect(report.openedPairConversationIds).toEqual([pairOf(t, t.outsider.id)]);
     } finally {
       t.cleanup();
     }
@@ -674,8 +809,14 @@ describe('mention CC v71 — the write half on states a user send cannot produce
       expect(report.skipped).toEqual([
         { handle: 'cc-outsider', reason: 'unresolved_author', agentId: t.outsider.id },
       ]);
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(copiesTo(t, t.outsider.id)).toEqual([]);
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      // Ordered BEFORE the direct-line check on purpose: with no author there is no
+      // human endpoint to open a line with, so asking whose line it is would be
+      // asking the wrong question — and a pair keyed on a guessed viewer is a line
+      // between two principals who never spoke.
+      expect(pairOf(t, t.outsider.id)).toBeNull();
+      expect(report.openedPairConversationIds).toEqual([]);
     } finally {
       t.cleanup();
     }
@@ -684,26 +825,37 @@ describe('mention CC v71 — the write half on states a user send cannot produce
   it('skips a workspace-less source instead of throwing: the copy has no coordinate, the send is still valid', () => {
     const t = bootstrap();
     try {
-      const message = authoredMessage(t, `${canonical('cc-outsider')} from an inbox`);
-      // The insider's own inbox as the SOURCE — still a state a user send cannot
-      // produce, which is why it is called directly here. What changed in
+      const message = authoredMessage(t, `${canonical('cc-outsider')} from a DM`);
+      // The insider's own direct line as the SOURCE. The write step is driven
+      // directly because its RETURN VALUE is the contract the post-commit
+      // dispatcher consumes — the integration twin below asserts the same verdict
+      // through a real human send, but only from the outside. What changed in
       // #task:2021 P4-5 is the ANSWER: this used to throw, and throwing from inside
       // the send transaction rolls back a message the write gate had already
       // admitted. A source with no workspace has no coordinate to name the copy
       // after (the wrap text and the `mention_external` row are both keyed by it),
       // so the CC is declined AS DATA and the send commits.
+      const source = t.conversations.get(
+        t.conversations.getOrCreateDirectPair(
+          { kind: 'human', id: 'local' },
+          { kind: 'agent', id: t.insider.id },
+          1_700_000_000_000,
+        ).conversation.id,
+      )!;
+      expect(source.workspace_id).toBeNull();
       const report = runWrite(t, {
         message,
-        sourceConversation: t.conversations.get(t.insiderInbox.id)!,
+        sourceConversation: source,
       });
 
       expect(report.copies).toEqual([]);
       expect(report.skipped).toEqual([
         { handle: 'cc-outsider', reason: 'source_not_workspace_placed' },
       ]);
-      // A skip, not a partial write: no copy, no queued delivery, no notification.
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
-      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      // A skip, not a partial write: no copy, no queued delivery, no notification —
+      // and no line opened, because the refusal precedes the mint.
+      expect(copiesTo(t, t.outsider.id)).toEqual([]);
+      expect(pairOf(t, t.outsider.id)).toBeNull();
       expect(t.notifications.list({ userId: 'local' })).toEqual([]);
     } finally {
       t.cleanup();
@@ -718,7 +870,7 @@ describe('mention CC v71 — the write half on states a user send cannot produce
  * every gate — a durable-looking failure on the human's screen for the crime of
  * naming a third agent in a DM.
  */
-describe('mention CC v71 — a DM source declines the CC without failing the send', () => {
+describe('mention CC — a DM source declines the CC without failing the send', () => {
   it('commits the DM message, writes no copy, and reports the skip after commit', async () => {
     const t = bootstrap();
     try {
@@ -746,9 +898,9 @@ describe('mention CC v71 — a DM source declines the CC without failing the sen
       expect(result.committed.message.content).toBe(
         `${canonical('cc-outsider')} take a look`,
       );
-      // …and the CC wrote nothing anywhere.
-      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
-      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      // …and the CC wrote nothing anywhere, and opened no line.
+      expect(copiesTo(t, t.outsider.id)).toEqual([]);
+      expect(pairOf(t, t.outsider.id)).toBeNull();
       // No notification of ANY kind: not a mention CC (declined as data), and not
       // an `agent_start_failed` either — the DM endpoint's wake is an ORDINARY
       // one, because a workspace-less placement has a session scope (#task:2019).
@@ -781,19 +933,26 @@ describe('mention CC v71 — a DM source declines the CC without failing the sen
   });
 });
 
-describe('mention CC v71 — the post-commit half is the only best-effort part', () => {
-  const report = (overrides: Partial<MentionCcReport['copies'][number]> = {}): MentionCcReport => ({
+describe('mention CC — the post-commit half is the only best-effort part', () => {
+  /** One copy into `pair-1`, which THIS send opened — the ordinary shape. `opened`
+   *  is overridable so the coverage proof below can be handed the one shape the
+   *  dispatcher must not accept silently. */
+  const report = (
+    overrides: Partial<MentionCcReport['copies'][number]> = {},
+    opened: string[] = ['pair-1'],
+  ): MentionCcReport => ({
     copies: [
       {
         agentId: 'agent-1',
         agentHandle: 'cc-outsider',
-        inboxConversationId: 'inbox-1',
+        conversationId: 'pair-1',
         wrapped: { id: 'copy-1' } as MessageDto,
         notifiedUserId: 'local',
         ...overrides,
       },
     ],
     skipped: [],
+    openedPairConversationIds: opened,
     source: { conversationId: 'channel-1', messageId: 'source-1' },
   });
 
@@ -851,25 +1010,27 @@ describe('mention CC v71 — the post-commit half is the only best-effort part',
     expect(logEvents(h.logger.warn)).toEqual(['mention_cc.dispatch_failed']);
   });
 
-  it('publishes the inbox message frame and the author notification before waking', async () => {
+  it('tells the author the line EXISTS before it puts a message in it, then wakes', async () => {
     const order: string[] = [];
     const h = deps(async () => {
       order.push('start');
     });
-    const inboxFrames: string[] = [];
+    const pairFrames: string[] = [];
     const viewerFrames: unknown[] = [];
-    h.events.subscribe('inbox-1', e => {
+    h.events.subscribe('pair-1', e => {
       order.push('frame');
-      inboxFrames.push(e.kind);
+      pairFrames.push(e.kind);
     });
     h.events.subscribeScope('viewer:local', e => {
+      order.push(`viewer:${e.kind}`);
       viewerFrames.push({ kind: e.kind, payload: e.payload });
     });
 
     await dispatchMentionCcEffects(report(), h.deps);
 
-    expect(inboxFrames).toEqual(['message']);
+    expect(pairFrames).toEqual(['message']);
     expect(viewerFrames).toEqual([
+      { kind: 'direct_pairs_changed', payload: { conversation_id: 'pair-1' } },
       {
         kind: 'notification',
         payload: {
@@ -879,9 +1040,43 @@ describe('mention CC v71 — the post-commit half is the only best-effort part',
         },
       },
     ]);
-    // The frames do not depend on the wake succeeding — a client that has the
-    // conversation open must see the copy even on the deferred path.
-    expect(order).toEqual(['frame', 'start']);
+    // ORDER IS THE CLAIM (#task:2035 + #task:2072). The list invalidation goes out
+    // FIRST because the list is the authority for what exists: a live client that
+    // received a `message` frame for a conversation it has never heard of has nothing
+    // to apply it to. Then the copy's own frame, then the wake — the frames do not
+    // depend on the wake succeeding, because a client with the line open must see the
+    // copy even on the deferred path.
+    expect(order).toEqual([
+      'viewer:direct_pairs_changed',
+      'frame',
+      'viewer:notification',
+      'start',
+    ]);
     expect(logCalls(h.logger.warn)).toEqual([]);
+    expect(logCalls(h.logger.error)).toEqual([]);
+  });
+
+  it('PROVES it announced every pair the transaction opened, instead of trusting the caller', async () => {
+    // The obligation #task:2035 fused to the allocation, discharged the only way an
+    // in-transaction minter can: recorded as data, published after commit. What makes
+    // it an obligation and not a hope is this check — the dispatcher walks the ids the
+    // transaction opened and reports any it did not cover.
+    //
+    // The state below is unreachable through `writeMentionCcCopies` today (every mint
+    // there is followed by a copy that names it), and that is exactly why it is
+    // asserted here rather than left to the code being read correctly: the next way to
+    // skip a copy AFTER the mint would otherwise reintroduce the #task:2035 bug — an
+    // opened line the author's list never learns about — with every test still green.
+    const h = deps(async () => {});
+    await dispatchMentionCcEffects(report({}, ['pair-1', 'pair-orphan']), h.deps);
+
+    expect(
+      logCalls(h.logger.error).map(fields => ({
+        event: fields.event,
+        conversationId: fields.conversationId,
+      })),
+    ).toEqual([
+      { event: 'mention_cc.pair_open_unannounced', conversationId: 'pair-orphan' },
+    ]);
   });
 });

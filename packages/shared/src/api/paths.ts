@@ -152,8 +152,7 @@ export const apiPaths = {
   agentDirectMessages: (id: string) => `/api/agents/${id}/direct-messages`,
   /** Owner-audit chats list (#task:2036 part ②): the conversations the agent is a
    *  party to that its OWNER may read in full, read-only. Enumerates the agent's
-   *  workspace conversations and its `direct_pair` lines; the AgentInbox is
-   *  excluded (the agent's own private queue, outside the audit face).
+   *  workspace conversations and its `direct_pair` lines.
    *
    *  Owner-only by a two-step anti-enum ladder, matching `GET /api/agents/:id`:
    *  `canViewAgent` → 404 (hides existence from a non-viewer), then
@@ -172,8 +171,8 @@ export const apiPaths = {
    *
    *  Same ladder as the list, plus the per-conversation gate
    *  (`canAuditAgentConversation`): `canViewAgent` → 404, then
-   *  `canAuditAgentConversation` → 403 (owner ∧ the conversation exists ∧ is not
-   *  the AgentInbox ∧ the agent is a SUBJECT participant of it). A conversation
+   *  `canAuditAgentConversation` → 403 (owner ∧ the conversation exists ∧ the
+   *  agent is a SUBJECT participant of it). A conversation
    *  the agent is not a party to is indistinguishable from a bogus id — no
    *  existence oracle. Each read leaves operator audit evidence. */
   agentChatTranscript: (id: string, conversationId: string) =>
@@ -277,6 +276,10 @@ export const apiPaths = {
    *  star, DELETE = unstar. Viewer-scoped, can-view gated — replaced the old
    *  admin-gated shared `/pin` route. */
   channelStar: (id: string) => `/api/channels/${id}/star`,
+  /** The messages door for a conversation by id: POST sends, GET reads history
+   *  (both verbs, one URL). The sole name for `/api/channels/:id/messages` —
+   *  there is no `conversationChannel*` alias, so a caller cannot pick the wrong
+   *  spelling of an identical URL. */
   channelMessages: (id: string) => `/api/channels/${id}/messages`,
   channelThreadFollowers: (id: string, rootMessageId: string) =>
     `/api/channels/${id}/threads/${rootMessageId}/followers`,
@@ -311,7 +314,6 @@ export const apiPaths = {
    *  human of a private channel is rejected with a typed reason. */
   channelLeave: (id: string) => `/api/channels/${id}/leave`,
   conversationChannel: (id: string) => `/api/channels/${id}`,
-  conversationChannelMessages: (id: string) => `/api/channels/${id}/messages`,
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
 
   /** Identity + routing metadata for ANY top-level conversation by id. Backs

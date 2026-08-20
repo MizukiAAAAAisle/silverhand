@@ -16,9 +16,14 @@
  *      without a channel seat also hides the row (public discovery grants no
  *      read). This is the participation-only falsifier the `['saved']`
  *      workspace-name live-join depends on (F1 guardrail);
- *   3. the `workspace_channel` place projects an `agent_home` workspace as
- *      `agent_space` on the wire — the same one-way projection `TaskPlace` makes,
- *      re-derived independently here because it is a distinct SQL site.
+ *   3. an `agent_home` channel is projected by the SAME `workspace_channel` arm,
+ *      with NO container word beside the coordinate. Until #task:2075's
+ *      stop-publish step this cell asserted the opposite half — that a distinct
+ *      CASE expression here relabelled `agent_home` as the published word
+ *      `agent_space` — and the CASE was what made this a distinct SQL site.
+ *      Nothing in this query branches on the container any more, so the cell is
+ *      kept as an EXACT key-set equality: an extra key would be refused here,
+ *      whereas the DTO's non-strict zod object would silently strip it.
  *
  * `seedAllFixtureMemberships: false` is load-bearing: the fixture trigger would
  * seat every human in every conversation, which would both mask the DM gap in
@@ -128,12 +133,12 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
     expect(listed.map(s => s.message.id)).toContain(msg.id);
     // Exact shape (F1): the workspace NAME is deliberately absent — joined live
     // from `['workspaces']`, mirroring the shipped `TaskPlace`. A full `toEqual`
-    // (not `toMatchObject`) makes re-adding `workspace_name` redden this.
+    // (not `toMatchObject`) makes re-adding `workspace_name` redden this — and,
+    // since #task:2075's stop-publish step, a re-added container word too.
     expect(listed.find(s => s.message.id === msg.id)!.place).toEqual({
       kind: 'workspace_channel',
       conversation_id: channel.id,
       workspace_id: ws.id,
-      workspace_kind: 'regular',
       channel_name: fixedConversationTitle('general').title,
     });
   });
@@ -185,7 +190,7 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
     expect(saved.listForUser(viewer).map(s => s.message.id)).toContain(msg.id);
   });
 
-  it('projects an agent_home channel as workspace_kind=agent_space', () => {
+  it('projects an agent_home channel through the plain workspace arm, with no container word', () => {
     const alpha = agents.create(
       { name: 'home-alpha', runtime: 'claude' },
       localHostId,
@@ -205,17 +210,20 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
     });
 
     const saved = new SavedMessageRepo(db);
-    // Read by id (no participation gate) isolates the CASE projection: the
-    // `agent_home` workspace kind must surface on the wire as `agent_space`.
-    // `agent_home` never appears in a DTO; a broken CASE would either throw
-    // (NULL `workspace_kind`) or mislabel it — both caught here.
+    // Read by id (no participation gate) isolates the projection itself. The
+    // assertion is `toEqual`, not `toMatchObject`: the property under test is
+    // that this arm carries the coordinate pair and the one live name and
+    // NOTHING else — an ownership-derived container word re-appearing here
+    // would fail, which `toMatchObject` could not see. `agent_home` is a
+    // deliberate input: it is the container that used to take the special
+    // branch, so it is the state where a re-introduced word would surface first.
     expect(saved.save(msg.id, viewer)).not.toBeNull();
     const echo = saved.getByMessageIdForUser(msg.id, viewer);
-    expect(echo!.place).toMatchObject({
+    expect(echo!.place).toEqual({
       kind: 'workspace_channel',
       conversation_id: dm.id,
-      workspace_kind: 'agent_space',
       workspace_id: home.id,
+      channel_name: dm.title,
     });
   });
 });

@@ -171,11 +171,14 @@ describe('Tasks (PR-T1)', () => {
       kind: 'workspace',
       workspace_id: workspaceId,
       conversation_id: conversationId,
-      // Regular counterpart to the agent_home case in task-identity.test.ts: a
-      // regular workspace projects to `regular`, not `agent_space`. Pins the
-      // other CASE branch so miswiring the SQL projection cannot stay green.
-      workspace_kind: 'regular',
     });
+    // Regular counterpart to the agent_home case in task-identity.test.ts. That
+    // cell pinned the other branch of a SQL CASE over the container word until
+    // #task:2075's stop-publish step deleted both the CASE and the word; what is
+    // left to distinguish the two containers on this face is the coordinate
+    // itself, asserted above. The exact-key-set assertion lives on the agent_home
+    // side, which is where a re-derived word would appear first.
+    expect(detail.place).not.toHaveProperty('workspace_kind');
     expect(detail.source_message_id).toBeNull();
     expect(detail.nav.kind).toBe('created_event');
     expect(detail.creator.type).toBe('user');

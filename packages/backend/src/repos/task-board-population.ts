@@ -34,9 +34,8 @@ export interface SqlFragment {
  * (`listParticipantUserIds`) use, so a task the board shows is exactly a task
  * the point read serves and the change event reaches. A human participates via
  * the workspace roster edge (a channel seat AND workspace membership) OR the
- * human endpoint of a DirectPair; there is NO agent-inbox arm for humans, so a
- * DM task is visible to its endpoints without any `conversation_users` row
- * (#task:2037).
+ * human endpoint of a DirectPair — two arms and no third, so a DM task is
+ * visible to its endpoints without any `conversation_users` row (#task:2037).
  *
  * `userParticipates` correlates on the CONVERSATIONS table (placement_kind,
  * endpoints, workspace_id), and the board queries read `FROM tasks t` with no

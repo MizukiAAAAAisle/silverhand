@@ -104,10 +104,9 @@ import {
  * codec). Turning an address into a stream needs the conversation store, the
  * handle registry and the authenticated principal, so it lives in the backend
  * resolver — an address is a REQUEST for a stream, never proof that one exists.
- * The grammar is likewise placement-BLIND: `#conv:<id>` can spell an `agent_inbox`
- * conversation, and refusing that as a write destination (an inbox is a
- * notification read face, so a mention CC must point at the repliable origin
- * stream instead) is the resolver's decision, not the parser's.
+ * The grammar is likewise placement-BLIND: `#conv:<id>` can spell a `direct_pair`
+ * the caller has no part in, and refusing that as a destination is the resolver's
+ * decision, not the parser's.
  *
  * Deliberately NOT merged with `reference.ts` (#task:2011's object references):
  * that grammar points at principals and objects inside prose and decides
@@ -505,7 +504,6 @@ export function formatDirectPairLabel(otherHandle: string): string {
  *  - `target_malformed` — not an address at all. Stays distinct because no lookup
  *    happened and the caller can only fix it if told.
  *  - `target_unresolved` — names no stream this principal may use.
- *  - `inbox_not_writable` — an agent inbox is a read face, never a destination.
  *  - `thread_not_in_target` — the suffix names no reply cluster of that
  *    conversation.
  *  - `self_pair_not_addressable` — `dm:@<own handle>`; a DM has two participants.
@@ -513,7 +511,6 @@ export function formatDirectPairLabel(otherHandle: string): string {
 export const DELIVERY_TARGET_REFUSAL_CODES = [
   'target_malformed',
   'target_unresolved',
-  'inbox_not_writable',
   'thread_not_in_target',
   'self_pair_not_addressable',
 ] as const;
@@ -574,11 +571,10 @@ export const SLOT_REACH_REFUSAL_CODE = 'slot_out_of_scope';
  *    by a later table upgrade. The only reason that indicates something an operator
  *    might want to clean up.
  *
- * Deliberately NOT a reason: a `direct_pair` or `agent_inbox` placement. Those are
- * not workspace-placed and have no name form by design — the pair renders its
- * first-person label and the inbox renders its id, and counting either as a
- * fallback would bury the three above under traffic that no amount of naming
- * machinery could ever remove.
+ * Deliberately NOT a reason: a `direct_pair` placement. It is not workspace-placed
+ * and has no name form by design — the pair renders its first-person label, and
+ * counting that as a fallback would bury the three above under traffic that no
+ * amount of naming machinery could ever remove.
  */
 export type AddressFallbackReason =
   | 'agent_home'
@@ -592,8 +588,8 @@ export type AddressFallbackReason =
  * Four arms, because there are exactly four cases and the renderer must not have
  * to guess between them: a stream is either nameable, workspace-placed but not
  * nameable (with the reason the caller alone can know), a pair being rendered for
- * one of its two participants, or a placement with no name form. Passing the
- * branded canonical values rather than raw columns is what makes
+ * one of its two participants, or a row with no name form for THIS viewer. Passing
+ * the branded canonical values rather than raw columns is what makes
  * {@link formatStreamAddressToken} total without validating anything.
  */
 export type StreamNaming =
@@ -605,7 +601,8 @@ export type StreamNaming =
   | { readonly kind: 'unnameable'; readonly reason: AddressFallbackReason }
   /** For the ONE viewer this header is being written for. */
   | { readonly kind: 'direct_pair'; readonly otherHandle: string }
-  /** `agent_inbox`: a single-participant notification face, addressed by id. */
+  /** No first-person label to render this row in: the viewer is not an endpoint
+   *  of the pair, or that endpoint's handle is gone. Addressed by id. */
   | { readonly kind: 'id_only' };
 
 /**

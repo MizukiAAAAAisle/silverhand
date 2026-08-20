@@ -29,7 +29,11 @@ import {
   type SilverhandCliLauncher,
 } from './context.js';
 import { AgentTokenStore } from './auth/agent-token-store.js';
-import { canAgentUseCapability, canPostToConversation } from './permissions.js';
+import {
+  canAgentUseCapability,
+  canInitiateDirectMessageToAgent,
+  canPostToConversation,
+} from './permissions.js';
 import { resolveAuthRuntimeConfig } from './auth/config.js';
 import {
   cleanupEmbeddedBootstrap,
@@ -290,17 +294,27 @@ export async function startBackend(
   opts.testHooks?.onDatabaseOpened?.(db);
   if (
     migrationResult.current &&
-    migrationResult.current.appliedVersions.length > 0
+    migrationResult.current.appliedSteps.length > 0
   ) {
+    const run = migrationResult.current;
+    // The line an operator reads leads with the EPOCH, because that is the one
+    // number a release announces (#task:2103). The steps stay in the record
+    // because they are what actually ran: a resume applies only the tail of the
+    // epoch, so the step span is the only way to see which steps this run
+    // covered and where a previous crashed attempt had stopped.
     logger.info(
       {
-        fromVersion: migrationResult.current.beforeVersion,
-        toVersion: migrationResult.current.afterVersion,
-        appliedVersions: migrationResult.current.appliedVersions,
-        backupPath: migrationResult.current.backupPath,
+        fromEpoch: run.beforeEpoch,
+        toEpoch: run.afterEpoch,
+        fromStep: run.beforeStep,
+        toStep: run.afterStep,
+        appliedSteps: run.appliedSteps,
+        backupPath: run.backupPath,
         elapsedMs: elapsedSince(migrationStartedAt),
       },
-      `Migration applied: v${migrationResult.current.beforeVersion} -> v${migrationResult.current.afterVersion}, backup at ${migrationResult.current.backupPath ?? 'none'}`,
+      `Migration applied: schema epoch ${run.beforeEpoch} -> ${run.afterEpoch} `
+        + `(migration steps ${run.beforeStep} -> ${run.afterStep}), `
+        + `backup at ${run.backupPath ?? 'none'}`,
     );
   }
   // #task:2016 — the third of the three properties that make "no two channels
@@ -614,6 +628,24 @@ export async function startBackend(
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
+    // #task:2072 — the mention CC's destination is a direct pair with the author,
+    // so the send has to know WHICH mentioned agents this author may open one to.
+    // Bound here, like `TaskService`'s gates below: the verdict is
+    // `canInitiateDirectMessageToAgent` — the same gate the agent page's "Message"
+    // button runs, so a mention creates no line its author could not have created
+    // with one click — and it is asked at the boundary because its reads are
+    // authorization state, not the send's transaction.
+    //
+    // Returns the AGENT ID it gated, not a boolean: the handle is re-resolved
+    // inside the transaction, and keying the CC's check by id means a handle that
+    // resolves elsewhere by then is simply absent from the set and fails closed.
+    directLineTargetFor: (userId, agentHandle) => {
+      const agent = persistence.repos.agents.getByName(agentHandle);
+      if (!agent) return null;
+      return canInitiateDirectMessageToAgent(ctx, { kind: 'user', userId }, agent.id)
+        ? agent.id
+        : null;
+    },
   });
   const taskPersistence = persistence.tasks;
   ctx.taskService = new TaskService({
@@ -1042,13 +1074,19 @@ export {
   prepareObserved,
   type ObservedStatement,
 } from './observability/observed-statement.js';
+export { CURRENT_MIGRATION_STEP } from '@silverhand/shared/db/migrations';
 export {
-  CURRENT_SCHEMA_VERSION,
-  MIN_SUPPORTED_SCHEMA_VERSION,
-} from '@silverhand/shared/db/migrations';
+  CURRENT_SCHEMA_EPOCH,
+  MIN_SUPPORTED_MIGRATION_STEP,
+  MIN_SUPPORTED_SCHEMA_EPOCH,
+  epochForMigrationStep,
+  firstStepOfEpoch,
+  reportedEpochForAppliedStep,
+} from '@silverhand/shared/db/schema-epochs';
 export {
   DatabaseMigrationError,
-  currentSchemaVersion,
+  currentMigrationStep,
+  currentSchemaEpoch,
   type DatabaseMigrationErrorCode,
   type MigrationBackupInfo,
   type MigrationRunResult,

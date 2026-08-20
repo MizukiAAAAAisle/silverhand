@@ -122,8 +122,9 @@ export type MessageEventPayload = z.infer<typeof MessageEventPayloadSchema>;
  * actor who made this attempt — while the `message` event is read by everyone in
  * the conversation. So sender-only diagnostics attach HERE and never inside
  * `MessageEventPayload`, which is why the WS frame stays literally
- * `result.committed`. `stream_head_before` on the agent surface is the same
- * pattern: a fact about the attempt, carried by the attempt's answer.
+ * `result.committed`. `unresolved_references` below is exactly this pattern: a
+ * fact about the attempt (which of this sender's references addressed nobody),
+ * carried by the attempt's answer and seen by no one else.
  */
 export const MessageSendAckSchema = MessageEventPayloadSchema.extend({
   /** This sender's references that addressed nobody (#task:2021 P4-5-b) — see
@@ -458,9 +459,6 @@ const SearchOptionalMillisSchema = z.preprocess(
   z.coerce.number().int().nonnegative().optional(),
 );
 
-export const SearchScopeSchema = z.enum(['all', 'regular', 'dm']);
-export type SearchScope = z.infer<typeof SearchScopeSchema>;
-
 // Stream scope for message search (#task:1334). `all` searches both the
 // mainline and every thread of the matched conversation(s) — the historical
 // behaviour. `mainline` / `thread` narrow to a single renderable stream of
@@ -509,7 +507,6 @@ const SENDER_SINGLE_SELECT_ISSUE: { message: string; path: (string | number)[] }
 export const SearchQueryInputSchema = z
   .object({
     q: z.string().trim().max(200).optional().default(''),
-    scope: SearchScopeSchema.optional().default('all'),
     stream: SearchStreamSchema.optional().default('all'),
     workspace_id: SearchOptionalStringSchema,
     conversation_id: SearchOptionalStringSchema,
@@ -545,7 +542,26 @@ export type SearchQueryInput = z.infer<typeof SearchQueryInputSchema>;
 export const SearchWorkspaceRefSchema = z.object({
   id: z.string(),
   name: z.string(),
-  kind: z.enum(['regular', 'dm']),
+  /**
+   * WHOSE container this is: the home agent of an agent space, `null` for a
+   * regular workspace. The ownership arc itself — not a word derived from it.
+   *
+   * Search's consumer needs this bit for an IA-level decision (`groupResults`
+   * splits an "Agent Spaces" group) and cannot compute it in scope, which is the
+   * only reason a container fact travels on a result row at all: a ref carries a
+   * fact ONLY when the reader's real question needs it and the DTO cannot
+   * otherwise answer it (#task:2075).
+   *
+   * The published `kind` word (`z.enum(['regular','dm'])`) carried the same bit
+   * on `origin/main` — it PREDATES this field, it was not introduced beside it.
+   * A1 added `owner_agent_id` alongside the existing published `kind` so the
+   * renderer half could switch reads without a lock-step change, and A2's
+   * stop-publish step then deleted `kind` — a breaking removal of a field the
+   * in-field renderer reads, one of this generation's desktop-epoch breaks
+   * (#task:2075). Do not re-derive a
+   * container word from this field.
+   */
+  owner_agent_id: z.string().nullable(),
 });
 export type SearchWorkspaceRef = z.infer<typeof SearchWorkspaceRefSchema>;
 
@@ -571,10 +587,12 @@ const searchConversationRefBase = {
 // consumer free to branch on `workspace === null` — the same field-absence-as-
 // discriminator failure mode as the `resolveNavWorkspaceId` finding).
 //
-// Only the two placements search's producer whitelist admits appear here.
-// `agent_inbox` has NO arm on purpose: a mis-projected inbox row fails to
-// parse, so exhaustive/fail-closed is enforced at the type layer independently
-// of the SQL whitelist (#task:2053-B②) — both guards, same direction.
+// Only the two placements search's producer whitelist admits appear here, which
+// is today the whole placement alphabet. The union is still the fail-closed
+// guard, and for a FUTURE placement rather than a retired one: a row the SQL
+// whitelist mis-projected fails to PARSE instead of arriving with its `workspace`
+// field silently absent (#task:2053-B②) — both guards, same direction, and
+// adding a placement must add an arm here or stay out of search.
 export const SearchConversationRefSchema = z.discriminatedUnion(
   'placement_kind',
   [
@@ -620,10 +638,6 @@ export const SearchResultDtoSchema = z.discriminatedUnion('type', [
     // workspace-less human↔agent DM).
     conversation: SearchConversationRefSchema,
     message: MessageDtoSchema,
-    /** The author agent's immutable `@handle` (`agents.name`), or `null` for
-     *  user messages — same field as `SavedMessageDto.agent_name`, same
-     *  reason it needs no identity invalidation (#task:1705). */
-    agent_name: z.string().nullable(),
   }),
 ]);
 export type SearchResultDto = z.infer<typeof SearchResultDtoSchema>;
@@ -654,9 +668,9 @@ export type SearchDto = z.infer<typeof SearchDtoSchema>;
  *  the message's complete location with no parallel top-level coordinate.
  *
  *  - workspace_channel arm: `conversation_id` plus the workspace board namespace
- *    (`workspace_id` + the `regular | agent_space` DOMAIN `workspace_kind`;
- *    physical `agent_home` never reaches the wire, contract §2 rule 5) and the
- *    one embedded mutable name, `channel_name`. The workspace NAME is deliberately
+ *    (`workspace_id` alone — a container WORD sat beside it until #task:2075's
+ *    stop-publish step, and no consumer of this place ever asked which kind of
+ *    container it was) and the one embedded mutable name, `channel_name`. The workspace NAME is deliberately
  *    NOT here (F1, mirrors the shipped `TaskPlace` workspace arm): a workspace's
  *    name is its aggregate's mutable field, so the renderer joins it live from the
  *    `['workspaces']` directory (kept fresh by `viewer_workspaces_changed`,
@@ -684,9 +698,6 @@ export const SavedPlaceSchema = z.discriminatedUnion('kind', [
     kind: z.literal('workspace_channel'),
     conversation_id: z.string(),
     workspace_id: z.string(),
-    /** Domain projection of the workspace kind; physical `agent_home` never
-     *  reaches the wire (contract §2 rule 5). */
-    workspace_kind: z.enum(['regular', 'agent_space']),
     /** The channel's display title (a channel has one; a DM does not). A LIVE
      *  projection: `['saved']` subscribes `workspace_channels_changed` (§4-A)
      *  and invalidates on it. The workspace NAME is deliberately absent —
@@ -719,15 +730,6 @@ export const SavedMessageDtoSchema = z.object({
    *  may read any `conversation_id` as a thread coordinate — attributing or
    *  filtering a row "by thread" from this field silently means "by channel". */
   place: SavedPlaceSchema,
-  /**
-   * The author agent's immutable `@handle` (`agents.name`), or `null` for
-   * user messages. NOT a display-name snapshot: `name` is decided at agent
-   * creation and never editable, so a later profile rename does not change
-   * this value and there is no "historical vs current name" question to
-   * settle. It is therefore exempt from live identity invalidation — the
-   * mutable carriers are `display_name` / `avatar_url` (#task:1705).
-   */
-  agent_name: z.string().nullable(),
   saved_at: z.number(),
 });
 export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;

@@ -90,8 +90,8 @@ export class MessageDeliveryCoordinator {
    *      not exist in the client's cache at all (a stranger's first DM), so the
    *      authority is the re-read of `GET /api/direct-pairs`, which carries the
    *      pair's unread. See `application/direct-pairs-changed.ts`.
-   *  The `agent_inbox` arm is neither: an inbox has no human participant, so
-   *  there is no viewer-scoped frame to send.
+   *  Those two arms are the whole placement alphabet, so nothing falls through
+   *  to a third outcome.
    *
    *  Every caller of this method is post-commit, and all three describe a change
    *  the DM list would show: a send, and the two thread follow-state writes
@@ -268,7 +268,7 @@ export class MessageDeliveryCoordinator {
    *
    * A workspace-less placement is NOT one of those failures and needs no
    * exemption: `buildRuntimeStartOptions` already emits `workspace: null` with an
-   * agent-scoped `runtime_scope`, so a `direct_pair` / `agent_inbox` spawn takes
+   * agent-scoped `runtime_scope`, so a `direct_pair` spawn takes
    * the ordinary path (#task:2019 landed). Every error that arrives here is a real
    * start/deliver failure and is reported as one.
    */
@@ -404,8 +404,8 @@ export class MessageDeliveryCoordinator {
    *
    * The "already running" fact comes from the agent's RUNTIME SEAT
    * (`runtimeSeatStatus`), not from a membership row's projected `status` column:
-   * the recipient unit is a principal id now, and a `direct_pair` / `agent_inbox`
-   * participant has a seat but no membership row at all, so the old pre-filter
+   * the recipient unit is a principal id now, and a `direct_pair` participant
+   * has a seat but no membership row at all, so the old pre-filter
    * could not have answered for one (#task:2021 P4-5). The RULE — which statuses
    * count as running — stays here, where a test of the use case can see it; the
    * port only reports the status.

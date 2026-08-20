@@ -6,7 +6,7 @@ import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import { workspaceDisplayName } from '@/lib/workspace-name';
+import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
 import {
   FilterSelectItem,
   FILTER_SELECT_TRIGGER_CLASS,
@@ -16,8 +16,8 @@ import {
 /**
  * Shared "filter by workspace" dropdown. One component, one data source
  * (`WorkspaceListItem[]`), one item design — Agent Spaces group then Workspaces,
- * each row a `WorkspaceIcon` (agent space → agent avatar, regular → serif W) +
- * the canonical `workspaceDisplayName`. ArchivedChannelsPanel and SavedListView
+ * each row a `WorkspaceIcon` (agent space → its agent's avatar, people-owned →
+ * serif W) + the workspace's own name. ArchivedChannelsPanel and SavedListView
  * both render through THIS so the two workspace filters are identical rather than
  * each deriving an ad-hoc `{id, name}` list off its own rows (shiki #task:1258:
  * match Archived's item design + data source). Built on the Radix-Select
@@ -43,23 +43,23 @@ export function WorkspaceFilterSelect({
   ariaLabel = 'Workspace filter',
 }: {
   value: WorkspaceFilterValue;
-  /** Full list; filtered to regular + DM workspaces internally. */
+  /** Full list — every workspace the viewer can see is offered. */
   workspaces: WorkspaceListItem[];
   onChange: (value: WorkspaceFilterValue) => void;
   allLabel?: string;
   /** Icon for the "all" row + the trigger when nothing is scoped. */
   allIcon: JSX.Element;
-  /** Tag DM/regular rows whose workspace is itself archived (Archived panel). */
+  /** Tag rows whose workspace is itself archived (Archived panel). */
   showArchivedSuffix?: boolean;
   ariaLabel?: string;
 }): JSX.Element {
   const { data: agents = [] } = useAgents();
-  const filterable = useMemo(
-    () => workspaces.filter(w => w.kind === 'regular' || w.kind === 'dm'),
-    [workspaces],
-  );
-  const dms = filterable.filter(w => w.kind === 'dm');
-  const regular = filterable.filter(w => w.kind === 'regular');
+  // Every visible workspace is offered: the `kind === 'regular' || kind ===
+  // 'agent_space'` pre-filter that used to sit here admitted the whole set (the
+  // union WAS the alphabet), so it fenced nothing and went out with the kind
+  // (#task:2078).
+  const agentSpaces = workspaces.filter(w => isAgentSpace(w));
+  const peopleOwned = workspaces.filter(w => !isAgentSpace(w));
   const agentsById = useMemo(
     () => new Map(agents.map(a => [a.id, a])),
     [agents],
@@ -67,7 +67,7 @@ export function WorkspaceFilterSelect({
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const selected = workspaceFilterLabel(
     value,
-    filterable,
+    workspaces,
     agentsById,
     agentAvatarUrls,
     allLabel,
@@ -98,21 +98,20 @@ export function WorkspaceFilterSelect({
             </FilterSelectItem>
             {/* Agent spaces lead, mirroring SearchPanel/Archived order so every
                 workspace-filter dropdown reads the same. */}
-            {dms.length > 0 ? (
+            {agentSpaces.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Agent Spaces
                 </Select.Label>
-                {dms.map(workspace => (
+                {agentSpaces.map(workspace => (
                   <FilterSelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
                     icon={
                       <WorkspaceIcon
-                        kind="dm"
-                        dmAgentId={workspace.dm_agent_id}
+                        ownerAgentId={workspace.owner_agent_id}
                         agentsById={agentsById}
-                        dmAgentAvatarUrls={agentAvatarUrls}
+                        ownerAgentAvatarUrls={agentAvatarUrls}
                       />
                     }
                     suffix={
@@ -121,25 +120,24 @@ export function WorkspaceFilterSelect({
                         : undefined
                     }
                   >
-                    {workspaceDisplayName(workspace)}
+                    {workspace.name}
                   </FilterSelectItem>
                 ))}
               </Select.Group>
             ) : null}
-            {regular.length > 0 ? (
+            {peopleOwned.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
-                {regular.map(workspace => (
+                {peopleOwned.map(workspace => (
                   <FilterSelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
                     icon={
                       <WorkspaceIcon
-                        kind="regular"
-                        dmAgentId={null}
-                        dmAgentAvatarUrls={agentAvatarUrls}
+                        ownerAgentId={workspace.owner_agent_id}
+                        ownerAgentAvatarUrls={agentAvatarUrls}
                       />
                     }
                     suffix={
@@ -148,7 +146,7 @@ export function WorkspaceFilterSelect({
                         : undefined
                     }
                   >
-                    {workspaceDisplayName(workspace)}
+                    {workspace.name}
                   </FilterSelectItem>
                 ))}
               </Select.Group>
@@ -172,29 +170,28 @@ function workspaceFilterLabel(
   const id = value.slice('workspace:'.length);
   const workspace = workspaces.find(w => w.id === id);
   if (!workspace) {
+    // The selected id no longer resolves (the workspace went away while the
+    // filter held it). The trigger must still render something, so this is a
+    // PLACEHOLDER, not a claim about ownership — a generic word and the neutral
+    // badge, never the vanished workspace's identity.
     return {
       label: 'Workspace',
       icon: (
-        <WorkspaceIcon kind="regular" dmAgentId={null} dmAgentAvatarUrls={agentAvatarUrls} />
+        <WorkspaceIcon ownerAgentId={null} ownerAgentAvatarUrls={agentAvatarUrls} />
       ),
     };
   }
-  return workspace.kind === 'dm'
-    ? {
-        label: workspaceDisplayName(workspace),
-        icon: (
-          <WorkspaceIcon
-            kind="dm"
-            dmAgentId={workspace.dm_agent_id}
-            agentsById={agentsById}
-            dmAgentAvatarUrls={agentAvatarUrls}
-          />
-        ),
-      }
-    : {
-        label: workspace.name,
-        icon: (
-          <WorkspaceIcon kind="regular" dmAgentId={null} dmAgentAvatarUrls={agentAvatarUrls} />
-        ),
-      };
+  // One label either way (the row's own name); only the identity glyph
+  // differs — an agent space wears its agent's face, a people-owned workspace the
+  // serif "W", and `WorkspaceIcon` picks that off the ownership arc itself.
+  return {
+    label: workspace.name,
+    icon: (
+      <WorkspaceIcon
+        ownerAgentId={workspace.owner_agent_id}
+        agentsById={agentsById}
+        ownerAgentAvatarUrls={agentAvatarUrls}
+      />
+    ),
+  };
 }

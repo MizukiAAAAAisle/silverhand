@@ -21,8 +21,17 @@
  */
 
 import type { TaskBoardContainer as TaskBoardContainerAxis } from '@silverhand/shared';
+import {
+  isAgentSpace,
+  type WorkspaceOwnership,
+} from '@/features/workspaces/workspace-ownership';
 
 export type { TaskBoardContainerAxis };
+
+/** Which data source a channel option came from — the PRESENTATION axis the
+ *  channel dropdown sections on, named once here so the three consumers cannot
+ *  drift (#task:2066). Not a stored key: the filter value stays a channel id. */
+export type ChannelSourceGroup = 'agent_space' | 'workspace';
 
 /** A person reference keyed by `{type,id}` — id alone is unsafe because
  *  agent and user ids share no namespace guarantee (Cindy boundary). */
@@ -134,26 +143,35 @@ export function applyWorkspaceCascade(
  *   - `channelAxisScope` — whether that channel picker applies under a container,
  *     and over which channel population.
  *
- * The membership rule is single-sourced here: a workspace of `kind:'regular'`
- * lives under `workspace`, `kind:'dm'` (an agent home) under `agent_space`; a
- * channel's data-source `group` mirrors that. The `direct_messages` container is
+ * The membership rule is single-sourced here: a people-owned workspace lives
+ * under `workspace`, an agent space under `agent_space`; a channel's data-source
+ * `group` mirrors that. The `direct_messages` container is
  * never picked from the scope dropdown — it exists only as the pinned baseline of
  * a direct line's own (locked) Tasks drawer, where its coordinate is the pair
  * conversation (matched by the `channel_id` param) and no workspace is minted.
  */
 
-/** The container a workspace of this kind belongs to. */
-export function workspaceKindContainer(
-  kind: 'regular' | 'dm',
+/**
+ * The board container a workspace belongs to.
+ *
+ * The QUESTION is ownership (#task:2078) — the container kind this used to read
+ * is retired. The ANSWER is untouched on purpose: `'agent_space'` here is a
+ * member of the BOARD axis's own alphabet (`TaskBoardContainerSchema`, a wire
+ * value that travels to `/api/tasks/board/*`), which merely shares a spelling
+ * with the retired container kind. Two axes, one word: retiring the kind does
+ * not retire this token, so nothing about the return value moves.
+ */
+export function workspaceBoardContainer(
+  workspace: WorkspaceOwnership,
 ): Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'> {
-  return kind === 'dm' ? 'agent_space' : 'workspace';
+  return isAgentSpace(workspace) ? 'agent_space' : 'workspace';
 }
 
 /** The container a channel of this data-source group belongs to. */
 export function channelGroupContainer(
-  group: 'dm' | 'workspace',
+  group: ChannelSourceGroup,
 ): Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'> {
-  return group === 'dm' ? 'agent_space' : 'workspace';
+  return group === 'agent_space' ? 'agent_space' : 'workspace';
 }
 
 /** Whether the within-workspace channel axis applies under a container, and over
@@ -185,7 +203,7 @@ export interface ChannelAxisScope<C> {
  *    regular workspace's channels vs. an agent home's);
  *  - `null` (All) — every channel the viewer can see.
  */
-export function channelAxisScope<C extends { group: 'dm' | 'workspace' }>(
+export function channelAxisScope<C extends { group: ChannelSourceGroup }>(
   container: TaskBoardContainerAxis | null,
   channelOptions: C[],
 ): ChannelAxisScope<C> {
@@ -264,25 +282,25 @@ export interface BoardScopeGroup<W> {
 
 /**
  * Classify the board-scope dropdown's sections (#task:2041) — the third pure face
- * of the container model, so "which KIND of workspace goes in which section, and
- * when does a section show" is falsifiable without a DOM (the whole classification
- * used to be inlined in the filter bar's `useMemo`, where deleting a section or
- * mis-routing a kind stayed green — @Cindy).
+ * of the container model, so "which workspace goes in which section, and when does
+ * a section show" is falsifiable without a DOM (the whole classification used to be
+ * inlined in the filter bar's `useMemo`, where deleting a section or mis-routing a
+ * workspace stayed green — @Cindy).
  *
- * The regular vs agent-home split reuses `workspaceKindContainer`, the SAME
- * taxonomy the wire axis uses, so a workspace can never land in a section that
+ * The people-owned vs agent-space split reuses {@link workspaceBoardContainer}, the
+ * SAME taxonomy the wire axis uses, so a workspace can never land in a section that
  * disagrees with the container its pick stamps. A section shows iff it has
  * objects: an answered-empty section is simply absent. Direct Messages are not
  * offered here (contract §5) — the coarsest axis's only selectable objects are
  * workspaces and agent spaces; DM tasks reach the board through the "All" union or
  * their own locked drawer.
  */
-export function boardScopeGroups<W extends { kind: 'regular' | 'dm' }>(input: {
+export function boardScopeGroups<W extends WorkspaceOwnership>(input: {
   workspaces: readonly W[];
 }): Array<BoardScopeGroup<W>> {
   const inContainer = (
     container: Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'>,
-  ): readonly W[] => input.workspaces.filter(w => workspaceKindContainer(w.kind) === container);
+  ): readonly W[] => input.workspaces.filter(w => workspaceBoardContainer(w) === container);
   const defs: Array<BoardScopeGroup<W>> = [
     { key: 'workspaces', label: 'Workspaces', workspaces: inContainer('workspace') },
     { key: 'agent-spaces', label: 'Agent Spaces', workspaces: inContainer('agent_space') },

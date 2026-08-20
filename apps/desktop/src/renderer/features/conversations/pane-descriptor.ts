@@ -19,11 +19,6 @@ import type {
   DirectPairListItem,
 } from '@silverhand/shared';
 
-/** Kind of the workspace a pane's conversation sits in, `null` for a
- *  workspace-less placement. Mirrors `ConversationRef.workspace_kind`'s
- *  external projection (`agent_home → 'dm'`). */
-export type WorkspaceUiKind = 'regular' | 'dm';
-
 export interface ConversationPaneDescriptor {
   id: string;
   /** The pane's display title. A `direct_pair` holds no `title_key`, so the

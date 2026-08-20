@@ -21,7 +21,6 @@ function summary(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
       kind: 'workspace',
       conversation_id: 'anchor-chan',
       workspace_id: 'ws1',
-      workspace_kind: 'regular',
       channel_name: 'chan',
     },
     thread_root_id: null,
@@ -53,7 +52,7 @@ describe('resolveTaskJumpTarget', () => {
       nav: {
         kind: 'source',
         ref: {
-          channel_id: 'src-chan',
+          conversation_id: 'src-chan',
           thread_root_id: 'src-thread',
           message_id: 'src-msg',
         },
@@ -73,7 +72,7 @@ describe('resolveTaskJumpTarget', () => {
       nav: {
         kind: 'created_event',
         ref: {
-          channel_id: 'evt-chan',
+          conversation_id: 'evt-chan',
           thread_root_id: null,
           message_id: 'evt-msg',
         },
@@ -88,7 +87,8 @@ describe('resolveTaskJumpTarget', () => {
   });
 
   it('navigates a direct_pair task to its pair conversation, without a workspaceId', () => {
-    // A pair-placed task has no workspace coordinate, but its ref channel_id IS
+    // A pair-placed task has no workspace coordinate, but its ref
+    // conversation_id IS
     // the pair conversation id — the caller routes that through the viewer's
     // pair carrier (`directPairIds` → `nav.toDirect`). Suppressing the jump for
     // a non-workspace placement would be a shape side-effect, not a real
@@ -98,7 +98,7 @@ describe('resolveTaskJumpTarget', () => {
       nav: {
         kind: 'source',
         ref: {
-          channel_id: 'pair-conv',
+          conversation_id: 'pair-conv',
           thread_root_id: null,
           message_id: 'pair-msg',
         },

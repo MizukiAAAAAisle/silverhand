@@ -59,7 +59,6 @@ import {
   type AgentMessageSendParams,
   type AgentStaleReceiveParams,
   type AgentStaleResolveParams,
-  type AgentStreamObservedParams,
   type HostOutboundAttachParams,
   type HostRuntimeCatalogParams,
   type HostProxyConfigSetParams,
@@ -369,12 +368,6 @@ export class HostClient {
     params: AgentStaleResolveParams,
   ): Promise<IntentResult<'agent_stale_resolve'>> {
     return this.call('agent_stale_resolve', params);
-  }
-
-  agentStreamObserved(
-    params: AgentStreamObservedParams,
-  ): Promise<IntentResult<'agent_stream_observed'>> {
-    return this.call('agent_stream_observed', params);
   }
 
   /** #task:1614 — deferred-pull second consumer. Callers must size the

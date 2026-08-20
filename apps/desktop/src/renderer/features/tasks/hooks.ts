@@ -35,6 +35,7 @@ import {
 import {
   beginOptimisticStatusWrite,
   closeOptimisticStatusWrite,
+  invalidateTaskPointCaches,
   reconcileTaskStatusWrite,
   restartRacingTaskReads,
   revertOptimisticStatusWrite,
@@ -253,14 +254,25 @@ export function useAssignTask() {
       return res;
     },
     onSuccess: (_res, vars) => {
-      // Same three projections as a status write — the board list is never the
-      // only place a task's assignee is shown.
+      // The `['tasks']` ROOT, deliberately — this is the one write that has to be
+      // that wide, and each of the three reasons is enough on its own: FACETS are
+      // the assignee population and this write changes it (`boardFacetsKey` is
+      // refreshed by prefix, one entry per container); the DESTINATION column is
+      // not this client's to name, because assigning a `todo` task dispatches it
+      // in the same write; and a scope that narrows the assignee axis
+      // (`filterKeyConstrainsAssignee`) can GAIN the row in a column this client
+      // never held it in, which no content scan can locate.
       void qc.invalidateQueries({ queryKey: ['tasks'] });
       void qc.invalidateQueries({
         queryKey: taskDetailKey(vars.taskId),
         exact: true,
       });
-      void qc.invalidateQueries({ queryKey: ['task-by-number'] });
+      // The chips, by content: an assignee is shown on every inline `#task:<n>`
+      // entry, but only the ones HOLDING this task can have changed — the rest
+      // are about other tasks (#task:2091). Not predicting the value and not
+      // re-reading unrelated entries are separate questions; this write answers
+      // the first with "invalidate" and still owes the second a narrow scope.
+      invalidateTaskPointCaches(qc, vars.taskId);
     },
   });
 }
@@ -390,9 +402,13 @@ export function useEditTask() {
     onSuccess: task => {
       // In-place cache update from the authoritative post-edit snapshot;
       // title may have changed so refresh the board list + inline sigils.
+      // The list root is the wide one on purpose (a retitled row belongs on
+      // every loaded column of every scope); the sigils are not — an edit
+      // reaches ONE task, so only the entries holding it can have changed
+      // (#task:2091).
       qc.setQueryData(taskDetailKey(task.id), task);
       void qc.invalidateQueries({ queryKey: ['tasks'] });
-      void qc.invalidateQueries({ queryKey: ['task-by-number'] });
+      invalidateTaskPointCaches(qc, task.id);
     },
   });
 }

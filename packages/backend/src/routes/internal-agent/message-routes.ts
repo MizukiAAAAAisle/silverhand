@@ -128,8 +128,6 @@ export function registerMessageRoutes(
         content: parsed.data.content,
         attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
         destination: { kind: 'stream', stream: resolved.target.stream },
-        assertedStream: parsed.data.asserted_stream,
-        seenUpToSeq: parsed.data.seen_up_to_seq,
         staleEventId: parsed.data.stale_event_id,
         staleResolutionReason: parsed.data.stale_resolution_reason,
         freshnessBypass: parsed.data.freshness_bypass ?? false,
@@ -144,9 +142,6 @@ export function registerMessageRoutes(
         // one answer for every send.
         conversation_id: result.targetConversationId,
         thread_root_id: result.committed.message.thread_root_id,
-        ...(result.streamHeadBeforeSend !== undefined
-          ? { stream_head_before: result.streamHeadBeforeSend }
-          : {}),
         // Omitted when empty (#task:2021 P4-5-b): the field is the ANSWER
         // "these references addressed nobody", so an empty array on every
         // ordinary send would be noise on the one surface an agent reads after

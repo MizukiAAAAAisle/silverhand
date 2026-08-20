@@ -74,21 +74,42 @@ export type HostProvisioningSource = z.infer<
 export const HostCredentialKindSchema = z.enum(['long_lived', 'bootstrap']);
 export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
 
-export const WorkspaceKindSchema = z.enum(['regular', 'agent_home']);
-export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
-
 /**
  * WHERE a conversation lives, and therefore how its participant set is derived
  * (agent-scoped-session-v1 §3/§4.1). Exhaustive and mutually exclusive:
- * `workspace` keeps explicit membership rows; `direct_pair` and `agent_inbox`
- * derive their participants from the placement itself. Migration v69 introduces
- * the axis with only `workspace` representable — the placement-specific columns
- * arrive with the placements themselves (§8 P0-b / P3).
+ * `workspace` keeps explicit membership rows; `direct_pair` derives its
+ * participants from the placement itself. Migration v69 introduces the axis with
+ * only `workspace` representable — the placement-specific columns arrive with the
+ * placements themselves (§8 P0-b / P3).
+ *
+ * There were three placements until #task:2072: `agent_inbox` was a
+ * single-participant container minted one per agent, and it is retired (v84/v85)
+ * because waking an agent must happen in a conversation that has a SECOND
+ * participant. Every placement here now has at least two.
+ *
+ * THE KEYING RULE, stated here ONCE because three read points got it wrong
+ * independently (#task:2074 / #task:2076 / #task:2077, all one mis-keying):
+ * a conversation's IDENTITY — what it IS, what it is called, which glyph names it
+ * — is a function of PLACEMENT. Its CAPABILITIES — may members be added, may the
+ * roster change, does unread arrive directed-grade — are a function of
+ * `roster_policy`. Every read point must say which of the two it is asking, and a
+ * `roster_policy` read may never stand in for the identity question: a fixed
+ * roster is a CONSEQUENCE of some placements, never the definition of one (an
+ * agent home's DM channel and its Onboarding channel are workspace-placed with a
+ * fixed roster, and #task:1373 says a workspace conversation is a channel
+ * whatever its roster).
+ *
+ * The corollary that keeps costing a wire field: a read face RESTRICTED to
+ * `workspace` placements has no identity branch at all — not a branch keyed on
+ * something better. Publishing this word to such a face ships a constant. That is
+ * why `ActivityItemDto` carries neither this word nor a roster bit
+ * (`api/attention.ts`), while `AgentRuntimeParticipationSchema` — a face that
+ * genuinely admits `direct_pair` — carries this word and needs it
+ * (`api/agent.ts`).
  */
 export const ConversationPlacementKindSchema = z.enum([
   'workspace',
   'direct_pair',
-  'agent_inbox',
 ]);
 export type ConversationPlacementKind = z.infer<
   typeof ConversationPlacementKindSchema
@@ -164,6 +185,16 @@ export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 export const TaskAssigneeTypeSchema = z.enum(['agent', 'user']);
 export type TaskAssigneeType = z.infer<typeof TaskAssigneeTypeSchema>;
 
+/**
+ * The persisted activity-row alphabet. NOT the same alphabet as
+ * `PARSED_EVENT_KINDS` (the driver's), and deliberately so: this one is keyed
+ * on "what this runtime did or experienced during its run", whoever observed
+ * it. Most rows are the driver's parsed output, but `parsed_event_dropped`
+ * (daemon-observed wire loss) and `message_stale` (daemon-relayed backend
+ * delivery verdict, #task:2099) are authored by the daemon and have no
+ * `ParsedEvent` counterpart. Adding one here does NOT license adding it there
+ * — a synthetic parsed event would claim the runtime said something it didn't.
+ */
 export const ConversationEventKindSchema = z.enum([
   'session_init',
   'thinking',
@@ -180,6 +211,7 @@ export const ConversationEventKindSchema = z.enum([
   'error',
   'unknown',
   'parsed_event_dropped',
+  'message_stale',
 ]);
 export type ConversationEventKind = z.infer<typeof ConversationEventKindSchema>;
 
@@ -353,10 +385,9 @@ export interface WorkspaceRow {
   id: string;
   name: string;
   /** Internal current-address key. Present only on regular workspaces and
-   * stripped from WorkspaceDto; agent_home is outside the namespace. */
+   * stripped from Workspace; agent_home is outside the namespace. */
   name_key: string | null;
   description: string | null;
-  workspace_kind: WorkspaceKind;
   owner_agent_id: string | null;
   /**
    * Human governance owner (graded-permissions Layer A, v40). The live
@@ -370,7 +401,6 @@ export interface WorkspaceRow {
   owner_user_id: string | null;
   dm_channel_id?: string | null;
   dm_channel_ids?: string[];
-  pinned_at: number | null;
   archived_at: number | null;
   created_at: number;
   updated_at: number;
@@ -475,13 +505,8 @@ export interface ConversationRow {
   /** The workspace arm of the placement arc (v71+): NOT NULL exactly when
    *  `placement_kind = 'workspace'`, NULL for every other placement. Read
    *  surfaces must therefore not INNER JOIN `workspaces` to reach a
-   *  conversation — an `agent_inbox` row has no workspace at all. */
+   *  conversation — a `direct_pair` row has no workspace at all. */
   workspace_id: string | null;
-  /** The owner of an `agent_inbox` placement (v71+): NOT NULL exactly when
-   *  `placement_kind = 'agent_inbox'`, NULL otherwise. An OWNERSHIP edge
-   *  (`ON DELETE CASCADE`) — the inbox has no survivor, so it dies with the
-   *  agent rather than outliving it as a historical coordinate. */
-  inbox_agent_id: string | null;
   /** The two arms of a `direct_pair` placement (v73+): NOT NULL exactly when
    *  `placement_kind = 'direct_pair'`, NULL for every other placement, and
    *  stored in canonical order (`a < b` by `(kind, id)`, which also rules out a
@@ -516,7 +541,7 @@ export interface ConversationRow {
   title: string;
   /** The TITLE AS AN ADDRESS (v72+, #task:2016): `NFC(foldCase(NFC(trim(title))))`,
    *  unique per workspace among workspace placements, and NOT NULL exactly when
-   *  `placement_kind = 'workspace'` — an inbox or DirectPair holds no title
+   *  `placement_kind = 'workspace'` — a DirectPair holds no title
    *  address, so a resolver that forgot its placement predicate still cannot
    *  reach one.
    *
@@ -642,33 +667,6 @@ export interface MessageRow {
    *  source message's own transaction, so it is a safety belt against a second
    *  write path, not the correctness mechanism. */
   cc_source_message_id: string | null;
-  // ── DEAD MODEL RESIDUE (v60) ──────────────────────────────────────────
-  // The columns below are from the retired "a message IS a task" model. As of
-  // v60 a task is a first-class `tasks` aggregate (see TaskRow); these columns
-  // are NO LONGER read or written by task code — new task reads/writes go
-  // through `tasks`, and the message-row task chip reads the joined
-  // `linked_task` projection (tasks.source_message_id == messages.id). They are
-  // kept physically only because migrations are append-only; a follow-up
-  // migration drops them. Do NOT reintroduce reads/writes here.
-  task_number: number | null;
-  task_status: TaskStatus | null;
-  task_assignee_agent_id: string | null;
-  task_assignee_user_id: string | null;
-  task_title: string | null;
-  task_workspace_id: string | null;
-  task_closed_at: number | null;
-  /** @deprecated v60 dead residue — provenance now lives on
-   *  `tasks.source_message_id`. */
-  source_message_id: string | null;
-  /** @deprecated v60 dead residue — the old per-message task CAS token; the
-   *  task-edit contract is now plain last-write-wins, so no `revision` exists on
-   *  `tasks` either. Column persists only because message migrations are
-   *  append-only. */
-  task_revision: number | null;
-  /** @deprecated v60 dead residue — now `tasks.last_editor_kind`. */
-  task_last_editor_kind: 'agent' | 'user' | null;
-  task_last_editor_id: string | null;
-  task_last_edited_at: number | null;
   /**
    * Reply-cluster thread anchor (v43). NULL = this message is a root /
    * main-line message; non-NULL = a reply in the thread rooted at that

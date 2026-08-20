@@ -46,7 +46,7 @@ import { useChannelMembership } from '@/features/channels/use-channel-membership
 import { useChannelDetail, useJoinChannel } from '@/features/workspaces/hooks';
 import { lastCommittedSeq } from '@/features/channels/pending-message';
 import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
-import type { ConversationReference } from '@/components/chat/ConversationRef';
+import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import { MemberStrip } from './channel-view/member-strip';
 import { MembersButton } from './channel-view/members-button';
 import { ChannelMembersDialog } from './channel-view/members-dialog';
@@ -58,10 +58,7 @@ import {
 } from '@/features/search/useInlineFind';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 import type { ConversationVisibility } from '@silverhand/shared';
-import type {
-  ConversationPaneDescriptor,
-  WorkspaceUiKind,
-} from '@/features/conversations/pane-descriptor';
+import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
 import {
   paneCapabilities,
   projectConversationPaneMode,
@@ -72,13 +69,14 @@ import { ConversationHeaderIdentity } from './channel-view/conversation-header-i
 import { paneChrome } from './pane-chrome';
 
 interface ChannelViewProps {
-  /** Kind of the parent workspace. DM and regular channels diverge in
-   *  several places (agent strip, sub-thread affordances, member
-   *  management). Threaded as a prop so the divergences stay local.
-   *  `null` for a workspace-less conversation (a `direct_pair`, #task:2035) as
-   *  well as for a workspace whose kind hasn't resolved — both must withhold
-   *  every workspace-kind-specific affordance, so one null serves. */
-  channelKind: WorkspaceUiKind | null;
+  /** Whether this conversation's container has a `#` channel namespace: true for
+   *  any resolved workspace, false BOTH for a workspace-less conversation (a
+   *  `direct_pair`, #task:2035) and for a workspace whose row hasn't resolved.
+   *  Both must withhold every channel-like affordance, so one `false` serves.
+   *  This used to be the parent workspace's KIND, but no consumer under here ever
+   *  told the two kinds apart — the divergences are all "is there a channel
+   *  namespace at all" (#task:2078). */
+  hasChannelNamespace: boolean;
   conversation: ConversationPaneDescriptor | null;
   /** True when a channel IS selected in the route but its workspace's channel
    *  list hasn't resolved yet (e.g. a cross-workspace jump from Activity's
@@ -194,7 +192,7 @@ interface ChannelViewProps {
    *  human / archived). */
   onLeaveChannel?: (channelId: string) => Promise<void>;
   /** Current-workspace top-level conversation id map for inline `#conv:<id>` refs. */
-  conversationRefsById?: Map<string, ConversationReference>;
+  conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   /** Click handler for inline `#<channel_name>` chips. The chip's
    *  resolution scope is this conversation's workspace, so the caller
@@ -285,7 +283,7 @@ function canAddMember(
 // Split out so the React-Query hooks below only mount once a channel
 // exists — keeps hook order stable across the null transition.
 function ActiveChannelView({
-  channelKind,
+  hasChannelNamespace,
   conversation,
   parentTitle,
   jumpTarget,
@@ -445,8 +443,10 @@ function ActiveChannelView({
   // they apply to every top-level conversation, whether it is an open-roster
   // workspace channel or a fixed-roster DM. The parent decides the actual
   // permission by whether it passes the handler at all; rename additionally
-  // requires "not closed" (a closed channel is read-only).
-  const isTopLevelChannelLike = channelKind !== null;
+  // requires "not closed" (a closed channel is read-only). So the gate is exactly
+  // "does this container have a channel namespace" — a local reading name for the
+  // prop, not a second derivation of it (#task:2078).
+  const isTopLevelChannelLike = hasChannelNamespace;
   const canToggleArchive =
     isTopLevelChannelLike && !!onArchiveChannel && gate.allowMutations;
   const canRenameChannel =
@@ -1067,7 +1067,7 @@ function ActiveChannelView({
             key={conversation.id}
             conversationId={conversation.id}
             workspaceId={conversation.workspace_id}
-            workspaceKind={channelKind}
+            hasChannelNamespace={hasChannelNamespace}
             disabled={closed}
             archived={isArchived}
             // A pair whose counterpart principal is gone: writes can never

@@ -213,6 +213,20 @@ export interface ConversationActivitySink {
     reason: string;
     createdAt: number;
   }): ConversationActivityEvent;
+  recordMessageStale(params: {
+    conversationId: string;
+    agentId: string;
+    createdAt: number;
+  }): ConversationActivityEvent;
+  /** #task:2101 — merge late parameters into an existing `tool_call` row.
+   *  Returns null when there is no such row (paged out / never persisted);
+   *  a refinement must never insert. */
+  refineToolCallInput(params: {
+    conversationId: string;
+    agentId: string;
+    toolCallId: string;
+    input: unknown;
+  }): ConversationActivityEvent | null;
 }
 
 /**
@@ -829,8 +843,8 @@ export class RuntimeEventHandler {
       case 'runtime_parsed_event':
         // #task:1557 Phase 1: `input_lifecycle` is a diagnostics-only
         // signal — record a sanitized structured log and STOP. It must
-        // not reach the `agent_event` SSE (renderer Events panel /
-        // agent-event listeners), conversation activity, or any
+        // not reach the `agent_event` side-scope publish (see the
+        // wire-compat note below), conversation activity, or any
         // business callback below.
         if (frame.parsed.kind === 'input_lifecycle') {
           this.logger.info(
@@ -856,12 +870,18 @@ export class RuntimeEventHandler {
         // stamped (diagnostics only); `runtime_state` / `runtime_exit` /
         // delivery-failed / watchdog / synthetic-clear are likewise not stamped.
         this.agentActivity?.stampActivity(frame.agent_id);
-        // Project to the historical `agent_event` SSE shape so the
-        // renderer's Events panel and the agent-event listeners can't
-        // tell which runtime produced the publish. MUST run
-        // sanitization here (`tool_call.input` size cap + recursion
-        // depth + cycle detection) — invariant inherited from the
-        // original ConversationManager runtime; Cindy
+        // Project to the historical `agent_event` shape so no listener on
+        // this side-scope kind can tell which runtime produced the
+        // publish. WIRE-COMPAT ONLY — do NOT infer UI consequences from
+        // this publish (#task:2101, @Norman): as of 2026-08 the repo has
+        // zero consumers outside this package. The renderer's side-scope
+        // dispatch (`features/realtime/conversation-ingestor.ts`) handles
+        // exactly `agent_activity` / `agent_status` /
+        // `conversation_activity` / `attachment_changed` and has no
+        // default arm, so `agent_event` is silently dropped there. MUST
+        // still run sanitization here (`tool_call.input` size cap +
+        // recursion depth + cycle detection) — invariant inherited from
+        // the original ConversationManager runtime; Cindy
         // `ch9ZsU0v0ATr6tr8` carried-forward blocker for commit 5
         // unit 1.
         this.events.publishSide(frame.conversation_id, {
@@ -946,6 +966,14 @@ export class RuntimeEventHandler {
       // field, then publish the normal `agent_activity` shape.
       case 'runtime_parsed_event_dropped':
         this.onParsedEventDropped(frame);
+        return;
+      // `runtime_message_stale` (#task:2099) is a pure activity fact: the
+      // backend refused one of this runtime's sends as stale and the daemon
+      // relayed that verdict back with the focus conversation it belongs to.
+      // It touches NO run state — a refused send is not a lifecycle
+      // transition, and the agent is mid-turn either way.
+      case 'runtime_message_stale':
+        this.onMessageStale(frame);
         return;
       // Other frames we acknowledge but currently route nowhere —
       // kept here so the exhaustive `switch` doesn't fall through
@@ -1055,6 +1083,50 @@ export class RuntimeEventHandler {
     );
   }
 
+  /**
+   * Persist + publish the one `message_stale` activity row for a refused send
+   * (#task:2099).
+   *
+   * The pending text block is flushed FIRST (Cindy's review point 2), for the
+   * same reason every other non-text row does it: an open block keeps absorbing
+   * later text into a row whose id already sorts before this one, so without the
+   * flush the refusal can read as having happened before words the agent wrote
+   * after it. Both rows come back from a single `record` call and publish in
+   * order.
+   *
+   * Deliberately logs NOTHING here. `recordConversationActivity` is void and has
+   * two silent-failure arms (no sink configured; persist threw and was caught),
+   * so any log placed after the call would claim a row that may not exist. The
+   * rejection already has exactly one authoritative WARN, at the seam that mints
+   * the verdict (`conversation-message-service` freshness guard) and carries the
+   * triage set — `staleEventId`, scope arm, target, `undeliveredCount` — per
+   * `docs/freshness-boundary-authority-v1.md` §3.2/§6. A second WARN here would
+   * double-count rejections in that ledger. The failure arm is not silent
+   * overall: the helper's catch emits `conversation_activity_persist_failed`.
+   */
+  private onMessageStale(
+    frame: Extract<EventFrame, { event: 'runtime_message_stale' }>,
+  ): void {
+    this.recordConversationActivity({
+      conversationId: frame.conversation_id,
+      agentId: frame.agent_id,
+      createdAt: frame.ts,
+      record: sink =>
+        [
+          ...this.flushTextActivityBlock(
+            sink,
+            frame.conversation_id,
+            frame.agent_id,
+          ),
+          sink.recordMessageStale({
+            conversationId: frame.conversation_id,
+            agentId: frame.agent_id,
+            createdAt: frame.ts,
+          }),
+        ],
+    });
+  }
+
   private recordConversationActivity(params: {
     conversationId: string;
     agentId: string;
@@ -1114,6 +1186,21 @@ export class RuntimeEventHandler {
       params.conversationId,
       params.agentId,
     );
+    // #task:2101 — a refinement updates the `tool_call` row already in the
+    // timeline; it is not a new row and must not go through
+    // `recordParsedEvent`. The text flush above still applies: republishing the
+    // older row while a newer text block sits unflushed in memory would let the
+    // renderer order the refreshed call after prose that came later.
+    if (params.event.kind === 'tool_call_input') {
+      const refined = sink.refineToolCallInput({
+        conversationId: params.conversationId,
+        agentId: params.agentId,
+        toolCallId: params.event.toolCallId,
+        input: params.event.input,
+      });
+      if (refined) events.push(refined);
+      return events;
+    }
     const current = sink.recordParsedEvent(params);
     if (current) events.push(current);
     return events;

@@ -38,10 +38,7 @@ import {
   conversationPaneDescriptorFromIdentity,
   type ConversationIdentityResolution,
 } from '@/features/conversations/conversation-identity';
-import type {
-  ConversationPaneDescriptor,
-  WorkspaceUiKind,
-} from '@/features/conversations/pane-descriptor';
+import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
 
 export type SecondaryDescriptor =
   | {
@@ -55,10 +52,12 @@ export type SecondaryDescriptor =
        *  to be a second, narrower record declared right here, which could not
        *  express a workspace-less placement at all. */
       descriptor: ConversationPaneDescriptor;
-      /** Kind of the workspace the conversation sits in, `null` for a
-       *  workspace-less placement — which is also what the pane reads as "not a
-       *  top-level channel-like conversation" (no rename / archive / visibility). */
-      workspaceKind: WorkspaceUiKind | null;
+      /** Whether this conversation's container has a `#` channel namespace —
+       *  false for a workspace-less placement, which is also what the pane reads
+       *  as "not a top-level channel-like conversation" (no rename / archive /
+       *  visibility). Derived from the identity's own discriminant, so the pane
+       *  chain never carries a container kind (#task:2078). */
+      hasChannelNamespace: boolean;
     }
   | { source: 'side'; status: 'loading'; id: string }
   | { source: 'side'; status: 'unauthorized'; id: string }
@@ -110,10 +109,13 @@ export function selectSecondaryDescriptor(
       ? resolution.identity.ref.id
       : resolution.identity.pair.conversation_id,
     descriptor: conversationPaneDescriptorFromIdentity(resolution.identity),
-    workspaceKind:
-      resolution.identity.placement === 'workspace'
-        ? resolution.identity.ref.workspace_kind
-        : null,
+    // The one bit the pane chain reads, taken straight off the identity's own
+    // discriminant: a workspace placement has a `#` namespace, a private line has
+    // none. The carrier's container kind is NOT consulted — nothing downstream
+    // (ChannelView, ThreadPanel, Composer) ever distinguished the two kinds, so
+    // reading it would only give a second spelling of the same bit (#task:2078;
+    // the read-through of the published word it replaced landed in #task:2070).
+    hasChannelNamespace: resolution.identity.placement === 'workspace',
   };
 }
 
@@ -125,26 +127,26 @@ export interface SecondaryViewInputs {
    *  pane should not render a real ChannelView (no secondary, or a
    *  non-resolved `?side`). */
   conversationDescriptor: ConversationPaneDescriptor | null;
-  /** ChannelView `channelKind` prop value. For a resolved `?side` this comes
-   *  from the identity (null for a workspace-less placement); otherwise it
-   *  falls through to the primary's kind. */
-  channelKind: WorkspaceUiKind | null;
+  /** ChannelView `hasChannelNamespace` prop value. For a resolved `?side` this
+   *  comes from the identity (false for a workspace-less placement); otherwise it
+   *  falls through to the primary's bit. */
+  hasChannelNamespace: boolean;
   /** Workspace id to bake into the secondary archive mutation
    *  invalidation. Cross-workspace secondary needs the foreign
    *  workspace id so the `['workspaces', wid, 'channels']` cache
    *  invalidation hits the right entry. Falls back to the primary
    *  workspace id for non-resolved cases, and is null for a placement that
    *  has no workspace to invalidate (a `direct_pair`, which no archive door
-   *  accepts anyway — `channelKind: null` withholds the affordance). */
+   *  accepts anyway — `hasChannelNamespace: false` withholds the affordance). */
   archiveWorkspaceId: string | null;
 }
 
 export interface SecondaryViewMappingInputs {
   secondary: SecondaryDescriptor | null;
-  /** Primary workspace's kind, used as fallback channel kind for
-   *  non-resolved `?side` (a resolved `?side` carries its own
-   *  `workspaceKind` so this is rarely consulted in practice). */
-  primaryChannelKind: WorkspaceUiKind | null;
+  /** Whether the PRIMARY conversation's container has a channel namespace, used
+   *  as the fallback for a non-resolved `?side` (a resolved `?side` carries its
+   *  own bit so this is rarely consulted in practice). */
+  primaryHasChannelNamespace: boolean;
   /** Primary workspace id, used as archive-invalidation target when
    *  there is no resolved secondary. */
   primaryWorkspaceId: string | null;
@@ -163,12 +165,12 @@ export interface SecondaryViewMappingInputs {
 export function selectSecondaryViewInputs(
   inputs: SecondaryViewMappingInputs,
 ): SecondaryViewInputs {
-  const { secondary, primaryChannelKind, primaryWorkspaceId } = inputs;
+  const { secondary, primaryHasChannelNamespace, primaryWorkspaceId } = inputs;
 
   if (!secondary) {
     return {
       conversationDescriptor: null,
-      channelKind: primaryChannelKind,
+      hasChannelNamespace: primaryHasChannelNamespace,
       archiveWorkspaceId: primaryWorkspaceId,
     };
   }
@@ -179,7 +181,7 @@ export function selectSecondaryViewInputs(
   if (secondary.source === 'side' && secondary.status === 'resolved') {
     return {
       conversationDescriptor: secondary.descriptor,
-      channelKind: secondary.workspaceKind,
+      hasChannelNamespace: secondary.hasChannelNamespace,
       archiveWorkspaceId: secondary.descriptor.workspace_id,
     };
   }
@@ -188,7 +190,7 @@ export function selectSecondaryViewInputs(
   // no ChannelView descriptor.
   return {
     conversationDescriptor: null,
-    channelKind: primaryChannelKind,
+    hasChannelNamespace: primaryHasChannelNamespace,
     archiveWorkspaceId: primaryWorkspaceId,
   };
 }

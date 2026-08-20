@@ -181,9 +181,9 @@ async function seedRuntimePair(rig: ParityRig): Promise<SeededRuntimePair> {
 
   db.prepare(
     `INSERT INTO workspaces
-      (id, name, name_key, description, workspace_kind,
+      (id, name, name_key, description,
        owner_agent_id, archived_at, created_at, updated_at)
-      VALUES (?, ?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+      VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)`,
   ).run(workspaceId, `parity-ws-${suffix}`, `parity-ws-${suffix}`, now, now);
   db.prepare(
     `INSERT INTO workspace_users (workspace_id, user_id, joined_at)

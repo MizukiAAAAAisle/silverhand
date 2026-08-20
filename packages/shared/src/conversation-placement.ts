@@ -1,8 +1,8 @@
 // Placement accessors for conversations (agent-scoped-session-v1 §4.1).
 //
 // A workspace is a property of ONE placement arm, not of every conversation:
-// `placement_kind='workspace'` rows carry `workspace_id`, `agent_inbox` rows
-// carry `inbox_agent_id`, and `direct_pair` rows carry their two endpoints. That
+// `placement_kind='workspace'` rows carry `workspace_id` and `direct_pair` rows
+// carry their two endpoints. That
 // is why `workspace_id` is nullable on the row AND on the wire.
 //
 // Nullable coordinates spread through call sites in two very different ways,
@@ -28,12 +28,6 @@ import type {
   ConversationEndpointKind,
   ConversationPlacementKind,
 } from './db/schema.js';
-
-/** The title every agent inbox carries. One constant so the backend insert and
- *  any display surface agree; the v71 backfill repeats the literal because SQL
- *  cannot import it. Not a per-agent label ("Alice's Inbox"): the inbox has
- *  exactly one participant, who never needs to be told whose it is. */
-export const AGENT_INBOX_TITLE = 'Inbox';
 
 /** The minimum shape both DB rows and wire DTOs satisfy. Structural on purpose
  *  so the one rule serves both without a conversion step. */
@@ -326,7 +320,6 @@ export function canonicalEndpointOrder(
 export interface ConversationParticipationRef extends ConversationEndpointRef {
   id: string;
   workspace_id: string | null;
-  inbox_agent_id: string | null;
 }
 
 /**
@@ -343,7 +336,7 @@ export type ConversationActor =
       readonly agentId: string;
       /** The conversation this session is ACTING INSIDE, or `null` when the
        *  caller is not a session. Naming an agent is never enough: a session in
-       *  channel A does not reach into a DM or an inbox by reference. */
+       *  channel A does not reach into a DM by reference. */
       readonly runningInConversationId: string | null;
     };
 
@@ -357,17 +350,18 @@ export type ConversationActor =
  * permission entry point resolves through it, so "who is in this conversation"
  * has a single answer per placement instead of one per call site:
  *
- *   - `agent_inbox` — exactly ONE participant, the agent named by
- *     `inbox_agent_id`, running in it. A HUMAN is never one, not even the person
- *     who created the agent: `agents.created_by_user_id` is MANAGEMENT authority
- *     (rename, capabilities, delete), not a message ACL, so the inbox is absent
- *     from human read surfaces by DOMAIN RULE and not because a JOIN dropped it.
  *   - `direct_pair` — exactly TWO, and they ARE the endpoints: an `agent`
  *     endpoint admits that agent under the same running-in rule, a `human`
  *     endpoint admits that user. Deletion of the OTHER side changes nothing here
  *     — reading one's own history is the whole reason an endpoint is a historical
  *     coordinate rather than a foreign key. What it changes is the WRITE gate,
  *     which is a different question asked of the same endpoints.
+ *
+ * There is exactly one such arm since #task:2072 retired `agent_inbox` (the
+ * single-participant placement, whose sole participant was the owning agent). The
+ * shape below is still a per-placement dispatch and not a `direct_pair` special
+ * case, because that is what makes the NEXT placement's arm a deliberate addition
+ * here rather than an omission at N call sites.
  *
  * THIS MODULE CANNOT READ THE ROSTER, and that is the load-bearing part rather
  * than a happy accident: it has no dependency but a type import, so the arms that
@@ -388,13 +382,6 @@ export function resolveParticipation(
           actor.agentId === endpoint.id &&
           actor.runningInConversationId === conversation.id
         : actor.kind === 'human' && actor.userId === endpoint.id,
-    );
-  }
-  if (conversation.placement_kind === 'agent_inbox') {
-    return (
-      actor.kind === 'agent' &&
-      conversation.inbox_agent_id === actor.agentId &&
-      actor.runningInConversationId === conversation.id
     );
   }
   return null;

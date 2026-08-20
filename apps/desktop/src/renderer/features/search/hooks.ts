@@ -1,11 +1,17 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
-import type { SearchDto, SearchScope } from '@silverhand/shared';
+import type { SearchDto } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 
+/**
+ * The panel's request shape: every field is a CONCRETE coordinate or bound —
+ * which workspace, which conversation, which sender, which time window. The
+ * population is never selected by a container CATEGORY. If the product ever
+ * wants a category split, it arrives as a NEW token carrying its own
+ * token→population table (#task:2087).
+ */
 export interface SearchFilters {
   q: string;
-  scope: SearchScope;
   workspace_id?: string;
   conversation_id?: string;
   user_id?: string;
@@ -18,7 +24,6 @@ export interface SearchFilters {
 function hasSearchIntent(filters: SearchFilters): boolean {
   return (
     filters.q.trim().length > 0 ||
-    filters.scope !== 'all' ||
     !!filters.workspace_id ||
     !!filters.conversation_id ||
     !!filters.user_id ||
@@ -32,7 +37,6 @@ function buildSearchParams(filters: SearchFilters): string {
   const params = new URLSearchParams();
   const q = filters.q.trim();
   if (q) params.set('q', q);
-  if (filters.scope !== 'all') params.set('scope', filters.scope);
   if (filters.workspace_id) params.set('workspace_id', filters.workspace_id);
   if (filters.conversation_id) {
     params.set('conversation_id', filters.conversation_id);

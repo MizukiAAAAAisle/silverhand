@@ -1,3 +1,4 @@
+import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { UserPrincipal } from '../auth/principal.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -61,7 +62,7 @@ export async function deleteWorkspace(
   if (!workspace) {
     return { kind: 'idempotentNoop' };
   }
-  if (workspace.workspace_kind !== 'regular') {
+  if (isAgentHomeWorkspace(workspace)) {
     return { kind: 'notDeletableKind' };
   }
   const principal: UserPrincipal = { kind: 'user', userId: cmd.requesterUserId };

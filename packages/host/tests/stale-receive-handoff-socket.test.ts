@@ -32,7 +32,7 @@ function silentLogger() {
 
 /** Stub supervisor: only `agentStaleReceive` matters — it registers the
  *  response handoff exactly like the real one and returns a valid
- *  batch_covered result. Everything else is unreachable in this test. */
+ *  batch_queue_drained result. Everything else is unreachable in this test. */
 function stubSupervisor(onHandoff: (ok: boolean) => void): SupervisorContract {
   const unreachable = () => {
     throw new Error('not used');
@@ -40,16 +40,14 @@ function stubSupervisor(onHandoff: (ok: boolean) => void): SupervisorContract {
   return {
     agentMessageSend: unreachable,
     agentStaleResolve: unreachable,
-    agentStreamObserved: unreachable,
     agentStaleReceive: (_params, ctx) => {
       ctx.responseHandoff = onHandoff;
       return {
         ok: true,
-        outcome: 'batch_covered',
+        outcome: 'batch_queue_drained',
         stale_event_id: 'stale-1',
         text: 'body',
         delivery_ids: [1],
-        covered_seq_by_stream: [['main', 2]],
       };
     },
     start: unreachable,

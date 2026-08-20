@@ -30,7 +30,7 @@ describe('workspace/conversation routes', () => {
     ).json() as any;
     const regular = workspaces.workspaces.find((w: any) => w.id === workspaceBody.workspace.id);
     const home = workspaces.workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentBody.agent.id,
+      (w: any) => w.owner_agent_id === agentBody.agent.id,
     );
     expect(regular).toBeDefined();
     expect(home).toBeDefined();
@@ -334,7 +334,7 @@ describe('workspace/conversation routes', () => {
     const home = (await (
       await http(t).get('/api/workspaces')
     ).json() as any).workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentBody.agent.id,
+      (w: any) => w.owner_agent_id === agentBody.agent.id,
     );
     expect(home).toBeDefined();
 

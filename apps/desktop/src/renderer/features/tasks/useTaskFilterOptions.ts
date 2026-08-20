@@ -3,7 +3,6 @@ import {
   useWorkspaces,
   useChannelsAcrossWorkspaces,
 } from '@/features/workspaces/hooks';
-import { agentSpaceLabel, workspaceDisplayName } from '@/lib/workspace-name';
 import { isMemberChannel } from '@/features/channels/membership';
 import {
   buildChannelFilterOptions,
@@ -11,6 +10,10 @@ import {
   type ChannelOption,
   type WorkspaceOption,
 } from '@/components/tasks/TaskFilterBar';
+import {
+  isAgentSpace,
+  type WorkspaceOwnership,
+} from '@/features/workspaces/workspace-ownership';
 
 /**
  * Shared filter-option source for BOTH task surfaces — the global Tasks
@@ -23,9 +26,9 @@ import {
  * sourcing the option set here is the fix; the drawer just passes a
  * `defaultConversationId` to pre-focus a channel.
  *
- * This yields both the WORKSPACE options (the upstream cascade axis — regular
- * workspaces AND agent spaces, each tagged with its `kind`/`dmAgentId` for the
- * canonical WorkspaceIcon) and the CHANNEL options (each tagged with its owning
+ * This yields both the WORKSPACE options (the upstream cascade axis — people-owned
+ * workspaces AND agent spaces, each carrying its `owner_agent_id` for the canonical
+ * WorkspaceIcon) and the CHANNEL options (each tagged with its owning
  * `workspaceId` so the workspace→channel cascade can scope + clear them,
  * #task:1387).
  *
@@ -36,12 +39,11 @@ import {
  * regular channel, the agent's name for an agent-space channel. That's why an
  * agent with multiple channels in its space (e.g. `Mentions` + `Onboarding`)
  * shows as distinct rows that no longer collide on a single label. Rows are
- * still GROUPED by data source (`group: 'workspace' | 'dm'`) for the section
- * split; `'dm'` is the storage key, the section READS "Agent Spaces"
- * (#task:2044).
+ * still GROUPED by data source (`group: 'workspace' | 'agent_space'`) for the
+ * section split, which READS "Agent Spaces" (#task:2044).
  */
 export interface TaskFilterOptions {
-  /** Upstream cascade axis — regular workspaces and agent spaces, sorted by name. */
+  /** Upstream cascade axis — people-owned workspaces and agent spaces, sorted by name. */
   workspaceOptions: WorkspaceOption[];
   channelOptions: ChannelOption[];
 }
@@ -50,7 +52,6 @@ export interface TaskFilterOptions {
 interface MappableChannel {
   id: string;
   title: string;
-  roster_policy: 'open' | 'fixed';
   archived_at: number | null;
 }
 
@@ -59,28 +60,27 @@ interface MappableChannel {
  * so the label/subtitle rule is unit-testable without a query client.
  *
  * Primary label = the channel title (always). Subtitle = the source: the
- * workspace name for a regular channel, the agent's name for an agent-space
- * channel. Each candidate carries `workspaceId` so the workspace→channel cascade
- * can scope and clear channel options (#task:1387). Because the filter value is
+ * workspace name for a people-owned workspace's channel, the agent's name for an
+ * agent-space channel. Each candidate carries `workspaceId` so the workspace→channel
+ * cascade can scope and clear channel options (#task:1387). Because the filter value is
  * a channel id, an agent whose space holds several channels surfaces as several
  * rows — distinct by their channel titles, all sharing the agent-name subtitle —
  * instead of N identical rows (the bug shiki flagged in #task:1165).
  */
 export function workspaceChannelCandidates(
-  workspace: { id: string; name: string; kind: 'regular' | 'dm' },
+  workspace: { id: string; name: string } & WorkspaceOwnership,
   channels: MappableChannel[],
 ): ChannelFilterCandidate[] {
-  const isDm = workspace.kind === 'dm';
-  const sublabel = isDm
-    ? agentSpaceLabel(workspace.name)
-    : workspaceDisplayName({ name: workspace.name, kind: workspace.kind });
+  // The container's own name on either side of the split (#task:2066 retired the
+  // agent space's `dm-` prefix, so there is no shape to normalise).
+  const sublabel = workspace.name;
+  const fromAgentSpace = isAgentSpace(workspace);
   return channels.map(conv => ({
     id: conv.id,
     workspaceId: workspace.id,
     title: conv.title,
-    roster_policy: conv.roster_policy,
     archived_at: conv.archived_at,
-    fromDmWorkspace: isDm,
+    fromAgentSpace,
     sublabel,
   }));
 }
@@ -91,21 +91,20 @@ export function useTaskFilterOptions(): TaskFilterOptions {
     useMemo(() => workspaces.map(w => w.id), [workspaces]),
   );
 
-  // Workspace filter offers BOTH regular workspaces and agent spaces — the
+  // Workspace filter offers BOTH people-owned workspaces and agent spaces — the
   // upstream cascade axis (shiki #task:1387 review: match the message-search
-  // workspace filter, which lists them too). Each option carries `kind` +
-  // `dmAgentId` so the dropdown can render the canonical WorkspaceIcon (serif "W"
-  // for regular, the bound agent's avatar for an agent space). The cascade matches
-  // on `task.place.workspace_id`, so an agent space filters exactly like a regular
+  // workspace filter, which lists them too). Each option carries `owner_agent_id`
+  // so the dropdown can render the canonical WorkspaceIcon (serif "W" when it is
+  // null, the owning agent's avatar otherwise). The cascade matches
+  // on `task.place.workspace_id`, so an agent space filters exactly like any other
   // workspace.
   const workspaceOptions = useMemo<WorkspaceOption[]>(
     () =>
       workspaces
         .map(w => ({
           id: w.id,
-          label: workspaceDisplayName({ name: w.name, kind: w.kind }),
-          kind: w.kind,
-          dmAgentId: w.dm_agent_id,
+          label: w.name,
+          owner_agent_id: w.owner_agent_id,
         }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     [workspaces],
@@ -119,7 +118,7 @@ export function useTaskFilterOptions(): TaskFilterOptions {
     // the pure `workspaceChannelCandidates`.
     const candidates: ChannelFilterCandidate[] = workspaces.flatMap((w, i) =>
       workspaceChannelCandidates(
-        { id: w.id, name: w.name, kind: w.kind },
+        { id: w.id, name: w.name, owner_agent_id: w.owner_agent_id },
         // Member-scoped aggregate: the discovery union now mixes in
         // active PUBLIC channels the viewer hasn't joined. The Tasks channel
         // filter is a member projection (v1 aggregates stay member-only), so

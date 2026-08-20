@@ -31,6 +31,7 @@ import {
   canManageWorkspaceLifecycle,
   canRenameWorkspace,
 } from './workspace-permissions';
+import type { WorkspaceCapabilities } from './workspace-capabilities';
 
 type SettingsSection = 'general' | 'agents';
 type PermissionTab = 'agents' | 'human';
@@ -45,7 +46,11 @@ interface WorkspaceSettingsDialogProps {
   onOpenChange: (open: boolean) => void;
   workspaceId: string | null;
   workspaceName: string | null;
-  workspaceKind: string | null;
+  /** What the container HAS, not what it is (#task:2066): the Permission
+   *  section, the rename form and the lifecycle / leave blocks each key on one
+   *  of these facts. Derived by `workspaceCapabilities` — this dialog never sees
+   *  a workspace kind. */
+  capabilities: WorkspaceCapabilities;
   /** epoch ms when archived; null for active workspaces. */
   archivedAt: number | null;
   onDeleted?: () => void;
@@ -67,7 +72,7 @@ export function WorkspaceSettingsDialog({
   onOpenChange,
   workspaceId,
   workspaceName,
-  workspaceKind,
+  capabilities,
   archivedAt,
   onDeleted,
   initialSection = 'general',
@@ -101,25 +106,28 @@ export function WorkspaceSettingsDialog({
   const canManageLifecycle = canManageWorkspaceLifecycle(viewerRole);
   const canLeave = canLeaveWorkspace(viewerRole);
 
-  const isDm = workspaceKind === 'dm';
+  const { nameSettable, hasMembers, hasLifecycle } = capabilities;
   const isArchived = archivedAt !== null;
-  const visibleNavItems = isDm
-    ? NAV_ITEMS.filter(item => item.id === 'general')
-    : NAV_ITEMS;
-  const activeSection = isDm && section !== 'general' ? 'general' : section;
+  // A container with no member set has no per-member permissions to show, so the
+  // Permission section is not offered — and a deep-link that asks for it lands
+  // on General rather than an empty panel.
+  const visibleNavItems = hasMembers
+    ? NAV_ITEMS
+    : NAV_ITEMS.filter(item => item.id === 'general');
+  const activeSection = !hasMembers && section !== 'general' ? 'general' : section;
 
   // Reset every time the dialog reopens for a (potentially different)
   // workspace.
   useEffect(() => {
     if (open) {
-      setSection(isDm ? 'general' : initialSection);
+      setSection(hasMembers ? initialSection : 'general');
       setPermTab('agents');
       setName(workspaceName ?? '');
       setRenameError(null);
       setConfirmingDelete(false);
       setConfirmingLeave(false);
     }
-  }, [open, workspaceName, initialSection, isDm]);
+  }, [open, workspaceName, initialSection, hasMembers]);
 
   const handleRename = async (e: FormEvent) => {
     e.preventDefault();
@@ -186,7 +194,7 @@ export function WorkspaceSettingsDialog({
 
   const renameDirty = name.trim() !== (workspaceName ?? '');
   const renameDisabled =
-    isDm || renameWorkspace.isPending || !renameDirty || !workspaceId;
+    !nameSettable || renameWorkspace.isPending || !renameDirty || !workspaceId;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -239,7 +247,8 @@ export function WorkspaceSettingsDialog({
           <div className="scrollbar-hide min-w-0 flex-1 overflow-y-auto pr-1">
             {activeSection === 'general' ? (
               <GeneralSection
-                isDm={isDm}
+                nameSettable={nameSettable}
+                hasLifecycle={hasLifecycle}
                 isArchived={isArchived}
                 canRename={canRename}
                 canManageLifecycle={canManageLifecycle}
@@ -313,7 +322,11 @@ export function WorkspaceSettingsDialog({
 }
 
 interface GeneralSectionProps {
-  isDm: boolean;
+  /** Structural: the name is the user's to set (false = derived from the owning
+   *  agent). Orthogonal to `canRename`, which is the viewer's role. */
+  nameSettable: boolean;
+  /** Structural: the container has its own archive / delete / leave doors. */
+  hasLifecycle: boolean;
   isArchived: boolean;
   /** Viewer may rename (owner|admin). When false, Name is shown read-only. */
   canRename: boolean;
@@ -340,7 +353,8 @@ interface GeneralSectionProps {
 }
 
 function GeneralSection({
-  isDm,
+  nameSettable,
+  hasLifecycle,
   isArchived,
   canRename,
   canManageLifecycle,
@@ -363,18 +377,20 @@ function GeneralSection({
   onLeave,
   leavePending,
 }: GeneralSectionProps): JSX.Element {
-  // An agent space's name is immutable (it follows its agent); a regular
-  // workspace is editable only for owner|admin. Everyone else sees the name
-  // read-only — the value is still worth showing, but there is no Save
-  // affordance that would 403.
-  const nameEditable = !isDm && canRename;
+  // A derived name is immutable (it follows its agent); a settable one is
+  // editable only for owner|admin. Everyone else sees the name read-only — the
+  // value is still worth showing, but there is no Save affordance that would
+  // 403.
+  const nameEditable = nameSettable && canRename;
 
   return (
     <div className="flex flex-col gap-4">
-      {isDm ? (
+      {!nameSettable ? (
         <p className="text-xs text-text-muted">
-          {/* Says WHY it is fixed, without leaking the internal `dm-` encoding
-            * to the user (#task:2044 — the space reads as its agent's name). */}
+          {/* The one producer of a non-settable name today is an agent space, so
+            * this says WHY it is fixed: the name IS its agent's handle, which the
+            * agent cannot change either (#task:2044 — the space reads as its
+            * agent's name). A second producer must carry its own reason. */}
           An agent space takes its name from its agent and cannot be renamed.
         </p>
       ) : canRename ? (
@@ -415,7 +431,7 @@ function GeneralSection({
         </div>
       )}
 
-      {!isDm && canManageLifecycle ? (
+      {hasLifecycle && canManageLifecycle ? (
         <>
           {/* Archive + Delete are owner-only administrative ACTIONS (gated on
               canManageLifecycle). Unlike Name, they carry no read value for a
@@ -520,7 +536,7 @@ function GeneralSection({
           channels. The inline confirm mirrors Delete's two-button swap for
           consistency within the section. Owner never reaches here (canLeave is
           false for owner). */}
-      {!isDm && canLeave ? (
+      {hasLifecycle && canLeave ? (
         <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-text-primary">

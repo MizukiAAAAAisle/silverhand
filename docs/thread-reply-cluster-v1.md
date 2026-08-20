@@ -156,13 +156,15 @@ agent 被 @ / 主动 follow **之前**,该 thread 的历史 reply 从没进过�
 
 1. **upsert follower**(若已存在则幂等,不重置 `source`/`followed_at`)。
 2. **backfill 该 thread 已有 replies** 进 `(channel, agent)` inbox/上下文——**按 `seq` 有序、幂等去重**
-   (以 agent 在该 stream 的 observed boundary 为起点,只灌它没见过的;重复 follow 不重复灌)。
+   (回灌根消息 + 该 stream 内所有 `seq<current` 的**未投递** `observe` 行,完整无上限;门是"该行尚未投递",
+   不是 per-stream observed boundary;重复 follow 不重复灌)。
 3. **enqueue 当前触发的 reply / wake**。
 
 - **当前触发消息单独 enqueue(步骤 3),不混进 backfill(步骤 2)**——backfill 严格是"此前已有 replies",
   避免当前 reply 被投两次。
-- **追平要同步推进该 stream 的 observed boundary**(§6.4),否则刚灌进去的历史会被 freshness 当成"未观察"
-  反过来把这个 agent stale 掉。
+- **追平不再"推进 observed boundary"**(scheme C 下该 per-stream 游标已删除,§6.4)。回灌写入的是普通的
+  未投递 inbox 行,按 whole-runtime freshness 规则,在被消费(delivered)前会正常参与该 runtime 的 stale
+  判定——这是设计预期,不需要(也不存在)旧模型里"推进 observed 以免刚灌的历史反把 agent 自我 stale"的补偿。
 - pull(§7)留作**非 follower** 的逃生口,**不是 follow 后的补课**。
 - 全量回灌 vs digest 的阈值由 runtime 定;默认全量(thread 通常不长),digest 仅长 thread 优化。
 
@@ -177,6 +179,13 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
 - `turn`:你被 @mention / 显式 target,**应当**考虑响应。
 - backend 在投递时按"该 actor 是否被本条消息 mention/target"算出 `delivery_kind`,runtime 据此决定是否
   起 turn。**不能让 runtime 从 inbox 有没有新消息去猜。**
+- **落地形态修订(#task:2097):** 这个字段的载体是 `conversation_inboxes.delivery_kind`(backend 内部一路带到
+  `RuntimeDeliveryCoordinator`),**但不上 wire**:turn/observe 的裁定在组批之前就用掉了——`turn` 收件人走
+  主动投递(spawn idle / wake ready),`observe` 收件人只落一条持久 inbox 行、不唤醒(`services/conversation-message/delivery.ts`
+  `deliverThreadReplyBestEffort`),所以 runtime 无需、也拿不到这个字段;它曾在 `deliveries[]` 里携带过一段时间
+  但从无 daemon reader,已删(§6.4 末段)。红线不变:决定权在 backend 的 mention/target 计算,而非 runtime 猜
+  inbox。**若日后做"把 observe reply 推进已 ready runtime 的上下文而不起 turn"(段2),那才重新需要一个 wire
+  envelope——届时是新增一个有 reader 的字段,不是复活这条 tail。**
 - **测试钉死:** 普通 follower 收到 thread reply → `observe`、不抢答;被 mention 的 follower → `turn`。
 
 ### 6.3 串行化(已知取舍,记档)
@@ -186,87 +195,29 @@ follower agent 会一起回。**投递语义与 act 语义必须分开实现。*
 真要并行的重活就该是独立 conversation = channel**(这正是决策 Y 的运行时理由)。v1 不为 thread 引入
 并行 session。
 
-### 6.4 Freshness / message-stale 交互(per-target-stream)
+### 6.4 Freshness / message-stale 交互(whole-runtime,非 per-stream)
 
-旧 `message_stale` 是 **conversation 粒度的 raw seq CAS**(`conversations.latest_message_seq` + daemon 单值
-observed)。旧模型成立因 thread 是独立 conversation。新模型 thread reply 写进父 channel 同一条消息流,
-**若仍用 conv 粒度会两个错:** ① 非 follower 没收到某 thread 的 reply,但 conv seq 被推进 → 它在主线发言被
-误 stale;② stale 的 `newer_messages` 会把它没 follow 的 thread 消息塞回去 = **用 freshness 绕过 follower
-push、泄露 thread 内容**。
+**freshness 不是流/线程/主线的属性,而是整个 runtime 视野的属性(scheme C)。** 一个 runtime = 一个
+上下文;只要它还有**任何未投递的 inbox 行**(后端对 `conversation_inboxes` 里 `delivered_at IS NULL` 的
+布尔 EXISTS),它所有待发送的消息就都算 stale——thread 与主线**不互相隔离**,任一会话/线程里未消费的行
+都会挡住它在任意流的发送。权威是**后端**,在 `message send` 处经 `RuntimeScope` guard 判定;daemon
+**不持有任何 freshness 游标**。
 
-**契约(正式 v1 = per-target-stream;delivery-stream 只允许作实现 floor/迁移中间态,不写进产品语义):**
+因此旧设计里"按 target stream 逐流 CAS"这整套已删除,**不是 deferred**:不再有 per-stream observed
+boundary、不再有 daemon 侧 `observedSeqByStream` / `pendingAdmissionSeqByStream`,不再有 `seen_up_to_seq`
+/ `stream_head_before` / per-stream CAS token,也不再有 `conversation_stream_heads` 这张 freshness 锁行表
+(§9 已随之移除)。旧模型担心的两类 per-stream 危害——① 非 follower 没收到某 thread reply 却因 conv seq
+被推进而误 stale;② stale 的 `newer_messages` 把没 follow 的 thread 消息塞回去 = 用 freshness 绕过
+follower push 泄露——在 whole-runtime 模型下**从机制上不存在**:freshness 只问"有没有东西被 route 给我、
+而我还没消费",不比较任何流的 seq,也不带 seq / count 回 409。
 
-> **一条 send 只能被「同一 target stream 内、且对该 actor 可见/可投递」的更新判 stale;`newer_messages`
-> 也只含这类更新。** `stream_key = (conversation_id, thread_root_id | null)`(`null`=主线)。
-
-机制(排序与判新解耦,三方收敛 + Cindy slock-ai 调研 #task:1023 印证):
-- **排序 seq 不动:** `messages.seq` 仍是 conversation 内全局单调序(排序/分页/WS replay 兼容)。**不给
-  thread 另起递增 seq。**
-- **per-stream head 物化 + `latest_seq` 当 CAS token(无独立 `version`,已拍):** 新表
-  `conversation_stream_heads`(**结构化列 `thread_root_id`,NULL=main;不存编码字符串 `stream_key`**,见 §9 + blocker 修正)。
-  `latest_seq` = 该 stream 最新消息的 **global seq**。同一 stream 内 global seq
-  单调递增(全局 allocator 保证后插入更大)→ `latest_seq` 本身就是合法 CAS token,**一值三用**:CAS token
-  + `newer_messages` 下界 + daemon observed boundary。语义源头仍是 `messages` 全局 seq + stream key
-  (`MAX(seq) WHERE conversation_id=? AND thread_root_id <=> ?` 可重建 head,用于 backfill/校验)。`stream_key`
-  字符串只在 API/daemon wire 层暴露,DB 边界一律用结构化 `thread_root_id`。
-  - **不建独立 `version` 字段。** slock-ai 同样用"消息序号本身"做 per-target boundary、无独立 version。
-    **注意(shiki 指正):slock 是有 reaction 机制的,但 reaction 被刻意排除在 freshness 之外**(只 POST/DELETE
-    `/messages/:id/reactions`,不带 `seenUpToSeq`)——所以"系统里存在 reaction"本身**永远不构成**引入 version
-    的理由。只有当我们**主动决定**让某种不推进 `latest_seq` 的变更(edit / 把 reaction 设计成"需重判")参与
-    freshness 时,才需要独立 version。v1 不这么设计(对齐 `docs/reactions-design.md`:reaction 独立表、不进消息流),
-    故单 `latest_seq` 足够,version 不预留。
-- **发送事务(确定形态,单一 DB transaction,采纳 Cindy blocker#1):** allocator 与 stream-CAS 是两件事
-  (今天在 `message-repo.ts:493-521` 挤成同一条 `latest_message_seq+1` UPDATE,新模型必须拆),但**必须包在
-  一个事务里,CAS 失败整体 rollback**——不能像现有 `insertForConversationIfFresh` 那样 return stale 后仍提交
-  (否则会把 `conversations.latest_message_seq` 空推进、留下 burned seq)。确定顺序:
-  1. resolve target stream(reply→`thread_root_id=<root>`,否则 `main` 即 `NULL`)。
-  2. **reserve global seq**:`conversations.latest_message_seq += 1` → `newGlobalSeq`(无条件全局 allocator)。
-  3. **stream-head CAS,UPDATE-first(实测纠正二轮,见下方"为何 UPDATE-first"):**
-     - **先做条件 UPDATE**(无论 `seenStreamSeq` 是 0 还是 >0,只要 head 行已存在):
-       ```sql
-       UPDATE conversation_stream_heads SET latest_seq = :newGlobalSeq
-        WHERE conversation_id = :conv
-          AND thread_root_id IS :rootOrNull   -- main 用 IS NULL;thread 用 = :root
-          AND latest_seq = :seenStreamSeq;     -- changes()==1 → 成功
-       ```
-     - **UPDATE 命中 0 行且 `seenStreamSeq == 0`**(该 stream 尚无 head 行,典型=thread 首条 reply):**INSERT,冲突即放弃**
-       ```sql
-       INSERT INTO conversation_stream_heads(conversation_id, thread_root_id, latest_seq)
-       VALUES(:conv, :rootOrNull, :newGlobalSeq)
-       ON CONFLICT DO NOTHING;     -- 无需 conflict target;changes()==0 → 并发首 reply 已赢 → stale
-       ```
-     - **UPDATE 命中 0 行且 `seenStreamSeq > 0`** → head 被人推进 or 行缺失 → **stale**(不进 INSERT,绝不误插)。
-     > **为何 UPDATE-first(纠正原"`seen==0`→INSERT / `seen>0`→UPDATE"两路径,sqlite3 + better-sqlite3 实测):**
-     > v43 migration 给**每个已存在 conversation** backfill 了一条 main head(空会话 `latest_seq=0`)。原方案下 main 线
-     > 首发(`seen==0`)会走 INSERT 分支 → 撞已存在的 main head 行 → `ON CONFLICT DO NOTHING` → `changes()==0` →
-     > **误判 stale**(而旧 conv 级 CAS `WHERE latest_message_seq=0` 是成功的 → 回归)。UPDATE-first 把"行已存在"
-     > 的所有情形(含 backfilled main-head-at-0)交给条件 UPDATE,只有 UPDATE 0 行 **且** `seen==0` 才认定 head
-     > 真缺失 → INSERT。**并发首 reply / `seen>0` 缺行 → stale 的语义与原方案逐格一致**(见下方并发用例),只是多正确
-     > 覆盖了 backfilled-main 这一格。两条 SQL 仍都不带 conflict target,partial-index 限制不相关。
-
-  4. **CAS 失败(`changes()==0`)→ `throw` 让事务/savepoint rollback**(allocator 的 +1 一并回滚,无 gap);
-     rollback 后再查该 stream 当前 `latest_seq` 组 stale 响应,`newer_messages` 用**同 stream + 同
-     deliverability/follower filter** 拉。
-     - **cut1 落地形态**(`message-repo.ts insertForConversationIfFresh`):allocator+CAS 包在一个 `db.transaction`,
-       CAS miss 抛内部 sentinel `StreamCasMiss` → savepoint rollback(撤 +1)→ 捕获后返回 `{ok:false, currentSeq=
-       该 stream head}`;service 再抛 `MessageFreshnessGuardError(threadRootId)` 回滚外层并组 `message_stale` 响应,
-       `newer_messages` = `listAfterSeqInStream(conv, threadRootId, seen)`(follower deliverability filter 归 cut2)。
-  5. CAS 成功(`changes()==1`)→ insert message(`seq=newGlobalSeq`, `thread_root_id=…`),提交。
-  - 并发首 reply(都 `seen=0`):第一条 UPDATE 0 行 → INSERT 成功(`changes()=1`);第二条 UPDATE 0 行(head 已被首条
-    推到 >0)→ `seen=0` 走 INSERT → 撞 partial unique → `DO NOTHING` → `changes()=0` → stale。(均 better-sqlite3 实测,
-    cut1 测试 `message-repo.test.ts` 钉死。)
-- **daemon observed 从单值 → map** `stream_key → observed_seq`(= 它读到的该 stream `latest_seq`)。send 带
-  `(stream_key, seenStreamSeq)`;CAS 比的是同一 stream 的 head,而非 conv 全局 max。
-- **`newer_messages` 用完全相同的 deliverability + stream filter**,不能 `listAfterSeq(conversation_id)`。
-- **pull-read(§7)产生该 `thread_root_id` stream 的 observed boundary**(不创建 follow),否则"主动读完→
-  reply"会被自己 stale(与 §6.1 追平同源:任何让历史进上下文的路径都要同步推进对应 stream 的 observed)。
-  slock 同此:read/history + full stdin delivery 推进 boundary,busy notice 不推进。
-
-净效果:消除跨 stream 误报 + 非 follower 误拦 + payload 泄露;thread-heavy 频道的假 stale 大幅下降。
-
-> **实现期测试要求(Cindy review PASS 附带,卡点):** CAS 测试必须覆盖 main 与 thread 两组路径的全部分支——
-> 首插、**并发首插(`seen=0` 第二条 → 0 changes → stale)**、CAS 成功、CAS stale、**`seen>0` 且 head 缺失 →
-> UPDATE 0 行 → stale(不误插)**;并断言 `conversations.latest_message_seq` 在 CAS miss 后已 rollback(无 burned seq)。
+- **排序 seq 不动(仍然 LIVE,属 thread/排序模型而非 freshness):** `messages.seq` 仍是 conversation 内全局
+  单调序(排序/分页/WS replay 兼容),**不给 thread 另起递增 seq**;stream 身份仍是
+  `(conversation_id, thread_root_id|null)`(§9),用于组织 reply cluster、回灌与窗口,与已删除的 per-stream
+  freshness CAS 无关。
+- **canonical freshness 契约见 `docs/freshness-boundary-authority-v1.md`(scheme C):** carrier = "该 runtime
+  是否还有未投递 inbox 行" 的布尔 EXISTS;409 `code='message_stale'` 不带 seq/count;唯一 bypass 是人类
+  `--anyway`。本 doc 不再重复其机制细节,thread reply 与主线一视同仁地走该 whole-runtime 判定。
 
 ### 6.5 默认 reply target(bare send 落哪条 stream;#task:1236 floor 定档)
 
@@ -278,7 +229,7 @@ default 不是可变游标,而是从本 turn 的 `deliveries[]` 派生出来的�
    不与 thread 平级竞争。
 3. **2+ 个 thread streams** → `ambiguous`,bare send fail-loud,要求显式 `--target`。
 
-`observe` delivery 不参与 default 推断;它只推进 read/observed 边界。显式 `--target channel|thread:<id>` 或
+`observe` delivery 不参与 default 推断(它只是把消息带进上下文,不改 bare-send default)。显式 `--target channel|thread:<id>` 或
 `--reply-to <id>` 永远覆盖 default,但只作用于**当前这次 send**,绝不能改写本 turn 的 bare-send default。
 
 **同源不变量(header ≡ resolver ≡ candidate_targets):** backend 渲染给 agent 的 header `target=` 与 host
@@ -296,19 +247,26 @@ header 看到的流、daemon 会默认回复的流、以及 fail-loud 时可 cop
 promote 成 `defaultReplyTarget`(promote 等到下个 turn 边界 `admitPendingSeqForNewTurn`)。读路径先取 pending,
 再退 admitted;pending 代表本 turn 的新触发流,必须压过上一轮遗留的 admitted default。
 
-**与 freshness 的耦合(否则次生 false-stale):** 默认落到一条 **pending(尚未 admitted)** thread stream 时,该
-stream 的 observed 还没推进到触发消息,直接用 `observedSeqByStream` 当 `seen_up_to_seq` 会被 §6.4 的 per-stream CAS
-误判 stale。故 `source==='pending_default'` 时 `seen_up_to_seq = max(observedSeq, pendingAdmissionSeq)`,把被
-deferred 的触发消息算作已见。**这只是 send 时多读一眼 pending admission;observed-seq 的 turn-boundary promote
-时序不变**——default-target 与 freshness 两个关注点保持解耦,绝不提前 promote pending。
+**与 freshness 的关系(scheme C 下已解耦,不再有次生 false-stale):** 旧模型里默认落到一条 **pending(尚未
+admitted)** thread stream 时,会因该 stream 的 observed 没推进到触发消息、直接拿 `observedSeqByStream` 当
+`seen_up_to_seq` 而被 per-stream CAS 误判 stale——**这条危害随 per-stream freshness 一起删除**:freshness 现在是
+whole-runtime 的(后端对未投递 inbox 行的 EXISTS,§6.4 / `docs/freshness-boundary-authority-v1.md`),与 default
+落哪条 stream 无关,不存在 `seen_up_to_seq` / `observedSeqByStream` / `pendingAdmissionSeq` 这类 per-stream 补偿。
+pending-vs-admitted 仍是 **default-target 解析**内部的时序(读路径先 pending 再 admitted),但已与 freshness 完全正交。
 
-**delivery metadata 必须穿透中途 queue(#task:1218 根因,load-bearing):** backend → daemon 的
-`deliveries[]` 是 observed boundary 与 default resolver 的唯一 per-stream 权威;scalar `delivered_up_to_seq` 只是
-legacy/diagnostic high-water,不能用来推进或推断任意 stream。若 gated mid-turn queue 丢掉 `deliveries[]`,
-safe-boundary flush 会退回 scalar fallback,把 thread seq 写进 main observed boundary,随后 bare main send 会拿
-`seen_up_to_seq > main head` 做 CAS,表现为 `current_seq` 倒退且 `newer_messages=[]` 的假 stale。因此
-`RuntimeDeliveryCoordinator` 的 enqueue/flush 路径必须原样保留每条 delivery 的
-`thread_root_id`/`delivery_kind`。
+**delivery metadata 与中途 queue(#task:1218,现状修订):** backend → daemon 的 `deliveries[]` 里,daemon
+今天只读 `delivery_id`(去重)、`seq`(其 `max` 即 daemon 写盘的 sidecar high-water)与 `presentation`;这个数组
+**是那个 high-water 的唯一来源,不是 "observed boundary / per-stream 权威"**——scheme C 下根本没有 observed boundary。
+**#task:2106 已把 wire 上的 scalar `delivered_up_to_seq` 从 `runtime_deliver` params 物理删除**(`deliveries[]` 同时收窄为必填非空):
+不再有 wire 标量,daemon 每次写盘的 sidecar 值改为纯派生 `max(deliveries[].seq)`,只是 diagnostic high-water,
+不参与 freshness(freshness 走 whole-runtime EXISTS,§6.4)。因此旧描述的"queue 丢 `deliveries[]` → scalar fallback → thread seq 写进 main observed → bare main send
+拿 `seen_up_to_seq > main head` 做 CAS → `current_seq` 倒退、`newer_messages=[]` 的假 stale"这条失败模式已随
+per-stream freshness 一并删除(且 scalar fallback 分支本身已随 #task:2106 消失)。**`message_id` / `thread_root_id` / `delivery_kind` 这三条 dead wire tail 已由
+#task:2097 从 `deliveries[]` 物理删除**(折进同一个未发布协议代,无新协议号):数组的字母表现在精确等于
+daemon 的那三个 reader,`.strict()` 两侧都不再接受它们。被删的事实各自另有权威载体:thread 坐标是
+stdin header 里的绝对 `target`(daemon 解析 request JSON,从不读这个数组),turn/observe 由 backend 在组批
+之前读 `conversation_inboxes.delivery_kind` 裁定。它们不保留为 optional——strict 内部 wire 上的 optional
+字段等于断言"消费者还可能出现",而这正是被退役的那个断言。
 
 **跨回合 sticky:** 若当前 turn 没有新的 turn delivery 贡献 default,daemon 可沿用 admitted default。任何时候要跳出
 thread default 回主线,用显式 `--target channel`。
@@ -341,7 +299,7 @@ main-line target 覆盖当前 thread default。
 - **reply / 建 thread:** `message send --reply-to <msg_id> ...`(reply 到某消息;首次 reply 自动建
   thread 并 follow)。
 - **主动读(pull):** **复用 `message history`,新增 target 形态 `--target thread:<root_msg_id>`**(§7;不建
-  follow,但产生该 stream 的 observed boundary,§6.4)。**不要新引 `message read`** —— 当前 CLI 明确无该
+  follow,也不产生任何 freshness 游标/observed boundary——该 per-stream 概念已删除,pull 就只是读,§6.4)。**不要新引 `message read`** —— 当前 CLI 明确无该
   命令、且有 rejection test 提示用 `message history`(Cindy 现读指出)。沿用 `message history` 即可,避免复活
   一个被测试拒绝的命令。
   - 注:`--target thread:<id>` 这个 grammar 现存(旧指 thread-conversation id);thread 不再是 conversation
@@ -383,33 +341,12 @@ main-line target 覆盖当前 thread default。
   - `source` 仅遥测/可解释性、记初始入口不覆盖(§5)。
   - **`follower ⊆ channel member` 不是 DB 表能维持的不变量**(表无法随 membership 动态收缩)——它在
     **投递/读查询时**按"当前是否 channel 可见/成员"join 过滤(失权即过滤;follower 表非权威,channel 权限才是)。
-- **per-stream freshness head(load-bearing,非可选缓存——它是 freshness CAS 的锁行,§6.4):**
-  **DB 用结构化列 `thread_root_id`(NULL=main),不存编码字符串 `stream_key`**(采纳 Cindy blocker#2:
-  `thread:<id>` 字符串无法自然 FK 到 messages,结构化列才能复用同一套 root-valid trigger):
-  ```
-  conversation_stream_heads(
-    conversation_id  TEXT NOT NULL,
-    thread_root_id   TEXT,                 -- NULL = main stream
-    latest_seq       INTEGER NOT NULL      -- 该 stream 最新消息的 global messages.seq;= CAS token + 边界
-  );
-  -- 每 conversation 唯一 main head:
-  CREATE UNIQUE INDEX uniq_stream_main
-    ON conversation_stream_heads(conversation_id) WHERE thread_root_id IS NULL;
-  -- 每 (conversation, thread) 唯一 head:
-  CREATE UNIQUE INDEX uniq_stream_thread
-    ON conversation_stream_heads(conversation_id, thread_root_id) WHERE thread_root_id IS NOT NULL;
-  ```
-  - `thread_root_id` 复用 §9 上面那套 root-valid trigger 约束(存在、同 conversation、root 自身
-    `thread_root_id IS NULL`)。`stream_key='main'|'thread:<id>'` 只在 API/daemon wire 层编码/解码,DB 不见。
-  - **SQLite UPSERT 落地(Cindy 实测起头 + 我两轮实测纠正):** CAS **不走** `ON CONFLICT … DO UPDATE`,改 **UPDATE-first**:
-    先 `UPDATE … WHERE latest_seq=:seen`;命中 0 行**且** `seen=0` 再 `INSERT … ON CONFLICT DO NOTHING`;否则 stale。
-    这样既绕开 partial unique index 的 conflict-target 限制(两条 SQL 都无 target),又正确覆盖 v43 给每个已存在
-    conversation backfill 的 main head(空会话 `latest_seq=0`)——纯"`seen=0`→INSERT"会把它误判 stale。完整 SQL +
-    实测结论见 §6.4 步骤 3。
-  - **无 `version` 列**(原 §14 已拍 + Cindy slock 调研 #task:1023 印证:slock 也用消息 seq 做 per-target
-    boundary、无独立 version;reaction 不参与 freshness)。仅未来 edit/reaction 要触发重判时才加。
-  - `latest_seq` 语义源头 = `MAX(messages.seq) WHERE conversation_id=? AND thread_root_id <=> ?`,head 是其物化,
-    可由该 query 重建(backfill / 校验 job)。
+- **~~per-stream freshness head 表(`conversation_stream_heads`)~~ —— scheme C 下删除,不再是数据模型的一部分:**
+  旧设计要建这张表(per `(conversation_id, thread_root_id)` 一行 `latest_seq`)作 freshness CAS 的锁行,一值三用
+  (CAS token + `newer_messages` 下界 + daemon observed boundary)。scheme C 把 freshness 改成 whole-runtime 的
+  后端 EXISTS 判定(§6.4 / `docs/freshness-boundary-authority-v1.md`),**不再有任何 per-stream head / CAS token /
+  observed boundary**,故这张表、它的 UPDATE-first CAS SQL、`version` 列讨论都随之作废、不再入库。thread 身份与排序
+  仍只靠 `messages.thread_root_id` + 全局 `messages.seq`(见本节上文),不需要 head 物化表。
 - 迁移按 append-only(CLAUDE.md):新版本 migration,不改已发布的。
 
 ---
@@ -420,7 +357,7 @@ main-line target 覆盖当前 thread default。
 (B) 冻结而非改写**(原 §14 Q3 已拍):
 
 - (A) 把每个旧 thread 的消息"挂回"父 channel:旧 thread 消息批量改写 `thread_root_id`,删 thread
-  conversation 行。**风险:历史归属重写、跨 stream observed/freshness 重算,易错——否决。**
+  conversation 行。**风险:历史归属重写、跨 conversation 的 seq/归属重算,易错——否决。**
 - **(B,采用) 冻结:** 停止创建新隔离 thread;旧 thread conversation 只读保留(UI 标 "legacy
   thread"),新模型只对新建 reply 生效。旧 `(thread, agent)` session 走正常 idle-reap 回收,不再 spawn。
 
@@ -445,18 +382,18 @@ main-line target 覆盖当前 thread default。
 ## 11. 核心不变量(测试 + review 卡点)
 
 1. `thread_follower` 只控制 push/inbox/notification,**不控制 read permission**。
-2. `message history --target thread:<root_msg_id>` 是主动 pull,**不创建 follow**(但产生该 stream
-   的 observed boundary,§6.4)。
+2. `message history --target thread:<root_msg_id>` 是主动 pull,**不创建 follow**(也不产生 observed
+   boundary——该 per-stream 游标已删除,§6.4)。
 3. thread reply **不写给非 follower agent 的 inbox**。
 4. mention / reply / target_author 驱动的 follow = **backend 自动副作用**(inbound 自助 follow 逻辑
    不可行);CLI `thread follow` 仅 `source='manual'` 主动自愿一类;读/打开/reaction 不进 follower。
 5. **没有 private thread**;私密/隔离/并行需求走 channel。
-6. **中途成为 follower → 自动追平**(回灌 thread 历史,按 seq 有序幂等,同步推进 observed boundary);
-   **turn ≠ 投递**(follow 只"看得到",发言仍由 mention/target 决定;投递信封带 `delivery_kind`)。
+6. **中途成为 follower → 自动追平**(回灌 thread 历史,按 seq 有序幂等;由**未投递 inbox 行**驱动、无 observed
+   boundary,§6.1/§6.4);**turn ≠ 投递**(follow 只"看得到",发言仍由 mention/target 决定;投递信封带 `delivery_kind`)。
 7. **follower ⊆ parent channel member**;失权即过滤(follower 表非权威,query-time join channel 权限)。
-8. **freshness 判 stale 只在「同一 target stream + 对该 actor 可投递」范围内**(`stream_key =
-   (conversation_id, thread_root_id|null)`);`newer_messages` 用同一 deliverability+stream filter,
-   **不得跨 stream 泄露**。排序 `messages.seq` 仍 conversation 全局,**不给 thread 另起 seq**。
+8. **freshness 判 stale 是 whole-runtime 视野属性**(后端对未投递 inbox 行的 EXISTS),**不再 per-stream**;
+   thread 与主线不互相隔离,`newer_messages`/per-stream CAS/observed boundary 那套已删除,详见 §6.4 /
+   `docs/freshness-boundary-authority-v1.md`。排序 `messages.seq` 仍 conversation 全局,**不给 thread 另起 seq**。
 
 ---
 
@@ -484,13 +421,13 @@ session。这比旧模型(给 agent 一个"每 thread 一个脑子"、human 没�
 **已拍(本轮收敛,留痕):**
 - ~~Q2 §9 `thread_root_id` 根消息上取 NULL 还是自指~~ → **NULL on root**(§9)。
 - ~~Q3 §10 迁移走 (A) 还是 (B)~~ → **(B) 冻结 + 兼容矩阵**(§10.1)。
-- ~~freshness 是否给 thread 单独建 latest seq~~ → **不**;排序 seq 全局不动,freshness 改 per-stream
-  派生(§6.4)。
+- ~~freshness 是否给 thread 单独建 latest seq~~ → **不**;排序 seq 全局不动。freshness 后续又整体改为
+  whole-runtime 的后端 EXISTS(scheme C),连 per-stream 派生都不做(§6.4 / `docs/freshness-boundary-authority-v1.md`)。
 
 **仍开放:**
 1. §6.1 追平:全量回灌 vs digest 的阈值(默认全量;长 thread 何时切 digest)。
-2. §6.4/§9:`conversation_stream_heads` 是 load-bearing 锁行(已定),是否再加一个**派生校验/重建 job**
-   (拿 `MAX(messages.seq)` 对账 head,修迁移/异常导致的漂移)。
+2. ~~§6.4/§9:`conversation_stream_heads` 是否再加**派生校验/重建 job**~~ → **作废**:scheme C 删除了 per-stream
+   head 表,freshness 改 whole-runtime 后端 EXISTS,不再有 head 要对账(§6.4/§9)。
 3. §10:冻结窗口多长、何时彻底删旧 thread 行(Cindy 定);typed error code 命名。
 4. §8:`thread follow/unfollow --root` 要不要短别名(纯人体工学,非阻塞)。
 5. human UI 的 unread / 通知粒度(per-thread 通知管理,Slack 有,v1 是否做)。

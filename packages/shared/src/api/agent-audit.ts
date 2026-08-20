@@ -13,7 +13,6 @@
 import { z } from 'zod';
 import {
   ConversationRosterPolicySchema,
-  WorkspaceKindSchema,
 } from '../db/schema.js';
 import { DirectPairCounterpartSchema } from './conversation.js';
 import { MessageDtoSchema } from './message.js';
@@ -31,8 +30,7 @@ import { MessageDtoSchema } from './message.js';
  * COUNTERPART — the endpoint that is NOT the audited agent (who the agent is
  * talking to), resolved server-side for the same reason the DM list resolves it
  * there (which slot is "the other one" is a storage rule a client must not
- * reimplement). The AgentInbox never appears — it is the agent's own private
- * queue, outside the audit face's declared scope.
+ * reimplement).
  *
  * `created_at` is the list's ORDER (oldest first), the same base order every
  * sibling conversation list uses; no conversation row carries a last-activity
@@ -46,7 +44,6 @@ export const AgentAuditChatSummarySchema = z.discriminatedUnion('placement_kind'
     title: z.string(),
     workspace_id: z.string(),
     workspace_name: z.string(),
-    workspace_kind: WorkspaceKindSchema,
     archived_at: z.number().nullable(),
     created_at: z.number().int(),
   }),

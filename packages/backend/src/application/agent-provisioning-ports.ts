@@ -8,12 +8,11 @@
  *
  * ## What this scope covers
  *
- * TWO units of work, both atomic and independent (spec §5 note / §2.2):
+ * TWO units of work, independent, and only the second one atomic
+ * (spec §5 note / §2.2):
  *
- * 1. the AGGREGATE reserve —
- *    {@link AgentProvisioningPersistence.reserveAgentAggregate} writes the
- *    `agents` row plus its inbox placement (v71 §4.2), the pair that makes an
- *    Agent exist at all;
+ * 1. the ROW reserve — {@link AgentProvisioningPersistence.reserveAgentRow}
+ *    writes the `agents` row. One statement, its own commit;
  * 2. the DEPENDENT GRAPH —
  *    `create-agent.ts::insertProvisioningDependents` flips a
  *    `pending_materialization` agent to `active` and inserts everything that
@@ -21,16 +20,24 @@
  *    depends on the agent's session scope (#task:2034): the CONVERSATION arm
  *    builds the agent-home workspace, the onboarding DM channel + both
  *    membership edges, the owner-human membership/pointer, and the onboarding
- *    system message; the AGENT arm has no home and no DM, so its graph is the
- *    onboarding system message alone, addressed to the inbox it already owns.
+ *    system message; the AGENT arm has no home and no DM, so its graph is its
+ *    direct line with the CREATOR plus the onboarding message in it.
  *    All of those writes plus the authoritative re-read the workspace insert
  *    needs are the faces below.
  *
  * The split is the lifecycle: `pending_materialization | active | failed` are all
  * legal states of an Agent, and only (2) is conditional on materialization
- * succeeding. Putting the inbox in (2) would give a `failed` row no destination
- * for a mention of its already-reserved handle, and would make a retry insert a
- * second inbox for a row that already has one.
+ * succeeding.
+ *
+ * (1) USED TO BE AN AGGREGATE and is not one any more (#task:2072). It paired the
+ * row with an `agent_inbox` placement, because a handle is addressable from the
+ * instant it is reserved and the mention CC of the day copied INTO that inbox —
+ * so a `pending_materialization` or `failed` row needed a destination it could not
+ * mint for itself. The CC now copies into the AUTHOR's direct line with the agent
+ * and mints that line at the send boundary, so a bare row is a complete Agent: the
+ * destination is a function of the sender, not a possession of the agent. What is
+ * left is one INSERT, and the reason it is still its own commit is unchanged — the
+ * L2 materialize dispatch depends on the row being durable before it runs.
  *
  * ## Atomicity, not isolation — but the conditional transition IS the gate
  *
@@ -87,29 +94,9 @@
 import type {
   AgentRow,
   CanonicalConversationTitle,
+  ConversationEndpointIdentity,
   CreateAgentInput,
 } from '@silverhand/shared';
-
-/** A broken Agent aggregate: the agent row exists but its inbox does not.
- *
- *  Declared HERE, next to {@link AgentProvisioningPersistence.reserveAgentAggregate}
- *  (#task:2034): that factory is what makes "an agent always has an inbox" true,
- *  so the violation of the invariant belongs to the module that states it — not
- *  to whichever consumer happened to notice first (it was `mention-cc.ts`, which
- *  is a mention rule, not the aggregate's contract). Never recoverable at a read
- *  site: a get-or-create is exactly what let two `Mentions` DMs exist for one
- *  agent. */
-export class AgentInboxMissingError extends Error {
-  readonly code = 'agent_inbox_missing' as const;
-  constructor(readonly agentId: string) {
-    super(
-      `agent ${agentId} has no agent_inbox placement; the inbox is created with `
-        + 'the agent (v71 migration + create-agent transaction), so this is a '
-        + 'broken aggregate, not a state to repair from a mention',
-    );
-    this.name = 'AgentInboxMissingError';
-  }
-}
 
 /** The agent face: the conditional transition and the authoritative re-read
  *  that follows it, as ONE operation. */
@@ -119,9 +106,9 @@ export interface AgentProvisioningAgentsTxPort {
    * the reserved row because the row (never the request body) is the source of
    * truth for the wire intent that follows.
    *
-   * Reachable only through {@link AgentProvisioningPersistence.reserveAgentAggregate},
-   * which pairs it with the inbox insert; the port exposes it on the tx scope so
-   * that pairing is a transaction and not a convention.
+   * Exposed on the tx scope because {@link AgentProvisioningPersistence.reserveAgentRow}
+   * is composed from the same faces as the dependent graph, not because the
+   * reserve needs a transaction: it is one statement.
    */
   reserveForMaterialize(args: {
     input: CreateAgentInput;
@@ -169,8 +156,8 @@ export interface AgentProvisioningWorkspacesTxPort {
   setOwnerUserId(workspaceId: string, userId: string): void;
 }
 
-/** The conversation face: the onboarding DM channel, its two edges, the
- *  agent's inbox placement, and the inbox lookup the agent-scoped arm needs. */
+/** The conversation face: the onboarding DM channel and its two edges, plus the
+ *  creator's direct line the agent-scoped arm onboards into. */
 export interface AgentProvisioningConversationsTxPort {
   /** Insert the DM channel under the (already-inserted) agent-home workspace.
    *  Returns only its id — the edges below and the message insert key off it.
@@ -185,44 +172,31 @@ export interface AgentProvisioningConversationsTxPort {
     agentId?: string | null;
   }): { id: string };
   /**
-   * Insert the agent's INBOX placement (v71, §4.2) — part of the Agent
-   * aggregate, so it is written in the SAME transaction as the `agents` row
-   * ({@link AgentProvisioningPersistence.reserveAgentAggregate}), never lazily by
-   * whatever first needs it. The mention CC depends on this row existing and
-   * refuses to create one (`AgentInboxMissingError`): a get-or-create is exactly
-   * what let two `Mentions` DMs exist for one agent.
+   * Get-or-create the `direct_pair` for these two endpoints — the AGENT-SCOPED
+   * arm's onboarding destination: the creator's direct line with the new agent
+   * (#task:2072).
    *
-   * NOT part of the dependent graph below: `pending_materialization` and
-   * `failed` rows own an inbox too (the mention resolver answers for them), and a
-   * retry that re-ran this insert would collide with the inbox its own first
-   * attempt already committed.
+   * The member name, the argument order and the `created` flag are
+   * `DirectPairMintPort`'s (`application/open-direct-pair.ts`) so that this face
+   * can be handed to `openDirectPair` verbatim. That matters more than it looks:
+   * the mint and its `direct_pairs_changed` announcement are ONE operation there,
+   * and reaching the mint means holding the announcement capability. A second
+   * hand-rolled mint here would be a door that can forget to announce, which is
+   * the whole of #task:2035.
    *
-   * Takes the owner and the owner's `created_at`: the inbox has no workspace, no
-   * roster edge, no caller-chosen title and no visibility — `inbox_agent_id` is
-   * its whole identity, and the DB's arc CHECK plus
-   * `idx_conversations_inbox_agent` make both facts schema-level. The timestamp
-   * is the agent's, so aggregate birth reads the same on an upgraded DB as on a
-   * fresh create. Returns `{ id }` like its siblings (R4).
+   * WRITTEN INSIDE THE DEPENDENT GRAPH, not beside the `agents` row: it is needed
+   * only by the write that consumes it (the onboarding message), so it belongs to
+   * the same atomicity — a line that outlived a rolled-back graph would be an
+   * empty conversation in the creator's DM list. Get-or-create rather than insert
+   * for the same reason it is safe under `?retry=true`: the creator may already
+   * have a line with this agent (they could have mentioned it while it was still
+   * `pending_materialization`), and that line is the destination, not a conflict.
    */
-  insertAgentInbox(agentId: string, createdAt: number): { id: string };
-  /**
-   * The agent's inbox id — the destination the AGENT-SCOPED arm's onboarding
-   * message lands in (#task:2034).
-   *
-   * A read inside the write transaction, not a value threaded in from the
-   * caller: the message insert that consumes it is part of this graph, so the
-   * destination must be read under the same atomicity as the write. (The inbox
-   * itself is written by {@link AgentProvisioningPersistence.reserveAgentAggregate}
-   * in an EARLIER transaction — it is an invariant of the `agents` row, not of
-   * the materialized graph.)
-   *
-   * THROWS when the row is absent instead of returning `null`: by the aggregate
-   * factory's invariant an `agents` row always has one, so absence means
-   * external mutation — and the alternative, skipping the onboarding write, is
-   * the exact silent-no-onboarding bug this arm exists to fix. Rolling the graph
-   * back is the honest outcome.
-   */
-  requireInboxId(agentId: string): string;
+  getOrCreateDirectPair(
+    x: ConversationEndpointIdentity,
+    y: ConversationEndpointIdentity,
+    now: number,
+  ): { conversation: { id: string }; created: boolean };
   /** Owner-agent edge on the DM. */
   addAgent(conversationId: string, agentId: string): void;
   /** Owner-human edge on the DM. */
@@ -262,19 +236,22 @@ export interface AgentProvisioningUnitOfWork {
 export interface AgentProvisioningPersistence {
   uow: AgentProvisioningUnitOfWork;
   /**
-   * The AGENT AGGREGATE FACTORY (v71): the `agents` row and its inbox, in one
-   * transaction. This is the only way an Agent comes into existence — the row
-   * alone is not an Agent, because the mention resolver can address the handle
-   * from the instant it is reserved and `requireAgentInbox` refuses to repair a
-   * missing destination.
+   * L1 reserve, as its own commit: INSERT the `agents` row in
+   * `pending_materialization`.
    *
-   * A named operation rather than an inline `atomically` at the call site: the
-   * atomicity is the aggregate's rule, so it belongs to the thing that owns the
-   * aggregate, and a second caller (a test fixture, a future import path) gets
-   * the invariant by calling this instead of re-deriving it. `AgentRepo`'s own
-   * `reserveForMaterialize` writes a bare row and is NOT that factory.
+   * Its own commit because the L2 materialize dispatch depends on the row being
+   * durable before it runs — NOT because two rows have to move together. It used
+   * to be the AGENT AGGREGATE FACTORY, pairing the row with an `agent_inbox`
+   * placement in one transaction; #task:2072 retired the inbox, and with it the
+   * only reason a reserved row needed anything beside it (see the module doc).
+   *
+   * Still a named operation on this face rather than a bare
+   * `agents.reserveForMaterialize` at the call site: the use case holds ports, not
+   * repos, and "the reserve is one statement" is a fact about the ADAPTER — a
+   * pooled/PG implementation is free to need more, and would have nowhere honest
+   * to put it if the use case reached past this face.
    */
-  reserveAgentAggregate(args: {
+  reserveAgentRow(args: {
     input: CreateAgentInput;
     defaultHostId: string;
     createdByUserId: string;

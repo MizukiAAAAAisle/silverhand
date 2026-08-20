@@ -3,17 +3,17 @@ import type {
   AgentDto,
   ConversationDto,
   MemberDto,
-  WorkspaceDto,
+  Workspace,
 } from '@silverhand/shared';
 import type { SilverhandCliLauncher } from '../context.js';
 
 export interface BuildRuntimeStartOptionsInput {
   conversation: ConversationDto;
-  workspace: WorkspaceDto | null;
+  workspace: Workspace | null;
   agent: AgentDto;
   cliSessionId: string | null;
   members: MemberDto[];
-  workspacesForAgent: WorkspaceDto[];
+  workspacesForAgent: Workspace[];
   silverhandCli: SilverhandCliLauncher | null;
   agentToken: string;
   modelOverride?: string | null;
@@ -68,7 +68,7 @@ export function buildRuntimeStartOptions(
       },
     };
   }
-  const indexedWorkspaces: WorkspaceDto[] = input.workspace === null
+  const indexedWorkspaces: Workspace[] = input.workspace === null
     ? []
     : ensureCurrentWorkspaceIndexed(input.workspace, input.workspacesForAgent);
   return {
@@ -97,7 +97,7 @@ export function buildRuntimeStartOptions(
  * action workdir from the target placement. */
 export function buildRuntimeActionTarget(
   conversation: ConversationDto,
-  workspace: WorkspaceDto | null,
+  workspace: Workspace | null,
 ): RuntimeActionTarget {
   return {
     conversation_id: conversation.id,
@@ -106,7 +106,7 @@ export function buildRuntimeActionTarget(
 }
 
 function runtimeWorkspaceRef(
-  workspace: WorkspaceDto,
+  workspace: Workspace,
 ): NonNullable<
   Extract<
     RuntimeStartParams['options'],
@@ -116,14 +116,13 @@ function runtimeWorkspaceRef(
   return {
     id: workspace.id,
     name: workspace.name,
-    kind: workspace.workspace_kind,
   };
 }
 
 function ensureCurrentWorkspaceIndexed(
-  current: WorkspaceDto,
-  workspaces: readonly WorkspaceDto[],
-): WorkspaceDto[] {
+  current: Workspace,
+  workspaces: readonly Workspace[],
+): Workspace[] {
   if (workspaces.some(w => w.id === current.id)) return [...workspaces];
   return [current, ...workspaces];
 }

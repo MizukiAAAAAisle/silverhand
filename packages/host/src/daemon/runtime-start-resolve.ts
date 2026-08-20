@@ -55,7 +55,10 @@ import type {
   RuntimeStartErrorCode,
   StartOptions,
 } from '../protocol.js';
-import { agentHomeWorkspaceId } from '@silverhand/shared';
+import {
+  AGENT_HOME_WORKSPACE_ID_PREFIX,
+  agentHomeWorkspaceId,
+} from '@silverhand/shared';
 import {
   bundleL2Present,
   resolveAgentDir,
@@ -207,7 +210,12 @@ export function resolveRuntimeActionWorkdir(
       throw err;
     }
   }
-  if (target.workspace.kind === 'agent_home') {
+  // #task:2081: no stored `kind` on the wire — the id decides. The `wsah_`
+  // prefix says WHICH alphabet (an agent-home-shaped ref); the exact match
+  // against `agentHomeWorkspaceId(agentId)` says WHOSE. A foreign/corrupt
+  // agent-home id must fail closed here rather than fall through to bundle
+  // resolution (which would resolve it onto a path under this agent).
+  if (target.workspace.id.startsWith(AGENT_HOME_WORKSPACE_ID_PREFIX)) {
     const expected = agentHomeWorkspaceId(agentId);
     if (target.workspace.id !== expected) {
       throw new RuntimeStartResolveError(
@@ -300,10 +308,13 @@ export async function resolveRuntimeStartPaths(
   const resolvePath = (
     workspace: NonNullable<ConversationStartOptions['workspace']>,
   ): string => {
-    if (workspace.kind === 'agent_home') {
-      // I4 / single-source guard: an `agent_home` ref must be THIS agent's own
-      // home workspace id. Never trust `kind` alone — a mismatched id is a
-      // corrupt/foreign ref, not this agent's L1.
+    // I4 / single-source guard (#task:2081): the wire no longer carries a
+    // `kind`, so the id is the sole authority. The `wsah_` prefix identifies an
+    // agent-home-shaped ref (WHICH alphabet); the exact match against this
+    // agent's own home id decides WHOSE. A mismatched id is a corrupt/foreign
+    // ref, not this agent's L1, and must fail closed rather than resolve onto a
+    // bundle path under this agent.
+    if (workspace.id.startsWith(AGENT_HOME_WORKSPACE_ID_PREFIX)) {
       if (workspace.id !== ownHomeWorkspaceId) {
         throw new RuntimeStartResolveError(
           'workspace_not_provisioned',

@@ -59,7 +59,11 @@ describe('POST /api/workspaces', () => {
     expect(res.status).toBe(201);
     const body = await res.json() as any;
     expect(body.workspace.name).toBe('eng');
-    expect(body.workspace.workspace_kind).toBe('regular');
+    // A human-created workspace is UNOWNED by any agent. Since #task:2075's
+    // stop-publish step the ownership relation is the only container fact on
+    // this wire, and it is the load-bearing half: a created workspace born with
+    // an `owner_agent_id` would be an agent home nobody asked for.
+    expect(body.workspace.owner_agent_id).toBeNull();
     expect(typeof body.onboarding_channel_id).toBe('string');
     expect(body.channel).toMatchObject({ placement_kind: 'workspace', roster_policy: 'open' });
 
@@ -1349,17 +1353,28 @@ describe('PATCH /api/channels/:id + POST channels — the title IS the address (
     t = app;
     const agentId = await makeAgent(app, 'alice');
     // Reached through the CHANNEL door on purpose: `kind` is GENERATED from
-    // `roster_policy`, so an inbox reads as `dm_channel` and passes every
-    // kind-shaped gate. What stops it is not the kind and not — here — the
-    // absence of an address: `canGovernConversationWorkspace(..., 'admin')`
-    // admits only a `system` principal for a workspace-less conversation, and
-    // this door cannot carry one. So the wire answer is 403, and the service's
-    // `not_addressable` (400) is unreachable through it; that refusal is pinned
-    // at the service face in `tests/services/channel-service.test.ts`. Asserted
-    // here so the LAYERING is the recorded fact rather than an assumption.
-    const inboxId = new ConversationRepo(app.ctx.db).getAgentInbox(agentId)!.id;
+    // `roster_policy`, so a rosterless direct pair reads as `dm_channel` and
+    // passes every kind-shaped gate. What stops it is not the kind and not —
+    // here — the absence of an address: `canGovernConversationWorkspace(...,
+    // 'admin')` admits only a `system` principal for a workspace-less
+    // conversation, and this door cannot carry one. So the wire answer is 403,
+    // and the service's `not_addressable` (400) is unreachable through it; that
+    // refusal is pinned at the service face in
+    // `tests/services/channel-service.test.ts`. Asserted here so the LAYERING is
+    // the recorded fact rather than an assumption.
+    //
+    // The subject used to be the agent's inbox, which #task:2072 stops minting.
+    // A direct pair is the same claim on a carrier that is not being retired:
+    // workspace-less, addressless, fixed roster.
+    const addresslessId = new ConversationRepo(app.ctx.db).getOrCreateDirectPair(
+      { kind: 'agent', id: agentId },
+      { kind: 'human', id: app.viewerUserId },
+      Date.now(),
+    ).conversation.id;
 
-    const res = await http(app).patch(`/api/channels/${inboxId}`, { title: 'Alice Inbox' });
+    const res = await http(app).patch(`/api/channels/${addresslessId}`, {
+      title: 'Alice Direct Line',
+    });
     expect(res.status).toBe(403);
   });
 
@@ -1470,7 +1485,7 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
     // Onboarding provisioning auto-creates an agent_home workspace per agent.
     const wsList = await (await http(t).get('/api/workspaces')).json() as any;
     const home = wsList.workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === aliceId,
+      (w: any) => w.owner_agent_id === aliceId,
     );
     expect(home).toBeTruthy();
     const res = await http(t).get(`/api/workspaces/${home.id}/channels/archived`);
@@ -1558,7 +1573,7 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
     ).toBe(200);
 
     const home = ((await (await http(t).get('/api/workspaces')).json()) as any).workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === aliceId,
+      (w: any) => w.owner_agent_id === aliceId,
     );
     const body = await (
       await http(t).get(`/api/workspaces/${home.id}/channels/archived`)
@@ -2977,7 +2992,7 @@ describe('GET /api/workspaces/:id/channels — discovery union + per-item is_mem
     const aliceId = await makeAgent(t, 'alice');
     const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
     const home = wsList.workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === aliceId,
+      (w: any) => w.owner_agent_id === aliceId,
     );
     expect(home).toBeTruthy();
 

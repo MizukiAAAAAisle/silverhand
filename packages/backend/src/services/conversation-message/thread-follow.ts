@@ -223,7 +223,7 @@ export class ThreadFollowManager {
    * authority (§4.2) for BOTH principal kinds (#task:2021 P4-5). They used to be
    * roster questions — `conversation_agents` for an agent,
    * `conversation_users` for a human — which are the participants of the WORKSPACE
-   * arm only: on a `direct_pair` / `agent_inbox` thread nothing was ever eligible,
+   * arm only: on a `direct_pair` thread nothing was ever eligible,
    * not even the endpoint principal replying in its own DM, so no follower row was
    * created and the reply delivered to nobody.
    */
@@ -354,7 +354,7 @@ export class ThreadFollowManager {
    *  deleted DM keeps reading — which means `isAgentParticipant` alone still says
    *  yes for the agent that no longer exists, and this is the wrong place to learn
    *  that: `thread_followers.principal_id` has no FK to `agents`, so the row would
-   *  persist, and the backfill's `agent_inbox_deliveries` insert would fail on ITS
+   *  persist, and the backfill's `conversation_inboxes` insert would fail on ITS
    *  FK and take the caller's whole send down with it. */
   private followAgent(
     tx: MessageTxScope,

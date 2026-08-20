@@ -10,7 +10,6 @@ import {
   WORKSPACE_PLACED,
 } from './conversation-placement-sql.js';
 import {
-  AGENT_INBOX_TITLE,
   canonicalEndpointOrder,
   requireWorkspacePlacement,
 } from '@silverhand/shared';
@@ -28,7 +27,7 @@ import type {
   ConversationUserMemberDto,
   ConversationUserMemberRow,
   ConversationVisibility,
-  DmChannelDto,
+  FixedRosterConversationDto,
   UserRow,
   WorkspaceChannelListItem,
 } from '@silverhand/shared';
@@ -97,7 +96,6 @@ export interface ConversationAddressFacts {
   id: string;
   placement_kind: ConversationPlacementKind;
   workspace_id: string | null;
-  inbox_agent_id: string | null;
   /** `''` for a `direct_pair` — see {@link DIRECT_PAIR_STORED_TITLE}. */
   title: string;
   /** `NULL` for every placement that is not workspace-placed. */
@@ -131,7 +129,6 @@ export interface ConversationIdentity {
    *  asks anything about the caller. */
   roster_policy: ConversationRosterPolicy;
   workspace_id: string | null;
-  inbox_agent_id: string | null;
   endpoint_a_kind: ConversationRow['endpoint_a_kind'];
   endpoint_a_id: string | null;
   endpoint_b_kind: ConversationRow['endpoint_b_kind'];
@@ -325,7 +322,6 @@ export interface DirectPairListRow extends ConversationEndpointRef {
 function stripInternalColumns(row: ConversationRow): Omit<
   ConversationRow,
   | 'pinned_at'
-  | 'inbox_agent_id'
   | 'endpoint_a_kind'
   | 'endpoint_a_id'
   | 'endpoint_b_kind'
@@ -337,7 +333,6 @@ function stripInternalColumns(row: ConversationRow): Omit<
 > {
   const {
     pinned_at: _pinnedAt,
-    inbox_agent_id: _inboxAgentId,
     endpoint_a_kind: _endpointAKind,
     endpoint_a_id: _endpointAId,
     endpoint_b_kind: _endpointBKind,
@@ -365,7 +360,6 @@ function rowToIdentity(row: ConversationRow): ConversationIdentity {
     placement_kind: row.placement_kind,
     roster_policy: row.roster_policy,
     workspace_id: row.workspace_id,
-    inbox_agent_id: row.inbox_agent_id,
     endpoint_a_kind: row.endpoint_a_kind,
     endpoint_a_id: row.endpoint_a_id,
     endpoint_b_kind: row.endpoint_b_kind,
@@ -380,7 +374,7 @@ function rowToIdentity(row: ConversationRow): ConversationIdentity {
  *  `SELECT *`: identity reads are placement decisions, and `*` would make the
  *  projection depend on whichever columns the table happens to have. */
 const IDENTITY_COLUMNS = `id, visibility, archived_at,
-       placement_kind, roster_policy, workspace_id, inbox_agent_id,
+       placement_kind, roster_policy, workspace_id,
        endpoint_a_kind, endpoint_a_id,
        endpoint_b_kind, endpoint_b_id,
        endpoint_a_deleted_at, endpoint_b_deleted_at,
@@ -399,7 +393,6 @@ function rowToAddressFacts(row: ConversationRow): ConversationAddressFacts {
     id: row.id,
     placement_kind: row.placement_kind,
     workspace_id: row.workspace_id,
-    inbox_agent_id: row.inbox_agent_id,
     title: row.title,
     title_key: row.title_key,
     endpoint_a_kind: row.endpoint_a_kind,
@@ -411,7 +404,7 @@ function rowToAddressFacts(row: ConversationRow): ConversationAddressFacts {
   };
 }
 
-const ADDRESS_FACTS_COLUMNS = `id, placement_kind, workspace_id, inbox_agent_id,
+const ADDRESS_FACTS_COLUMNS = `id, placement_kind, workspace_id,
        title, title_key,
        endpoint_a_kind, endpoint_a_id,
        endpoint_b_kind, endpoint_b_id,
@@ -424,7 +417,7 @@ const ADDRESS_FACTS_COLUMNS = `id, placement_kind, workspace_id, inbox_agent_id,
  */
 function assertChannelLike(
   row: ConversationRow,
-): ChannelConversationDto | DmChannelDto {
+): ChannelConversationDto | FixedRosterConversationDto {
   if (row.roster_policy === 'fixed') return rowToDmChannel(row);
   return rowToChannel(row);
 }
@@ -436,7 +429,7 @@ function rowToChannel(row: ConversationRow): ChannelConversationDto {
   return { ...stripInternalColumns(row), placement_kind: 'workspace', roster_policy: 'open' };
 }
 
-function rowToDmChannel(row: ConversationRow): DmChannelDto {
+function rowToDmChannel(row: ConversationRow): FixedRosterConversationDto {
   if (row.roster_policy !== 'fixed') {
     throw new Error('conversation does not have a fixed roster');
   }
@@ -491,32 +484,6 @@ export class ConversationRepo {
   }
 
   /**
-   * The agent's inbox placement, keyed on the OWNERSHIP column (v71, §4.2).
-   *
-   * Keyed on `inbox_agent_id`, never on the title: an inbox is an invariant of
-   * the Agent aggregate, so its identity is the owner edge — and
-   * `idx_conversations_inbox_agent` (partial UNIQUE) makes "at most one" a
-   * schema fact rather than an ORDER BY tie-break. The retired
-   * `getOrCreateMentionsConversation` looked its predecessor up by
-   * `title = 'Mentions'` inside the agent's home workspace, which is why two
-   * concurrent mentions could create two of them.
-   *
-   * Returns the identity projection, not a DTO: the only fact any caller needs
-   * is the conversation id, and a DTO would hand the mention CC path a
-   * `workspace_id` it must not use.
-   */
-  getAgentInbox(agentId: string): ConversationIdentity | null {
-    const row = this.db
-      .prepare<[string], ConversationRow>(
-        `SELECT ${IDENTITY_COLUMNS}
-           FROM conversations
-          WHERE inbox_agent_id = ? AND placement_kind = 'agent_inbox'`,
-      )
-      .get(agentId);
-    return row ? rowToIdentity(row) : null;
-  }
-
-  /**
    * The ONE conversation two principals share as a `direct_pair` (§4.1), or
    * `null`. Keyed on the four endpoint COORDINATES, in whichever order the caller
    * holds them — {@link canonicalEndpointOrder} normalizes, so `(x, y)` and
@@ -564,9 +531,9 @@ export class ConversationRepo {
    * INSERT; the partial UNIQUE index elects one and `ON CONFLICT … DO NOTHING`
    * turns the loser into a no-op, which then reads the winner's row. So there is
    * no read-then-write window to lose, no retry loop, and no application-side
-   * lock — the same shape as the inbox's `idx_conversations_inbox_agent`, and the
-   * reason the retired `getOrCreateMentionsConversation` (keyed on a title, not a
-   * constraint) could produce two rows.
+   * lock — the same shape `idx_conversations_title_key` gives a workspace title,
+   * and the reason the retired `getOrCreateMentionsConversation` (keyed on a
+   * title, not a constraint) could produce two rows.
    *
    * FAIL-CLOSED CREATION comes from the schema, not from a check here: v73's
    * birth trigger ABORTS unless each endpoint names a live principal of its own
@@ -590,10 +557,10 @@ export class ConversationRepo {
     const result = this.db
       .prepare(
         `INSERT INTO conversations
-           (id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+           (id, workspace_id, placement_kind, roster_policy,
             endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
             title, status, visibility, created_at, updated_at)
-         VALUES (?, NULL, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?,
+         VALUES (?, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?,
                  ?, 'idle', 'private', ?, ?)
          ON CONFLICT (endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id)
            WHERE placement_kind = 'direct_pair'
@@ -633,7 +600,7 @@ export class ConversationRepo {
     return row ? rowToChannel(row) : null;
   }
 
-  getDmChannel(id: string): DmChannelDto | null {
+  getDmChannel(id: string): FixedRosterConversationDto | null {
     const row = this.db
       .prepare<[string], ConversationRow>(
         `SELECT *
@@ -644,7 +611,7 @@ export class ConversationRepo {
     return row ? rowToDmChannel(row) : null;
   }
 
-  getChannelLike(id: string): ChannelConversationDto | DmChannelDto | null {
+  getChannelLike(id: string): ChannelConversationDto | FixedRosterConversationDto | null {
     const row = this.db
       .prepare<[string], ConversationRow>(
         `SELECT *
@@ -857,11 +824,11 @@ export class ConversationRepo {
    *
    *  `WORKSPACE_PLACED` is load-bearing here, and in the OPPOSITE direction from
    *  the other placement predicates in this file: `kind` is GENERATED from
-   *  `roster_policy`, so an agent inbox (necessarily `fixed`) reports
-   *  fixed-roster rows too. Without the predicate this face would silently
-   *  GAIN one row per agent — an unfiltered `kind` scan is the one shape where a
-   *  new placement leaks IN rather than dropping out. */
-  listDmChannels(): DmChannelDto[] {
+   *  `roster_policy`, so a `direct_pair` (necessarily `fixed`) reports as a
+   *  fixed-roster row too. Without the predicate this face would silently GAIN
+   *  every DM in the installation — an unfiltered `kind` scan is the one shape
+   *  where a new placement leaks IN rather than dropping out. */
+  listDmChannels(): FixedRosterConversationDto[] {
     const rows = this.db
       .prepare<[], ConversationRow>(
         `SELECT c.*
@@ -874,7 +841,7 @@ export class ConversationRepo {
     return rows.map(rowToDmChannel);
   }
 
-  listDmChannelForWorkspace(workspaceId: string): DmChannelDto | null {
+  listDmChannelForWorkspace(workspaceId: string): FixedRosterConversationDto | null {
     const row = this.db
       .prepare<[string], ConversationRow>(
         // Placement: the caller's UNIT IS A WORKSPACE, and `c.workspace_id = ?`
@@ -949,14 +916,14 @@ export class ConversationRepo {
   listAllDmChannelsForWorkspace(
     workspaceId: string,
     opts: { forUserId?: string } = {},
-  ): DmChannelDto[] {
+  ): FixedRosterConversationDto[] {
     return this.queryDmChannelsForWorkspace(workspaceId, opts);
   }
 
   private queryDmChannelsForWorkspace(
     workspaceId: string,
     opts: { forUserId?: string; archived?: boolean } = {},
-  ): DmChannelDto[] {
+  ): FixedRosterConversationDto[] {
     // Placement: same as `listDmChannelForWorkspace` — the unit is a workspace
     // and `c.workspace_id = ?` is the domain filter, so the `JOIN workspaces`
     // (present only to resolve the owner agent for title ordering) removes
@@ -1010,7 +977,7 @@ export class ConversationRepo {
    * rename may change at any time, while identity is `id` and the address is an
    * allocation in the workspace namespace. It had no production caller.
    */
-  findDmChannelForAgent(agentId: string): DmChannelDto | null {
+  findDmChannelForAgent(agentId: string): FixedRosterConversationDto | null {
     const row = this.db
       .prepare<[string], ConversationRow>(
         `SELECT c.*
@@ -1025,7 +992,7 @@ export class ConversationRepo {
     return row ? rowToDmChannel(row) : null;
   }
 
-  listDmChannelsForAgent(agentId: string): DmChannelDto[] {
+  listDmChannelsForAgent(agentId: string): FixedRosterConversationDto[] {
     const rows = this.db
       .prepare<[string], ConversationRow>(
         `SELECT c.*
@@ -1088,15 +1055,17 @@ export class ConversationRepo {
     );
   }
 
-  /** The DM twin of {@link insertChannel} — same address space, same rules. A DM
-   *  channel is `placement_kind='workspace'` today, so it holds a title address
-   *  like any other workspace placement; when P3 moves direct conversations onto
-   *  their own placement they stop holding one, and this face goes with them. */
+  /** Constructs a workspace-placed FIXED-roster conversation — the agent home's
+   *  DM / Onboarding channel. `placement_kind='workspace'`, so it holds a title
+   *  address like any other workspace placement. This is NOT the direct-pair
+   *  constructor: P3 shipped `direct_pair` as its own placement (created
+   *  elsewhere), and this face did not move onto it — it stayed the
+   *  workspace-placed fixed-roster constructor it always was. */
   insertDmChannel(params: {
     workspaceId: string;
     title: CanonicalConversationTitle;
     agentId?: string | null;
-  }): DmChannelDto {
+  }): FixedRosterConversationDto {
     return rowToDmChannel(
       this.insert({
         placement: {
@@ -1110,52 +1079,10 @@ export class ConversationRepo {
     );
   }
 
-  /**
-   * The agent's inbox placement — the other half of bringing an Agent into
-   * existence (v71, §4.2). Written in the SAME transaction as the `agents` row
-   * (`reserveAgentAggregate`), so "an agent has exactly one inbox" is an
-   * invariant of the row rather than something a mention repairs later;
-   * `idx_conversations_inbox_agent` makes a second one a constraint failure.
-   *
-   * NOT the `pending → active` materialization graph, on purpose: the inbox needs
-   * nothing materialization produces (no daemon ack, no agent dir, no host, no
-   * workspace), while `AgentRepo.getByName` — the mention resolver — answers for
-   * `pending_materialization` and `failed` rows too. An inbox born with the
-   * status flip would mean a mention of a reserved-but-failed handle has no
-   * destination (a loud throw inside the sender's own message transaction), and a
-   * retry would try to insert a second inbox for a row that already has one.
-   *
-   * NO `conversation_agents` row, by construction: on this arc the participant IS
-   * `inbox_agent_id`, and a projected roster row would be a second authority for
-   * the same fact.
-   *
-   * `createdAt` is the OWNING AGENT's `created_at`, matching the v71 backfill
-   * statement: the timestamp expresses agent-aggregate birth, not when a
-   * dependent row happened to land, so an upgraded inbox and a freshly created
-   * one are indistinguishable. The id is an ordinary conversation id — see
-   * {@link insert} for why this arc may not mint a shape of its own.
-   *
-   * Returns the identity projection: an inbox has no workspace and no roster, so
-   * there is no channel DTO to hand back and no wire surface that wants one.
-   */
-  insertAgentInbox(agentId: string, createdAt: number): ConversationIdentity {
-    const row = this.insert({
-      placement: { kind: 'agent_inbox', agentId },
-      // The arc's CHECK requires `fixed`: an inbox roster is not open to
-      // placement at all, so "open" would not merely be wrong, it is refused.
-      rosterPolicy: 'fixed',
-      // No title argument: an inbox's label is {@link AGENT_INBOX_TITLE} and its
-      // `title_key` is NULL, both settled by the arc rather than by this caller.
-      spawnedByAgentId: null,
-      createdAt,
-    });
-    return rowToIdentity(row);
-  }
-
   setArchived(
     id: string,
     archived: boolean,
-  ): ChannelConversationDto | DmChannelDto | null {
+  ): ChannelConversationDto | FixedRosterConversationDto | null {
     const now = Date.now();
     const result = this.db
       .prepare(
@@ -1268,7 +1195,7 @@ export class ConversationRepo {
     id: string,
     title: CanonicalConversationTitle,
   ): {
-    channel: ChannelConversationDto | DmChannelDto;
+    channel: ChannelConversationDto | FixedRosterConversationDto;
     releasedKey: string | null;
   } | null {
     const before = this.getRaw(id);
@@ -1394,14 +1321,13 @@ export class ConversationRepo {
    * which is NOT the same question as {@link getAgent}, "is there a roster row?".
    *
    * For the workspace arm the two coincide: participants ARE the
-   * `conversation_agents` rows. For `agent_inbox` and `direct_pair` there is
-   * deliberately no roster row (§4.2, Cindy `SEfG0TUfDkOaB9xn`): the placement
-   * itself names the participants — `inbox_agent_id` for the one, the two typed
-   * endpoints for the other — so a caller asking about MEMBERSHIP must ask this,
-   * while a caller that needs runtime state must query the scoped slot read
-   * model independently.
+   * `conversation_agents` rows. For `direct_pair` there is deliberately no roster
+   * row (§4.2, Cindy `SEfG0TUfDkOaB9xn`): the placement itself names the
+   * participants — its two typed endpoints — so a caller asking about MEMBERSHIP
+   * must ask this, while a caller that needs runtime state must query the scoped
+   * slot read model independently.
    *
-   * The rosterless arms make this predicate STRICTLY WIDER than `getAgent`, which
+   * The rosterless arm makes this predicate STRICTLY WIDER than `getAgent`, which
    * is what P2's runtime target gate and the delivery faces need in order to
    * reach a DM at all; and the workspace arm is now placement-gated, so a roster
    * row that somehow exists on a non-workspace placement is inert here too.
@@ -1425,8 +1351,9 @@ export class ConversationRepo {
    * {@link isAgentParticipant}, asked of the other principal kind, and answered
    * by the same authority (`userParticipates`, the SQL face of §4.2). One
    * predicate per kind rather than one polymorphic one: the arms differ (a human
-   * channel seat is two facts, an inbox has no human arm at all), and a shared
-   * signature would have to take a tagged principal and branch inside the SQL.
+   * channel seat is two facts, a `direct_pair` endpoint is a typed coordinate),
+   * and a shared signature would have to take a tagged principal and branch
+   * inside the SQL.
    *
    * Its first caller is the send's write gate, which asks participation of every
    * actor kind INSIDE the transaction (#task:2021 P4-4) — before that
@@ -1448,7 +1375,7 @@ export class ConversationRepo {
    * recipient enumeration of the send path (#task:2021 P4-5).
    *
    * Why not {@link listAgents}: that returns `conversation_agents` rows, so on a
-   * `direct_pair` or an `agent_inbox` — rosterless by construction (§4.2) — it
+   * `direct_pair` — rosterless by construction (§4.2) — it
    * returns the empty set, and a message committed into a DM was delivered to
    * NOBODY. The participants are named by the placement, so the enumeration is the
    * placement's own set-shaped text ({@link PARTICIPANT_AGENT_IDS_SQL}) rather
@@ -1542,10 +1469,10 @@ export class ConversationRepo {
    * of a human↔agent DirectPair can view that agent.
    *
    * The SQL (`DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL`) gates BOTH slot
-   * orders on `endpoint_*_kind = 'human'` for the returned slot, so the four
+   * orders on `endpoint_*_kind = 'human'` for the returned slot, so the
    * no-extend constraints fall out structurally: an agent↔agent pair yields no
-   * human, owner-audit is a different ACL arm (not an endpoint), and the
-   * agent_inbox placement is not a `direct_pair`, so none of them widen this set.
+   * human, and owner-audit is a different ACL arm (not an endpoint), so neither
+   * widens this set.
    */
   listDirectPairHumanEndpointsForAgent(agentId: string): string[] {
     return this.db
@@ -1632,29 +1559,34 @@ export class ConversationRepo {
   }
 
   /**
-   * The one INSERT. `placement` is a DISCRIMINATED UNION, not a
-   * `placementKind` + nullable columns triple, because the DB's arc CHECK is
-   * exactly that shape: each placement names the columns it owns and NULLs every
-   * other arc's. Passing them separately would make "workspace placement with an
-   * `inbox_agent_id`" a expressible-but-refused call — a runtime constraint
-   * failure standing in for a type error.
+   * The one INSERT. `placement` is a TAGGED OBJECT, not a `placementKind` + a
+   * nullable column per arc, because the DB's arc CHECK is exactly that shape:
+   * each placement names the columns it owns and NULLs every other arc's. Passing
+   * them separately would make "workspace placement carrying an endpoint
+   * coordinate" an expressible-but-refused call — a runtime constraint failure
+   * standing in for a type error.
    */
   private insert(params: {
     /**
      * The placement CARRIES the title address (#task:2016), because holding one
      * is a property of the placement and not of a conversation: a workspace
-     * placement must supply the canonical pair, an inbox has no address to give.
-     * That makes the arc CHECK (`title_key IS NOT NULL` exactly on the workspace
-     * arc) a fact of this type too, so the impossible combination cannot be
-     * spelled here and then be refused by SQLite at runtime.
+     * placement must supply the canonical pair. That makes the arc CHECK
+     * (`title_key IS NOT NULL` exactly on the workspace arc) a fact of this type
+     * too, so the impossible combination cannot be spelled here and then be
+     * refused by SQLite at runtime.
+     *
+     * ONE ARM since #task:2072: the only other placement, `direct_pair`, holds no
+     * title address and has its own constructor
+     * ({@link ConversationRepo.getOrCreateDirectPair}) because its uniqueness is a
+     * get-or-create race rather than an insert. The tag stays — it is the value
+     * written to `placement_kind` — so a placement that DOES pass through here
+     * adds an arm instead of a second parameter shape.
      */
-    placement:
-      | {
-          kind: 'workspace';
-          workspaceId: string;
-          title: CanonicalConversationTitle;
-        }
-      | { kind: 'agent_inbox'; agentId: string };
+    placement: {
+      kind: 'workspace';
+      workspaceId: string;
+      title: CanonicalConversationTitle;
+    };
     /** The roster axis (v69). `kind` is NOT passed and NOT written: the DB
      *  derives it from `roster_policy` as a generated column, so this layer must
      *  not carry a mirrored derivation. */
@@ -1663,39 +1595,28 @@ export class ConversationRepo {
     /** Defaults to the DB column default ('private') when
      *  omitted. Only an open roster may be 'public' (the DB CHECK enforces it). */
     visibility?: ConversationVisibility;
-    /** `created_at`/`updated_at`, when the caller owns a truer birth instant
-     *  than "now" — see {@link insertAgentInbox}. Defaults to the wall clock. */
-    createdAt?: number;
   }): ConversationRow {
     // Every placement gets a fresh opaque id from the ONE generator: a
     // conversation id is a domain value object (12 random bytes as 16 chars of
     // base64url) and the canonical `#conv:<id>` grammar accepts exactly that, so
     // no arc may mint a shape of its own.
     const id = newId();
-    const now = params.createdAt ?? Date.now();
-    // An inbox's title is a fixed label rather than an address: it is the same
-    // string for every agent, it is never renamed, and `title_key` stays NULL so
-    // it occupies nothing in any workspace's namespace.
-    const { title, titleKey } =
-      params.placement.kind === 'workspace'
-        ? { title: params.placement.title.title, titleKey: params.placement.title.key }
-        : { title: AGENT_INBOX_TITLE, titleKey: null };
+    const now = Date.now();
     this.db
       .prepare(
         `INSERT INTO conversations
-         (id, workspace_id, inbox_agent_id, placement_kind, roster_policy, title,
+         (id, workspace_id, placement_kind, roster_policy, title,
           title_key, status, spawned_by_agent_id, closed_at, close_summary,
           created_at, updated_at, visibility)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
       )
       .run(
         id,
-        params.placement.kind === 'workspace' ? params.placement.workspaceId : null,
-        params.placement.kind === 'agent_inbox' ? params.placement.agentId : null,
+        params.placement.workspaceId,
         params.placement.kind,
         params.rosterPolicy,
-        title,
-        titleKey,
+        params.placement.title.title,
+        params.placement.title.key,
         params.spawnedByAgentId,
         now,
         now,
@@ -1720,7 +1641,7 @@ export class ConversationRepo {
 }
 
 export interface ArchivedAggregateRow {
-  channel: ChannelConversationDto | DmChannelDto;
+  channel: ChannelConversationDto | FixedRosterConversationDto;
   workspace: {
     id: string;
     name: string;

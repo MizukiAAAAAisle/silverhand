@@ -33,7 +33,6 @@ import {
 import { tmpdir } from 'node:os';
 import {
   composeRuntimeDeliveryPresentation,
-  formatAgentRuntimeScopeBanner,
   parseDeliveryTarget,
 } from '@silverhand/shared';
 
@@ -304,13 +303,11 @@ async function waitFor(
 }
 
 /**
- * Wait until a `deliver()` WRITE-arm batch has been admitted into the
- * per-stream observed boundary. Under `runtime_deliver` the WRITE arm
- * returns `admitted` SYNC but records the observed boundary ASYNC
- * (inside `consumeStartupDelivery`, before it emits
- * `runtime_delivery_consumed`). Tests that then call
- * `agentMessageSend` and assert on the per-stream boundary must wait
- * for that consumed ack first.
+ * Wait until a `deliver()` WRITE-arm batch has been consumed. Under
+ * `runtime_deliver` the WRITE arm returns `admitted` SYNC but emits
+ * `runtime_delivery_consumed` ASYNC (from `consumeStartupDelivery`, once
+ * the batch is written to stdin). Tests that then act on the delivered
+ * turn must wait for that consumed ack first.
  */
 async function waitForDeliveryConsumed(
   events: EventFrame[],
@@ -590,6 +587,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         delivery_ids: [11],
         kind: 'message',
         text: 'startup delivery D2G',
+        deliveries: [{ delivery_id: 11, seq: 11, presentation: testDeliveryPresentation('startup delivery D2G') }],
       }, { owner: 'test-owner' });
       expect(res.disposition).toBe('spawning');
       expect(captured.ctx).toBeDefined();
@@ -663,6 +661,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         delivery_ids: [deliveryId],
         kind: 'message',
         text: `delivery ${deliveryId}`,
+        deliveries: [{ delivery_id: deliveryId, seq: deliveryId, presentation: testDeliveryPresentation(`delivery ${deliveryId}`) }],
         spawn_options: options,
       }, { owner: `owner-${generation}` });
 
@@ -690,8 +689,9 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       for (const prompt of promptTexts) {
         expect(prompt).toContain('AGENT_SLOT_ROLE');
         expect(prompt).toContain('AGENT_SLOT_MEMORY');
-        expect(prompt).toContain('Runtime scope: agent');
-        expect(prompt).not.toContain('## Workspace & Memory');
+        expect(prompt).not.toMatch(/runtime_scope|workdir|\bcwd\b/u);
+        expect(prompt).toContain('## Memory and files');
+        expect(prompt).not.toMatch(/\b(?:AgentSlot|agent-global|L1|L2)\b/u);
         expect(prompt).not.toContain('Workspace Memory Index');
       }
       expect(childEnvs).toHaveLength(2);
@@ -1296,18 +1296,8 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
   it('AgentSlot reuses one child across conversation targets and acks each origin independently', async () => {
     let spawnCount = 0;
     let lastDeliveredSeqPath: string | undefined;
-    const freshnessLogs: Array<Record<string, unknown>> = [];
-    const logger = {
-      ...silentLogger(),
-      warn(fields: unknown) {
-        if (fields && typeof fields === 'object') {
-          freshnessLogs.push(fields as Record<string, unknown>);
-        }
-      },
-    };
     const { supervisor, events } = makeSupervisor({
       driverArgs: ['--echo-stdin'],
-      logger,
       spawnFn: (bin, args, options) => {
         spawnCount += 1;
         lastDeliveredSeqPath = options.env?.['SILVERHAND_LAST_DELIVERED_SEQ_FILE'];
@@ -1331,13 +1321,9 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
         target: { conversation_id: conversationId, workspace: null },
         agent_id: 'a1',
         delivery_ids: [deliveryId],
-        delivered_up_to_seq: seq,
         deliveries: [{
           delivery_id: deliveryId,
-          message_id: `message-${deliveryId}`,
           seq,
-          thread_root_id: null,
-          delivery_kind: 'turn',
           presentation,
         }],
         kind: 'message',
@@ -1361,8 +1347,7 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       await waitFor(() =>
         events.some(
             event => event.event === 'runtime_output'
-            && event.chunk.includes('runtime_scope=agent')
-            && event.chunk.includes('/conversations/Conversation0002'),
+            && event.chunk.includes('second target'),
         ),
       );
 
@@ -1430,25 +1415,20 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
         )
         .map(event => event.chunk)
         .join('');
-      expect(output).toContain('/conversations/Conversation0001');
-      expect(output).toContain('/conversations/Conversation0002');
+      expect(output).toContain('first target');
+      expect(output).toContain('second target');
       expect(output).not.toContain('target=');
-      expect(output).toContain(join(SUPERVISOR_AGENTS_ROOT, 'a1'));
+      expect(output).not.toMatch(/runtime_scope|workdir=/u);
+      expect(output).not.toContain(SUPERVISOR_AGENTS_ROOT);
+      // #task:2095: the sidecar is a bare `<seq>\n` scalar (the per-stream
+      // `{version:1,streams}` ledger is retired). On an AgentSlot it is the
+      // LAST value written, NOT a per-origin cursor — the two delivers above
+      // hop seq spaces (Conversation0001 seq 100 → Conversation0002 seq 1), so
+      // the file ends on the last write's seq. Per-origin independent ack is
+      // proven by the `runtime_delivery_consumed` stream asserted above, which
+      // is the real ack surface — not this scalar.
       expect(lastDeliveredSeqPath).toBeDefined();
-      const ledger = JSON.parse(readFileSync(lastDeliveredSeqPath!, 'utf8')) as {
-        streams: Array<{ conversation_id: string; stream_key: string; seq: number }>;
-      };
-      expect(ledger.streams.map(({ conversation_id, seq }) => ({
-        conversationId: conversation_id,
-        seq,
-      }))).toEqual([
-        { conversationId: 'Conversation0001', seq: 100 },
-      ]);
-      expect(freshnessLogs).toContainEqual(expect.objectContaining({
-        action: 'freshness_pending_admission_queued',
-        conversationId: 'Conversation0002',
-        pending_admission_seq: 1,
-      }));
+      expect(readFileSync(lastDeliveredSeqPath!, 'utf8')).toBe('1\n');
     } finally {
       await supervisor.stop({
         runtime_scope: { kind: 'agent', agent_id: 'a1' },
@@ -1481,6 +1461,10 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       delivery_ids: [42, 43],
       kind: 'message',
       text: 'hi',
+      deliveries: [
+        { delivery_id: 42, seq: 42, presentation: testDeliveryPresentation('hi') },
+        { delivery_id: 43, seq: 43, presentation: testDeliveryPresentation('hi') },
+      ],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(res.disposition).toBe('admitted');
@@ -1519,6 +1503,7 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('stub') }],
       spawn_options: testStartOptions({
         conversationId: 'ConversationX001',
         agentId: 'aX',
@@ -1733,7 +1718,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       delivery_ids: [21],
       kind: 'message',
       text: 'first payload',
-      delivered_up_to_seq: 21,
+      deliveries: [{ delivery_id: 21, seq: 21, presentation: testDeliveryPresentation('first payload') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     await waitForDeliveryConsumed(events, 21);
@@ -1755,7 +1740,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       delivery_ids: [22],
       kind: 'message',
       text: 'second payload',
-      delivered_up_to_seq: 22,
+      deliveries: [{ delivery_id: 22, seq: 22, presentation: testDeliveryPresentation('second payload') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     await waitFor(() =>
@@ -1784,7 +1769,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       delivery_ids: [23],
       kind: 'message',
       text: 'third payload',
-      delivered_up_to_seq: 23,
+      deliveries: [{ delivery_id: 23, seq: 23, presentation: testDeliveryPresentation('third payload') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     await waitFor(() =>
@@ -1801,18 +1786,13 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     expect(uncorrelated?.['delivery_ids']).toBeNull();
 
     // Zero behavior change: lifecycle frames drove no run-state tool
-    // transition and no freshness advance of their own. Only the first
-    // delivery's startup admission advances observed (deliveries 2/3
-    // arrive mid-turn and park in pending admission) — the three
-    // lifecycle frames add exactly nothing on top of that.
+    // transition of their own — the three lifecycle frames add exactly
+    // nothing on top of the delivery that preceded them.
     expect(
       events.some(
         e => e.event === 'runtime_state' && e.state?.status === 'tool_running',
       ),
     ).toBe(false);
-    expect(
-      logs.filter(l => l['action'] === 'freshness_observed_seq_advanced').length,
-    ).toBe(1);
     await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
@@ -1910,6 +1890,70 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
         lastIdle.event === 'runtime_state' &&
         lastIdle.state.terminalReason,
     ).toBe('turn_ended');
+
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+  });
+
+  it('a tool_call_input refinement is forwarded but touches NO run state: counts stay at one call and a single tool_output still ends the tool (#task:2101)', async () => {
+    const { driver } = makeProgrammableDriver([
+      '--emit-line', 'A',
+      '--emit-line', 'B',
+      '--emit-line', 'C',
+      '--emit-line', 'D',
+    ]);
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    let step = 0;
+    const sequence: ParsedEvent[][] = [
+      [],                                                   // READY (no-op)
+      [{ kind: 'tool_call', name: 'Bash', input: { cwd: '/w' } }],
+      // The late params for the SAME call. If this were counted as a call,
+      // `toolCallCounts.Bash` would reach 2 and `outstandingToolUses` 2 —
+      // leaving the runtime stuck in tool_running after the single output.
+      [{ kind: 'tool_call_input', toolCallId: 't1', input: { command: 'ls' } }],
+      [{ kind: 'tool_output', name: 'Bash' }],
+      [{ kind: 'turn_end' }],
+    ];
+    driver.parseLine = () => sequence[step++] ?? [];
+
+    await supervisor.start(baseStartParams);
+
+    await waitFor(() =>
+      events.some(
+        e =>
+          e.event === 'runtime_state' &&
+          e.state.status === 'idle' &&
+          e.state.terminalReason === 'turn_ended',
+      ),
+      3_000,
+    );
+
+    // Forwarded to the backend like any other parsed event — the refinement is
+    // real runtime output, it just is not run-state evidence.
+    expect(
+      events.some(
+        e =>
+          e.event === 'runtime_parsed_event' &&
+          e.parsed.kind === 'tool_call_input' &&
+          e.parsed.toolCallId === 't1',
+      ),
+    ).toBe(true);
+
+    // Exactly one call was ever counted, at creation.
+    for (const e of events) {
+      if (e.event !== 'runtime_state') continue;
+      if (!e.state.toolCallCounts) continue;
+      expect(e.state.toolCallCounts).toEqual({ Bash: 1 });
+    }
+
+    // One `tool_output` was enough to close the tool: outstanding was never
+    // double-incremented.
+    const backToThinking = events.find(
+      e =>
+        e.event === 'runtime_state' &&
+        e.state.status === 'thinking' &&
+        e.state.toolCallCounts?.Bash === 1,
+    );
+    expect(backToThinking).toBeDefined();
 
     await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
@@ -2063,6 +2107,10 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
       delivery_ids: [101, 102],
       kind: 'message',
       text: 'boot batch',
+      deliveries: [
+        { delivery_id: 101, seq: 101, presentation: testDeliveryPresentation('boot batch') },
+        { delivery_id: 102, seq: 102, presentation: testDeliveryPresentation('boot batch') },
+      ],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
@@ -2114,6 +2162,7 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
         delivery_ids: [201],
         kind: 'message',
         text: 'boot batch',
+        deliveries: [{ delivery_id: 201, seq: 201, presentation: testDeliveryPresentation('boot batch') }],
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' })
       .catch(() => {});
@@ -2137,6 +2186,7 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
       delivery_ids: [202],
       kind: 'message',
       text: 'after-death',
+      deliveries: [{ delivery_id: 202, seq: 202, presentation: testDeliveryPresentation('after-death') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     if (deliverRes.disposition === 'refused') {
@@ -2225,6 +2275,10 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       delivery_ids: [501, 502],
       kind: 'message',
       text: 'boot batch',
+      deliveries: [
+        { delivery_id: 501, seq: 501, presentation: testDeliveryPresentation('boot batch') },
+        { delivery_id: 502, seq: 502, presentation: testDeliveryPresentation('boot batch') },
+      ],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
 
@@ -2260,6 +2314,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       delivery_ids: [777],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 777, seq: 777, presentation: testDeliveryPresentation('stub') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(deliverMid).toEqual({
@@ -2338,6 +2393,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       delivery_ids: [999],
       kind: 'message',
       text: 'stub',
+      deliveries: [{ delivery_id: 999, seq: 999, presentation: testDeliveryPresentation('stub') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(deliverAfter.disposition).toBe('admitted');
@@ -2820,6 +2876,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'hi',
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('hi') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     await waitFor(
@@ -2871,6 +2928,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
       delivery_ids: [901],
       kind: 'message',
       text: 'boot batch',
+      deliveries: [{ delivery_id: 901, seq: 901, presentation: testDeliveryPresentation('boot batch') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     await waitFor(() => stub.pendingWrite !== null, 1_000);
@@ -3412,6 +3470,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
       delivery_ids: [11],
       kind: 'message',
       text: 'during-kill-window',
+      deliveries: [{ delivery_id: 11, seq: 11, presentation: testDeliveryPresentation('during-kill-window') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(deliverRes.disposition).toBe('refused');
@@ -3472,6 +3531,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
       delivery_ids: [42],
       kind: 'message',
       text: 'x',
+      deliveries: [{ delivery_id: 42, seq: 42, presentation: testDeliveryPresentation('x') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(midDeliver.disposition).toBe('refused');
@@ -3734,6 +3794,10 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
       delivery_ids: [201, 202],
       kind: 'message',
       text: 'hi from backend',
+      deliveries: [
+        { delivery_id: 201, seq: 201, presentation: testDeliveryPresentation('hi from backend') },
+        { delivery_id: 202, seq: 202, presentation: testDeliveryPresentation('hi from backend') },
+      ],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(res).toEqual({
@@ -3793,6 +3857,7 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
       delivery_ids: [301],
       kind: 'message',
       text: 'bytes',
+      deliveries: [{ delivery_id: 301, seq: 301, presentation: testDeliveryPresentation('bytes') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(res.disposition).toBe('admitted');
@@ -3898,6 +3963,10 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
       delivery_ids: [701, 702],
       kind: 'message',
       text: 'boot codex',
+      deliveries: [
+        { delivery_id: 701, seq: 701, presentation: testDeliveryPresentation('boot codex') },
+        { delivery_id: 702, seq: 702, presentation: testDeliveryPresentation('boot codex') },
+      ],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
 
@@ -3939,2796 +4008,9 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
   });
 });
 
-describe('Supervisor — daemon-owned freshness boundary', () => {
-  it('carries the stale event and holds the boundary when the 409 window is empty', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        if (postedBodies.length === 1) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: 'stale-1',
-                  seen_up_to_seq: 12,
-                  current_seq: 13,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            message_id: 'm14',
-            message_seq: 14,
-            ...landedStream(postedBodies.at(-1)?.['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [12],
-        kind: 'message',
-        text: 'count upward from 1',
-        delivered_up_to_seq: 12,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 12);
 
-      const stale = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: '1',
-      });
-      expect(stale).toMatchObject({ ok: false, status: 409 });
 
-      const retry = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: '2',
-        stale_resolution_reason: 'revised',
-      });
-
-      expect(retry).toMatchObject({ ok: true, message_id: 'm14' });
-      expect(postedBodies).toHaveLength(2);
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(12);
-      // Empty `newer_messages` window: nothing was shown, so the observed
-      // boundary must NOT advance to current_seq (13) — it stays at 12
-      // and the CAS remains armed for the unseen message.
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(12);
-      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-1');
-      expect(postedBodies[1]?.['stale_resolution_reason']).toBe('revised');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('api_response falsifier (#task:1582): waiting/ready own only their display lane, and the notice is NOT generation-boundary evidence (pending coverage stays parked)', async () => {
-    const { driver, setNextParse } = makeProgrammableDriver();
-    const logs: Array<Record<string, unknown>> = [];
-    const logger = {
-      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
-      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
-      error: () => {},
-    } as unknown as DaemonLogger;
-    const { supervisor, events } = makeSupervisorWithDriver(driver, { logger });
-    const advancedTo = (seq: number) =>
-      logs.some(
-        l =>
-          l['action'] === 'freshness_observed_seq_advanced' &&
-          l['observed_seq'] === seq,
-      );
-    const lastStatus = () => {
-      const frames = events.filter(e => e.event === 'runtime_state');
-      const last = frames.at(-1);
-      return last && last.event === 'runtime_state' ? last.state : null;
-    };
-    let tick = 100;
-    const deliverTick = async (parsedEvents: ParsedEvent[]) => {
-      setNextParse(parsedEvents);
-      tick += 1;
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [tick], kind: 'message',
-        text: `tick-${tick}`, spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, tick);
-    };
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      // M1 (seq 10) admitted → observed 10, turn active.
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [10], kind: 'message',
-        text: 'M1', delivered_up_to_seq: 10, spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 10);
-
-      // Provider queue notice → dedicated `waiting` status with the
-      // normalized message on the snippet (was mislabeled `thinking`).
-      await deliverTick([
-        { kind: 'api_response', status: 'waiting', message: 'Qoder model request queued (queue size 3)' },
-      ]);
-      await waitFor(() => lastStatus()?.status === 'waiting');
-      expect(lastStatus()?.activitySnippet).toContain('queue size 3');
-
-      // `ready` restores ONLY the hold waiting created → back to thinking.
-      await deliverTick([
-        { kind: 'api_response', status: 'ready', message: 'Qoder model is available; resuming request' },
-      ]);
-      await waitFor(() => lastStatus()?.status === 'thinking');
-
-      // `notice` is display-only: it never touches the run state.
-      await deliverTick([
-        { kind: 'api_response', status: 'notice', message: 'provider capacity degraded' },
-      ]);
-      expect(lastStatus()?.status).toBe('thinking');
-
-      // Lane guard: a running tool owns the display. waiting must NOT
-      // displace tool_running (same guard as tool_output's restore),
-      // and ready must NOT touch a status waiting did not create.
-      await deliverTick([{ kind: 'tool_call', name: 'Bash', input: {} }]);
-      await waitFor(() => lastStatus()?.status === 'tool_running');
-      await deliverTick([
-        { kind: 'api_response', status: 'waiting', message: 'queued mid-tool' },
-      ]);
-      expect(lastStatus()?.status).toBe('tool_running');
-      expect(lastStatus()?.detail).toBe('Bash');
-      await deliverTick([
-        { kind: 'api_response', status: 'ready', message: 'ready mid-tool' },
-      ]);
-      expect(lastStatus()?.status).toBe('tool_running');
-      await deliverTick([{ kind: 'tool_output', name: 'Bash' }]);
-      await waitFor(() => lastStatus()?.status === 'thinking');
-
-      // Evidence falsifier: after turn_end, seq 12 is delivered mid-gap
-      // and parks in pendingAdmission. A provider notice must NOT settle
-      // it — api_response is a delivery/transport-side observation, not
-      // proof a new model generation started.
-      setNextParse([{ kind: 'turn_end' }]);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [12], kind: 'message',
-        text: 'gap', delivered_up_to_seq: 12, spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 12);
-      await deliverTick([
-        { kind: 'api_response', status: 'waiting', message: 'queued again' },
-      ]);
-      expect(advancedTo(12)).toBe(false);
-
-      // A REAL generation start (thinking) settles the pending coverage.
-      await deliverTick([{ kind: 'thinking', text: 'new action' }]);
-      await waitFor(() => advancedTo(12));
-    } finally {
-      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
-        .catch(() => undefined);
-    }
-  });
-
-  it('countgame round-2 falsifier (#task:1561): old action with locked snapshot gets a REAL signal-only 409; only after the userMessage-echo lifecycle does the informed resend pass CAS', async () => {
-    const captured: Array<string | undefined> = [];
-    const { driver, setNextParse } = makeProgrammableDriver();
-    const baseEncode = driver.encodeStdinMessage.bind(driver);
-    driver.encodeStdinMessage = (text, sess, opts) => {
-      captured.push(opts?.payloadUuid);
-      return baseEncode(text, sess, opts);
-    };
-    const { supervisor, events } = makeSupervisorWithDriver(driver);
-    const postedBodies: Record<string, unknown>[] = [];
-    // CAS-aware fake backend (Cindy P1): the conversation head is at
-    // seq 11 (M2 already landed). A send whose seen_up_to_seq trails the
-    // head gets the production signal-only 409 shape — no bodies, no
-    // count; a fresh send gets 200. This makes the falsifier end-to-end:
-    // an unconditionally-200 fake had blessed exactly the round-2 bug.
-    let backendHeadSeq = 11;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        const seen = body['seen_up_to_seq'];
-        if (
-          body['freshness_bypass'] !== true &&
-          typeof seen === 'number' &&
-          seen < backendHeadSeq
-        ) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: `message is stale: conversation advanced from seq ${seen} to ${backendHeadSeq} before send`,
-                retriable: false,
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: `se-${postedBodies.length}`,
-                  stream_key: 'main',
-                  seen_up_to_seq: seen,
-                  current_seq: backendHeadSeq,
-                  hint: 'unseen messages are queued for normal delivery',
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        backendHeadSeq += 1;
-        return new Response(
-          JSON.stringify({
-            message_id: `m${postedBodies.length}`,
-            message_seq: backendHeadSeq,
-            ...landedStream(postedBodies.at(-1)?.['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      // M1 (seq 10) admitted at boundary → observed MAIN=10, turn active.
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [10], kind: 'message',
-        text: 'M1', delivered_up_to_seq: 10, spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 10);
-
-      // M2 (seq 11) steered mid-turn: written into the active turn. The
-      // JSON-RPC response to that steer is a TRANSPORT ack and (round-2
-      // contract) produces NO parsed event at all — coverage stays parked
-      // in pendingAdmission (#1471), observed stays 10.
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [11], kind: 'message',
-        text: 'M2', delivered_up_to_seq: 11, spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 11);
-      const uuidM2 = captured[captured.length - 1];
-      expect(uuidM2).toBeTruthy();
-
-      // The already-in-flight action's send carries the LOCKED snapshot
-      // (seen=10) and the backend CAS MUST stale it — this is the exact
-      // event round 2 let through three times.
-      const send1 = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1', content: '0-old-draft',
-      });
-      expect(send1.ok).toBe(false);
-      expect(send1.ok === false && send1.status).toBe(409);
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
-
-      // Generation-boundary evidence: codex drains pending_input into
-      // model history and echoes our clientUserMessageId on
-      // item/started(userMessage) — the driver maps it to
-      // input_lifecycle started; the real completed follows as its own
-      // frame (Cindy P2). NOW observed promotes to 11.
-      setNextParse([
-        { kind: 'input_lifecycle', commandUuid: uuidM2!, state: 'started' },
-      ]);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [12], kind: 'message',
-        text: 'tick', spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 12);
-      setNextParse([
-        { kind: 'input_lifecycle', commandUuid: uuidM2!, state: 'completed' },
-      ]);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [13], kind: 'message',
-        text: 'tick2', spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 13);
-
-      // The informed resend (revised draft under the recorded stale
-      // event) carries seen=11 and passes CAS.
-      const send2 = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1', content: '1',
-        stale_resolution_reason: 'revised',
-      });
-      expect(send2.ok).toBe(true);
-      const informed = postedBodies[postedBodies.length - 1]!;
-      expect(informed['seen_up_to_seq']).toBe(11);
-      expect(informed['stale_resolution_reason']).toBe('revised');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
-        .catch(() => undefined);
-    }
-  });
-
-  it('countgame P1-B falsifier: a bypass holds the watermark across the gap, then the own seq MERGES once the gap is admitted (no permanent hole)', async () => {
-    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits');
-    const { supervisor, events } = makeSupervisorWithDriver(driver);
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        const isBypass = postedBodies[postedBodies.length - 1]?.['freshness_bypass'] === true;
-        // Backend accepts the bypass send at seq 15, with the stream head
-        // at insert time (14) as the merge prerequisite — everything the
-        // sender skipped past.
-        return new Response(
-          JSON.stringify(
-            isBypass
-              ? {
-                  message_id: 'forced',
-                  message_seq: 15,
-                  ...landedStream(postedBodies.at(-1)?.['target']),
-                  stream_head_before: 14,
-                }
-              : {
-                  message_id: `m${postedBodies.length}`,
-                  ...landedStream(postedBodies.at(-1)?.['target']),
-                },
-          ),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [11], kind: 'message',
-        text: 'seed observed at 11', delivered_up_to_seq: 11,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 11);
-
-      const forced = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'forced past the gap',
-        freshness_bypass: true,
-      });
-      expect(forced.ok).toBe(true);
-
-      // Arm 1 — no immediate swallow (live regression 11→15/11→16): the
-      // forced message lands but the cursor HOLDS; the next normal send
-      // still declares seen=11 while 12–14 are unadmitted.
-      const next = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1', content: 'next normal send',
-      });
-      expect(next.ok).toBe(true);
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(11);
-
-      // Arm 2 — no permanent hole (Cindy follow-up P1): the sender is
-      // excluded from its own fan-out, so seq 15 never arrives by inbox.
-      // When the REAL gap (12..14) is legitimately admitted, observed
-      // must converge THROUGH the prerequisite to the own seq 15 — not
-      // stall at 14 with head=15 forever.
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [14], kind: 'message',
-        text: 'gap batch 12..14', delivered_up_to_seq: 14,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 14);
-      // Mid-turn write is not evidence (#1471): promote the pending gap
-      // at the next parsed turn boundary (turn_end → new-turn thinking).
-      // Seq-less tick deliveries flush the preset parse events via the
-      // fixture's stdin echo without touching observed themselves.
-      setNextParse([{ kind: 'turn_end' }]);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [90], kind: 'message',
-        text: 'tick1', spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitFor(() =>
-        events.some(
-          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end',
-        ),
-      );
-      setNextParse([{ kind: 'thinking', text: 'new turn' }]);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [91], kind: 'message',
-        text: 'tick2', spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitFor(() =>
-        events.some(
-          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'thinking',
-        ),
-      );
-
-      const converged = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1', content: 'post-gap send',
-      });
-      expect(converged.ok).toBe(true);
-      expect(postedBodies[postedBodies.length - 1]?.['seen_up_to_seq']).toBe(15);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
-        .catch(() => undefined);
-    }
-  });
-
-  it('signal-only 409 never moves the observed cursor (#task:1561): an uninformed retry keeps the old boundary', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        if (postedBodies.length === 1) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: 'stale-s',
-                  stream_key: 'main',
-                  seen_up_to_seq: 12,
-                  current_seq: 30,
-                  hint: 'wait for normal delivery',
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            message_id: 'm31',
-            message_seq: 31,
-            ...landedStream(postedBodies.at(-1)?.['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [12],
-        kind: 'message',
-        text: 'seed observed at 12',
-        delivered_up_to_seq: 12,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 12);
-
-      const stale = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: '1',
-      });
-      expect(stale).toMatchObject({ ok: false, status: 409 });
-
-      await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: '2',
-        stale_resolution_reason: 'revised',
-      });
-      // Nothing was shown by the 409 (no bodies on the wire), so the
-      // retry's boundary is STILL 12 — the CAS stays armed until the
-      // unseen window arrives through normal delivery and admission
-      // evidence advances the cursor. The retry also correlates the
-      // pending stale event exactly once.
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(12);
-      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-s');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('fails closed on a malformed stale window: the observed cursor does not move', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    // Two consecutive degenerate 409 shapes: (1) malformed seen + entries
-    // without usable seq; (2) seen absent entirely + empty window. Neither
-    // yields evidence of what was shown, so neither may move the cursor.
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        if (postedBodies.length === 1) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: 'stale-m',
-                  seen_up_to_seq: 'not-a-number',
-                  current_seq: 30,
-                  newer_messages: [{}, { seq: 'x' }],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        if (postedBodies.length === 2) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: 'stale-n',
-                  current_seq: 30,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            message_id: 'm31',
-            message_seq: 31,
-            ...landedStream(postedBodies.at(-1)?.['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [12],
-        kind: 'message',
-        text: 'seed observed at 12',
-        delivered_up_to_seq: 12,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 12);
-
-      const stale = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: '1',
-      });
-      expect(stale).toMatchObject({ ok: false, status: 409 });
-
-      const stale2 = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: '2',
-        stale_resolution_reason: 'revised',
-      });
-      expect(stale2).toMatchObject({ ok: false, status: 409 });
-      // Cursor unchanged after shape (1): still the delivery boundary.
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(12);
-      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-m');
-
-      await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: '3',
-        stale_resolution_reason: 'revised',
-      });
-      // Cursor unchanged after shape (2) as well: never 30.
-      expect(postedBodies[2]?.['seen_up_to_seq']).toBe(12);
-      expect(postedBodies[2]?.['stale_event_id']).toBe('stale-n');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-});
-
-// =============================================================================
-// Supervisor — mid-turn delivery admission gate (#task:1471)
-// -----------------------------------------------------------------------------
-// CONTRACT (Do Not Weaken):
-//
-//   A delivery admitted into `observedSeqByStream` must reflect what the
-//   *model* has actually observed as a bounded turn context — NOT what the
-//   daemon has merely handed to stdin. When the model is mid-turn
-//   (`inputTurnActive=true`), a fresh delivery's seq goes into
-//   `pendingAdmissionSeqByStream` and is promoted to observed only at the
-//   next parsed turn-start (`admitPendingSeqForNewTurn`), OR when a stale
-//   response advances it via `message_stale_response`.
-//
-// WHY THIS EXISTS:
-//
-//   The pre-#1417 world had a `runtime_wake` contract test that pinned
-//   this ("does not admit mid-turn wake delivery into the next send
-//   boundary"). #1417 folded wake into `runtime_deliver →
-//   consumeStartupDelivery` and that test was deleted with the old API,
-//   leaving the behaviour untested. `consumeStartupDelivery` then
-//   hard-coded `admitNow=true`, which silently bypassed the 409 stale
-//   gate and broke turn-taking in countgame1 (5-agent race — the daemon
-//   reported mid-turn deliveries as model-seen even though the model's
-//   current action was generated from the earlier turn context, so the
-//   backend CAS couldn't identify laggard sends as stale).
-//
-// REVIEW GATE — a modifier MUST answer these before changing this group:
-//
-//   1. Are you softening `expect(seen_up_to_seq).toBe(<pre-turn seq>)` in
-//      the mid-turn send? If yes, you are removing a load-bearing proof
-//      point of the #1417 regression guard — do not.
-//   2. Are you deleting the 409-aware mock in the gated test (returning
-//      200 unconditionally)? That collapses this into an error-handling
-//      test and stops proving that stale is being *produced*.
-//   3. Are you removing the race test? The pre-await snapshot invariant
-//      (see supervisor/index.ts consumeStartupDelivery) is a
-//      load-bearing proof point in this group — without an equivalent,
-//      moving the admission-decision read to after any async barrier
-//      that can interleave with `turn_end` will pass CI.
-//   4. Are you migrating this behaviour to a new API? Port the
-//      equivalent proof points to that API's inputs BEFORE deleting or
-//      replacing this group; merging/renaming tests is fine, dropping
-//      the contract is not.
-// =============================================================================
-describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
-  it('queues mid-turn delivery into pending admission and promotes it at the next parsed turn-start, while runtime_delivery_consumed still fires per delivery', async () => {
-    // INVARIANT: mid-turn delivery's seq must NOT reach the model-seen
-    // cursor (observed) until the next parsed turn-start. Two proof
-    // points, both load-bearing:
-    //   (a) mid-turn send body carries seen=10 (pre-turn), not 11.
-    //   (b) after turn_end + parsed thinking, next-turn send carries seen=11
-    //       — pending WAS promoted, so the fix hasn't over-corrected into
-    //       "never admit".
-    // Delivery custody (runtime_delivery_consumed) fires for both
-    // regardless. Do not weaken either proof point; (a) proves the gate,
-    // (b) proves the promoter.
-    class ControlledStub extends EventEmitter {
-      readonly pid = 34_567;
-      readonly stdout = new EventEmitter();
-      readonly stderr = new EventEmitter();
-      readonly stdin = {
-        write: (
-          _line: string,
-          cb?: (err?: Error | null) => void,
-        ): boolean => {
-          setImmediate(() => cb?.());
-          return true;
-        },
-        end: () => {},
-        destroyed: false,
-        once: () => {},
-      };
-      kill(_sig?: NodeJS.Signals | number): boolean {
-        setImmediate(() => this.emit('exit', 0, null));
-        return true;
-      }
-    }
-    const stub = new ControlledStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
-
-    const { driver } = makeProgrammableDriver([], 'self_inits');
-    const spy = makeEmitSpy();
-    const supervisor = new Supervisor({
-      emit: spy.emit,
-      logger: silentLogger(),
-      driverFor: () => driver,
-      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
-      spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
-      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
-      emitRawRuntimeOutput: true,
-      sigtermToSigkillMs: 50,
-      sigkillTimeoutMs: 200,
-    });
-
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        // Deliberately omit `message_seq` on the send response so the
-        // post-commit `advanceObservedStream(message_send_commit)` is a
-        // no-op. This isolates what we're actually testing (the mid-turn
-        // admit boundary) from the orthogonal send-commit advance path.
-        return new Response(
-          JSON.stringify({
-            message_id: `m${postedBodies.length}`,
-            ...landedStream(body['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-
-    try {
-      // M1 arrives via SPAWN arm — no prior handle → startUnlocked with
-      // M1 as its startup_delivery. Handle materializes with
-      // inputTurnActive=false (fake driver is not oneShot), so
-      // consumeStartupDelivery admits M1 immediately into observed
-      // (MAIN=10) and the admit flips inputTurnActive=true.
-      const spawnResult = await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [10],
-        kind: 'message',
-        text: 'first message (spawn batch)',
-        delivered_up_to_seq: 10,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      expect(spawnResult).toMatchObject({ disposition: 'spawning' });
-      await waitForDeliveryConsumed(spy.events, 10);
-
-      // M2 arrives while the model is still mid-turn (inputTurnActive=true).
-      // Pre-fix: admitted immediately, bumped observed to 11 → the still-
-      // in-flight model send would report seen=11 for a message it never
-      // saw and CAS would never stale. Fixed: routed into
-      // pendingAdmissionSeqByStream; observed stays at 10 until the next
-      // parsed turn-start.
-      const midTurnDeliver = await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [11],
-        kind: 'message',
-        text: 'second message arriving mid-turn',
-        delivered_up_to_seq: 11,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      expect(midTurnDeliver).toMatchObject({ disposition: 'admitted' });
-      await waitForDeliveryConsumed(spy.events, 11);
-
-      // Delivery custody unchanged — both consumed events fire even though
-      // only M1 advanced the model-seen cursor. Cindy: the fix only moves
-      // observed-cursor timing; DB ack/`delivered_at` contract stays.
-      const consumedIds = spy.events
-        .flatMap(e =>
-          e.event === 'runtime_delivery_consumed' ? [...e.delivery_ids] : [],
-        )
-        .sort((a, b) => a - b);
-      expect(consumedIds).toEqual([10, 11]);
-
-      // ── Mid-turn agent send. seen_up_to_seq must be 10 (M1 only), not 11.
-      // Before the #task:1471 fix this was 11 → the regression.
-      const midTurnSend = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'draft reply generated on M1 context',
-      });
-      expect(midTurnSend).toMatchObject({ ok: true });
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001');
-
-      // ── Turn boundary: parsed turn_end → resolveRun clears
-      // inputTurnActive. Then a parsed thinking event (parsedStartsTurn=true)
-      // triggers admitPendingSeqForNewTurn, promoting the queued M2 (11)
-      // from pendingAdmissionSeqByStream into observedSeqByStream.
-      driver.parseLine = () => [{ kind: 'turn_end' }];
-      stub.stdout.emit('data', 'END\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'turn_end',
-        ),
-      );
-      driver.parseLine = () => [
-        { kind: 'thinking', text: 'starting next turn' },
-      ];
-      stub.stdout.emit('data', 'THINK\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'thinking',
-        ),
-      );
-      driver.parseLine = () => [];
-
-      // ── Next-turn send: pending was promoted, so seen now covers M2.
-      // Guards against the sibling regression where the fix could over-
-      // correct into "never admit" — must actually promote here.
-      const nextTurnSend = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'reply generated on new turn context',
-      });
-      expect(nextTurnSend).toMatchObject({ ok: true });
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(11);
-      expect(postedBodies[1]?.['asserted_stream']).toBe('#conv:Conversation0001');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('gated driver — mid-turn deferred flush at tool_output boundary keeps observed at the pre-turn seq (countgame1 claude path)', async () => {
-    // INVARIANTS (Cindy — do not weaken):
-    //   1. Old-turn send must trigger a REAL 409 from the backend. The
-    //      mock CAS on `seen_up_to_seq < BACKEND_CURRENT_SEQ` is
-    //      load-bearing — reverting to unconditional 409 (or 200) turns
-    //      this into an error-handling test and drops the *production
-    //      condition* the regression bypassed.
-    //   2. `delivery-consumed != model-seen`: both M1+M2 fire
-    //      runtime_delivery_consumed, but only M1 advances observed
-    //      until the next parsed turn-start.
-    //   3. The boundary-gated profile is intentional. Reverting to the
-    //      default `direct` picks a different consumeStartupDelivery
-    //      entry and no longer exercises the deferred-queue path that
-    //      broke countgame1.
-    // The countgame1 regression path (boundary-gated profile):
-    //   1. M1 delivered idle → SPAWN arm admits → observed=10, inputTurnActive=true
-    //   2. Model emits tool_call → busy.outstandingToolUses=1 → boundary closed
-    //   3. M2 delivered mid-tool_call → gated && !boundaryOpen → `deferred`
-    //   4. Model emits tool_output → outstandingToolUses=0 → boundary reopens
-    //      → maybeScheduleDeferredFlush → flushDeferred → consumeStartupDelivery
-    //   5. HERE: inputTurnActive still true (no turn_end fired). Pre-fix
-    //      unconditional admit at :1692 bumped observed to 11 before the
-    //      model's in-turn `agentMessageSend`; the send then reported
-    //      seen=11 for a message the model never saw. Fix routes to
-    //      pending admission until the next parsed turn-start.
-    class ControlledStub extends EventEmitter {
-      readonly pid = 45_678;
-      readonly stdout = new EventEmitter();
-      readonly stderr = new EventEmitter();
-      readonly stdin = {
-        write: (
-          _line: string,
-          cb?: (err?: Error | null) => void,
-        ): boolean => {
-          setImmediate(() => cb?.());
-          return true;
-        },
-        end: () => {},
-        destroyed: false,
-        once: () => {},
-      };
-      kill(_sig?: NodeJS.Signals | number): boolean {
-        setImmediate(() => this.emit('exit', 0, null));
-        return true;
-      }
-    }
-    const stub = new ControlledStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
-
-    const { driver: baseDriver } = makeProgrammableDriver([], 'self_inits');
-    // Real claude driver is `gated` (tests/../drivers/claude.ts). The default
-    // fake is `direct`; override so this test exercises the actual
-    // countgame1 code path (deferred queue + boundary-reopen flush).
-    // #1471's invariant (mid-turn writes must not advance observed
-    // before turn-start) lives on tool-boundary-steer in the final
-    // tree — the only profile that writes during an active turn.
-    const driver: Driver = { ...baseDriver, releaseProfile: 'tool-boundary-steer' };
-    const spy = makeEmitSpy();
-    const supervisor = new Supervisor({
-      emit: spy.emit,
-      logger: silentLogger(),
-      driverFor: () => driver,
-      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
-      spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
-      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
-      emitRawRuntimeOutput: true,
-      sigtermToSigkillMs: 50,
-      sigkillTimeoutMs: 200,
-    });
-
-    const postedBodies: Record<string, unknown>[] = [];
-    // 409-aware mock: the backend's authoritative main-line seq after M1+M2
-    // deliver is 11. A send with `seen_up_to_seq < 11` is stale under the
-    // per-stream CAS; the backend returns 409 with `subkind='message_stale'`.
-    // A revised retry (or any send with seen>=11) settles at 200. This is
-    // the correctness gate the #task:1417 regression bypassed: mid-turn
-    // deliveries bumped observed to 11 before the model's in-turn send,
-    // so `seen_up_to_seq=11` slipped past CAS and never staled.
-    const BACKEND_CURRENT_SEQ = 11;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        const seen = body['seen_up_to_seq'];
-        if (typeof seen === 'number' && seen < BACKEND_CURRENT_SEQ) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: `stale-${postedBodies.length}`,
-                  seen_up_to_seq: seen,
-                  current_seq: BACKEND_CURRENT_SEQ,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            message_id: `m${postedBodies.length}`,
-            ...landedStream(body['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-
-    try {
-      // ── M1: SPAWN arm — startup admit, observed=10, inputTurnActive=true.
-      const spawnResult = await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [10],
-        kind: 'message',
-        text: 'first message (spawn batch)',
-        delivered_up_to_seq: 10,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      expect(spawnResult).toMatchObject({ disposition: 'spawning' });
-      await waitForDeliveryConsumed(spy.events, 10);
-
-      // ── Model enters a tool_call — boundary closes (outstandingToolUses=1).
-      driver.parseLine = () => [
-        { kind: 'tool_call', name: 'Bash', input: {} },
-      ];
-      stub.stdout.emit('data', 'TOOL\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'tool_call',
-        ),
-      );
-
-      // ── M2 delivered mid-tool_call — tool-boundary-steer writes
-      // IMMEDIATELY (B'); the admission decision (turn active → pending)
-      // is the invariant under test in step 5.
-      driver.parseLine = () => [];
-      const midToolCallDeliver = await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [11],
-        kind: 'message',
-        text: 'second message arriving mid tool_call',
-        delivered_up_to_seq: 11,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      expect(midToolCallDeliver).toMatchObject({ disposition: 'admitted' });
-      await waitForDeliveryConsumed(spy.events, 11);
-
-      // ── tool_output resolves; the model keeps working the same turn.
-      driver.parseLine = () => [{ kind: 'tool_output', name: 'Bash' }];
-      stub.stdout.emit('data', 'TOOL_OUT\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'tool_output',
-        ),
-      );
-      driver.parseLine = () => [];
-
-      // Custody unchanged: consumed for both, direct/gated alike.
-      const consumedIds = spy.events
-        .flatMap(e =>
-          e.event === 'runtime_delivery_consumed' ? [...e.delivery_ids] : [],
-        )
-        .sort((a, b) => a - b);
-      expect(consumedIds).toEqual([10, 11]);
-
-      // ── In-turn agent send after the deferred flush. This is the exact
-      // countgame1 06:08 moment: tool_output just resolved, model generates
-      // its reply, calls message_send with a `seen_up_to_seq` that reflects
-      // ONLY M1 context. With the fix, observed is still 10 (M2 sits in
-      // pending), so the send body carries seen=10 and the backend's CAS
-      // fires 409 message_stale — the correctness gate the regression
-      // silently bypassed. Pre-fix, seen would be 11 and the send would
-      // slip past CAS with 200 (the countgame1 turn-taking break).
-      const midTurnSend = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'draft reply generated on M1 context after tool_output',
-      });
-      expect(midTurnSend).toMatchObject({ ok: false, status: 409 });
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
-
-      // ── Turn boundary + revised retry. Once the model surfaces
-      // turn_end and a new turn-start (`thinking`), pending is folded into
-      // observed via `admitPendingSeqForNewTurn`. In this test 409's own
-      // `message_stale_response` observed-advance already reached seq=11,
-      // so promotion is a monotonic no-op (proven separately by the
-      // direct-mode test above); the point here is that the next send
-      // carries the freshened boundary and the 409 gate no longer fires.
-      driver.parseLine = () => [{ kind: 'turn_end' }];
-      stub.stdout.emit('data', 'END\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'turn_end',
-        ),
-      );
-      driver.parseLine = () => [
-        { kind: 'thinking', text: 'starting next turn' },
-      ];
-      stub.stdout.emit('data', 'THINK\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'thinking',
-        ),
-      );
-      driver.parseLine = () => [];
-
-      const nextTurnSend = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'revised reply on refreshed context',
-        stale_resolution_reason: 'revised',
-      });
-      expect(nextTurnSend).toMatchObject({ ok: true });
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(11);
-      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-1');
-      expect(postedBodies[1]?.['stale_resolution_reason']).toBe('revised');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('snapshots admit decision BEFORE writeStdinPayload so a turn_end interleaving the write cannot bypass the pending gate', async () => {
-    // INVARIANTS (do not weaken):
-    //   1. The admission decision (admit-now vs queue-to-pending) must
-    //      be bound BEFORE any async boundary that can interleave with
-    //      `turn_end`. The current implementation achieves this by
-    //      snapshotting `admitNow = shouldAdmitDeliveryImmediately(handle)`
-    //      before `await this.writeStdinPayload(...)` in
-    //      consumeStartupDelivery; a later serialisation or atomic
-    //      state-machine rewrite is fine so long as the decision
-    //      remains bound to the turn state at the moment the batch was
-    //      chosen — post-await re-reads reintroduce the regression.
-    //   2. The test must preserve a deterministic barrier proving the
-    //      write can be in-flight while `turn_end` crosses it. The
-    //      current fixture uses `parkWrites` + `resolveParkedWrite()`
-    //      to make the interleaving reliable; refactor the fixture
-    //      freely, but do NOT fall back to probabilistic timing
-    //      (setImmediate / setTimeout scheduling doesn't hold the
-    //      write callback long enough for `dispatchParsedLine` — which
-    //      runs synchronously from the stdout listener, unlocked — to
-    //      reliably interleave a `turn_end` line).
-    //   3. The 409 assertion on `postedBodies[0]['seen_up_to_seq'] ===
-    //      10` is the proof point that the decision honoured the
-    //      pre-boundary turn state. Weakening it to `<= 11` allows the
-    //      regression through.
-    // Race window (Cindy): `dispatchParsedLine` runs synchronously from the
-    // child stdout listener and is NOT under this handle's lifecycle lock.
-    // So while `consumeStartupDelivery` is awaiting `writeStdinPayload`, a
-    // `turn_end` line on stdout can be processed and flip
-    // `inputTurnActive=false` before the write callback fires. A post-await
-    // read of `shouldAdmitDeliveryImmediately(handle)` would then admit
-    // immediately — even though this batch was decided upon and started
-    // being written while the prior turn was still active. Correct
-    // semantics: snapshot the decision BEFORE the write, matching the
-    // pre-#task:1417 `runtime_wake` invariant.
-    class ControlledStub extends EventEmitter {
-      readonly pid = 56_789;
-      readonly stdout = new EventEmitter();
-      readonly stderr = new EventEmitter();
-      parkWrites = false;
-      pendingWriteCb: ((err?: Error | null) => void) | null = null;
-      readonly stdin = {
-        write: (
-          _line: string,
-          cb?: (err?: Error | null) => void,
-        ): boolean => {
-          if (this.parkWrites) {
-            // Park the callback; the test resolves it manually after
-            // interleaving a `turn_end` stdout line so we can prove the
-            // decision is taken pre-await, not post-await.
-            this.pendingWriteCb = cb ?? null;
-          } else {
-            setImmediate(() => cb?.());
-          }
-          return true;
-        },
-        end: () => {},
-        destroyed: false,
-        once: () => {},
-      };
-      resolveParkedWrite(): void {
-        const cb = this.pendingWriteCb;
-        this.pendingWriteCb = null;
-        cb?.();
-      }
-      kill(_sig?: NodeJS.Signals | number): boolean {
-        setImmediate(() => this.emit('exit', 0, null));
-        return true;
-      }
-    }
-    const stub = new ControlledStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
-
-    const { driver: baseDriver } = makeProgrammableDriver([], 'self_inits');
-    // #1471's invariant (mid-turn writes must not advance observed
-    // before turn-start) lives on tool-boundary-steer in the final
-    // tree — the only profile that writes during an active turn.
-    const driver: Driver = { ...baseDriver, releaseProfile: 'tool-boundary-steer' };
-    const spy = makeEmitSpy();
-    const supervisor = new Supervisor({
-      emit: spy.emit,
-      logger: silentLogger(),
-      driverFor: () => driver,
-      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
-      spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
-      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
-      emitRawRuntimeOutput: true,
-      sigtermToSigkillMs: 50,
-      sigkillTimeoutMs: 200,
-    });
-
-    const postedBodies: Record<string, unknown>[] = [];
-    const BACKEND_CURRENT_SEQ = 11;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        const seen = body['seen_up_to_seq'];
-        if (typeof seen === 'number' && seen < BACKEND_CURRENT_SEQ) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: `stale-${postedBodies.length}`,
-                  seen_up_to_seq: seen,
-                  current_seq: BACKEND_CURRENT_SEQ,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            message_id: `m${postedBodies.length}`,
-            ...landedStream(body['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-
-    try {
-      // ── Setup identical to the countgame1 gated test, up to M2 deferred.
-      const spawnResult = await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [10],
-        kind: 'message',
-        text: 'first message',
-        delivered_up_to_seq: 10,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      expect(spawnResult).toMatchObject({ disposition: 'spawning' });
-      await waitForDeliveryConsumed(spy.events, 10);
-
-      driver.parseLine = () => [
-        { kind: 'tool_call', name: 'Bash', input: {} },
-      ];
-      stub.stdout.emit('data', 'TOOL\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'tool_call',
-        ),
-      );
-
-      // ── Race sequencing. Park M2's write BEFORE delivering, so the
-      // immediate tool-boundary-steer write is captured in flight; then
-      // interleave turn_end so `resolveRun` flips inputTurnActive=false
-      // WHILE the write's promise is still awaiting. Pre-fix: a
-      // post-await read of `shouldAdmitDeliveryImmediately(handle)`
-      // would return true (turn just ended) → admit immediately →
-      // observed=11 → send seen=11, no 409. With the pre-await
-      // snapshot: decision taken as false (turn active) → pending →
-      // observed stays 10 → send seen=10, 409.
-      driver.parseLine = () => [];
-      stub.parkWrites = true;
-      const midToolCallDeliver = await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [11],
-        kind: 'message',
-        text: 'second message arriving mid tool_call',
-        delivered_up_to_seq: 11,
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      expect(midToolCallDeliver).toMatchObject({ disposition: 'admitted' });
-      // The write is genuinely in flight before we interleave turn_end.
-      await waitFor(() => stub.pendingWriteCb !== null, 1_000);
-
-      driver.parseLine = () => [{ kind: 'turn_end' }];
-      stub.stdout.emit('data', 'END\n');
-      await waitFor(() =>
-        spy.events.some(
-          e =>
-            e.event === 'runtime_parsed_event' &&
-            e.parsed.kind === 'turn_end',
-        ),
-      );
-
-      // Only NOW release the write. consumeStartupDelivery resumes; the
-      // fixed code applies the pre-await snapshot (admitNow=false) and
-      // routes M2 into pending. Without the fix it would read live state
-      // (post-turn_end, admitNow=true) and admit immediately.
-      driver.parseLine = () => [];
-      stub.parkWrites = false;
-      stub.resolveParkedWrite();
-      await waitForDeliveryConsumed(spy.events, 11);
-
-      // Custody still per-delivery regardless of the race timing.
-      const consumedIds = spy.events
-        .flatMap(e =>
-          e.event === 'runtime_delivery_consumed' ? [...e.delivery_ids] : [],
-        )
-        .sort((a, b) => a - b);
-      expect(consumedIds).toEqual([10, 11]);
-
-      // The proof: an in-turn send generated before the turn boundary was
-      // observed by the model must still stale. Backend returns 409
-      // because seen=10 < BACKEND_CURRENT_SEQ=11.
-      const raceSend = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'draft reply raced against turn_end',
-      });
-      expect(raceSend).toMatchObject({ ok: false, status: 409 });
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-});
-
-describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', () => {
-  it('addresses the main line after a thread-only wake, and treats main as unobserved', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(parsedBody);
-        return new Response(
-          JSON.stringify({
-            message_id: 'm54',
-            message_seq: 54,
-            ...landedStream(parsedBody['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [52, 53],
-        kind: 'message',
-        text: 'thread turn batch',
-        delivered_up_to_seq: 53,
-        deliveries: [
-          {
-            delivery_id: 52,
-            message_id: 'm52',
-            seq: 52,
-            thread_root_id: 'MessageRoot00001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-          {
-            delivery_id: 53,
-            message_id: 'm53',
-            seq: 53,
-            thread_root_id: 'MessageRoot00001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 53);
-
-      const result = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'a reply addressed at the main line',
-      });
-
-      // The wake's streams no longer influence WHERE a send goes — the address
-      // does, and it is forwarded verbatim. What the wake still decides is
-      // whether a freshness boundary is OWED: this session observed only
-      // thread:MessageRoot00001, so the addressed main line is a first touch and
-      // carries no per-stream freshness.
-      expect(result).toMatchObject({ ok: true, message_id: 'm54' });
-      expect(postedBodies[0]?.['target']).toBe('#conv:Conversation0001');
-      expect(postedBodies[0]).not.toHaveProperty('asserted_stream');
-      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('omits freshness for a main-line first-touch send, twice over', async () => {
-    const { supervisor } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    let nextSeq = 50;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return new Response(
-          JSON.stringify({
-            message_id: `m${nextSeq}`,
-            message_seq: nextSeq++,
-            ...landedStream(postedBodies.at(-1)?.['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-
-      const first = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'first main-line send without observed main',
-      });
-      const second = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'second main-line send still has not observed main',
-      });
-
-      expect(first).toMatchObject({ ok: true, message_id: 'm50' });
-      expect(second).toMatchObject({ ok: true, message_id: 'm51' });
-      expect(postedBodies).toHaveLength(2);
-      for (const body of postedBodies) {
-        expect(body['target']).toBe('#conv:Conversation0001');
-        expect(body).not.toHaveProperty('asserted_stream');
-        expect(body).not.toHaveProperty('seen_up_to_seq');
-      }
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('forwards the sender-only unresolved references verbatim, and drops a field it cannot read WITH a named warn (#task:2021 P4-5-b)', async () => {
-    const warnRecords: Record<string, unknown>[] = [];
-    const logger: DaemonLogger = {
-      ...silentLogger(),
-      warn: obj => warnRecords.push(obj as Record<string, unknown>),
-    };
-    const { supervisor } = makeSupervisor({ logger });
-    // Three backend answers, in order: a well-formed report, no report at all,
-    // and a report the daemon must refuse to interpret.
-    const responses: Array<Record<string, unknown>> = [
-      { unresolved_references: [{ kind: 'agent', handle: 'nosuchagent' }] },
-      {},
-      // Malformed on purpose (a `reason` the contract forbids, plus a bad kind):
-      // a version skew must not reach the agent as a half-understood answer.
-      { unresolved_references: [{ kind: 'robot', handle: 'x', reason: 'unknown' }] },
-    ];
-    let call = 0;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        const extra = responses[call] ?? {};
-        call += 1;
-        return new Response(
-          JSON.stringify({
-            message_id: `m${call}`,
-            message_seq: 50 + call,
-            conversation_id: 'Conversation0001',
-            thread_root_id: null,
-            ...extra,
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    const mismatches = (): Record<string, unknown>[] =>
-      warnRecords.filter(
-        record => record['action'] === 'send_unresolved_references_shape_mismatch',
-      );
-    try {
-      await supervisor.start(baseStartParams);
-      const send = (content: string) =>
-        supervisor.agentMessageSend({
-          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-          target: '#conv:Conversation0001',
-          agent_id: 'a1',
-          content,
-        });
-
-      // FORWARDED, never derived: the daemon holds no participation authority, so
-      // the token it emits is byte-identical to the one the backend answered with.
-      expect(await send('<silverhand://agent/nosuchagent> hi')).toMatchObject({
-        ok: true,
-        unresolved_references: [{ kind: 'agent', handle: 'nosuchagent' }],
-      });
-      // Absent stays absent — the daemon never fabricates the empty case.
-      expect(await send('nothing addressed')).not.toHaveProperty(
-        'unresolved_references',
-      );
-      // Neither readable answer is a shape mismatch: an absent field is the
-      // CONTRACT's quiet case, so warning on it would train everyone to ignore
-      // the warn that matters.
-      expect(mismatches()).toEqual([]);
-
-      // Unreadable is DROPPED, and the send still succeeds: an unparsable
-      // diagnostic must not fail a message that the backend committed.
-      const skewed = await send('<silverhand://agent/x> hi');
-      expect(skewed).toMatchObject({ ok: true, message_id: 'm3' });
-      expect(skewed).not.toHaveProperty('unresolved_references');
-      // …but it does NOT evaporate: exactly one named warn, so backend/daemon
-      // shape drift is distinguishable from "every reference landed".
-      const mismatch = mismatches();
-      expect(mismatch).toHaveLength(1);
-      expect(mismatch[0]).toMatchObject({
-        kind: 'process',
-        conversationId: 'Conversation0001',
-        agent_id: 'a1',
-      });
-      // Issue SHAPE only (code + path). The offending body is untrusted input:
-      // no handle, no `reason`, nothing from the payload reaches the log.
-      expect(mismatch[0]!['issues']).toEqual([
-        { code: 'invalid_enum_value', path: '0.kind' },
-        { code: 'unrecognized_keys', path: '0' },
-      ]);
-      expect(JSON.stringify(mismatch[0])).not.toContain('robot');
-      // `unrecognized_keys` names the offending key in zod's own issue object;
-      // mapping to code+path is what keeps it out of the log.
-      expect(JSON.stringify(mismatch[0])).not.toContain('reason');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('owes the main boundary a mixed wake observed, and none an observe-only thread wake left', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(parsedBody);
-        return new Response(
-          JSON.stringify({
-            message_id: `m${60 + postedBodies.length}`,
-            message_seq: 60 + postedBodies.length,
-            ...landedStream(parsedBody['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [50, 51],
-        kind: 'message',
-        text: 'mixed main + thread turn batch',
-        delivered_up_to_seq: 51,
-        deliveries: [
-          {
-            delivery_id: 50,
-            message_id: 'MessageMain00001',
-            seq: 50,
-            thread_root_id: null,
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-          {
-            delivery_id: 51,
-            message_id: 'm51',
-            seq: 51,
-            thread_root_id: 'MessageRoot00001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-
-      await waitForDeliveryConsumed(events, 51);
-      await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'addressed at the main line after a mixed batch',
-      });
-      // The batch reached seq 51, but its MAIN member stopped at 50 — the
-      // boundary is per stream, so the addressed main line CASes against 50 and
-      // the thread member contributes nothing to it.
-      expect(postedBodies[0]?.['target']).toBe('#conv:Conversation0001');
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(50);
-
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-      postedBodies.length = 0;
-
-      await supervisor.start(baseStartParams);
-      await waitFor(
-        () =>
-          events.filter(
-            e => e.event === 'runtime_output' && e.chunk.includes('READY'),
-          ).length >= 2,
-      );
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [52],
-        kind: 'message',
-        text: 'observe-only thread batch',
-        delivered_up_to_seq: 52,
-        deliveries: [
-          {
-            delivery_id: 52,
-            message_id: 'm52',
-            seq: 52,
-            thread_root_id: 'MessageRoot00001',
-            delivery_kind: 'observe',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-
-      await waitForDeliveryConsumed(events, 52);
-      await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'addressed at the main line after an observe-only thread wake',
-      });
-      // A fresh session that only ever observed a thread cluster has NOT seen
-      // main, so no boundary is owed for it — and inventing seen=0 here would
-      // stale the send against every message the channel already holds.
-      expect(postedBodies[0]?.['target']).toBe('#conv:Conversation0001');
-      expect(postedBodies[0]).not.toHaveProperty('asserted_stream');
-      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('keeps the main boundary at its own member when one turn carried two thread streams', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return new Response(
-          JSON.stringify({
-            message_id: 'm83',
-            message_seq: 83,
-            ...landedStream(postedBodies.at(-1)?.['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [80, 81, 82],
-        kind: 'message',
-        text: 'two thread streams plus main',
-        delivered_up_to_seq: 82,
-        deliveries: [
-          {
-            delivery_id: 80,
-            message_id: 'MessageMain00001',
-            seq: 80,
-            thread_root_id: null,
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-          {
-            delivery_id: 81,
-            message_id: 'mA',
-            seq: 81,
-            thread_root_id: 'MessageRootA0001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-          {
-            delivery_id: 82,
-            message_id: 'mB',
-            seq: 82,
-            thread_root_id: 'MessageRootB0001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-
-      await waitForDeliveryConsumed(events, 82);
-      // Three streams in one batch, whose last delivery is seq 82. The addressed
-      // main line still CASes against ITS member (80): a per-batch watermark
-      // would claim the agent had seen two thread messages it never saw.
-      const result = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'addressed at the main line after a three-stream batch',
-      });
-
-      expect(result).toMatchObject({ ok: true, message_id: 'm83' });
-      expect(postedBodies).toHaveLength(1);
-      expect(postedBodies[0]?.['target']).toBe('#conv:Conversation0001');
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(80);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('keeps main and thread observed boundaries independent and CASes against the addressed one', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    let nextSeq = 51;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const parsedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(parsedBody);
-        const seq = nextSeq++;
-        return new Response(
-          JSON.stringify({
-            message_id: `m${seq}`,
-            message_seq: seq,
-            ...landedStream(parsedBody['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      // A main-line delivery (the root @ seq 50) — advances observed[main] and
-      // makes "that root's cluster is still empty" an OBSERVED fact, which is
-      // what lets the first reply into it carry seen=0.
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [50],
-        kind: 'message',
-        text: 'root message',
-        delivered_up_to_seq: 50,
-        deliveries: [
-          {
-            delivery_id: 50,
-            message_id: 'MessageRoot00001',
-            seq: 50,
-            thread_root_id: null,
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-
-      await waitForDeliveryConsumed(events, 50);
-      // First reply into the root's cluster: nothing has ever been delivered
-      // from it, and the daemon knows that because it received the root itself.
-      const reply1 = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'first reply',
-        target: '#conv:Conversation0001/thread:MessageRoot00001',
-      });
-      expect(reply1).toMatchObject({ ok: true, message_id: 'm51' });
-      expect(postedBodies[0]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageRoot00001',
-      );
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001/thread:MessageRoot00001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
-
-      // A second message into the SAME cluster. The address is the cluster's
-      // root both times — a reply is not addressed by the message it answers
-      // (that was `reply_to_message_id`, and it made the destination depend on
-      // the backend's canonicalisation). Observed[thread] advanced to 51 by our
-      // own first reply, independent of observed[main]=50.
-      const reply2 = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'second reply',
-        target: '#conv:Conversation0001/thread:MessageRoot00001',
-      });
-      expect(reply2).toMatchObject({ ok: true });
-      expect(postedBodies[1]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageRoot00001',
-      );
-      expect(postedBodies[1]?.['asserted_stream']).toBe('#conv:Conversation0001/thread:MessageRoot00001');
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(51);
-
-      // A main-line send still sees the main boundary (50), untouched by
-      // the thread sends.
-      const mainSend = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'main line',
-      });
-      expect(mainSend).toMatchObject({ ok: true });
-      expect(postedBodies[2]?.['target']).toBe('#conv:Conversation0001');
-      expect(postedBodies[2]?.['asserted_stream']).toBe('#conv:Conversation0001');
-      expect(postedBodies[2]?.['seen_up_to_seq']).toBe(50);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('resolves a delivered reply canonical root so self-authored thread seqs advance the same CAS boundary', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    let threadHead = 507;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-
-        // Stateful backend head: a known-stream send succeeds only at the
-        // exact CAS boundary. An unknown first-touch send omits both fields
-        // and is intentionally allowed, matching Case A loose semantics.
-        if (
-          body['seen_up_to_seq'] !== undefined
-          && body['seen_up_to_seq'] !== threadHead
-        ) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: `stale-${threadHead}`,
-                  seen_up_to_seq: body['seen_up_to_seq'],
-                  current_seq: threadHead,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-
-        threadHead += 1;
-        return new Response(
-          JSON.stringify({
-            message_id: `m${threadHead}`,
-            message_seq: threadHead,
-            ...landedStream(body['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [507],
-        kind: 'message',
-        text: 'reply already in the thread',
-        delivered_up_to_seq: 507,
-        deliveries: [
-          {
-            delivery_id: 507,
-            message_id: 'mReply507',
-            seq: 507,
-            thread_root_id: 'MessageRoot00001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 507);
-
-      // The root did not arrive in this batch, but the delivered reply named it
-      // as its canonical root, so the CLUSTER is an observed stream with a
-      // cursor at 507. The first send addressed at it is therefore protected at
-      // that head, not an unobserved loose send.
-      const first = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'first agent reply',
-        target: '#conv:Conversation0001/thread:MessageRoot00001',
-      });
-      expect(first).toMatchObject({ ok: true, message_id: 'm508' });
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001/thread:MessageRoot00001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(507);
-
-      // A successful protected send advances observed to the sender's own
-      // seq. The sender never receives its own fanout, so this is the only
-      // path that prevents a permanent self-made stale gap.
-      const second = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'second agent reply',
-        target: '#conv:Conversation0001/thread:MessageRoot00001',
-      });
-      expect(second).toMatchObject({ ok: true, message_id: 'm509' });
-      expect(postedBodies[1]?.['asserted_stream']).toBe('#conv:Conversation0001/thread:MessageRoot00001');
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(508);
-      expect(threadHead).toBe(509);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('omits freshness for an unobserved cluster (Case A loose), and a send into it does not make it observed', async () => {
-    const { supervisor } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return new Response(
-          JSON.stringify({
-            message_id: 'm77',
-            message_seq: 77,
-            ...landedStream(postedBodies.at(-1)?.['target']),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      const result = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'reply to a message I never saw',
-        target: '#conv:Conversation0001/thread:MessageGhost0001',
-      });
-      expect(result).toMatchObject({ ok: true, message_id: 'm77' });
-      expect(postedBodies[0]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageGhost0001',
-      );
-      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
-      expect(postedBodies[0]).not.toHaveProperty('asserted_stream');
-
-      // The follow-up is loose TOO, and that is the P4-4 change: having sent
-      // into a cluster proves it EXISTS, never that this session read it. The
-      // pre-P4-4 daemon read its own reply-target mapping as if it were an
-      // observation and asserted seen=0 here — a CAS against "nothing has ever
-      // been said in there", which every non-empty ghost cluster then answered
-      // with a 409 the agent could do nothing about. A boundary is owed only for
-      // a stream this session actually SAW: an observed cursor, or a cluster
-      // whose root was delivered here (which is what makes its emptiness a fact
-      // rather than a guess). This response carries no `stream_head_before`, so
-      // there is no merge prerequisite to converge through either.
-      const followup = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'follow-up reply',
-        target: '#conv:Conversation0001/thread:MessageGhost0001',
-      });
-      expect(followup).toMatchObject({ ok: true });
-      expect(postedBodies[1]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageGhost0001',
-      );
-      expect(postedBodies[1]).not.toHaveProperty('asserted_stream');
-      expect(postedBodies[1]).not.toHaveProperty('seen_up_to_seq');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('#task:1854 falsifier: a loose first-touch thread send merges its own seq once the skipped head is admitted (no permanent self-stale)', async () => {
-    const infoLogs: Array<Record<string, unknown>> = [];
-    const warnLogs: Array<Record<string, unknown>> = [];
-    const logger: DaemonLogger = {
-      ...silentLogger(),
-      info: fields => {
-        if (fields && typeof fields === 'object') {
-          infoLogs.push(fields as Record<string, unknown>);
-        }
-      },
-      warn: fields => {
-        if (fields && typeof fields === 'object') {
-          warnLogs.push(fields as Record<string, unknown>);
-        }
-      },
-    };
-    const { supervisor, events } = makeSupervisor({ logger });
-    const postedBodies: Record<string, unknown>[] = [];
-    // Stateful backend for the `thread:mGhost` stream. A send carrying
-    // stream_key is CAS-gated at the exact head; a loose send (no fields)
-    // skips the CAS and therefore comes back WITH the pre-insert head as the
-    // merge prerequisite — the real backend's `skippedFreshnessReason` rule.
-    let threadHead = 41;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        const skippedCas = body['seen_up_to_seq'] === undefined;
-        if (!skippedCas && body['seen_up_to_seq'] !== threadHead) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: `stale-${threadHead}`,
-                  seen_up_to_seq: body['seen_up_to_seq'],
-                  current_seq: threadHead,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        const headBefore = threadHead;
-        threadHead += 1;
-        return new Response(
-          JSON.stringify({
-            message_id: `m${threadHead}`,
-            message_seq: threadHead,
-            ...landedStream(body['target']),
-            ...(skippedCas ? { stream_head_before: headBefore } : {}),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-
-      // First touch of a cluster this daemon has never observed: loose send,
-      // no CAS, own seq 42 filed against the skipped head 41.
-      const loose = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'first touch of an unseen cluster',
-        target: '#conv:Conversation0001/thread:MessageGhost0001',
-      });
-      expect(loose).toMatchObject({ ok: true, message_id: 'm42' });
-      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
-      expect(postedBodies[0]).not.toHaveProperty('asserted_stream');
-
-      // Arm 1 — no swallow: the own seq does NOT jump observed on its own.
-      // Nothing has been observed in this cluster yet, so the queued merge
-      // waits for real admission evidence covering head 41.
-      //
-      // Arm 2 — no permanent hole: the sender is excluded from its own
-      // fan-out, so seq 42 never arrives by inbox. When seq 41 is admitted,
-      // observed must converge THROUGH the prerequisite to 42; pre-fix it
-      // stalled at 41 with head 42 and every later send in this cluster 409'd
-      // against the sender's own message, forever.
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [41],
-        kind: 'message',
-        text: 'the reply we had skipped past',
-        delivered_up_to_seq: 41,
-        deliveries: [
-          {
-            delivery_id: 41,
-            message_id: 'mReply41',
-            seq: 41,
-            thread_root_id: 'MessageGhost0001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 41);
-
-      // #task:1993: both the admitted prerequisite (41) and the own-seq
-      // convergence (42) are successful cursor progress, not an operator
-      // warning. Keep the structured events, but only on the info lane.
-      await waitFor(() =>
-        infoLogs.some(
-          l =>
-            l['action'] === 'freshness_observed_seq_advanced' &&
-            l['source'] === 'skipped_cas_own_seq_merged' &&
-            l['observed_seq'] === 42,
-        ),
-      );
-      expect(
-        infoLogs.some(
-          l =>
-            l['action'] === 'freshness_observed_seq_advanced' &&
-            l['source'] === 'startup_delivery_admitted' &&
-            l['observed_seq'] === 41,
-        ),
-      ).toBe(true);
-      expect(
-        warnLogs.some(l => l['action'] === 'freshness_observed_seq_advanced'),
-      ).toBe(false);
-
-      const converged = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'second reply in the same cluster',
-        target: '#conv:Conversation0001/thread:MessageGhost0001',
-      });
-      expect(converged).toMatchObject({ ok: true, message_id: 'm43' });
-      expect(postedBodies[1]?.['asserted_stream']).toBe('#conv:Conversation0001/thread:MessageGhost0001');
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(42);
-      expect(threadHead).toBe(43);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('#task:1854 falsifier: a first main-line send before any delivery merges its own seq once the skipped head is admitted', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    let mainHead = 9;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        const skippedCas = body['seen_up_to_seq'] === undefined;
-        if (!skippedCas && body['seen_up_to_seq'] !== mainHead) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: `stale-${mainHead}`,
-                  seen_up_to_seq: body['seen_up_to_seq'],
-                  current_seq: mainHead,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        const headBefore = mainHead;
-        mainHead += 1;
-        return new Response(
-          JSON.stringify({
-            message_id: `m${mainHead}`,
-            message_seq: mainHead,
-            ...landedStream(body['target']),
-            ...(skippedCas ? { stream_head_before: headBefore } : {}),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-
-      // An agent that speaks before it has read anything (schedule fire,
-      // self-init) has never observed `main`, so this is the main-line shape
-      // of the same first touch: loose send, own seq 10 against head 9.
-      const loose = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'first thing I ever say',
-      });
-      expect(loose).toMatchObject({ ok: true, message_id: 'm10' });
-      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
-      expect(postedBodies[0]).not.toHaveProperty('asserted_stream');
-
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [9],
-        kind: 'message',
-        text: 'main-line history we had skipped past',
-        delivered_up_to_seq: 9,
-        deliveries: [
-          {
-            delivery_id: 9,
-            message_id: 'mMain9',
-            seq: 9,
-            thread_root_id: null,
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 9);
-
-      const converged = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'second thing I say',
-      });
-      expect(converged).toMatchObject({ ok: true, message_id: 'm11' });
-      expect(postedBodies[1]?.['asserted_stream']).toBe('#conv:Conversation0001');
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(10);
-      expect(mainHead).toBe(11);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('#task:1854 boundary: a mid-turn delivery neither raises observed nor merges the own seq; the next turn boundary does both', async () => {
-    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits');
-    const { supervisor, events } = makeSupervisorWithDriver(driver);
-    const postedBodies: Record<string, unknown>[] = [];
-    let threadHead = 41;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        const skippedCas = body['seen_up_to_seq'] === undefined;
-        if (!skippedCas && body['seen_up_to_seq'] !== threadHead) {
-          return new Response(
-            JSON.stringify({
-              error: {
-                code: 'conflict',
-                message: 'message stale',
-                details: {
-                  subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
-                  stale_event_id: `stale-${threadHead}`,
-                  seen_up_to_seq: body['seen_up_to_seq'],
-                  current_seq: threadHead,
-                  newer_messages: [],
-                },
-              },
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        const headBefore = threadHead;
-        threadHead += 1;
-        return new Response(
-          JSON.stringify({
-            message_id: `m${threadHead}`,
-            message_seq: threadHead,
-            ...landedStream(body['target']),
-            ...(skippedCas ? { stream_head_before: headBefore } : {}),
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      await waitForRuntimeReady(events);
-      // A main-line delivery makes the turn active without touching the
-      // cluster under test, so the cluster's own evidence lands mid-turn.
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [5],
-        kind: 'message',
-        text: 'unrelated main-line message',
-        delivered_up_to_seq: 5,
-        deliveries: [
-          {
-            delivery_id: 5,
-            message_id: 'mMain5',
-            seq: 5,
-            thread_root_id: null,
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 5);
-
-      const loose = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'first touch of an unseen cluster',
-        target: '#conv:Conversation0001/thread:MessageGhost0001',
-      });
-      expect(loose).toMatchObject({ ok: true, message_id: 'm42' });
-
-      // Evidence for head 41 arrives MID-TURN → pending admission only
-      // (#1471). It must not raise observed, and it must not satisfy the
-      // merge prerequisite: a pending seq is not yet precedent context for
-      // anything the model does in this turn (Cindy).
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [41],
-        kind: 'message',
-        text: 'the reply we had skipped past',
-        delivered_up_to_seq: 41,
-        deliveries: [
-          {
-            delivery_id: 41,
-            message_id: 'mReply41',
-            seq: 41,
-            thread_root_id: 'MessageGhost0001',
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitForDeliveryConsumed(events, 41);
-
-      // Still loose, and that is the point being pinned twice over. The
-      // cluster is not a stream this session SAW: a mid-turn delivery is a
-      // pending admission, not an observed cursor, and it named the cluster
-      // through a REPLY (`mReply41`), never through the root — so there is no
-      // `R -> thread:R` custody either. And having sent into it earlier proves
-      // only that it exists. What must never happen is the daemon declaring a
-      // boundary off pending state: neither 41 (pending is not observed) nor
-      // 42 (no merge off a pending seq).
-      const midTurn = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'mid-turn reply',
-        target: '#conv:Conversation0001/thread:MessageGhost0001',
-      });
-      expect(midTurn).toMatchObject({ ok: true, message_id: 'm43' });
-      expect(postedBodies[1]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageGhost0001',
-      );
-      expect(postedBodies[1]).not.toHaveProperty('asserted_stream');
-      expect(postedBodies[1]).not.toHaveProperty('seen_up_to_seq');
-
-      // Cross the turn boundary: pending promotes to observed 41, which
-      // covers the first send's prerequisite, which merges its own seq 42 —
-      // and 42 in turn covers the mid-turn send's prerequisite, merging 43.
-      // The same convergence as the falsifier above, one boundary later and
-      // chained through both skipped heads. Seq-less tick deliveries flush the
-      // preset parse events without touching observed themselves.
-      setNextParse([{ kind: 'turn_end' }]);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [90], kind: 'message',
-        text: 'tick1', spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitFor(() =>
-        events.some(
-          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end',
-        ),
-      );
-      setNextParse([{ kind: 'thinking', text: 'new turn' }]);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [91], kind: 'message',
-        text: 'tick2', spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-      await waitFor(() =>
-        events.some(
-          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'thinking',
-        ),
-      );
-
-      const converged = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'post-boundary reply',
-        target: '#conv:Conversation0001/thread:MessageGhost0001',
-      });
-      expect(converged).toMatchObject({ ok: true, message_id: 'm44' });
-      expect(
-        postedBodies[postedBodies.length - 1]?.['asserted_stream'],
-      ).toBe('#conv:Conversation0001/thread:MessageGhost0001');
-      expect(
-        postedBodies[postedBodies.length - 1]?.['seen_up_to_seq'],
-      ).toBe(43);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  // #task:1854 review (Cindy MUST FIX, Norman reachability): `prereq = 0` is
-  // the COMMON first touch, not an edge case — `streamHeadLatestSeq` returns 0
-  // when no head row exists yet, i.e. whenever the agent is the first replier
-  // in a cluster (or the first speaker in a channel). Reading "no cursor" as
-  // "covers nothing" parked that merge forever, so the send that succeeded
-  // still self-staled on its own head with no later delivery able to help.
-  // Both arms therefore assert convergence WITHOUT any delivery at all. The
-  // `prereq > 0` counterpart (still blocked until real evidence arrives) is
-  // covered by the two falsifiers above.
-  for (const arm of [
-    {
-      label: 'an empty thread cluster',
-      assertedStream: '#conv:Conversation0001/thread:MessageRoot00001',
-      target: '#conv:Conversation0001/thread:MessageRoot00001',
-    },
-    {
-      label: 'an empty main line',
-      assertedStream: '#conv:Conversation0001',
-      target: '#conv:Conversation0001',
-    },
-  ]) {
-    it(`#task:1854 falsifier: a first touch of ${arm.label} (head 0) merges its own seq immediately, with no later delivery`, async () => {
-      const { supervisor, events } = makeSupervisor();
-      const postedBodies: Record<string, unknown>[] = [];
-      let head = 0;
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (_url: string, init?: RequestInit) => {
-          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-          postedBodies.push(body);
-          const skippedCas = body['seen_up_to_seq'] === undefined;
-          if (!skippedCas && body['seen_up_to_seq'] !== head) {
-            return new Response(
-              JSON.stringify({
-                error: {
-                  code: 'conflict',
-                  message: 'message stale',
-                  details: {
-                    subkind: 'message_stale',
-                    conversation_id: 'Conversation0001',
-                    stale_event_id: `stale-${head}`,
-                    seen_up_to_seq: body['seen_up_to_seq'],
-                    current_seq: head,
-                    newer_messages: [],
-                  },
-                },
-              }),
-              { status: 409, headers: { 'content-type': 'application/json' } },
-            );
-          }
-          // Empty stream: the head BEFORE the insert is 0 — the backend's proof
-          // that there was nothing to cover.
-          const headBefore = head;
-          head += 1;
-          return new Response(
-            JSON.stringify({
-              message_id: `m${head}`,
-              message_seq: head,
-              ...landedStream(body['target']),
-              ...(skippedCas ? { stream_head_before: headBefore } : {}),
-            }),
-            { status: 200, headers: { 'content-type': 'application/json' } },
-          );
-        }),
-      );
-      try {
-        await supervisor.start(baseStartParams);
-        await waitForRuntimeReady(events);
-
-        const first = await supervisor.agentMessageSend({
-          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-          agent_id: 'a1',
-          content: 'first message in an empty stream',
-          target: arm.target,
-        });
-        expect(first).toMatchObject({ ok: true, message_id: 'm1' });
-        expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
-        expect(postedBodies[0]).not.toHaveProperty('asserted_stream');
-
-        // prereq 0 is satisfied the moment it is queued: nothing precedes our
-        // own message, so the watermark is our own seq — no swallow, and no
-        // dependency on anyone else ever speaking in this stream.
-        const second = await supervisor.agentMessageSend({
-          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-          agent_id: 'a1',
-          content: 'second message in the same stream',
-          target: arm.target,
-        });
-        expect(second).toMatchObject({ ok: true, message_id: 'm2' });
-        expect(postedBodies[1]?.['asserted_stream']).toBe(arm.assertedStream);
-        expect(postedBodies[1]?.['seen_up_to_seq']).toBe(1);
-        expect(head).toBe(2);
-      } finally {
-        vi.unstubAllGlobals();
-        await supervisor.stop({
-          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-          runtime_generation: 1, mode: 'hard',
-        }).catch(() => undefined);
-      }
-    });
-  }
-
-  it('records a pulled cluster boundary (agent_stream_observed) so a later reply-to carries seen=maxSeq', async () => {
-    const { supervisor } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        return new Response(
-          JSON.stringify({ message_id: 'm99', message_seq: 99, ...landedStream(body['target']) }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      // The agent ran `history --target thread:mRoot` over plain HTTP (the
-      // daemon never saw it) and the CLI fired this intent: replies up to
-      // seq 60 were observed; root + reply ids surfaced.
-      const observed = await supervisor.agentStreamObserved({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        stream_conversation_id: 'Conversation0001',
-        agent_id: 'a1',
-        thread_root_id: 'MessageRoot00001',
-        observed_seq: 60,
-      });
-      expect(observed).toEqual({ ok: true });
-
-      // Reply to the root → known cluster, seen = the pulled max.
-      const reply = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'late reply after reading',
-        target: '#conv:Conversation0001/thread:MessageRoot00001',
-      });
-      expect(reply).toMatchObject({ ok: true });
-      expect(postedBodies[0]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageRoot00001',
-      );
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001/thread:MessageRoot00001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(60);
-
-      // Falsifier for the mapping P4-4 deleted: a MID-CLUSTER id in the thread
-      // suffix is not another spelling of this cluster. The daemon forwards the
-      // address verbatim and keys nothing off it — borrowing the root's cursor
-      // here would be this process second-guessing the resolver, and the pulled
-      // boundary (60) would be asserted for a stream nobody resolved.
-      await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'addressed at a reply, not at the cluster root',
-        target: '#conv:Conversation0001/thread:MessageReply0060',
-      });
-      expect(postedBodies[1]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageReply0060',
-      );
-      expect(postedBodies[1]).not.toHaveProperty('asserted_stream');
-      expect(postedBodies[1]).not.toHaveProperty('seen_up_to_seq');
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('makes a reply-to-root known with seen=0 after observing a cluster that has no replies', async () => {
-    const { supervisor } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        return new Response(
-          JSON.stringify({ message_id: 'm12', message_seq: 12, ...landedStream(body['target']) }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      // Pulled a cluster with only the root (no replies yet): observed_seq 0,
-      // root id surfaced.
-      const observed = await supervisor.agentStreamObserved({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        stream_conversation_id: 'Conversation0001',
-        agent_id: 'a1',
-        thread_root_id: 'MessageLone00001',
-        observed_seq: 0,
-      });
-      expect(observed).toEqual({ ok: true });
-
-      // First reply to the root: known stream (the mapping made it known) and
-      // seen 0 (no replies were observed) — exactly the freshness the backend
-      // CAS expects for a thread's first reply.
-      const reply = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        agent_id: 'a1',
-        content: 'first reply to a freshly read root',
-        target: '#conv:Conversation0001/thread:MessageLone00001',
-      });
-      expect(reply).toMatchObject({ ok: true });
-      expect(postedBodies[0]?.['target']).toBe(
-        '#conv:Conversation0001/thread:MessageLone00001',
-      );
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001/thread:MessageLone00001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(0);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
-  it('does not advance the main observed boundary when a thread cluster is pulled', async () => {
-    const { supervisor, events } = makeSupervisor();
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        postedBodies.push(body);
-        return new Response(
-          JSON.stringify({ message_id: 'm51', message_seq: 51, ...landedStream(body['target']) }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
-      }),
-    );
-    try {
-      await supervisor.start(baseStartParams);
-      // A main-line delivery advances observed[main] = 50.
-      await waitForRuntimeReady(events);
-      await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [50],
-        kind: 'message',
-        text: 'main message',
-        delivered_up_to_seq: 50,
-        deliveries: [
-          {
-            delivery_id: 50,
-            message_id: 'MessageMain00001',
-            seq: 50,
-            thread_root_id: null,
-            delivery_kind: 'turn',
-            presentation: testDeliveryPresentation('delivery-text'),
-          },
-        ],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
-
-      await waitForDeliveryConsumed(events, 50);
-      // Pulling a thread cluster up to seq 80 must touch ONLY thread:mRoot —
-      // never main (the pull saw one root, not the whole main prefix to 80).
-      await supervisor.agentStreamObserved({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        stream_conversation_id: 'Conversation0001',
-        agent_id: 'a1',
-        thread_root_id: 'MessageRoot00001',
-        observed_seq: 80,
-      });
-
-      const mainSend = await supervisor.agentMessageSend({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
-        target: '#conv:Conversation0001',
-        agent_id: 'a1',
-        content: 'main line send',
-      });
-      expect(mainSend).toMatchObject({ ok: true });
-      expect(postedBodies[0]?.['asserted_stream']).toBe('#conv:Conversation0001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(50);
-    } finally {
-      vi.unstubAllGlobals();
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
-    }
-  });
-
+describe('Supervisor — runtime_deliver metadata validation', () => {
   it('hard-rejects a deliver whose deliveries[] id-set does not match delivery_ids', async () => {
     const { supervisor } = makeSupervisor();
     try {
@@ -6742,14 +4024,10 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
           delivery_ids: [1, 2],
           kind: 'message',
           text: 'mismatched batch',
-          delivered_up_to_seq: 2,
           deliveries: [
             {
               delivery_id: 1,
-              message_id: 'm1',
               seq: 1,
-              thread_root_id: null,
-              delivery_kind: 'turn',
               presentation: testDeliveryPresentation('delivery-text'),
             },
           ],
@@ -6778,6 +4056,10 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       delivery_ids: [7, 8],
       kind: 'message',
       text: 'boot via deliver',
+      deliveries: [
+        { delivery_id: 7, seq: 7, presentation: testDeliveryPresentation('boot via deliver') },
+        { delivery_id: 8, seq: 8, presentation: testDeliveryPresentation('boot via deliver') },
+      ],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(res.disposition).toBe('spawning');
@@ -6826,6 +4108,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       delivery_ids: [42],
       kind: 'message',
       text: 'live deliver',
+      deliveries: [{ delivery_id: 42, seq: 42, presentation: testDeliveryPresentation('live deliver') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(res.disposition).toBe('admitted');
@@ -6901,13 +4184,9 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
           presentations,
           'silverhand message send',
         ),
-        delivered_up_to_seq: Math.max(...ids),
         deliveries: ids.map((id, index) => ({
           delivery_id: id,
-          message_id: `m${id}`,
           seq: id,
-          thread_root_id: null,
-          delivery_kind: 'turn' as const,
           presentation: presentations[index]!,
         })),
         spawn_options: baseStartParams.options,
@@ -7053,6 +4332,10 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       delivery_ids: [1, 2],
       kind: 'message',
       text: 'boot',
+      deliveries: [
+        { delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('boot') },
+        { delivery_id: 2, seq: 2, presentation: testDeliveryPresentation('boot') },
+      ],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     const res = await supervisor.deliver({
@@ -7063,6 +4346,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       delivery_ids: [99],
       kind: 'message',
       text: 'race',
+      deliveries: [{ delivery_id: 99, seq: 99, presentation: testDeliveryPresentation('race') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(res).toEqual({ disposition: 'refused', reason: 'startup_pending' });
@@ -7125,6 +4409,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       delivery_ids: [5],
       kind: 'message',
       text: 'during drain',
+      deliveries: [{ delivery_id: 5, seq: 5, presentation: testDeliveryPresentation('during drain') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(res).toEqual({ disposition: 'refused', reason: 'draining' });
@@ -7174,6 +4459,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       delivery_ids: [77],
       kind: 'message',
       text: 'to a live oneShot',
+      deliveries: [{ delivery_id: 77, seq: 77, presentation: testDeliveryPresentation('to a live oneShot') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
 
@@ -7322,6 +4608,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
           delivery_ids: ids,
           kind: 'message',
           text: `msg-${ids.join('_')}`,
+          deliveries: ids.map(id => ({ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`msg-${ids.join('_')}`) })),
           spawn_options: opts.startOptions ?? baseStartParams.options,
         },
         { owner },
@@ -7362,15 +4649,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         target: { conversation_id: 'Conversation0001', workspace: null },
         agent_id: 'a1',
         delivery_ids: [...ids],
-        delivered_up_to_seq: Math.max(...ids),
         kind: 'message' as const,
         text: canonical,
         deliveries: ids.map((id, index) => ({
           delivery_id: id,
-          message_id: index === 0 ? 'mA' : 'mB',
           seq: id,
-          thread_root_id: null,
-          delivery_kind: 'turn' as const,
           presentation: presentations[index]!,
         })),
         spawn_options: baseStartParams.options,
@@ -7464,7 +4747,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     },
   );
 
-  it('opaque strict-subset retry fails before owner mutation; original-owner cleanup is total and leaves no orphan', async () => {
+  it('#task:2106 strict-subset rebind is now admitted (per-id metadata always present): owner cleanup splits the group — rebound id delivers under the new owner, the dropped owner’s remaining id is discarded for re-drive, nothing is orphaned or double-consumed', async () => {
     const h = makeDriven('direct');
     try {
       expect((await h.deliver([1])).disposition).toBe('spawning');
@@ -7473,30 +4756,35 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       h.stub.parkWrites = true;
       expect((await h.deliver([90], 'owner-1')).disposition).toBe('admitted');
       expect((await h.deliver([100, 101], 'owner-1')).disposition).toBe('deferred');
-      const writesBeforeRetry = h.stub.written.length;
+      const writesBeforeRebind = h.stub.written.length;
 
-      await expect(h.deliver([100], 'owner-2')).rejects.toThrow(
-        /cannot rebind a strict subset of an opaque presentation group/,
-      );
-      expect(h.stub.written).toHaveLength(writesBeforeRetry);
+      // #task:2106 deleted the "opaque presentation group" concept: every
+      // deferred entry now carries per-delivery metadata, so a strict subset of
+      // a deferred group CAN be rebound to a new owner (id 100 moves to owner-2
+      // while 101 stays with owner-1). No throw, no write — the group is still
+      // deferred, only its per-id ownership changed.
+      expect((await h.deliver([100], 'owner-2')).disposition).toBe('deferred');
+      expect(h.stub.written).toHaveLength(writesBeforeRebind);
 
-      // Because the rejected retry changed no per-id owner, cleanup of the
-      // original owner removes the complete opaque group without splitting.
+      // owner-1 drops: cleanup SPLITS the group by id (the per-id metadata makes
+      // the subset takeable). owner-1's still-owned id (101) is discarded — it
+      // rolls back to backend-pending for a fresh re-drive; the rebound id (100)
+      // is retained in daemon custody under owner-2.
       expect(() => h.supervisor.cleanupDeferredForOwner('owner-1')).not.toThrow();
+
       h.stub.parkWrites = false;
       h.stub.resolveParkedWrite();
       await waitForDeliveryConsumed(h.events, 90);
-      await wait(30);
-      expect(h.stub.written).toHaveLength(writesBeforeRetry);
-      expect(h.consumedFor(100)).toHaveLength(0);
-      expect(h.consumedFor(101)).toHaveLength(0);
-
-      // The ids are not orphaned in daemon custody: the new owner can submit
-      // the original atomic group and it is admitted exactly once.
-      expect((await h.deliver([100, 101], 'owner-2')).disposition).toBe('admitted');
+      // The retained subset flushes under owner-2 exactly once, as its own
+      // atomic group [100] — not fused back with the discarded 101.
       await waitForDeliveryConsumed(h.events, 100);
+      await wait(30);
+
+      expect(h.consumedFor(90)).toHaveLength(1);
       expect(h.consumedFor(100)).toHaveLength(1);
-      expect(h.consumedFor(101)).toHaveLength(1);
+      // 101 belonged to the dropped owner-1 and was discarded on its cleanup —
+      // it is never consumed here (the backend re-drives it as a fresh row).
+      expect(h.consumedFor(101)).toHaveLength(0);
     } finally {
       await h.supervisor.stop({
         runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
@@ -7521,11 +4809,10 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       conversation_id: 'Conversation0001',
       target: {
         conversation_id: 'Conversation0001',
-        workspace: { id: 'ws1', name: 'test-workspace', kind: 'regular' as const },
+        workspace: { id: 'ws1', name: 'test-workspace' },
       },
       agent_id: 'a1',
       delivery_ids: [...ids],
-      delivered_up_to_seq: Math.max(...ids),
       kind: 'message' as const,
       text: composeRuntimeDeliveryPresentation(
         ids.map(id => presentations[id === 10 ? 0 : 1]!),
@@ -7533,10 +4820,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       ),
       deliveries: ids.map(id => ({
         delivery_id: id,
-        message_id: `m${id}`,
         seq: id,
-        thread_root_id: null,
-        delivery_kind: 'turn' as const,
         presentation: presentations[id === 10 ? 0 : 1]!,
       })),
       spawn_options: startOptions,
@@ -7567,19 +4851,12 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       h.drive([{ kind: 'turn_end' }]);
       await waitFor(() => h.stub.written.length === before + 1);
       const text = decoded(h.stub.written.at(-1)!);
-      // The banner is asserted through its own formatter (#task:2021 P4-4), which
-      // is also what the platform prompt teaches an AgentSlot to read — a
-      // hand-typed literal here would be a third spelling free to drift from both.
-      expect(text).toContain(
-        formatAgentRuntimeScopeBanner(
-          join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
-        ),
-      );
-      expect(text).toContain(
-        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
-      );
       expect(text).toContain('msg-10');
       expect(text).not.toContain('msg-11');
+      expect(text).not.toMatch(/runtime_scope|workdir=/u);
+      expect(text).not.toContain(
+        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
+      );
       await waitForDeliveryConsumed(h.events, 10);
       expect(h.consumedFor(11)).toHaveLength(0);
     } finally {
@@ -7591,7 +4868,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     }
   });
 
-  it('AgentSlot keeps one process while each origin gets its own absolute action workdir', async () => {
+  it('AgentSlot keeps one process across origins without exposing runtime scope or directory coordinates', async () => {
     ensureSupervisorBundle('a1', 'ws2');
     const startOptions = testStartOptions({
       agentId: 'a1',
@@ -7602,7 +4879,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       (JSON.parse(line) as { message: { content: string } }).message.content;
     const deliver = (
       conversationId: string,
-      workspace: { id: string; name: string; kind: 'regular' } | null,
+      workspace: { id: string; name: string } | null,
       id: number,
     ) => h.supervisor.deliver({
       runtime_generation: 1,
@@ -7612,12 +4889,13 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       delivery_ids: [id],
       kind: 'message',
       text: `origin-${conversationId}`,
+      deliveries: [{ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`origin-${conversationId}`) }],
       spawn_options: startOptions,
     }, { owner: 'owner-A' });
     try {
       const fromA = await deliver(
         'Conversation0001',
-        { id: 'ws1', name: 'one', kind: 'regular' },
+        { id: 'ws1', name: 'one' },
         1,
       );
       expect(fromA.disposition).toBe('spawning');
@@ -7637,7 +4915,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       const focusBoundary = h.events.length;
       const fromB = await deliver(
         'Conversation0002',
-        { id: 'ws2', name: 'two', kind: 'regular' },
+        { id: 'ws2', name: 'two' },
         2,
       );
       expect(fromB.disposition).toBe('admitted');
@@ -7668,7 +4946,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // here the host proves that A → B → DM → A remains one vendor process.
       const backToA = await deliver(
         'Conversation0001',
-        { id: 'ws1', name: 'one', kind: 'regular' },
+        { id: 'ws1', name: 'one' },
         4,
       );
       expect(backToA.disposition).toBe('admitted');
@@ -7684,23 +4962,10 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         && event.parsed.kind === 'session_init'
       )).toHaveLength(1);
       const visible = h.stub.written.map(decoded);
-      expect(visible[0]).toContain(formatAgentRuntimeScopeBanner(
-        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
-      ));
-      expect(visible[1]).toContain(formatAgentRuntimeScopeBanner(
-        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws2'),
-      ));
-      expect(visible[2]).toContain(formatAgentRuntimeScopeBanner(
-        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'conversations', 'Conversation0003'),
-      ));
-      expect(visible[3]).toContain(formatAgentRuntimeScopeBanner(
-        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
-      ));
       for (const text of visible) expect(text).not.toContain('target=');
       for (const text of visible) {
-        expect(text).not.toContain(
-          `workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1'))}]`,
-        );
+        expect(text).not.toMatch(/runtime_scope|workdir=/u);
+        expect(text).not.toContain(SUPERVISOR_AGENTS_ROOT);
       }
     } finally {
       await h.supervisor.stop({
@@ -7711,7 +4976,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     }
   });
 
-  it('AgentSlot keeps stale custody independent for every origin conversation', async () => {
+  it('F18: one pendingStaleEvent per runtime — a second 409 supersedes the first; the two outcomes (superseded-with-live-id vs true no_pending) are pinned on both surfaces', async () => {
     const startOptions = testStartOptions({
       agentId: 'a1',
       sessionScope: 'agent',
@@ -7745,11 +5010,8 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
             message: 'message stale',
             details: {
               subkind: 'message_stale',
-              conversation_id: conversationId,
               stale_event_id: `stale-${conversationId}`,
-              stream_key: 'main',
-              seen_up_to_seq: 1,
-              current_seq: 2,
+              target_conversation_id: conversationId,
             },
           },
         }), {
@@ -7788,38 +5050,68 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       expect((await h.deliver([1])).disposition).toBe('spawning');
       await waitForDeliveryConsumed(h.events, 1);
 
+      // Arm A, then B. There is exactly ONE pendingStaleEvent per runtime, so
+      // B's 409 OVERWRITES A's — A's stale_event_id is no longer live. (The
+      // retired model kept a per-origin stale event; F18 collapses it.)
       expect(await send('Conversation0001', 'arm A')).toMatchObject({ ok: false, status: 409 });
       expect(await send('Conversation0002', 'arm B')).toMatchObject({ ok: false, status: 409 });
-      expect((await receive('stale-missing', 'control:missing')).outcome)
-        .toBe('no_pending_stale');
-      expect((await receive('stale-Conversation0002', 'control:B')).outcome)
-        .toBe('timeout');
 
+      // ── stale-receive surface ──
+      // A never-armed id AND the just-overwritten A id resolve the SAME way:
+      // `stale_event_superseded` carrying the LIVE id (the only thing the agent
+      // can act on) — NOT a false `no_pending_stale`. That both collapse to the
+      // live id is the proof A was superseded, not independently retained.
+      expect(await receive('stale-missing', 'control:missing')).toMatchObject({
+        ok: true,
+        outcome: 'stale_event_superseded',
+        current_stale_event_id: 'stale-Conversation0002',
+      });
+      expect(await receive('stale-Conversation0001', 'control:A-gone')).toMatchObject({
+        ok: true,
+        outcome: 'stale_event_superseded',
+        current_stale_event_id: 'stale-Conversation0002',
+      });
+
+      // ── stale-resolve surface (symmetric) ──
+      // A mismatched id supersedes here too, echoing the live id.
+      expect(await h.supervisor.agentStaleResolve({
+        runtime_scope: { kind: 'agent' },
+        agent_id: 'a1',
+        stale_event_id: 'stale-Conversation0001',
+        resolution_reason: 'obsolete',
+      })).toEqual({
+        ok: true,
+        resolved: false,
+        reason: 'stale_event_superseded',
+        current_stale_event_id: 'stale-Conversation0002',
+      });
+
+      // Resolve the LIVE id → resolved, POSTing the backend-resolved target
+      // conversation VERBATIM as the authz subject (F17), then clearing the
+      // single held event.
       expect(await h.supervisor.agentStaleResolve({
         runtime_scope: { kind: 'agent' },
         agent_id: 'a1',
         stale_event_id: 'stale-Conversation0002',
         resolution_reason: 'obsolete',
       })).toEqual({ ok: true, resolved: true });
-      expect((await receive('stale-Conversation0002', 'control:B-resolved')).outcome)
-        .toBe('no_pending_stale');
-      expect((await receive('stale-Conversation0001', 'control:A-remains')).outcome)
-        .toBe('timeout');
-      expect(await send('Conversation0001', 'A survives B resolve')).toMatchObject({
-        ok: false,
-        status: 409,
+      expect(posted.get('Conversation0002')?.at(-1)).toMatchObject({
+        conversation_id: 'Conversation0002',
+        stale_event_id: 'stale-Conversation0002',
+        resolution_reason: 'obsolete',
       });
-      expect(posted.get('Conversation0001')?.at(-1)?.['stale_event_id']).toBe('stale-Conversation0001');
 
-      // Re-arm B, then let A succeed. Success for A must not clear B.
-      expect(await send('Conversation0002', 're-arm B')).toMatchObject({ ok: false, status: 409 });
-      responses.set('Conversation0001', 'ok');
-      expect(await send('Conversation0001', 'commit A')).toMatchObject({ ok: true });
-      expect(await send('Conversation0002', 'B survives A success')).toMatchObject({
-        ok: false,
-        status: 409,
-      });
-      expect(posted.get('Conversation0002')?.at(-1)?.['stale_event_id']).toBe('stale-Conversation0002');
+      // ── the OTHER outcome: pendingStaleEvent === null → true absence ──
+      // receive reports `no_pending_stale`; resolve reports the (distinctly
+      // named) `no_pending_stale_event`. Neither carries a live id.
+      expect((await receive('stale-Conversation0002', 'control:cleared')).outcome)
+        .toBe('no_pending_stale');
+      expect(await h.supervisor.agentStaleResolve({
+        runtime_scope: { kind: 'agent' },
+        agent_id: 'a1',
+        stale_event_id: 'stale-anything',
+        resolution_reason: 'obsolete',
+      })).toEqual({ ok: true, resolved: false, reason: 'no_pending_stale_event' });
     } finally {
       vi.unstubAllGlobals();
       await h.supervisor.stop({
@@ -7830,75 +5122,183 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     }
   });
 
-  // Falsifier for the two-coordinate split (#task:2021 P4-4): an AgentSlot's
-  // observed boundaries are keyed by conversation, and a send keys by the
-  // ADDRESS's conversation — so a pull must be filed under the stream it read,
-  // not merely under runtime custody. While `agent_stream_observed` carried
-  // one `conversation_id` for both jobs, every cross-conversation
-  // read-then-reply from an AgentSlot filed the boundary where no send would
-  // look and silently degraded to a loose first touch.
-  it('AgentSlot files a pulled cluster under the stream it read', async () => {
-    const startOptions = testStartOptions({ agentId: 'a1', sessionScope: 'agent' });
+  // #task:2099: `runtime_message_stale` is the ONE authoritative "a send of mine
+  // was refused as stale" fact. It rides the SAME gate as arming
+  // (`extractStaleConflict`), so the emit arms and the fail-closed arms are the
+  // same partition — that is what makes it a fact axis rather than a second,
+  // looser classifier. The renderer used to guess this from the agent's command
+  // line; these arms are why that guess can now be deleted.
+  it('#task:2099: exactly one runtime_message_stale per stale refusal — success, non-stale 409, and an unactionable "stale" 409 emit none', async () => {
+    const startOptions = testStartOptions({
+      agentId: 'a1',
+      sessionScope: 'agent',
+    });
     const h = makeDriven('direct', undefined, undefined, { startOptions });
-    const postedBodies: Record<string, unknown>[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      postedBodies.push(body);
-      return new Response(
-        JSON.stringify({
-          message_id: 'm77',
-          message_seq: 77,
-          ...landedStream(body['target']),
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      );
+    let arm: 'stale' | 'ok' | 'conflict_other' | 'stale_unactionable' | 'server_error' =
+      'stale';
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      const conflict = (details: Record<string, unknown> | null) =>
+        new Response(JSON.stringify({
+          error: { code: 'conflict', message: 'nope', ...(details ? { details } : {}) },
+        }), { status: 409, headers: { 'content-type': 'application/json' } });
+      switch (arm) {
+        case 'stale':
+          return conflict({
+            subkind: 'message_stale',
+            stale_event_id: 'stale-1',
+            target_conversation_id: 'Conversation0001',
+          });
+        case 'stale_unactionable':
+          // Right subkind, but no actionable anchor — `extractStaleConflict`
+          // fails CLOSED (no armed event), so there is nothing to report as a
+          // stale refusal either.
+          return conflict({ subkind: 'message_stale' });
+        case 'conflict_other':
+          return conflict({ subkind: 'something_else' });
+        case 'server_error':
+          return new Response('boom', { status: 500 });
+        case 'ok':
+          return new Response(JSON.stringify({
+            message_id: 'sent-1',
+            message_seq: 3,
+            conversation_id: 'Conversation0001',
+            thread_root_id: null,
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
     }));
+    const staleFrames = () => h.events.filter(
+      (event): event is Extract<EventFrame, { event: 'runtime_message_stale' }> =>
+        event.event === 'runtime_message_stale',
+    );
+    const send = () => h.supervisor.agentMessageSend({
+      runtime_scope: { kind: 'agent' },
+      target: '#conv:Conversation0001',
+      agent_id: 'a1',
+      content: 'hello',
+    });
     try {
       expect((await h.deliver([1])).disposition).toBe('spawning');
       await waitForDeliveryConsumed(h.events, 1);
-      // The aggregate runtime observes a cluster in Conversation0002.
-      expect(await h.supervisor.agentStreamObserved({
-        runtime_scope: { kind: 'agent' },
-        stream_conversation_id: 'Conversation0002',
-        agent_id: 'a1',
-        thread_root_id: 'MessageRoot00001',
-        observed_seq: 60,
-      })).toEqual({ ok: true });
 
-      // Reply into the cluster that was actually read → the pulled boundary.
-      // THE differential: with one overloaded `conversation_id` the entry landed
-      // under the session's route, this lookup missed it, and the send still
-      // asserted the stream — with `seen=0` from the root memo (which is keyed by
-      // the globally unique message id, so it survives the mis-keying). So the
-      // bug was not a missing assertion but a WRONG one: 0 instead of 60.
-      expect(await h.supervisor.agentMessageSend({
-        runtime_scope: { kind: 'agent' },
+      // ── the ONE emitting arm ──
+      expect(await send()).toMatchObject({ ok: false, status: 409 });
+      expect(staleFrames()).toHaveLength(1);
+      expect(staleFrames()[0]).toEqual({
+        event: 'runtime_message_stale',
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        conversation_id: 'Conversation0001',
         agent_id: 'a1',
-        content: 'reply into the pulled cluster',
-        target: '#conv:Conversation0002/thread:MessageRoot00001',
-      })).toMatchObject({ ok: true });
-      expect(postedBodies[0]?.['asserted_stream'])
-        .toBe('#conv:Conversation0002/thread:MessageRoot00001');
-      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(60);
-
-      // A second cluster in a THIRD conversation: one handle holds both
-      // boundaries, and each address finds its own.
-      expect(await h.supervisor.agentStreamObserved({
-        runtime_scope: { kind: 'agent' },
-        stream_conversation_id: 'Conversation0003',
-        agent_id: 'a1',
-        thread_root_id: 'MessageRoot00002',
-        observed_seq: 12,
-      })).toEqual({ ok: true });
-      await h.supervisor.agentMessageSend({
-        runtime_scope: { kind: 'agent' },
-        agent_id: 'a1',
-        content: 'reply into the other pulled cluster',
-        target: '#conv:Conversation0003/thread:MessageRoot00002',
+        runtime_generation: 1,
+        ts: expect.any(Number),
       });
-      expect(postedBodies[1]?.['asserted_stream'])
-        .toBe('#conv:Conversation0003/thread:MessageRoot00002');
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(12);
+
+      // A REPLACEMENT 409 is a second refusal, so it gets its own row — the
+      // single-`pendingStaleEvent` collapse (F18) is about what the agent can
+      // still act on, not about how many refusals happened.
+      expect(await send()).toMatchObject({ ok: false, status: 409 });
+      expect(staleFrames()).toHaveLength(2);
+
+      // ── the silent arms ──
+      arm = 'ok';
+      expect(await send()).toMatchObject({ ok: true });
+      arm = 'conflict_other';
+      expect(await send()).toMatchObject({ ok: false, status: 409 });
+      arm = 'stale_unactionable';
+      expect(await send()).toMatchObject({ ok: false, status: 409 });
+      arm = 'server_error';
+      expect(await send()).toMatchObject({ ok: false, status: 500 });
+      expect(staleFrames()).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.supervisor.stop({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        runtime_generation: 1,
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  // #task:2099 (Cindy review point 1): the activity coordinate is SNAPSHOTTED
+  // before the HTTP await. `handle.conversationId` is the agent-scoped session's
+  // mutable focus and `agentMessageSend` holds no lifecycle lock, so a delivery
+  // that lands while the send is in flight rewrites it. Park the backend response
+  // mid-flight, flip focus A→B, then release: the refusal must still file under
+  // A, the conversation the command was issued from.
+  it('#task:2099: a focus flip during the in-flight send does not move the stale row off the issuing conversation', async () => {
+    ensureSupervisorBundle('a1', 'ws2');
+    const startOptions = testStartOptions({
+      agentId: 'a1',
+      sessionScope: 'agent',
+    });
+    const h = makeDriven('direct', undefined, undefined, { startOptions });
+    // Held in a container, not a `let`: TS narrows a `let` assigned only inside a
+    // callback back to `null` at the call site.
+    const parked: { release: (() => void) | null } = { release: null };
+    const sendReached = new Promise<void>(resolveReached => {
+      vi.stubGlobal('fetch', vi.fn(async () => {
+        await new Promise<void>(release => {
+          parked.release = release;
+          resolveReached();
+        });
+        return new Response(JSON.stringify({
+          error: {
+            code: 'conflict',
+            message: 'message stale',
+            details: {
+              subkind: 'message_stale',
+              stale_event_id: 'stale-1',
+              target_conversation_id: 'Conversation0001',
+            },
+          },
+        }), { status: 409, headers: { 'content-type': 'application/json' } });
+      }));
+    });
+    const deliverTo = (conversationId: string, workspace: string, id: number) =>
+      h.supervisor.deliver({
+        runtime_generation: 1,
+        conversation_id: conversationId,
+        target: { conversation_id: conversationId, workspace: { id: workspace, name: workspace } },
+        agent_id: 'a1',
+        delivery_ids: [id],
+        kind: 'message',
+        text: `origin-${conversationId}`,
+        deliveries: [{ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`origin-${conversationId}`) }],
+        spawn_options: startOptions,
+      }, { owner: 'owner-A' });
+    try {
+      expect((await deliverTo('Conversation0001', 'ws1', 1)).disposition).toBe('spawning');
+      await waitForDeliveryConsumed(h.events, 1);
+
+      // Issue the send from A and park it inside the backend round-trip.
+      const inFlight = h.supervisor.agentMessageSend({
+        runtime_scope: { kind: 'agent' },
+        target: '#conv:Conversation0001',
+        agent_id: 'a1',
+        content: 'sent while focused on A',
+      });
+      await sendReached;
+
+      // Focus moves to B while the send is still awaiting its 409.
+      // `bindRuntimeFocus` runs at the head of the consume path, so B's own
+      // consumed ack carrying `Conversation0002` IS the proof the handle's focus
+      // had already been rewritten before the 409 came back — without it this
+      // test could pass on a focus that never moved.
+      expect((await deliverTo('Conversation0002', 'ws2', 2)).disposition).toBe('admitted');
+      await waitForDeliveryConsumed(h.events, 2);
+      expect(h.events.find(event =>
+        event.event === 'runtime_delivery_consumed'
+        && event.delivery_ids.includes(2),
+      )).toMatchObject({ conversation_id: 'Conversation0002' });
+
+      parked.release?.();
+      expect(await inFlight).toMatchObject({ ok: false, status: 409 });
+
+      const staleFrames = h.events.filter(
+        (event): event is Extract<EventFrame, { event: 'runtime_message_stale' }> =>
+          event.event === 'runtime_message_stale',
+      );
+      expect(staleFrames).toHaveLength(1);
+      expect(staleFrames[0]?.conversation_id).toBe('Conversation0001');
     } finally {
       vi.unstubAllGlobals();
       await h.supervisor.stop({
@@ -7931,6 +5331,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
           delivery_ids: [1],
           kind: 'message',
           text: 'late',
+          deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('late') }],
           spawn_options: baseStartParams.options,
         },
         { owner: 'owner-A' },
@@ -8252,7 +5653,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     },
   );
 
-  it('prompt-boundary falsifier (#task:1565): deliveries during an active prompt DEFER with observed locked; the prompt response reopens the boundary → ONE combined prompt, batch-boundary admission', async () => {
+  it('prompt-boundary falsifier (#task:1565): deliveries during an active prompt DEFER; the prompt response reopens the boundary → ONE combined prompt, batch-boundary admission', async () => {
     const logs: Array<Record<string, unknown>> = [];
     const logger = {
       info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
@@ -8285,26 +5686,20 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         runtime_generation: 1,
         conversation_id: 'Conversation0001',
         target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [id], kind: 'message',
-        text: `m${id}`, delivered_up_to_seq: seq,
+        text: `m${id}`,
+        deliveries: [{ delivery_id: id, seq, presentation: testDeliveryPresentation(`m${id}`) }],
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
-    const advancedTo = (seq: number) =>
-      logs.some(
-        l =>
-          l['action'] === 'freshness_observed_seq_advanced' &&
-          l['observed_seq'] === seq,
-      );
 
     // Spawn-with-batch [1] (seq 10): the write IS the prompt → boundary
-    // closes, observed=10 becomes the new action snapshot.
+    // closes.
     const spawn0 = await deliverSeq(1, 10);
     expect(spawn0.disposition).toBe('spawning');
     h.drive([{ kind: 'session_init', sessionId: 's1' }]);
     await waitForDeliveryConsumed(h.events, 1);
     expect(promptActive).toBe(true);
 
-    // Mid-prompt deliveries DEFER (boundary closed) and the snapshot
-    // stays locked: no advancement to 11/12, no consumed.
+    // Mid-prompt deliveries DEFER (boundary closed): no consumed.
     const d2 = await deliverSeq(2, 11);
     const d3 = await deliverSeq(3, 12);
     expect(d2.disposition).toBe('deferred');
@@ -8312,13 +5707,10 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await wait(30);
     expect(h.consumedFor(2)).toHaveLength(0);
     expect(h.consumedFor(3)).toHaveLength(0);
-    expect(advancedTo(11)).toBe(false);
-    expect(advancedTo(12)).toBe(false);
 
     // The prompt RESPONSE (parsed turn_end) reopens the boundary: the
     // whole queue flushes as ONE combined prompt / ONE consumed, and the
-    // batch admits at the boundary — constructive batch-boundary
-    // evidence advances observed to 12 for the NEXT generation snapshot.
+    // batch admits at the boundary.
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 2);
     const combined = h.events.filter(
@@ -8338,7 +5730,6 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     );
     expect(combinedWrite).toBeTruthy();
     expect(combinedWrite!.indexOf('m2')).toBeLessThan(combinedWrite!.indexOf('m3'));
-    await waitFor(() => advancedTo(12));
 
     // The flush write opened the NEXT prompt: boundary closed again, a
     // new delivery defers until that prompt's response.
@@ -8351,7 +5742,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
-  it("B' (#task:1558): tool-boundary-steer writes immediately mid-turn (compaction is the only hold) and started(uuid) promotes observed", async () => {
+  it("B' (#task:1558): tool-boundary-steer writes immediately mid-turn (compaction is the only hold)", async () => {
     const logs: Array<Record<string, unknown>> = [];
     const logger = {
       info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
@@ -8375,7 +5766,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       delivery_ids: [1],
       kind: 'message',
       text: 'first',
-      delivered_up_to_seq: 10,
+      deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('first') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(spawn0.disposition).toBe('spawning');
@@ -8398,33 +5789,13 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       delivery_ids: [2],
       kind: 'message',
       text: 'steer me in',
-      delivered_up_to_seq: 11,
+      deliveries: [{ delivery_id: 2, seq: 2, presentation: testDeliveryPresentation('steer me in') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(d2.disposition).toBe('admitted');
     await waitForDeliveryConsumed(h.events, 2);
     const uuid2 = minted[minted.length - 1];
     expect(uuid2).toBeTruthy();
-    // Mid-turn write: observed must NOT have advanced to 11 yet.
-    expect(
-      logs.some(
-        l =>
-          l['action'] === 'freshness_observed_seq_advanced' &&
-          l['observed_seq'] === 11,
-      ),
-    ).toBe(false);
-
-    // Runtime echoes started(uuid): the payload became precedent —
-    // observed promotes to the covered seq immediately.
-    h.drive([{ kind: 'input_lifecycle', commandUuid: uuid2!, state: 'started' }]);
-    await waitFor(() =>
-      logs.some(
-        l =>
-          l['action'] === 'freshness_observed_seq_advanced' &&
-          l['source'] === 'input_lifecycle_started' &&
-          l['observed_seq'] === 11,
-      ),
-    );
 
     // Compaction is the one migration-period hold: deliveries defer
     // while compacting and flush at compaction_finished.
@@ -8444,7 +5815,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       delivery_ids: [3],
       kind: 'message',
       text: 'wait for compaction',
-      delivered_up_to_seq: 12,
+      deliveries: [{ delivery_id: 3, seq: 3, presentation: testDeliveryPresentation('wait for compaction') }],
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     expect(d3.disposition).toBe('deferred');
@@ -8501,7 +5872,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       runtime_generation: 1,
       conversation_id: 'Conversation0001',
       target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: ids, kind: 'message',
-      text: `m-${ids.join('_')}`, spawn_options: baseStartParams.options,
+      text: `m-${ids.join('_')}`,
+      deliveries: ids.map(id => ({ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`m-${ids.join('_')}`) })),
+      spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
 
     // Spawn-with-batch [1]: park its write, complete its turn (turn_end)
@@ -8606,7 +5979,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         runtime_generation: 1,
         conversation_id: 'Conversation0001',
         target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [id], kind: 'message',
-        text, spawn_options: baseStartParams.options,
+        text,
+        deliveries: [{ delivery_id: id, seq: id, presentation: testDeliveryPresentation(text) }],
+        spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
 
     // Five 60KiB entries: with the 512B per-entry wrapping budget the
@@ -8910,7 +6285,8 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
   }
 
   /** Gated next-turn-batch (qoder-class) harness with per-delivery seq
-   *  metadata — the pull's coverage arithmetic needs real seqs. */
+   *  metadata — the deferred batch still carries per-delivery seqs for
+   *  the combined turn's `delivered_up_to_seq` high-water. */
   function makePullHarness(opts: {
     deletionCustodySettleTimeoutMs?: number;
   } = {}) {
@@ -8960,14 +6336,10 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
           delivery_ids: [id],
           kind: 'message',
           text: `msg-${id}`,
-          delivered_up_to_seq: seq,
           deliveries: [
             {
               delivery_id: id,
-              message_id: `m${id}`,
               seq,
-              thread_root_id: null,
-              delivery_kind: 'turn' as const,
               presentation: testDeliveryPresentation(`msg-${id}`),
             },
           ],
@@ -8980,25 +6352,30 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
         e =>
           e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id),
       );
-    /** Arm the daemon's pendingStaleEvent through a production-shaped
-     *  409, then keep answering sends by CAS against `headSeq`:
-     *  seen_up_to_seq >= headSeq → 200, else another 409. */
-    const stubBackendWithCas = (headSeq: number) => {
+    /** #task:2095: freshness is now a backend RuntimeScope-wide EXISTS
+     *  guard, not a daemon-stamped per-stream cursor. The daemon forwards
+     *  NO `seen_up_to_seq`/`asserted_stream` — the only freshness field it
+     *  can carry is the human `--anyway` bypass (`freshness_bypass`). So
+     *  this stub answers every non-bypass send with a production-shaped
+     *  409 (F17 detail: `target_conversation_id`, no seq), which arms the
+     *  daemon's single `pendingStaleEvent`; an explicit `--anyway` send is
+     *  the only one that lands. Coverage arithmetic is gone: whether a
+     *  stale-receive drains the queue is a property of the daemon's
+     *  deferred FIFO depth, decided host-side, never of a backend head. */
+    const stubBackendFreshnessGuard = () => {
       const postedBodies: Record<string, unknown>[] = [];
       vi.stubGlobal(
         'fetch',
         vi.fn(async (_url: string, init?: RequestInit) => {
           const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
           postedBodies.push(body);
-          const seen = body['seen_up_to_seq'];
-          if (typeof seen === 'number' && seen >= headSeq) {
+          if (body['freshness_bypass'] === true) {
             return new Response(
               JSON.stringify({
                 message_id: 'm-ok',
-                message_seq: headSeq + 1,
-                // Only the 200 arm can be a send (it needed a numeric
-                // seen_up_to_seq to get here), so the landed stream is
-                // always derivable from the request's own address.
+                message_seq: 99,
+                // The landed stream is derivable from the request's own
+                // forwarded address.
                 ...landedStream(body['target']),
               }),
               { status: 200, headers: { 'content-type': 'application/json' } },
@@ -9011,11 +6388,8 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
                 message: 'message stale',
                 details: {
                   subkind: 'message_stale',
-                  conversation_id: 'Conversation0001',
                   stale_event_id: 'stale-1',
-                  stream_key: 'main',
-                  seen_up_to_seq: seen ?? null,
-                  current_seq: headSeq,
+                  target_conversation_id: 'Conversation0001',
                 },
               },
             }),
@@ -9064,7 +6438,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       drive,
       deliverSeq,
       consumedFor,
-      stubBackendWithCas,
+      stubBackendFreshnessGuard,
       boot,
       pull,
       stop,
@@ -9075,6 +6449,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     supervisor: Supervisor,
     content: string,
     staleResolution?: 'unaffected' | 'revised',
+    freshnessBypass?: boolean,
   ) =>
     supervisor.agentMessageSend({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
@@ -9082,6 +6457,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       agent_id: 'a1',
       content,
       ...(staleResolution ? { stale_resolution_reason: staleResolution } : {}),
+      ...(freshnessBypass ? { freshness_bypass: true } : {}),
     });
 
   const spyOnLastDeliveredWrite = (
@@ -9110,7 +6486,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('deletion fence closes stale-receive under the lifecycle lock before it can reserve custody', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     let releasePurge!: () => void;
     const holdPurge = new Promise<void>(resolve => {
       releasePurge = resolve;
@@ -9148,7 +6524,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('deletion waits for successful response handoff settlement after handle exit before rm, then consumes exactly once', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     const order: string[] = [];
     const writeSpy = spyOnLastDeliveredWrite(h.supervisor, order);
     try {
@@ -9158,7 +6534,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
       // The reservation outlives the runtime handle. The deletion barrier
       // must find custody through the agent-level registry, not only the
       // current/living handle map.
@@ -9191,7 +6567,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('deletion waits for failed response handoff settlement, then fails restored custody exactly once before rm', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     const order: string[] = [];
     const writeSpy = spyOnLastDeliveredWrite(h.supervisor, order);
     try {
@@ -9201,7 +6577,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       const purge = runDeletionPurge(h.supervisor, order);
       await wait(30);
@@ -9227,7 +6603,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('deletion custody timeout returns retryable quiesce_failed without settlement or rm; handoff then retry converges', async () => {
     const h = makePullHarness({ deletionCustodySettleTimeoutMs: 25 });
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     const order: string[] = [];
     const writeSpy = spyOnLastDeliveredWrite(h.supervisor, order);
     try {
@@ -9237,7 +6613,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       const timeoutError = await runDeletionPurge(h.supervisor, order).catch(
         error => error as Error & { code?: string },
@@ -9276,9 +6652,9 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     }
   });
 
-  it('core falsifier: 409 → pull takes the deferred batch atomically → observed covers → same-turn revised send passes CAS → turn_end releases nothing twice', async () => {
+  it('core falsifier: 409 → pull takes the deferred batch atomically → the reservation holds it off the stdin path until settlement → turn_end releases nothing twice', async () => {
     const h = makePullHarness();
-    const postedBodies = h.stubBackendWithCas(3);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       const writesAfterBoot = h.stub.written.length;
@@ -9292,11 +6668,11 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await h.deliverSeq(3, 3)).disposition).toBe('deferred');
       expect(h.consumedFor(2)).toHaveLength(0);
 
-      // PULL: takes the whole bounded FIFO prefix; coverage reaches the
-      // stale head (seq 3 on main) → batch_covered.
+      // PULL: takes the whole bounded FIFO prefix; the splice drains the
+      // deferred queue → batch_queue_drained.
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
-      if (result.outcome !== 'batch_covered') throw new Error('unreachable');
+      expect(result.outcome).toBe('batch_queue_drained');
+      if (result.outcome !== 'batch_queue_drained') throw new Error('unreachable');
       expect([...result.delivery_ids].sort()).toEqual([2, 3]);
       expect(result.text).toContain('msg-2');
       expect(result.text).toContain('msg-3');
@@ -9309,8 +6685,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect(h.stub.written.length).toBe(writesAfterBoot);
       expect(h.consumedFor(2)).toHaveLength(0);
 
-      // Transport handoff proven → exactly one consumed covering [2,3],
-      // observed advanced by the batch's ACTUAL coverage.
+      // Transport handoff proven → exactly one consumed covering [2,3].
       settle!(true);
       await waitForDeliveryConsumed(h.events, 2);
       const consumed = h.events.filter(
@@ -9320,14 +6695,10 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       );
       expect(consumed).toHaveLength(1);
 
-      // Same-turn retry is now fresh: CAS sees seen_up_to_seq = 3.
-      const retry = await send(h.supervisor, 'revised draft', 'revised');
-      expect(retry).toMatchObject({ ok: true, message_id: 'm-ok' });
-      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(3);
-      expect(postedBodies.at(-1)?.['stale_event_id']).toBe('stale-1');
-
       // turn_end after settlement: the pulled batch is GONE from daemon
-      // custody — nothing re-flushes, zero duplicate exposure.
+      // custody — nothing re-flushes, zero duplicate exposure. (Freshness
+      // itself is a backend RuntimeScope guard now, covered by the backend
+      // suite; the daemon's proof point is this no-double-release.)
       h.drive([{ kind: 'turn_end' }]);
       await wait(30);
       expect(h.stub.written.length).toBe(writesAfterBoot);
@@ -9344,16 +6715,16 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     }
   });
 
-  it('handoff failure before the proof point: FIFO restored in place, zero consumed, zero observed; the next flush releases it exactly once', async () => {
+  it('handoff failure before the proof point: FIFO restored in place, zero consumed; the runtime still holds undelivered input so a retry still 409s; the next flush releases it exactly once', async () => {
     const h = makePullHarness();
-    const postedBodies = h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
 
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       // Pre-proof failure → restore, no settlement of any kind.
       settle!(false);
@@ -9363,10 +6734,11 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
         h.events.some(e => e.event === 'runtime_delivery_failed'),
       ).toBe(false);
 
-      // Observed did NOT advance: a retry send is still stale.
+      // The restored row is undelivered again, so the runtime's field of
+      // view is still stale: a non-bypass retry honestly 409s (freshness
+      // is the backend's EXISTS guard; the mock re-arms).
       const retry = await send(h.supervisor, 'retry', 'unaffected');
       expect(retry).toMatchObject({ ok: false, status: 409 });
-      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(1);
 
       // The restored batch releases through the NORMAL path at turn_end —
       // exactly once.
@@ -9382,9 +6754,9 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     }
   });
 
-  it('push wins the interleave: after the auto-flush admitted the head, the pull reports already_admitted and takes nothing', async () => {
+  it('push wins the interleave: after the auto-flush admitted the head, a later pull finds the deferred queue drained and times out, taking nothing', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
@@ -9394,10 +6766,14 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       h.drive([{ kind: 'turn_end' }]);
       await waitForDeliveryConsumed(h.events, 2);
 
+      // The stale event is still armed (nothing resolved it), but the
+      // queue is empty and no release is underway → the pull has nothing
+      // takeable and nothing provable, so a zero-wait pull times out.
+      // (`already_admitted` DIED with the per-stream observed cursor:
+      // freshness is no longer a seq the daemon can report as "already
+      // covered".)
       const { result, settle } = await h.pull(0);
-      expect(result.outcome).toBe('already_admitted');
-      if (result.outcome !== 'already_admitted') throw new Error('unreachable');
-      expect(result.observed_seq).toBeGreaterThanOrEqual(2);
+      expect(result.outcome).toBe('timeout');
       // No custody was taken → no handoff settlement was registered.
       expect(settle).toBeUndefined();
       expect(h.consumedFor(2)).toHaveLength(1);
@@ -9409,7 +6785,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('release-in-progress is never stolen: a covering write in flight yields normal_delivery_in_progress and the batch stays on the stdin path', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       // Close the boot turn so the next delivery takes the ADMIT arm —
@@ -9440,27 +6816,44 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     }
   });
 
-  it('partial coverage keeps the stale armed: the pull takes the same bounded FIFO prefix the flush would, reports batch_partial_armed, and a retry still 409s', async () => {
+  it('a bounded prefix that does not drain the queue reports batch_more_pending; the next pull drains the remainder → batch_queue_drained', async () => {
     const h = makePullHarness();
-    const postedBodies = h.stubBackendWithCas(50);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
-      // Head is seq 50; only seq 2 arrives.
-      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      // #task:2095 F12: "more pending" is now a property of the daemon's
+      // deferred FIFO depth, not a backend head beyond some coverage. Defer
+      // one more than the bounded-prefix cap (DEFERRED_BATCH_MAX_ENTRIES =
+      // 20) so the pull's splice CANNOT drain the whole queue in one take.
+      const ids = Array.from({ length: 21 }, (_, i) => i + 2); // 2..22
+      for (const id of ids) {
+        expect((await h.deliverSeq(id, id)).disposition).toBe('deferred');
+      }
 
-      const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_partial_armed');
-      if (result.outcome !== 'batch_partial_armed') throw new Error('unreachable');
-      expect(result.delivery_ids).toEqual([2]);
-      settle!(true);
+      // First pull takes the bounded FIFO prefix (20); one entry remains,
+      // so the queue is NOT drained → batch_more_pending.
+      const first = await h.pull(1_000);
+      expect(first.result.outcome).toBe('batch_more_pending');
+      if (first.result.outcome !== 'batch_more_pending') {
+        throw new Error('unreachable');
+      }
+      expect([...first.result.delivery_ids].sort((a, b) => a - b)).toEqual(
+        ids.slice(0, 20),
+      );
+      first.settle!(true);
       await waitForDeliveryConsumed(h.events, 2);
 
-      // Observed advanced by ACTUAL coverage (2), never jumped to the
-      // stale head (50): the retry is honestly still stale.
-      const retry = await send(h.supervisor, 'retry', 'revised');
-      expect(retry).toMatchObject({ ok: false, status: 409 });
-      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(2);
+      // The stale event is still armed (no send resolved it); a second pull
+      // drains the lone remainder → batch_queue_drained.
+      const second = await h.pull(1_000);
+      expect(second.result.outcome).toBe('batch_queue_drained');
+      if (second.result.outcome !== 'batch_queue_drained') {
+        throw new Error('unreachable');
+      }
+      expect([...second.result.delivery_ids]).toEqual([22]);
+      second.settle!(true);
+      await waitForDeliveryConsumed(h.events, 22);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
@@ -9469,7 +6862,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('no_pending_stale is a typed no-op; timeout changes neither custody nor the stale event', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(9);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
 
@@ -9507,7 +6900,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('a waiting pull is woken by the arrival instead of polling: deliver mid-wait fulfills with the batch', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
@@ -9518,7 +6911,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
 
       const { result, settle } = await pending;
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
       settle!(true);
       await waitForDeliveryConsumed(h.events, 2);
     } finally {
@@ -9529,7 +6922,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('one pull per handle: a rejected second call cannot clear the first call\'s waiter — the first fulfills on ARRIVAL, far before its deadline (P1-3)', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
@@ -9550,7 +6943,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
       const { result, settle } = await first;
       expect(Date.now() - deliveredAt).toBeLessThan(1_500);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
       settle!(true);
       await waitForDeliveryConsumed(h.events, 2);
     } finally {
@@ -9561,7 +6954,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('an ingress that cannot prove the response handoff is refused fail-closed before any custody decision', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
@@ -9591,7 +6984,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('a delivery arriving while the reservation is unresolved defers behind it (no later release), and flushes only after settlement', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       const writesAfterBoot = h.stub.written.length;
@@ -9599,7 +6992,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
 
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       // Arrives during the reservation window — and, adversarially, with
       // the boundary OPEN (turn_end already parsed): must still defer.
@@ -9628,7 +7021,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('P1-1 owner disconnect: a re-driven copy of a RESERVED id-set never enqueues — one consumed, zero stdin exposure of the pulled bodies', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       const writesAfterBoot = h.stub.written.length;
@@ -9636,7 +7029,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect((await h.deliverSeq(2, 2, 'owner-A')).disposition).toBe('deferred');
 
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       // Old owner's connection drops mid-reservation: backend rolls the
       // rows back and re-drives the SAME ids under a new connection. The
@@ -9665,14 +7058,14 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('response-loss ownership union: reservation partial overlap rebinds held id and queues only novel FIFO remainder', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       const writesAfterBoot = h.stub.written.length;
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
       expect((await h.deliverSeq(2, 2, 'owner-A')).disposition).toBe('deferred');
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       h.supervisor.cleanupDeferredForOwner('owner-A');
       const presentations = [2, 3].map(id => ({
@@ -9685,7 +7078,6 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
         target: { conversation_id: 'Conversation0001', workspace: null },
         agent_id: 'a1',
         delivery_ids: [2, 3],
-        delivered_up_to_seq: 3,
         kind: 'message',
         text: composeRuntimeDeliveryPresentation(
           presentations,
@@ -9693,10 +7085,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
         ),
         deliveries: [2, 3].map((id, index) => ({
           delivery_id: id,
-          message_id: `m${id}`,
           seq: id,
-          thread_root_id: null,
-          delivery_kind: 'turn' as const,
           presentation: presentations[index]!,
         })),
         spawn_options: baseStartParams.options,
@@ -9725,14 +7114,14 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('P1-1 restore variant: after an owner rebind, a pre-proof failure restores the prefix under the NEW owner and it releases exactly once via stdin', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
       expect((await h.deliverSeq(2, 2, 'owner-A')).disposition).toBe('deferred');
 
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       h.supervisor.cleanupDeferredForOwner('owner-A');
       expect((await h.deliverSeq(2, 2, 'owner-B')).disposition).toBe('deferred');
@@ -9754,9 +7143,9 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     }
   });
 
-  it('P1-2 settlement-before-send: with the response in the peer\'s hands and the server write callback NOT yet executed, a resend BLOCKS on the settlement barrier, then passes CAS', async () => {
+  it('P1-2 settlement-before-send: with the response in the peer\'s hands and the server write callback NOT yet executed, a resend BLOCKS on the settlement barrier, then lands', async () => {
     const h = makePullHarness();
-    const postedBodies = h.stubBackendWithCas(3);
+    const postedBodies = h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
@@ -9770,13 +7159,15 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       // daemon's event loop executes the callback. Lock-chain position
       // proves nothing in this state.
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       // The resend must BLOCK on the reservation's `settled` barrier —
-      // not race the un-queued settlement into a spurious 409, and not
-      // sneak through on Node scheduling habits.
+      // not race the un-queued settlement, and not sneak through on Node
+      // scheduling habits. (An `--anyway` resend so it lands once the
+      // barrier releases; the barrier itself is unconditional on the
+      // pending reservation, freshness aside.)
       let retryResolved: Awaited<ReturnType<typeof send>> | null = null;
-      const retry = send(h.supervisor, 'revised draft', 'revised').then(r => {
+      const retry = send(h.supervisor, 'forced draft', undefined, true).then(r => {
         retryResolved = r;
         return r;
       });
@@ -9784,35 +7175,36 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect(retryResolved).toBeNull();
 
       // The callback finally runs (flush/error/destroy always fires it);
-      // settlement completes and releases the barrier with the new
-      // watermark already in place.
+      // settlement completes and releases the barrier.
       settle!(true);
       const retryResult = await retry;
       expect(retryResult).toMatchObject({ ok: true, message_id: 'm-ok' });
-      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(3);
+      // The resend paired itself with the armed conflict and carried the
+      // human bypass — the only freshness field the daemon forwards now.
+      expect(postedBodies.at(-1)?.['stale_event_id']).toBe('stale-1');
+      expect(postedBodies.at(-1)?.['freshness_bypass']).toBe(true);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
     }
   });
 
-  it('P1-2 companion: a pre-proof settlement failure releases the barrier WITHOUT advancing observed — the blocked resend honestly 409s again', async () => {
+  it('P1-2 companion: a pre-proof settlement failure releases the barrier — the restored input keeps the runtime stale so the blocked resend honestly 409s again', async () => {
     const h = makePullHarness();
-    const postedBodies = h.stubBackendWithCas(2);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
 
       const { result, settle } = await h.pull(1_000);
-      expect(result.outcome).toBe('batch_covered');
+      expect(result.outcome).toBe('batch_queue_drained');
 
       const retry = send(h.supervisor, 'retry', 'unaffected');
       await wait(50);
       settle!(false); // handoff failed: content never reached the peer
       const retryResult = await retry;
       expect(retryResult).toMatchObject({ ok: false, status: 409 });
-      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(1);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
@@ -9821,7 +7213,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('P1-4 cancel leg: closing the issuing control connection unregisters the waiter promptly (zero custody) and frees the slot for the next pull', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(9);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
@@ -9845,7 +7237,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       await wait(20);
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
       const fulfilled = await next;
-      expect(fulfilled.result.outcome).toBe('batch_partial_armed');
+      expect(fulfilled.result.outcome).toBe('batch_queue_drained');
       fulfilled.settle!(true);
       await waitForDeliveryConsumed(h.events, 2);
     } finally {
@@ -9856,7 +7248,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   it('P1-4 pre-registration cancel (round-3): a pull still QUEUED behind the lifecycle lock when its connection closes never registers a waiter and never squats the slot', async () => {
     const h = makePullHarness();
-    h.stubBackendWithCas(9);
+    h.stubBackendFreshnessGuard();
     try {
       await h.boot();
       expect((await send(h.supervisor, 'draft')).ok).toBe(false);
@@ -9894,9 +7286,80 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       await wait(20);
       expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
       const fulfilled = await next;
-      expect(fulfilled.result.outcome).toBe('batch_partial_armed');
+      expect(fulfilled.result.outcome).toBe('batch_queue_drained');
       fulfilled.settle!(true);
       await waitForDeliveryConsumed(h.events, 2);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('验收⑥ F17: a name-form send that 409s arms the backend-resolved target; stale-resolve POSTs THAT conversation id verbatim as its authz subject', async () => {
+    const h = makePullHarness();
+    // The backend resolves the name-form target to a conversation id ONLY it
+    // knows. The daemon holds no address resolver, so without the 409 carrying
+    // `target_conversation_id` (F17) the follow-up stale-resolve would have no
+    // authorization subject to POST — the silent breakage this test pins.
+    const RESOLVED = 'BackendResolved99';
+    const resolvePosts: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        if (String(url).endsWith('/stale-message-resolution')) {
+          resolvePosts.push(body);
+          return new Response(JSON.stringify({ resolved: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        // send-message: a name-form target 409s, and only the backend knows
+        // which conversation the name denoted.
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 'conflict',
+              message: 'message stale',
+              details: {
+                subkind: 'message_stale',
+                stale_event_id: 'stale-9',
+                target_conversation_id: RESOLVED,
+              },
+            },
+          }),
+          { status: 409, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await h.boot();
+      // A name-form target the daemon forwards verbatim and never pre-resolves.
+      const stale = await h.supervisor.agentMessageSend({
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
+        target: '#some-channel-by-name',
+        agent_id: 'a1',
+        content: 'draft',
+      });
+      expect(stale).toMatchObject({ ok: false, status: 409 });
+
+      const resolved = await h.supervisor.agentStaleResolve({
+        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001' },
+        agent_id: 'a1',
+        stale_event_id: 'stale-9',
+        resolution_reason: 'obsolete',
+      });
+      expect(resolved).toEqual({ ok: true, resolved: true });
+
+      // F17: the resolve POST's authz subject is the 409's
+      // `target_conversation_id`, fed VERBATIM — the daemon had no other
+      // source for it.
+      expect(resolvePosts).toHaveLength(1);
+      expect(resolvePosts[0]).toMatchObject({
+        conversation_id: RESOLVED,
+        stale_event_id: 'stale-9',
+        resolution_reason: 'obsolete',
+      });
     } finally {
       vi.unstubAllGlobals();
       await h.stop();

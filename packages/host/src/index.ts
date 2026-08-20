@@ -147,8 +147,6 @@ export {
   type AgentStaleReceiveErrorCode,
   type AgentStaleResolveParams,
   type AgentStaleResolveResult,
-  type AgentStreamObservedParams,
-  type AgentStreamObservedResult,
   type HostStatusParams,
   type HostStatusResult,
   type RuntimeStateDto,
