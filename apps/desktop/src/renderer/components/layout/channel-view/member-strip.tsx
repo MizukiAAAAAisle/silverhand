@@ -22,6 +22,7 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
+import { useNav } from '@/router';
 
 // ── Member strip ────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ export function MemberStrip({
   /** Open the channel members modal — the `+N` chip's action (#task:1687). */
   onOpenMembers: () => void;
 }): JSX.Element | null {
+  const nav = useNav();
   const { data: agents = [] } = useAgents();
   const agentById = useMemo(() => {
     const m = new Map<string, AgentDto>();
@@ -123,6 +125,14 @@ export function MemberStrip({
             >
               <button
                 type="button"
+                // Same destination an agent's avatar/name in the stream and an
+                // inline `@agent` mention already go to: the compact side panel
+                // (`?agent=`, #task:1189), so the channel stays put and the
+                // agent's page reads beside it (shiki #task:2117「点击每个应该可以以
+                // sidepanel 打开该 agent page」). One entity, one click answer —
+                // this strip was the last identity surface where a click did
+                // nothing at all.
+                onClick={() => nav.openAgentPanel(agent.id)}
                 aria-label={`@${agent.name}`}
                 data-member-chip="agent"
                 data-member-id={member.agent_id}
@@ -169,6 +179,13 @@ export function MemberStrip({
  * `UserAvatar`'s neutral person square when no avatar is available yet. Hover
  * popover mirrors `HumanMention`'s content so inline `@handle` mentions and
  * header chips read the same.
+ *
+ * Clicking one goes where every other human identity chip goes — the members
+ * user page (`HumanMention`, the stream byline). A human has no side panel to
+ * open: `?agent=` renders an AGENT page, and there is no human equivalent, so
+ * pointing this chip at the panel would be pointing it at nothing. Leaving it
+ * click-dead next to a navigable agent chip would be worse: same shape, same
+ * row, two different answers to the same gesture (#task:2117).
  */
 function HumanMemberChip({
   human,
@@ -177,6 +194,7 @@ function HumanMemberChip({
   human: HumanMemberDto;
   avatarObjectUrl: string | null;
 }): JSX.Element {
+  const nav = useNav();
   const presence = usePresenceById().get(human.user_id);
   const dot = presenceDotStatus(presence?.presence);
   return (
@@ -190,6 +208,7 @@ function HumanMemberChip({
     >
       <button
         type="button"
+        onClick={() => nav.toMembersUser(human.user_id)}
         aria-label={`@${human.name}`}
         data-member-chip="human"
         data-member-id={human.user_id}
