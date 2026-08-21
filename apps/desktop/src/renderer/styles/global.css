@@ -1093,7 +1093,17 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.25em 0.6em;
+  box-sizing: border-box;
+  /* Every code/mermaid header is one fixed-height strip. The height is a single
+     authority (`--code-block-header-height`), not synthesized from the language
+     tag / view switch / action line boxes — so a long label, an icon, the
+     inherited prose line-height, or forza6's 2px segment border can neither grow
+     nor shrink it, and a plain code block and a mermaid block share one height.
+     `border-box` folds the border-bottom in (1px, or forza6's, both leave the
+     outer box constant); the flex `align-items: center` centres the contents. */
+  --code-block-header-height: 32px;
+  height: var(--code-block-header-height);
+  padding: 0 0.6em;
   /* The header strip sits one shade off the code body. Light themes paint it
      pure white; slack-dark leaves this token unset and falls back to its
      `island-deep` (a white strip on a near-black HUD would blow out). forza6
@@ -1110,10 +1120,9 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   text-transform: lowercase;
   letter-spacing: 0.04em;
 }
-/* Icon-only control (#task:1835): no `gap` — there is no second child to
-   space against. The small symmetric padding is hit area, not visual weight:
-   the header's height is set by the language tag's line box (~1.6em), which
-   still exceeds the 12px glyph plus this padding, so the strip does not grow. */
+/* Icon-only control: no `gap` — there is no second child to space against. The
+   small symmetric padding is hit area, not visual weight; the header's fixed
+   height centres the glyph, so this padding never grows the strip. */
 .markdown-body .code-block__copy {
   display: inline-flex;
   align-items: center;
@@ -1190,10 +1199,10 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   color: var(--text-muted);
 }
 
-/* Operable mermaid block (#task:2114): the live diagram in a `.code-block`
-   shell with two views (diagram / source) and a zoom ladder. Everything
-   structural lives here; every colour comes from the `island` family the code
-   block already uses, so no theme needs to know this block exists. */
+/* Operable mermaid block: the live diagram in a `.code-block` shell with two
+   views (diagram / source) and a zoom ladder. Its header inherits the shared
+   fixed `.code-block__header` height, so switching views or stepping zoom never
+   resizes the strip. */
 .markdown-body .mermaid-block__controls {
   display: flex;
   align-items: center;
