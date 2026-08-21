@@ -275,7 +275,7 @@ function SortableTab({
             event.stopPropagation();
             onClose();
           }}
-          className="mr-1.5 flex shrink-0 cursor-pointer items-center rounded-sm p-0.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
+          className="mr-1.5 flex shrink-0 cursor-pointer items-center p-0.5 text-text-muted transition-colors hover:text-text-primary"
         >
           <X className="size-3" aria-hidden />
         </button>
