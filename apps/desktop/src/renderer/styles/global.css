@@ -1293,6 +1293,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 .markdown-body .mermaid-block__viewport {
   padding: 0.7em 0.9em;
   overflow: visible;
+  /* Centre the diagram on the column axis. `text-align` centres the inline
+     pending line; the canvas block below centres via `margin-inline:auto`, so
+     pending / rendered / fullscreen-placeholder all share one centre axis and
+     the axis doesn't jump as they swap. */
+  text-align: center;
   /* The diagram renders in the theme's light/dark palette (chosen from
      `--bg-base`), so its ground must match that palette, NOT the code island:
      forza6's island is dark navy but its diagram palette is light, so the
@@ -1306,6 +1311,9 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 .markdown-body .mermaid-block__canvas {
   width: max-content;
   max-width: 100%;
+  /* Shrink-to-fit block, so auto side margins centre it in the viewport when it
+     fits; `zoom` scales the equal margins with it, holding the centre axis. */
+  margin-inline: auto;
 }
 .markdown-body .mermaid-block__canvas svg {
   max-width: 100%;
