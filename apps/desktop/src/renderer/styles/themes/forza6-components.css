@@ -1367,10 +1367,9 @@
 }
 
 /* ── Chat header action cluster — layout only ───────────────────────
-   The cluster resets any outer frame so its buttons fall back to the JSX
-   layout defaults. It paints NOTHING itself: each action button consumes the
-   sticker primitive explicitly (`data-sticker data-sticker-tone="neutral"`), so
-   the cluster carries only gap / flow, with no button-painting rule to drift. */
+   The cluster itself has no frame / paint; it carries only gap / flow. Each
+   action button declares its own sticker axes (`data-sticker` + size + tone),
+   so there is no button-painting rule here to drift. */
 [data-theme='forza6'] [data-channel-actions] {
   border: 0;
   border-radius: var(--control-radius);

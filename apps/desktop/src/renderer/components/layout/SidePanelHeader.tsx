@@ -5,11 +5,9 @@ import { X } from 'lucide-react';
  * profile panel, the thread panel, the threads list, and the attachments list.
  *
  * Locks the header-height contract to the channel header's `h-12` (48px)
- * *structurally*, so no panel can drift the way the agent panel did
- * (shiki 2026-07-21: it had crept to 51px from an auto-height `py-2.5` + a 28px
- * avatar / two-line block, against the channel's 48px). Height, the bottom
- * hairline, the horizontal padding, and the close affordance all live here once
- * instead of being re-typed — and re-drifted — per panel.
+ * *structurally*: height, the bottom hairline, the horizontal padding, and the
+ * close affordance live here once, so a panel's content can't grow the outer
+ * box and drift off the channel's 48px.
  *
  * Only the header is shared, not the frame: each panel keeps its own outer
  * element because those genuinely differ (the thread panel is a
@@ -40,11 +38,8 @@ export function SidePanelHeader({
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
       {children}
       {actions ? (
-        // Actions + close sit in the `[data-channel-actions]` layout cluster
-        // (same wrapper the channel header uses); each button carries its own
-        // forza6 `data-sticker` hook, the cluster only lays them out. The
-        // `flex-1` header content pins the cluster right, so no `ml-auto` is
-        // needed on the close button here.
+        // `data-channel-actions` lays the trailing controls out only; each
+        // button declares its own forza6 sticker axes.
         <div
           data-channel-actions
           className="ml-auto flex shrink-0 items-center gap-1.5"
@@ -54,9 +49,7 @@ export function SidePanelHeader({
         </div>
       ) : onClose ? (
         // Close-only panels keep the button standalone (no `data-channel-actions`
-        // wrapper). It still carries its own `data-sticker` hook, so forza6 paints
-        // it whether or not the cluster is present. `ml-auto` pins it right even
-        // when there is no `flex-1` header content (loading / error).
+        // wrapper); `ml-auto` pins it right when there is no `flex-1` content.
         <SidePanelCloseButton onClose={onClose} className="ml-auto" />
       ) : null}
     </header>
