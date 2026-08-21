@@ -721,10 +721,11 @@ function AttachmentRow({
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           <AttachmentThumb attachment={attachment} isImage={isImage} />
-          {/* Filename over byline when the surface is narrow; filename / author /
-              size / date as aligned columns once it's wide (rule in
-              `global.css`, keyed on the surface's own container width — never on
-              which host mounted it). */}
+          {/* Filename over byline when the surface is narrow; wide, it splits
+              into `filename | metadata cluster`, the cluster a fixed
+              author/size/date grid that hugs the right (rule in `global.css`,
+              keyed on the surface's own container width — never on which host
+              mounted it). */}
           <span
             data-attachment-row-body
             className="flex min-w-0 flex-1 flex-col leading-tight"

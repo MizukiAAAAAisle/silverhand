@@ -732,26 +732,34 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
 /* Attachment row, wide: filename | author | size | date as REAL columns, not a
    trailing byline. Each row is its own grid, so the three trailing tracks are
-   FIXED widths — content-sized (`auto`) tracks would be as wide as each row's
-   own text and the columns would step out of line from row to row. `contents`
-   dissolves the byline wrapper so its children are the row's grid items. Author
-   and filename take the squeeze (both truncate); the date never does.
-   The threshold is the width at which all four tracks plus the row's thumb and
-   actions fit without the filename collapsing. */
+   Two layers, so the trailing metadata reads as ONE right-hugging block rather
+   than three tracks spread across the row: the body is `filename | cluster`
+   with the filename taking all the slack, and the cluster is its own fixed
+   three-track grid (`author | size | date`). Fixed tracks — content-sized
+   (`auto`) tracks would be as wide as each row's own text and step out of line
+   from row to row; a constant cluster width lands every column on the same
+   vertical across rows. Author takes the squeeze (truncates); size and date
+   never do.
+   The threshold is the width at which the cluster plus a legible filename, the
+   thumb and the actions fit. */
 @container conversation-surface (min-width: 720px) {
   [data-attachment-row-body] {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 12rem) 4.5rem 8rem;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    column-gap: 16px;
+    column-gap: 24px;
   }
   [data-attachment-row-meta] {
-    display: contents;
+    display: grid;
+    grid-template-columns: minmax(0, 9rem) 3.25rem 7.75rem;
+    align-items: center;
+    column-gap: 12px;
   }
   [data-attachment-row-size] {
     text-align: right;
   }
   [data-attachment-row-time] {
+    justify-content: flex-end;
     white-space: nowrap;
   }
 }
