@@ -1,13 +1,13 @@
 import { type JSX, type ReactNode } from 'react';
 import {
   Activity,
-  CheckSquare,
   MessagesSquare,
   Monitor,
   Settings,
   Users,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { TaskIcon } from '@/components/tasks/TaskIcon';
 import { PANE_RADIUS, paneChrome } from './pane-chrome';
 
 /**
@@ -54,7 +54,7 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { id: 'chat', label: 'Chat', icon: <MessagesSquare className="size-4" />, shortcut: 1 },
   { id: 'activity', label: 'Activity', icon: <Activity className="size-4" />, shortcut: 2 },
-  { id: 'tasks', label: 'Tasks', icon: <CheckSquare className="size-4" />, shortcut: 3 },
+  { id: 'tasks', label: 'Tasks', icon: <TaskIcon className="size-4" />, shortcut: 3 },
   { id: 'members', label: 'Members', icon: <Users className="size-4" />, shortcut: 4 },
   { id: 'computers', label: 'Computers', icon: <Monitor className="size-4" />, shortcut: 5 },
 ];

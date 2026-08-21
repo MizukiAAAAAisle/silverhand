@@ -1,4 +1,4 @@
-import { CheckSquare, FileText, MessageSquare, X } from 'lucide-react';
+import { FileText, MessageSquare, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
   DndContext,
@@ -22,6 +22,7 @@ import {
   AppContextMenuItem,
 } from '@/components/menus/AppContextMenu';
 import { isRemovable, tabKey, type Tab } from '@/lib/conversation-tabs';
+import { TaskIcon } from '@/components/tasks/TaskIcon';
 
 /**
  * Per-conversation view tab strip (#task:2121) — a Slack-style horizontal bar
@@ -62,7 +63,7 @@ function tabPresentation(tab: Tab): TabPresentation {
     case 'chat':
       return { icon: MessageSquare, label: 'Chat' };
     case 'tasks':
-      return { icon: CheckSquare, label: 'Tasks' };
+      return { icon: TaskIcon, label: 'Tasks' };
     case 'attachment':
       return { icon: FileText, label: tab.filename };
   }
@@ -86,7 +87,7 @@ export function ConversationTabBar({
   return (
     <div
       data-conversation-tabs
-      className="flex h-9 shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border-subtle px-2 scrollbar-hide"
+      className="flex h-[30px] shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border-subtle px-2 scrollbar-hide"
     >
       <DndContext
         sensors={sensors}
@@ -135,7 +136,7 @@ function SortableTab({
   active: boolean;
   onActivate: () => void;
   /** Present only for removable (custom) tabs — its presence is what mounts the
-   *  right-click "从本会话移除" menu. */
+   *  right-click "Remove" menu. */
   onClose?: () => void;
 }): JSX.Element {
   const {
@@ -167,13 +168,15 @@ function SortableTab({
       role="tab"
       aria-selected={active}
       className={cn(
-        // The active tab is marked by a bottom accent border + primary ink; the
+        // The active tab is marked by a bottom ink border + primary ink; the
         // strip's own bottom border shows through for inactive tabs. A 2px
         // border on both states (transparent when inactive) keeps the label
-        // baseline from shifting on activation. 稳定 > 自适应.
+        // baseline from shifting on activation. 稳定 > 自适应. The underline is
+        // ink (not accent): a view tab is a utility navigator, so it stays in
+        // the neutral ink vocabulary and matches its own label ink.
         'flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap border-b-2 px-2.5 text-xs transition-colors',
         active
-          ? 'border-accent text-text-primary'
+          ? 'border-text-primary text-text-primary'
           : 'border-transparent text-text-muted hover:text-text-primary',
       )}
     >
@@ -189,7 +192,7 @@ function SortableTab({
   return (
     <AppContextMenu trigger={button}>
       <AppContextMenuItem icon={<X className="size-3.5" />} onSelect={onClose}>
-        从本会话移除
+        Remove
       </AppContextMenuItem>
     </AppContextMenu>
   );

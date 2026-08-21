@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from 'react';
-import { CheckSquare, Loader2, Pencil } from 'lucide-react';
+import { Loader2, Pencil } from 'lucide-react';
 import type { TaskDetailDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
+import { TaskIcon } from '@/components/tasks/TaskIcon';
 import { MiniIconButton } from '@/components/tasks/MiniIconButton';
 import {
   SidePanelHeader,
@@ -107,7 +108,7 @@ export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetail
           entity's identity as the subtitle. */}
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
-          icon={<CheckSquare className="size-3.5 shrink-0 text-text-muted" aria-hidden />}
+          icon={<TaskIcon className="size-3.5 shrink-0 text-text-muted" aria-hidden />}
           title="Task"
           // The number, not the title — the task's own title lives in the body
           // with its edit pencil, so the header doesn't repeat it (shiki mockup

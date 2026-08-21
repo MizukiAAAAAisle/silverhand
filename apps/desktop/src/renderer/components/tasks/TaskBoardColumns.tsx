@@ -119,7 +119,13 @@ export function TaskBoardColumns({
   return (
     <div
       data-tasks-board
-      className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
+      // Columns share the width when it's ample (`flex-1`) but never squeeze
+      // below a readable floor (`min-w` on each column): once the five floors
+      // exceed the container the board scrolls horizontally instead of crushing
+      // the cards (shiki — a squeezed column loses visual efficiency). The
+      // scrollbar is hidden (`.scrollbar-hide`); the vertical axis stays owned by
+      // each column's own body, so the board itself never scrolls up/down.
+      className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto overflow-y-hidden p-4 scrollbar-hide"
     >
       {COLUMNS.map(col => (
         <KanbanColumn
@@ -245,7 +251,9 @@ function KanbanColumn({
         // five keep an EQUAL flex width whether collapsed or not (#task:1169
         // follow-up, shiki): collapsing only drops the body, never resizes a
         // column, so the live columns don't jitter when Closed folds/unfolds.
-        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle transition-colors',
+        // `min-w-[12rem]` is the readable floor — below it the board scrolls
+        // (parent `overflow-x-auto`) rather than letting a card squeeze.
+        'flex min-h-0 max-h-full min-w-[12rem] flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle transition-colors',
         columnClassName,
         // Done + Closed are terminal — dim slightly so the live columns read as
         // the focus.
