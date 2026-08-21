@@ -730,37 +730,20 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   container-name: conversation-surface;
 }
 
-/* Attachment row, wide: filename | author | size | date as REAL columns, not a
-   trailing byline. Each row is its own grid, so the three trailing tracks are
-   Two layers, so the trailing metadata reads as ONE right-hugging block rather
-   than three tracks spread across the row: the body is `filename | cluster`
-   with the filename taking all the slack, and the cluster is its own fixed
-   three-track grid (`author | size | date`). Fixed tracks — content-sized
-   (`auto`) tracks would be as wide as each row's own text and step out of line
-   from row to row; a constant cluster width lands every column on the same
-   vertical across rows. Author takes the squeeze (truncates); size and date
-   never do.
-   The threshold is the width at which the cluster plus a legible filename, the
-   thumb and the actions fit. */
+/* Attachment row, wide: the filename and the author/size/date cluster read as
+   ONE continuous content block hugging the left, and a trailing 1fr spacer puts
+   the elastic gap AFTER that block — between it and the row's right-pinned
+   actions — instead of between filename and metadata (that split let the
+   filename track swallow all the slack and stranded the cluster across a dead
+   void at wide widths). The filename track is content-sized with a cap and
+   truncates under pressure; the cluster keeps its own compact left-to-right
+   flow (no cross-row column alignment — reading continuity wins here). */
 @container conversation-surface (min-width: 720px) {
   [data-attachment-row-body] {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 40rem) auto 1fr;
     align-items: center;
-    column-gap: 24px;
-  }
-  [data-attachment-row-meta] {
-    display: grid;
-    grid-template-columns: minmax(0, 9rem) 3.25rem 7.75rem;
-    align-items: center;
-    column-gap: 12px;
-  }
-  [data-attachment-row-size] {
-    text-align: right;
-  }
-  [data-attachment-row-time] {
-    justify-content: flex-end;
-    white-space: nowrap;
+    column-gap: 16px;
   }
 }
 
