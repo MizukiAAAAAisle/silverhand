@@ -1220,6 +1220,9 @@
 [data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker] {
   background: var(--forza6-paper);
   color: var(--forza6-ink);
+  /* Header stickers frame at the full control width (shiki: 2px), not the
+     `sm` 1px — the shadow stays `sm` (set by the size attr, higher up). */
+  --sticker-border-w: var(--control-border-width);
   padding: 0.1em 0.3em;
   transition: transform 0.1s ease, box-shadow 0.1s ease;
 }
@@ -1258,21 +1261,12 @@
 [data-theme='forza6'] [data-mermaid-modal] {
   border: var(--control-border-width) solid var(--forza6-ink);
 }
-/* Both fullscreen viewers (image Lightbox + Mermaid) share one footer contract:
-   the −/+ steppers opt into `data-sticker`, so the primitive already frames
-   them; this supplies the paper fill + ink glyph and swaps the generic
-   `hover:bg-bg-hover` for the same shadow-lift the header controls use (shiki
-   #task:2130「Modal 底部的 − + button 也适配 forza6」). The % beside them is a
-   plain readout — no `data-sticker`, so it is untouched. */
-[data-theme='forza6'] [data-modal-shell] [data-sticker] {
-  background: var(--forza6-paper);
-  color: var(--forza6-ink);
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
-}
-[data-theme='forza6'] [data-modal-shell] [data-sticker]:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 2px 2px 0 var(--forza6-ink);
-}
+/* The fullscreen viewers' footer −/+ steppers are the shared control primitive
+   (base `Button` + `neutralAction`), so forza6 already frames them through the
+   `[data-neutral-action]` poster rule — same border/paper/ink/shadow as the
+   Copy/Download buttons beside them (shiki #task:2130「统一成 Copy/Download 的
+   样式」). No modal-scoped sticker rule: matching Copy/Download means reusing
+   their actual primitive, not re-deriving a look. */
 
 /* ── #v5.5b — Forza6 code island syntax palette (dark) ───────────────
    Cindy `z06bLIkQ7jnxc17V` blocker. global.css:23 imports

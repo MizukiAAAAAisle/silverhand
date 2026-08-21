@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, Copy, Maximize2, Minus, Plus } from 'lucide-react';
+import { Check, Code, Copy, Maximize2, Minus, Plus, Workflow } from 'lucide-react';
 import { MermaidLightbox } from './MermaidLightbox';
 
 /**
@@ -249,6 +249,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             aria-pressed={view === 'diagram'}
             onClick={() => setView('diagram')}
           >
+            <Workflow className="size-3" />
             Mermaid
           </button>
           <button
@@ -260,6 +261,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             aria-pressed={view === 'code'}
             onClick={() => setView('code')}
           >
+            <Code className="size-3" />
             Code
           </button>
         </div>
@@ -270,6 +272,15 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
         <div className="mermaid-block__controls">
           {view === 'diagram' ? (
             <>
+              {/* Order is `100% − +` (shiki #task:2130): the readout sits to the
+                  LEFT so the two steppers are adjacent and read as one pair. The
+                  zoom level is a READOUT, not a control — it is NOT aria-hidden
+                  (a visually-hidden "Zoom " prefix gives screen readers "Zoom
+                  150%"); reset is by stepping down with `−`. */}
+              <span className="mermaid-block__zoom">
+                <span className="sr-only">Zoom </span>
+                {Math.round(zoom * 100)}%
+              </span>
               <button
                 type="button"
                 className="mermaid-block__icon"
@@ -282,16 +293,6 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               >
                 <Minus className="size-3" />
               </button>
-              {/* The zoom level is a READOUT, not a control (shiki #task:2130):
-                  it names the current scale, it is not a button and carries no
-                  poster-sticker chrome. Reset is by stepping down with `−`. It
-                  is NOT aria-hidden (Cindy a11y): a visually-hidden "Zoom "
-                  prefix gives screen readers the full "Zoom 150%" instead of a
-                  bare, contextless percentage. */}
-              <span className="mermaid-block__zoom">
-                <span className="sr-only">Zoom </span>
-                {Math.round(zoom * 100)}%
-              </span>
               <button
                 type="button"
                 className="mermaid-block__icon"

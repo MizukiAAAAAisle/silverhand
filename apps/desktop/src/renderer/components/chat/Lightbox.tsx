@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Download, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { neutralAction } from '@/features/common/ControlInkBorder';
 import { SelectionActionButton } from './SelectionToolbar';
 
 interface LightboxProps {
@@ -416,17 +418,17 @@ export function Lightbox({
 
           <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border-subtle px-3 py-2 text-xs">
             <div className="flex items-center gap-2">
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="icon"
                 aria-label="Zoom out"
-                data-sticker
-                data-sticker-size="sm"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
-                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
+                {...neutralAction('size-7 shrink-0')}
               >
                 <ZoomOut className="size-4" />
-              </button>
+              </Button>
               {/* Drag-to-zoom slider — reuses the Settings→Appearance font-size
                   slider chrome (both the `.settings-font-size-slider` base class
                   and the `data-settings-slider` forza6 hook) so the thumb/track
@@ -443,17 +445,17 @@ export function Lightbox({
                 aria-label="Zoom level"
                 onChange={e => setZoom(Number(e.target.value) / 100)}
               />
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="icon"
                 aria-label="Zoom in"
-                data-sticker
-                data-sticker-size="sm"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
-                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
+                {...neutralAction('size-7 shrink-0')}
               >
                 <ZoomIn className="size-4" />
-              </button>
+              </Button>
               {/* Zoom level is a READOUT, not a control (shiki #task:2130): no
                   click / reset, no button or sticker chrome. Reset is the `0`
                   key (and stepping with −). A visually-hidden "Zoom " prefix
