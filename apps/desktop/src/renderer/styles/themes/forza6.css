@@ -296,6 +296,12 @@
   /* ── Islands (code blocks) — near-black navy HUD ground ── */
   --bg-island: var(--forza6-code-island);
   --bg-island-deep: var(--forza6-code-deep);
+  /* Mermaid diagram ground: a diagram renders in forza6's LIGHT palette (chosen
+     from the light `--bg-base`), so it must sit on white, not the navy code
+     island a source snippet uses (shiki #task:2130). Consumed by the inline
+     `.mermaid-block__viewport` and the fullscreen modal well; the code SOURCE
+     view keeps the navy island. */
+  --mermaid-diagram-bg: #FFFFFF;
 
   /* ── Text (cool-neutral on light, light on dark island) ── */
   --text-primary: #0F1F1D;

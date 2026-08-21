@@ -1207,10 +1207,11 @@
    Utility controls (zoom / fullscreen) and the INACTIVE view segment take a
    NEUTRAL paper fill: they wear the poster SHAPE without spending the accent
    hue on chrome. The ACTIVE view segment earns the lime fill — a genuine
-   selected state, the one place loud is paid for. Hover peels to lime too (the
-   forza6 interactive-preview vocabulary), ink text throughout so contrast
-   holds. The extra header gap keeps each sticker's offset shadow off its
-   neighbour. */
+   selected state, the one place loud is paid for. Hover does NOT swap the fill
+   (shiki #task:2130「hover 给 shadow 抬起的样式，不要给 hover background」): it
+   only deepens the poster's offset shadow and lifts 1px, so the accent stays
+   reserved for the selected segment. The extra header gap keeps each sticker's
+   offset shadow off its neighbour. */
 [data-theme='forza6'] .markdown-body .mermaid-block__controls,
 [data-theme='forza6'] .markdown-body .mermaid-block__switch {
   gap: 0.3em;
@@ -1220,14 +1221,14 @@
   background: var(--forza6-paper);
   color: var(--forza6-ink);
   padding: 0.1em 0.3em;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
 }
 [data-theme='forza6'] .markdown-body .mermaid-block__controls .mermaid-block__icon[data-sticker],
 [data-theme='forza6'] .markdown-body .mermaid-block__controls .code-block__copy[data-sticker] {
   /* Icon-only controls stay square — symmetric hit area, not text padding. */
   padding: 0.15em;
 }
-[data-theme='forza6'] .markdown-body .mermaid-block__switch .mermaid-block__seg[data-sticker],
-[data-theme='forza6'] .markdown-body .mermaid-block__controls .mermaid-block__zoom[data-sticker] {
+[data-theme='forza6'] .markdown-body .mermaid-block__switch .mermaid-block__seg[data-sticker] {
   font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -1239,10 +1240,38 @@
   background: var(--forza6-lime);
   color: var(--forza6-ink);
 }
+/* Hover = shadow-lift, not a fill swap (shiki #task:2130). The selected
+   segment keeps its lime; every control just rises 1px on a deepened offset
+   shadow, so hover reads as "liftable" without stealing the accent. */
 [data-theme='forza6'] .markdown-body .mermaid-block__controls [data-sticker]:hover:not(:disabled),
 [data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker]:hover:not(:disabled) {
-  background: var(--forza6-lime);
+  transform: translateY(-1px);
+  box-shadow: 2px 2px 0 var(--forza6-ink);
+}
+
+/* ── Fullscreen viewer modals — forza6 poster frame + footer stickers ──
+   The generic `[data-modal-shell]` is deliberately frameless in forza6 (poster
+   drop shadow only, image viewers since #1959). The Mermaid modal is a poster,
+   not a floating image, so it earns the ink frame back (shiki #task:2130「之前
+   有 ink border 的，现在没了」) — scoped to `data-mermaid-modal` so the image
+   viewers stay frameless. */
+[data-theme='forza6'] [data-mermaid-modal] {
+  border: var(--control-border-width) solid var(--forza6-ink);
+}
+/* Both fullscreen viewers (image Lightbox + Mermaid) share one footer contract:
+   the −/+ steppers opt into `data-sticker`, so the primitive already frames
+   them; this supplies the paper fill + ink glyph and swaps the generic
+   `hover:bg-bg-hover` for the same shadow-lift the header controls use (shiki
+   #task:2130「Modal 底部的 − + button 也适配 forza6」). The % beside them is a
+   plain readout — no `data-sticker`, so it is untouched. */
+[data-theme='forza6'] [data-modal-shell] [data-sticker] {
+  background: var(--forza6-paper);
   color: var(--forza6-ink);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+[data-theme='forza6'] [data-modal-shell] [data-sticker]:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 2px 2px 0 var(--forza6-ink);
 }
 
 /* ── #v5.5b — Forza6 code island syntax palette (dark) ───────────────

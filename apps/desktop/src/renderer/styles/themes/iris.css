@@ -155,6 +155,10 @@
   /* Code / mermaid header strip: pure white above the warm-paper island body
      (shiki #task:2130, choice A). */
   --code-block-header-bg: #FFFFFF;
+  /* Diagram ground shared by the inline mermaid block and the fullscreen modal
+     (shiki #task:2130). A light theme renders mermaid's default palette on the
+     warm-paper code island. */
+  --mermaid-diagram-bg: var(--bg-island);
 
   /* ── Text（暖墨阶梯，白底对比度标在后面）──
      例外是 muted：白底是 iris 最亮的一面，只量它会放过 `--bg-hover` /

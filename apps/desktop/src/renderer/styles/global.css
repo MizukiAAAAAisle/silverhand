@@ -1197,7 +1197,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 .markdown-body .mermaid-block__controls {
   display: flex;
   align-items: center;
-  gap: 0.15em;
+  gap: 0.35em;
 }
 /* Icon controls take the copy button's treatment verbatim (same strip, same
    hit area) but keep their OWN class: `code-block__copy` names an action, and a
@@ -1224,7 +1224,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   gap: 0.15em;
 }
 .markdown-body .mermaid-block__seg {
-  padding: 0.15em 0.4em;
+  padding: 0.02em 0.4em;
   color: var(--text-muted);
   font-family: inherit;
   font-size: inherit;
@@ -1237,19 +1237,14 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   color: var(--text-primary);
   font-weight: 600;
 }
-/* Zoom readout + view toggle are TEXT controls in an icon strip, so they take
-   the header's own muted-to-primary hover instead of a second treatment. No
-   fill, no border: the header strip is already a surface, and a chip inside a
-   chip is one lift too many. */
+/* Zoom level is a static READOUT (a `<span>`, not a control): it names the
+   current scale between the − / + steppers. Muted, no hover, no fill —
+   reset is by stepping down (#task:2130). */
 .markdown-body .mermaid-block__zoom {
   padding: 0.15em 0.35em;
   color: var(--text-muted);
   font-family: inherit;
   font-size: inherit;
-  transition: color 120ms ease;
-}
-.markdown-body .mermaid-block__zoom:hover:not(:disabled) {
-  color: var(--text-primary);
 }
 /* A control that cannot act reads as absent-but-reserved, not as clickable:
    the ladder's ends and the pending window both land here. Reserved rather
@@ -1276,6 +1271,13 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    rather than a surprise during ordinary reading. */
 .markdown-body .mermaid-block__viewport {
   padding: 0.7em 0.9em;
+  /* The diagram renders in the theme's light/dark palette (chosen from
+     `--bg-base`), so its ground must match that palette, NOT the code island:
+     forza6's island is dark navy but its diagram palette is light, so the
+     light diagram would float on black. `--mermaid-diagram-bg` lets a theme
+     name the diagram ground (forza6 → white); others fall back to the island
+     shade they already used (#task:2130). */
+  background: var(--mermaid-diagram-bg, var(--bg-island));
 }
 .markdown-body .mermaid-block__viewport[data-mermaid-scroll='viewport'] {
   max-height: 22rem;

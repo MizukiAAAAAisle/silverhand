@@ -260,7 +260,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             aria-pressed={view === 'code'}
             onClick={() => setView('code')}
           >
-            Source
+            Code
           </button>
         </div>
         {/* RIGHT: view-scoped actions. Zoom + fullscreen belong to the diagram
@@ -282,22 +282,12 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               >
                 <Minus className="size-3" />
               </button>
-              {/* The readout IS the reset control: a fourth button spelling
-                  "Reset" would spend header width on a state that the number
-                  already names, and clicking a zoom readout to get back to 100%
-                  is the gesture readers already have. */}
-              <button
-                type="button"
-                className="mermaid-block__zoom"
-                data-sticker
-                data-sticker-size="sm"
-                onClick={() => setZoomIndex(ZOOM_BASE_INDEX)}
-                disabled={!diagramReady || zoomIndex === ZOOM_BASE_INDEX}
-                aria-label="Reset zoom"
-                title="Reset zoom"
-              >
+              {/* The zoom level is a READOUT, not a control (shiki #task:2130):
+                  it names the current scale, it is not a button and carries no
+                  poster-sticker chrome. Reset is by stepping down with `−`. */}
+              <span className="mermaid-block__zoom" aria-hidden>
                 {Math.round(zoom * 100)}%
-              </button>
+              </span>
               <button
                 type="button"
                 className="mermaid-block__icon"

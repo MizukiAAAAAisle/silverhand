@@ -105,6 +105,10 @@
      蓝灰 (#1E1E22 → #181B1E) 与 chat 区有材质差。 */
   --bg-island: #1E1E22;
   --bg-island-deep: #181B1E;
+  /* Diagram ground shared by the inline mermaid block and the fullscreen modal
+     (shiki #task:2130). A dark theme renders mermaid's dark palette, which sits
+     on the code island. */
+  --mermaid-diagram-bg: var(--bg-island);
 
   /* ── Text ──
      layered 阶梯：primary #E2E3E3 (AAA) → secondary #BABABB (AAA) →

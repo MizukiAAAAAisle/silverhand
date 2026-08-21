@@ -419,6 +419,8 @@ export function Lightbox({
               <button
                 type="button"
                 aria-label="Zoom out"
+                data-sticker
+                data-sticker-size="sm"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
                 className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
@@ -444,22 +446,20 @@ export function Lightbox({
               <button
                 type="button"
                 aria-label="Zoom in"
+                data-sticker
+                data-sticker-size="sm"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
                 className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
               >
                 <ZoomIn className="size-4" />
               </button>
-              {/* Percentage readout doubles as reset-to-fit. */}
-              <button
-                type="button"
-                aria-label="Reset zoom to fit"
-                disabled={scale === MIN_SCALE}
-                onClick={() => setZoom(1)}
-                className="flex h-7 min-w-[3.25rem] items-center justify-center rounded-[var(--control-radius)] px-1.5 tabular-nums text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-60 focus-outline"
-              >
+              {/* Zoom level is a READOUT, not a control (shiki #task:2130): no
+                  click / reset, no button or sticker chrome. Reset is the `0`
+                  key (and stepping with −). */}
+              <span className="flex h-7 min-w-[3.25rem] items-center justify-center px-1.5 tabular-nums text-text-secondary">
                 {Math.round(scale * 100)}%
-              </button>
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <SelectionActionButton
