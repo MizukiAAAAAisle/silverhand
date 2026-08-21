@@ -17,7 +17,9 @@ interface TaskRefProps {
    *  `#<n>` text with NO chip — a bare number that isn't a task must not
    *  sprout chrome. Only a resolved-present task yields a chip, identical
    *  to the explicit sigil. Default (false) keeps the explicit `#task:<n>`
-   *  behaviour: a muted chip in every state. */
+   *  behaviour, which differs only in the transient states: no-context and
+   *  loading show a muted pill (bare stays raw there). A definitively-missing
+   *  ref renders raw in BOTH modes, and a resolved one yields the chip. */
   bare?: boolean;
 }
 
@@ -47,9 +49,12 @@ export interface StaticTaskRefSummary {
  * free. The only live bits dropped are interaction-only (role / tabIndex /
  * handlers / cursor / focus ring), which paint nothing in a static image.
  *
- * An UNRESOLVED ref stays the muted `bg-bg-elevated` pill (state `static`),
- * matching the live no-context / missing chips: a fill-bearing surface that
- * legitimately keeps its side padding.
+ * An UNRESOLVED ref stays the muted `bg-bg-elevated` pill (state `static`).
+ * The export pre-resolves refs, so a null here means "not resolvable at
+ * snapshot time" — an unknown, not a definitive miss. It therefore mirrors the
+ * live no-context / loading pill (the states that still carry a fill), NOT the
+ * live definitively-missing ref, which demotes to raw prose text (see
+ * `TaskRef`).
  */
 export function TaskRefStaticChip({
   taskNumber,
@@ -138,21 +143,20 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // Bare `#<n>` with no resolved task → render the literal `#<n>` text,
   // no chip. One gate covers no-context (hook disabled → no data),
   // loading (data not yet settled), and resolved-missing (task deleted /
-  // never existed). The explicit `#task:<n>` sigil keeps its muted chip
-  // in these states instead; a bare number is too ambiguous to mark up
-  // until it's confirmed to be a real task.
+  // never existed). The explicit `#task:<n>` sigil keeps a muted chip only
+  // in the transient no-context / loading states; a definitive miss demotes
+  // to raw text in both modes (below). A bare number is too ambiguous to mark
+  // up until it's confirmed to be a real task.
   if (bare && !task) {
     return <>{`#${taskNumber}`}</>;
   }
 
-  // No-context (saved/preview surfaces) and resolved-missing (task
-  // deleted or never existed on this conversation's board) render a
-  // tooltip-only pill with no popover — there's nothing meaningful to
-  // surface on hover for either case. Loading WITH conversation context
-  // goes through HoverPopover with `isContentReady=false` so a hover
-  // ≥500ms while the fetch is still in flight gets a skeleton (Cindy
-  // review of commit 3 — previously the loading branch returned a bare
-  // span, missing the 500ms→skeleton spec entirely).
+  // No-context (saved/preview surfaces with no board to resolve against)
+  // renders a tooltip-only pill with no popover — there's nothing meaningful to
+  // surface on hover. Loading WITH conversation context goes through
+  // HoverPopover with `isContentReady=false` so a hover ≥500ms while the fetch
+  // is still in flight gets a skeleton; a definitive miss instead demotes to
+  // raw text below.
   if (!conversationId) {
     return (
       <span
@@ -203,7 +207,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     // inheriting prose style: no chip fill / border / hover / cursor, not
     // navigable. A dead ref must not masquerade as an openable chip. loading
     // (pending) and no-context (no board to resolve against) are NOT resolution
-    // failures and keep their muted pill (shiki, #task:2143).
+    // failures and keep their muted pill (#task:2143).
     return <>{inertLabel}</>;
   }
 
