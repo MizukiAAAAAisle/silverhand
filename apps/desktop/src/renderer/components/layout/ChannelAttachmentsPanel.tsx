@@ -105,9 +105,56 @@ interface ChannelAttachmentsPanelProps {
 }
 
 /**
- * Channel Attachments panel: every attachment referenced by a persisted
- * message in one channel, reverse-chronological, grouped by local day.
- * Utility pane — not a conversation, does not enter the visible/focused
+ * Channel Attachments panel — the SIDE-PANEL host: `<aside>` +
+ * `SidePanelHeader` around {@link ChannelAttachmentsContent}. The custom-tab
+ * host composes the same content under its own container; the two
+ * hosts share no shell.
+ */
+export function ChannelAttachmentsPanel({
+  channelId,
+  workspaceId,
+  parentTitle,
+  onClose,
+  onJumpToMessage,
+  onOpenAttachment,
+  nowMs,
+}: ChannelAttachmentsPanelProps): JSX.Element {
+  return (
+    <aside
+      data-pane="attachments-list"
+      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
+    >
+      <SidePanelHeader onClose={onClose}>
+        <SidePanelHeaderTitle
+          icon={<Paperclip className="size-3.5 shrink-0 text-text-muted" />}
+          title="Attachments"
+          subtitle={parentTitle ? `#${parentTitle}` : ''}
+        />
+      </SidePanelHeader>
+      {/* This host's inset. The pane-edge gutter belongs to the container, so
+          the surface inside starts at x=0 and each host picks its own distance
+          from the edge — a narrow side panel spends less of it than a tab. */}
+      <div className="flex min-h-0 flex-1 flex-col px-1.5">
+        <ChannelAttachmentsContent
+          channelId={channelId}
+          workspaceId={workspaceId}
+          onJumpToMessage={onJumpToMessage}
+          onOpenAttachment={onOpenAttachment}
+          nowMs={nowMs}
+        />
+      </div>
+    </aside>
+  );
+}
+
+/**
+ * The Attachments surface itself: every attachment referenced by a persisted
+ * message in one channel, reverse-chronological, grouped by local day. Filter
+ * bar, rows, empty/error states and its own virtualized scroller. Host-agnostic
+ * — no title, no close — so the side panel and the conversation tab mount THIS
+ * and can't drift on what an attachment row says.
+ *
+ * Utility surface — not a conversation, does not enter the visible/focused
  * compute for notification suppression.
  *
  * Rendered with `GroupedVirtuoso` so only viewport rows mount. This is a
@@ -126,16 +173,20 @@ interface ChannelAttachmentsPanelProps {
  * the physical index (including group headers), so a naive
  * `flatItems[index]` mapping would be off by one per preceding group
  * header. Keying the subtree is both simpler and correct.
+ *
+ * Width-adaptive: `conversation-surface` names the query container, so the
+ * layout tracks THIS surface's own width (see `global.css`) — the narrow stack
+ * of filename over byline becomes filename / author / size / date as aligned
+ * columns once there is room. The surface fills whatever box its host gives it;
+ * the outer inset belongs to the host, this component only spaces its own rows.
  */
-export function ChannelAttachmentsPanel({
+export function ChannelAttachmentsContent({
   channelId,
   workspaceId,
-  parentTitle,
-  onClose,
   onJumpToMessage,
   onOpenAttachment,
   nowMs,
-}: ChannelAttachmentsPanelProps): JSX.Element {
+}: Omit<ChannelAttachmentsPanelProps, 'onClose' | 'parentTitle'>): JSX.Element {
   const [filter, setFilter] = useState<AttachmentListFilter>(
     ALL_ATTACHMENTS_FILTER,
   );
@@ -219,50 +270,41 @@ export function ChannelAttachmentsPanel({
     !isLoading && !isError && (flatItems.length > 0 || filterActive);
 
   return (
-    <aside
-      data-pane="attachments-list"
-      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
-    >
-      <SidePanelHeader onClose={onClose}>
-        <SidePanelHeaderTitle
-          icon={<Paperclip className="size-3.5 shrink-0 text-text-muted" />}
-          title="Attachments"
-          subtitle={parentTitle ? `#${parentTitle}` : ''}
-        />
-      </SidePanelHeader>
-
+    <div className="conversation-surface flex min-h-0 w-full flex-1 flex-col">
       {showFilterBar ? (
         <div
           data-attachments-filter-bar
-          className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-3 py-2"
+          className="shrink-0 border-b border-border-subtle"
         >
-          <SenderFilterSelect
-            value={filter.sender}
-            facets={senderFacets}
-            isLoading={sendersLoading}
-            isError={sendersError}
-            agentsById={agentsById}
-            humansById={humansById}
-            agentAvatarUrls={agentAvatarUrls}
-            humanAvatarUrls={humanAvatarUrls}
-            onOpenChange={open => {
-              if (open) {
-                setSenderMenuOpened(true);
-                // A prior failure leaves a false-empty dropdown; reopening
-                // retries rather than staying stuck on "no senders".
-                if (sendersError) refetchSenders();
+          <div className="flex flex-wrap items-center gap-2 py-2">
+            <SenderFilterSelect
+              value={filter.sender}
+              facets={senderFacets}
+              isLoading={sendersLoading}
+              isError={sendersError}
+              agentsById={agentsById}
+              humansById={humansById}
+              agentAvatarUrls={agentAvatarUrls}
+              humanAvatarUrls={humanAvatarUrls}
+              onOpenChange={open => {
+                if (open) {
+                  setSenderMenuOpened(true);
+                  // A prior failure leaves a false-empty dropdown; reopening
+                  // retries rather than staying stuck on "no senders".
+                  if (sendersError) refetchSenders();
+                }
+              }}
+              onChange={sender => setFilter(f => ({ ...f, sender }))}
+            />
+            <DateFilterSelect
+              value={filter.time}
+              ariaLabel="Filter attachments by time"
+              triggerClassName="w-auto"
+              onChange={(time: DateFilterValue) =>
+                setFilter(f => ({ ...f, time }))
               }
-            }}
-            onChange={sender => setFilter(f => ({ ...f, sender }))}
-          />
-          <DateFilterSelect
-            value={filter.time}
-            ariaLabel="Filter attachments by time"
-            triggerClassName="w-auto"
-            onChange={(time: DateFilterValue) =>
-              setFilter(f => ({ ...f, time }))
-            }
-          />
+            />
+          </div>
         </div>
       ) : null}
 
@@ -312,8 +354,10 @@ export function ChannelAttachmentsPanel({
             firstItemIndex={attachWindow.firstItemIndex}
             groupCounts={groupCounts}
             groupContent={index => (
-              <div className="bg-[var(--bg-chat,var(--bg-app))] px-3 pb-1 pt-2 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
-                {groups[index]?.label ?? ''}
+              <div className="bg-[var(--bg-chat,var(--bg-app))]">
+                <div className="pb-1 pt-2 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
+                  {groups[index]?.label ?? ''}
+                </div>
               </div>
             )}
             itemContent={index => {
@@ -336,7 +380,7 @@ export function ChannelAttachmentsPanel({
                 ? presentAuthor(item.source.author)
                 : null;
               return (
-                <div className="px-2 py-[3px]">
+                <div className="py-[3px]">
                   <AttachmentRow
                     key={item.attachment.id}
                     item={item}
@@ -370,7 +414,7 @@ export function ChannelAttachmentsPanel({
           />
         )}
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -677,12 +721,28 @@ function AttachmentRow({
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           <AttachmentThumb attachment={attachment} isImage={isImage} />
-          <span className="flex min-w-0 flex-1 flex-col leading-tight">
-            <span className="truncate text-sm text-text-primary group-hover:text-text-primary">
+          {/* Filename over byline when the surface is narrow; filename / author /
+              size / date as aligned columns once it's wide (rule in
+              `global.css`, keyed on the surface's own container width — never on
+              which host mounted it). */}
+          <span
+            data-attachment-row-body
+            className="flex min-w-0 flex-1 flex-col leading-tight"
+          >
+            <span
+              data-attachment-row-name
+              className="truncate text-sm text-text-primary group-hover:text-text-primary"
+            >
               {attachment.filename}
             </span>
-            <span className="flex min-w-0 items-center gap-2 text-xs text-text-muted">
-              <span className="flex min-w-0 items-center gap-1.5">
+            <span
+              data-attachment-row-meta
+              className="flex min-w-0 items-center gap-2 text-xs text-text-muted"
+            >
+              <span
+                data-attachment-row-author
+                className="flex min-w-0 items-center gap-1.5"
+              >
                 <span className="flex shrink-0">
                   <AuthorAvatarView
                     avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
@@ -701,8 +761,11 @@ function AttachmentRow({
                   <span className="truncate">{senderLabel}</span>
                 )}
               </span>
-              <span className="shrink-0">{formatBytes(attachment.size)}</span>
+              <span data-attachment-row-size className="shrink-0">
+                {formatBytes(attachment.size)}
+              </span>
               <time
+                data-attachment-row-time
                 dateTime={new Date(source.appeared_at).toISOString()}
                 title={appeared.format('YYYY-MM-DD HH:mm:ss')}
                 className="flex shrink-0 items-center gap-1"

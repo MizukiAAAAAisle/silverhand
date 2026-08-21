@@ -715,6 +715,60 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 }
 
 
+/* Conversation surfaces (Attachments / Threads / Members) — width-adaptive.
+   Each surface renders under TWO independent hosts: the ~320px side panel and a
+   custom conversation tab that owns the whole main pane. The layout must follow
+   the SURFACE's own width, not the viewport and not which host mounted it, so
+   the content component names a query container and every width rule lives here
+   — no host-kind branch reaches the content.
+
+   These are density lists, not prose: extra width is spent on columns, so the
+   content uses the whole surface with only its own padding — no centred reading
+   measure. */
+.conversation-surface {
+  container-type: inline-size;
+  container-name: conversation-surface;
+}
+
+/* Attachment row, wide: filename | author | size | date as REAL columns, not a
+   trailing byline. Each row is its own grid, so the three trailing tracks are
+   FIXED widths — content-sized (`auto`) tracks would be as wide as each row's
+   own text and the columns would step out of line from row to row. `contents`
+   dissolves the byline wrapper so its children are the row's grid items. Author
+   and filename take the squeeze (both truncate); the date never does.
+   The threshold is the width at which all four tracks plus the row's thumb and
+   actions fit without the filename collapsing. */
+@container conversation-surface (min-width: 720px) {
+  [data-attachment-row-body] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 12rem) 4.5rem 8rem;
+    align-items: center;
+    column-gap: 16px;
+  }
+  [data-attachment-row-meta] {
+    display: contents;
+  }
+  [data-attachment-row-size] {
+    text-align: right;
+  }
+  [data-attachment-row-time] {
+    white-space: nowrap;
+  }
+}
+
+@container conversation-surface (min-width: 620px) {
+  /* Roster: more GROUP columns, never a wider row — a wider row only buys empty
+     space to the right of every name. Fixed-width columns fill the surface as
+     they fit, so the roster grows sideways instead of stretching. */
+  [data-members-groups] {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(0, 22rem));
+    align-items: start;
+    column-gap: 24px;
+  }
+}
+
+
 /* ── Activity cluster (PR-10) ──────────────────────────────────────
    `task_* / session_cleared / rename` lifecycle events get pooled
    into an `ActivityCluster` (see `groupMessages.ts`). The cluster

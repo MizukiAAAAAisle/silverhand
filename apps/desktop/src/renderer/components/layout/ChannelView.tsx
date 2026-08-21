@@ -75,8 +75,9 @@ import { paneChrome } from './pane-chrome';
 import { ConversationTabBar } from './channel-view/ConversationTabBar';
 import { ChannelTasksTab } from './channel-view/ChannelTasksTab';
 import { ChannelAttachmentTab } from './channel-view/ChannelAttachmentTab';
+import { ConversationPanelTab } from './channel-view/ConversationPanelTab';
 import { useConversationTabs } from '@/features/conversations/useConversationTabs';
-import { tabKey } from '@/lib/conversation-tabs';
+import { tabKey, type PanelTabKind } from '@/lib/conversation-tabs';
 import {
   taskBoardContainerForPane,
   type TaskBoardContainer,
@@ -449,6 +450,47 @@ function ActiveChannelView({
     );
     return active && active.kind === 'attachment' ? active : null;
   }, [viewTabsShown, tabController.tabs, tabController.activeKey]);
+  // The panel surfaces this pane can host, each behind the SAME gate its
+  // side-panel / modal entry uses: a jump handler for Attachments (the locate
+  // action is a row's whole point), a thread opener for Threads, a roster target
+  // for Members. ONE list feeds both the `＋` producer and the mount below, so a
+  // surface this pane can't host is never offered.
+  const hostablePanels = useMemo<readonly PanelTabKind[]>(() => {
+    const out: PanelTabKind[] = [];
+    if (onJumpToMessage) out.push('attachments');
+    if (onOpenThread) out.push('threads');
+    if (rosterTarget !== null) out.push('members');
+    return out;
+  }, [onJumpToMessage, onOpenThread, rosterTarget]);
+  // Already-open surfaces leave the menu: the strip is showing that tab, so
+  // offering it again would be a dead entry. All three open → no `＋` at all.
+  const addablePanels = useMemo(
+    () =>
+      hostablePanels.filter(
+        panel => !tabController.tabs.some(t => t.kind === 'panel' && t.panel === panel),
+      ),
+    [hostablePanels, tabController.tabs],
+  );
+  // The panel tab in front, by IDENTITY — deliberately NOT filtered by
+  // `hostablePanels`. A tab whose gate stopped holding (membership left, or not
+  // yet resolved) keeps its selection and keeps the pane covered by the opaque
+  // surface below; filtering here would drop the overlay and expose the Chat
+  // stream under a tab chip that still reads as selected.
+  const activePanelTab = useMemo(() => {
+    if (!viewTabsShown) return null;
+    const active = tabController.tabs.find(
+      t => tabKey(t) === tabController.activeKey,
+    );
+    return active && active.kind === 'panel' ? active.panel : null;
+  }, [viewTabsShown, tabController.tabs, tabController.activeKey]);
+  const activePanelHostable =
+    activePanelTab !== null && hostablePanels.includes(activePanelTab);
+  const handleAddPanel = useCallback(
+    (panel: PanelTabKind) => {
+      tabController.openTab({ kind: 'panel', panel });
+    },
+    [tabController.openTab],
+  );
   // Open (or focus) a md/html attachment's previewer tab. Only handed to the
   // message list when the tab strip is shown — otherwise md/html keep the
   // open-with-OS behaviour every other attachment type has.
@@ -600,11 +642,14 @@ function ActiveChannelView({
   // The visibility/leave capability carriers (`can_update_visibility`,
   // `can_leave`, `leave_blocked_reason`) live only on the channel-detail
   // envelope, and a member never fetches detail on the hot path. Fetch it only
-  // while a surface that consumes them is open (the settings modal, or the
-  // members modal — whose own row carries Leave) for a regular channel; a member
-  // hot path fires zero extra network until one is opened, and both fail-close
-  // (control hidden / Leave disabled) until it resolves.
-  const channelDetailEnabled = (settingsOpen || membersOpen) && isRegularChannel;
+  // while a surface that consumes them is mounted — the settings modal, or
+  // EITHER host of the roster (the modal, and the Members tab, whose own row
+  // carries Leave) — for a regular channel; a member hot path fires zero extra
+  // network until one opens, and both fail-close (control hidden / Leave
+  // disabled) until it resolves.
+  const membersTabMounted = activePanelHostable && activePanelTab === 'members';
+  const channelDetailEnabled =
+    (settingsOpen || membersOpen || membersTabMounted) && isRegularChannel;
   const { data: channelDetail } = useChannelDetail(
     channelDetailEnabled ? conversation.id : null,
     channelDetailEnabled,
@@ -728,6 +773,16 @@ function ActiveChannelView({
       onJumped?.();
     }
   }, [conversation.id, jumpTarget, onJumped]);
+  // A message jump's destination is the chat stream, so any jump landing in THIS
+  // conversation brings Chat to the front. Without it the scroll/highlight
+  // happens under whatever tab is in front (an opaque overlay) and the viewer
+  // sees nothing — true for the Attachments tab's own locate action and for an
+  // external jump (Saved, Activity, a task) that happens to target the open
+  // conversation. One destination rule, not a second reveal state.
+  useEffect(() => {
+    if (effectiveJumpMessageId === null) return;
+    tabController.setActive('chat');
+  }, [effectiveJumpMessageId, tabController.setActive]);
 
   // The reply affordance (open thread + per-root reply badge) is
   // actionable only on the parent pane, gated by `onOpenThread` being
@@ -1026,6 +1081,8 @@ function ActiveChannelView({
           onActivate={tabController.setActive}
           onReorder={tabController.reorder}
           onClose={tabController.closeTab}
+          addablePanels={addablePanels}
+          onAddPanel={handleAddPanel}
         />
       ) : null}
 
@@ -1261,6 +1318,49 @@ function ActiveChannelView({
               filename={activeAttachmentTab.filename}
               contentType={activeAttachmentTab.contentType}
             />
+          </div>
+        ) : null}
+
+        {/* Attachments / Threads / Members as a tab — same overlay discipline as
+            Tasks, so Chat keeps its scroll underneath. Keyed on the surface so
+            switching between two panel tabs remounts the surface's own
+            filter/scroll rather than carrying one list's state into another. */}
+        {activePanelTab ? (
+          <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+            {activePanelHostable ? (
+              <ConversationPanelTab
+                key={activePanelTab}
+                panel={activePanelTab}
+                channelId={conversation.id}
+                workspaceId={conversation.workspace_id}
+                // Present by construction: `hostablePanels` only offers
+                // Attachments when this handler exists.
+                onJumpToMessage={target => onJumpToMessage?.(target)}
+                // Same pane, so an md/html row opens the previewer tab directly —
+                // no sibling relay (that exists only because the side panel can't
+                // reach this pane's tab controller). Images and other types stay
+                // the row's own business (lightbox / open-with-OS).
+                onOpenAttachment={handleOpenAttachment}
+                onOpenThread={
+                  onOpenThread ? rootId => onOpenThread(rootId) : undefined
+                }
+                agentRuntime={channelAgentRuntime}
+                agentAvatarUrls={agentAvatarUrls}
+                onLeave={
+                  isRegularChannel && onLeaveChannel && gate.allowMutations
+                    ? () => onLeaveChannel(conversation.id)
+                    : undefined
+                }
+                canLeave={canLeaveChannel}
+                leaveBlockedReason={leaveBlockedReason}
+                visibility={channelVisibility}
+                addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center px-6 text-xs text-text-muted">
+                This view is unavailable here.
+              </div>
+            )}
           </div>
         ) : null}
       </div>

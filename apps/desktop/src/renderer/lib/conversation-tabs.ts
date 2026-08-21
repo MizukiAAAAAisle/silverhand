@@ -1,19 +1,19 @@
 /**
- * Per-conversation view tabs (#task:2121).
+ * Per-conversation view tabs.
  *
- * A conversation's main pane is an ORDERED list of tabs. Two are BUILTIN —
- * Chat and Tasks — present in every conversation (including a direct line,
- * shiki 2026-08-21) and non-removable, but they share ONE draggable order with
- * the viewer's custom tabs: a builtin can be dragged after a custom one, it
- * just can't be closed. Custom tabs (attachment previewers, #task:2122, and
- * later panel views) are both reorderable and removable.
+ * A conversation's main pane is an ORDERED list of tabs. Two are BUILTIN — Chat
+ * and Tasks — present in every conversation, direct lines included, and
+ * non-removable, but they share ONE draggable order with the viewer's custom
+ * tabs: a builtin can be dragged after a custom one, it just can't be closed.
+ * Custom tabs (attachment previewers, panel surfaces) are reorderable and
+ * removable.
  *
  * The whole ordered list is persisted per conversation (see `place-memory.ts`).
  * The ACTIVE tab is deliberately NOT persisted: reopening a conversation enters
  * the FIRST tab in its persisted order — whatever the viewer dragged there, not
- * a hardcoded Chat (shiki 2026-08-21; no URL, no cross-session active restore).
- * Active is component state, resolved through {@link resolveActiveTabKey} so a
- * removed or stale target falls back to the first tab rather than a blank pane.
+ * a hardcoded Chat. Active is component state, resolved through
+ * {@link resolveActiveTabKey} so a removed or stale target falls back to the
+ * first tab rather than a blank pane.
  *
  * PURE module: no React, no localStorage, no queries. The persistence half
  * lives in `place-memory.ts` (identity-bound, wiped on logout) and consumes
@@ -25,8 +25,7 @@
 /**
  * One tab. A flat discriminated union so the persisted unit is a single ordered
  * list that self-describes each element — builtins and customs sit side by side
- * in one order (shiki 2026-08-21). A new custom kind (panel views — Files /
- * Threads / Members — arrive as later increments) extends the union here.
+ * in one order.
  */
 export type Tab =
   | { kind: 'chat' }
@@ -41,7 +40,35 @@ export type Tab =
       filename: string;
       /** Decides how the previewer renders the body (md vs sandboxed html). */
       contentType: string;
+    }
+  | {
+      kind: 'panel';
+      /** Which conversation surface this tab hosts. The kind IS the whole
+       *  identity, so one conversation holds at most one tab per surface and
+       *  re-adding focuses the open one ({@link addTab}). Nothing about the
+       *  surface's CONTENT is carried here — rows, permissions and filters are
+       *  always re-read from their own authorities on mount. */
+      panel: PanelTabKind;
     };
+
+/** The conversation surfaces that can be opened as a tab. */
+export type PanelTabKind = 'attachments' | 'threads' | 'members';
+
+/** Derived from a total map rather than a bare array, so adding a
+ *  {@link PanelTabKind} without extending validation is a type error instead of
+ *  a silently-rejected persisted tab. */
+const PANEL_TAB_KINDS = {
+  attachments: true,
+  threads: true,
+  members: true,
+} as const satisfies Record<PanelTabKind, true>;
+
+function isPanelTabKind(value: unknown): value is PanelTabKind {
+  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a persisted
+  // `"toString"` would validate as a surface and mount a blank tab.
+  return typeof value === 'string' && Object.hasOwn(PANEL_TAB_KINDS, value);
+}
+
 
 /** The builtin kinds, in their default leading order. */
 const BUILTIN_KINDS = ['chat', 'tasks'] as const;
@@ -50,18 +77,27 @@ type BuiltinKind = (typeof BUILTIN_KINDS)[number];
 /** The default order for a conversation with no persisted layout. */
 export const DEFAULT_TABS: readonly Tab[] = [{ kind: 'chat' }, { kind: 'tasks' }];
 
-/** True for tabs the viewer may close. Builtins are non-removable; only
- *  custom tabs (today: attachments) can be removed from a conversation. */
+/** True for tabs the viewer may close. Builtins are non-removable; custom tabs
+ *  (attachment previewers and panel surfaces) can be removed from a
+ *  conversation. */
 export function isRemovable(tab: Tab): boolean {
-  return tab.kind === 'attachment';
+  return tab.kind === 'attachment' || tab.kind === 'panel';
 }
 
 /**
  * A tab's stable key — React key, active-tab selector, and dedupe identity.
- * Namespaced so a builtin can never collide with an attachment id.
+ * Namespaced so a builtin can never collide with an attachment id or a panel
+ * kind.
  */
 export function tabKey(tab: Tab): string {
-  return tab.kind === 'attachment' ? `attachment:${tab.attachmentId}` : tab.kind;
+  switch (tab.kind) {
+    case 'attachment':
+      return `attachment:${tab.attachmentId}`;
+    case 'panel':
+      return `panel:${tab.panel}`;
+    default:
+      return tab.kind;
+  }
 }
 
 /** The key of the first tab in an order — the tab a conversation opens on. */
@@ -110,7 +146,7 @@ export function addTab(tabs: readonly Tab[], next: Tab): Tab[] {
  * Remove the tab with this key. Builtins are non-removable — a key naming Chat
  * or Tasks (or an absent key) returns the list unchanged. Removing a custom tab
  * is non-destructive: it only drops the tab from this conversation's layout;
- * the attachment and its data are untouched (shiki 2026-08-21).
+ * the attachment and its data are untouched.
  */
 export function removeTab(tabs: readonly Tab[], key: string): Tab[] {
   const target = tabs.find(t => tabKey(t) === key);
@@ -168,6 +204,7 @@ export function parseTab(value: unknown): Tab | null {
     attachmentId?: unknown;
     filename?: unknown;
     contentType?: unknown;
+    panel?: unknown;
   };
   if (v.kind === 'chat' || v.kind === 'tasks') return { kind: v.kind };
   if (v.kind === 'attachment') {
@@ -180,6 +217,10 @@ export function parseTab(value: unknown): Tab | null {
       filename: v.filename,
       contentType: v.contentType,
     };
+  }
+  if (v.kind === 'panel') {
+    if (!isPanelTabKind(v.panel)) return null;
+    return { kind: 'panel', panel: v.panel };
   }
   return null;
 }

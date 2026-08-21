@@ -12,6 +12,7 @@ import {
   reorderTabs,
   resolveActiveTabKey,
   tabKey,
+  type PanelTabKind,
   type Tab,
 } from './conversation-tabs';
 
@@ -23,12 +24,19 @@ const att = (id: string, filename = `${id}.md`, contentType = 'text/markdown'): 
   filename,
   contentType,
 });
+const panel = (kind: PanelTabKind): Tab => ({ kind: 'panel', panel: kind });
 
 describe('tabKey / firstTabKey / isRemovable', () => {
   it('keys builtins by kind and attachments by id namespace', () => {
     expect(tabKey(chat)).toBe('chat');
     expect(tabKey(tasks)).toBe('tasks');
     expect(tabKey(att('a'))).toBe('attachment:a');
+  });
+
+  it('keys a panel surface by its kind, in its own namespace', () => {
+    expect(tabKey(panel('attachments'))).toBe('panel:attachments');
+    expect(tabKey(panel('threads'))).toBe('panel:threads');
+    expect(tabKey(panel('members'))).toBe('panel:members');
   });
 
   it('an attachment id that spells a builtin kind stays in its own namespace', () => {
@@ -40,10 +48,11 @@ describe('tabKey / firstTabKey / isRemovable', () => {
     expect(firstTabKey([])).toBe('chat');
   });
 
-  it('only attachments are removable', () => {
+  it('only custom tabs are removable', () => {
     expect(isRemovable(chat)).toBe(false);
     expect(isRemovable(tasks)).toBe(false);
     expect(isRemovable(att('a'))).toBe(true);
+    expect(isRemovable(panel('members'))).toBe(true);
   });
 });
 
@@ -83,11 +92,27 @@ describe('addTab — open-or-focus dedupe', () => {
     const out = addTab(list, att('a', 'renamed.md'));
     expect(out).toBe(list);
   });
+
+  it('one tab per panel surface: re-adding an open surface focuses it', () => {
+    const opened = addTab([chat, tasks], panel('threads'));
+    expect(opened.map(tabKey)).toEqual(['chat', 'tasks', 'panel:threads']);
+    expect(addTab(opened, panel('threads'))).toBe(opened);
+    expect(addTab(opened, panel('members')).map(tabKey)).toEqual([
+      'chat',
+      'tasks',
+      'panel:threads',
+      'panel:members',
+    ]);
+  });
 });
 
 describe('removeTab — builtins non-removable, customs non-destructive', () => {
   it('removes a custom tab by key', () => {
     expect(removeTab([chat, tasks, att('a')], 'attachment:a').map(tabKey)).toEqual(['chat', 'tasks']);
+    expect(removeTab([chat, tasks, panel('members')], 'panel:members').map(tabKey)).toEqual([
+      'chat',
+      'tasks',
+    ]);
   });
 
   it('refuses to remove a builtin', () => {
@@ -140,6 +165,16 @@ describe('parseTab / parseTabs — reject non-conforming, repair builtins', () =
     expect(parseTab({ kind: 'attachment', attachmentId: 'a', filename: 'a.md', contentType: 'text/markdown' })).toEqual(att('a'));
   });
 
+  it('accepts a known panel surface and drops an unknown one', () => {
+    expect(parseTab({ kind: 'panel', panel: 'attachments' })).toEqual(panel('attachments'));
+    expect(parseTab({ kind: 'panel', panel: 'threads' })).toEqual(panel('threads'));
+    expect(parseTab({ kind: 'panel', panel: 'members' })).toEqual(panel('members'));
+    // A surface this build no longer ships (or never shipped) must not hydrate
+    // into a tab that mounts nothing.
+    expect(parseTab({ kind: 'panel', panel: 'retired' })).toBeNull();
+    expect(parseTab({ kind: 'panel', panel: 'toString' })).toBeNull();
+  });
+
   it('drops malformed values', () => {
     expect(parseTab(null)).toBeNull();
     expect(parseTab({ kind: 'panel' })).toBeNull();
@@ -151,6 +186,16 @@ describe('parseTab / parseTabs — reject non-conforming, repair builtins', () =
   it('parseTabs keeps valid tabs and restores builtins', () => {
     expect(parseTabs([{ kind: 'attachment', attachmentId: 'a', filename: 'a.md', contentType: '' }, { kind: 'junk' }]).map(tabKey))
       .toEqual(['attachment:a', 'chat', 'tasks']);
+  });
+
+  it('parseTabs round-trips a persisted panel order and dedupes repeats', () => {
+    expect(
+      parseTabs([
+        { kind: 'panel', panel: 'members' },
+        { kind: 'chat' },
+        { kind: 'panel', panel: 'members' },
+      ]).map(tabKey),
+    ).toEqual(['panel:members', 'chat', 'tasks']);
   });
 
   it('parseTabs yields the default order for a corrupt/non-array value', () => {

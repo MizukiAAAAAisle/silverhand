@@ -48,10 +48,9 @@ const THREAD_TABS: { key: ChannelThreadsFilter; label: string }[] = [
  * message row — invisible in a busy channel. This list surfaces them all,
  * newest activity first, one click to open the existing `ThreadPanel`.
  *
- * A thread is NOT a conversation (it shares the parent channel's context), so
- * — like the reply-cluster pane — this panel renders outside the
- * conversation-bound `secondaryDescriptor` system and reads its own
- * channel-scoped aggregate via `useChannelThreads`.
+ * The SIDE-PANEL host: `<aside>` + `SidePanelHeader` around
+ * {@link ChannelThreadsContent}. The custom-tab host composes the
+ * same content under its own container; the two hosts share no shell.
  */
 export function ChannelThreadsPanel({
   channelId,
@@ -59,6 +58,49 @@ export function ChannelThreadsPanel({
   onClose,
   onOpenThread,
 }: ChannelThreadsPanelProps): JSX.Element {
+  return (
+    <aside
+      data-pane="threads-list"
+      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
+    >
+      <SidePanelHeader onClose={onClose}>
+        <SidePanelHeaderTitle
+          icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
+          title="Threads"
+          subtitle={parentTitle ? `#${parentTitle}` : undefined}
+        />
+      </SidePanelHeader>
+      {/* This host's inset — see the Attachments panel: pane-edge gutter is the
+          container's, never the surface's. */}
+      <div className="flex min-h-0 flex-1 flex-col px-1.5">
+        <ChannelThreadsContent channelId={channelId} onOpenThread={onOpenThread} />
+      </div>
+    </aside>
+  );
+}
+
+/**
+ * The Threads surface itself — filter, rows, empty/error/loading states and its
+ * own scroller. Host-agnostic: it takes no title, no close, no `open`. Both the
+ * side panel above and the conversation tab host mount THIS, so the two can't
+ * drift on what a thread row says.
+ *
+ * A thread is NOT a conversation (it shares the parent channel's context), so
+ * — like the reply-cluster pane — this surface renders outside the
+ * conversation-bound `secondaryDescriptor` system and reads its own
+ * channel-scoped aggregate via `useChannelThreads`.
+ *
+ * Width-adaptive: `conversation-surface` names the query container, so any width
+ * rule tracks THIS surface's own width (see `global.css`). The surface fills
+ * whatever box its host gives it — the outer inset belongs to the host.
+ */
+export function ChannelThreadsContent({
+  channelId,
+  onOpenThread,
+}: {
+  channelId: string;
+  onOpenThread: (rootMessageId: string) => void;
+}): JSX.Element {
   // Two independent datasets (#task:1773), NOT one list re-sorted: `all` is the
   // full follow-agnostic channel index; `unread` is the server's `followed ∩
   // unread` subset. Mount BOTH so the exact All key always has a reader — that
@@ -167,25 +209,14 @@ export function ChannelThreadsPanel({
   };
 
   return (
-    <aside
-      data-pane="threads-list"
-      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
-    >
-      <SidePanelHeader onClose={onClose}>
-        <SidePanelHeaderTitle
-          icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
-          title="Threads"
-          subtitle={parentTitle ? `#${parentTitle}` : undefined}
-        />
-      </SidePanelHeader>
-
+    <div className="conversation-surface flex min-h-0 w-full flex-1 flex-col">
       {/* Unread / All segmented filter. Selected chip uses the theme selection
           token, never a semantic hue — it must not steal the rows' unread-dot
           volume budget (mirrors ActivityView's filter chips). Counts are each
           dataset's own loaded length; a momentary 0 during a filtered load is a
           normal loading state, not a contradiction of the header dot (the two
           are independent reads that converge). */}
-      <div className="flex shrink-0 items-center gap-1.5 px-2.5 py-2">
+      <div className="flex shrink-0 items-center gap-1.5 py-2">
         {THREAD_TABS.map(t => {
           const on = t.key === tab;
           const count = t.key === 'followed-unread' ? unread.threads.length : all.threads.length;
@@ -209,7 +240,7 @@ export function ChannelThreadsPanel({
         })}
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-2">
         {isLoading ? (
           <div className="flex h-full items-center justify-center text-text-muted">
             <Loader2 className="size-4 animate-spin" />
@@ -263,7 +294,7 @@ export function ChannelThreadsPanel({
           </ul>
         )}
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -304,9 +335,9 @@ function ThreadRow({
         className="flex w-full flex-col overflow-hidden text-left focus-outline"
       >
         {/* Band 1 — root message: sender avatar + a natural "Name: content"
-            flow. shiki wants the avatar kept; the standalone byline row read as
-            disjoint, so the display name folds into the preview as a bold
-            prefix and the content carries the visual mass. */}
+            flow. The avatar stays, but the display name folds into the preview
+            as a bold prefix so the content carries the visual mass — a
+            standalone byline row read as disjoint from it. */}
         <span className="flex items-start gap-2 px-2.5 py-2">
           <span className="mt-px flex shrink-0">
             {renderAvatar(summary.root_author, 20)}

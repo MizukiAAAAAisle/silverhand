@@ -1,4 +1,4 @@
-import { FileText, MessageSquare, X } from 'lucide-react';
+import { FileText, MessagesSquare, Paperclip, Plus, Users, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
   DndContext,
@@ -20,20 +20,31 @@ import { animateLayoutChanges } from '@/components/layout/list-drag-sort';
 import {
   AppContextMenu,
   AppContextMenuItem,
+  AppDropdownMenu,
+  AppDropdownMenuItem,
 } from '@/components/menus/AppContextMenu';
-import { isRemovable, tabKey, type Tab } from '@/lib/conversation-tabs';
+import {
+  isRemovable,
+  tabKey,
+  type PanelTabKind,
+  type Tab,
+} from '@/lib/conversation-tabs';
 import { TaskIcon } from '@/components/tasks/TaskIcon';
+import { ThreadIcon } from '@/components/icons/conversation-icons';
 
 /**
- * Per-conversation view tab strip (#task:2121) — a Slack-style horizontal bar
- * under the conversation header. Builtins (Chat / Tasks) and the viewer's custom
- * tabs (attachment previewers, #task:2122) share ONE draggable order: any tab
- * can be dragged to any slot; only custom tabs can be removed (builtins have no
- * remove affordance). Removal is right-click only — a custom tab carries no close
- * icon (shiki 2026-08-21), so the strip stays flat and a builtin can never grow
- * a control it must never offer. Overflow scrolls horizontally with a hidden
- * scrollbar (`.scrollbar-hide`) — no dropdown; the `＋` producer is deferred
- * pending its scope (no custom-tab producer lands until #task:2122).
+ * Per-conversation view tab strip — a horizontal bar under the conversation
+ * header. Builtins (Chat / Tasks) and the viewer's custom tabs share ONE
+ * draggable order: any tab can be dragged to any slot; only custom tabs can be
+ * removed, and removal is right-click only — no tab carries a close icon, so a
+ * builtin can never grow a control it must not offer.
+ *
+ * The tabs scroll horizontally with a hidden scrollbar (`.scrollbar-hide`) — no
+ * dropdown. The `＋` producer is the LAST item of that same scroll flow, right
+ * after the final tab: it extends the sequence, so it must not detach from it and
+ * sit against the pane's far edge. It is not sortable, carries no tab identity,
+ * and mounts only when the host offers at least one addable surface (fail-closed:
+ * an ungated surface is absent from the menu, never a disabled row).
  *
  * Drag-reorder is LOCAL state (not the cache-driven sidebar sort), so the
  * frame-desync invariants in `list-drag-sort.tsx` don't apply — the reorder
@@ -48,6 +59,14 @@ export interface ConversationTabBarProps {
   /** Remove a custom tab from this conversation (non-destructive; builtins never
    *  call it — {@link isRemovable} decides whether the affordance renders). */
   onClose: (key: string) => void;
+  /** Surfaces the host can actually mount here AND has not already opened, in
+   *  menu order. Empty → no `＋`. The host owns every gate (membership,
+   *  workspace coordinate, a wired handler) and the already-open filter, so the
+   *  strip presents exactly what it is handed — no dead or disabled row. */
+  addablePanels?: readonly PanelTabKind[];
+  /** Open (or focus) a panel surface's tab. Required whenever
+   *  {@link ConversationTabBarProps.addablePanels} is non-empty. */
+  onAddPanel?: (panel: PanelTabKind) => void;
 }
 
 interface TabPresentation {
@@ -55,17 +74,31 @@ interface TabPresentation {
   label: string;
 }
 
+/** Icon + label for a panel surface — the ONE place a surface's tab identity is
+ *  presented, shared by the strip chip and the `＋` menu row so the two can't
+ *  disagree. Threads takes the `ThreadIcon` SSOT, never a raw bubble glyph. */
+const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
+  attachments: { icon: Paperclip, label: 'Attachments' },
+  threads: { icon: ThreadIcon, label: 'Threads' },
+  members: { icon: Users, label: 'Members' },
+};
+
 /** A tab's icon + label. Exhaustive over the {@link Tab} union so a new custom
  *  kind must declare its presentation here rather than fall through to a blank
  *  chip. */
 function tabPresentation(tab: Tab): TabPresentation {
   switch (tab.kind) {
     case 'chat':
-      return { icon: MessageSquare, label: 'Chat' };
+      // The chat-stream glyph (NavRail's Chats tab uses the same one), NOT the
+      // single bubble: that one is the ThreadIcon SSOT, and the Threads panel tab
+      // below carries it — two tabs must not share one glyph.
+      return { icon: MessagesSquare, label: 'Chat' };
     case 'tasks':
       return { icon: TaskIcon, label: 'Tasks' };
     case 'attachment':
       return { icon: FileText, label: tab.filename };
+    case 'panel':
+      return PANEL_PRESENTATION[tab.panel];
   }
 }
 
@@ -75,6 +108,8 @@ export function ConversationTabBar({
   onActivate,
   onReorder,
   onClose,
+  addablePanels,
+  onAddPanel,
 }: ConversationTabBarProps): JSX.Element {
   const ids = tabs.map(tabKey);
   const sensors = useSensors(
@@ -83,6 +118,7 @@ export function ConversationTabBar({
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+  const producers = onAddPanel ? (addablePanels ?? []) : [];
 
   return (
     <div
@@ -120,6 +156,35 @@ export function ConversationTabBar({
           })}
         </SortableContext>
       </DndContext>
+
+      {producers.length > 0 && onAddPanel ? (
+        <AppDropdownMenu
+          align="start"
+          trigger={
+            <button
+              type="button"
+              aria-label="Add a view"
+              title="Add a view"
+              className="flex shrink-0 cursor-pointer items-center border-b-2 border-transparent px-2 text-text-muted transition-colors hover:text-text-primary"
+            >
+              <Plus className="size-3.5" aria-hidden />
+            </button>
+          }
+        >
+          {producers.map(panel => {
+            const { icon: Icon, label } = PANEL_PRESENTATION[panel];
+            return (
+              <AppDropdownMenuItem
+                key={panel}
+                icon={<Icon className="size-3.5" />}
+                onSelect={() => onAddPanel(panel)}
+              >
+                {label}
+              </AppDropdownMenuItem>
+            );
+          })}
+        </AppDropdownMenu>
+      ) : null}
     </div>
   );
 }
@@ -185,9 +250,9 @@ function SortableTab({
     </button>
   );
 
-  // A custom tab carries no close icon (shiki 2026-08-21): removal is the
-  // right-click menu's single action, so the strip stays flat and a builtin
-  // never shows a control it must not offer.
+  // No close icon on any tab: removal is the right-click menu's single action,
+  // so the strip stays flat and a builtin never shows a control it must not
+  // offer.
   if (!onClose) return button;
   return (
     <AppContextMenu trigger={button}>
