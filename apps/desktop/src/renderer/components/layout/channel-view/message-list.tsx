@@ -78,6 +78,7 @@ export function MessageList({
   canMutateLinkedTask = false,
   searchQuery,
   searchActiveMessageId,
+  surfaceActive = true,
 }: {
   channelId: string;
   /** The conversation's workspace, or `null` for a workspace-less one (a
@@ -174,6 +175,14 @@ export function MessageList({
    *  Off-window matches are materialised by the shared jump/prime path (App's
    *  `handleJumpToMessage`) before they can be the active row. */
   searchActiveMessageId?: string | null;
+  /** False when this list is mounted-but-covered by a front tab overlay
+   *  (Tasks / attachment). Chat stays mounted so its scroll survives the
+   *  round-trip, but its out-of-flow floating affordances (the
+   *  scroll-to-bottom pill) sit at `--z-sticky`, above the `--z-raised`
+   *  overlay, so they must not paint while another tab owns the surface.
+   *  Default true: contexts without a tab strip (threads, activity) are
+   *  always their own surface. */
+  surfaceActive?: boolean;
 }): JSX.Element {
   // Render context (lookup maps + sigil resolution + resolved viewer)
   // comes from the shared hook so the channel pane and the thread
@@ -833,7 +842,7 @@ export function MessageList({
         />
       )}
 
-      {showScrollBottom || shouldResetToLatest ? (
+      {surfaceActive && (showScrollBottom || shouldResetToLatest) ? (
         <button
           type="button"
           data-scroll-bottom

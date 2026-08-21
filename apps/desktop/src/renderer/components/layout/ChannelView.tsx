@@ -431,6 +431,14 @@ function ActiveChannelView({
   const viewTabsShown =
     viewTabsEnabled && gate.allowMemberEffects && taskBoardContainer !== null;
   const tasksTabActive = viewTabsShown && tabController.activeKey === 'tasks';
+  // Chat owns the surface when there is no tab strip at all, or its tab is the
+  // front one. A front Tasks/attachment tab is an opaque overlay over the still-
+  // mounted Chat, so Chat's out-of-flow floating affordances (scroll-to-bottom
+  // pill, inline find bar) must go dark while it's covered — they sit above the
+  // overlay's z-index otherwise. Gating render (not state) keeps scroll + find
+  // intact for the round-trip back.
+  const chatSurfaceActive =
+    !viewTabsShown || tabController.activeKey === 'chat';
   // The attachment previewer tab currently in front, if any (#task:2122). Same
   // gate as the Tasks overlay — no tab strip, no attachment tabs. Resolved from
   // the ordered tabs so a removed/stale active key can't mount a ghost preview.
@@ -1029,7 +1037,7 @@ function ActiveChannelView({
           对话流、不应触发重渲染). It only drives the search controller + this
           overlay; the message window is untouched until the user navigates to a
           match (ensure-visible below). */}
-      {findAvailable && find.open ? (
+      {findAvailable && find.open && chatSurfaceActive ? (
         <div
           className={`absolute inset-x-0 z-[var(--z-sticky)] ${
             viewTabsShown
@@ -1190,6 +1198,7 @@ function ActiveChannelView({
             }
             searchQuery={find.highlightQuery}
             searchActiveMessageId={find.activeMessageId}
+            surfaceActive={chatSurfaceActive}
           />
           <SelectionQuoteToolbar
             boundaryRef={messageAreaRef}
