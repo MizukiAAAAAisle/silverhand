@@ -406,6 +406,54 @@ export interface DesktopEventWsDiagnostic {
   wasClean?: boolean;
 }
 
+let previewPinchZoomEnabled = false;
+
+interface PinchWheelEvent {
+  readonly ctrlKey: boolean;
+  preventDefault(): void;
+}
+
+interface PreloadEventTarget {
+  addEventListener(
+    type: 'wheel',
+    listener: (event: PinchWheelEvent) => void,
+    options: { capture: true; passive: false },
+  ): void;
+  removeEventListener(
+    type: 'wheel',
+    listener: (event: PinchWheelEvent) => void,
+    capture: true,
+  ): void;
+}
+
+const preloadEventTarget = globalThis as unknown as PreloadEventTarget;
+
+const preventPagePinchZoom = (event: PinchWheelEvent): void => {
+  if (event.ctrlKey) event.preventDefault();
+};
+
+/**
+ * Expose trackpad pinch events while a previewer is open, but never let
+ * Chromium apply them to the page viewport. The previewer consumes the same
+ * cancelable wheel event to update its own content scale.
+ */
+function setPreviewPinchZoom(enabled: boolean): void {
+  if (enabled === previewPinchZoomEnabled) return;
+  previewPinchZoomEnabled = enabled;
+
+  if (enabled) {
+    preloadEventTarget.addEventListener('wheel', preventPagePinchZoom, {
+      capture: true,
+      passive: false,
+    });
+    webFrame.setVisualZoomLevelLimits(1, 3);
+    return;
+  }
+
+  webFrame.setVisualZoomLevelLimits(1, 1);
+  preloadEventTarget.removeEventListener('wheel', preventPagePinchZoom, true);
+}
+
 const api = {
   getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> =>
     desktopBuildConfig(),
@@ -479,22 +527,7 @@ const api = {
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
-  /**
-   * Enable/disable trackpad pinch-to-zoom for this frame. macOS Electron
-   * defaults the visual-zoom limits to 1..1, which DISABLES pinch — and a
-   * disabled pinch is never dispatched to the page as a `ctrl+wheel` event,
-   * so no amount of renderer JS can observe it (verified with @shiki: even
-   * the Lightbox wheel handler saw nothing). Opening the limits makes
-   * Chromium emit cancelable `ctrl+wheel` for pinch; the caller
-   * `preventDefault`s it to run its own zoom instead of the page's visual
-   * viewport zoom. `webFrame` lives in this preload's (renderer) process, so
-   * this is a direct call, not an IPC round-trip. The Lightbox toggles it on
-   * only while open and restores 1..1 on close so pinch elsewhere in the app
-   * keeps its default (no) behaviour.
-   */
-  setPinchZoom: (enabled: boolean): void => {
-    webFrame.setVisualZoomLevelLimits(1, enabled ? 3 : 1);
-  },
+  setPinchZoom: setPreviewPinchZoom,
   /** Save attachment bytes to a per-app temp dir and hand the file off
    *  to the OS default handler (e.g. open `.html` in the user's
    *  browser). The renderer fetches the bytes through the main-owned

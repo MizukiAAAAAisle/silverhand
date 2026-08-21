@@ -2765,9 +2765,13 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
+      zoomFactor: 1,
     },
   });
   mainWindow = win;
+
+  // Mouse-wheel page zoom does not use the application menu.
+  win.webContents.on('zoom-changed', event => event.preventDefault());
 
   win.on('ready-to-show', () => win.show());
   win.on('closed', () => {
@@ -2864,10 +2868,8 @@ function buildAppMenu(): Menu {
         { role: 'forceReload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { type: 'separator' },
+        // Page zoom is unavailable. Previewers own content zoom without
+        // changing the renderer zoom factor.
         { role: 'togglefullscreen' },
       ],
     },
