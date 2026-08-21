@@ -317,7 +317,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             className="mermaid-block__seg"
             data-active={view === 'diagram'}
             data-sticker
-            data-sticker-size="sm"
+            data-sticker-size="lg"
             aria-pressed={view === 'diagram'}
             onClick={() => setView('diagram')}
           >
@@ -329,7 +329,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             className="mermaid-block__seg"
             data-active={view === 'code'}
             data-sticker
-            data-sticker-size="sm"
+            data-sticker-size="lg"
             aria-pressed={view === 'code'}
             onClick={() => setView('code')}
           >
@@ -357,7 +357,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 type="button"
                 className="mermaid-block__icon"
                 data-sticker
-                data-sticker-size="sm"
+                data-sticker-size="lg"
                 onClick={() => setZoomIndex(i => Math.max(0, i - 1))}
                 disabled={!diagramReady || zoomIndex === 0}
                 aria-label="Zoom out"
@@ -369,7 +369,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 type="button"
                 className="mermaid-block__icon"
                 data-sticker
-                data-sticker-size="sm"
+                data-sticker-size="lg"
                 onClick={() =>
                   setZoomIndex(i => Math.min(ZOOM_STEPS.length - 1, i + 1))
                 }
@@ -386,7 +386,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 type="button"
                 className="mermaid-block__icon"
                 data-sticker
-                data-sticker-size="sm"
+                data-sticker-size="lg"
                 onClick={openFullscreen}
                 disabled={!diagramReady}
                 aria-label="Open fullscreen"
@@ -400,7 +400,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               type="button"
               className="code-block__copy"
               data-sticker
-              data-sticker-size="sm"
+              data-sticker-size="lg"
               onClick={onCopy}
               title={copied ? 'Copied' : 'Copy source'}
               aria-label="Copy source"

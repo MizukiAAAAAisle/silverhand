@@ -1231,11 +1231,10 @@
 [data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker] {
   background: var(--forza6-paper);
   color: var(--forza6-ink);
-  /* Header stickers frame at the full control width (2px), not the `sm` 1px —
-     the shadow stays `sm` (set by the size attr, higher up). */
-  --sticker-border-w: var(--control-border-width);
   padding: 0.1em 0.3em;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  /* Only fill / padding / typography live here. Frame width, rest + hover
+     shadow, lift and transition are owned by the sticker primitive + the `lg`
+     size on the buttons — no private `--sticker-*` override. */
 }
 [data-theme='forza6'] .markdown-body .mermaid-block__controls .mermaid-block__icon[data-sticker],
 [data-theme='forza6'] .markdown-body .mermaid-block__controls .code-block__copy[data-sticker] {
