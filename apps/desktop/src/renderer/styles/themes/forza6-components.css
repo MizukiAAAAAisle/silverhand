@@ -622,7 +622,7 @@
   text-transform: uppercase;
 }
 
-/* ══ Sticker primitive (#task:1913) ══════════════════════════════════
+/* ══ Sticker primitive ══════════════════════════════════════════════
    forza6's poster-sticker shape language, parameterized once. A consumer
    opts in with `data-sticker` + `data-sticker-tone="<semantic>"`; this
    rule bakes the forza6 art (0 radius, ink frame, hard offset shadow) and
@@ -662,21 +662,25 @@
 [data-theme='forza6'] [data-sticker][data-sticker-no-frame] {
   border: none;
 }
-/* Interactive peel — an INTERACTIVE sticker (a `button`) rises 1px onto the
-   next step of the shared `--forza6-poster-shadow*` scale on hover. Scoped to
-   `button[data-sticker]` so a static identity glyph (channel `#`, workspace
-   icon) carrying a sticker never lifts. Redefining `--sticker-shadow` recomputes
-   the base box-shadow, so `data-sticker` + `data-sticker-size` alone own BOTH
-   states and the ONE shadow ladder scales them together. */
+/* Interactive peel — an INTERACTIVE sticker (a `button`) lifts a fixed 1px and
+   steps its shadow up exactly one rung of the shared `--forza6-poster-shadow*`
+   ladder. Each size maps its own rest→hover pair so md and lg never collapse to
+   the same hover: sm -sm→base, md base→-lg, lg -lg→-xl. Redefining
+   `--sticker-shadow` recomputes the base box-shadow, so `data-sticker` +
+   `data-sticker-size` alone own BOTH states. Scoped to `button[data-sticker]`
+   so a static identity glyph (channel `#`, workspace icon) never lifts. */
 [data-theme='forza6'] button[data-sticker] {
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 [data-theme='forza6'] button[data-sticker]:hover:not(:disabled) {
   transform: translateY(-1px);
-  --sticker-shadow: var(--forza6-poster-shadow-xl);
+  --sticker-shadow: var(--forza6-poster-shadow-lg);
 }
 [data-theme='forza6'] button[data-sticker][data-sticker-size='sm']:hover:not(:disabled) {
-  --sticker-shadow: var(--forza6-poster-shadow-lg);
+  --sticker-shadow: var(--forza6-poster-shadow);
+}
+[data-theme='forza6'] button[data-sticker][data-sticker-size='lg']:hover:not(:disabled) {
+  --sticker-shadow: var(--forza6-poster-shadow-xl);
 }
 /* Tone map — the semantic hue each sticker carries (fill + glyph). */
 [data-theme='forza6'] [data-sticker-tone='channel'] {
@@ -1213,8 +1217,8 @@
    Each control opts in with `data-sticker` (inert in every other theme — the
    primitive at the top of this file only paints under `[data-theme='forza6']`),
    so it inherits the shared poster geometry there: 0 radius + ink frame + hard
-   1px offset shadow (`data-sticker-size="sm"`). This block supplies only what
-   the primitive leaves open — the FILL and interior padding.
+   offset shadow at the `lg` size (2px border, `-lg` rest shadow). This block
+   supplies only what the primitive leaves open — the FILL and interior padding.
 
    Utility controls (zoom / fullscreen) and the INACTIVE view segment take a
    NEUTRAL paper fill: they wear the poster SHAPE without spending the accent
