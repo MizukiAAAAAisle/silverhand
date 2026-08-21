@@ -553,7 +553,7 @@
    消息自己的 task tag（`[data-message-task-tag]`，底边 `<status-icon> #n ·
    assignee` 按钮）默认继承 `--task-status-X-border`。shiki 要这一处无边框
    （薄底自己已经表达了状态，边框在消息流里读作噪音）。只 scope 这一个表面
-   —— kanban / drawer / inline `#task` chip / activity pill 都保留边框。 */
+   —— kanban board / inline `#task` chip / activity pill 都保留边框。 */
 [data-theme='studio-light'] [data-message-task-tag] {
   border: none;
 }

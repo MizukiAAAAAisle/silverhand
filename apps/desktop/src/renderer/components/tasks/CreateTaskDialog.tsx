@@ -34,12 +34,12 @@ export interface CreateTaskFormValues {
  * WHERE a new task will be created. Two shapes, because the two placements the
  * product has admit different target choices (contract §5):
  *
- *  - `pick` — a workspace-like surface (the global board or a workspace drawer):
+ *  - `pick` — a workspace-like surface (the global board or a per-conversation Tasks tab):
  *    the actor chooses a member channel from `channelOptions`, pre-focused on
  *    `defaultChannelId` when the surface opened on one. The global "All" board
  *    leaves it unseeded (`defaultChannelId: null`) — it never GUESSES a DM as the
- *    target; a DM task is created only from that direct line's own drawer.
- *  - `locked` — a direct line's own Tasks drawer: the target IS the pair
+ *    target; a DM task is created only from that direct line's own Tasks tab.
+ *  - `locked` — a direct line's own Tasks tab: the target IS the pair
  *    conversation, so there is nothing to pick — no channel picker shows and the
  *    task is created straight onto `conversationId`.
  *
@@ -75,14 +75,14 @@ export interface CreateTaskDialogProps {
 }
 
 /**
- * Create a task straight from a task surface (the board and the workspace
- * drawer), naming the channel it belongs to. Deliberately minimal — a required
+ * Create a task straight from a task surface (the global board and the
+ * per-conversation Tasks tab), naming the channel it belongs to. Deliberately minimal — a required
  * title, a required channel, an optional description — so the form carries no
  * explanatory prose; the required marks and labels do the work (shiki: no
  * conversational helper text stealing the information budget).
  *
  * In a locked (direct line) target there is no channel to choose, so the picker
- * is omitted entirely and the pair conversation is the target — the drawer's own
+ * is omitted entirely and the pair conversation is the target — the Tasks tab's own
  * header already names the direct line, so a read-only channel field would only
  * repeat it.
  *
@@ -250,7 +250,7 @@ export function CreateTaskDialog({
  * Bind the create form to the mutation. Returns the `onSubmit` the dialog
  * expects: map the form values to the wire input (an empty description is
  * OMITTED, not sent as ""), then create. On success the dialog closes and
- * `useCreateTask`'s `['tasks']` invalidation refreshes the board/drawer in
+ * `useCreateTask`'s `['tasks']` invalidation refreshes the board in
  * place — the actor stays where they were; the new task is NOT opened in a
  * detail modal (shiki 2026-07-30). A rejection is RE-THROWN as an Error carrying
  * manual copy (`createTaskErrorMessage`, classified on the typed `code`) — the

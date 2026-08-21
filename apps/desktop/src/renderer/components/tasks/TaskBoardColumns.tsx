@@ -1,5 +1,5 @@
 import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
-import { useRef, useState, type RefObject } from 'react';
+import { useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Clock } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
@@ -29,18 +29,16 @@ import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
 
 /**
  * The task board's five-column kanban BODY — the one authority for column
- * layout, card layout, drag-to-status, collapse, paging sentinel and reveal
- * highlight — shared by every board surface (#task:2121). Three surfaces mount
- * it: the global `/tasks` section, the floating conversation drawer, and the
- * per-conversation inline Tasks tab. They differ only in their SHELL — header,
- * filter bar, reveal wiring, create dialog — and in the two fill tokens below;
+ * layout, card layout, drag-to-status, collapse and paging sentinel — shared by
+ * every board surface (#task:2121). Two surfaces mount it: the global `/tasks`
+ * section and the per-conversation inline Tasks tab. They differ only in their
+ * SHELL — header, filter bar, create dialog — and in the two fill tokens below;
  * the body itself must read identically everywhere, so column status order, card
  * fields, drop behaviour and collapse can never drift between them.
  *
  * The only surface knob is the fill VOCABULARY ({@link columnClassName} /
- * {@link cardClassName}): the section and the inline tab put columns on
- * `bg-bg-primary` and cards on `bg-bg-base`; the drawer floats on a
- * `bg-bg-primary` shell so it inverts both. Everything else is fixed.
+ * {@link cardClassName}): both the section and the inline tab put columns on
+ * `bg-bg-primary` and cards on `bg-bg-base`. Everything else is fixed.
  */
 
 interface ColumnSpec {
@@ -92,23 +90,17 @@ export interface TaskBoardColumnsProps {
   /** The per-status authoritative totals (`useBoardCounts`). */
   counts: BoardAuthority<BoardCounts>;
   /** The render bound this surface owns — the section/tab pass their live
-   *  `columnWindow`; the drawer passes its pinned `renderWindow`. */
+   *  `columnWindow`. */
   window: ColumnWindow;
   isCollapsed: (status: TaskStatus) => boolean;
   onToggleCollapse: (status: TaskStatus) => void;
   onGrow: (status: TaskStatus) => void;
   onOpenTask: (taskId: string) => void;
   onStatusChange: (taskId: string, next: TaskStatus) => void;
-  /** The reveal target to pulse, or `null` — surfaces that aren't reveal
-   *  targets (the inline tab) simply never pass one. */
-  highlightedTaskId?: string | null;
   /** Column fill token, e.g. `bg-bg-primary`. */
   columnClassName: string;
   /** Card fill token, e.g. `bg-bg-base`. */
   cardClassName: string;
-  /** Scroll region ref — the section uses it as its reveal scroll root; the
-   *  drawer scrolls its own outer panel and passes nothing. */
-  boardRef?: RefObject<HTMLDivElement>;
 }
 
 /** The five-column kanban board region (`[data-tasks-board]`). */
@@ -121,14 +113,11 @@ export function TaskBoardColumns({
   onGrow,
   onOpenTask,
   onStatusChange,
-  highlightedTaskId = null,
   columnClassName,
   cardClassName,
-  boardRef,
 }: TaskBoardColumnsProps): JSX.Element {
   return (
     <div
-      ref={boardRef}
       data-tasks-board
       className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
     >
@@ -147,7 +136,6 @@ export function TaskBoardColumns({
           collapsed={isCollapsed(col.status)}
           onToggleCollapse={() => onToggleCollapse(col.status)}
           onReachEnd={() => onGrow(col.status)}
-          highlightedTaskId={highlightedTaskId}
           onCardClick={t => onOpenTask(t.id)}
           onStatusChange={onStatusChange}
           columnClassName={columnClassName}
@@ -173,7 +161,6 @@ function KanbanColumn({
   collapsed,
   onToggleCollapse,
   onReachEnd,
-  highlightedTaskId,
   onCardClick,
   onStatusChange,
   columnClassName,
@@ -199,7 +186,6 @@ function KanbanColumn({
   collapsed: boolean;
   onToggleCollapse: () => void;
   onReachEnd: () => void;
-  highlightedTaskId: string | null;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (taskId: string, next: TaskStatus) => void;
   columnClassName: string;
@@ -308,7 +294,6 @@ function KanbanColumn({
                 <li key={t.id}>
                   <TaskCard
                     task={t}
-                    highlighted={highlightedTaskId === t.id}
                     onClick={() => onCardClick(t)}
                     onStatusChange={next => onStatusChange(t.id, next)}
                     cardClassName={cardClassName}
@@ -333,13 +318,11 @@ function KanbanColumn({
 
 function TaskCard({
   task,
-  highlighted,
   onClick,
   onStatusChange,
   cardClassName,
 }: {
   task: TaskSummaryDto;
-  highlighted: boolean;
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
   cardClassName: string;
@@ -361,9 +344,6 @@ function TaskCard({
         className={cn(
           'group relative min-w-0 cursor-grab rounded-[var(--card-radius)] border border-border-subtle transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
           cardClassName,
-          // Brief outline pulse when this card is a reveal target — one recipe so
-          // a reveal reads identically on every board.
-          highlighted && '[outline:2px_solid_var(--accent)] [outline-offset:1px]',
           dragging && 'opacity-50',
         )}
       >

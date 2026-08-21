@@ -125,7 +125,7 @@ export interface ChannelFilterCandidate {
  * Single source of truth for *which* conversations are valid channel-filter
  * options. The eligibility rules — never offer an archived channel, dedup by
  * id, and map to the dropdown's `ChannelOption` shape — live here ONLY, so the
- * task pane (TasksSection) and the workspace task drawer (WorkspaceTasksDrawer)
+ * task section (TasksSection) and the per-conversation Tasks tab (ChannelTasksTab)
  * cannot drift. Callers own their own *scope* (which candidates to feed in)
  * and their own *ordering* (sort the result); those are legitimate
  * per-surface differences. Eligibility and option shape are not.
@@ -171,8 +171,8 @@ export interface TaskFilterBarProps {
   onChange: (next: TaskFilters) => void;
   /** Reset target. Clear shows only when `filters` differ from this and
    *  resets every dimension (workspace / channel / assignee / creator) back
-   *  to it. Global passes DEFAULT_TASK_FILTERS; the drawer passes its
-   *  current-channel default, so Clear restores the drawer's entry
+   *  to it. Global passes DEFAULT_TASK_FILTERS; the per-conversation Tasks tab passes its
+   *  current-channel default, so Clear restores that tab's entry
    *  context rather than jumping to All (Cindy review). */
   baselineFilters: TaskFilters;
   /** Upstream cascade axis (#task:1387). Empty → the workspace filter hides,
@@ -209,7 +209,7 @@ export function TaskFilterBar({
   const dirty = !taskFiltersEqual(filters, baselineFilters);
 
   // Consumer mode fork (contract §5). A `direct_messages` container is only ever
-  // the pinned baseline of a direct line's own Tasks drawer — DM is never a
+  // the pinned baseline of a direct line's own Tasks tab — DM is never a
   // selectable global scope — so it uniquely marks the LOCKED direct_pair context:
   // the scope trigger is hidden entirely (no scope to switch to, and it must not
   // double as a placement display) and only the Assignee / From narrowing shows.
@@ -262,7 +262,7 @@ export function TaskFilterBar({
           pick names the container KIND and the object together instead of the old
           pick-kind-then-object two-step. DM is never a selectable scope here
           (contract §5): its tasks reach the board through "All" or their own
-          locked drawer. It leads the row because it reshapes what the downstream
+          locked Tasks tab. It leads the row because it reshapes what the downstream
           channel menu even describes, and reads left-to-right as narrowing. Hidden
           entirely in a locked direct_pair context (§5), where there is no scope to
           switch to. */}
@@ -737,7 +737,7 @@ interface ScopeRow {
  * avatar), resolved from the directory the person menus already
  * loaded (no extra fetch). Direct Messages are not a section: a DM is never a
  * selectable global scope (contract §5) — its tasks reach the board through the
- * "All" union or the direct line's own locked Tasks drawer, which hides this
+ * "All" union or the direct line's own locked Tasks tab, which hides this
  * trigger entirely.
  */
 function BoardScopeFilter({

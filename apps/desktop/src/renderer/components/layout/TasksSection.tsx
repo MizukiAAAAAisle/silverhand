@@ -1,8 +1,7 @@
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { CheckSquare, Plus } from 'lucide-react';
 import { useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
-import { useRevealTaskRow } from '@/features/tasks/useRevealTaskRow';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
   activeTaskCount,
@@ -14,7 +13,6 @@ import {
   useBoardCounts,
   useBoardFacets,
 } from '@/features/tasks/useBoard';
-import { useBoardReveal } from '@/features/tasks/useBoardReveal';
 import { useColumnWindow } from '@/features/tasks/useColumnWindow';
 import {
   DEFAULT_TASK_FILTERS,
@@ -51,40 +49,24 @@ import { paneChrome } from './pane-chrome';
  * subscribes its caller to the location, which would re-render all ~1356 cards
  * on every section switch — exactly the urgent-pass freeze `React.memo` +
  * App's ref-stable handler exist to prevent (#task:1168).
- *
- * This board is also a reveal TARGET, not just a source: "View in Tasks" from the
- * modal lands here when `/tasks` is the route, and this section is the global All
- * board (`DEFAULT_TASK_FILTERS`), so the target card needs no navigation and no
- * filter widening — only a scroll and a pulse (#task:1715, Alice). A bounded,
- * paged board adds one step: the row may sit past the loaded prefix, which
- * `useBoardReveal` walks to (#task:1885). Every reveal prop must stay ref-stable
- * for the same `React.memo` reason as `onOpenTask`.
  */
 export interface TasksSectionProps {
   onOpenTask: (taskId: string) => void;
-  /** Standing reveal intent, or `null`. */
-  revealTaskId?: string | null;
-  /** Called once when the intent reaches a terminal outcome. */
-  onRevealConsumed?: () => void;
 }
 
 export const TasksSection = memo(function TasksSection({
   onOpenTask,
-  revealTaskId = null,
-  onRevealConsumed,
 }: TasksSectionProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [createOpen, setCreateOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
-  // Per-column render bound, local to THIS surface (#task:1885): the drawer
-  // shares the query cache but not the window, so its scrolling never inflates
-  // this board's mount cost. Every write that changes what the columns hold goes
-  // through `applyFilters` below, which resets the window in the same commit.
+  // Per-column render bound, local to THIS surface (#task:1885). Every write that
+  // changes what the columns hold goes through `applyFilters` below, which resets
+  // the window in the same commit.
   const {
     columnWindow,
     grow: growColumn,
     reset: resetColumnWindow,
-    coverIndex: coverColumnIndex,
   } = useColumnWindow();
   const applyFilters = useCallback(
     (next: TaskFilters) => {
@@ -93,10 +75,9 @@ export const TasksSection = memo(function TasksSection({
     },
     [resetColumnWindow],
   );
-  // Workspace + channel options + scope ids come from the SAME hook the
-  // drawer uses (#task:1165) so the two surfaces' dropdowns can't drift — DM +
-  // regular workspace channels, grouped by data source; regular workspaces for
-  // the upstream cascade axis (#task:1387).
+  // Workspace + channel options + scope ids (#task:1165): DM + regular workspace
+  // channels, grouped by data source; regular workspaces for the upstream cascade
+  // axis (#task:1387).
   const { workspaceOptions, channelOptions } = useTaskFilterOptions();
 
   // Collapse is read HERE, not only inside the column: a collapsed column must
@@ -119,49 +100,6 @@ export const TasksSection = memo(function TasksSection({
   const counts = useBoardCounts(filters);
   const people = useBoardFacets(filters);
 
-  // ── Reveal: this board is a delivery TARGET, not only a source ──────
-  //
-  // "This board's baseline is All" is NOT "this board's view is always All": the
-  // user filters it, and the reveal's own path produces the case — filter by
-  // Assignee, open a card, reassign it inside the modal, then "View in Tasks".
-  // The task leaves the current filter, so the row is gone from the DOM while the
-  // task still exists (Cindy BLOCKER 10). So widening the filters is this
-  // surface's own obligation, handed to the shared hook as a required argument.
-  //
-  // Widening is now ONLY the filter reset. The other two ways a row can be held
-  // and not rendered — past this surface's window, or on a page nobody fetched —
-  // are not one-shot writes but a walk, owned by `useBoardReveal` (which also
-  // scopes the evidence to the one column that may answer for the target).
-  const reveal = useBoardReveal({
-    revealTaskId,
-    active: true,
-    columns,
-    window: columnWindow,
-    grow: growColumn,
-    coverIndex: coverColumnIndex,
-  });
-  const ensureRevealRenderable = useCallback(() => {
-    applyFilters(DEFAULT_TASK_FILTERS);
-  }, [applyFilters]);
-  const boardRef = useRef<HTMLDivElement>(null);
-  const { highlightedTaskId } = useRevealTaskRow({
-    revealTaskId,
-    active: true,
-    rootRef: boardRef,
-    target: reveal.target,
-    ensureRenderable: ensureRevealRenderable,
-    canWiden: reveal.canWiden,
-    onWiden: reveal.widen,
-    canFetch: reveal.canFetch,
-    onPage: reveal.page,
-    authority: reveal.authority,
-    isFetching: reveal.isFetching,
-    dataUpdatedAt: reveal.dataUpdatedAt,
-    errorUpdateCount: reveal.errorUpdateCount,
-    refetch: reveal.refetch,
-    onConsumed: onRevealConsumed,
-  });
-
   const selectedChannelName = filters.channelId
     ? channelOptions.find(o => o.id === filters.channelId)?.label
     : null;
@@ -172,7 +110,7 @@ export const TasksSection = memo(function TasksSection({
   // the dialog closes and the list refreshes in place; the new task is NOT opened
   // in a detail modal (shiki 2026-07-30). The global board always PICKS a channel
   // — it never guesses a DM as the target (contract §5); a DM task is created only
-  // from that direct line's own drawer.
+  // from that direct line's own Tasks tab.
   const createTarget = useMemo<CreateTaskTarget>(() => {
     const defaultChannelId = channelOptions.some(o => o.id === filters.channelId)
       ? filters.channelId
@@ -193,8 +131,7 @@ export const TasksSection = memo(function TasksSection({
         * themes show a plain 16px CheckSquare here; 6px left is tight
         * but not broken — the icon leads the header content tight to
         * the left edge by intent (shiki #task:917 v6.7.3, "在不同的
-        * 地方用不同的外层样式来控制"). The drawer header keeps the
-        * standard `px-4` because its own `py-3` already balances. */}
+        * 地方用不同的外层样式来控制"). */}
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle pl-[6px] pr-4">
         <CheckSquare
           data-tasks-hero
@@ -239,10 +176,8 @@ export const TasksSection = memo(function TasksSection({
       </div>
 
       {/* Five-column kanban — the shared board body (`TaskBoardColumns`); this
-        * section supplies the shell + the reveal scroll root (`boardRef`) and
-        * the main-pane fill vocabulary. */}
+        * section supplies the shell + the main-pane fill vocabulary. */}
       <TaskBoardColumns
-        boardRef={boardRef}
         columns={columns}
         counts={counts}
         window={columnWindow}
@@ -251,7 +186,6 @@ export const TasksSection = memo(function TasksSection({
         onGrow={growColumn}
         onOpenTask={onOpenTask}
         onStatusChange={(taskId, next) => updateStatus.mutate({ taskId, status: next })}
-        highlightedTaskId={highlightedTaskId}
         columnClassName="bg-bg-primary"
         cardClassName="bg-bg-base"
       />

@@ -74,7 +74,7 @@ export function boardFilterParams(filters: TaskFilters): BoardFilterParams {
  *
  * A single segment (rather than one array element per axis) is what lets the two
  * surfaces SHARE a page cache: both derive the key from the same filters, so the
- * `/tasks` pane and the drawer read one query per column instead of fetching the
+ * `/tasks` section and the per-conversation Tasks tab read one query per column instead of fetching the
  * same page twice under two shapes. It is derived from the wire params, not from
  * the UI model, so two filter states that request the identical window (e.g. a
  * creator selection this mapper cannot express) resolve to one cache entry

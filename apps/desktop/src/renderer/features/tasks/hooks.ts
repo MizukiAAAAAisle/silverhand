@@ -424,7 +424,7 @@ export function useEditTask() {
  * and drive a duplicate on this sourceless, non-idempotent create; #task:1724).
  * The identity ACK only CONFIRMS the create — the surface does not navigate to
  * the new task; on success the dialog closes and the `['tasks']` invalidation
- * below refreshes the board/drawer in place (shiki 2026-07-30).
+ * below refreshes the board in place (shiki 2026-07-30).
  *
  * Only `['tasks']` is invalidated: the new row belongs on every board list, and
  * there is no prior detail / by-number projection of a task that did not exist a

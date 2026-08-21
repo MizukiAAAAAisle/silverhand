@@ -420,7 +420,7 @@
    borderless `--accent` link (pink here) with a hover underline. In forza6
    that left the inline task-ref as the ONE task surface NOT wearing its
    reserved hue: the colour-allocation lock assigns `yellow = task`
-   (forza6.css `--forza6-yellow`), and the board / drawer hero is already a
+   (forza6.css `--forza6-yellow`), and the task board hero is already a
    yellow hazard sticker (`[data-tasks-hero]` below). Pulling the inline chip
    onto that same yellow converges it with the board identity and leaves pink
    for channels only — inline: yellow = task, pink = channel.
@@ -1413,7 +1413,7 @@
    shiki: give the X close button a forza6 poster sticker across modals
    (channel/workspace settings, new workspace, new agent — all via the
    generic DialogContent close), the conversation side panel (AgentView),
-   the Image Preview / Lightbox modals, and the Tasks drawer. Same
+   the Image Preview / Lightbox modals, and the per-conversation Tasks tab. Same
    sticker-button family as `[data-channel-actions] button` above: white
    paper body + 2px ink border + 0 radius + hard ink drop shadow that
    grows on the hover lift. The hook paints identity only — each consumer
@@ -1538,8 +1538,8 @@
   box-shadow: var(--forza6-poster-shadow);
 }
 
-/* ── #v5.6 — Task panel (drawer + TasksSection) poster polish ────────
-   shiki `kx1DNk-PwdkIcQ_Y` "先做核心 4 个". WorkspaceTasksDrawer.tsx
+/* ── #v5.6 — Task panel (global section + per-conversation Tasks tab) poster polish ────────
+   shiki `kx1DNk-PwdkIcQ_Y` "先做核心 4 个". ChannelTasksTab.tsx
    and TasksSection.tsx render the same kanban surface (4-column
    board: todo / in_progress / in_review / done). v5.6 wraps the
    board with `[data-tasks-board]` and each column with
@@ -1635,7 +1635,7 @@
 
 /* Task card — poster sticker + lime hover preview. Selectors target
    `[data-tasks-board] [data-task-number]` so they apply to both the
-   drawer and the TasksSection without affecting any other element
+   per-conversation Tasks tab and the TasksSection without affecting any other element
    that happens to use `[data-task-number]` outside a tasks board. */
 [data-theme='forza6'] [data-tasks-board] [data-task-number] {
   border: 2px solid var(--forza6-ink);
@@ -1668,7 +1668,7 @@
 
 /* Column-header icons — re-home all 5 statuses to `-bg` token
    (v6.5l, #task:917) ──
-   `WorkspaceTasksDrawer.tsx:699` + `TasksSection.tsx:362` paint each
+   `TasksSection.tsx:362` + `ChannelTasksTab.tsx` paint each
    column header icon with `text-[color:var(--task-status-<status>-text)]`.
    The `-text` token in the forza6 task-status family is the ON-FILL
    foreground designed for the saturated chip ground inside cards —
@@ -2009,7 +2009,7 @@
                 was dormant until now; semantic fits "highlighter /
                 checklist / racing flag" instantly. Used for the right-
                 pane TasksSection header AND the channel-scoped Tasks
-                drawer header so the icon stamps wherever "tasks" live.
+                tab header so the icon stamps wherever "tasks" live.
      - Hosts  → DEEP TEAL sticker (Monitor/Globe on poster-teal-deep,
                 paper stroke). v6.6 first tried ink black; shiki feedback
                 "现在这个太黑了, 一个大黑块, 换一个颜色" — replaced with
@@ -2046,16 +2046,16 @@
    用不同的外层样式来控制"): v6.6.1 also added a blanket
    `margin-left: -10px` on the shared hook to compensate for
    TasksSection's `px-4` (16px) left padding — but the
-   WorkspaceTasksDrawer header has different proportions (`px-4 py-3`,
+   ChannelTasksTab header has different proportions (`px-4 py-3`,
    no fixed titlebar height) where -10px over-shifted the sticker
    into the pane edge. Removed: shared icon style only paints
    identity (colour, border, shadow), each consumer controls its own
    outer geometry via its header's Tailwind padding instead. See
-   TasksSection.tsx (pl-[6px]) vs WorkspaceTasksDrawer.tsx (px-4).
+   TasksSection.tsx (pl-[6px]) vs ChannelTasksTab.tsx (px-4).
 
    Used in:
      - TasksSection.tsx header (`/tasks` right pane title bar)
-     - WorkspaceTasksDrawer.tsx header (channel-scoped Tasks drawer) */
+     - ChannelTasksTab.tsx header (channel-scoped Tasks tab) */
 [data-theme='forza6'] [data-tasks-hero] {
   width: 22px;
   height: 22px;

@@ -4,7 +4,6 @@ import type { TaskDetailDto, TaskSummaryDto } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import {
   classifyTaskDetailFailure,
-  drawerShouldCloseOnEscape,
   resolveTaskDetailView,
   resolveTaskJumpTarget,
   shouldRefreshTaskDetail,
@@ -115,17 +114,6 @@ describe('resolveTaskJumpTarget', () => {
   it('returns null when nav.kind is "unavailable" (caller hides the affordance)', () => {
     const d = detail({ nav: { kind: 'unavailable' } });
     expect(resolveTaskJumpTarget(d)).toBeNull();
-  });
-});
-
-describe('drawerShouldCloseOnEscape', () => {
-  it('closes the drawer when no detail modal is open', () => {
-    expect(drawerShouldCloseOnEscape(false)).toBe(true);
-  });
-
-  it('defers (does NOT close the drawer) while a detail modal is open', () => {
-    // Escape belongs to the top layer: the modal closes, the drawer stays.
-    expect(drawerShouldCloseOnEscape(true)).toBe(false);
   });
 });
 

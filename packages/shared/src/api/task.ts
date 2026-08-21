@@ -936,9 +936,10 @@ export const TaskEditResultSchema = z.union([
 export type TaskEditResult = z.infer<typeof TaskEditResultSchema>;
 
 // Realtime payload — published on every task mutation (create / claim /
-// unclaim / status / edit). Consumers refresh the list + any open
-// conversation's inline task drawer. `edit` carries the new title; full
-// content is fetched on demand via the detail read (the event stays thin).
+// unclaim / status / edit). Consumers refresh the list + the two live board
+// surfaces (the global Tasks section and a conversation's inline Tasks tab).
+// `edit` carries the new title; full content is fetched on demand via the
+// detail read (the event stays thin).
 //
 // Published on TWO scopes: `conversation:<id>` (the conversation-visible read
 // stream — public-aware, so members and non-members alike observe task changes

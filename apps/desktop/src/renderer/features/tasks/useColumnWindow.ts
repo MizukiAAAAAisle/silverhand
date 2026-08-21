@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { TaskStatus } from '@silverhand/shared';
 import {
-  columnWindowCovering,
   FIRST_COLUMN_WINDOW,
   growColumnWindow,
   type ColumnWindow,
@@ -12,12 +11,10 @@ import {
  * model and why the bound is per surface).
  *
  * There is deliberately NO automatic reset key here. Resetting is owned by
- * whoever changes what the columns hold: a filter change, a drawer's baseline
- * re-anchor, a reveal that widens the view. A derived key looks tidier but
- * breaks the one case that matters — a reveal writes the filter reset and the
- * window coverage in the SAME commit, and a window keyed on the filters would
- * file that coverage under the outgoing key and drop it. So the surface calls
- * `reset()` next to its own `setFilters`, and both writes land together.
+ * whoever changes what the columns hold — a filter change resets in the same
+ * commit as `setFilters`. A derived key looks tidier but would file the reset
+ * under the outgoing filter key and drop it, so the surface calls `reset()` next
+ * to its own `setFilters` and both writes land together.
  */
 export function useColumnWindow(): {
   columnWindow: ColumnWindow;
@@ -25,8 +22,6 @@ export function useColumnWindow(): {
   grow: (status: TaskStatus) => void;
   /** Back to the first page of every column. */
   reset: () => void;
-  /** Widen a column so the row at `index` renders (reveal). */
-  coverIndex: (status: TaskStatus, index: number) => void;
 } {
   const [columnWindow, setColumnWindow] =
     useState<ColumnWindow>(FIRST_COLUMN_WINDOW);
@@ -41,11 +36,7 @@ export function useColumnWindow(): {
     );
   }, []);
 
-  const coverIndex = useCallback((status: TaskStatus, index: number) => {
-    setColumnWindow(prev => columnWindowCovering(prev, status, index));
-  }, []);
-
-  return { columnWindow, grow, reset, coverIndex };
+  return { columnWindow, grow, reset };
 }
 
 /**

@@ -430,8 +430,8 @@
    `<status-icon> #n · assignee` button) inherits `border: var(--task-status-
    X-border)` from the global `[data-task-status]` contract. shiki wants this
    one surface borderless in slack-dark (the fill carries the status; the border
-   is noise on the message stream). Scoped to the message tag only — kanban /
-   drawer / inline `#task` chip / activity pill keep their border. Selector
+   is noise on the message stream). Scoped to the message tag only — kanban
+   board / inline `#task` chip / activity pill keep their border. Selector
    specificity (theme + tag attr = 0,2,0) beats the global
    `[data-task-status='…']` (0,1,0), so `border: none` wins. forza6 untouched. */
 [data-theme='slack-dark'] [data-message-task-tag] {

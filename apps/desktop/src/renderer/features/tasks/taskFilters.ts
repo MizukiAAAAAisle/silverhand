@@ -1,6 +1,6 @@
 /**
  * Unified task-filter model shared by the global Tasks board
- * (TasksSection) and the workspace drawer (WorkspaceTasksDrawer).
+ * (TasksSection) and the per-conversation Tasks tab (ChannelTasksTab).
  *
  * Design (shiki + Cindy, #task:769 / #task:770): the kanban columns
  * express ONLY the status dimension (Todo / In progress / In review /
@@ -128,8 +128,8 @@ export function applyWorkspaceCascade(
 }
 
 /**
- * The container axis (#task:2041), closed as ONE pure model shared by the board
- * and the drawer. `null` = All (the union of every container the viewer can see);
+ * The container axis (#task:2041), closed as ONE pure model shared by the global
+ * section and the per-conversation Tasks tab. `null` = All (the union of every container the viewer can see);
  * the three concrete values narrow to one KIND of container. Two pure faces, so
  * the whole "container × channel axis × selection" matrix is falsifiable without
  * a DOM:
@@ -147,7 +147,7 @@ export function applyWorkspaceCascade(
  * under `workspace`, an agent space under `agent_space`; a channel's data-source
  * `group` mirrors that. The `direct_messages` container is
  * never picked from the scope dropdown — it exists only as the pinned baseline of
- * a direct line's own (locked) Tasks drawer, where its coordinate is the pair
+ * a direct line's own (locked) Tasks tab, where its coordinate is the pair
  * conversation (matched by the `channel_id` param) and no workspace is minted.
  */
 
@@ -196,7 +196,7 @@ export interface ChannelAxisScope<C> {
  *    `channel_id` param), not a channel, so the channel picker is HIDDEN, not fed
  *    an empty set: an empty option list reads as "no channels", a different
  *    (false) claim than "this axis does not apply here". (In practice a
- *    direct_messages board is only ever the locked DM drawer, which hides the
+ *    direct_messages board is only ever the locked DM Tasks tab, which hides the
  *    whole scope + channel row anyway; this keeps the pure model honest for the
  *    one value that reaches it.)
  *  - `workspace` / `agent_space` — narrow the channel population to that KIND (a
@@ -227,7 +227,7 @@ export function channelAxisScope<C extends { group: ChannelSourceGroup }>(
  * two are set together. There is no `direct_pair` pick: a DM is never a selectable
  * scope in the global board (contract §5) — the "All" tab already covers DM tasks
  * in its union, and a specific direct line is narrowed to only from inside its own
- * (locked) Tasks drawer, where the scope trigger is hidden entirely.
+ * (locked) Tasks tab, where the scope trigger is hidden entirely.
  */
 export type BoardScopeSelection =
   | { kind: 'all' }
@@ -293,7 +293,7 @@ export interface BoardScopeGroup<W> {
  * objects: an answered-empty section is simply absent. Direct Messages are not
  * offered here (contract §5) — the coarsest axis's only selectable objects are
  * workspaces and agent spaces; DM tasks reach the board through the "All" union or
- * their own locked drawer.
+ * their own locked Tasks tab.
  */
 export function boardScopeGroups<W extends WorkspaceOwnership>(input: {
   workspaces: readonly W[];

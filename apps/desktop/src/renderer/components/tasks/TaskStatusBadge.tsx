@@ -17,7 +17,7 @@ import {
 } from '@/components/menus/AppContextMenu';
 
 /**
- * Small inline status chip for task cards (drawer + global section).
+ * Small inline status chip for task cards (global section + per-conversation Tasks tab).
  *
  * Radius rides `--task-status-radius` — the whole task-status family (this
  * badge, the message task tag, and `TaskStatusPill`) shares ONE capsule form
@@ -94,7 +94,7 @@ const CircleProgress = createLucideIcon('CircleProgress', [
 /**
  * Canonical per-status icon. The SINGLE source for the status glyph vocabulary
  * (shiki #task:1185: "icon 引用同一个 source，到时候更改 icon 可以一起更新") —
- * the kanban board (`TasksSection`), the drawer (`WorkspaceTasksDrawer`) and the
+ * the kanban board (`TasksSection`), the per-conversation Tasks tab (`ChannelTasksTab`) and the
  * message task tag all read from here, so swapping a glyph updates every
  * surface at once. Colour stays per-consumer via the `--task-status-*-text`
  * tokens; only the glyph is centralised.
@@ -116,7 +116,7 @@ const CHIP =
   // the loose default, only this chip tightens.
   // `whitespace-nowrap` keeps "in progress" / "in review" cohesive when
   // the card's row 1 wraps under narrow column widths (TasksSection at low
-  // viewport + WorkspaceTasksDrawer at MIN_WIDTH share 5 columns). The
+  // viewport + per-conversation Tasks tab at MIN_WIDTH share 5 columns). The
   // chip drops to its own line beneath `#nnn` instead of breaking
   // mid-word.
   'rounded-[var(--task-status-radius)] whitespace-nowrap px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide leading-none';

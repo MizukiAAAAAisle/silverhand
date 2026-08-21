@@ -293,7 +293,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // the popover is purely informational (status / assignee /
   // conversation), not a click affordance, so it makes sense even
   // when the click handler is unavailable (e.g. saved/preview
-  // surfaces with workspace context but no drawer).
+  // surfaces with workspace context but no task-open host).
   return (
     <HoverPopover
       trigger={onOpenTask ? interactiveChip : inertChip}

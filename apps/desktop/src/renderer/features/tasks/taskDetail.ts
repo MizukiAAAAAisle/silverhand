@@ -229,15 +229,3 @@ export function shouldRefreshTaskDetail(
       return false;
   }
 }
-
-/**
- * Whether the tasks drawer's own Escape handler should close the drawer.
- *
- * When a task detail modal is open ON TOP of the drawer, Escape must close
- * only the modal (Radix owns that) and leave the drawer open — so the
- * drawer's unconditional document-level Escape listener has to defer while
- * the modal is up. One Escape closes one layer, top-down.
- */
-export function drawerShouldCloseOnEscape(detailModalOpen: boolean): boolean {
-  return !detailModalOpen;
-}

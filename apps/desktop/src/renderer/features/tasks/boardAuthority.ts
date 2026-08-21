@@ -48,9 +48,10 @@ export function mapBoardAuthority<A, B>(
 export type BoardCounts = Readonly<Record<TaskStatus, number>>;
 
 /**
- * "Active" = everything before a terminal status. ONE definition, consumed by the
- * titlebar badge and by a board header, so the two cannot disagree about what the
- * number means (`done` is completed and `closed` is shelved — neither is work in
+ * "Active" = everything before a terminal status. ONE definition, consumed by
+ * the global Tasks section's active-count label and kept distinct from the
+ * board header's total below, so the two numbers cannot disagree about what
+ * they mean (`done` is completed and `closed` is shelved — neither is work in
  * hand).
  *
  * Every reader below takes the AUTHORITY, not a `BoardCounts`, and returns `null`

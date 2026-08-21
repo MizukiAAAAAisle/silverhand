@@ -35,7 +35,7 @@ describe('buildChannelFilterOptions', () => {
     ]);
   });
 
-  it('skips archived channels — this is the drawer leak being fixed', () => {
+  it('skips archived channels — this is the archived-channel leak being fixed', () => {
     const out = buildChannelFilterOptions([
       candidate({ id: 'c1' }),
       candidate({ id: 'c2', archived_at: 1700000000000 }),

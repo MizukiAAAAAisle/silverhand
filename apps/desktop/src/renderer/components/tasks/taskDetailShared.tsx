@@ -28,7 +28,7 @@ import { cn } from '@/lib/cn';
 
 /**
  * Substance shared by the two task-detail surfaces — the modal
- * (`TaskDetailDialog`, opened from a board / drawer card) and the
+ * (`TaskDetailDialog`, opened from a board card) and the
  * conversation-anchored overlay pane (`TaskDetailPanel`). Everything here is
  * chrome-agnostic: the single-field inline editor, the failure copy, the
  * single-write-slot rule, and the metadata value/write primitives. Each surface

@@ -2,7 +2,8 @@ import type { TaskStatus } from '@silverhand/shared';
 
 /**
  * Shared drag-and-drop contract for task cards → status columns
- * (#task:779). Both boards (global TasksSection + WorkspaceTasksDrawer)
+ * (#task:779). Both surfaces — the global section (`TasksSection`) and the
+ * per-conversation Tasks tab (`ChannelTasksTab`) —
  * use native HTML5 drag/drop — no extra dependency — so this module is
  * the single source of the payload shape + (de)serialization, keeping the
  * two surfaces from drifting.

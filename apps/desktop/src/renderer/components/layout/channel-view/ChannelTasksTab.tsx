@@ -34,19 +34,17 @@ import { primaryAction } from '@/features/common/PrimaryAction';
  * rendered INLINE in the main pane, scoped to the conversation it opens in.
  *
  * The board BODY is the shared {@link TaskBoardColumns} — the same columns,
- * cards, drag/drop, collapse and paging the global section and the drawer
- * render, so the three surfaces cannot drift. This tab only supplies the SHELL:
- * the filter bar pre-focused on this conversation's CONTAINER
+ * cards, drag/drop, collapse and paging the global section renders, so the two
+ * surfaces cannot drift. This tab only supplies the SHELL: the filter bar
+ * pre-focused on this conversation's CONTAINER
  * (`taskContainerBaseline` — a workspace channel anchors workspace + channel, a
  * direct line anchors its own conversation and mints no workspace), the create
  * entrance, and the main-pane fill vocabulary (columns `bg-bg-primary`, cards
  * `bg-bg-base`). Both filters stay switchable; Clear restores the baseline, not
  * global All.
  *
- * NO reveal machinery: this is a board surface, not a "View in Tasks" delivery
- * target (that routing stays with the section/drawer until its cutover). NO
- * render-window sharing with the drawer/section either — this board owns its own
- * bound (`useColumnWindow`) so its scrolling never inflates another surface's
+ * Render-window bound is surface-local: this board owns its own
+ * (`useColumnWindow`) so its scrolling never inflates the global section's
  * mount cost.
  */
 export interface ChannelTasksTabProps {

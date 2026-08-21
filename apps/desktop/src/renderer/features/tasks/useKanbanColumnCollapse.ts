@@ -2,9 +2,9 @@ import { useSyncExternalStore } from 'react';
 import type { TaskStatus } from '@silverhand/shared';
 
 /**
- * Per-column collapse state for the task kanban (NavRail pane + titlebar
- * drawer share one store, so toggling in one surface reflects in the other
- * within the session).
+ * Per-column collapse state for the task kanban (global NavRail section +
+ * per-conversation Tasks tab share one store, so toggling in one surface
+ * reflects in the other within the session).
  *
  * Persistence is deliberately **in-memory only** (#task:1169, Alice + Cindy
  * review): column collapse is a per-viewer UI preference of the same family as
@@ -14,15 +14,16 @@ import type { TaskStatus } from '@silverhand/shared';
  * Reaching for localStorage here would (a) fork that state per
  * desktop/web/standalone surface and (b) open a second persistence paradigm
  * that drifts from list-sort. So we keep zero cross-session persistence: a
- * user's toggles live in a module-level store and are shared across the pane,
- * the drawer, and navigation **within the session**, but a window
+ * user's toggles live in a module-level store and are shared across the global
+ * section, the per-conversation Tasks tab, and navigation **within the
+ * session**, but a window
  * reload / fresh session resets to the default (Closed collapsed). It's the
  * archival terminal column, so that default is sensible.
  *
  * The public interface (`isCollapsed` / `toggle`) is the contract: if
  * "remember my expanded columns" ever becomes a real requirement, swap the
  * module store below for the server-side viewer-scoped read model — the call
- * sites in TasksSection / WorkspaceTasksDrawer don't change.
+ * sites in TasksSection / ChannelTasksTab don't change.
  */
 
 // Closed is collapsed by default — it's the archived terminal column and

@@ -252,8 +252,8 @@ export interface RouteState {
    *  The value is a task ID, not the `#<n>` the user reads in chat: a
    *  task_number is only unique inside a workspace, so it would need a
    *  second workspace axis to resolve — and the route's own workspace can't
-   *  supply it (the tasks drawer is a cross-workspace aggregate, so a card
-   *  it shows may belong to another workspace). One id is the whole
+   *  supply it (the global Tasks section is a cross-workspace aggregate, so a
+   *  card it shows may belong to another workspace). One id is the whole
    *  coordinate: `GET /api/tasks/:taskId` gates a human read on
    *  conversation access alone, with no workspace term. Same shape as
    *  `?side=<conversation_id>` / `?agent=<agent_id>`; `task_number` stays a
@@ -772,7 +772,7 @@ export function withTaskQuery(
  * Build the URL written by `openTask(taskId)`. Opens the `task` overlay on the
  * current location, preserving the base path and the `?thread` / `?threads`
  * restore stack. The app-level host reads `taskDetailId` from the resulting
- * RouteState and shows the detail pane (in a conversation) or modal (drawer /
+ * RouteState and shows the detail pane (in a conversation) or modal (from a
  * board) on that task.
  *
  * Thin wrapper over {@link withTaskQuery}; closing is `withTaskQuery(…, null)`.
@@ -1034,16 +1034,16 @@ export function useNav(): {
    *  icon's click-to-toggle behaviour, mirroring `toggleThreadsList`. */
   toggleFilesList: () => void;
   /** Open a task's detail by writing `?task=<task_id>` (an OVERLAY pane).
-   *  Every entrance (chat chip, Tasks pane card, drawer card) goes through
-   *  this one writer, so there is a single task-detail state. In a
-   *  conversation the host renders it as an overlay side pane; from the drawer
-   *  / board as a modal. `replace` so re-clicking chips doesn't pile history.
-   *  Clears `?side` + other overlays, preserves `?thread`/`?threads`. */
+   *  Every entrance (chat chip, global Tasks section card, per-conversation
+   *  Tasks tab card) goes through this one writer, so there is a single
+   *  task-detail state. In a conversation the host renders it as an overlay
+   *  side pane; from a board as a modal. `replace` so re-clicking chips doesn't
+   *  pile history. Clears `?side` + other overlays, preserves
+   *  `?thread`/`?threads`. */
   openTask: (taskId: string) => void;
   /** Close the task detail by clearing `?task` (and `?fullscreen`). The
-   *  preserved `?thread`/`?threads` resurfaces; the tasks drawer keeps its own
-   *  open state, so closing a detail opened from a drawer card returns to the
-   *  drawer. */
+   *  preserved `?thread`/`?threads` resurfaces; closing a detail opened from a
+   *  board card returns to whatever board was underneath. */
   closeTask: () => void;
   /** Open agent `agentId` as the chat-section right-pane panel
    *  (`?agent=<id>`, #task:1189) so a channel + the agent's Activity show

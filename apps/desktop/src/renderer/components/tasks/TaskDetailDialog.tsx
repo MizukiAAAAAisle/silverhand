@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckSquare, ExternalLink, Loader2, Pencil } from 'lucide-react';
+import { ExternalLink, Loader2, Pencil } from 'lucide-react';
 import type { TaskDetailDto } from '@silverhand/shared';
 import {
   Dialog,
@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
   dialogCornerButtonClass,
-  DialogCornerButton,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { MiniIconButton } from '@/components/tasks/MiniIconButton';
@@ -44,12 +43,6 @@ export interface TaskDetailDialogProps {
    *  dialog does NOT close itself — whoever navigates owns the pointer's fate
    *  (App closes it only when no navigation happened). */
   onJump: (target: TaskJumpTarget) => void;
-  /** "View in Tasks" — reveal this task's card on whichever task board is on
-   *  screen. Takes the task id ONLY: both boards read one cross-workspace board,
-   *  so a task id resolves against all of them and the reveal needs no workspace
-   *  of its own. Omitted → the affordance is absent. Same ownership rule as
-   *  `onJump`: the dialog does not close itself. */
-  onReveal?: (taskId: string) => void;
 }
 
 /**
@@ -60,11 +53,12 @@ export interface TaskDetailDialogProps {
  * single state. Reads the full body + edit-provenance byline on demand.
  *
  * Because a chip click no longer opens the tasks board first, the modal may be
- * the only task surface on screen — hence "View in Tasks" beside "View in
- * conversation": two destinations, one verb, so the corner cluster reads as one
- * family. Neither closes the modal from here: the surface that navigates decides
- * what happens to the `?task` pointer, so there is exactly ONE owner per action
- * (Cindy BLOCKER 3) instead of a close racing a route change.
+ * the only task surface on screen. "View in conversation" sits beside the close
+ * ✕ in the corner cluster; it does not close the modal from here — the surface
+ * that navigates decides what happens to the `?task` pointer, so there is exactly
+ * ONE owner for the action (Cindy BLOCKER 3) instead of a close racing a route
+ * change. A cold deep-link shows the detail only; there is no jump-to-board
+ * affordance (shiki 2026-08-21 — the reveal machinery was retired, #task:2124).
  *
  * WHAT IS RENDERED is one exhaustive decision, `resolveTaskDetailView` — failure
  * tier and "is there a body to paint" are independent axes and both are real
@@ -94,7 +88,6 @@ export function TaskDetailDialog({
   taskId,
   onOpenChange,
   onJump,
-  onReveal,
 }: TaskDetailDialogProps): JSX.Element {
   const open = taskId !== null;
   const detailQuery = useTaskDetail(taskId, { enabled: open });
@@ -179,39 +172,17 @@ export function TaskDetailDialog({
         // metadata row, not a `p-6` title line.
         cornerBand="top"
         cornerActions={
-          actionsVisible ? (
-            // Ordered by DISTANCE from where the reader already is (shiki
-            // 2026-07-29): the task's own board first — still inside the task
-            // context this modal belongs to — then the conversation it came from,
-            // which leaves that context, then ✕. So one scan left→right steps
-            // steadily further away instead of alternating.
-            <>
-              {onReveal && taskId ? (
-                // `DialogCornerButton`, not a hand-rolled peer: the primitive
-                // stamps the corner-cluster theme marker, so this button can't
-                // ship as a flat ghost beside the sticker ✕ in forza6.
-                <DialogCornerButton
-                  data-task-view-board
-                  title="View in Tasks"
-                  aria-label="View in Tasks"
-                  onClick={() => onReveal(taskId)}
-                >
-                  <CheckSquare className="size-4" aria-hidden />
-                </DialogCornerButton>
-              ) : null}
-              {jumpTarget ? (
-                <button
-                  type="button"
-                  data-task-view-jump
-                  title="View in conversation"
-                  aria-label="View in conversation"
-                  onClick={() => onJump(jumpTarget)}
-                  className={dialogCornerButtonClass}
-                >
-                  <ExternalLink className="size-4" aria-hidden />
-                </button>
-              ) : null}
-            </>
+          actionsVisible && jumpTarget ? (
+            <button
+              type="button"
+              data-task-view-jump
+              title="View in conversation"
+              aria-label="View in conversation"
+              onClick={() => onJump(jumpTarget)}
+              className={dialogCornerButtonClass}
+            >
+              <ExternalLink className="size-4" aria-hidden />
+            </button>
           ) : null
         }
       >

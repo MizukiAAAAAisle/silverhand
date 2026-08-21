@@ -31,9 +31,9 @@ describe('personFilterKey', () => {
 });
 
 describe('taskFiltersEqual (Clear / baseline comparison)', () => {
-  it('treats a drawer baseline (current channel) as equal to itself', () => {
+  it('treats a Tasks-tab baseline (current channel) as equal to itself', () => {
     const baseline: TaskFilters = { ...DEFAULT_TASK_FILTERS, channelId: 'ch1' };
-    // drawer 初始 = baseline → 不应显示 Clear
+    // tab 初始 = baseline → 不应显示 Clear
     expect(taskFiltersEqual(baseline, baseline)).toBe(true);
     // 切到别的 channel → 与 baseline 不同
     expect(taskFiltersEqual(baseline, { ...baseline, channelId: 'ch2' })).toBe(false);
@@ -205,7 +205,7 @@ describe('container axis model (#task:2041)', () => {
     });
 
     it('switching from a DM to a workspace drops the stale pair id in channelId', () => {
-      // The locked DM drawer's baseline sets `direct_messages` + the pair id in
+      // The locked DM Tasks tab's baseline sets `direct_messages` + the pair id in
       // `channelId`; if that state is ever fed a workspace pick, the pair id
       // belongs to no workspace, so the cascade clears it rather than carry a dead
       // `channel_id` into a workspace board.

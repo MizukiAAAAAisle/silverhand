@@ -654,7 +654,7 @@ describe('request budget for one status change', () => {
 
   it('re-reads every column of a filter scope that could not place the row', async () => {
     const b = board();
-    // A second board scope (e.g. the drawer filtered to one channel) whose
+    // A second board scope (e.g. a Tasks tab filtered to one channel) whose
     // window does not contain this task: it cannot say which column the row
     // left, so its columns are the honest re-read.
     const otherTodo = observe(b.qc, boardColumnKey('todo', OTHER_FILTER), pages(page([])));

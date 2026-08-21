@@ -399,10 +399,8 @@ function ActiveChannelView({
     () =>
       taskBoardContainerForPane(paneMode, {
         conversationId: conversation.id,
-        conversationTitle: conversation.title,
-        workspaceName: parentTitle ?? null,
       }),
-    [paneMode, conversation.id, conversation.title, parentTitle],
+    [paneMode, conversation.id],
   );
   const viewTabsShown =
     viewTabsEnabled && gate.allowMemberEffects && taskBoardContainer !== null;

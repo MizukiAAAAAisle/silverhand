@@ -1077,7 +1077,7 @@ function MessageTaskTag({
   const body = (
     <>
       {/* Status glyph from the shared TASK_STATUS_ICON source (kanban /
-          drawer use the same), so a future icon swap updates everywhere. */}
+          per-conversation Tasks tab use the same), so a future icon swap updates everywhere. */}
       <StatusIcon className="size-3 shrink-0" aria-hidden />
       {/* No `font-mono` on the number — it inherits the chip's typeface, so
           it matches the `· assignee` next to it (and forza6's
@@ -1158,7 +1158,8 @@ function formatTaskAssignee(
   ).replace(/^@/, '');
   // In-message task cards are a recognition surface: plain names for both
   // kinds, no leading `@` (the user branch above is already bare). Every task
-  // assignee/creator DISPLAY reads the same way now — board cards, the drawer,
+  // assignee/creator DISPLAY reads the same way now — board cards, the
+  // per-conversation Tasks tab,
   // TasksSection, the filter, and the TaskRef popover all show the plain
   // display name (the dto's `name` is the denormalized display_name, never a
   // handle). `@` is reserved for surfaces that show a real handle: mentions,

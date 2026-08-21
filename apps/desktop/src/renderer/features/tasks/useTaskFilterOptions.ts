@@ -17,13 +17,14 @@ import {
 
 /**
  * Shared filter-option source for BOTH task surfaces — the global Tasks
- * pane (`TasksSection`) and the floating workspace drawer
- * (`WorkspaceTasksDrawer`). They are the same product concept (a task
+ * section (`TasksSection`) and the per-conversation Tasks tab
+ * (`ChannelTasksTab`). They are the same product concept (a task
  * board filtered by workspace + channel); the only thing that used to differ
- * was the candidate scope — the pane spanned every workspace while the drawer
- * was limited to its own. That divergence is the bug shiki flagged (#task:1165:
- * the pane's dropdown listed DM channels, the drawer's didn't). Single-
- * sourcing the option set here is the fix; the drawer just passes a
+ * was the candidate scope — the global section spanned every workspace while the
+ * per-conversation tab was limited to its own. That divergence is the bug shiki
+ * flagged (#task:1165: the global dropdown listed DM channels, the
+ * per-conversation one didn't). Single-
+ * sourcing the option set here is the fix; the per-conversation tab just passes a
  * `defaultConversationId` to pre-focus a channel.
  *
  * This yields both the WORKSPACE options (the upstream cascade axis — people-owned

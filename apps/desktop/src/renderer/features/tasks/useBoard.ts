@@ -56,9 +56,9 @@ import {
  * WHAT DRIVES FETCHING is the surface's render window, not the query: a column
  * fetches until it has as many pages as the surface wants to render
  * (`window[status]`). The window is surface-local while pages are shared cache
- * (see `columnWindow.ts`), so the drawer scrolling to page 5 leaves 5 pages
- * cached without the pane inheriting them as a render bound — and the closed
- * drawer, pinned to its first page, issues no reads at all.
+ * (see `columnWindow.ts`), so one surface scrolling to page 5 leaves 5 pages
+ * cached without another inheriting them as a render bound — and a collapsed
+ * column, pinned to its first page, issues no reads at all.
  *
  * Pages are concatenated in REQUEST order and never re-sorted: the wire contract
  * (`TaskBoardColumnDtoSchema`) delivers `(task_number DESC, id DESC)` with each
@@ -88,8 +88,8 @@ export interface BoardColumnRead {
    * (#task:1885, Cindy MUST FIX).
    */
   identity: string;
-  /** Latest successful read / failure clocks for THIS column under THIS identity
-   *  — the reveal machine's evidence axes (`useRevealTaskRow`). */
+  /** Latest successful read / failure clocks for THIS column under THIS
+   *  identity. */
   dataUpdatedAt: number;
   errorUpdateCount: number;
   /** Re-read this column's loaded pages. Scoped deliberately: a round that needs
@@ -199,7 +199,7 @@ function useBoardColumn(
  */
 export function useBoardColumns(args: {
   filters: TaskFilters;
-  /** Surface-level gate (a closed drawer reads nothing). */
+  /** Surface-level gate (a hidden surface reads nothing). */
   enabled: boolean;
   window: ColumnWindow;
   isCollapsed: (status: TaskStatus) => boolean;

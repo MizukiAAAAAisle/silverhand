@@ -73,7 +73,7 @@ import {
 /** Subtypes that participate in activity clusters. Locked with @Cindy
  *  in the PR-10 design discussion, narrowed by shiki in #task:1145.
  *  Note: `task_create` IS in the set even though it's a "genesis" event —
- *  the actual anchor for the task is the task DB row + the task drawer, not
+ *  the actual anchor for the task is the task DB row + the task board, not
  *  the system message; the `task_create` system row is just another
  *  lifecycle note.
  *

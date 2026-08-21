@@ -3,112 +3,23 @@ import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
 import {
   taskBoardContainerForPane,
   taskContainerBaseline,
-  taskContainerForPosition,
   taskContainerKey,
-  taskContainerLabel,
+  type TaskBoardContainer,
 } from '@/features/tasks/taskContainer';
 import type { ConversationPaneMode } from '@/features/conversations/pane-mode';
-
-const pair = { conversationId: 'c-pair', label: 'Cindy' };
-const ws = { id: 'ws-1', name: 'silverhand' };
-
-describe('taskContainerForPosition', () => {
-  it('is the pair when a direct line is open', () => {
-    expect(
-      taskContainerForPosition({
-        directPair: pair,
-        workspace: null,
-        conversationId: 'c-pair',
-      }),
-    ).toEqual({ kind: 'direct_pair', conversationId: 'c-pair', label: 'Cindy' });
-  });
-
-  it('is the pair even with a workspace still selected in app state', () => {
-    // The bug this seam replaces: a pair route carries no workspace, so a
-    // workspace left over from the previous selection is NOT this
-    // conversation's container. Picking "whichever coordinate is non-null" is
-    // how a DM would open a channel's board.
-    expect(
-      taskContainerForPosition({
-        directPair: pair,
-        workspace: ws,
-        conversationId: 'c-pair',
-      }),
-    ).toEqual({ kind: 'direct_pair', conversationId: 'c-pair', label: 'Cindy' });
-  });
-
-  it('is the workspace + channel when a channel is open', () => {
-    expect(
-      taskContainerForPosition({
-        directPair: null,
-        workspace: ws,
-        conversationId: 'c-chan',
-      }),
-    ).toEqual({
-      kind: 'workspace_channel',
-      workspaceId: 'ws-1',
-      workspaceName: 'silverhand',
-      conversationId: 'c-chan',
-    });
-  });
-
-  it('is still the workspace with no channel selected', () => {
-    // A missing channel is a narrowing question, not a missing container —
-    // Activity's bare state must not lose the board.
-    expect(
-      taskContainerForPosition({
-        directPair: null,
-        workspace: ws,
-        conversationId: null,
-      }),
-    ).toEqual({
-      kind: 'workspace_channel',
-      workspaceId: 'ws-1',
-      workspaceName: 'silverhand',
-      conversationId: null,
-    });
-  });
-
-  it('carries an unresolved workspace name without invalidating the container', () => {
-    const container = taskContainerForPosition({
-      directPair: null,
-      workspace: { id: 'ws-1', name: null },
-      conversationId: 'c-chan',
-    });
-    expect(container).toEqual({
-      kind: 'workspace_channel',
-      workspaceId: 'ws-1',
-      workspaceName: null,
-      conversationId: 'c-chan',
-    });
-  });
-
-  it('is null where there is no container at all', () => {
-    // Bare /chat, a pre-mint draft, the non-conversation rails: no entry, and
-    // nothing invented to give one.
-    expect(
-      taskContainerForPosition({
-        directPair: null,
-        workspace: null,
-        conversationId: null,
-      }),
-    ).toBeNull();
-  });
-});
 
 describe('taskContainerBaseline', () => {
   it('narrows a pair on the conversation axis alone, on the direct_messages container', () => {
     // No workspace coordinate is minted: `t.workspace_id = ?` never matches the
     // NULL a DM task carries, so a claimed workspace would exclude the very
     // tasks the board opened for. The `direct_messages` container axis is set so
-    // the drawer opens on the DM 对端 leaf (this pair selected) rather than
+    // the board opens on the DM 对端 leaf (this pair selected) rather than
     // showing the workspace/channel controls under an orphan channelId
     // (#task:2041).
     expect(
       taskContainerBaseline({
         kind: 'direct_pair',
         conversationId: 'c-pair',
-        label: 'Cindy',
       }),
     ).toEqual({
       ...DEFAULT_TASK_FILTERS,
@@ -122,7 +33,6 @@ describe('taskContainerBaseline', () => {
       taskContainerBaseline({
         kind: 'workspace_channel',
         workspaceId: 'ws-1',
-        workspaceName: 'silverhand',
         conversationId: 'c-chan',
       }),
     ).toEqual({
@@ -137,7 +47,6 @@ describe('taskContainerBaseline', () => {
       taskContainerBaseline({
         kind: 'workspace_channel',
         workspaceId: 'ws-1',
-        workspaceName: null,
         conversationId: null,
       }),
     ).toEqual({ ...DEFAULT_TASK_FILTERS, workspaceId: 'ws-1', channelId: null });
@@ -145,111 +54,75 @@ describe('taskContainerBaseline', () => {
 });
 
 describe('taskContainerKey', () => {
-  const position = {
-    directPair: null,
-    workspace: ws,
+  const container: TaskBoardContainer = {
+    kind: 'workspace_channel',
+    workspaceId: 'ws-1',
     conversationId: 'c-chan',
   };
 
   it('is equal for two assemblies of the same facts', () => {
     // The point of the key: a carrier refetch hands over fresh objects, and the
-    // drawer's baseline must not re-apply (discarding the viewer's filters) just
+    // tab's baseline must not re-apply (discarding the viewer's filters) just
     // because a list was re-read.
-    const a = taskContainerForPosition(position)!;
-    const b = taskContainerForPosition({ ...position, workspace: { ...ws } })!;
+    const a: TaskBoardContainer = { ...container };
+    const b: TaskBoardContainer = { ...container };
     expect(a).not.toBe(b);
     expect(taskContainerKey(a)).toBe(taskContainerKey(b));
   });
 
   it('changes when the focused channel changes', () => {
-    expect(
-      taskContainerKey(taskContainerForPosition(position)!),
-    ).not.toBe(
-      taskContainerKey(
-        taskContainerForPosition({ ...position, conversationId: 'c-other' })!,
-      ),
+    expect(taskContainerKey(container)).not.toBe(
+      taskContainerKey({ ...container, conversationId: 'c-other' }),
     );
   });
 
-  it('changes when the presented label changes', () => {
-    // The label is what the header prints, so a rename IS a change.
-    expect(
-      taskContainerKey({
-        kind: 'direct_pair',
-        conversationId: 'c-pair',
-        label: 'Cindy',
-      }),
-    ).not.toBe(
-      taskContainerKey({
-        kind: 'direct_pair',
-        conversationId: 'c-pair',
-        label: 'Cindy (deleted)',
-      }),
+  it('type fence: the drawer-header carrier fields stay gone (re-adding fails typecheck)', () => {
+    // A COMPILE-TIME fence, not a runtime assertion — the runtime key is
+    // identity-only, so no value-level test can witness the ABSENCE of a field.
+    // `label` / `workspaceName` were the drawer header's only readers (#task:2124);
+    // if either is added back to `TaskBoardContainer`, the excess-property error
+    // disappears, the `@ts-expect-error` goes unused, and this package's
+    // typecheck goes red.
+    const pair: TaskBoardContainer = {
+      kind: 'direct_pair',
+      conversationId: 'c-pair',
+      // @ts-expect-error — removed drawer-header carrier (#task:2124)
+      label: 'Cindy',
+    };
+    const ws: TaskBoardContainer = {
+      kind: 'workspace_channel',
+      workspaceId: 'ws-1',
+      conversationId: 'c-chan',
+      // @ts-expect-error — removed drawer-header carrier (#task:2124)
+      workspaceName: 'silverhand',
+    };
+    // The key encodes only the coordinate; the excess fields are ignored (they
+    // survive on the object at runtime, but `taskContainerKey` never reads them).
+    expect(taskContainerKey(pair)).toBe(
+      JSON.stringify(['pair', 'c-pair']),
+    );
+    expect(taskContainerKey(ws)).toBe(
+      JSON.stringify(['ws', 'ws-1', 'c-chan']),
     );
   });
 
   it('never collides across the two arms on the same conversation id', () => {
     expect(
-      taskContainerKey({
-        kind: 'direct_pair',
-        conversationId: 'c-x',
-        label: 'x',
-      }),
+      taskContainerKey({ kind: 'direct_pair', conversationId: 'c-x' }),
     ).not.toBe(
       taskContainerKey({
         kind: 'workspace_channel',
         workspaceId: 'c-x',
-        workspaceName: 'x',
         conversationId: null,
       }),
     );
-  });
-});
-
-describe('taskContainerLabel', () => {
-  it('is the counterpart for a pair', () => {
-    expect(
-      taskContainerLabel({
-        kind: 'direct_pair',
-        conversationId: 'c-pair',
-        label: 'Cindy',
-      }),
-    ).toBe('Cindy');
-  });
-
-  it('is the workspace name for a channel', () => {
-    expect(
-      taskContainerLabel({
-        kind: 'workspace_channel',
-        workspaceId: 'ws-1',
-        workspaceName: 'silverhand',
-        conversationId: 'c-chan',
-      }),
-    ).toBe('silverhand');
-  });
-
-  it('is null while the workspace name has not resolved', () => {
-    // The header then reads plain "Tasks" rather than "Tasks ·" with nothing
-    // after the separator.
-    expect(
-      taskContainerLabel({
-        kind: 'workspace_channel',
-        workspaceId: 'ws-1',
-        workspaceName: null,
-        conversationId: null,
-      }),
-    ).toBeNull();
   });
 });
 
 describe('taskBoardContainerForPane', () => {
   // The pane facts the projection folds in — never the source of the placement
   // decision, only the coordinates a formed container carries.
-  const facts = {
-    conversationId: 'c-1',
-    conversationTitle: 'Cindy',
-    workspaceName: 'silverhand',
-  };
+  const facts = { conversationId: 'c-1' };
 
   it('forms a direct_pair for a direct_message pane', () => {
     const mode: ConversationPaneMode = {
@@ -259,7 +132,6 @@ describe('taskBoardContainerForPane', () => {
     expect(taskBoardContainerForPane(mode, facts)).toEqual({
       kind: 'direct_pair',
       conversationId: 'c-1',
-      label: 'Cindy',
     });
   });
 
@@ -271,7 +143,6 @@ describe('taskBoardContainerForPane', () => {
     expect(taskBoardContainerForPane(mode, facts)).toEqual({
       kind: 'workspace_channel',
       workspaceId: 'ws-1',
-      workspaceName: 'silverhand',
       conversationId: 'c-1',
     });
   });

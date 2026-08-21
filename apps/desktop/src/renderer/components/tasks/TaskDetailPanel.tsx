@@ -41,7 +41,7 @@ export interface TaskDetailPanelProps {
  * task-detail split (#task:1721). Opened by `?task=<id>` while the reader is in
  * a channel chat, it sits beside the conversation instead of covering it, so a
  * task can be read and edited without leaving the message it was referenced
- * from. Every OTHER entry (board card, drawer card, cold deep-link) keeps the
+ * from. Every OTHER entry (board card, cold deep-link) keeps the
  * app-level `TaskDetailDialog` modal — the two share ALL their substance
  * (`taskDetailShared`), differing only in chrome and metadata layout, so they
  * can never drift on how a task reads, edits, or fails.

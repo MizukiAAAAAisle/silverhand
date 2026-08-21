@@ -481,8 +481,8 @@ button:disabled { cursor: not-allowed; }
   height: var(--system-message-control-height);
 }
 
-/* Task status badge — all surfaces (TaskStatusBadge in drawer /
-   TasksSection / status picker, TaskRef chat chip, TaskStatusPill in
+/* Task status badge — all surfaces (TaskStatusBadge in TasksSection /
+   ChannelTasksTab / status picker, TaskRef chat chip, TaskStatusPill in
    SystemMessage task events) read color identity
    from the same 12-token contract via the shared `[data-task-status]`
    hook. Each theme owns its mapping; the global rule just wires the

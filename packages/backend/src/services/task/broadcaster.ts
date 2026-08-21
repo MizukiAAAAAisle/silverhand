@@ -203,7 +203,8 @@ export class TaskBroadcaster {
       closed_at: args.closedAt,
     };
     this.events.publish(conversationId, { kind: 'task_changed', payload: event });
-    // Cross-conversation board fanout (the workspace task drawer) is the MUTATION
+    // Cross-conversation board fanout (a viewer's cross-conversation task
+    // board / read-model) is the MUTATION
     // /control axis, so it is member-gated — NOT workspace-wide. Publishing to
     // `workspace:<id>` would leak a PRIVATE channel's task snapshot (title/status
     // /assignee + source_message_id) to every workspace member, contradicting the

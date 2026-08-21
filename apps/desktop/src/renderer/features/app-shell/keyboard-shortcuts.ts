@@ -136,7 +136,7 @@ export interface ContextualCloseState {
   filesListOpen: boolean;
   /** Task detail is showing as the OVERLAY SIDE PANE (`?task`, #task:1721), not
    *  the app-level modal. Only the pane is a ⌘W peel target — the modal (board /
-   *  drawer entry) is a Radix Dialog that owns its own dismissal. Sits just below
+   *  Tasks-tab entry) is a Radix Dialog that owns its own dismissal. Sits just below
    *  files in the ladder, mirroring the render order `agent > files > task > side
    *  > thread > threads`. */
   taskPaneOpen: boolean;
@@ -235,7 +235,7 @@ export function useContextualCloseResponder(
   route: ContextualCloseRoute,
   nav: ContextualCloseNav,
   /** Whether `?task` is currently showing as the side PANE (not the modal). The
-   *  pane-vs-modal split reads drawer state that isn't in `route`, so the caller
+   *  pane-vs-modal split reads task-pane state that isn't in `route`, so the caller
    *  resolves it and passes the result — only the pane is a ⌘W peel target. */
   taskPaneOpen: boolean,
 ): void {
