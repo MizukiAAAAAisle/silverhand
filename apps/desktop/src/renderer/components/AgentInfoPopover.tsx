@@ -21,12 +21,14 @@ import {
   useAgentPresence,
 } from '@/features/agents/hooks';
 import {
-  describeMemberRuntimeStatus,
-  memberRuntimeDot,
   presenceAuthorityFor,
   projectMemberRuntimeStatus,
 } from '@/features/agents/member-runtime-status';
-import { MUTED_DOT, STATUS_DOT } from '@/components/status-dot';
+import {
+  PRESENCE_TONE_DOT,
+  projectPresence,
+  type PresenceDisplay,
+} from '@/features/agents/presence-projection';
 import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import {
@@ -272,26 +274,39 @@ export function AgentInfoPopover({
 }
 
 /** One visual contract for every presence line, whichever authority answered:
- *  the same pip + the same caption slot next to the name. `title` carries the
- *  sentence when the answer has more to say than its one word (which session,
- *  and for a shared one that it is shared) — the label stays the word, so two
- *  agents in the same state never read differently (#task:2123). */
-function PresenceLine({
-  dot,
-  label,
-  title,
-}: {
-  dot: string;
-  label: string;
-  title?: string;
-}): JSX.Element {
+ *  the same pip + the same word next to the name. Everything on it comes from the
+ *  one projection (`projectPresence`) — the dot colour from the tone, the label
+ *  from the word, the accessible name from `a11yLabel` so a crashed session's
+ *  folded `Offline` still says failed to a screen reader. Two agents in the same
+ *  state never read differently (#task:2128).
+ *
+ *  Two a11y/hover rules, both from @Cindy's #task:2128 review:
+ *   - A crash must NOT emit a `title`: shiki's ruling is "Offline + fault colour,
+ *     no tooltip", and the detail sentence for `failed` IS that failure tooltip.
+ *     So `failed` shows no hover caption; the failure reaches AT non-visually via
+ *     the accessible name below. Other tones keep their scope-detail caption.
+ *   - The accessible name rides `role="img"`, not a bare `<span>` + `aria-label`
+ *     (a span has no implicit role, so a screen reader may name it from the
+ *     visible word alone and drop a crash's "session failed"). `role="img"` names
+ *     the whole thing from `a11yLabel` and reads once — the decorative pip and the
+ *     visible label are not announced a second time. */
+function PresenceLine({ display }: { display: PresenceDisplay }): JSX.Element {
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
-      title={title ?? label}
+      title={display.tone === 'failed' ? undefined : display.detail}
+      role="img"
+      aria-label={display.a11yLabel}
     >
-      <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + dot} />
-      {label}
+      <span
+        data-status-pip
+        className={
+          'size-1.5 rounded-[var(--pill-radius)] '
+          + PRESENCE_TONE_DOT[display.tone]
+          + (display.pulse ? ' motion-safe:animate-pulse' : '')
+        }
+      />
+      {display.label}
     </span>
   );
 }
@@ -350,15 +365,7 @@ function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | nul
   // `null` = no definite answer yet (availability pending / errored). Draw
   // nothing rather than assert a speculative status.
   if (presence === null) return null;
-  // Away and Offline share the muted pip (Away = reachable-but-idle, Offline =
-  // unreachable); the label carries the distinction, and a grey dot for both
-  // avoids a false red alarm for an agent that will answer on the next message.
-  return (
-    <PresenceLine
-      dot={presence === 'online' ? 'bg-success' : MUTED_DOT}
-      label={presence === 'online' ? 'Online' : presence === 'away' ? 'Away' : 'Offline'}
-    />
-  );
+  return <PresenceLine display={projectPresence({ scope: 'global', presence })} />;
 }
 
 /**
@@ -374,9 +381,9 @@ function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | nul
  * every agent in the channel while the read is in flight or failing.
  *
  * The scope of the answering slot rides the DETAIL sentence only. An
- * agent-scoped agent has one session serving every conversation, so "Active in
- * this channel" would be a claim its slot does not support; the word `Active` is
- * the same either way, and `describeMemberRuntimeStatus` owns the distinction.
+ * agent-scoped agent has one session serving every conversation, so "Online in
+ * this channel" would be a claim its slot does not support; the word is the same
+ * either way, and `projectPresence` owns the distinction (#task:2128).
  */
 function RosterMemberPresence({
   agent,
@@ -392,21 +399,12 @@ function RosterMemberPresence({
     runtime,
     agentId: agent.id,
   });
-  const copy = describeMemberRuntimeStatus(status);
-  if (copy === null) return null;
-  const dot = memberRuntimeDot(status);
-  return (
-    <PresenceLine
-      // `not_here` is a membership statement, not a run state, so it keeps the
-      // muted ground the other non-runtime answers use. `dot === null` is NOT a
-      // live branch — `unknown` is the only status without a dot and it already
-      // left through `copy === null` above; this is the type narrowing, kept so
-      // the two functions stay independently total (@Norman, #task:2123 review).
-      dot={status.kind === 'not_here' || dot === null ? MUTED_DOT : STATUS_DOT[dot]}
-      label={copy.label}
-      title={copy.detail}
-    />
-  );
+  const display = projectPresence({ scope: 'conversation', runtime: status });
+  // `null` = `unknown`: the roster read has not settled, so there is no honest
+  // word yet (this is the type narrowing too — `unknown` is the only status
+  // without a display).
+  if (display === null) return null;
+  return <PresenceLine display={display} />;
 }
 
 function AgentManagementActions({

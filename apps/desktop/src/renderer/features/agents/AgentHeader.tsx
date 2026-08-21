@@ -15,6 +15,7 @@ import {
   PresencePill,
 } from '@/features/common/PersonHero';
 import { useAgentPresence, useStopAgent } from './hooks';
+import { projectPresence } from './presence-projection';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { DeleteAgentDialog } from './DeleteAgentDialog';
 
@@ -93,16 +94,13 @@ export function AgentHeader({
             {/* Draw presence only when availability is a definite answer.
                 `null` (availability pending / errored) draws no dot and no pill —
                 the meta row simply ends at runtime/model, rather than asserting a
-                status for an agent we haven't read yet. Online = solid pill;
-                Away / Offline reuse the outline form, distinguished by label
-                (Away = reachable-but-idle, Offline = unreachable host). */}
+                status for an agent we haven't read yet. The pill takes the whole
+                projection: Online = solid pill, Away / Offline = outline form,
+                the word from `projectPresence` (#task:2128). */}
             {presence !== null ? (
               <>
                 <HeroDot />
-                <PresencePill
-                  online={presence === 'online'}
-                  label={presence === 'away' ? 'Away' : undefined}
-                />
+                <PresencePill display={projectPresence({ scope: 'global', presence })} />
               </>
             ) : null}
           </>

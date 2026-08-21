@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { PresenceDisplay } from '@/features/agents/presence-projection';
 
 /**
  * Identity-led header bar shared by the agent and human panels.
@@ -92,27 +93,19 @@ export function HeroDot(): JSX.Element {
   return <span aria-hidden="true">·</span>;
 }
 
-export interface PresencePillProps {
-  /** Whether the agent reads as present. The value is the agent-global presence
-   *  projection (`useAgentPresence` → `projectGlobalPresence`), NOT raw runtime
-   *  liveness: `true` for the `online` state (solid success pill), `false` for
-   *  `away` (outline pill). Presence is `(availability, away_at)` only — a live
-   *  runtime with no observable progress past the inactivity window projects to
-   *  `away`, so this is deliberately NOT "is the CLI resident" (#task:2049). It
-   *  is also NOT per-conversation running/idle — that belongs on conversation
-   *  surfaces, never here (#task:1362). */
-  online: boolean;
-  /** Override label. Defaults to Online / Offline; AgentHeader passes `Away`
-   *  for the `away` state. */
-  label?: string;
-}
-
 /**
  * Presence indicator for the agent-global Hero. Renders a HUD-style state
  * tag — solid `bg-success` tile + on-color dot for the present state, outline
  * form (transparent bg + border + muted text + dot) for the absent one — the
  * same geometry across both states so they read as one indicator family at
  * different states, matching the Activity / Schedule pill vocabulary.
+ *
+ * Takes the whole `PresenceDisplay` from the ONE projection (#task:2128): the
+ * word is `display.label`, and solid-vs-outline is `tone === 'online'`, so this
+ * pill holds no presence label literal of its own and cannot drift from the dot
+ * on other surfaces. Only the agent-global tones reach here (online / away /
+ * offline) — the per-conversation `Connecting…` / failed states never do, which
+ * is why two forms suffice.
  *
  * Reads the agent-global PRESENCE projection, NOT conversation activity: the
  * Agent page is the agent's global profile (not a conversation). #2049 defines
@@ -123,11 +116,8 @@ export interface PresencePillProps {
  * running/idle is NOT presence and lives on conversation surfaces + the Stop
  * button, never in this pill).
  */
-export function PresencePill({
-  online,
-  label,
-}: PresencePillProps): JSX.Element {
-  if (!online) {
+export function PresencePill({ display }: { display: PresenceDisplay }): JSX.Element {
+  if (display.tone !== 'online') {
     // Outline form (transparent bg + border + muted text). Theme-safe:
     // conveys "off" via the absent fill, never collides with any theme's
     // elevated surface, and reads as the same indicator family as the
@@ -138,7 +128,7 @@ export function PresencePill({
         className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted"
       >
         <span className="size-1.5 rounded-full bg-text-muted/60" />
-        {label ?? 'Offline'}
+        {display.label}
       </span>
     );
   }
@@ -148,7 +138,7 @@ export function PresencePill({
       className="inline-flex items-center gap-1.5 bg-success px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-on-success"
     >
       <span className="size-1.5 rounded-full bg-text-on-success/90" />
-      {label ?? 'Online'}
+      {display.label}
     </span>
   );
 }

@@ -1,4 +1,9 @@
-// The roster runtime status projection (#task:2123).
+// The roster runtime CLASSIFICATION (#task:2128, née #task:2123).
+//
+// This leaf now holds classification ONLY — the native verdict about a roster
+// placement. The words, the tone and the dot moved to `projectPresence`
+// (presence-projection.test.ts), so this file no longer asserts labels; it
+// asserts the discriminated union the projection consumes.
 //
 // Desktop's test env is `node` — no jsdom, no RTL — which is why this ticket's
 // acceptance asks for a matrix over the PROJECTION rather than over rendered
@@ -8,24 +13,19 @@
 // beside it read the runtime slot, so one agent showed `Idle` and `Online` at the
 // same time).
 //
-// Four properties:
+// Three properties:
 //
 //  1. THE MATRIX IS TOTAL — two session scopes × four runtime statuses, plus the
 //     three arms that are not a row at all (missing row, non-member, unsettled).
-//  2. UNSETTLED IS NOT IDLE. Either read being unanswered yields `unknown`, and
-//     `unknown` draws no dot and says nothing. This is the arm every consumer used
-//     to destroy with `= []`.
-//  3. SCOPE CHANGES THE SENTENCE, NEVER THE WORD OR THE DOT — and an agent-scoped
-//     session is never described as running "in this channel".
-//  4. NO ROSTER MEANS THE OTHER AUTHORITY, decided from the placement alone.
+//  2. UNSETTLED IS NOT no_session. Either read being unanswered yields `unknown`.
+//     This is the arm every consumer used to destroy with `= []`.
+//  3. NO ROSTER MEANS THE OTHER AUTHORITY, decided from the placement alone.
 import { describe, expect, it } from 'vitest';
 import type {
   ConversationAgentRuntimeDto,
   ConversationAgentStatus,
 } from '@silverhand/shared';
 import {
-  describeMemberRuntimeStatus,
-  memberRuntimeDot,
   presenceAuthorityFor,
   projectMemberRuntimeStatus,
   type AgentSlotScopeKind,
@@ -147,79 +147,6 @@ describe('the three arms that are not a row (#task:2123)', () => {
         agentId: AGENT,
       }),
     ).toEqual({ kind: 'not_here' });
-  });
-});
-
-describe('the dot follows the projection (#task:2123)', () => {
-  it('draws nothing for an unsettled read', () => {
-    // Not grey: grey IS the Idle statement on every surface that draws this dot.
-    expect(memberRuntimeDot({ kind: 'unknown' })).toBeNull();
-  });
-
-  it('is the row status when there is a row, in both scopes', () => {
-    for (const scope of SCOPES) {
-      for (const status of STATUSES) {
-        expect(memberRuntimeDot(project([row(status, scope)]))).toBe(status);
-      }
-    }
-  });
-
-  it('is idle for the two settled non-session answers', () => {
-    expect(memberRuntimeDot({ kind: 'no_session' })).toBe('idle');
-    expect(memberRuntimeDot({ kind: 'not_here' })).toBe('idle');
-  });
-});
-
-describe('the copy (#task:2123)', () => {
-  it('says nothing at all while unsettled', () => {
-    expect(describeMemberRuntimeStatus({ kind: 'unknown' })).toBeNull();
-  });
-
-  it('gives the same WORD to both scopes for the same status', () => {
-    // The property that keeps a strip readable: two agents in the same state read
-    // the same, and the scope distinction lives in the sentence.
-    for (const status of STATUSES) {
-      const conversation = describeMemberRuntimeStatus(
-        project([row(status, 'conversation')]),
-      );
-      const agentScoped = describeMemberRuntimeStatus(
-        project([row(status, 'agent')]),
-      );
-      expect(agentScoped?.label).toBe(conversation?.label);
-      expect(agentScoped?.detail).not.toBe(conversation?.detail);
-    }
-  });
-
-  it('never describes an agent-scoped session as belonging to this channel', () => {
-    // The ticket's naming rule: one session serves every conversation, so
-    // "Active in this channel" is a claim its slot does not support.
-    for (const status of STATUSES) {
-      const detail = describeMemberRuntimeStatus(project([row(status, 'agent')]))!
-        .detail;
-      expect(detail).not.toContain('This channel');
-      expect(detail).toContain('shared across every channel');
-    }
-  });
-
-  it('attributes a conversation-scoped session to this channel', () => {
-    expect(describeMemberRuntimeStatus(project([row('active', 'conversation')])))
-      .toEqual({ label: 'Active', detail: "This channel's session is working." });
-  });
-
-  it('describes a missing row without a scope, because there is none to read', () => {
-    // `scope_kind` exists only ON a row. Wording this case per-scope would have to
-    // reach for `agent.session_scope` and put a second scope authority back in the
-    // renderer.
-    const copy = describeMemberRuntimeStatus({ kind: 'no_session' })!;
-    expect(copy).toEqual({ label: 'Idle', detail: 'No session has been started.' });
-    expect(copy.detail).not.toContain('channel');
-  });
-
-  it('states membership, not a run state, for a non-member', () => {
-    expect(describeMemberRuntimeStatus({ kind: 'not_here' })).toEqual({
-      label: 'Not here',
-      detail: 'Not a member of this channel.',
-    });
   });
 });
 

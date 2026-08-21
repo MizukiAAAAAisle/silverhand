@@ -29,9 +29,9 @@ import type { RosterMembership } from './hooks';
  *    roster can state, and one the runtime read cannot: an agent-scoped agent
  *    has a slot row whether or not it is a member here.
  *  - `no_session` — a member, the runtime read settled, and it has no slot row.
- *    Idle, and DELIBERATELY SCOPE-FREE: `scope_kind` exists only ON a row, so
- *    describing this case per-scope would have to reach for `agent.session_scope`
- *    and reintroduce a second scope authority in the renderer.
+ *    No live session, and DELIBERATELY SCOPE-FREE: `scope_kind` exists only ON a
+ *    row, so describing this case per-scope would have to reach for
+ *    `agent.session_scope` and reintroduce a second scope authority in the renderer.
  *  - `session` — a member with a slot row. `scope` is the row's `scope_kind`,
  *    which the backend already derives from `agents.session_scope` when it picks
  *    ConversationSlot vs AgentSlot (`listConversationRuntime`), so the renderer
@@ -92,91 +92,3 @@ export function projectMemberRuntimeStatus(input: {
   if (row === undefined) return { kind: 'no_session' };
   return { kind: 'session', status: row.status, scope: row.scope_kind };
 }
-
-/**
- * The dot's run-state key, or `null` for "draw no dot".
- *
- * `unknown` withholds the dot rather than picking a colour: a grey pip is the
- * Idle statement, and asserting Idle for an unsettled read is the regression
- * this ticket exists to remove. The pip is absolutely positioned on every
- * surface that draws one, so omitting it shifts no layout.
- */
-export function memberRuntimeDot(
-  status: MemberRuntimeStatus,
-): ConversationAgentStatus | null {
-  switch (status.kind) {
-    case 'unknown':
-      return null;
-    case 'not_here':
-    case 'no_session':
-      return 'idle';
-    case 'session':
-      return status.status;
-  }
-}
-
-export interface MemberRuntimeCopy {
-  /** The one word the surface shows. */
-  label: string;
-  /** The tooltip sentence. SCOPE LIVES HERE AND ONLY HERE. */
-  detail: string;
-}
-
-/**
- * The words, in one place, for the same reason the projection is in one place.
- *
- * SCOPE CHANGES THE SENTENCE, NEVER THE WORD OR THE DOT. `Active` means the
- * same thing to a reader either way — this agent is working — and an
- * agent-scoped agent is working in the ONE session it has, which is not "in
- * this channel" even when the message it is answering arrived here. Putting the
- * scope in the label would make two agents in identical states read differently
- * on the same strip; putting it in the detail lets the card say which session it
- * is talking about without the strip having to.
- */
-export function describeMemberRuntimeStatus(
-  status: MemberRuntimeStatus,
-): MemberRuntimeCopy | null {
-  switch (status.kind) {
-    case 'unknown':
-      return null;
-    case 'not_here':
-      return { label: 'Not here', detail: 'Not a member of this channel.' };
-    case 'no_session':
-      // Scope-free by construction: there is no row to read a scope from.
-      return { label: 'Idle', detail: 'No session has been started.' };
-    case 'session':
-      return {
-        label: RUNTIME_LABEL[status.status],
-        detail: SESSION_SENTENCE[status.scope](RUNTIME_PREDICATE[status.status]),
-      };
-  }
-}
-
-const RUNTIME_LABEL: Record<ConversationAgentStatus, string> = {
-  active: 'Active',
-  starting: 'Starting',
-  idle: 'Idle',
-  crashed: 'Crashed',
-};
-
-/**
- * The detail sentence per scope, as a WHOLE sentence with the predicate
- * interpolated (@Norman, #task:2123 review).
- *
- * Not a bare subject + join: the agent-scoped subject ends on an appositive
- * (`, shared across every channel,`) whose closing comma is sentence structure,
- * and a comma sitting at the end of a string constant reads as a typo to the next
- * reader. Written out as a template it cannot be "tidied up" into a run-on.
- */
-const SESSION_SENTENCE: Record<AgentSlotScopeKind, (predicate: string) => string> = {
-  conversation: predicate => `This channel's session ${predicate}.`,
-  agent: predicate =>
-    `This agent's one session, shared across every channel, ${predicate}.`,
-};
-
-const RUNTIME_PREDICATE: Record<ConversationAgentStatus, string> = {
-  active: 'is working',
-  starting: 'is starting up',
-  idle: 'is not running',
-  crashed: 'crashed',
-};

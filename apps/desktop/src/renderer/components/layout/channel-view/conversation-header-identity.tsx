@@ -30,6 +30,10 @@ import {
 } from '@/components/chat/author-avatar-view';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useAgentPresence } from '@/features/agents/hooks';
+import {
+  PRESENCE_TONE_DOT,
+  projectPresence,
+} from '@/features/agents/presence-projection';
 import { usePresenceById } from '@/features/presence/hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
@@ -155,8 +159,9 @@ function CounterpartPresenceDot({
 
 /** Dot ground: green is earned by a live, available agent; Away and Offline share
  *  the muted pip (the distinction is a word, not a colour — an idle agent that
- *  will answer the next message must not read as an alarm). Same palette as
- *  `AgentInfoPopover`'s global presence line, which is the same projection.
+ *  will answer the next message must not read as an alarm). The colour comes from
+ *  the SHARED `PRESENCE_TONE_DOT` map, the same one `AgentInfoPopover`'s global
+ *  line reads, so this dot cannot drift a shade off it (#task:2128).
  *
  *  Carries `data-status-pip` and reads `--pill-radius` — the SAME status-pip
  *  contract the sidebar rail dot uses (shiki #task:2127). The attribute is what
@@ -171,11 +176,13 @@ const PRESENCE_DOT_CLASS =
 function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null {
   const presence = useAgentPresence(agentId);
   if (presence === null) return null;
+  const display = projectPresence({ scope: 'global', presence });
   return (
     <span
       data-status-pip
-      title={presence === 'online' ? 'Online' : presence === 'away' ? 'Away' : 'Offline'}
-      className={`${PRESENCE_DOT_CLASS} ${presence === 'online' ? 'bg-success' : 'bg-text-muted/40'}`}
+      title={display.detail}
+      aria-label={display.a11yLabel}
+      className={`${PRESENCE_DOT_CLASS} ${PRESENCE_TONE_DOT[display.tone]}`}
     />
   );
 }

@@ -102,10 +102,11 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 import { STATUS_DOT } from '@/components/status-dot';
+import { projectMemberRuntimeStatus } from '@/features/agents/member-runtime-status';
 import {
-  memberRuntimeDot,
-  projectMemberRuntimeStatus,
-} from '@/features/agents/member-runtime-status';
+  PRESENCE_TONE_DOT,
+  projectPresence,
+} from '@/features/agents/presence-projection';
 
 /** Above this many members the roster stops being scannable at a glance, so the
  *  search field appears. It is the same cap that collapses the header strip into
@@ -280,19 +281,37 @@ export function ChannelMembersDialog({
     const key = memberDtoKey(member);
     const label = member.display_name?.trim() || member.name;
     const isSelf = member.kind === 'human' && member.user_id === viewerUserId;
-    // One projection for the agent arm (#task:2123): membership is given by the
+    // One projection for the agent arm (#task:2128): membership is given by the
     // row's existence in this roster, so only the runtime read can be unsettled,
-    // and `null` there means "draw no dot" rather than Idle.
-    const dot =
+    // and `null` there means "draw no dot" rather than a status. The agent dot
+    // takes its colour from the shared tone map and carries the presence as an
+    // accessible name (this row dropped its status COLUMN — #task:1687 — so the
+    // dot is the only status signal, and a crashed session's fault would be
+    // colour-only without it). The human arm keeps its own presence dot.
+    const presenceDot: { colorClass: string; a11yLabel: string | null; pulse: boolean } | null =
       member.kind === 'agent'
-        ? memberRuntimeDot(
-            projectMemberRuntimeStatus({
-              membership: 'member',
-              runtime: agentRuntime,
-              agentId: member.agent_id,
-            }),
-          )
-        : presenceDotStatus(presenceById.get(member.user_id)?.presence);
+        ? (() => {
+            const display = projectPresence({
+              scope: 'conversation',
+              runtime: projectMemberRuntimeStatus({
+                membership: 'member',
+                runtime: agentRuntime,
+                agentId: member.agent_id,
+              }),
+            });
+            return display === null
+              ? null
+              : {
+                  colorClass: PRESENCE_TONE_DOT[display.tone],
+                  a11yLabel: display.a11yLabel,
+                  pulse: display.pulse,
+                };
+          })()
+        : {
+            colorClass: STATUS_DOT[presenceDotStatus(presenceById.get(member.user_id)?.presence)],
+            a11yLabel: null,
+            pulse: false,
+          };
     const canLeaveHere = isSelf && !!onLeave && canLeave;
     // Leave blocked by STATE gets a disabled Leave on the viewer's own row with
     // the reason as its tooltip (shiki 2026-07-28) — see the header note: this
@@ -331,11 +350,14 @@ export function ChannelMembersDialog({
                 alt={label}
               />
             )}
-            {dot === null ? null : (
+            {presenceDot === null ? null : (
               <span
+                role={presenceDot.a11yLabel ? 'img' : undefined}
+                aria-label={presenceDot.a11yLabel ?? undefined}
                 className={
                   'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating '
-                  + STATUS_DOT[dot]
+                  + presenceDot.colorClass
+                  + (presenceDot.pulse ? ' motion-safe:animate-pulse' : '')
                 }
               />
             )}

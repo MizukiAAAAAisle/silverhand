@@ -12,10 +12,11 @@ import { STATUS_DOT } from '@/components/status-dot';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useAgents } from '@/features/agents/hooks';
+import { projectMemberRuntimeStatus } from '@/features/agents/member-runtime-status';
 import {
-  memberRuntimeDot,
-  projectMemberRuntimeStatus,
-} from '@/features/agents/member-runtime-status';
+  PRESENCE_TONE_DOT,
+  projectPresence,
+} from '@/features/agents/presence-projection';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsersById } from '@/features/users/hooks';
 import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
@@ -113,15 +114,16 @@ export function MemberStrip({
         if (member.kind === 'agent') {
           const agent = agentById.get(member.agent_id);
           if (!agent) return null;
-          const dot = memberRuntimeDot(
-            projectMemberRuntimeStatus({
+          const presence = projectPresence({
+            scope: 'conversation',
+            runtime: projectMemberRuntimeStatus({
               // Membership is established by the iteration itself: this loop IS
               // the roster, so the only open question is the runtime read.
               membership: 'member',
               runtime: agentRuntime,
               agentId: member.agent_id,
             }),
-          );
+          });
           return (
             <AgentInfoPopover
               key={`agent:${member.agent_id}`}
@@ -142,7 +144,13 @@ export function MemberStrip({
                 // this strip was the last identity surface where a click did
                 // nothing at all.
                 onClick={() => nav.openAgentPanel(agent.id)}
-                aria-label={`@${agent.name}`}
+                // The chip button's accessible name carries the presence too, so
+                // the dot's meaning — and a crashed session's fault, which folds
+                // into a plain grey-vs-red the folded `Offline` word never shows —
+                // reaches a screen reader. A child `aria-label` span could not: a
+                // button with its own `aria-label` overrides its subtree, so the
+                // status must ride the button's name (#task:2128).
+                aria-label={presence ? `@${agent.name}, ${presence.a11yLabel}` : `@${agent.name}`}
                 data-member-chip="agent"
                 data-member-id={member.agent_id}
                 className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-floating p-0 transition-transform hover:scale-105 focus-outline"
@@ -153,14 +161,16 @@ export function MemberStrip({
                   avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
                   alt={agent.display_name || agent.name}
                 />
-                {/* No dot at all while the runtime read is unsettled — the grey
-                    pip IS the Idle statement, and the pip is absolutely
-                    positioned, so withholding it shifts no layout (#task:2123). */}
-                {dot === null ? null : (
+                {/* No dot at all while the runtime read is unsettled — the pip is
+                    absolutely positioned, so withholding it shifts no layout
+                    (#task:2128). */}
+                {presence === null ? null : (
                   <span
+                    aria-hidden
                     className={
                       'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm '
-                      + STATUS_DOT[dot]
+                      + PRESENCE_TONE_DOT[presence.tone]
+                      + (presence.pulse ? ' motion-safe:animate-pulse' : '')
                     }
                   />
                 )}

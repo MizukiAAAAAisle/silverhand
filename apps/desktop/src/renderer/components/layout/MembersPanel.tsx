@@ -2,6 +2,7 @@ import { Monitor, Plus, User, Users } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
 import type { AgentDto, HostDto } from '@silverhand/shared';
 import { useAgents, useAgentPresence } from '@/features/agents/hooks';
+import { projectPresence } from '@/features/agents/presence-projection';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
 import { useHostsQuery } from '@/features/hosts/hooks';
@@ -236,6 +237,12 @@ function AgentRow({
   onSelect?: (id: string) => void;
 }): JSX.Element {
   const presence = useAgentPresence(agent.id);
+  // Route the global native through the ONE projection, then adapt its tone to
+  // SidebarRow's generic status enum (a domain-agnostic list primitive keeps its
+  // own dot vocabulary): online tone → the earned green `active` dot, away /
+  // offline → the muted `idle` dot, and an unsettled read draws none. The
+  // native→tone decision stays in `projectPresence`, not here (#task:2128).
+  const display = presence === null ? null : projectPresence({ scope: 'global', presence });
   return (
     <SidebarRow
       className="h-[32px]"
@@ -249,7 +256,7 @@ function AgentRow({
       }
       title={agent.display_name || agent.name}
       subtitle={<span data-agent-runtime>{agent.runtime}</span>}
-      status={presence === 'online' ? 'active' : presence === null ? null : 'idle'}
+      status={display === null ? null : display.tone === 'online' ? 'active' : 'idle'}
       selected={selected}
       onClick={onSelect ? () => onSelect(agent.id) : undefined}
     />
