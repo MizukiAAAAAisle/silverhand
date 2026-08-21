@@ -167,15 +167,17 @@ export function AgentChatsPane({
       <div className="space-y-5 px-8 py-6">
         {groupAgentChats(chats).map(group => (
           <section key={group.key}>
-            {/* Group chrome verbatim from SearchPanel's sections — same product
-                concept (a labelled band of collection cards), so no second
-                spelling. NO icon in the header, unlike Search: a workspace's
+            {/* Group chrome mirrors SearchPanel's sections — same product
+                concept (a labelled band of collection cards) — but the label is
+                one weight bolder here (`font-semibold`, shiki 2026-08-21) so the
+                grouping reads as the primary structure of this denser audit list.
+                NO icon in the header, unlike Search: a workspace's
                 identity glyph needs its `owner_agent_id`, which the audit list
                 does not carry and the viewer's own workspace list cannot supply
                 for a container they are not in. A neutral glyph would draw
                 "unowned workspace" — a claim, not a gap (#task:2084's lesson).
                 Each ROW still wears its own entity's identity primitive. */}
-            <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-medium uppercase leading-none tracking-wider text-text-muted">
+            <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-semibold uppercase leading-none tracking-wider text-text-muted">
               <span className="min-w-0 truncate leading-none">{group.label}</span>
               <span className="leading-none text-text-muted/70">
                 {group.chats.length}
