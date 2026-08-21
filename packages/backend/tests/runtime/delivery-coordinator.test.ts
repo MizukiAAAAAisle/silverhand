@@ -223,7 +223,7 @@ function parsed(kind: ParsedEvent['kind']): ParsedEvent {
     case 'tool_call_input':
       return { kind, toolCallId: 'call-1', input: { command: 'ls' } };
     case 'tool_output':
-      return { kind };
+      return { kind, outcome: 'completed' };
     case 'turn_end':
       return { kind };
     case 'compaction_started':

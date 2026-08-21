@@ -62,6 +62,7 @@ describe('ConversationEventRepo', () => {
           kind: 'tool_output',
           name: 'Bash',
           toolCallId: 'tool-1',
+          outcome: 'success',
         },
         createdAt: 1_700_000_000_001,
       });
@@ -98,6 +99,7 @@ describe('ConversationEventRepo', () => {
       expect(page.events[1]!.payload).toEqual({
         name: 'Bash',
         tool_call_id: 'tool-1',
+        outcome: 'success',
       });
       expect(page.events[1]!.payload).not.toHaveProperty('output');
       expect(page.events[1]!.payload).not.toHaveProperty('result');

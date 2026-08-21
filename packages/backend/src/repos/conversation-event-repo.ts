@@ -145,7 +145,34 @@ export class ConversationEventRepo {
   }
 
   /**
-   * Merge late-arriving parameters into the `tool_call` row they belong to
+   * One activity row per batch of live deliveries the runtime actually accepted
+   * (#task:2146). Authored from the `runtime_delivery_consumed` edge — the sole
+   * place the daemon confirms input crossed into the agent — so "message
+   * received" is a distinct lifecycle fact, not something inferred from
+   * `session_init` (which fires every turn) or from message text.
+   *
+   * Payload carries `count` only (= accepted `delivery_ids.length`), never the
+   * bodies or ids: the timeline records THAT input landed and how much, and the
+   * message content already lives on the chat transcript. Not a `ParsedEvent`:
+   * like `message_stale`, it has no driver-side counterpart and is inserted
+   * directly, so it never travels the parse-fanout union.
+   */
+  recordMessageReceived(params: {
+    conversationId: string;
+    agentId: string;
+    count: number;
+    createdAt: number;
+  }): ConversationActivityEvent {
+    return this.insert({
+      conversationId: params.conversationId,
+      agentId: params.agentId,
+      kind: 'message_received',
+      payload: { count: params.count },
+      createdAt: params.createdAt,
+    });
+  }
+
+  /**
    * (#task:2101), returning the updated row so callers republish the SAME
    * event id and live timelines re-render in place.
    *
@@ -398,6 +425,7 @@ function payloadForParsedEvent(event: ParsedEvent): ConversationActivityPayload 
       return {
         ...(event.name ? { name: event.name } : {}),
         ...(event.toolCallId ? { tool_call_id: event.toolCallId } : {}),
+        outcome: event.outcome,
       };
     case 'tool_call_input':
       // Refinements never reach here (`recordParsedEvent` returns early); they

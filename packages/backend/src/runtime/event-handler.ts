@@ -218,6 +218,15 @@ export interface ConversationActivitySink {
     agentId: string;
     createdAt: number;
   }): ConversationActivityEvent;
+  /** #task:2146 — one row per batch of live deliveries the runtime accepted,
+   *  authored from the `runtime_delivery_consumed` edge. `count` is the accepted
+   *  `delivery_ids.length`; no bodies/ids (the content is on the transcript). */
+  recordMessageReceived(params: {
+    conversationId: string;
+    agentId: string;
+    count: number;
+    createdAt: number;
+  }): ConversationActivityEvent;
   /** #task:2101 — merge late parameters into an existing `tool_call` row.
    *  Returns null when there is no such row (paged out / never persisted);
    *  a refinement must never insert. */
@@ -733,6 +742,31 @@ export class RuntimeEventHandler {
         // (intentional). Stamp the presence clock; the sink fires
         // `agent_presence_changed` on an Away→Online crossing like Edge A.
         this.agentActivity?.stampActivity(frame.agent_id);
+        // #task:2146 — this consumed edge is the SOLE authority for "message
+        // received": the daemon confirms live input crossed into the runtime
+        // here, so the activity fact is minted from the accepted delivery count,
+        // never inferred from session_init or message text. Gated on the same
+        // settlement as `markDelivered` — a dropped settlement recorded no
+        // delivery, so it records no receive.
+        this.recordConversationActivity({
+          conversationId: frame.conversation_id,
+          agentId: frame.agent_id,
+          createdAt: frame.ts,
+          record: sink =>
+            [
+              ...this.flushTextActivityBlock(
+                sink,
+                frame.conversation_id,
+                frame.agent_id,
+              ),
+              sink.recordMessageReceived({
+                conversationId: frame.conversation_id,
+                agentId: frame.agent_id,
+                count: settlement.deliveryIds.length,
+                createdAt: frame.ts,
+              }),
+            ],
+        });
         return;
       }
       case 'runtime_delivery_failed': {

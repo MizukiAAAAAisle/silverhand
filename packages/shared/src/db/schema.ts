@@ -212,6 +212,7 @@ export const ConversationEventKindSchema = z.enum([
   'unknown',
   'parsed_event_dropped',
   'message_stale',
+  'message_received',
 ]);
 export type ConversationEventKind = z.infer<typeof ConversationEventKindSchema>;
 

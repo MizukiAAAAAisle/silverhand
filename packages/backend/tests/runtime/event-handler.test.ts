@@ -1126,6 +1126,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       recordMessageStale() {
         throw new Error('not used');
       },
+      recordMessageReceived() {
+        throw new Error('not used');
+      },
       refineToolCallInput() {
         throw new Error('not used');
       },
@@ -1209,6 +1212,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         throw new Error('not used');
       },
       recordMessageStale() {
+        throw new Error('not used');
+      },
+      recordMessageReceived() {
         throw new Error('not used');
       },
       refineToolCallInput() {
@@ -1314,6 +1320,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         throw new Error('not used');
       },
       recordMessageStale() {
+        throw new Error('not used');
+      },
+      recordMessageReceived() {
         throw new Error('not used');
       },
       refineToolCallInput() {
@@ -1463,6 +1472,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       recordMessageStale() {
         throw new Error('not used');
       },
+      recordMessageReceived() {
+        throw new Error('not used');
+      },
       refineToolCallInput() {
         throw new Error('not used');
       },
@@ -1551,6 +1563,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
           created_at: params.createdAt,
         };
       },
+      recordMessageReceived() {
+        throw new Error('not used');
+      },
       refineToolCallInput() {
         throw new Error('not used');
       },
@@ -1629,6 +1644,80 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     ]);
   });
 
+  // #task:2146: `runtime_delivery_consumed` is the SOLE authority for the
+  // "message received" fact — the daemon confirms live input crossed into the
+  // runtime here, so the row's count is the accepted `delivery_ids.length`, and
+  // it is never inferred from session_init or message text.
+  it('#task:2146: runtime_delivery_consumed records a message_received row with the accepted count', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher, published } = makePublisher();
+    const { sink, delivered } = makeInboxAck();
+    const receivedCalls: Array<
+      Parameters<ConversationActivitySink['recordMessageReceived']>[0]
+    > = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent() {
+        throw new Error('not used');
+      },
+      upsertTextBlock() {
+        throw new Error('not used');
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+      recordMessageStale() {
+        throw new Error('not used');
+      },
+      recordMessageReceived(params) {
+        receivedCalls.push(params);
+        return {
+          id: 21,
+          conversation_id: params.conversationId,
+          agent_id: params.agentId,
+          kind: 'message_received',
+          payload: { count: params.count },
+          created_at: params.createdAt,
+        };
+      },
+      refineToolCallInput() {
+        throw new Error('not used');
+      },
+    };
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_delivery_consumed',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [10, 11, 12],
+      ts: 1700000001000,
+    });
+
+    // Same settlement gate as the ack: the delivery is marked, and exactly one
+    // received row is authored with count = accepted delivery_ids.length.
+    expect(delivered).toEqual([[10, 11, 12]]);
+    expect(receivedCalls).toEqual([
+      { conversationId: 'c1', agentId: 'a1', count: 3, createdAt: 1700000001000 },
+    ]);
+    const activity = published.filter(p => p.kind === 'conversation_activity');
+    expect(activity.map(p => (p.payload as { kind: string }).kind)).toEqual([
+      'message_received',
+    ]);
+    expect(activity.at(-1)?.payload).toMatchObject({
+      kind: 'message_received',
+      payload: { count: 3 },
+    });
+  });
+
   // #task:2101: a `tool_call_input` frame is a REFINEMENT of a row already in the
   // timeline, so it must not travel the insert path. Same single-author ordering
   // argument as the `message_stale` test above: republishing the older tool_call
@@ -1679,6 +1768,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         throw new Error('not used');
       },
       recordMessageStale() {
+        throw new Error('not used');
+      },
+      recordMessageReceived() {
         throw new Error('not used');
       },
       refineToolCallInput(params) {
@@ -1842,6 +1934,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       recordMessageStale() {
         throw new Error('not used');
       },
+      recordMessageReceived() {
+        throw new Error('not used');
+      },
       refineToolCallInput() {
         throw new Error('not used');
       },
@@ -1949,6 +2044,9 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         throw new Error('not used');
       },
       recordMessageStale() {
+        throw new Error('not used');
+      },
+      recordMessageReceived() {
         throw new Error('not used');
       },
       refineToolCallInput() {
