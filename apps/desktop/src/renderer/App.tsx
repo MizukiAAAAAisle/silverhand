@@ -2064,11 +2064,10 @@ function RegisteredAppShell({
       onOpenTask={openTaskInPane}
       onJumpToMessage={handleJumpToMessage}
       onOpenAdvancedSearch={handleOpenAdvancedSearch}
-      // Per-conversation view tabs (#task:2121) — primary pane only. The inline
-      // Tasks board opens task detail in the MODAL (matching the `/tasks`
-      // section), distinct from `onOpenTask`'s inline-chip → side-pane route above.
+      // Per-conversation view tabs (#task:2121) — primary pane only. A Tasks-tab
+      // card opens task detail through `onOpenTask` above, the same side pane an
+      // inline `#task` chip uses.
       viewTabsEnabled
-      onOpenTaskDetail={openTaskInModal}
       // A md/html click in the sibling Attachments list opens here, in the
       // primary pane's previewer tab (#task:2122). The list hands the attachment
       // up; ChannelView applies the same previewable + tab-strip gate the message

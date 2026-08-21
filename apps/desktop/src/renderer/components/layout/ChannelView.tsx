@@ -211,10 +211,11 @@ interface ChannelViewProps {
    *  resolution scope is this conversation's workspace, so the caller
    *  binds the workspace id and we hand it the resolved channel id. */
   onOpenChannelRef?: (workspaceId: string, channelId: string) => void;
-  /** Click handler for inline `#task:<n>` chips. Receives the RESOLVED
-   *  task id — the chip resolves `#<n>` against this conversation's
-   *  workspace itself, so no workspace axis travels with the click.
-   *  App.tsx writes `?task=<task_id>`, which opens the detail modal. */
+  /** Opens a task's detail in the side pane. Receives the RESOLVED task id.
+   *  Both an inline `#task:<n>` chip (which resolves `#<n>` against this
+   *  conversation's workspace, so no workspace axis travels with the click) and
+   *  a Tasks-tab card route through here, so a card opens the same side-pane
+   *  host a chip does. */
   onOpenTask?: (taskId: string) => void;
   /** In-conversation header find (#task:1335). When provided, the header shows
    *  a search-toggle icon that opens the inline find bar below it. The callback
@@ -233,11 +234,6 @@ interface ChannelViewProps {
    *  inline. Only the PRIMARY pane passes it: a thread / side pane is a child
    *  view of the same container and gets no tab strip of its own. */
   viewTabsEnabled?: boolean;
-  /** Opens a task's detail MODAL from a Tasks-tab card (`?task=<id>`). Distinct
-   *  from {@link onOpenTask} (inline `#task` chips → side pane): a board card
-   *  matches the drawer/section, which open the modal. Only meaningful with
-   *  `viewTabsEnabled`. */
-  onOpenTaskDetail?: (taskId: string) => void;
   /** One-shot request to open an attachment from a SIBLING pane (the Attachments
    *  list, #task:2122) into THIS primary pane. The list can't reach this pane's
    *  tab controller directly, so it hands the attachment up to App, which relays
@@ -354,7 +350,6 @@ function ActiveChannelView({
   onJumpToMessage,
   onOpenAdvancedSearch,
   viewTabsEnabled = false,
-  onOpenTaskDetail,
   openAttachmentRequest,
   onAttachmentRequestConsumed,
 }: ChannelViewProps & { conversation: ConversationPaneDescriptor }): JSX.Element {
@@ -1230,15 +1225,16 @@ function ActiveChannelView({
         {/* Tasks tab (#task:2121) — an opaque overlay over the chat column
             (message list + composer) rather than a mount swap, so Chat stays
             mounted and its Virtuoso scroll survives a tab round-trip. Rendered
-            only while the Tasks tab is active, a detail-open handler exists (the
+            only while the Tasks tab is active, a task-open handler exists (the
             primary pane), AND a board container resolved (fail-closed: a
-            workspace channel with no real workspace id mounts nothing).
-            `inset-0` covers the whole column. */}
-        {tasksTabActive && taskBoardContainer && onOpenTaskDetail ? (
+            workspace channel with no real workspace id mounts nothing). A card
+            opens detail in the side pane via the same `onOpenTask` an inline
+            `#task` chip uses. `inset-0` covers the whole column. */}
+        {tasksTabActive && taskBoardContainer && onOpenTask ? (
           <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
             <ChannelTasksTab
               container={taskBoardContainer}
-              onOpenTask={onOpenTaskDetail}
+              onOpenTask={onOpenTask}
             />
           </div>
         ) : null}

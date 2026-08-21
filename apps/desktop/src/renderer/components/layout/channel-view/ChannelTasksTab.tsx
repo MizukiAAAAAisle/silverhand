@@ -49,8 +49,8 @@ import { primaryAction } from '@/features/common/PrimaryAction';
  */
 export interface ChannelTasksTabProps {
   container: TaskBoardContainer;
-  /** Opens a task's detail modal (App writes `?task=<id>`) — the same one modal
-   *  every board card shares. */
+  /** Opens a task's detail in the side pane (App writes `?task=<id>`) — the same
+   *  host an inline `#task` chip opens, so a card and a chip land identically. */
   onOpenTask: (taskId: string) => void;
 }
 
