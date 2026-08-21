@@ -43,15 +43,19 @@ function AppMenuItemContent({
 export function AppContextMenu({
   trigger,
   children,
+  contentClassName,
 }: {
   trigger: ReactElement;
   children: ReactNode;
+  /** Extra classes merged onto the menu content — e.g. a narrower `min-w-*`
+   *  than the shared default for a compact single-action menu. */
+  contentClassName?: string;
 }): JSX.Element {
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{trigger}</ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className={MENU_CONTENT_CLASS}>
+        <ContextMenu.Content className={cn(MENU_CONTENT_CLASS, contentClassName)}>
           {children}
         </ContextMenu.Content>
       </ContextMenu.Portal>

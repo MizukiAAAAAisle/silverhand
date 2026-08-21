@@ -272,10 +272,7 @@ export function ChannelAttachmentsContent({
   return (
     <div className="conversation-surface flex min-h-0 w-full flex-1 flex-col">
       {showFilterBar ? (
-        <div
-          data-attachments-filter-bar
-          className="shrink-0 border-b border-border-subtle"
-        >
+        <div data-attachments-filter-bar className="shrink-0">
           <div className="flex flex-wrap items-center gap-2 py-2">
             <SenderFilterSelect
               value={filter.sender}

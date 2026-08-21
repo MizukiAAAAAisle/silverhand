@@ -36,8 +36,9 @@ import { ThreadIcon } from '@/components/icons/conversation-icons';
  * Per-conversation view tab strip — a horizontal bar under the conversation
  * header. Builtins (Chat / Tasks) and the viewer's custom tabs share ONE
  * draggable order: any tab can be dragged to any slot; only custom tabs can be
- * removed, and removal is right-click only — no tab carries a close icon, so a
- * builtin can never grow a control it must not offer.
+ * removed. Attachment preview tabs — the transient ones — carry an inline close
+ * icon beside the label; panel tabs remove via the right-click menu only, and
+ * builtins carry neither, so a builtin never grows a control it must not offer.
  *
  * The tabs scroll horizontally with a hidden scrollbar (`.scrollbar-hide`) — no
  * dropdown. The `＋` producer is the LAST item of that same scroll flow, right
@@ -147,10 +148,13 @@ export function ConversationTabBar({
                 presentation={tabPresentation(tab)}
                 active={key === activeKey}
                 onActivate={() => onActivate(key)}
-                // Builtins pass no remover, so the context menu never mounts for
-                // them — the non-removable invariant is enforced by absence, not
-                // a disabled item.
+                // Builtins pass no remover, so neither the close icon nor the
+                // right-click menu mounts for them — the non-removable invariant
+                // is enforced by absence, not a disabled item.
                 onClose={isRemovable(tab) ? () => onClose(key) : undefined}
+                // Only attachment previews carry the inline close; panel tabs
+                // stay right-click-only.
+                closable={tab.kind === 'attachment'}
               />
             );
           })}
@@ -195,14 +199,18 @@ function SortableTab({
   active,
   onActivate,
   onClose,
+  closable,
 }: {
   id: string;
   presentation: TabPresentation;
   active: boolean;
   onActivate: () => void;
-  /** Present only for removable (custom) tabs — its presence is what mounts the
+  /** Present for every removable (custom) tab — its presence is what mounts the
    *  right-click "Remove" menu. */
   onClose?: () => void;
+  /** Whether this tab shows the inline close icon beside its label (attachment
+   *  previews only). Panel tabs are removable but stay right-click-only. */
+  closable?: boolean;
 }): JSX.Element {
   const {
     attributes,
@@ -213,11 +221,17 @@ function SortableTab({
     isDragging,
   } = useSortable({ id, animateLayoutChanges });
   const { icon: Icon, label } = presentation;
-  const button = (
-    <button
+  const showInlineClose = closable && onClose;
+  // The sortable node is the OUTER wrapper: it owns the ref, drag transform and
+  // the active underline. The activation region and the close button are its
+  // siblings, so the close control is never a nested interactive inside the
+  // tab's own button. A 2px bottom border on both states (transparent when
+  // inactive) keeps the label baseline from shifting on activation. 稳定 > 自适应.
+  // The underline is ink (not accent): a view tab is a utility navigator, so it
+  // stays in the neutral ink vocabulary and matches its own label ink.
+  const chip = (
+    <div
       ref={setNodeRef}
-      type="button"
-      onClick={onActivate}
       style={{
         transform: transform
           ? `translate3d(${transform.x}px, 0, 0)`
@@ -227,35 +241,51 @@ function SortableTab({
         zIndex: isDragging ? 1 : undefined,
         position: isDragging ? 'relative' : undefined,
       }}
-      {...attributes}
-      {...listeners}
-      // Tab semantics win over dnd-kit's default `role="button"` (spread above).
-      role="tab"
-      aria-selected={active}
       className={cn(
-        // The active tab is marked by a bottom ink border + primary ink; the
-        // strip's own bottom border shows through for inactive tabs. A 2px
-        // border on both states (transparent when inactive) keeps the label
-        // baseline from shifting on activation. 稳定 > 自适应. The underline is
-        // ink (not accent): a view tab is a utility navigator, so it stays in
-        // the neutral ink vocabulary and matches its own label ink.
-        'flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap border-b-2 px-2.5 text-xs transition-colors',
-        active
-          ? 'border-text-primary text-text-primary'
-          : 'border-transparent text-text-muted hover:text-text-primary',
+        'flex shrink-0 items-center border-b-2 transition-colors',
+        active ? 'border-text-primary' : 'border-transparent',
       )}
     >
-      <Icon className="size-3.5 shrink-0" aria-hidden />
-      {label}
-    </button>
+      <button
+        type="button"
+        onClick={onActivate}
+        {...attributes}
+        {...listeners}
+        // Tab semantics win over dnd-kit's default `role="button"` (spread above).
+        role="tab"
+        aria-selected={active}
+        className={cn(
+          'flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap pl-2.5 text-xs transition-colors',
+          showInlineClose ? 'pr-1' : 'pr-2.5',
+          active ? 'text-text-primary' : 'text-text-muted hover:text-text-primary',
+        )}
+      >
+        <Icon className="size-3.5 shrink-0" aria-hidden />
+        {label}
+      </button>
+      {showInlineClose ? (
+        <button
+          type="button"
+          aria-label={`Close ${label}`}
+          title="Close"
+          // Sibling of the activation button, so its click never activates the
+          // tab; stopPropagation guards against any future ancestor handler and
+          // the right-click menu that wraps the whole chip.
+          onClick={event => {
+            event.stopPropagation();
+            onClose();
+          }}
+          className="mr-1.5 flex shrink-0 cursor-pointer items-center rounded-sm p-0.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
+        >
+          <X className="size-3" aria-hidden />
+        </button>
+      ) : null}
+    </div>
   );
 
-  // No close icon on any tab: removal is the right-click menu's single action,
-  // so the strip stays flat and a builtin never shows a control it must not
-  // offer.
-  if (!onClose) return button;
+  if (!onClose) return chip;
   return (
-    <AppContextMenu trigger={button}>
+    <AppContextMenu trigger={chip} contentClassName="min-w-0">
       <AppContextMenuItem icon={<X className="size-3.5" />} onSelect={onClose}>
         Remove
       </AppContextMenuItem>
