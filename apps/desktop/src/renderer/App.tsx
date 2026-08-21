@@ -1370,15 +1370,14 @@ function RegisteredAppShell({
   };
 
   // Open a task's detail. `taskId` says WHICH task; the HOST — pane vs modal —
-  // says FROM WHERE it was opened, and the two are ORTHOGONAL (shiki + Cindy
-  // 2026-07-29). The entrance chooses the host EXPLICITLY — never inferred from
-  // live UI or from whether the id changed: a conversation `#task` chip opens the
-  // overlay side pane beside the messages it was referenced from (#task:1721); a
-  // board card opens the app-level modal. `taskHost` records that choice,
-  // so re-opening the SAME task from a different entrance (e.g. a board card over
-  // an existing pane) still switches surface even though `?task` is unchanged.
-  // Every entrance hands over the RESOLVED `tasks.id`; `?task=<task_id>`
-  // is the whole coordinate, no workspace axis travels with the click (#task:1715).
+  // says FROM WHERE it was opened, and the two are ORTHOGONAL. The entrance
+  // chooses the host EXPLICITLY, never inferred from live UI or from whether the
+  // id changed: a conversation `#task` chip and a conversation Tasks-tab card both
+  // open the overlay side pane beside the conversation; the global Tasks board
+  // opens the app-level modal. `taskHost` records that choice, so re-opening the
+  // SAME task from a different entrance still switches surface even though `?task`
+  // is unchanged. Every entrance hands over the RESOLVED `tasks.id`; `?task=<id>`
+  // is the whole coordinate — no workspace axis travels with the click.
   const [taskHost, setTaskHost] = useState<{
     id: string;
     host: 'pane' | 'modal';
@@ -2064,9 +2063,9 @@ function RegisteredAppShell({
       onOpenTask={openTaskInPane}
       onJumpToMessage={handleJumpToMessage}
       onOpenAdvancedSearch={handleOpenAdvancedSearch}
-      // Per-conversation view tabs (#task:2121) — primary pane only. A Tasks-tab
-      // card opens task detail through `onOpenTask` above, the same side pane an
-      // inline `#task` chip uses.
+      // Per-conversation view tabs — primary pane only. A Tasks-tab card opens
+      // task detail through `onOpenTask` above, the same side pane an inline
+      // `#task` chip uses.
       viewTabsEnabled
       // A md/html click in the sibling Attachments list opens here, in the
       // primary pane's previewer tab (#task:2122). The list hands the attachment

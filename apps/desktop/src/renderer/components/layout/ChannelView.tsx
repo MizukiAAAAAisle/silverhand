@@ -1222,14 +1222,14 @@ function ActiveChannelView({
           />
         ) : null}
 
-        {/* Tasks tab (#task:2121) — an opaque overlay over the chat column
-            (message list + composer) rather than a mount swap, so Chat stays
-            mounted and its Virtuoso scroll survives a tab round-trip. Rendered
-            only while the Tasks tab is active, a task-open handler exists (the
-            primary pane), AND a board container resolved (fail-closed: a
-            workspace channel with no real workspace id mounts nothing). A card
-            opens detail in the side pane via the same `onOpenTask` an inline
-            `#task` chip uses. `inset-0` covers the whole column. */}
+        {/* Tasks tab — an opaque overlay over the chat column (message list +
+            composer) rather than a mount swap, so Chat stays mounted and its
+            Virtuoso scroll survives a tab round-trip. Rendered only while the
+            Tasks tab is active, a task-open handler exists (the primary pane),
+            AND a board container resolved (fail-closed: a workspace channel with
+            no real workspace id mounts nothing). A card opens detail in the side
+            pane via the same `onOpenTask` an inline `#task` chip uses. `inset-0`
+            covers the whole column. */}
         {tasksTabActive && taskBoardContainer && onOpenTask ? (
           <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
             <ChannelTasksTab
