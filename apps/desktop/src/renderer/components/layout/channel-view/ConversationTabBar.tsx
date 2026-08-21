@@ -272,7 +272,9 @@ function SortableTab({
         className={cn(
           'flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap pl-2.5 text-xs transition-colors',
           showInlineClose ? 'pr-1' : 'pr-2.5',
-          active ? 'text-text-primary' : 'text-text-muted hover:text-text-primary',
+          active
+            ? 'font-semibold text-text-primary'
+            : 'font-medium text-text-secondary hover:text-text-primary',
         )}
       >
         <Icon className="size-3.5 shrink-0" aria-hidden />
