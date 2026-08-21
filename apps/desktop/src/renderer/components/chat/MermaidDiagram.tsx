@@ -284,8 +284,12 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               </button>
               {/* The zoom level is a READOUT, not a control (shiki #task:2130):
                   it names the current scale, it is not a button and carries no
-                  poster-sticker chrome. Reset is by stepping down with `−`. */}
-              <span className="mermaid-block__zoom" aria-hidden>
+                  poster-sticker chrome. Reset is by stepping down with `−`. It
+                  is NOT aria-hidden (Cindy a11y): a visually-hidden "Zoom "
+                  prefix gives screen readers the full "Zoom 150%" instead of a
+                  bare, contextless percentage. */}
+              <span className="mermaid-block__zoom">
+                <span className="sr-only">Zoom </span>
                 {Math.round(zoom * 100)}%
               </span>
               <button
