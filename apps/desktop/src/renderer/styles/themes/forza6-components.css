@@ -624,25 +624,20 @@
 
 /* ══ Sticker primitive ══════════════════════════════════════════════
    forza6's poster-sticker shape language, parameterized once. A consumer
-   opts in with `data-sticker` + `data-sticker-tone="<semantic>"`; this
-   rule bakes the forza6 art (0 radius, ink frame, hard offset shadow) and
-   the tone map below supplies fill / glyph / frame colour by MEANING (the
-   theme owns which hue each meaning maps to — see forza6.css). Axes:
-     · `data-sticker-size` = sm (1px) / md=default (1.5px) / lg (2px) —
-       scales border + shadow offset together.
-     · `data-sticker-flat` = drop the rest shadow (FLAT chip; the lift is
-       reserved for the hero / interactive peel).
-     · `data-sticker-no-frame` = drop the border (a hue too low-contrast
-       against ink relies on the shadow alone to frame it).
-   Genuinely per-instance forza6 layout (content-box scaling, padding,
-   glyph `stroke-width`) stays on the element's own rule — this owns only
-   the shared colour + shape, the two things that were hand-copied at every
-   call site. `--sticker-frame` defaults to ink and is the ONE slot the old
-   rules overloaded with fill; keeping fill (tone) and frame separate is what
-   lets a chip whose fill IS ink (workspace) or too low-contrast to also frame
-   in ink (host, deep-teal) drop the frame via `data-sticker-no-frame` without
-   losing its fill. Other themes ignore `data-sticker`
-   entirely and keep their JSX base classes. */
+   opts in with `data-sticker` (+ `data-sticker-tone` for its hue). Axes:
+     · `data-sticker` = ink frame + 0 radius + rest shadow.
+     · `data-sticker-size` = sm / md=default / lg — border width AND the
+       rest + hover shadow rung, moved together.
+     · `button[data-sticker]` = interactive: fixed 1px lift, hover shadow one
+       rung up from its size's rest (see the peel block).
+     · `data-sticker-tone` = fill + glyph colour by MEANING (the theme owns
+       which hue each meaning maps to — see forza6.css); never geometry.
+     · `data-sticker-flat` = drop the rest shadow. `data-sticker-no-frame` =
+       drop the border (a fill that IS ink, or too low-contrast against it,
+       leans on the shadow to read as a poster).
+   Per-instance layout (content-box scaling, padding, glyph `stroke-width`)
+   stays on the element's own rule. Frame colour is ink via `--sticker-frame`;
+   no tone sets it. Other themes ignore `data-sticker`. */
 [data-theme='forza6'] [data-sticker] {
   border: var(--sticker-border-w, 1.5px) solid var(--sticker-frame, var(--forza6-ink));
   border-radius: var(--chip-radius);
