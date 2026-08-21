@@ -156,15 +156,24 @@ function CounterpartPresenceDot({
 /** Dot ground: green is earned by a live, available agent; Away and Offline share
  *  the muted pip (the distinction is a word, not a colour — an idle agent that
  *  will answer the next message must not read as an alarm). Same palette as
- *  `AgentInfoPopover`'s global presence line, which is the same projection. */
-const PRESENCE_DOT_CLASS = 'size-2 shrink-0 rounded-full';
+ *  `AgentInfoPopover`'s global presence line, which is the same projection.
+ *
+ *  Carries `data-status-pip` and reads `--pill-radius` — the SAME status-pip
+ *  contract the sidebar rail dot uses (shiki #task:2127). The attribute is what
+ *  keeps the dot informational across themes: forza6 re-inks plain status colours
+ *  but exempts `[data-status-pip]`, and the radius token makes the pip square in
+ *  forza6 (`--pill-radius: 0`) and round elsewhere, so this dot matches every
+ *  other presence pip instead of staying a hardcoded circle. Size stays the
+ *  header's own (one tier above the rail) — that is layout, the consumer's call. */
+const PRESENCE_DOT_CLASS =
+  'size-2 shrink-0 rounded-[var(--pill-radius)]';
 
 function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null {
   const presence = useAgentPresence(agentId);
   if (presence === null) return null;
   return (
     <span
-      data-header-presence-dot={presence}
+      data-status-pip
       title={presence === 'online' ? 'Online' : presence === 'away' ? 'Away' : 'Offline'}
       className={`${PRESENCE_DOT_CLASS} ${presence === 'online' ? 'bg-success' : 'bg-text-muted/40'}`}
     />
@@ -179,7 +188,7 @@ function HumanPresenceDot({ userId }: { userId: string }): JSX.Element {
   const online = presence === 'online';
   return (
     <span
-      data-header-presence-dot={online ? 'online' : 'offline'}
+      data-status-pip
       title={online ? 'Online' : 'Offline'}
       className={`${PRESENCE_DOT_CLASS} ${online ? 'bg-success' : 'bg-text-muted/40'}`}
     />
