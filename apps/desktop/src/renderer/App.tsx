@@ -66,7 +66,7 @@ import { HumanView } from '@/features/me/HumanView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import { isWorkspacePlaced } from '@silverhand/shared';
-import type { ConversationVisibility } from '@silverhand/shared';
+import type { AttachmentSnapshot, ConversationVisibility } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
 import {
   useAppShellGlobalSync,
@@ -1444,6 +1444,19 @@ function RegisteredAppShell({
     nav.closeTask();
   }, [nav]);
 
+  // One-shot relay for an md/html click in the Attachments list → the primary
+  // pane's previewer tab (#task:2122). The list is a sibling pane and can't reach
+  // that pane's tab controller, so it hands the attachment here; the primary
+  // ChannelView consumes it and clears it back to null. Carries the SOURCE
+  // conversation id: the primary pane may render a beat later, after a route
+  // switch, and it drops a request whose source no longer matches the mounted
+  // conversation (never routes A's file into B's tabs). Wrapped in a fresh object
+  // per click so re-opening the same file isn't swallowed by state identity.
+  const [paneAttachmentRequest, setPaneAttachmentRequest] = useState<{
+    conversationId: string;
+    attachment: AttachmentSnapshot;
+  } | null>(null);
+
   // ⌘W ladder. Called here (not with the other early hooks) because it needs
   // `taskPaneId` to know whether the task shows as the peelable side pane or the
   // self-dismissing modal. Route + nav are read through a ref inside, so the
@@ -2042,6 +2055,12 @@ function RegisteredAppShell({
       // section), distinct from `onOpenTask`'s inline-chip → side-pane route above.
       viewTabsEnabled
       onOpenTaskDetail={openTaskInModal}
+      // A md/html click in the sibling Attachments list opens here, in the
+      // primary pane's previewer tab (#task:2122). The list hands the attachment
+      // up; ChannelView applies the same previewable + tab-strip gate the message
+      // card uses, or falls back to open-with-OS.
+      openAttachmentRequest={paneAttachmentRequest}
+      onAttachmentRequestConsumed={() => setPaneAttachmentRequest(null)}
     />
   );
 
@@ -2103,6 +2122,17 @@ function RegisteredAppShell({
         parentTitle={selectedChannel?.title ?? null}
         onClose={nav.closeFilesList}
         onJumpToMessage={handleJumpToMessage}
+        // md/html rows open in the primary pane's in-app previewer tab
+        // (#task:2122) instead of open-with-OS. A fresh wrapper per click so a
+        // re-click of the same file re-fires the one-shot (App.is-equal state
+        // would otherwise swallow it). ChannelView owns the previewable/gate
+        // decision; images (lightbox) and other files stay panel-local.
+        onOpenAttachment={attachment =>
+          setPaneAttachmentRequest({
+            conversationId: selectedChannelId,
+            attachment,
+          })
+        }
       />
     );
   } else if (taskPaneId && selectedChannelId) {

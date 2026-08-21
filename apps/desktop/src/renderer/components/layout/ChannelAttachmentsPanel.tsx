@@ -66,6 +66,7 @@ import {
   FILTER_SELECT_CONTENT_CLASS,
 } from '@/components/ui/filter-select';
 import { cn } from '@/lib/cn';
+import { attachmentPreviewKind } from '@/lib/attachment-preview';
 import { saveAttachmentToDisk } from '@/components/chat/save-attachment';
 import {
   formatOpenException,
@@ -92,6 +93,12 @@ interface ChannelAttachmentsPanelProps {
    *  same primitive as thread "View in channel" so a thread-scoped source
    *  lands in the right place. */
   onJumpToMessage: (target: MessageJumpTarget) => void;
+  /** Open an md/html row in the primary pane's in-app previewer tab (#task:2122)
+   *  rather than open-with-OS. The panel is a sibling pane with no reach into that
+   *  pane's tab controller, so it hands the attachment up to App, which relays it.
+   *  Only md/html route here (the panel decides via {@link attachmentPreviewKind});
+   *  images open the local lightbox and other files still open-with-OS. */
+  onOpenAttachment?: (attachment: AttachmentDto) => void;
   /** Injected in tests to pin day-boundary math to a fixed clock; production
    *  defaults to `Date.now()`. */
   nowMs?: number;
@@ -126,6 +133,7 @@ export function ChannelAttachmentsPanel({
   parentTitle,
   onClose,
   onJumpToMessage,
+  onOpenAttachment,
   nowMs,
 }: ChannelAttachmentsPanelProps): JSX.Element {
   const [filter, setFilter] = useState<AttachmentListFilter>(
@@ -335,6 +343,7 @@ export function ChannelAttachmentsPanel({
                     presentation={presentation}
                     authorAgentAvatarUrls={authorAgentAvatarUrls}
                     authorHumanAvatarUrls={authorHumanAvatarUrls}
+                    onOpenAttachment={onOpenAttachment}
                     onJump={() =>
                       onJumpToMessage({
                         workspaceId: workspaceId ?? undefined,
@@ -593,13 +602,16 @@ interface AttachmentRowProps {
    *  (#task:1792 B2) — not a directory join. */
   authorAgentAvatarUrls: Map<string, string | null>;
   authorHumanAvatarUrls: Map<string, string | null>;
+  /** Route an md/html row to the in-app previewer tab (see the panel prop). */
+  onOpenAttachment?: (attachment: AttachmentDto) => void;
   onJump: () => void;
 }
 
 /**
  * One attachment row. Three sibling <button>s inside a chip container:
- *   1. Main → Lightbox for images (via a click-time prefetch that
- *      fails-visibly), `open-with-OS` IPC for files.
+ *   1. Main → Lightbox for images; the in-app previewer tab for md/html when a
+ *      host is wired (`onOpenAttachment`, #task:2122); `open-with-OS` IPC for
+ *      every other file type.
  *   2. Download → save-as via `attachment:save` IPC.
  *   3. Show-in-conversation → jump to the source message.
  *
@@ -612,6 +624,7 @@ function AttachmentRow({
   presentation,
   authorAgentAvatarUrls,
   authorHumanAvatarUrls,
+  onOpenAttachment,
   onJump,
 }: AttachmentRowProps): JSX.Element {
   const { attachment, source } = item;
@@ -644,8 +657,21 @@ function AttachmentRow({
         <button
           type="button"
           onClick={() => {
-            if (isImage) void openImagePreview();
-            else void openAttachmentExternally(attachment);
+            if (isImage) {
+              void openImagePreview();
+              return;
+            }
+            // md/html → the primary pane's previewer tab when a host is wired;
+            // ChannelView applies the final previewable/gate decision and falls
+            // back to open-with-OS itself, so a non-member pane still opens.
+            if (
+              onOpenAttachment
+              && attachmentPreviewKind(attachment.content_type, attachment.filename)
+            ) {
+              onOpenAttachment(attachment);
+              return;
+            }
+            void openAttachmentExternally(attachment);
           }}
           className="group flex min-w-0 flex-1 items-center gap-2.5 text-left focus-outline"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}

@@ -20,6 +20,8 @@ import { SelectionQuoteToolbar } from '@/components/chat/SelectionQuoteToolbar';
 import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
+import { openAttachmentExternally } from '@/components/chat/open-attachment';
+import { attachmentPreviewKind, resolveAttachmentOpenRoute } from '@/lib/attachment-preview';
 import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
 import { AddConversationMemberPopover } from '@/features/conversations/AddConversationMemberPopover';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
@@ -227,6 +229,23 @@ interface ChannelViewProps {
    *  matches the drawer/section, which open the modal. Only meaningful with
    *  `viewTabsEnabled`. */
   onOpenTaskDetail?: (taskId: string) => void;
+  /** One-shot request to open an attachment from a SIBLING pane (the Attachments
+   *  list, #task:2122) into THIS primary pane. The list can't reach this pane's
+   *  tab controller directly, so it hands the attachment up to App, which relays
+   *  it here. The request carries the conversation it was ISSUED from; the
+   *  consumer runs `resolveAttachmentOpenRoute` against the conversation actually
+   *  mounted now, so a request from A that lands after a switch to B is DROPPED,
+   *  never routed into B's tabs or OS-opened on B. Where the source matches it
+   *  uses the SAME rule the message card does — `attachmentPreviewKind` + the
+   *  tab-strip gate — so md/html land in the previewer tab where this pane hosts
+   *  tabs, and everything else falls back to open-with-OS. A fresh object per
+   *  click (App wraps it) so re-clicking the same file re-fires. */
+  openAttachmentRequest?: {
+    conversationId: string;
+    attachment: AttachmentSnapshot;
+  } | null;
+  /** Clear the one-shot above once consumed. */
+  onAttachmentRequestConsumed?: () => void;
 }
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -326,6 +345,8 @@ function ActiveChannelView({
   onOpenAdvancedSearch,
   viewTabsEnabled = false,
   onOpenTaskDetail,
+  openAttachmentRequest,
+  onAttachmentRequestConsumed,
 }: ChannelViewProps & { conversation: ConversationPaneDescriptor }): JSX.Element {
   const {
     data: messages = [],
@@ -429,6 +450,40 @@ function ActiveChannelView({
     },
     [tabController.openTab],
   );
+
+  // Consume a sibling pane's one-shot request to open an attachment here
+  // (#task:2122): the Attachments list can't reach this pane's tab controller, so
+  // it relays the file up through App. `resolveAttachmentOpenRoute` decides the
+  // destination against the conversation MOUNTED NOW versus the one the request
+  // was issued from — a request from A that lands after a switch to B resolves to
+  // `reject`, so we clear it WITHOUT acting (never route A's file into B's tabs,
+  // never OS-open A's file on B; the OS-open fallback is only for the matching
+  // source). Where the source matches it's the same rule the message card makes:
+  // previewable md/html + a hosting tab strip → previewer tab; else open-with-OS
+  // (its own toast on failure). Clearing is signalled back so a re-click re-fires.
+  useEffect(() => {
+    const req = openAttachmentRequest;
+    if (!req) return;
+    const att = req.attachment;
+    const route = resolveAttachmentOpenRoute({
+      requestConversationId: req.conversationId,
+      currentConversationId: conversation.id,
+      previewKind: attachmentPreviewKind(att.content_type, att.filename),
+      tabStripShown: viewTabsShown,
+    });
+    if (route === 'preview') {
+      handleOpenAttachment(att);
+    } else if (route === 'os-open') {
+      void openAttachmentExternally(att);
+    }
+    onAttachmentRequestConsumed?.();
+  }, [
+    openAttachmentRequest,
+    conversation.id,
+    viewTabsShown,
+    handleOpenAttachment,
+    onAttachmentRequestConsumed,
+  ]);
 
   // Per-viewer server-scored unread for this conversation's reply-clusters
   // (#task:1226). The SINGLE source of the chip's "N new" + first-unread —

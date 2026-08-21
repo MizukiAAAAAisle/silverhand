@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   addTab,
   firstTabKey,
@@ -63,11 +63,18 @@ export function useConversationTabs(
   );
 
   // Reset order + active when the conversation changes — the
-  // adjust-state-during-render pattern (store previous id in a ref) so the swap
-  // lands in the same commit as the id change, with no post-mount flash.
-  const prevId = useRef(conversationId);
-  if (prevId.current !== conversationId) {
-    prevId.current = conversationId;
+  // adjust-state-during-render pattern (React's documented "store previous
+  // value" form). The previous id is STATE, not a ref, on purpose: a concurrent
+  // render can be started and thrown away (this hook feeds the primary pane,
+  // whose `conversation.id` comes through `useDeferredValue`, so interrupted
+  // renders are routine). A ref advanced during a discarded render would STICK
+  // while the paired `setTabs`/`setActiveKey` were rolled back — leaving the new
+  // conversation showing the old one's tabs forever. Keeping the previous id in
+  // state makes the comparison transactional with the resets: discard one,
+  // discard all, and the next render re-detects the change.
+  const [prevId, setPrevId] = useState(conversationId);
+  if (prevId !== conversationId) {
+    setPrevId(conversationId);
     const next = getConversationTabs(conversationId);
     setTabs(next);
     setActiveKey(firstTabKey(next));
