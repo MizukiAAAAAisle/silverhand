@@ -160,11 +160,10 @@ type ChannelMembersContentProps = Omit<
 };
 
 /**
- * The Add-member entry: the one primary action that extends this roster. Shared
- * by both hosts so WHOM you may add (the picker's per-candidate answer) and the
- * fail-closed floor stay defined once — only the trigger's width and the panel's
- * anchoring are the host's, because a fixed-width modal and a wide tab want
- * different button footprints.
+ * The Add-member entry, shared by both hosts so WHOM you may add (the picker's
+ * per-candidate answer) and the fail-closed floor stay defined once. The roster
+ * body does not own it — each host composes it at its own top; only the
+ * trigger's width and the panel's anchoring are the host's.
  */
 export function ChannelAddMemberEntry({
   workspaceId,
@@ -276,20 +275,15 @@ export function ChannelMembersDialog({
             ) : null}
           </DialogTitle>
         </DialogHeader>
-        {/* Add member is the roster's ONE primary action and sits at the top,
-            above the search + list, so a long roster never scrolls it out of
-            reach. Full width to span the fixed 360px shell; the picker is the
-            shared one, so candidates and their grading come from it. */}
         {addMemberWorkspaceId ? (
           <ChannelAddMemberEntry
             workspaceId={addMemberWorkspaceId}
             conversationId={content.channelId}
             triggerWidthClass="w-full"
             align="center"
-            // 360px = the shell's own `max-w`, so a centred panel sits flush.
             popoverWidthClass="w-[360px]"
-            // The Dialog's scroll-lock would block wheel scroll on the portaled
-            // candidate list, so the picker opens modal to reclaim it.
+            // `modal` so the picker's portaled list reclaims wheel scroll from
+            // the Dialog's scroll-lock.
             modal
           />
         ) : null}

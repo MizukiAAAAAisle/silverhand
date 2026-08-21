@@ -78,16 +78,11 @@ export function ConversationPanelTab({
       );
     case 'members':
       return (
-        // The roster is a short list, so it seats at the TOP of the tab rather
-        // than filling it — a full-height stretch would strand the content in an
-        // empty pane.
         <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto px-3 py-3">
-          {/* Add member rides the TOP of both hosts (shiki #task:2140), above
-              the roster, so a long list never scrolls it out of reach. A tab can
-              be as wide as the main pane, where a full-width CTA reads as an odd
-              banner; cap it so it stays a button, while a narrow tab still fills
-              to an easy tap target. Gated by the same add-member floor as the
-              header `+` — absent → no entry. */}
+          {/* Add member is the host's, seated at the top; the roster body never
+              owns it. The width cap keeps a wide pane from stretching the CTA
+              into a banner while a narrow tab still fills to an easy tap. Gate is
+              the header `+`'s add-member floor. */}
           {addMemberWorkspaceId ? (
             <ChannelAddMemberEntry
               workspaceId={addMemberWorkspaceId}
