@@ -1871,6 +1871,9 @@ describe('Markdown mermaid fences (#task:1322)', () => {
     // can only be read off the state attribute.
     const html = renderInteractive(DIAGRAM);
     expect(html).toContain('data-mermaid-state="pending"');
+    // At the untouched 100% zoom, the Mermaid block must not take vertical
+    // wheel ownership away from the message stream (#task:2129).
+    expect(html).toContain('data-mermaid-scroll="document"');
     // Not the interactive code-block chrome (that path offers copy; the
     // diagram view offers zoom + the source toggle instead).
     expect(html).not.toContain('code-block__copy');

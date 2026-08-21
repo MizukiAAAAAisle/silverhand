@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { extractMermaidSources } from './MermaidDiagram';
+import {
+  extractMermaidSources,
+  mermaidScrollOwnerForZoom,
+} from './MermaidDiagram';
 
 // The export pre-render pass (#task:1322) scans message markdown for mermaid
 // fences and keys the rendered SVGs by trimmed source. Markdown's `pre` override
@@ -35,4 +38,17 @@ describe('extractMermaidSources (#task:1322)', () => {
   it('skips an empty mermaid fence', () => {
     expect(extractMermaidSources('```mermaid\n\n```')).toEqual([]);
   });
+});
+
+describe('Mermaid scroll ownership (#task:2129)', () => {
+  it('leaves ordinary 100% reading to the document scroll owner', () => {
+    expect(mermaidScrollOwnerForZoom(1)).toBe('document');
+  });
+
+  it.each([0.5, 0.75, 1.5, 2, 3])(
+    'turns explicit zoom %s into an intentional pan viewport',
+    zoom => {
+      expect(mermaidScrollOwnerForZoom(zoom)).toBe('viewport');
+    },
+  );
 });

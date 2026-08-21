@@ -1236,13 +1236,23 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
      two buttons, which would otherwise shift under the pointer mid-zoom. */
   font-variant-numeric: tabular-nums;
 }
-/* The scroll viewport. Capped like `pre` (22rem) so a tall diagram cannot own
-   the whole message; zooming scrolls INSIDE this box rather than growing the
-   message, which is the whole point of a block that zooms. */
+/* At the default 100% view, a Mermaid diagram is ordinary document content:
+   it grows the message vertically and the message stream remains the ONE
+   wheel-scroll owner. The old unconditional `max-height: 22rem; overflow:auto`
+   silently created a second vertical scroller with no visible affordance. A
+   wheel over a tall diagram moved its hidden viewport by hundreds of pixels
+   while the conversation stayed still, then abruptly handed control back to
+   the conversation at the edge (#task:2129).
+
+   Only an explicit zoom step opts into the capped pan viewport. At that point
+   the reader asked to inspect a scaled canvas, so nested panning is intentional
+   rather than a surprise during ordinary reading. */
 .markdown-body .mermaid-block__viewport {
+  padding: 0.7em 0.9em;
+}
+.markdown-body .mermaid-block__viewport[data-mermaid-scroll='viewport'] {
   max-height: 22rem;
   overflow: auto;
-  padding: 0.7em 0.9em;
 }
 /* `transform` is set inline (the live zoom step). Origin top-left keeps the
    scaled canvas anchored to the corner the reader scrolls from; `width:

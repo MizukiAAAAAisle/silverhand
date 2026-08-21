@@ -110,6 +110,18 @@ type RenderState =
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.5, 2, 3] as const;
 const ZOOM_BASE_INDEX = ZOOM_STEPS.indexOf(1);
 
+/**
+ * Ordinary reading has one vertical scroll owner: the document. A reader who
+ * explicitly changes Mermaid zoom opts into a bounded pan viewport instead.
+ * Named as a pure decision so the default can never silently regress to the
+ * hidden nested scroller fixed by #task:2129.
+ */
+export function mermaidScrollOwnerForZoom(
+  zoom: number,
+): 'document' | 'viewport' {
+  return zoom === 1 ? 'document' : 'viewport';
+}
+
 export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const [state, setState] = useState<RenderState>({ status: 'pending' });
   // Bumped whenever the app theme changes so the render effect re-fires.
@@ -194,6 +206,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
 
   const zoom = ZOOM_STEPS[zoomIndex] ?? 1;
   const diagramReady = state.status === 'ok';
+  const scrollOwner = mermaidScrollOwnerForZoom(zoom);
 
   return (
     <div
@@ -278,16 +291,20 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           <code className="language-mermaid">{code}</code>
         </pre>
       ) : (
-        <div className="mermaid-block__viewport">
+        <div
+          className="mermaid-block__viewport"
+          data-mermaid-scroll={scrollOwner}
+        >
           {diagramReady ? (
             <div
               className="mermaid-block__canvas"
-              // Scale, not a width override: the SVG's internal geometry is
-              // laid out by mermaid, so a transform is the one operation that
-              // cannot reflow labels into each other. `transform-origin` is
-              // top-left (CSS) so zooming grows the scrollable area to the
-              // right/bottom instead of pushing the diagram off two edges.
-              style={{ transform: `scale(${zoom})` }}
+              // At 100% the SVG participates in ordinary document layout: no
+              // transform/compositor layer and no nested vertical scroller.
+              // That keeps the message stream the sole wheel-scroll owner.
+              // Once the reader explicitly zooms, transform preserves
+              // mermaid's laid-out geometry; the viewport then becomes the
+              // deliberate pan surface (see `data-mermaid-scroll`).
+              style={zoom === 1 ? undefined : { transform: `scale(${zoom})` }}
               // SVG is produced by mermaid with securityLevel:'strict'
               // (DOMPurify-sanitized).
               dangerouslySetInnerHTML={{ __html: state.svg }}
