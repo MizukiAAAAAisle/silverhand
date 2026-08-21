@@ -20,6 +20,13 @@ import {
   projectRosterMembership,
   useAgentPresence,
 } from '@/features/agents/hooks';
+import {
+  describeMemberRuntimeStatus,
+  memberRuntimeDot,
+  presenceAuthorityFor,
+  projectMemberRuntimeStatus,
+} from '@/features/agents/member-runtime-status';
+import { MUTED_DOT, STATUS_DOT } from '@/components/status-dot';
 import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import {
@@ -51,9 +58,10 @@ interface AgentInfoPopoverProps {
   side?: 'top' | 'bottom' | 'left' | 'right';
   align?: 'start' | 'center' | 'end';
   /** When set, the card carries a presence line + (when crashed) a retry
-   *  action. Online/Offline is read from the agent's Availability regardless of
-   *  placement; a roster-bearing conversation additionally answers the
-   *  MEMBERSHIP question (`Not here`) for an agent not on it (#task:2039). */
+   *  action. WHICH AUTHORITY answers the line is the placement's, not this
+   *  prop's: a roster placement shows the run state of the session serving this
+   *  conversation and can also answer `Not here`; a workspace-less DirectPair
+   *  shows the agent's global Availability (#task:2039, #task:2123). */
   conversationId?: string | null;
   /** `'click'` (default) opens on click for standalone controls.
    *  `'hover'` opens on pointer-enter and
@@ -86,8 +94,8 @@ const HOVER_CLOSE_DELAY_MS = 120;
 
 /**
  * Compact agent info card. Shows avatar, display name + handle,
- * runtime/model, presence (Online/Away/Offline from the agent's Availability, plus
- * a roster's `Not here` membership answer), and an
+ * runtime/model, presence (the roster's run state in a channel, the agent's
+ * global Availability in a workspace-less DirectPair — `PresenceInline`), and an
  * optional retry affordance when the agent has crashed in this conversation.
  *
  * Two trigger modes: click (standalone controls) and hover
@@ -206,10 +214,11 @@ export function AgentInfoPopover({
             <div className="min-w-0 flex-1">
               {/* Name + inline presence dot. Presence sits as the
                   semantic state next to the name, and is only shown
-                  when the card was opened FROM a conversation. Online/Offline
-                  comes from the agent's Availability on every placement; a
-                  roster placement additionally answers `Not here`
-                  (`paneCaps.hasRoster`). */}
+                  when the card was opened FROM a conversation. The placement
+                  decides which authority answers it (`paneCaps.hasRoster` →
+                  the roster's run state, otherwise global Availability),
+                  so the card can never contradict the chip it opened from
+                  (#task:2123). */}
               <div className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 truncate text-sm font-semibold text-text-primary">
                   {agent.display_name || agent.name}
@@ -263,12 +272,23 @@ export function AgentInfoPopover({
 }
 
 /** One visual contract for every presence line, whichever authority answered:
- *  the same pip + the same caption slot next to the name. */
-function PresenceLine({ dot, label }: { dot: string; label: string }): JSX.Element {
+ *  the same pip + the same caption slot next to the name. `title` carries the
+ *  sentence when the answer has more to say than its one word (which session,
+ *  and for a shared one that it is shared) — the label stays the word, so two
+ *  agents in the same state never read differently (#task:2123). */
+function PresenceLine({
+  dot,
+  label,
+  title,
+}: {
+  dot: string;
+  label: string;
+  title?: string;
+}): JSX.Element {
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
-      title={label}
+      title={title ?? label}
     >
       <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + dot} />
       {label}
@@ -277,20 +297,25 @@ function PresenceLine({ dot, label }: { dot: string; label: string }): JSX.Eleme
 }
 
 /**
- * The agent's presence next to its name (#task:2039).
+ * The agent's presence next to its name (#task:2039, #task:2123).
  *
- * Online/Away/Offline is read from the SAME two-axis composition on every
- * placement — the agent's Availability × process Liveness (`projectGlobalPresence`,
- * see `GlobalPresenceInline`). A placement never supplies the online/offline word
- * itself; the only thing a roster adds is the MEMBERSHIP answer:
+ * WHICH AUTHORITY ANSWERS IS A PROPERTY OF THE PLACEMENT, and the decision is a
+ * named pure function (`presenceAuthorityFor`) switched exhaustively here — this
+ * branch is exactly where the two authorities used to be crossed:
  *
- *  - `hasRoster` (a channel) — the agent may not be a member, which is a real
- *    fact only a roster can state (`Not here`). A member falls through to the
- *    same availability-driven presence as everywhere else.
- *  - no roster (a `direct_pair`) — the counterpart is the identity; there is no
- *    membership question, so the availability presence renders directly. Reading a
- *    roster row here once turned membership into presence and told the user their
- *    DM counterpart was `Not here` while it was answering them (shiki, #task:2039).
+ *  - `roster_runtime` (a channel) — the run state of the session serving this
+ *    conversation, plus the membership answer (`Not here`) only a roster can
+ *    state. This card is opened FROM the member chip, and the chip has always
+ *    shown that run state, so reading the agent's global Availability here
+ *    produced `Idle` on the chip and `Online` in the card above it — one agent,
+ *    two words, both live (#task:2123).
+ *  - `global_presence` (a `direct_pair`) — unchanged. There is no membership
+ *    question and no conversation-scoped slot; reading a roster row here once
+ *    told a user their DM counterpart was `Not here` while it was answering them
+ *    (shiki, #task:2039).
+ *
+ * The switch picks a COMPONENT, not a value, because the choice also decides
+ * which reads to start: a DirectPair must not issue the roster reads at all.
  */
 function PresenceInline({
   agent,
@@ -301,12 +326,19 @@ function PresenceInline({
   conversationId: string;
   hasRoster: boolean;
 }): JSX.Element | null {
-  if (hasRoster) {
-    return <RosterMemberPresence agent={agent} conversationId={conversationId} />;
+  switch (presenceAuthorityFor(hasRoster)) {
+    case 'roster_runtime':
+      return <RosterMemberPresence agent={agent} conversationId={conversationId} />;
+    case 'global_presence':
+      return <GlobalPresenceInline agent={agent} />;
   }
-  return <GlobalPresenceInline agent={agent} />;
 }
 
+/**
+ * Global presence — the surfaces that ask "can this agent work for me at all",
+ * which after #task:2123 means a workspace-less DirectPair and the agent's own
+ * profile, never a roster placement.
+ */
 function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | null {
   // Availability (host reachable × agent valid — "can it work for me now") is
   // the primary axis and the only source of Offline; the presence-clock deadline
@@ -323,21 +355,28 @@ function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | nul
   // avoids a false red alarm for an agent that will answer on the next message.
   return (
     <PresenceLine
-      dot={presence === 'online' ? 'bg-success' : 'bg-text-muted/40'}
+      dot={presence === 'online' ? 'bg-success' : MUTED_DOT}
       label={presence === 'online' ? 'Online' : presence === 'away' ? 'Away' : 'Offline'}
     />
   );
 }
 
 /**
- * A roster-bearing placement adds exactly ONE thing to the presence line that
- * Availability already answers: MEMBERSHIP (@Cindy, #task:2039). The membership
- * question is itself a THREE-state projection (`projectRosterMembership`): until
- * the roster read is settled-successful it answers `unknown` and the line draws
- * nothing — a pending / cold-errored roster must NOT impersonate `Not here`. A
- * confirmed non-member reads `Not here`; a member's Online/Away/Offline then comes
- * from the same availability × presence-deadline composition every placement uses,
- * so the roster never supplies the online/offline word — only the "is it here" gate.
+ * A roster placement's presence line: the SAME state the member chip's dot shows,
+ * from the SAME projection (`projectMemberRuntimeStatus`), so the card and the
+ * chip it was opened from cannot disagree (#task:2123).
+ *
+ * BOTH READS ARE THREE-STATE, and neither may be defaulted. Membership answers
+ * `unknown` until the roster read is settled-successful (@Cindy, #task:2039) —
+ * a pending or cold-errored roster must not impersonate `Not here` — and the
+ * runtime read gets the same discipline here: raw `query.data`, because a `= []`
+ * default would turn "not answered" into "answered, no row" and assert Idle for
+ * every agent in the channel while the read is in flight or failing.
+ *
+ * The scope of the answering slot rides the DETAIL sentence only. An
+ * agent-scoped agent has one session serving every conversation, so "Active in
+ * this channel" would be a claim its slot does not support; the word `Active` is
+ * the same either way, and `describeMemberRuntimeStatus` owns the distinction.
  */
 function RosterMemberPresence({
   agent,
@@ -346,16 +385,28 @@ function RosterMemberPresence({
   agent: AgentDto;
   conversationId: string;
 }): JSX.Element | null {
-  // Raw `query.data`, NOT `= []`: a default empty array would collapse a
-  // not-yet-loaded / errored roster into "answered, no members" and paint a real
-  // member as `Not here` on first open (@Cindy, #task:2039).
   const { data: members } = useChannelAgents(conversationId);
-  const membership = projectRosterMembership(members, agent.id);
-  if (membership === 'unknown') return null;
-  if (membership === 'not_here') {
-    return <PresenceLine dot="bg-text-muted/40" label="Not here" />;
-  }
-  return <GlobalPresenceInline agent={agent} />;
+  const { data: runtime } = useChannelAgentRuntime(conversationId);
+  const status = projectMemberRuntimeStatus({
+    membership: projectRosterMembership(members, agent.id),
+    runtime,
+    agentId: agent.id,
+  });
+  const copy = describeMemberRuntimeStatus(status);
+  if (copy === null) return null;
+  const dot = memberRuntimeDot(status);
+  return (
+    <PresenceLine
+      // `not_here` is a membership statement, not a run state, so it keeps the
+      // muted ground the other non-runtime answers use. `dot === null` is NOT a
+      // live branch — `unknown` is the only status without a dot and it already
+      // left through `copy === null` above; this is the type narrowing, kept so
+      // the two functions stay independently total (@Norman, #task:2123 review).
+      dot={status.kind === 'not_here' || dot === null ? MUTED_DOT : STATUS_DOT[dot]}
+      label={copy.label}
+      title={copy.detail}
+    />
+  );
 }
 
 function AgentManagementActions({
@@ -368,7 +419,10 @@ function AgentManagementActions({
   onDialogOpenChange: (open: boolean) => void;
 }): JSX.Element | null {
   const { data: conversationAgents = [] } = useChannelAgents(conversationId);
-  const { data: conversationRuntime = [] } = useChannelAgentRuntime(conversationId);
+  // Raw, like the presence line's: the projection answers `unknown` for an
+  // unsettled read, and Stop then stays disabled — the fail-closed direction for
+  // a control, and reached without a `= []` that would call it `no_session`.
+  const { data: conversationRuntime } = useChannelAgentRuntime(conversationId);
   const start = useStartAgent(conversationId);
   const stop = useStopAgent(conversationId);
   const clearSession = useClearAgentSession(conversationId, agent.session_scope);
@@ -386,7 +440,17 @@ function AgentManagementActions({
   const [clearOpen, setClearOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const row = conversationAgents.find(s => s.agent_id === agent.id);
-  const runtimeRow = conversationRuntime.find(s => s.agent_id === agent.id);
+  // The same projection the presence line reads, so "which row serves this agent
+  // here" is decided once for this whole card (#task:2123). This is the CONTROL
+  // question, not the display one — "is there a session to stop" — and it reads
+  // the answer instead of re-finding the row.
+  const runtimeStatus = projectMemberRuntimeStatus({
+    membership: 'member',
+    runtime: conversationRuntime,
+    agentId: agent.id,
+  });
+  const stoppable =
+    runtimeStatus.kind === 'session' && runtimeStatus.status !== 'idle';
   if (!row) return null;
   const viewerForPermissions =
     viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
@@ -471,7 +535,7 @@ function AgentManagementActions({
             <button
               type="button"
               onClick={stopAgent}
-              disabled={pending || !runtimeRow || runtimeRow.status === 'idle'}
+              disabled={pending || !stoppable}
               className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
               title={`Stop ${agentLabel}`}
               aria-label={`Stop ${agentLabel}`}

@@ -500,7 +500,10 @@ function ActiveChannelView({
   // (a `direct_pair`), and a null id disables the query AND the WS interest — so
   // a DM starts neither read.
   const { data: channelAgents = [] } = useChannelAgents(rosterTarget);
-  const { data: channelAgentRuntime = [] } = useChannelAgentRuntime(rosterTarget);
+  // NOT defaulted: the run-state consumers distinguish "the read has not
+  // settled" from "settled, this agent has no slot row", and `= []` collapses
+  // the two into a confident Idle for every member (#task:2123).
+  const { data: channelAgentRuntime } = useChannelAgentRuntime(rosterTarget);
   const startAgent = useStartAgent(conversation.id);
   const stopAgent = useStopAgent(conversation.id);
   const agentIds = useMemo(

@@ -2,16 +2,20 @@ import { useMemo } from 'react';
 import type {
   AgentDto,
   ConversationAgentRuntimeDto,
-  ConversationAgentStatus,
   HumanMemberDto,
   MemberDto,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
+import { STATUS_DOT } from '@/components/status-dot';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useAgents } from '@/features/agents/hooks';
+import {
+  memberRuntimeDot,
+  projectMemberRuntimeStatus,
+} from '@/features/agents/member-runtime-status';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsersById } from '@/features/users/hooks';
 import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
@@ -39,7 +43,10 @@ export function MemberStrip({
   onOpenMembers,
 }: {
   channelId: string;
-  agentRuntime: ConversationAgentRuntimeDto[];
+  /** Raw `query.data`: `undefined` means the runtime read has not settled, and
+   *  the chips withhold their dot instead of asserting Idle for every agent
+   *  (#task:2123). A `= []` default here is the bug, not a convenience. */
+  agentRuntime: readonly ConversationAgentRuntimeDto[] | undefined;
   agentAvatarUrls: Map<string, string | null>;
   /** Open the channel members modal — the `+N` chip's action (#task:1687). */
   onOpenMembers: () => void;
@@ -51,11 +58,6 @@ export function MemberStrip({
     for (const a of agents) m.set(a.id, a);
     return m;
   }, [agents]);
-  const runtimeByAgentId = useMemo(() => {
-    const m = new Map<string, ConversationAgentRuntimeDto>();
-    for (const ca of agentRuntime) m.set(ca.agent_id, ca);
-    return m;
-  }, [agentRuntime]);
 
   // Members come from the same backend source-of-truth that the
   // platform prompt's "Channel members:" block renders, so
@@ -111,8 +113,15 @@ export function MemberStrip({
         if (member.kind === 'agent') {
           const agent = agentById.get(member.agent_id);
           if (!agent) return null;
-          const runtime = runtimeByAgentId.get(member.agent_id);
-          const status: ConversationAgentStatus = runtime?.status ?? 'idle';
+          const dot = memberRuntimeDot(
+            projectMemberRuntimeStatus({
+              // Membership is established by the iteration itself: this loop IS
+              // the roster, so the only open question is the runtime read.
+              membership: 'member',
+              runtime: agentRuntime,
+              agentId: member.agent_id,
+            }),
+          );
           return (
             <AgentInfoPopover
               key={`agent:${member.agent_id}`}
@@ -144,12 +153,17 @@ export function MemberStrip({
                   avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
                   alt={agent.display_name || agent.name}
                 />
-                <span
-                  className={
-                    'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm '
-                    + STATUS_DOT[status]
-                  }
-                />
+                {/* No dot at all while the runtime read is unsettled — the grey
+                    pip IS the Idle statement, and the pip is absolutely
+                    positioned, so withholding it shifts no layout (#task:2123). */}
+                {dot === null ? null : (
+                  <span
+                    className={
+                      'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm '
+                      + STATUS_DOT[dot]
+                    }
+                  />
+                )}
               </button>
             </AgentInfoPopover>
           );
@@ -282,15 +296,3 @@ function MemberOverflowChip({
     </button>
   );
 }
-
-/** Presence/run-state dot ground, keyed by the agent run status (humans map
- *  their presence onto the same two of these via `presenceDotStatus`). Exported
- *  because the members modal expresses the SAME state on the SAME dot — one
- *  recipe, two surfaces; the modal dropped its status column precisely because
- *  this dot already says it (shiki, #task:1687). */
-export const STATUS_DOT: Record<ConversationAgentStatus, string> = {
-  active: 'bg-success',
-  starting: 'bg-warning',
-  crashed: 'bg-error',
-  idle: 'bg-text-muted/50',
-};

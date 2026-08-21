@@ -47,8 +47,9 @@
  * and, being absent from the roster, no row either).
  *
  * No status column: an agent's run state and a human's presence both ride the
- * avatar's corner dot, the same recipe the header chips use (`STATUS_DOT`) —
- * shiki 2026-07-28 removed the column for that reason.
+ * avatar's corner dot, the same recipe the header chips and the identity popover
+ * use (`STATUS_DOT`, and for agents the one `projectMemberRuntimeStatus`
+ * projection behind it) — shiki 2026-07-28 removed the column for that reason.
  *
  * Confirmation happens INLINE, appended under the row it belongs to. A dialog
  * inside a dialog loses the "which row am I confirming?" context and walks into
@@ -60,7 +61,6 @@ import { Loader2, LogOut, Plus, Power, RefreshCw, Search, UserMinus } from 'luci
 import type {
   ChannelLeaveBlockedReason,
   ConversationAgentRuntimeDto,
-  ConversationAgentStatus,
   ConversationVisibility,
   MemberDto,
 } from '@silverhand/shared';
@@ -101,7 +101,11 @@ import {
   isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
-import { STATUS_DOT } from './member-strip';
+import { STATUS_DOT } from '@/components/status-dot';
+import {
+  memberRuntimeDot,
+  projectMemberRuntimeStatus,
+} from '@/features/agents/member-runtime-status';
 
 /** Above this many members the roster stops being scannable at a glance, so the
  *  search field appears. It is the same cap that collapses the header strip into
@@ -119,8 +123,10 @@ interface ChannelMembersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   channelId: string;
-  /** Per-conversation agent rows — the source of each agent's run state dot. */
-  agentRuntime: ConversationAgentRuntimeDto[];
+  /** Per-conversation agent rows — the source of each agent's run state dot.
+   *  Raw `query.data`: `undefined` = the read has not settled, and a row then
+   *  draws no dot rather than claiming Idle (#task:2123). */
+  agentRuntime: readonly ConversationAgentRuntimeDto[] | undefined;
   agentAvatarUrls: Map<string, string | null>;
   /** Restart / stop EVERY agent in this channel. Absent → not rendered (the
    *  viewer may not manage all of them, or the channel is closed / agentless). */
@@ -222,11 +228,6 @@ export function ChannelMembersDialog({
   );
   const humanAvatarUrls = useUserAvatarObjectUrls(humanAvatarSources);
   const presenceById = usePresenceById();
-  const agentStatusById = useMemo(() => {
-    const m = new Map<string, ConversationAgentStatus>();
-    for (const row of agentRuntime) m.set(row.agent_id, row.status);
-    return m;
-  }, [agentRuntime]);
 
   // HUMANS first, then AGENTS: the viewer's own row lives in the human group and
   // carries Leave, so it must be the first thing found. (The workspace roster
@@ -279,9 +280,18 @@ export function ChannelMembersDialog({
     const key = memberDtoKey(member);
     const label = member.display_name?.trim() || member.name;
     const isSelf = member.kind === 'human' && member.user_id === viewerUserId;
+    // One projection for the agent arm (#task:2123): membership is given by the
+    // row's existence in this roster, so only the runtime read can be unsettled,
+    // and `null` there means "draw no dot" rather than Idle.
     const dot =
       member.kind === 'agent'
-        ? (agentStatusById.get(member.agent_id) ?? 'idle')
+        ? memberRuntimeDot(
+            projectMemberRuntimeStatus({
+              membership: 'member',
+              runtime: agentRuntime,
+              agentId: member.agent_id,
+            }),
+          )
         : presenceDotStatus(presenceById.get(member.user_id)?.presence);
     const canLeaveHere = isSelf && !!onLeave && canLeave;
     // Leave blocked by STATE gets a disabled Leave on the viewer's own row with
@@ -321,12 +331,14 @@ export function ChannelMembersDialog({
                 alt={label}
               />
             )}
-            <span
-              className={
-                'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating '
-                + STATUS_DOT[dot]
-              }
-            />
+            {dot === null ? null : (
+              <span
+                className={
+                  'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating '
+                  + STATUS_DOT[dot]
+                }
+              />
+            )}
           </span>
           {/* Name budget (shiki 2026-07-28: 名字超长要处理). Both the display
               name and the `@handle` truncate, but NOT proportionally — the

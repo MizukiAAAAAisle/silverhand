@@ -360,11 +360,34 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
   });
 
   it('feeds the presence line the roster capability, not a presence-source enum', () => {
-    // Presence reads Online/Offline from Availability on EVERY placement; the
-    // roster only adds the `Not here` membership answer, so the popover is handed
-    // `hasRoster`, never the obsolete `agentPresence` source (#task:2039).
+    // The placement decides which authority answers presence (#task:2123), but it
+    // decides it from `hasRoster` — the same field that gates the reads — and never
+    // from a second `agentPresence` source enum that could disagree with them.
     expect(popoverSource).toContain('hasRoster={paneCaps.hasRoster}');
     expect(popoverSource).not.toContain('paneCaps.agentPresence');
+    expect(popoverSource).toContain('presenceAuthorityFor(hasRoster)');
+  });
+
+  it('reads a roster placement\'s presence from the runtime slot, not Availability', () => {
+    // The #task:2123 bug in structural form: the roster arm's member case used to
+    // fall through to `GlobalPresenceInline`, so the card contradicted the chip it
+    // was opened from. The projection is now the member arm's only source, and
+    // `useAgentPresence` must remain reachable ONLY from the global arm.
+    expect(popoverSource).toContain('projectMemberRuntimeStatus(');
+    expect(popoverSource).toContain('useChannelAgentRuntime(conversationId)');
+    const rosterArmStart = popoverSource.indexOf('function RosterMemberPresence');
+    expect(rosterArmStart).toBeGreaterThan(-1);
+    const rosterArm = popoverSource.slice(
+      rosterArmStart,
+      popoverSource.indexOf('\nfunction ', rosterArmStart + 1),
+    );
+    expect(rosterArm).not.toContain('GlobalPresenceInline');
+    expect(rosterArm).not.toContain('useAgentPresence');
+    // And neither roster read may be defaulted: `= []` turns an unsettled read
+    // into a confident answer for every member in the channel.
+    expect(popoverSource).not.toContain('useChannelAgents(conversationId) ?? []');
+    expect(popoverSource).not.toContain('data: runtime = []');
+    expect(popoverSource).not.toContain('data: members = []');
   });
 
   it('mounts the thread pane INSIDE the inherited capability (#task:2098)', () => {

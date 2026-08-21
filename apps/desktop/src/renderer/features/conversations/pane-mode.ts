@@ -8,10 +8,11 @@
  *  - `workspace_channel` — a workspace container: roster, member management,
  *    channel identity (`#`), workspace-scoped refs and candidate searches;
  *  - `direct_message` — a `direct_pair`: two endpoints, no roster and no
- *    container, the counterpart IS the identity. Presence is NOT placement-keyed:
- *    both shapes read a member's Online/Offline from the agent's Availability
- *    (#task:2043) — a channel's only presence-specific power is the `Not here`
- *    membership answer a roster gives, which is {@link ConversationPaneCapabilities.hasRoster}.
+ *    container, the counterpart IS the identity. Presence IS placement-keyed
+ *    (#task:2123): a roster placement reads a member's state from the session
+ *    serving that conversation, a DirectPair from the agent's global
+ *    Availability (#task:2043). Which one applies follows from
+ *    {@link ConversationPaneCapabilities.hasRoster} — see `presenceAuthorityFor`.
  *
  * — and the four dogfood findings behind this ticket were four different
  * components each guessing which one they were in (`workspaceId === null`, the
@@ -89,15 +90,15 @@ export function placementOfPaneMode(
  * What the pane may show, and what it may READ. Every field is a UI capability,
  * never a permission.
  *
- * Presence is deliberately NOT a field here. Both placements now read a member's
- * presence from the SAME authority — the agent's Availability
- * (`agent_availability_changed`, #task:2043), projected to Online/Away by
- * `projectGlobalPresence` from `(availability, away_at)` alone (#task:2049
- * dropped liveness as an input) — so "which authority answers presence" is no
- * longer a placement-specific capability. The one
- * remaining placement difference is MEMBERSHIP: a roster-bearing placement can say
- * `Not here` for a non-member, which is exactly {@link hasRoster}. A runtime state
- * (`starting` / `crashed`) is orthogonal and never decides presence.
+ * Presence is deliberately NOT its own field here even though the AUTHORITY that
+ * answers it IS placement-keyed (#task:2123): a roster placement reads the run
+ * state of the session serving this conversation, a pair reads the agent's global
+ * Availability (`agent_availability_changed`, #task:2043 → `projectGlobalPresence`).
+ * That difference is not a second capability, because it follows exactly from
+ * {@link hasRoster} — both the membership answer (`Not here`) and the runtime read
+ * are roster powers, and `presenceAuthorityFor` derives the choice from that one
+ * field. A `presence` enum beside it would be a second way to say the same thing,
+ * free to disagree with the reads {@link rosterQueryTarget} actually starts.
  */
 export interface ConversationPaneCapabilities {
   /** The identity primitive the header wears: the channel `#`, the counterpart's
@@ -109,8 +110,10 @@ export interface ConversationPaneCapabilities {
    *  them. A pair's two endpoints are not a roster, so it has none of it (shiki,
    *  #task:2039).
    *
-   *  It also gates the presence line's MEMBERSHIP question: a roster-bearing
-   *  placement answers `Not here` for an agent not on it, a pair never does.
+   *  It also decides WHICH AUTHORITY the presence line reads: a roster-bearing
+   *  placement reads the roster's runtime slot (and can say `Not here` for an
+   *  agent not on it), a pair reads global Availability and never says either
+   *  (#task:2123).
    *
    *  It gates the READS, not just the painting (@Cindy, #task:2039 review): a
    *  surface that starts the query and then renders nothing because the response
