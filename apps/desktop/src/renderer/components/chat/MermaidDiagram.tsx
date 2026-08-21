@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Code, Copy, Maximize2, Workflow, ZoomIn, ZoomOut } from 'lucide-react';
 import { MermaidLightbox } from './MermaidLightbox';
 
@@ -75,8 +75,28 @@ export async function renderMermaidSvg(
   // error otherwise throws AND appends a visible error node to <body>).
   await mermaid.parse(source);
   const id = `mermaid-${diagramSeq++}`;
-  const { svg } = await mermaid.render(id, source);
-  return svg;
+  // Mermaid otherwise renders its temporary measuring SVG directly under
+  // <body>. Keep that connected for SVG text measurement but invisible and
+  // outside page layout; transient renders must never paint over the app.
+  const renderHost = document.createElement('div');
+  renderHost.setAttribute('aria-hidden', 'true');
+  Object.assign(renderHost.style, {
+    position: 'fixed',
+    left: '-100000px',
+    top: '0',
+    width: `${document.documentElement.clientWidth}px`,
+    height: '0',
+    overflow: 'hidden',
+    visibility: 'hidden',
+    pointerEvents: 'none',
+  });
+  document.body.append(renderHost);
+  try {
+    const { svg } = await mermaid.render(id, source, renderHost);
+    return svg;
+  } finally {
+    renderHost.remove();
+  }
 }
 
 /** Extract the trimmed source of every ```mermaid fence in a markdown string,
@@ -111,16 +131,45 @@ type RenderState =
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.5, 2, 3] as const;
 const ZOOM_BASE_INDEX = ZOOM_STEPS.indexOf(1);
 
+interface MermaidViewportGeometry {
+  width: number;
+  height: number;
+}
+
+const MAX_CACHED_VIEWPORTS = 64;
+const viewportGeometryByDiagram = new Map<string, MermaidViewportGeometry>();
+
+function geometryKey(code: string, dark: boolean): string {
+  return `${dark ? 'dark' : 'light'}\u0000${code.trim()}`;
+}
+
+function cachedViewportHeight(key: string, width: number): number | null {
+  const geometry = viewportGeometryByDiagram.get(key);
+  if (!geometry || Math.abs(geometry.width - width) > 1) return null;
+  viewportGeometryByDiagram.delete(key);
+  viewportGeometryByDiagram.set(key, geometry);
+  return geometry.height;
+}
+
+function rememberViewportGeometry(
+  key: string,
+  geometry: MermaidViewportGeometry,
+): void {
+  viewportGeometryByDiagram.delete(key);
+  viewportGeometryByDiagram.set(key, geometry);
+  if (viewportGeometryByDiagram.size <= MAX_CACHED_VIEWPORTS) return;
+  const oldest = viewportGeometryByDiagram.keys().next().value;
+  if (oldest !== undefined) viewportGeometryByDiagram.delete(oldest);
+}
+
 /**
- * Ordinary reading has one vertical scroll owner: the document. A reader who
- * explicitly changes Mermaid zoom opts into a bounded pan viewport instead.
- * Named as a pure decision so the default can never silently regress to the
- * hidden nested scroller fixed by #task:2129.
+ * The message stream is the only inline vertical scroll owner. Zoom participates
+ * in layout; fullscreen owns bounded pan/zoom for detailed inspection.
  */
 export function mermaidScrollOwnerForZoom(
-  zoom: number,
-): 'document' | 'viewport' {
-  return zoom === 1 ? 'document' : 'viewport';
+  _zoom: number,
+): 'document' {
+  return 'document';
 }
 
 export function MermaidDiagram({ code }: { code: string }): JSX.Element {
@@ -134,6 +183,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const [zoomIndex, setZoomIndex] = useState(ZOOM_BASE_INDEX);
   const [copied, setCopied] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [pendingHeight, setPendingHeight] = useState<number | null>(null);
   // While the fullscreen modal is open the SAME sanitized SVG lives there, so the
   // inline copy is withdrawn: a Mermaid SVG carries internal ids and `url(#…)` /
   // marker / clipPath fragment references, and two live copies in one document
@@ -144,6 +194,35 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const [inlineHold, setInlineHold] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+
+  const zoom = ZOOM_STEPS[zoomIndex] ?? 1;
+  const diagramReady = state.status === 'ok';
+  const scrollOwner = mermaidScrollOwnerForZoom(zoom);
+  const viewportGeometryKey = geometryKey(code, isDarkTheme());
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    if (state.status === 'pending') {
+      const cachedHeight = cachedViewportHeight(
+        viewportGeometryKey,
+        viewport.offsetWidth,
+      );
+      setPendingHeight(current =>
+        current === cachedHeight ? current : cachedHeight,
+      );
+      return;
+    }
+
+    if (state.status === 'ok' && zoom === 1) {
+      rememberViewportGeometry(viewportGeometryKey, {
+        width: viewport.offsetWidth,
+        height: viewport.offsetHeight,
+      });
+    }
+    if (pendingHeight !== null) setPendingHeight(null);
+  }, [pendingHeight, state.status, viewportGeometryKey, zoom]);
 
   const openFullscreen = useCallback(() => {
     setInlineHold(viewportRef.current?.offsetHeight ?? null);
@@ -219,10 +298,6 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
       </div>
     );
   }
-
-  const zoom = ZOOM_STEPS[zoomIndex] ?? 1;
-  const diagramReady = state.status === 'ok';
-  const scrollOwner = mermaidScrollOwnerForZoom(zoom);
 
   return (
     <div
@@ -344,6 +419,11 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           ref={viewportRef}
           className="mermaid-block__viewport"
           data-mermaid-scroll={scrollOwner}
+          style={
+            state.status === 'pending' && pendingHeight !== null
+              ? { height: pendingHeight }
+              : undefined
+          }
         >
           {fullscreen ? (
             // Inline SVG withdrawn while the modal owns the only live copy. An
@@ -353,13 +433,10 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           ) : diagramReady ? (
             <div
               className="mermaid-block__canvas"
-              // At 100% the SVG participates in ordinary document layout: no
-              // transform/compositor layer and no nested vertical scroller.
-              // That keeps the message stream the sole wheel-scroll owner.
-              // Once the reader explicitly zooms, transform preserves
-              // mermaid's laid-out geometry; the viewport then becomes the
-              // deliberate pan surface (see `data-mermaid-scroll`).
-              style={zoom === 1 ? undefined : { transform: `scale(${zoom})` }}
+              // Layout zoom changes the block's measured height, so inline
+              // reading keeps the message stream as its only scroll owner.
+              // Fullscreen provides the bounded pan surface for inspection.
+              style={zoom === 1 ? undefined : { zoom }}
               // SVG is produced by mermaid with securityLevel:'strict'
               // (DOMPurify-sanitized).
               dangerouslySetInnerHTML={{ __html: state.svg }}
