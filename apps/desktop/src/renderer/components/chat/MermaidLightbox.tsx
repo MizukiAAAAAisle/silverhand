@@ -201,7 +201,7 @@ export function MermaidLightbox({
               uses. */}
           <div
             ref={attachWell}
-            className="flex flex-1 overflow-auto p-4"
+            className="flex flex-1 overflow-auto p-4 scrollbar-hide"
             // The diagram surface reads the theme's diagram ground (forza6 is
             // white, not its dark code island); other themes fall back to the
             // modal's elevated surface.
@@ -249,6 +249,7 @@ export function MermaidLightbox({
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
                 {...neutralAction('size-[22px] shrink-0')}
+                data-zoom-stepper
               >
                 <ZoomOut className="size-4" />
               </Button>
@@ -273,6 +274,7 @@ export function MermaidLightbox({
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
                 {...neutralAction('size-[22px] shrink-0')}
+                data-zoom-stepper
               >
                 <ZoomIn className="size-4" />
               </Button>

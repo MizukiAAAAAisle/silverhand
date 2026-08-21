@@ -377,7 +377,7 @@ export function Lightbox({
               rather than pushing the footer out of the frame. */}
           <div
             ref={attachWell}
-            className="flex flex-1 overflow-auto bg-bg-elevated p-3"
+            className="flex flex-1 overflow-auto bg-bg-elevated p-3 scrollbar-hide"
             style={{ minHeight: WELL_MIN_HEIGHT }}
           >
             <img
@@ -432,6 +432,7 @@ export function Lightbox({
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
                 {...neutralAction('size-[22px] shrink-0')}
+                data-zoom-stepper
               >
                 <ZoomOut className="size-4" />
               </Button>
@@ -459,6 +460,7 @@ export function Lightbox({
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
                 {...neutralAction('size-[22px] shrink-0')}
+                data-zoom-stepper
               >
                 <ZoomIn className="size-4" />
               </Button>

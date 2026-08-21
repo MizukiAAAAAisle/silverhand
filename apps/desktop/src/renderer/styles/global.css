@@ -255,6 +255,17 @@ html, body, #root {
 .scrollbar-hide { scrollbar-width: none; }
 .scrollbar-hide::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
+/* Previewer footer zoom steppers reuse the neutral-action control primitive
+   (frame + hover-lift + poster hook) but drop its resting ink stroke: on the
+   Image/Mermaid footers the −/+ read as quiet icon controls, not framed poster
+   actions. The width token stays so the box aligns with the framed Copy/Download
+   beside them; only the colour goes transparent, at rest and on hover. forza6
+   projects its 2px ink poster frame back in its theme file. */
+[data-zoom-stepper],
+[data-zoom-stepper]:hover:not(:disabled) {
+  border-color: transparent;
+}
+
 /* Sidebar/workspace/channel rows reserve border space even when transparent;
    themes can tune the stroke weight without touching component classes.
    `border-radius: var(--row-radius)` lets each theme decide list-row
