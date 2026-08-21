@@ -4,7 +4,15 @@ import { describe, expect, it } from 'vitest';
 import type {
   AgentDto,
   ChannelConversationDto,
+  Locator,
   WorkspaceHumanMemberDto,
+} from '@silverhand/shared';
+import {
+  canonicalizeStoredConversationTitle,
+  canonicalizeStoredWorkspaceName,
+  formatLocator,
+  formatLocatorToken,
+  parseLocator,
 } from '@silverhand/shared';
 import {
   buildMentionHumans,
@@ -19,27 +27,55 @@ import {
 } from './Composer';
 
 /**
- * Locks the two branches `formatPickInsertion` can produce so the
- * mention picker never inserts a string that `Markdown.tsx`'s
- * `@<handle>` / `#conv:<id>` parsers can't resolve.
+ * Locks the branches `formatPickInsertion` can produce so the mention
+ * picker never inserts a string the renderer can't turn into a working
+ * chip — and, for a channel, that the semantic locator it emits round-trips
+ * through the shared parser for EVERY character class a real title carries.
  *
  * History:
- * - Original implementation always inserted `#<title>` — broke on
- *   the common case of CJK / spaces / slashes / leading digits.
- *   (Cindy #task:502 review finding.)
- * - First fix added a handle-safe branch that kept `#<title>` for
- *   ASCII-only titles and fell back to `#conv:<id>` otherwise.
- * - shiki + Cindy then converged on the simpler invariant: the
- *   picker ALWAYS inserts `#conv:<id>`, because (a) it sidesteps
- *   the title-charset constraint entirely, (b) it sidesteps
- *   same-title ambiguity inside a workspace (ChannelRef returns the
- *   ambiguous sentinel and renders inert muted text), and (c) the
- *   picker already has the id in hand, so there is no win to
- *   recomputing it from a title.
+ * - Original implementation always inserted `#<title>` — broke on the
+ *   common case of CJK / spaces / slashes / leading digits. (#task:502.)
+ * - Then the picker always inserted `#conv:<id>`: id-precise, but the wire
+ *   form is opaque in prose — a human reading the body can't see which
+ *   channel it points at.
+ * - #task:2126: the picker now spells the shipped SEMANTIC LOCATOR
+ *   `<silverhand://workspace/<ws>/<title>>` (#task:2119 grammar) via the
+ *   shared formatter + canonical name constructors, so the body stays
+ *   agent- and human-readable. The renderer still parses `#conv:<id>` for
+ *   every existing body, and the picker falls back to it when the workspace
+ *   name is absent (a state the `#` picker does not reach today).
  *
- * `#<name>` remains a valid hand-written short alias for unique
- * handle-safe titles, but the picker stops producing it.
+ * The percent-escaping of a title's `/`, `%`, `#`, `?`, `<`, `>` and spaces
+ * is the shared URI codec's job; these cases prove the picker delegates to
+ * it and never reimplements it — the emitted token parses back to exactly
+ * the coordinate that was built from the raw names.
  */
+
+/** Build the locator the picker MUST emit for `(rawTitle, workspaceName)`, then
+ *  assert (a) the picker emits its canonical prose token verbatim and (b) that
+ *  token round-trips through `parseLocator` back to the same coordinate — the
+ *  proof the name-segment escaping is exact for this title's characters. */
+function expectChannelLocator(rawTitle: string, workspaceName: string): void {
+  const expected: Locator = {
+    kind: 'channel',
+    workspace: canonicalizeStoredWorkspaceName(workspaceName),
+    channel: canonicalizeStoredConversationTitle(rawTitle),
+    threadRootId: null,
+  };
+  const emitted = formatPickInsertion(
+    // `id` is deliberately ignored by the locator arm — the coordinate is the
+    // name, not the opaque id — so a distinctive value proves it isn't leaking in.
+    { kind: 'channel', channel: channel({ id: 'IGNORED_00000000', title: rawTitle }) },
+    workspaceName,
+  );
+  expect(emitted).toBe(formatLocatorToken(expected));
+  // Autolink brackets are load-bearing (custom scheme has no bare autolink);
+  // strip them to feed the parser the author's raw bytes it expects.
+  expect(emitted.startsWith('<') && emitted.endsWith('>')).toBe(true);
+  expect(parseLocator(emitted.slice(1, -1))).toEqual(expected);
+  // The picker never falls back to the opaque wire id when a name is available.
+  expect(emitted).not.toContain('#conv:');
+}
 
 function agent(overrides: Partial<AgentDto> = {}): AgentDto {
   return {
@@ -105,64 +141,74 @@ function wsHuman(
 describe('formatPickInsertion', () => {
   it('agent → @<name> (handle is always url-safe by schema)', () => {
     expect(
-      formatPickInsertion({ kind: 'agent', agent: agent(), inConversation: true }),
+      formatPickInsertion(
+        { kind: 'agent', agent: agent(), inConversation: true },
+        'silverhand',
+      ),
     ).toBe('@alice');
   });
 
   it('human → @<name> (same mention namespace as agents)', () => {
     expect(
-      formatPickInsertion({ kind: 'human', human: human(), inConversation: true }),
+      formatPickInsertion(
+        { kind: 'human', human: human(), inConversation: true },
+        'silverhand',
+      ),
     ).toBe('@shiki');
   });
 
-  it('channel with handle-safe title → still #conv:<id> (no title shortcut)', () => {
-    // Picker no longer takes the `#<title>` shortcut even when the
-    // title would parse. Avoids the cross-title-ambiguity case
-    // entirely — two `#general` channels in a workspace would render
-    // inert; `#conv:<id>` always wins.
-    expect(
-      formatPickInsertion({
-        kind: 'channel',
-        channel: channel({ id: 'qdQwBXDqcq_GE63-', title: 'general' }),
-      }),
-    ).toBe('#conv:qdQwBXDqcq_GE63-');
+  it('channel with handle-safe title → semantic locator (no #conv shortcut)', () => {
+    expectChannelLocator('general', 'silverhand');
   });
 
-  it('channel with title containing spaces → #conv:<id>', () => {
-    // The placeholder in CreateChannelDialog is literally
-    // `修复 login bug`, so this is the common case, not a corner.
-    expect(
-      formatPickInsertion({
-        kind: 'channel',
-        channel: channel({ id: 'abc1234567890def', title: 'agent panel ui polish' }),
-      }),
-    ).toBe('#conv:abc1234567890def');
+  it('channel with CJK + spaces in title → percent-escaped locator', () => {
+    // The CreateChannelDialog placeholder is literally `修复 login bug`, so
+    // CJK-with-spaces is the common case, not a corner: CJK stays raw, the
+    // space becomes `%20`.
+    expectChannelLocator('修复 login bug', 'silverhand');
   });
 
-  it('channel with CJK title → #conv:<id>', () => {
-    expect(
-      formatPickInsertion({
-        kind: 'channel',
-        channel: channel({ id: 'cjkc000000000aaa', title: '修复 login bug' }),
-      }),
-    ).toBe('#conv:cjkc000000000aaa');
+  it('channel with slash in title → structural / stays, title / escapes', () => {
+    // `/` inside a name must escape to `%2F` or it would forge an extra path
+    // segment; the segment separators between root/ws/title stay raw.
+    expectChannelLocator('feature/cli design', 'silverhand');
   });
 
-  it('channel with title starting with a digit → #conv:<id>', () => {
-    expect(
-      formatPickInsertion({
-        kind: 'channel',
-        channel: channel({ id: 'roadmap0000000aa', title: '2026-roadmap' }),
-      }),
-    ).toBe('#conv:roadmap0000000aa');
+  it('channel with percent, hash and question mark in title → escaped locator', () => {
+    // `%` must escape first (`%25`) or every other escape becomes ambiguous;
+    // `#`/`?` are URI structural (fragment/query) and must not leak.
+    expectChannelLocator('100% done? #ship', 'silverhand');
   });
 
-  it('channel with slash in title → #conv:<id>', () => {
+  it('channel with angle brackets in title → escaped locator', () => {
+    // `<`/`>` are the autolink delimiters themselves; unescaped they would
+    // truncate the token and kill the chip.
+    expectChannelLocator('a<b>c', 'silverhand');
+  });
+
+  it('channel with every reserved class at once → still round-trips', () => {
+    // One title exercising CJK, space, `/`, `%`, `#`, `?`, `<`, `>` together.
+    expectChannelLocator('UI/UX 100%? <设计>#1', 'silverhand');
+  });
+
+  it('workspace name also percent-escapes (same codec, both segments)', () => {
+    // The workspace segment is escaped by the same codec as the title, so a
+    // space in the workspace name must round-trip too.
+    expectChannelLocator('general', 'my workspace');
+  });
+
+  it('null workspace name → falls back to #conv:<id> (totality)', () => {
+    // The `#` picker is gated on a resolved workspace so it does not reach
+    // this arm today, but the producer stays total rather than throwing, and
+    // `#conv:` is the documented fallback the renderer still parses.
     expect(
-      formatPickInsertion({
-        kind: 'channel',
-        channel: channel({ id: 'feat0000000clidg', title: 'feature/cli design' }),
-      }),
+      formatPickInsertion(
+        {
+          kind: 'channel',
+          channel: channel({ id: 'feat0000000clidg', title: 'feature/cli design' }),
+        },
+        null,
+      ),
     ).toBe('#conv:feat0000000clidg');
   });
 });

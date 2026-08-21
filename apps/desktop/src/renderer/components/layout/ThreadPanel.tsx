@@ -66,6 +66,12 @@ interface ThreadPanelProps {
    *  channel-ref nav), exactly as the primary `ChannelView` handles its own
    *  nullable `conversation.workspace_id`. */
   workspaceId: string | null;
+  /** Display name of the parent's workspace, resolved by the pane owner and
+   *  forwarded to the composer's `#` picker so it spells a semantic channel
+   *  locator (#task:2126). Null for a `direct_pair` or an unresolved workspace,
+   *  where the picker falls back to `#conv:<id>` — the same null domain as
+   *  `workspaceId`. */
+  workspaceName: string | null;
   /** Whether the parent's container has a `#` channel namespace, forwarded to the
    *  composer's `#` channel query. Required and un-defaulted: the parent
    *  workspace ROW can still be unresolved while this pane is open, and a default
@@ -162,6 +168,7 @@ interface ThreadPanelProps {
 export function ThreadPanel({
   channelId,
   workspaceId,
+  workspaceName,
   hasChannelNamespace,
   rootMessageId,
   parentTitle,
@@ -1062,6 +1069,7 @@ export function ThreadPanel({
           key={`${channelId}#cluster#${rootMessageId}`}
           conversationId={channelId}
           workspaceId={workspaceId}
+          workspaceName={workspaceName}
           hasChannelNamespace={hasChannelNamespace}
           threadRootId={rootMessageId}
           disabled={closed || rootCtx.isError || !rootCtx.root}

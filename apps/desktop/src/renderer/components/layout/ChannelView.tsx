@@ -91,6 +91,13 @@ interface ChannelViewProps {
    *  told the two kinds apart — the divergences are all "is there a channel
    *  namespace at all" (#task:2078). */
   hasChannelNamespace: boolean;
+  /** Display name of this conversation's workspace, resolved ONCE by the pane
+   *  owner from its id→name authority and threaded down as a sibling to
+   *  `hasChannelNamespace` — never looked up in this leaf (#task:2126). The
+   *  Composer's `#` picker spells a semantic channel locator with it; null for a
+   *  workspace-less conversation or an unresolved row, where the picker falls back
+   *  to `#conv:<id>`. */
+  workspaceName: string | null;
   conversation: ConversationPaneDescriptor | null;
   /** True when a channel IS selected in the route but its workspace's channel
    *  list hasn't resolved yet (e.g. a cross-workspace jump from Activity's
@@ -315,6 +322,7 @@ function canAddMember(
 // exists — keeps hook order stable across the null transition.
 function ActiveChannelView({
   hasChannelNamespace,
+  workspaceName,
   conversation,
   parentTitle,
   jumpTarget,
@@ -1193,6 +1201,7 @@ function ActiveChannelView({
             key={conversation.id}
             conversationId={conversation.id}
             workspaceId={conversation.workspace_id}
+            workspaceName={workspaceName}
             hasChannelNamespace={hasChannelNamespace}
             disabled={closed}
             archived={isArchived}

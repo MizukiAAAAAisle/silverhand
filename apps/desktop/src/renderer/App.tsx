@@ -458,6 +458,17 @@ function RegisteredAppShell({
     [agents],
   );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  // The pane owner already holds the workspace id→name authority (`workspaces`),
+  // so it resolves the display name a Composer needs to spell a semantic channel
+  // locator and hands it down as a SIBLING prop — no leaf lookup, mirroring how
+  // `hasChannelNamespace` is threaded (#task:2126). Null for a workspace-less
+  // conversation or an unresolved row, which the Composer treats as "fall back to
+  // `#conv:<id>`".
+  const workspaceNameById = useCallback(
+    (wid: string | null): string | null =>
+      wid === null ? null : (workspaces.find(w => w.id === wid)?.name ?? null),
+    [workspaces],
+  );
   // The workspace a pending channel creation targets — resolved off the id the
   // tree row handed over, so `+` on a row the primary pane is NOT in still creates
   // in the right place (#task:1889).
@@ -1994,6 +2005,7 @@ function RegisteredAppShell({
   ) : (
     <ChannelView
       hasChannelNamespace={primaryPaneHasChannelNamespace}
+      workspaceName={workspaceNameById(primaryPaneDescriptor?.workspace_id ?? null)}
       conversation={primaryPaneDescriptor}
       resolving={parentChannelResolving}
       // The pair arm's failed read (#task:2035 B8): neither a loader nor "Select
@@ -2167,6 +2179,7 @@ function RegisteredAppShell({
       secondaryView = (
         <ChannelView
           hasChannelNamespace={secondaryViewInputs.hasChannelNamespace}
+          workspaceName={workspaceNameById(secondaryConversationDescriptor.workspace_id)}
           conversation={secondaryConversationDescriptor}
           parentTitle={null}
           jumpTarget={secondaryJumpTarget}
@@ -2224,6 +2237,7 @@ function RegisteredAppShell({
         <ThreadPanel
           channelId={threadChannelId}
           workspaceId={threadWorkspaceId}
+          workspaceName={workspaceNameById(threadWorkspaceId)}
           // A thread's composer resolves `@`/`#` shorthand in its parent's
           // namespace, so it takes the DERIVED namespace bit the primary pane uses
           // (`primaryPaneHasChannelNamespace`, the same value ChannelView reads),

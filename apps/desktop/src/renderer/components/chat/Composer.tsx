@@ -13,9 +13,16 @@ import { AtSign, Hash, Paperclip, X } from 'lucide-react';
 import type {
   AgentDto,
   ChannelConversationDto,
+  Locator,
   ReferenceKind,
 } from '@silverhand/shared';
-import { isGenericMimeHint, mimeFromFilename } from '@silverhand/shared';
+import {
+  canonicalizeStoredConversationTitle,
+  canonicalizeStoredWorkspaceName,
+  formatLocatorToken,
+  isGenericMimeHint,
+  mimeFromFilename,
+} from '@silverhand/shared';
 import {
   findShorthandCandidates,
   rewriteShorthandReferences,
@@ -79,6 +86,15 @@ interface ComposerProps {
    *  `conversation_users` rows; only unresolved `@human` chips degrade to plain
    *  text. */
   workspaceId: string | null;
+  /** The authoritative name of that workspace, resolved by the PANE owner from
+   *  the workspace list it already holds — never recovered from `workspaceId` by
+   *  an ambient lookup here (a leaf that re-derived it would be a second name
+   *  authority). A workspace-derived fact carried as a sibling to the descriptor,
+   *  exactly like {@link ComposerProps.hasChannelNamespace}. `null` ⇔
+   *  `workspaceId` is null (a `direct_pair`, which has no channel picker). The `#`
+   *  picker spells its pick as a semantic locator over this name and the selected
+   *  channel's title (#task:2126). */
+  workspaceName: string | null;
   /** Whether that workspace has a `#` channel namespace to resolve against —
    *  false whenever `workspaceId` is null, and also while the container's own row
    *  is unresolved; the `#` channel query treats both as "don't ask" (#task:2078
@@ -173,6 +189,7 @@ type SubmittingSnapshot = {
 export function Composer({
   conversationId,
   workspaceId,
+  workspaceName,
   hasChannelNamespace,
   threadRootId,
   disabled: disabledProp,
@@ -418,14 +435,13 @@ export function Composer({
   // public), never a cross-workspace directory (#task:2088).
   //
   // The boundary is what this container makes VISIBLE to the viewer, not what
-  // would resolve if offered. The picker inserts `#conv:<id>` (see
-  // {@link formatPickInsertion}), which is id-addressed and resolves in ANY
-  // workspace (`ConversationRef` → `useConversationIdentity` →
-  // `GET /api/conversations/:id/ref`), so a cross-workspace candidate would
-  // produce a WORKING chip; what makes it wrong is the offer itself — the list
-  // would name conversations this container does not hold. Do not re-derive the
-  // scoping from "it would not resolve anyway": that was this comment's earlier
-  // rationale and it is false for the token the picker actually emits.
+  // would resolve if offered. The picker inserts a semantic channel locator (see
+  // {@link formatPickInsertion}), whose name segments resolve against live names
+  // in ANY workspace, so a cross-workspace candidate would produce a WORKING
+  // chip; what makes it wrong is the offer itself — the list would name
+  // conversations this container does not hold. Do not re-derive the scoping from
+  // "it would not resolve anyway": that was this comment's earlier rationale and
+  // it is false for the token the picker actually emits.
   //
   // A conversation with no workspace at all (a `direct_pair`) is the same rule's
   // terminal cell: `workspaceId` is null, this query stays off, and the picker
@@ -486,7 +502,7 @@ export function Composer({
     // Trailing space so the next keystroke isn't immediately treated
     // as continuation of the handle (and so the caret lands at a
     // typing-friendly spot).
-    const insertion = `${formatPickInsertion(item)} `;
+    const insertion = `${formatPickInsertion(item, workspaceName)} `;
     const nextDraft = before + insertion + after;
     const nextCaret = (before + insertion).length;
     updateDraft(nextDraft, nextCaret);
@@ -1797,32 +1813,43 @@ function rowKey(item: PickerItem): string {
 /**
  * Build the text to splice in when the user picks a row from the
  * mention popover. Exported for the regression test that locks the
- * two branches the renderer always resolves:
+ * branches the renderer always resolves:
  *
  *   - `agent`   → `@<name>` — ParticipantNameSchema is alpha-first and
  *                 shares the renderer's `@<handle>` grammar, so the parser
  *                 always matches every stored agent name.
- *   - `channel` → `#conv:<id>` — universal, id-precise. We do NOT
- *                 emit `#<title>` even when the title happens to be
- *                 handle-safe: `#name` parsing is workspace-scoped
- *                 by-title (Markdown.tsx → ChannelRef) and breaks on
- *                 CJK / spaces / leading digits / collisions with
- *                 another same-titled channel, so the picker would
- *                 silently produce different reliability for
- *                 different titles. Channel ids match `#conv:`'s
- *                 16-char alphanumeric+`-_` parser shape exactly,
- *                 so this branch always renders as a working ref —
- *                 in ANY workspace, which is why the candidate set's
- *                 workspace scoping is a product rule and not a
- *                 consequence of resolvability (see the
- *                 `useChannelsForWorkspace` call above, #task:2088).
+ *   - `channel` → the SEMANTIC LOCATOR `<silverhand://workspace/<ws>/<title>>`
+ *                 (#task:2126). This is PROSE authoring, so the picker spells the
+ *                 coordinate the shared grammar defines rather than the
+ *                 `#conv:<id>` wire form — a human reading the body sees which
+ *                 channel it points at. The percent-escaping of names with CJK,
+ *                 spaces or the URI's structural characters is the shared codec's
+ *                 job: we build a `Locator` from the two canonical name
+ *                 constructors and hand it to {@link formatLocatorToken}; the
+ *                 renderer NEVER reimplements the escape set. `formatLocator` is
+ *                 total over the type, so the emitted string always round-trips
+ *                 through `parseLocator`.
  *
- * The user can still type `#general` manually if they prefer the
- * shorter form for a handle-safe title — the picker just picks the
- * surer wire format.
+ * FALLS BACK to `#conv:<id>` only when the workspace name is absent — a state the
+ * `#` picker does not reach today (it is gated on `hasChannelNamespace`, which
+ * implies a workspace), kept total rather than throwing. `#conv:` parsing is
+ * unchanged and still carries every existing body and permanent-id deep link.
+ *
+ * The user can still type `#general` or a locator by hand; the picker just emits
+ * the readable, reliable form.
  */
-export function formatPickInsertion(item: PickerItem): string {
+export function formatPickInsertion(
+  item: PickerItem,
+  workspaceName: string | null,
+): string {
   if (item.kind === 'agent') return `@${item.agent.name}`;
   if (item.kind === 'human') return `@${item.human.name}`;
-  return `#conv:${item.channel.id}`;
+  if (workspaceName === null) return `#conv:${item.channel.id}`;
+  const locator: Locator = {
+    kind: 'channel',
+    workspace: canonicalizeStoredWorkspaceName(workspaceName),
+    channel: canonicalizeStoredConversationTitle(item.channel.title),
+    threadRootId: null,
+  };
+  return formatLocatorToken(locator);
 }
