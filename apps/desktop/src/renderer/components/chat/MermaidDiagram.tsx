@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, Code, Copy, Maximize2, Minus, Plus, Workflow } from 'lucide-react';
+import { Check, Code, Copy, Maximize2, Workflow, ZoomIn, ZoomOut } from 'lucide-react';
 import { MermaidLightbox } from './MermaidLightbox';
 
 /**
@@ -140,8 +140,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   // collide (duplicate ids → the modal's refs can resolve into the inline
   // `<defs>`). We do NOT re-render or rewrite ids; we simply hold the inline
   // slot's measured height with an id-free placeholder so the message doesn't
-  // reflow underneath the modal, then restore the SVG on close (Cindy B1,
-  // #task:2130).
+  // reflow underneath the modal, then restore the SVG on close.
   const [inlineHold, setInlineHold] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -233,12 +232,10 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
       data-mermaid-view={view}
     >
       <div className="code-block__header">
-        {/* LEFT: the view switch IS the label (shiki #task:2130「header 上固定的
-            mermaid label 去掉，变成 mermaid + source 固定常驻，点击切换」). Two
-            persistent segments, not one flip-button: both destinations stay
-            visible and directly clickable, and the active segment names the
-            current view — so the switch subsumes the old static `mermaid` tag
-            rather than sitting beside it. */}
+        {/* LEFT: the view switch IS the label. Two persistent segments, not one
+            flip-button: both destinations stay visible and directly clickable,
+            and the active segment names the current view, so the switch subsumes
+            a separate static tag rather than sitting beside it. */}
         <div className="mermaid-block__switch" role="group" aria-label="View">
           <button
             type="button"
@@ -272,11 +269,11 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
         <div className="mermaid-block__controls">
           {view === 'diagram' ? (
             <>
-              {/* Order is `100% − +` (shiki #task:2130): the readout sits to the
-                  LEFT so the two steppers are adjacent and read as one pair. The
-                  zoom level is a READOUT, not a control — it is NOT aria-hidden
-                  (a visually-hidden "Zoom " prefix gives screen readers "Zoom
-                  150%"); reset is by stepping down with `−`. */}
+              {/* Order `100% − +`: the readout sits to the LEFT so the two
+                  steppers are adjacent and read as one pair. The zoom level is a
+                  READOUT, not a control — it is NOT aria-hidden (a visually-hidden
+                  "Zoom " prefix gives screen readers "Zoom 150%"); reset is by
+                  stepping down with `−`. */}
               <span className="mermaid-block__zoom">
                 <span className="sr-only">Zoom </span>
                 {Math.round(zoom * 100)}%
@@ -291,7 +288,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 aria-label="Zoom out"
                 title="Zoom out"
               >
-                <Minus className="size-3" />
+                <ZoomOut className="size-3" />
               </button>
               <button
                 type="button"
@@ -305,11 +302,11 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 aria-label="Zoom in"
                 title="Zoom in"
               >
-                <Plus className="size-3" />
+                <ZoomIn className="size-3" />
               </button>
-              {/* Fullscreen opens the read-only pan/zoom modal (#task:2130):
-                  inline zoom is capped and bounded to the message column, the
-                  modal is the room to inspect a large diagram. */}
+              {/* Fullscreen opens the read-only pan/zoom modal: inline zoom is
+                  capped and bounded to the message column, the modal is the room
+                  to inspect a large diagram. */}
               <button
                 type="button"
                 className="mermaid-block__icon"
@@ -349,9 +346,9 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           data-mermaid-scroll={scrollOwner}
         >
           {fullscreen ? (
-            // Inline SVG withdrawn while the modal owns the only live copy
-            // (Cindy B1). An id-free, aria-hidden spacer holds the measured
-            // height so the message doesn't reflow behind the backdrop.
+            // Inline SVG withdrawn while the modal owns the only live copy. An
+            // id-free, aria-hidden spacer holds the measured height so the
+            // message doesn't reflow behind the backdrop.
             <div aria-hidden style={{ height: inlineHold ?? undefined }} />
           ) : diagramReady ? (
             <div

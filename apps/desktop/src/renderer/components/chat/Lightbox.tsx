@@ -425,7 +425,7 @@ export function Lightbox({
                 aria-label="Zoom out"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
-                {...neutralAction('size-7 shrink-0')}
+                {...neutralAction('size-[22px] shrink-0')}
               >
                 <ZoomOut className="size-4" />
               </Button>
@@ -452,14 +452,14 @@ export function Lightbox({
                 aria-label="Zoom in"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
-                {...neutralAction('size-7 shrink-0')}
+                {...neutralAction('size-[22px] shrink-0')}
               >
                 <ZoomIn className="size-4" />
               </Button>
-              {/* Zoom level is a READOUT, not a control (shiki #task:2130): no
-                  click / reset, no button or sticker chrome. Reset is the `0`
-                  key (and stepping with −). A visually-hidden "Zoom " prefix
-                  gives screen readers "Zoom 150%", not a bare percentage. */}
+              {/* Zoom level is a READOUT, not a control: no click / reset, no
+                  button or sticker chrome. Reset is the `0` key (and stepping
+                  with −). A visually-hidden "Zoom " prefix gives screen readers
+                  "Zoom 150%", not a bare percentage. */}
               <span className="flex h-7 min-w-[3.25rem] items-center justify-center px-1.5 tabular-nums text-text-secondary">
                 <span className="sr-only">Zoom </span>
                 {Math.round(scale * 100)}%

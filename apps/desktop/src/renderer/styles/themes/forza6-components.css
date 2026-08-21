@@ -1143,10 +1143,10 @@
        white header cap + framed code body (shiki #task:796 — the slab
        used to sit inside the frame and looked embedded/box-in-box).
        Not a code-island role — a forza6 chrome role.
-     - Header strip: WHITE cap (shiki #task:2130「forza6 的 header 也改白色」,
-       superseding the earlier indigo slab) with ink foreground + an ink
-       hairline dividing it from the navy body. slack-dark is the only theme
-       that keeps a dark header now. Header bg stays forza6-scoped because it
+     - Header strip: WHITE cap (superseding the earlier indigo slab) with ink
+       foreground + an ink hairline dividing it from the navy body. slack-dark
+       is the only theme that keeps a dark header now. Header bg stays
+       forza6-scoped because it
        overrides the global `--code-block-header-bg` token this rule ignores.
      - ink small label for the language tag (was lime — unreadable on white;
        lime/粉 now survives only on the body border + the mermaid active
@@ -1158,18 +1158,18 @@
   border-radius: var(--control-radius);
 }
 [data-theme='forza6'] .markdown-body .code-block__header {
-  /* WHITE cap (shiki #task:2130) — was `--forza6-indigo-slab`. It sits INSIDE
-     the 2px ink frame (no negative-margin cap trick any more): once the cap
-     went white it lost its boundary against the light page, so shiki asked for
-     a border — the block frame now outlines the header too, and the ink
-     border-bottom divides it from the navy body. This is not the box-in-box
-     #task:796 rejected: the header carries no inset border of its own, it fills
-     flush to the frame's inner edge. */
+  /* WHITE cap — was `--forza6-indigo-slab`. It sits INSIDE the 2px ink frame
+     (no negative-margin cap trick any more): once the cap went white it lost
+     its boundary against the light page, so it takes a border — the block
+     frame now outlines the header too, and the ink border-bottom divides it
+     from the navy body. Not the box-in-box #task:796 rejected: the header
+     carries no inset border of its own, it fills flush to the frame's inner
+     edge. */
   background: #FFFFFF;
   border-bottom: 1px solid var(--forza6-ink);
 }
 [data-theme='forza6'] .markdown-body .code-block__lang {
-  /* Ink, not lime: lime is unreadable on white (#task:2130). */
+  /* Ink, not lime: lime is unreadable on white. */
   color: var(--forza6-ink);
   font-family: var(--font-display);
   letter-spacing: 0.10em;
@@ -1196,9 +1196,8 @@
   background: var(--forza6-lime);
 }
 
-/* ── Mermaid header controls — forza6 poster stickers (#task:2130) ───
-   shiki「header 上的这些 button 在 forza6 下适配成 poster sticker 样式」. Each
-   control opts in with `data-sticker` (inert in every other theme — the
+/* ── Mermaid header controls — forza6 poster stickers ───
+   Each control opts in with `data-sticker` (inert in every other theme — the
    primitive at the top of this file only paints under `[data-theme='forza6']`),
    so it inherits the shared poster geometry there: 0 radius + ink frame + hard
    1px offset shadow (`data-sticker-size="sm"`). This block supplies only what
@@ -1207,9 +1206,8 @@
    Utility controls (zoom / fullscreen) and the INACTIVE view segment take a
    NEUTRAL paper fill: they wear the poster SHAPE without spending the accent
    hue on chrome. The ACTIVE view segment earns the lime fill — a genuine
-   selected state, the one place loud is paid for. Hover does NOT swap the fill
-   (shiki #task:2130「hover 给 shadow 抬起的样式，不要给 hover background」): it
-   only deepens the poster's offset shadow and lifts 1px, so the accent stays
+   selected state, the one place loud is paid for. Hover does NOT swap the fill:
+   it only deepens the poster's offset shadow and lifts 1px, so the accent stays
    reserved for the selected segment. The extra header gap keeps each sticker's
    offset shadow off its neighbour. */
 [data-theme='forza6'] .markdown-body .mermaid-block__controls,
@@ -1220,8 +1218,8 @@
 [data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker] {
   background: var(--forza6-paper);
   color: var(--forza6-ink);
-  /* Header stickers frame at the full control width (shiki: 2px), not the
-     `sm` 1px — the shadow stays `sm` (set by the size attr, higher up). */
+  /* Header stickers frame at the full control width (2px), not the `sm` 1px —
+     the shadow stays `sm` (set by the size attr, higher up). */
   --sticker-border-w: var(--control-border-width);
   padding: 0.1em 0.3em;
   transition: transform 0.1s ease, box-shadow 0.1s ease;
@@ -1243,9 +1241,9 @@
   background: var(--forza6-lime);
   color: var(--forza6-ink);
 }
-/* Hover = shadow-lift, not a fill swap (shiki #task:2130). The selected
-   segment keeps its lime; every control just rises 1px on a deepened offset
-   shadow, so hover reads as "liftable" without stealing the accent. */
+/* Hover = shadow-lift, not a fill swap. The selected segment keeps its lime;
+   every control just rises 1px on a deepened offset shadow, so hover reads as
+   "liftable" without stealing the accent. */
 [data-theme='forza6'] .markdown-body .mermaid-block__controls [data-sticker]:hover:not(:disabled),
 [data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker]:hover:not(:disabled) {
   transform: translateY(-1px);
@@ -1254,19 +1252,17 @@
 
 /* ── Fullscreen viewer modals — forza6 poster frame + footer stickers ──
    The generic `[data-modal-shell]` is deliberately frameless in forza6 (poster
-   drop shadow only, image viewers since #1959). The Mermaid modal is a poster,
-   not a floating image, so it earns the ink frame back (shiki #task:2130「之前
-   有 ink border 的，现在没了」) — scoped to `data-mermaid-modal` so the image
-   viewers stay frameless. */
+   drop shadow only, image viewers). The Mermaid modal is a poster, not a
+   floating image, so it earns the ink frame back — scoped to
+   `data-mermaid-modal` so the image viewers stay frameless. */
 [data-theme='forza6'] [data-mermaid-modal] {
   border: var(--control-border-width) solid var(--forza6-ink);
 }
 /* The fullscreen viewers' footer −/+ steppers are the shared control primitive
    (base `Button` + `neutralAction`), so forza6 already frames them through the
    `[data-neutral-action]` poster rule — same border/paper/ink/shadow as the
-   Copy/Download buttons beside them (shiki #task:2130「统一成 Copy/Download 的
-   样式」). No modal-scoped sticker rule: matching Copy/Download means reusing
-   their actual primitive, not re-deriving a look. */
+   Copy/Download buttons beside them. No modal-scoped sticker rule: matching
+   Copy/Download means reusing their actual primitive, not re-deriving a look. */
 
 /* ── #v5.5b — Forza6 code island syntax palette (dark) ───────────────
    Cindy `z06bLIkQ7jnxc17V` blocker. global.css:23 imports

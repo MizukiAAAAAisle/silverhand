@@ -1095,10 +1095,9 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   justify-content: space-between;
   padding: 0.25em 0.6em;
   /* The header strip sits one shade off the code body. Light themes paint it
-     pure white (shiki #task:2130「这类 pre block header 直接改成白色」, choice A);
-     dark themes (slack-dark / forza6) keep their own `island-deep` — a white
-     strip on a near-black HUD would blow out — so the token is unset there and
-     falls back to the deeper island shade. */
+     pure white (choice A); dark themes (slack-dark / forza6) keep their own
+     `island-deep` — a white strip on a near-black HUD would blow out — so the
+     token is unset there and falls back to the deeper island shade. */
   background: var(--code-block-header-bg, var(--bg-island-deep));
   border-bottom: 1px solid var(--border-island);
   font-family: var(--appearance-code-font, var(--font-mono));
@@ -1214,11 +1213,10 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   color: var(--text-primary);
 }
 /* The view switch: two persistent segments (Mermaid / Code) that name the
-   two views and select between them (#task:2130). Each carries its own icon +
-   label. Text controls in a flat header strip — no fill/border at rest (a chip
-   inside a chip is one lift too many); the ACTIVE segment earns emphasis via
-   ink weight + full-strength colour, the inactive one sits muted and answers
-   hover. */
+   two views and select between them. Each carries its own icon + label. Text
+   controls in a flat header strip — no fill/border at rest (a chip inside a
+   chip is one lift too many); the ACTIVE segment earns emphasis via ink weight
+   + full-strength colour, the inactive one sits muted and answers hover. */
 .markdown-body .mermaid-block__switch {
   display: flex;
   align-items: center;
@@ -1229,8 +1227,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   align-items: center;
   gap: 0.3em;
   padding: 0 0.4em;
-  /* Height is driven by line-height, not padding (shiki 实测): 18px is the
-     compact strip height the icon + label sit within. */
+  /* Height is driven by line-height, not padding: 18px is the compact strip
+     height the icon + label sit within. */
   line-height: 18px;
   color: var(--text-muted);
   font-family: inherit;

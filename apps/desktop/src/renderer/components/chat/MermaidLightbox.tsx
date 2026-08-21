@@ -13,9 +13,8 @@ interface MermaidLightboxProps {
   svg: string;
 }
 
-/** Same zoom idiom as {@link Lightbox} (shiki「跟 Image Previewer 差不多的操作」):
- *  fit-to-window is 1, zoom only grows above it, continuous slider + stepped
- *  buttons/keys. */
+/** Same zoom idiom as {@link Lightbox}: fit-to-window is 1, zoom only grows
+ *  above it, continuous slider + stepped buttons/keys. */
 const MIN_SCALE = 1;
 const MAX_SCALE = 5;
 const STEP = 1.25;
@@ -24,7 +23,7 @@ const clamp = (v: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, v));
 
 /**
- * Fullscreen Mermaid viewer (#task:2130). A read-only sibling of {@link Lightbox}
+ * Fullscreen Mermaid viewer. A read-only sibling of {@link Lightbox}
  * for a diagram: the same shell (`data-modal-shell` → forza6 poster drop shadow,
  * elevation-only otherwise), the same zoom controls (−/slider/+ and `+` `−` `0`
  * keys, trackpad pinch), and the same drag-to-pan-plus-native-scroll well. It is
@@ -36,7 +35,7 @@ const clamp = (v: number, min: number, max: number): number =>
  * is no natural-size fit to measure and no crispness/whole-pixel concern: the
  * canvas fits the well at scale 1 (`max-width/height: 100%`) and CSS `transform`
  * scales it above, which is the SAME zoom mechanism the inline
- * `.mermaid-block__canvas` uses (#task:2129) — the well is the pan viewport once
+ * `.mermaid-block__canvas` uses — the well is the pan viewport once
  * the diagram overflows. The shell is a fixed large viewport rather than the
  * image modal's hug-the-content box: a diagram has no "natural" on-screen size a
  * reader recognises, so a stable inspector frame reads better than one that
@@ -201,8 +200,8 @@ export function MermaidLightbox({
             ref={attachWell}
             className="flex flex-1 overflow-auto p-4"
             // The diagram surface reads the theme's diagram ground (forza6 is
-            // white, not its dark code island — shiki #task:2130); other themes
-            // fall back to the modal's elevated surface.
+            // white, not its dark code island); other themes fall back to the
+            // modal's elevated surface.
             style={{ background: 'var(--mermaid-diagram-bg, var(--bg-elevated))' }}
           >
             <div
@@ -231,9 +230,9 @@ export function MermaidLightbox({
               MUST stay inside a nested inline group: `.settings-font-size-slider`
               sets `width:100%` (unlayered, so it beats Tailwind's `w-28`), and as
               a direct flex child that width consumes the whole footer — a full-
-              width track that reads as a giant scrollbar (shiki #task:2130). The
-              wrapper is a shrink-to-fit flex item, so the slider resolves to its
-              `w-28` intrinsic width, exactly as in the image Lightbox. */}
+              width track that reads as a giant scrollbar. The wrapper is a
+              shrink-to-fit flex item, so the slider resolves to its `w-28`
+              intrinsic width, exactly as in the image Lightbox. */}
           <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-3 py-2 text-xs">
             <div className="flex items-center gap-2">
               <Button
@@ -243,7 +242,7 @@ export function MermaidLightbox({
                 aria-label="Zoom out"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
-                {...neutralAction('size-7 shrink-0')}
+                {...neutralAction('size-[22px] shrink-0')}
               >
                 <ZoomOut className="size-4" />
               </Button>
@@ -267,14 +266,14 @@ export function MermaidLightbox({
                 aria-label="Zoom in"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
-                {...neutralAction('size-7 shrink-0')}
+                {...neutralAction('size-[22px] shrink-0')}
               >
                 <ZoomIn className="size-4" />
               </Button>
-              {/* Zoom level is a READOUT, not a control (shiki #task:2130): no
-                  click / reset, no button or sticker chrome. Reset is the `0`
-                  key (and stepping with −). A visually-hidden "Zoom " prefix
-                  gives screen readers "Zoom 150%", not a bare percentage. */}
+              {/* Zoom level is a READOUT, not a control: no click / reset, no
+                  button or sticker chrome. Reset is the `0` key (and stepping
+                  with −). A visually-hidden "Zoom " prefix gives screen readers
+                  "Zoom 150%", not a bare percentage. */}
               <span className="flex h-7 min-w-[3.25rem] items-center justify-center px-1.5 tabular-nums text-text-secondary">
                 <span className="sr-only">Zoom </span>
                 {Math.round(scale * 100)}%
