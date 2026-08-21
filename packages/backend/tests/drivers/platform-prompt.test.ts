@@ -199,7 +199,51 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('`<silverhand://agent/<name>>`');
     expect(text).toContain('`<silverhand://human/<name>>`');
     expect(text).toContain('`@<name>` is display only');
-    expect(text).toContain('References address only in prose');
+    expect(text).toContain('Participant references address only in prose');
+  });
+
+  it('separates delivery targets, locators, and participant references', () => {
+    // #task:2125 — three distinct grammars under one Formatting Reference, each
+    // with a load-bearing boundary. The failure this pins is the drift that
+    // collapses them: a locator treated as an address (it has no inbox), or the
+    // viewer-relative DM shorthand presented as a shared id.
+    const text = prompt();
+    expect(text).toContain('### Delivery targets');
+    expect(text).toContain('### Locators');
+    expect(text).toContain('### Participant references');
+    // Delivery target: verbatim copy of the whole token. The union is NOT called
+    // absolute — only the channel/id arms are reader-independent; the DM arm is
+    // viewer-relative, so calling the union absolute is the drift we pin against.
+    expect(text).not.toContain('`target=` is absolute');
+    expect(text).toContain('Copy the complete `target=` token unchanged');
+    expect(text).toContain('reader-independent');
+    expect(text).toContain('`dm:@<handle>` is viewer-relative');
+    // Locator grammar: all five complete forms (no `...` abbreviation that would
+    // teach an unsendable literal), container-only, no-side-effect boundary.
+    expect(text).toContain('`<silverhand://workspace/<workspace>>`');
+    expect(text).toContain('`<silverhand://workspace/<workspace>/<channel>>`');
+    expect(text).toContain(
+      '`<silverhand://workspace/<workspace>/<channel>/<thread_root_id>>`',
+    );
+    expect(text).toContain('`<silverhand://dm/<handle>/<handle>>`');
+    expect(text).toContain(
+      '`<silverhand://dm/<handle>/<handle>/<thread_root_id>>`',
+    );
+    expect(text).toMatch(/never sends,\s+mentions,\s+wakes, CCs, or follows/u);
+    // Locators carry no addressing (not "only navigates"): a renamed/absent
+    // container need not be dead, so we pin the live-name/no-opaque-id phrasing.
+    expect(text).toContain('carries no addressing');
+    expect(text).toContain('resolve against current live');
+    // The prompt now teaches CONSTRUCTION, so the name-segment escape rule must be
+    // present with a worked example — a placeholder filled naively (a channel named
+    // `UI/UX 优化`) would otherwise emit an invalid locator. CJK stays raw (not
+    // encodeURIComponent), `/` and space are escaped, structural `/` is not.
+    expect(text).toContain('percent-escape within each name segment');
+    expect(text).toContain(
+      '`<silverhand://workspace/silverhand/UI%2FUX%20优化>`',
+    );
+    // Disjoint from participant references by root word, not merged into them.
+    expect(text).toContain('Disjoint from participant references by root word');
   });
 
   it('does not claim that profile commands can mutate the injected role', () => {

@@ -472,18 +472,37 @@ ${renderSilverhandCliManual()}
 
 These are chat-output contracts. Copy values from CLI output; never invent ids.
 
-### Addresses
-- \`target=\` is absolute. Copy its complete value unchanged when replying.
-- Stream forms are \`#<workspace>/<title>\`, \`dm:@<handle>\`, and
-  \`#conv:<id>\`. A reply cluster appends \`/thread:<root_message_id>\`.
-- The DM shorthand is viewer-relative; never present it as a shared identifier.
+### Delivery targets
+- Where a message goes. Copy the complete \`target=\` token unchanged to \`--target\`
+  when replying.
+- Stream forms are \`#<workspace>/<title>\`, \`#conv:<id>\`, and \`dm:@<handle>\`; a
+  reply cluster appends \`/thread:<root_message_id>\`. The workspace and \`#conv:<id>\`
+  forms are reader-independent; \`dm:@<handle>\` is viewer-relative — never present it
+  as a shared identifier.
 
-### References
+### Locators
+- How prose NAMES a container — a workspace, channel, thread, or DirectPair —
+  spelled as a CommonMark autolink, the same scheme participant references use. The
+  five forms are \`<silverhand://workspace/<workspace>>\`,
+  \`<silverhand://workspace/<workspace>/<channel>>\`,
+  \`<silverhand://workspace/<workspace>/<channel>/<thread_root_id>>\`,
+  \`<silverhand://dm/<handle>/<handle>>\`, and
+  \`<silverhand://dm/<handle>/<handle>/<thread_root_id>>\`.
+- Disjoint from participant references by root word (\`workspace\`/\`dm\` locate,
+  \`human\`/\`agent\` address). A locator carries no addressing: it never sends,
+  mentions, wakes, CCs, or follows. Its name segments resolve against current live
+  names and carry no opaque ids.
+- Filling a placeholder, percent-escape within each name segment \`/\`, \`%\`, \`#\`,
+  \`?\`, \`<\`, \`>\`, and every Unicode space; leave all other text, including CJK,
+  raw, and keep the \`/\` between segments unescaped. Channel \`UI/UX 优化\` in
+  workspace \`silverhand\` is \`<silverhand://workspace/silverhand/UI%2FUX%20优化>\`.
+
+### Participant references
 - \`<silverhand://agent/<name>>\` and \`<silverhand://human/<name>>\` address a
   participant. Copy \`kind\` and \`name\` from the header or member list.
 - \`@<name>\` is display only. \`#task:<n>\` identifies a workspace task.
-- References address only in prose; code spans, fences, and quotations are
-  literal. CLI arguments take raw values, including complete address tokens.
+- Participant references address only in prose; code spans, fences, and quotations
+  are literal. CLI arguments take raw values, including complete address tokens.
 
 ${injectedMemoryTail ? `${injectedMemoryTail}\n\n` : ''}## Initial role (your assignment in this workspace/channel)
 
