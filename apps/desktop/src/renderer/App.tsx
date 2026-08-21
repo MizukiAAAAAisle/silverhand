@@ -171,7 +171,7 @@ import {
   resolveChatPlaceRestore,
   type DirectPairAuthority,
 } from '@/lib/chat-place-restore';
-import { resolveJumpNav, resolveJumpRoute } from '@/lib/message-jump-nav';
+import { jumpBasePath, resolveJumpNav, resolveJumpRoute } from '@/lib/message-jump-nav';
 export {
   LAST_CHANNEL_KEY,
   clearPlaceMemory,
@@ -1529,12 +1529,6 @@ function RegisteredAppShell({
     // so the flag can ONLY skip nav for a main-channel target — a thread target
     // that mistakenly carries it still runs `withThreadQuery` below (Cindy).
     if (isInlineFind) return false;
-    // Section-aware base path: an Activity-list jump stays in `/activity/...`
-    // (the channel/thread panes are the SAME components, just under the
-    // activity route so the workspace axis + titlebar switch with the
-    // selection); every other section lands in chat (#task:1394).
-    const channelPath =
-      appSection === 'activity' ? routes.activityChannel : routes.chatChannel;
     // Which pane, and the cluster to open with it. Both arms take their thread
     // coordinate from ONE place (#task:2102) — the direct arm used to drop it,
     // which is why a DM attachment sourced from a thread opened the pair's main
@@ -1548,10 +1542,12 @@ function RegisteredAppShell({
       threadRootId: params.threadRootId,
     });
     if (!route) return false;
-    const basePath =
-      route.kind === 'direct'
-        ? routes.chatDirect(route.conversationId)
-        : channelPath(route.workspaceId, route.channelId);
+    // Section-aware base path (#task:1394 / #task:2115): an Activity-list jump
+    // stays in `/activity/...` for BOTH placements — a DirectPair keeps the
+    // Activity shell/list exactly like a channel item, rather than falling back
+    // to `/chat/d/:id` and leaving the section. The section→prefix and
+    // placement→workspace-segment decisions compose in one pure function.
+    const basePath = jumpBasePath(appSection, route);
     // Navigate pane + `?thread` ATOMICALLY — a `toDirect`/`toChannel` followed by
     // an `openThread` would build the thread query off the PRE-navigation
     // location and drop it. `withThreadQuery` on a null root serializes to the

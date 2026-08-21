@@ -1,4 +1,6 @@
 import type { DirectPairAuthority } from '@/lib/chat-place-restore';
+import type { AppSection } from '@/components/layout/NavRail';
+import { routes } from '@/router';
 
 /**
  * How `handleJumpToMessage` should route a jump target whose only coordinates
@@ -91,6 +93,37 @@ export function resolveJumpRoute(inputs: {
     channelId: inputs.channelId,
     threadRootId,
   };
+}
+
+/**
+ * The section-aware base PATH an accepted {@link JumpRoute} lands on, BEFORE the
+ * `?thread` query is layered on (#task:2115). One place answers "which section
+ * shell hosts this jump", for BOTH placements:
+ *
+ *   - From the Activity list, a jump STAYS in `/activity/...` — a channel item
+ *     opens `/activity/w/:wid/c/:cid` and a DirectPair opens `/activity/d/:cid`,
+ *     both keeping the Activity shell/list beside the reused pane. A DM used to
+ *     fall back to `/chat/d/:cid` and leave the section, the dogfood regression
+ *     this retires.
+ *   - From any other section (chat, or a notification click viewed elsewhere) a
+ *     jump lands in chat: `/chat/w/:wid/c/:cid` or `/chat/d/:cid`.
+ *
+ * The placement (`route.kind`) and the section are ORTHOGONAL — the section
+ * chooses the prefix, the placement chooses whether a workspace segment exists —
+ * so the two decisions compose here instead of drifting into per-arm `if`s in
+ * the caller. A pure string function so the "DM from Activity stays in Activity"
+ * contract is pinned without mounting the app.
+ */
+export function jumpBasePath(section: AppSection, route: JumpRoute): string {
+  const inActivity = section === 'activity';
+  if (route.kind === 'direct') {
+    return inActivity
+      ? routes.activityDirect(route.conversationId)
+      : routes.chatDirect(route.conversationId);
+  }
+  return inActivity
+    ? routes.activityChannel(route.workspaceId, route.channelId)
+    : routes.chatChannel(route.workspaceId, route.channelId);
 }
 
 export function resolveJumpNav(inputs: {

@@ -103,19 +103,28 @@ export const routes = {
    * four.
    */
   chatDirectDraft: (agentId: string) => `/chat/d/new/${agentId}`,
-  // Activity is a top-level NavRail section (peer to chat, #task:1394). It has
-  // exactly TWO states, both a pure projection of the route: bare `/activity`
-  // (no workspace, no channel — the full-width global list) and the selected
-  // state `/activity/w/:wid/c/:cid` (a specific channel, opened from a list
-  // item). There is deliberately NO workspace-only `/activity/w/:wid` route:
-  // the workspace is always derived from the selected channel, so a workspace
-  // with no channel would be a third selection state with a titlebar/ws-scoped
-  // queries but no Activity item behind it (Cindy, #task:1394 review). Secondary
-  // panes (`?thread=<root>`) ride the shared query helpers, which operate on the
+  // Activity is a top-level NavRail section (peer to chat, #task:1394). Its
+  // selected state is a pure projection of the route: bare `/activity` (no
+  // workspace, no channel — the full-width global list) plus one selected-item
+  // route PER PLACEMENT, because an Activity item is either a workspace channel
+  // or a workspace-less DirectPair and BOTH open in the Activity shell/list
+  // (opening a DM used to fall back to `/chat/d/:id` and leave the section — a
+  // #task:2115 dogfood regression). There is deliberately NO workspace-only
+  // `/activity/w/:wid` route: a workspace with no channel would be a selection
+  // state with a titlebar/ws-scoped queries but no Activity item behind it
+  // (Cindy, #task:1394 review). The DM route names a whole conversation, so it
+  // does not reintroduce that empty-selection problem. Secondary panes
+  // (`?thread=<root>`) ride the shared query helpers, which operate on the
   // current pathname and thus stay in-section automatically.
   activity: () => '/activity',
   activityChannel: (workspaceId: string, channelId: string) =>
     `/activity/w/${workspaceId}/c/${channelId}`,
+  // The workspace-less DirectPair twin of `activityChannel` (#task:2115): a DM
+  // selected in Activity, staying in the Activity shell. Disjoint from
+  // `activityChannel` by its `/d/` segment (mirrors the `chatDirect` vs
+  // `chatChannel` split), and from `chatDirect` by the `/activity` prefix.
+  activityDirect: (conversationId: string) =>
+    `/activity/d/${conversationId}`,
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
   // Distinct prefix for users so a user id can never collide with the
@@ -139,6 +148,7 @@ export const routePatterns = {
   chatSaved: '/chat/saved',
   chat: '/chat',
   activityChannel: '/activity/w/:workspaceId/c/:channelId',
+  activityDirect: '/activity/d/:conversationId',
   activity: '/activity',
   membersAgent: '/members/:agentId',
   membersUser: '/members/u/:userId',
@@ -178,9 +188,12 @@ export interface RouteState {
   workspaceId: string | null;
   channelId: string | null;
   /**
-   * Set to `channelId` iff the URL is the workspace-less `/chat/d/:conversationId`
-   * (#task:2035) — the EXPLICIT discriminator for "this pane has no workspace
-   * coordinate".
+   * Set to `channelId` iff the URL is a workspace-less conversation route —
+   * `/chat/d/:conversationId` (#task:2035) or its Activity twin
+   * `/activity/d/:conversationId` (#task:2115) — the EXPLICIT discriminator for
+   * "this pane has no workspace coordinate". It is section-independent: the
+   * section is read from the pathname prefix; this only says the open
+   * conversation is a pair.
    *
    * It exists because `workspaceId === null` does not mean that: a bare `/chat`,
    * `/chat/search`, and every non-chat section also carry a null workspace, and
@@ -300,16 +313,23 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // matches no pattern here and resolves to activity section + no workspace/no
   // channel (the full-width list), never a phantom workspace selection.
   const mWorkspace = matchPath(routePatterns.chatWorkspace, pathname);
-  // The workspace-less conversation route (#task:2035). Disjoint from the two
-  // channel patterns by its `/d/` segment, so no ordering question arises.
-  // Its pre-mint sibling (`/chat/d/new/:agentId`, #task:2039) is tried FIRST:
-  // the two are already disjoint by segment count (four vs three), and matching
-  // the more specific one first keeps that intent visible rather than resting on
-  // a count the reader has to verify.
+  // The workspace-less conversation route. Disjoint from the two channel
+  // patterns by its `/d/` segment, so no ordering question arises. It has TWO
+  // prefixes — `/chat/d/:id` (#task:2035) and its Activity twin
+  // `/activity/d/:id` (#task:2115) — and `directConversationId` is populated
+  // the same way for either, because "this pane has no workspace coordinate" is
+  // a placement fact independent of which section shell hosts it; the section
+  // itself is decided by the pathname prefix below. Its pre-mint sibling
+  // (`/chat/d/new/:agentId`, #task:2039) is tried FIRST: the two are already
+  // disjoint by segment count (four vs three), and matching the more specific
+  // one first keeps that intent visible rather than resting on a count the
+  // reader has to verify. (There is no Activity draft twin — a first DM is
+  // composed from an agent page, never from the Activity list.)
   const mDirectDraft = matchPath(routePatterns.chatDirectDraft, pathname);
   const mDirect = mDirectDraft
     ? null
-    : matchPath(routePatterns.chatDirect, pathname);
+    : matchPath(routePatterns.chatDirect, pathname) ??
+      matchPath(routePatterns.activityDirect, pathname);
   // Order matters: the user route is more specific (`/members/u/:userId`,
   // three segments) than the agent route (`/members/:agentId`, two
   // segments), and matchPath returns the first match. Trying the user

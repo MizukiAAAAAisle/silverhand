@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DirectPairAuthority } from '@/lib/chat-place-restore';
-import { resolveJumpNav, resolveJumpRoute } from './message-jump-nav';
+import type { JumpRoute } from './message-jump-nav';
+import { jumpBasePath, resolveJumpNav, resolveJumpRoute } from './message-jump-nav';
 
 // Pure decision fence for the jump seam (#task:2052). Not a UI test: which of
 // three nav modes a jump takes is a BEHAVIOR branch, and the bug it guards
@@ -210,6 +211,50 @@ describe('resolveJumpRoute', () => {
           threadRootId,
         }),
       ).toBeNull();
+    }
+  });
+});
+
+describe('jumpBasePath — section × placement → base path (#task:2115)', () => {
+  const direct = (conversationId: string): JumpRoute => ({
+    kind: 'direct',
+    conversationId,
+    threadRootId: null,
+  });
+  const channel = (workspaceId: string, channelId: string): JumpRoute => ({
+    kind: 'channel',
+    workspaceId,
+    channelId,
+    threadRootId: null,
+  });
+
+  it('keeps a DirectPair jump IN the Activity shell — the dogfood regression', () => {
+    // The whole point: a DM opened from the Activity list must NOT fall back to
+    // `/chat/d/:id` (which left the section). This is the falsifier — flip the
+    // direct arm back to `routes.chatDirect` and this reddens.
+    expect(jumpBasePath('activity', direct('conv-1'))).toBe('/activity/d/conv-1');
+  });
+
+  it('keeps a channel jump in the Activity shell too (unchanged #task:1394 arm)', () => {
+    expect(jumpBasePath('activity', channel('w-1', 'c-a'))).toBe(
+      '/activity/w/w-1/c/c-a',
+    );
+  });
+
+  it('lands both placements in chat from the chat section', () => {
+    expect(jumpBasePath('chat', direct('conv-1'))).toBe('/chat/d/conv-1');
+    expect(jumpBasePath('chat', channel('w-1', 'c-a'))).toBe('/chat/w/w-1/c/c-a');
+  });
+
+  it('treats every non-activity section as chat (a notification click viewed elsewhere)', () => {
+    // The caller's original ternary was `section === 'activity' ? … : chat`, so
+    // anything that is not Activity routes to chat — pin that so a future added
+    // section does not silently acquire its own arm.
+    for (const section of ['tasks', 'members', 'computers', 'settings'] as const) {
+      expect(jumpBasePath(section, direct('conv-1'))).toBe('/chat/d/conv-1');
+      expect(jumpBasePath(section, channel('w-1', 'c-a'))).toBe(
+        '/chat/w/w-1/c/c-a',
+      );
     }
   });
 });

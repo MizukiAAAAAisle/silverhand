@@ -111,12 +111,38 @@ describe('parseRouteState — chat URL matrix', () => {
     expect(r.threadRootId).toBe('root-1');
   });
 
-  it('workspace-only /activity/w/:wid yields NO workspace selection (no third state)', () => {
-    // Activity has exactly two states: bare `/activity` (full-width list) and
-    // `/activity/w/:wid/c/:cid` (selected). There is no `/activity/w/:wid`
-    // route, so a hand-typed one must NOT resolve a phantom workspace — that
-    // would show a titlebar / fire ws-scoped queries for a workspace not
-    // derived from any selected Activity item (#task:1394 review).
+  it('parses /activity/d/:conversationId — DM selected IN the Activity shell (#task:2115)', () => {
+    // The workspace-less twin of `/activity/w/:wid/c/:cid`: a DirectPair opened
+    // from the Activity list stays in the Activity section instead of falling
+    // back to `/chat/d/:id`. `directConversationId` is the placement marker and
+    // is section-independent; `channelId` mirrors it so every channelId-keyed
+    // consumer (secondary panes, ⌘W, read cursors) needs no activity branch.
+    const r = parseRouteState('/activity/d/conv-1', '');
+    expect(r).toMatchObject({
+      section: 'activity',
+      workspaceId: null,
+      channelId: 'conv-1',
+      directConversationId: 'conv-1',
+    });
+  });
+
+  it('carries ?thread on the activity DM route (same secondary-pane helper as chat)', () => {
+    const r = parseRouteState('/activity/d/conv-1', '?thread=root-1');
+    expect(r).toMatchObject({
+      section: 'activity',
+      directConversationId: 'conv-1',
+      channelId: 'conv-1',
+      threadRootId: 'root-1',
+    });
+  });
+
+  it('workspace-only /activity/w/:wid yields NO workspace selection (no bare-workspace state)', () => {
+    // The selected Activity state is per-PLACEMENT — `/activity/w/:wid/c/:cid`
+    // (channel) or `/activity/d/:cid` (DM), both naming a whole conversation.
+    // There is deliberately no workspace-ONLY `/activity/w/:wid` route, so a
+    // hand-typed one must NOT resolve a phantom workspace — that would show a
+    // titlebar / fire ws-scoped queries for a workspace not derived from any
+    // selected Activity item (#task:1394 review).
     const r = parseRouteState('/activity/w/w-1', '');
     expect(r.section).toBe('activity');
     expect(r.workspaceId).toBeNull();

@@ -304,7 +304,9 @@ interface RowLocation {
    *  resolved yet). */
   workspace: ActivityWorkspaceRef | null;
   /** The jump target's workspace coordinate — `undefined` for a DM, which is what
-   *  routes it through the viewer's pair authority to `/chat/d/:id`. */
+   *  routes it through the viewer's pair authority. From Activity that resolves to
+   *  the workspace-less Activity route `/activity/d/:id` (stays in the shell,
+   *  #task:2115); the section, not this field, decides the shell. */
   workspaceId: string | undefined;
   /** Row 1's name, and the subject fallback when the item carries no preview. */
   label: string;
@@ -338,9 +340,11 @@ interface ActivityViewProps {
   workspaceRefById: ReadonlyMap<string, ActivityWorkspaceRef>;
   /** agent_id → agent, for an agent space's icon (the owning agent's avatar). */
   agentsById: ReadonlyMap<string, AgentDto>;
-  /** Jump to a message source — the parent owns view routing (flips to channel
-   *  view, selects workspace + channel, scrolls + flashes). Cross-workspace
-   *  stable: the target carries its own `workspaceId`. */
+  /** Jump to a message source — the parent owns section-aware routing. The
+   *  section decides the shell (an Activity-list jump STAYS in `/activity/...`;
+   *  #task:2115) and the placement decides the coordinate: a workspace channel
+   *  carries its own `workspaceId`, a DM has none (its route is workspace-less).
+   *  Cross-workspace stable on the channel arm via that carried id. */
   onJump: (target: MessageJumpTarget) => void;
 }
 
@@ -606,9 +610,10 @@ function ActivityRow({
     if (item.message_id == null) return;
     onJump({
       // Undefined on the DM arm (see `RowLocation`): a workspace-less target is
-      // what routes the jump through the viewer's pair authority to `/chat/d/:id`,
-      // and a fabricated coordinate would instead build a channel URL under a
-      // workspace this conversation is not in.
+      // what routes the jump through the viewer's pair authority, and a
+      // fabricated coordinate would instead build a channel URL under a
+      // workspace this conversation is not in. `handleJumpToMessage` keeps the
+      // jump in-section, so from here it lands on `/activity/d/:id` (#task:2115).
       workspaceId: location.workspaceId,
       channelId: item.conversation_id,
       threadRootId: item.thread_root_id,
