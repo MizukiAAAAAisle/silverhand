@@ -79,17 +79,17 @@ export function ConversationPanelTab({
     case 'members':
       return (
         <div className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3">
-          {/* Add member is a quiet, natural-width top action — no divider. Its
-              neutral weight lets it sit above the HUMANS/AGENTS columns without
-              a rule to separate it, so it reads as the roster's action rather
-              than a banner. Gate is the header `+`'s add-member floor. */}
+          {/* Add member is a natural-width top action — no divider, no restyle:
+              same primary poster as the modal, just sized to its label instead
+              of stretched to a banner, so it reads as the roster's action above
+              the HUMANS/AGENTS columns. Gate is the header `+`'s add-member
+              floor. */}
           {addMemberWorkspaceId ? (
             <div className="mb-3">
               <ChannelAddMemberEntry
                 workspaceId={addMemberWorkspaceId}
                 conversationId={channelId}
                 align="start"
-                quiet
               />
             </div>
           ) : null}

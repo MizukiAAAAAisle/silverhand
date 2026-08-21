@@ -162,8 +162,8 @@ type ChannelMembersContentProps = Omit<
 /**
  * The Add-member entry, shared by both hosts so WHOM you may add (the picker's
  * per-candidate answer) and the fail-closed floor stay defined once. The roster
- * body does not own it — each host composes it at its own top; the trigger's
- * emphasis, width, and the panel's anchoring are the host's.
+ * body does not own it — each host composes it at its own top; only the
+ * trigger's width and the panel's anchoring are the host's.
  */
 export function ChannelAddMemberEntry({
   workspaceId,
@@ -172,7 +172,6 @@ export function ChannelAddMemberEntry({
   align,
   popoverWidthClass,
   modal = false,
-  quiet = false,
 }: {
   workspaceId: string;
   conversationId: string;
@@ -181,10 +180,6 @@ export function ChannelAddMemberEntry({
   align?: 'start' | 'center' | 'end';
   popoverWidthClass?: string;
   modal?: boolean;
-  /** Neutral outline instead of the primary poster — for an ambient host (the
-   *  roster tab) where a saturated CTA over sparse content reads over-heavy. The
-   *  modal is a focused commit surface and keeps the primary emphasis. */
-  quiet?: boolean;
 }): JSX.Element {
   return (
     <AddConversationMemberPopover
@@ -194,17 +189,10 @@ export function ChannelAddMemberEntry({
       widthClass={popoverWidthClass}
       modal={modal}
       trigger={
-        quiet ? (
-          <Button variant="outline" size="sm" className={triggerWidthClass}>
-            <Plus className="size-4" aria-hidden />
-            Add member
-          </Button>
-        ) : (
-          <Button size="sm" {...primaryAction(triggerWidthClass)}>
-            <Plus className="size-4" aria-hidden />
-            Add member
-          </Button>
-        )
+        <Button size="sm" {...primaryAction(triggerWidthClass)}>
+          <Plus className="size-4" aria-hidden />
+          Add member
+        </Button>
       }
     />
   );
