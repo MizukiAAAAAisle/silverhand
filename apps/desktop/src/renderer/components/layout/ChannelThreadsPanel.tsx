@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Clock, Loader2 } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import {
   SidePanelHeader,
@@ -400,16 +400,18 @@ function ThreadRow({
                 />
               )
             ) : null}
-            <span className="text-xs leading-4 text-text-muted" aria-hidden>
-              ·
+            {/* Icon + time are their own tight group so the row's `gap-2` never
+                strands the clock away from the time it marks. Icon decorative. */}
+            <span className="flex shrink-0 items-center gap-1 text-text-muted">
+              <Clock className="size-3 shrink-0" aria-hidden />
+              <time
+                dateTime={new Date(summary.last_reply_at).toISOString()}
+                title={lastReplyTime.absolute}
+                className="text-xs"
+              >
+                {lastReplyTime.relative}
+              </time>
             </span>
-            <time
-              dateTime={new Date(summary.last_reply_at).toISOString()}
-              title={lastReplyTime.absolute}
-              className="shrink-0 text-xs text-text-muted"
-            >
-              {lastReplyTime.relative}
-            </time>
           </span>
         ) : null}
       </CollectionItemCard>
