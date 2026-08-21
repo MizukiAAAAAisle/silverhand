@@ -179,7 +179,10 @@ export function MermaidLightbox({
           className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating shadow-xl focus:outline-none"
           style={{ width: 'min(1100px, 92vw)', height: '86vh' }}
         >
-          <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
+          <div
+            data-modal-divider
+            className="flex shrink-0 items-center gap-2 border-b-[length:var(--control-border-width)] border-border-subtle px-3 py-2"
+          >
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
               Diagram
             </DialogPrimitive.Title>
@@ -233,7 +236,10 @@ export function MermaidLightbox({
               width track that reads as a giant scrollbar. The wrapper is a
               shrink-to-fit flex item, so the slider resolves to its `w-28`
               intrinsic width, exactly as in the image Lightbox. */}
-          <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-3 py-2 text-xs">
+          <div
+            data-modal-divider
+            className="flex shrink-0 items-center gap-2 border-t-[length:var(--control-border-width)] border-border-subtle px-3 py-2 text-xs"
+          >
             <div className="flex items-center gap-2">
               <Button
                 type="button"

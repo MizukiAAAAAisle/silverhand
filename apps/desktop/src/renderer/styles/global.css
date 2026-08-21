@@ -1110,7 +1110,10 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
      also has a dark body, but its white header is set explicitly in the forza6
      component layer, not through this fallback. */
   background: var(--code-block-header-bg, var(--bg-island-deep));
-  border-bottom: 1px solid var(--border-island);
+  /* Divider width tracks the theme's structural stroke authority
+     (`--control-border-width`: 1px, forza6 2px), so the header/body seam matches
+     every other themed divider instead of hard-coding a per-theme special case. */
+  border-bottom: var(--control-border-width) solid var(--border-island);
   font-family: var(--appearance-code-font, var(--font-mono));
   font-size: 0.75em;
   color: var(--text-island);

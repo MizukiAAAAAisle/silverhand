@@ -347,7 +347,10 @@ export function Lightbox({
             maxHeight: SHELL_MAX_HEIGHT,
           }}
         >
-          <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
+          <div
+            data-modal-divider
+            className="flex shrink-0 items-center gap-2 border-b-[length:var(--control-border-width)] border-border-subtle px-3 py-2"
+          >
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
               Image Preview
             </DialogPrimitive.Title>
@@ -416,7 +419,10 @@ export function Lightbox({
             />
           </div>
 
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border-subtle px-3 py-2 text-xs">
+          <div
+            data-modal-divider
+            className="flex shrink-0 items-center justify-between gap-2 border-t-[length:var(--control-border-width)] border-border-subtle px-3 py-2 text-xs"
+          >
             <div className="flex items-center gap-2">
               <Button
                 type="button"

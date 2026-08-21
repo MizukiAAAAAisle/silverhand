@@ -1160,9 +1160,10 @@
      boundary of its own, so it takes the block frame's outline plus an ink
      border-bottom to divide it from the navy body. Not box-in-box: the header
      carries no inset border of its own, it fills flush to the frame's inner
-     edge. */
+     edge. Only the colour is forza6's here — the width comes from the shared
+     `--control-border-width` on the base rule. */
   background: #FFFFFF;
-  border-bottom: 1px solid var(--forza6-ink);
+  border-bottom-color: var(--forza6-ink);
 }
 [data-theme='forza6'] .markdown-body .code-block__lang {
   /* Ink, not lime: lime is unreadable on white. */
@@ -1253,6 +1254,13 @@
    frameless. */
 [data-theme='forza6'] [data-mermaid-modal] {
   border: var(--control-border-width) solid var(--forza6-ink);
+}
+/* Modal header/footer dividers render ink here, not the faint `--border-subtle`
+   the base classes carry: on forza6's paper a structural seam is ink, matching
+   the code-block header and the poster frame. Width still comes from the shared
+   `--control-border-width`; other themes keep their subtle divider. */
+[data-theme='forza6'] [data-modal-divider] {
+  border-color: var(--forza6-ink);
 }
 /* The fullscreen viewers' footer −/+ steppers are the shared control primitive
    (base `Button` + `neutralAction`), so forza6 already frames them through the
