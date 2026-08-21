@@ -155,6 +155,7 @@ export function CreateAgentDialog({
   const selectRuntime = useCallback((next: RuntimeKind): void => {
     setRuntime(next);
     setModel(runtimeDefaultModel(next) ?? '');
+    setError(null);
   }, []);
 
   const hostsQuery = useHostsQuery();
@@ -307,7 +308,10 @@ export function CreateAgentDialog({
               hosts={placeableHosts}
               availabilityById={availabilityById}
               value={selectedHostId}
-              onChange={setSelectedHostId}
+              onChange={id => {
+                setSelectedHostId(id);
+                setError(null);
+              }}
               ariaLabel="Computer"
             />
           </div>
@@ -319,7 +323,10 @@ export function CreateAgentDialog({
             <Input
               id="ag-name"
               value={name}
-              onChange={e => setName(e.target.value)}
+              onChange={e => {
+                setName(e.target.value);
+                setError(null);
+              }}
               onBlur={nameCheck.markTouched}
               aria-invalid={nameCheck.blocking || undefined}
               placeholder="alice"
@@ -328,14 +335,6 @@ export function CreateAgentDialog({
             <NameAvailabilityHint check={nameCheck} />
           </div>
 
-          <RuntimePicker
-            hostId={selectedHostId}
-            hostAvailable={selectedHostAvailable}
-            value={runtime}
-            onSelect={selectRuntime}
-            onGateChange={setRuntimeGate}
-          />
-
           <div className="flex flex-col gap-1.5">
             <Label className="font-semibold">Session scope</Label>
             <div className="flex flex-wrap gap-1.5" role="group" aria-label="Session scope">
@@ -343,7 +342,10 @@ export function CreateAgentDialog({
                 type="button"
                 className={chipClass(sessionScope === 'conversation')}
                 aria-pressed={sessionScope === 'conversation'}
-                onClick={() => setSessionScope('conversation')}
+                onClick={() => {
+                  setSessionScope('conversation');
+                  setError(null);
+                }}
               >
                 Conversation
               </button>
@@ -351,7 +353,10 @@ export function CreateAgentDialog({
                 type="button"
                 className={chipClass(sessionScope === 'agent')}
                 aria-pressed={sessionScope === 'agent'}
-                onClick={() => setSessionScope('agent')}
+                onClick={() => {
+                  setSessionScope('agent');
+                  setError(null);
+                }}
               >
                 Agent
               </button>
@@ -362,6 +367,14 @@ export function CreateAgentDialog({
                 : 'A separate session is kept for each conversation.'}
             </p>
           </div>
+
+          <RuntimePicker
+            hostId={selectedHostId}
+            hostAvailable={selectedHostAvailable}
+            value={runtime}
+            onSelect={selectRuntime}
+            onGateChange={setRuntimeGate}
+          />
 
           <div className="flex flex-col gap-1.5">
             {/* No `htmlFor` → the caption is a plain visual label, not a
@@ -376,7 +389,10 @@ export function CreateAgentDialog({
               id="ag-model"
               ariaLabel="Model"
               value={model}
-              onChange={setModel}
+              onChange={value => {
+                setModel(value);
+                setError(null);
+              }}
               onCommit={setModel}
               suggestions={modelSuggestions}
               placeholder="driver default"
@@ -384,6 +400,10 @@ export function CreateAgentDialog({
             />
           </div>
 
+          {/* Submit-only failure line: rendered conditionally so it reserves no
+              space at rest, and every field edit clears it (setError(null) in
+              the handlers above) so a stale error never lingers past the change
+              that fixes it. */}
           {error ? <div className="text-xs text-error">{error}</div> : null}
 
           <DialogFooter className="mt-2">
