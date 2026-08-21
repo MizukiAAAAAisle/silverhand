@@ -24,8 +24,8 @@ const clamp = (v: number, min: number, max: number): number =>
 
 /**
  * Fullscreen Mermaid viewer. A read-only sibling of {@link Lightbox}
- * for a diagram: the same shell (`data-modal-shell` → forza6 poster drop shadow,
- * elevation-only otherwise), the same zoom controls (−/slider/+ and `+` `−` `0`
+ * for a diagram: the same shell (`data-modal-shell` → forza6 poster drop shadow
+ * + ink frame, elevation-only otherwise), the same zoom controls (−/slider/+ and `+` `−` `0`
  * keys, trackpad pinch), and the same drag-to-pan-plus-native-scroll well. It is
  * read-only on purpose — the inline block already owns Copy (source) and the
  * export path owns the image, so a diagram inspector adds only reach, not a
@@ -173,7 +173,6 @@ export function MermaidLightbox({
         <DialogPrimitive.Overlay className="fixed inset-0 z-[var(--z-lightbox)] bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           data-modal-shell
-          data-mermaid-modal
           onKeyDown={onKeyDown}
           aria-label="Diagram preview"
           className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating shadow-xl focus:outline-none"

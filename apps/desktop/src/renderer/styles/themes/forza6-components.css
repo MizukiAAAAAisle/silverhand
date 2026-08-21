@@ -1247,15 +1247,12 @@
   box-shadow: 2px 2px 0 var(--forza6-ink);
 }
 
-/* ── Fullscreen viewer modals — forza6 poster frame + footer stickers ──
-   The generic `[data-modal-shell]` is frameless in forza6 (poster drop shadow
-   only). The Mermaid modal is a poster, not a floating image, so it takes the
-   ink frame — scoped to `data-mermaid-modal` so the image viewers stay
-   frameless. */
-[data-theme='forza6'] [data-mermaid-modal] {
-  border: var(--control-border-width) solid var(--forza6-ink);
-}
-/* Modal header/footer dividers render ink here, not the faint `--border-subtle`
+/* ── Fullscreen viewer modals — forza6 dividers + footer stickers ──
+   The modal ink frame is the shared `[data-modal-shell]` rule (below, near the
+   poster shadow) — every forza6 modal wears one frame. These rules only add the
+   header/footer dividers and the footer −/+ stickers.
+
+   Modal header/footer dividers render ink here, not the faint `--border-subtle`
    the base classes carry: on forza6's paper a structural seam is ink, matching
    the code-block header and the poster frame. Width still comes from the shared
    `--control-border-width`; other themes keep their subtle divider. */
@@ -2425,14 +2422,25 @@
 
    Why `data-modal-shell` instead of selecting `[role='dialog']`
    broadly: the hook is opt-in per shell, so a Radix-Dialog-based
-   surface only takes the poster shadow when it wants it. Current
+   surface only takes the poster treatment when it wants it. Current
    opt-ins: the generic Dialog primitive, the three startup gates,
-   `ImagePreviewModal` and `Lightbox` (the two image viewers take the
-   shadow but carry NO resting frame since #task:1959 — a border over
-   the image competes with it). Only surfaces that also carry
-   `data-popover-frame` (any value) get the 2px ink frame. */
+   `ImagePreviewModal`, `Lightbox` and the Mermaid modal. All of them
+   wear the SAME forza6 frame: those that also carry `data-popover-frame`
+   (Dialog, gates) get the 2px ink frame from that shared cluster; the
+   frameless viewers (both image modals + Mermaid) get the identical ink
+   frame from the `:not([data-popover-frame])` rule below, so no forza6
+   modal drifts frameless. (The image viewers' hand-drawn frame was
+   dropped in #task:1959; forza6 now gives them one uniformly via the
+   shell — other themes keep them frameless.) */
 [data-theme='forza6'] [data-modal-shell] {
   box-shadow: var(--forza6-poster-shadow-lg);
+}
+/* A modal shell that doesn't bring its own floating frame still wears the
+   standard forza6 ink frame, so image/diagram viewers match dialogs. Width from
+   the shared `--control-border-width`; other themes zero or omit this per their
+   own `[data-modal-shell]` rule. */
+[data-theme='forza6'] [data-modal-shell]:not([data-popover-frame]) {
+  border: var(--control-border-width) solid var(--forza6-ink);
 }
 
 /* ── Computer footer action stack — poster sticker (#task:1619) ──

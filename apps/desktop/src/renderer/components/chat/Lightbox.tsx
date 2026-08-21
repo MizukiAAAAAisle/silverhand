@@ -63,11 +63,13 @@ const clamp = (v: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, v));
 
 /**
- * Image preview modal. An unframed modal shell (elevation only — `shadow-xl`,
- * and in forza6 the `data-modal-shell` poster drop shadow; no resting border
- * since #task:1959, exactly like the export preview modal) with a header
- * ("Image Preview" title + a close icon on the right), the image well, and a
- * bottom action bar (zoom controls left, Copy/Download right).
+ * Image preview modal. A modal shell (elevation — `shadow-xl`, and in forza6
+ * the `data-modal-shell` poster drop shadow) that wears forza6's shared ink
+ * modal frame like every other modal; other themes stay frameless (#task:1959,
+ * a border over the image competes with it) — exactly like the export preview
+ * modal. It has a header ("Image Preview" title + a close icon on the right),
+ * the image well, and a bottom action bar (zoom controls left, Copy/Download
+ * right).
  *
  * The shell hugs the fitted image — `fit-content` under the
  * `min(920px, 88vw)` / `82vh` caps — so a small image gets a compact card
