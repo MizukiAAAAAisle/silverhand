@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
 import {
+  taskBoardContainerForPane,
   taskContainerBaseline,
   taskContainerForPosition,
   taskContainerKey,
   taskContainerLabel,
 } from '@/features/tasks/taskContainer';
+import type { ConversationPaneMode } from '@/features/conversations/pane-mode';
 
 const pair = { conversationId: 'c-pair', label: 'Cindy' };
 const ws = { id: 'ws-1', name: 'silverhand' };
@@ -237,5 +239,59 @@ describe('taskContainerLabel', () => {
         conversationId: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe('taskBoardContainerForPane', () => {
+  // The pane facts the projection folds in — never the source of the placement
+  // decision, only the coordinates a formed container carries.
+  const facts = {
+    conversationId: 'c-1',
+    conversationTitle: 'Cindy',
+    workspaceName: 'silverhand',
+  };
+
+  it('forms a direct_pair for a direct_message pane', () => {
+    const mode: ConversationPaneMode = {
+      kind: 'direct_message',
+      counterpart: null,
+    };
+    expect(taskBoardContainerForPane(mode, facts)).toEqual({
+      kind: 'direct_pair',
+      conversationId: 'c-1',
+      label: 'Cindy',
+    });
+  });
+
+  it('forms a workspace_channel when the workspace id is real', () => {
+    const mode: ConversationPaneMode = {
+      kind: 'workspace_channel',
+      workspaceId: 'ws-1',
+    };
+    expect(taskBoardContainerForPane(mode, facts)).toEqual({
+      kind: 'workspace_channel',
+      workspaceId: 'ws-1',
+      workspaceName: 'silverhand',
+      conversationId: 'c-1',
+    });
+  });
+
+  // The two fail-closed cases: NO container forms, which is the sole gate that
+  // withholds the conversation's Tasks affordance (no selectable tab that would
+  // reveal Chat beneath it — Cindy review).
+  it('fails closed to null for a workspace pane with no workspace id', () => {
+    const mode: ConversationPaneMode = {
+      kind: 'workspace_channel',
+      workspaceId: null,
+    };
+    expect(taskBoardContainerForPane(mode, facts)).toBeNull();
+  });
+
+  it('fails closed to null for an unsupported placement', () => {
+    const mode: ConversationPaneMode = {
+      kind: 'unsupported',
+      placement: 'workspace',
+    };
+    expect(taskBoardContainerForPane(mode, facts)).toBeNull();
   });
 });

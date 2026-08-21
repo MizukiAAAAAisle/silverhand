@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decodeMessageSeq } from '@silverhand/shared';
+import type { Tab } from './conversation-tabs';
 
 /**
  * Tiny localStorage polyfill — vitest runs this test in the node
@@ -33,19 +34,23 @@ const {
   LAST_CHAT_PLACE_KEY,
   LAST_LAYOUT_KEY,
   CLOSE_WATERMARK_KEY,
+  CONVERSATION_TABS_KEY,
   clearPlaceMemory,
   closeWatermarkByChannel,
   getChannelLayout,
   getCloseWatermark,
+  getConversationTabs,
   getLastChatPlace,
   getLastWorkspaceId,
   lastChannelByWorkspace,
   lastLayoutByChannel,
   persistLastChannel,
+  recordConversationTabs,
   recordLastChatPlace,
   recordLastWorkspace,
   recordChannelLayout,
   recordCloseWatermark,
+  tabsByConversation,
 } = await import('./place-memory');
 
 /**
@@ -354,6 +359,130 @@ describe('place-memory', () => {
       expect(fresh.getCloseWatermark('ch-frac')).toBeNull();
       expect(fresh.getCloseWatermark('ch-ok')).toBe(12);
       vi.resetModules();
+    });
+  });
+
+  // ── Per-conversation tab order (#task:2121) ────────────────────────────
+  //
+  // The layout the tab strip persists: a per-conversation ordering of Chat /
+  // Tasks / attachment tabs. These pin the four storage behaviors the strip
+  // depends on — write-through, per-conversation isolation, load-time repair,
+  // and default-elision on both write and load — plus the logout wipe. UI
+  // painting (the strip itself) is deliberately untested; this is the data seam.
+  describe('conversation tabs', () => {
+    // A custom order (Tasks dragged ahead of Chat) — non-default, carries no
+    // attachment, so it exercises reordering without an attachment fixture.
+    const swapped: Tab[] = [{ kind: 'tasks' }, { kind: 'chat' }];
+    // A custom order with an attachment tab appended.
+    const withAttachment: Tab[] = [
+      { kind: 'chat' },
+      { kind: 'tasks' },
+      {
+        kind: 'attachment',
+        attachmentId: 'att-1',
+        filename: 'diagram.html',
+        contentType: 'text/html',
+      },
+    ];
+
+    it('records a custom order write-through to localStorage and reads it back', () => {
+      recordConversationTabs('c1', withAttachment);
+      expect(getConversationTabs('c1')).toEqual(withAttachment);
+      // The raw disk shape is the whole map keyed by conversation id.
+      const raw = localStorage.getItem(CONVERSATION_TABS_KEY);
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!)).toEqual({ c1: withAttachment });
+    });
+
+    it('keeps each conversation independent', () => {
+      recordConversationTabs('c1', swapped);
+      recordConversationTabs('c2', withAttachment);
+      expect(getConversationTabs('c1')).toEqual(swapped);
+      expect(getConversationTabs('c2')).toEqual(withAttachment);
+      // An unrecorded conversation falls back to the default order, not another
+      // conversation's layout.
+      expect(getConversationTabs('c3')).toEqual([{ kind: 'chat' }, { kind: 'tasks' }]);
+    });
+
+    it('drops the entry when an order is recorded back to default (write-time elision)', () => {
+      recordConversationTabs('c1', swapped);
+      expect(tabsByConversation.has('c1')).toBe(true);
+      // Re-recording the default order must leave no key behind — a conversation
+      // the viewer un-customized is indistinguishable from one never touched.
+      recordConversationTabs('c1', [{ kind: 'chat' }, { kind: 'tasks' }]);
+      expect(tabsByConversation.has('c1')).toBe(false);
+      expect(JSON.parse(localStorage.getItem(CONVERSATION_TABS_KEY)!)).toEqual({});
+    });
+
+    it('normalizes on write — a missing builtin is repaired, not stored partial', () => {
+      // Storing only an attachment must still round-trip both builtins so the
+      // strip can never lose Chat/Tasks.
+      recordConversationTabs('c1', [
+        {
+          kind: 'attachment',
+          attachmentId: 'att-1',
+          filename: 'diagram.html',
+          contentType: 'text/html',
+        },
+      ]);
+      expect(getConversationTabs('c1')).toEqual([
+        { kind: 'attachment', attachmentId: 'att-1', filename: 'diagram.html', contentType: 'text/html' },
+        { kind: 'chat' },
+        { kind: 'tasks' },
+      ]);
+    });
+
+    it('hydrates from localStorage on import, dropping default + malformed entries', async () => {
+      // Seed disk BEFORE the module loads its singleton map.
+      memoryStore.set(
+        CONVERSATION_TABS_KEY,
+        JSON.stringify({
+          // A stored default order is redundant with the get-time fallback and
+          // must NOT be kept in the map (load-time elision).
+          cDefault: [{ kind: 'chat' }, { kind: 'tasks' }],
+          // A genuine custom order survives.
+          cCustom: swapped,
+          // A partial order (attachment only) is repaired to carry both builtins.
+          cPartial: [
+            { kind: 'attachment', attachmentId: 'att-9', filename: 'x.html', contentType: 'text/html' },
+          ],
+          // Junk entries: a non-array value and a mistyped tab are dropped.
+          cBadType: 'not-an-array',
+          cBadTab: [{ kind: 'nope' }, { kind: 'chat' }, { kind: 'tasks' }],
+        }),
+      );
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+      expect(fresh.tabsByConversation.has('cDefault')).toBe(false);
+      expect(fresh.getConversationTabs('cCustom')).toEqual(swapped);
+      expect(fresh.getConversationTabs('cPartial')).toEqual([
+        { kind: 'attachment', attachmentId: 'att-9', filename: 'x.html', contentType: 'text/html' },
+        { kind: 'chat' },
+        { kind: 'tasks' },
+      ]);
+      // The mistyped tab is dropped; the surviving builtins are the default, so
+      // cBadTab elides to no entry.
+      expect(fresh.tabsByConversation.has('cBadTab')).toBe(false);
+      expect(fresh.tabsByConversation.has('cBadType')).toBe(false);
+      vi.resetModules();
+    });
+
+    it('survives a corrupt localStorage blob with an empty map', async () => {
+      memoryStore.set(CONVERSATION_TABS_KEY, '{ not json');
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+      expect(fresh.tabsByConversation.size).toBe(0);
+      expect(fresh.getConversationTabs('c1')).toEqual([{ kind: 'chat' }, { kind: 'tasks' }]);
+      vi.resetModules();
+    });
+
+    it('clearPlaceMemory wipes the tab map and its localStorage key on logout', () => {
+      recordConversationTabs('c1', swapped);
+      expect(localStorage.getItem(CONVERSATION_TABS_KEY)).not.toBeNull();
+      clearPlaceMemory();
+      expect(tabsByConversation.size).toBe(0);
+      expect(localStorage.getItem(CONVERSATION_TABS_KEY)).toBeNull();
+      expect(getConversationTabs('c1')).toEqual([{ kind: 'chat' }, { kind: 'tasks' }]);
     });
   });
 });

@@ -901,17 +901,15 @@ describe('App keeps exactly one task surface on screen', () => {
     expect(code).not.toContain('revealTaskId={reveal.taskId}');
   });
 
-  it('offers the drawer only where it can be shown, from one entry', () => {
-    // One predicate for "this position hosts the drawer", read by the
-    // conversation header's Tasks button, the drawer's visibility, and the
-    // reveal's navigation branch — so the app cannot offer a drawer that would
-    // immediately be hidden.
-    expect(code).toContain('onOpenTasks={drawerHostable ? openTasksDrawer : undefined}');
+  it('gives the drawer no manual entry — reveal-only, gated where it can show', () => {
+    // #task:2121: the conversation's manual Tasks entry is the per-conversation
+    // Tasks TAB now, not a header button that opens this drawer. So the drawer
+    // has NO opener prop anywhere — its sole `true` write is the reveal branch,
+    // gated on the same `drawerHostable` predicate as its visibility, so the app
+    // still never brings up a drawer that would immediately be hidden.
+    expect(code).not.toContain('onOpenTasks');
     expect(code).toContain('if (drawerHostable) {');
-    // Exactly ONE entry to the board in the shell (#task:2041 Phase B): the
-    // titlebar's workspace-scoped button is gone, not shadowed. A second entry
-    // is how a DM ended up with a workspace's board — or with none at all.
-    expect(code.match(/onOpenTasks=/g) ?? []).toHaveLength(1);
+    expect(code.match(/setTasksDrawerOpen\(true\)/g) ?? []).toHaveLength(1);
   });
 
   it('voids through the slot fold, on urgent section state', () => {

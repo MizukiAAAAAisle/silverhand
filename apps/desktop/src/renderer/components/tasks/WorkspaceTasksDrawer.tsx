@@ -1,4 +1,3 @@
-import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
 import {
   useCallback,
   useEffect,
@@ -8,37 +7,19 @@ import {
   useState,
   type RefObject,
 } from 'react';
-import {
-  CheckSquare,
-  ChevronDown,
-  ChevronRight,
-  Clock,
-  Plus,
-  X,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
+import { CheckSquare, Plus, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
 import { useRevealTaskRow } from '@/features/tasks/useRevealTaskRow';
 import { FIRST_COLUMN_WINDOW } from '@/features/tasks/columnWindow';
 import {
-  boardColumnTotal,
-  boardCountLabel,
-} from '@/features/tasks/boardAuthority';
-import {
-  boardColumnCanGrow,
-  boardVisibleItems,
   useBoardColumns,
   useBoardCounts,
   useBoardFacets,
 } from '@/features/tasks/useBoard';
 import { useBoardReveal } from '@/features/tasks/useBoardReveal';
-import {
-  useColumnEndSentinel,
-  useColumnWindow,
-} from '@/features/tasks/useColumnWindow';
+import { useColumnWindow } from '@/features/tasks/useColumnWindow';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
   DEFAULT_TASK_FILTERS,
@@ -50,16 +31,8 @@ import {
   taskContainerLabel,
   type TaskBoardContainer,
 } from '@/features/tasks/taskContainer';
-import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDnd';
 import { drawerShouldCloseOnEscape } from '@/features/tasks/taskDetail';
-import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import {
-  TaskStatusBadge,
-  TaskCardContextMenu,
-  TASK_STATUS_ICON,
-} from '@/components/tasks/TaskStatusBadge';
-import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
+import { TaskBoardColumns } from '@/components/tasks/TaskBoardColumns';
 import {
   TaskFilterBar,
   FILTER_ROW_TRIGGER_BOX,
@@ -410,9 +383,10 @@ export function WorkspaceTasksDrawer({
   }, [applyFilters]);
 
   // A plain card click opens the detail modal (`?task=<id>`, hosted by App);
-  // jumping to the conversation is the modal's own explicit action.
-  const handleCardClick = (t: TaskSummaryDto): void => {
-    onOpenTask?.(t.id);
+  // jumping to the conversation is the modal's own explicit action. The shared
+  // board passes the task id directly.
+  const handleCardClick = (taskId: string): void => {
+    onOpenTask?.(taskId);
   };
 
   // Create entrance. A direct line's drawer creates ONTO the pair conversation —
@@ -594,37 +568,24 @@ export function WorkspaceTasksDrawer({
             </Button>
           </div>
 
-          {/* Kanban board — flex row of five status columns. Each column
-              hugs its own content height (items-start) but caps at
-              `max-h-full`, so a sparse column doesn't claim 100% of the
-              page. Closed is the terminal 5th column. */}
-          <div
-            data-tasks-board
-            className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
-          >
-            {COLUMNS.map(col => (
-              <KanbanColumn
-                key={col.status}
-                title={col.label}
-                status={col.status}
-                icon={col.icon}
-                iconClass={col.iconClass}
-                items={boardVisibleItems(columns[col.status], renderWindow, col.status)}
-                total={boardColumnTotal(counts, col.status)}
-                hasMore={boardColumnCanGrow(columns[col.status], renderWindow, col.status)}
-                onReachEnd={() => growColumn(col.status)}
-                isLoading={columns[col.status].isLoading}
-                isError={columns[col.status].isError}
-                collapsed={isCollapsed(col.status)}
-                onToggleCollapse={() => toggleCollapse(col.status)}
-                onCardClick={handleCardClick}
-                onStatusChange={(taskId, status) =>
-                  updateStatus.mutate({ taskId, status })
-                }
-                highlightedTaskId={highlightedTaskId}
-              />
-            ))}
-          </div>
+          {/* Kanban board — the shared body (`TaskBoardColumns`). The drawer
+              floats on a `bg-bg-primary` shell, so it INVERTS the section's fill
+              vocabulary: columns on `bg-bg-base`, cards on `bg-bg-primary`. It
+              scrolls its own outer panel (`drawerRef`) as the reveal root, so it
+              passes no `boardRef`. */}
+          <TaskBoardColumns
+            columns={columns}
+            counts={counts}
+            window={renderWindow}
+            isCollapsed={isCollapsed}
+            onToggleCollapse={toggleCollapse}
+            onGrow={growColumn}
+            onOpenTask={handleCardClick}
+            onStatusChange={(taskId, status) => updateStatus.mutate({ taskId, status })}
+            highlightedTaskId={highlightedTaskId}
+            columnClassName="bg-bg-base"
+            cardClassName="bg-bg-primary"
+          />
         </div>
       </div>
 
@@ -637,338 +598,3 @@ export function WorkspaceTasksDrawer({
     </>
   );
 }
-
-interface ColumnSpec {
-  status: TaskStatus;
-  label: string;
-  icon: LucideIcon;
-  /** Color token for the icon — reads the SAME `--task-status-<status>-text`
-   *  token the inline card chip uses (TaskStatusBadge.tsx via global.css
-   *  `[data-task-status]` rule). Mirrored in TasksSection.tsx so kanban
-   *  + drawer share one vocabulary. shiki review #task:912. */
-  iconClass: string;
-}
-
-const COLUMNS: ReadonlyArray<ColumnSpec> = [
-  {
-    status: 'todo',
-    label: 'Todo',
-    icon: TASK_STATUS_ICON.todo,
-    iconClass: 'text-[color:var(--task-status-todo-solid)]',
-  },
-  {
-    status: 'in_progress',
-    label: 'In progress',
-    icon: TASK_STATUS_ICON.in_progress,
-    iconClass: 'text-[color:var(--task-status-in-progress-solid)]',
-  },
-  {
-    status: 'in_review',
-    label: 'In review',
-    icon: TASK_STATUS_ICON.in_review,
-    iconClass: 'text-[color:var(--task-status-in-review-solid)]',
-  },
-  {
-    status: 'done',
-    label: 'Done',
-    icon: TASK_STATUS_ICON.done,
-    iconClass: 'text-[color:var(--task-status-done-solid)]',
-  },
-  {
-    status: 'closed',
-    label: 'Closed',
-    icon: TASK_STATUS_ICON.closed,
-    iconClass: 'text-[color:var(--task-status-closed-solid)]',
-  },
-];
-
-// ── Kanban column ────────────────────────────────────────────────────
-
-function KanbanColumn({
-  title,
-  status,
-  icon: Icon,
-  iconClass,
-  items,
-  total,
-  hasMore,
-  onReachEnd,
-  isLoading,
-  isError,
-  collapsed,
-  onToggleCollapse,
-  onCardClick,
-  onStatusChange,
-  highlightedTaskId,
-}: {
-  title: string;
-  status: TaskStatus;
-  icon: LucideIcon;
-  iconClass: string;
-  /** The rows this surface may render — the loaded prefix under its own window
-   *  bound, never the whole column. */
-  items: TaskSummaryDto[];
-  /** The column's authoritative total under the current filters (counts face),
-   *  which is what the header shows: bounding the body must not shrink the
-   *  number. `null` while the counts face has not answered — independent of this
-   *  column's own body read, so a loaded body can show its rows with no number,
-   *  and a known total can stand over a failed body. */
-  total: number | null;
-  /** Anything left past the rendered rows — loaded or still on the server. */
-  hasMore: boolean;
-  /** The reader reached the end of this column — render one more page. */
-  onReachEnd: () => void;
-  isLoading: boolean;
-  isError: boolean;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
-  onCardClick: (t: TaskSummaryDto) => void;
-  onStatusChange: (taskId: string, next: TaskStatus) => void;
-  highlightedTaskId: string | null;
-}): JSX.Element {
-  // Drag-over highlight (#task:779) — mirrors TasksSection.
-  const [dragOver, setDragOver] = useState(false);
-  // Per-column collapse (#task:1169) — the resolved bit and its toggle arrive
-  // from the drawer, which needs them to gate the reads too. Mirrors
-  // TasksSection.
-  const Chevron = collapsed ? ChevronRight : ChevronDown;
-  // A collapsed column renders no body, so it arms no observer — the sentinel
-  // isn't in the tree and an unmounted root would grow the window forever.
-  const canGrow = !collapsed && hasMore;
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLLIElement>(null);
-  useColumnEndSentinel({
-    rootRef: bodyRef,
-    sentinelRef,
-    hasMore: canGrow,
-    renderedCount: items.length,
-    onReachEnd,
-  });
-  return (
-    <section
-      data-tasks-column
-      data-status={status}
-      data-drop-target={dragOver || undefined}
-      onDragOver={e => {
-        if (!isTaskDrag(e.dataTransfer)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        if (!dragOver) setDragOver(true);
-      }}
-      onDragLeave={e => {
-        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-        setDragOver(false);
-      }}
-      onDrop={e => {
-        const payload = readTaskDrag(e.dataTransfer);
-        setDragOver(false);
-        if (!payload) return;
-        e.preventDefault();
-        if (payload.from === status) return; // same-column drop = no-op
-        onStatusChange(payload.taskId, status);
-      }}
-      className={cn(
-        // Mirrors TasksSection — column hugs content height with a
-        // `max-h-full` cap; body scrolls inside when content overflows.
-        //
-        // All five columns keep an EQUAL flex width whether collapsed or not
-        // (#task:1169 follow-up, shiki): collapsing only drops the body, never
-        // resizes a column, so the live columns don't jitter when Closed
-        // folds/unfolds. Closed stays 1/5 width — shiki accepts that; the perf
-        // win was never rendering its 1000+ cards, not reclaiming width.
-        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle bg-bg-base transition-colors',
-        (status === 'done' || status === 'closed') && 'opacity-80',
-        // Drop affordance (`data-drop-target`) is painted in CSS, not here —
-        // forza6's high-specificity `[data-tasks-column]` background/border
-        // can't be beaten by a Tailwind utility (shiki #task:784, Cindy
-        // review). See global.css / forza6-components.css.
-      )}
-    >
-      <button
-        type="button"
-        data-tasks-column-header
-        onClick={onToggleCollapse}
-        aria-expanded={!collapsed}
-        aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${title} column`}
-        className="flex w-full shrink-0 cursor-pointer items-center gap-2 border-b border-border-subtle px-3 py-2 text-left transition-colors hover:bg-bg-hover"
-      >
-        <Chevron className="size-3.5 shrink-0 text-text-muted" aria-hidden />
-        <Icon data-tasks-column-icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden />
-        <span className="text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-secondary">
-          {title}
-        </span>
-        <span className="text-[length:var(--text-badge)] tabular-nums text-text-muted">
-          {boardCountLabel(total)}
-        </span>
-      </button>
-      {collapsed ? null : (
-        <div
-          ref={bodyRef}
-          data-tasks-column-body
-          className="min-h-0 flex-auto overflow-y-auto p-2"
-        >
-          {isLoading ? (
-            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] text-text-muted">
-              Loading…
-            </p>
-          ) : isError ? (
-            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] text-text-muted">
-              Couldn’t load tasks
-            </p>
-          ) : items.length === 0 && !dragOver ? (
-            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
-              No {title.toLowerCase()} tasks
-            </p>
-          ) : (
-            <ul className="space-y-1.5">
-              {dragOver ? <TaskDropPlaceholder /> : null}
-              {items.map(t => (
-                <li key={t.id}>
-                  <TaskCard
-                    task={t}
-                    highlighted={highlightedTaskId === t.id}
-                    onClick={() => onCardClick(t)}
-                    onStatusChange={next => onStatusChange(t.id, next)}
-                  />
-                </li>
-              ))}
-              {/* Tail sentinel — grows the window as it comes into view, which is
-                  also what asks for the next page (the window drives fetching).
-                  No visual of its own: the rows either arrive on the next commit
-                  (already cached) or with the page, and a spinner pinned to the
-                  tail would flicker on every local growth. */}
-              {canGrow ? <li ref={sentinelRef} aria-hidden className="h-px" /> : null}
-            </ul>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-// ── Task card ────────────────────────────────────────────────────────
-
-function TaskCard({
-  task,
-  highlighted,
-  onClick,
-  onStatusChange,
-}: {
-  task: TaskSummaryDto;
-  highlighted: boolean;
-  onClick: () => void;
-  onStatusChange: (next: TaskStatus) => void;
-}): JSX.Element {
-  const { relative, absolute } = useRelativeTime(task.created_at);
-  const [dragging, setDragging] = useState(false);
-  const channelLabel = taskChannelLabel(task);
-  return (
-    <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
-      <div
-        data-task-number={task.task_number}
-        data-task-id={task.id}
-        draggable
-        onDragStart={e => {
-          writeTaskDrag(e.dataTransfer, { taskId: task.id, from: task.status });
-          setDragging(true);
-        }}
-        onDragEnd={() => setDragging(false)}
-        className={cn(
-          'group relative min-w-0 cursor-grab rounded-[var(--card-radius)] border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
-          // Brief outline pulse when this card is the focused-task target.
-          // Cleared by the drawer's setTimeout (~1.4s) so the highlight
-          // doesn't linger on next open. `transition-all` lets the outline
-          // fade in/out smoothly without a custom keyframe.
-          highlighted && '[outline:2px_solid_var(--accent)] [outline-offset:1px]',
-          dragging && 'opacity-50',
-        )}
-      >
-      {/* Stretched jump overlay — covers the whole card so clicking
-          anywhere (except the interactive controls layered above) jumps
-          to the message. Lets the status badge live as an independently
-          clickable control without a button-in-button. `draggable=false`
-          so a press-drag here initiates the card's drag, not the button. */}
-      <button
-        type="button"
-        draggable={false}
-        onClick={onClick}
-        aria-label="Open task detail"
-        className="absolute inset-0 z-0 rounded-[var(--card-radius)] focus-outline-accent"
-      />
-      {/* Content layer. `pointer-events-none` so text clicks fall
-          through to the jump overlay; only the status badge re-enables
-          pointer events. `min-w-0` propagates the row's narrow-width
-          shrink down to the title/meta rows below (#task:918). */}
-      <div className="pointer-events-none relative z-[var(--z-raised)] min-w-0 p-2">
-        {/* Row 1: #number + interactive status badge inline (reads
-            "Closed" for a closed task — no separate chip). v6.5m
-            (#task:917): reverted from the v6.5l single-row merge
-            because pulling the title onto this row compressed the
-            content space too much for long titles — shiki "这样也
-            不好，会压缩卡片内容的空间，还是 #nnn 和 status 独占
-            一行，下面是内容比较好". The 2-row layout is back; left-
-            edge alignment between #nnn and title is handled by the
-            `margin-left: -1px` nudge on `[data-tasks-num]` (forza6-
-            components.css) that compensates Rajdhani's wider left
-            side-bearing on `#`.
-            `flex-wrap` (#task:918): in narrow drawer/column widths the
-            chip ("in progress" / "in review") drops to its own line
-            beneath `#nnn` instead of overflowing the card edge. */}
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pb-0.5 leading-none">
-          <span data-tasks-num className="shrink-0 font-mono text-[length:var(--text-badge)] text-text-muted">
-            #{task.task_number}
-          </span>
-          <TaskStatusBadge
-            status={task.status}
-            onChange={onStatusChange}
-            className="ml-auto pointer-events-auto"
-          />
-        </div>
-        {/* Row 2: title — `[overflow-wrap:anywhere]` (more aggressive
-            than `break-words`) so a long URL or hash without spaces
-            still breaks inside a narrow card instead of pushing the
-            card's effective width past its column. */}
-        <span className="block min-w-0 text-xs text-text-primary [overflow-wrap:anywhere]">
-          {task.title}
-        </span>
-        {/* Row 3: assignee · channel · created — inline meta, single line.
-            Separators are icons, not `·` glyphs (shiki 2026-07-21): the
-            channel gets a `#` (dropping the "in " prose) and the timestamp a
-            clock, so the row self-delimits by identity glyph + gap instead of
-            middots. NO `flex-wrap` here (unlike Row 1): with wrap, flex would
-            drop the `ml-auto` time onto its own line the moment the channel
-            title got long, growing the card height (shiki 2026-07-23 "底部有时
-            候会导致换行"). Single line instead → the conversation span is the
-            only shrink target (`min-w-0 truncate`), so a long channel title
-            ellipsizes (full name on hover via `title`) while assignee + time
-            stay pinned. 稳定 > 自适应. */}
-        <div className="mt-1 flex items-center gap-x-2 text-[length:var(--text-badge)] text-text-muted">
-          <span className="shrink-0 text-text-secondary">
-            {task.assignee ? task.assignee.name : (
-              <span className="italic">unassigned</span>
-            )}
-          </span>
-          {channelLabel !== null ? (
-            <span
-              className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
-              title={channelLabel}
-            >
-              <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
-              <span className="min-w-0 truncate">{channelLabel}</span>
-            </span>
-          ) : null}
-          {/* Time pinned to the row's right edge (`ml-auto`), single line. */}
-          <span className="ml-auto inline-flex shrink-0 items-center gap-0.5" title={absolute}>
-            <Clock className="size-3 shrink-0" />
-            {relative}
-          </span>
-        </div>
-      </div>
-      </div>
-    </TaskCardContextMenu>
-  );
-}
-
-
-/** Small inline status badge — moved to ./TaskStatusBadge (now shared
- *  + interactive). */

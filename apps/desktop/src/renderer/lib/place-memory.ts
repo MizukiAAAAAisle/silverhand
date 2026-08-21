@@ -32,12 +32,14 @@
 import type { ChannelLayout } from '@/router';
 import type { MessageSeq } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
+import { isDefaultTabs, normalizeTabs, parseTabs, type Tab } from './conversation-tabs';
 
 export const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
 export const LAST_WORKSPACE_KEY = 'silverhand:layout.last-workspace';
 export const LAST_CHAT_PLACE_KEY = 'silverhand:layout.last-chat-place';
 export const LAST_LAYOUT_KEY = 'silverhand:layout.last-layout-by-channel';
 export const CLOSE_WATERMARK_KEY = 'silverhand:layout.close-watermark-by-channel';
+export const CONVERSATION_TABS_KEY = 'silverhand:layout.conversation-tabs';
 
 function loadStringValue(key: string): string | null {
   try {
@@ -312,6 +314,74 @@ export function recordCloseWatermark(channelId: string, seq: MessageSeq): void {
 }
 
 /**
+ * Per-conversation view tabs (#task:2121). The whole ordered tab list is
+ * stored per conversation — builtins (Chat/Tasks) share one draggable order
+ * with the viewer's custom tabs (attachment previewers, later panel views), so
+ * the order itself is what's remembered (shiki 2026-08-21). The active tab is
+ * intentionally NOT persisted (a conversation opens on the first tab in order).
+ * Each list is validated + repaired on load through {@link parseTabs}, which
+ * drops non-conforming entries and guarantees both builtins are present.
+ */
+function loadTabsMap(key: string): Map<string, Tab[]> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    if (!obj || typeof obj !== 'object') return new Map();
+    const out = new Map<string, Tab[]>();
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof k !== 'string' || !Array.isArray(v)) continue;
+      const tabs = parseTabs(v);
+      // Only keep a conversation the viewer actually customized; a stored
+      // default is redundant with the get-time fallback.
+      if (!isDefaultTabs(tabs)) out.set(k, tabs);
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
+export const tabsByConversation = loadTabsMap(CONVERSATION_TABS_KEY);
+
+function persistConversationTabs(): void {
+  try {
+    localStorage.setItem(
+      CONVERSATION_TABS_KEY,
+      JSON.stringify(Object.fromEntries(tabsByConversation)),
+    );
+  } catch {
+    // Quota / disabled storage — fall back to in-memory only.
+  }
+}
+
+/** Read a conversation's tab order, repaired to always carry both builtins.
+ *  Returns the default order (Chat, Tasks) when nothing is stored. */
+export function getConversationTabs(conversationId: string): Tab[] {
+  return normalizeTabs(tabsByConversation.get(conversationId) ?? []);
+}
+
+/**
+ * Record a conversation's tab order, persisting through to disk. No-ops when
+ * byte-identical to what's already stored so an unrelated tab switch doesn't
+ * thrash localStorage. An untouched default order drops the entry entirely so
+ * a conversation the viewer never customized leaves no key behind.
+ */
+export function recordConversationTabs(conversationId: string, tabs: Tab[]): void {
+  const normalized = normalizeTabs(tabs);
+  const prev = tabsByConversation.get(conversationId);
+  if (isDefaultTabs(normalized)) {
+    if (prev === undefined) return;
+    tabsByConversation.delete(conversationId);
+    persistConversationTabs();
+    return;
+  }
+  if (prev && JSON.stringify(prev) === JSON.stringify(normalized)) return;
+  tabsByConversation.set(conversationId, normalized);
+  persistConversationTabs();
+}
+
+/**
  * Wipe both the disk value and the in-process Map. Called from
  * `useLogout` so the next signed-in human starts with a blank place
  * memory.
@@ -322,12 +392,14 @@ export function clearPlaceMemory(): void {
   lastChannelByWorkspace.clear();
   lastLayoutByChannel.clear();
   closeWatermarkByChannel.clear();
+  tabsByConversation.clear();
   try {
     localStorage.removeItem(LAST_WORKSPACE_KEY);
     localStorage.removeItem(LAST_CHANNEL_KEY);
     localStorage.removeItem(LAST_CHAT_PLACE_KEY);
     localStorage.removeItem(LAST_LAYOUT_KEY);
     localStorage.removeItem(CLOSE_WATERMARK_KEY);
+    localStorage.removeItem(CONVERSATION_TABS_KEY);
   } catch {
     // Quota / disabled storage — Maps are already empty.
   }

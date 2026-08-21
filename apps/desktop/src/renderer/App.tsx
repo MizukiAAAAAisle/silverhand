@@ -1468,12 +1468,13 @@ function RegisteredAppShell({
     ],
   );
   // `drawerHostable` is the single definition of "this position can host the
-  // drawer" — the header's Tasks button, the drawer's own visibility, the reveal
-  // one-shot's hosting and the reveal's navigation branch all read it, so they
-  // cannot drift. Visibility is DERIVED from it, deliberately not "navigate, then
-  // an effect closes the drawer": the effect version leaves one commit where
-  // `/tasks` is current AND the drawer still counts as a delivery surface, i.e. a
-  // reveal delivered into a board that is closing (Alice).
+  // drawer" — the drawer's own visibility, the reveal one-shot's hosting and the
+  // reveal's navigation branch all read it, so they cannot drift. (#task:2121
+  // moved the manual Tasks opener to the per-conversation tab, so no header
+  // button reads this anymore.) Visibility is DERIVED from it, deliberately not
+  // "navigate, then an effect closes the drawer": the effect version leaves one
+  // commit where `/tasks` is current AND the drawer still counts as a delivery
+  // surface, i.e. a reveal delivered into a board that is closing (Alice).
   //
   // `tasksDrawerOpen` stays the user's MEMORY bit: leaving Chat hides the drawer,
   // coming back restores it. Writing `false` on leave would be a side effect with
@@ -1484,10 +1485,6 @@ function RegisteredAppShell({
     ((appSection === 'chat' && view === 'channel') || appSection === 'activity');
   const drawerVisible = drawerHostable && tasksDrawerOpen;
   const sectionVisible = appSection === 'tasks';
-  // Stable identity: the entry now lives on the memoized primary pane, and a
-  // fresh arrow every render would re-render the heaviest view in the app on
-  // every unrelated commit.
-  const openTasksDrawer = useCallback(() => setTasksDrawerOpen(true), []);
 
   // Resolve which surface shows `?task=<id>`. The recorded host wins whenever it
   // matches the live pointer (an opener set it — the explicit entrance). A pointer
@@ -2148,13 +2145,11 @@ function RegisteredAppShell({
           : undefined
       }
       filesListActive={filesListMounted}
-      // Tasks board entry (#task:2041 Phase B). Gated on `drawerHostable`, the
-      // one predicate the drawer's own visibility reads, so the header can never
-      // offer a board that would not be shown. NOT gated on the channel-index
-      // toggles above: a `direct_pair` has no channel-scoped thread/attachment
-      // index but it does have tasks, which is precisely shiki's item ③.
-      onOpenTasks={drawerHostable ? openTasksDrawer : undefined}
-      tasksActive={drawerVisible}
+      // Tasks moved from the header drawer entry to the per-conversation Tasks
+      // TAB (#task:2121) — the manual opener is the tab, so the header no longer
+      // carries a Tasks button (dual navigation removed). The drawer stays as the
+      // "View in Tasks" reveal target only (`drawerHostable` still gates that
+      // branch below); its full retirement + reveal→inline reroute is a follow-up.
       onArchiveChannel={handleArchiveChannelMutation}
       onRenameChannel={handleRenameChannelMutation}
       onSetChannelVisibility={handleSetChannelVisibilityMutation}
@@ -2166,6 +2161,11 @@ function RegisteredAppShell({
       onOpenTask={openTaskInPane}
       onJumpToMessage={handleJumpToMessage}
       onOpenAdvancedSearch={handleOpenAdvancedSearch}
+      // Per-conversation view tabs (#task:2121) — primary pane only. The inline
+      // Tasks board opens task detail in the MODAL (matching the drawer/section),
+      // distinct from `onOpenTask`'s inline-chip → side-pane route above.
+      viewTabsEnabled
+      onOpenTaskDetail={openTaskInModal}
     />
   );
 
@@ -2969,8 +2969,8 @@ function RegisteredAppShell({
           // screen, so the branches below are a NAVIGATION decision (which board
           // to bring up), not an attribution. Outside a position that can host the
           // drawer there is no drawer to open, so the reveal goes to the rail
-          // board — `drawerHostable` is the same predicate the titlebar's own Tasks
-          // button and the drawer's visibility read.
+          // board — `drawerHostable` is the same predicate the drawer's own
+          // visibility reads.
           setReveal(openRevealSlot(taskId));
           if (drawerHostable) {
             // Already open in the `drawerVisible` case; this is the "bring it up"

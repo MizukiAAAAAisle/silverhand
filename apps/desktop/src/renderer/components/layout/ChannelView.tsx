@@ -7,7 +7,6 @@ import {
   useState,
 } from 'react';
 import {
-  CheckSquare,
   Maximize2,
   Minimize2,
   Paperclip,
@@ -71,6 +70,13 @@ import {
 import { ConversationPaneCapabilitiesProvider } from '@/features/conversations/pane-capabilities-context';
 import { ConversationHeaderIdentity } from './channel-view/conversation-header-identity';
 import { paneChrome } from './pane-chrome';
+import { ConversationTabBar } from './channel-view/ConversationTabBar';
+import { ChannelTasksTab } from './channel-view/ChannelTasksTab';
+import { useConversationTabs } from '@/features/conversations/useConversationTabs';
+import {
+  taskBoardContainerForPane,
+  type TaskBoardContainer,
+} from '@/features/tasks/taskContainer';
 
 interface ChannelViewProps {
   /** Whether this conversation's container has a `#` channel namespace: true for
@@ -138,16 +144,6 @@ interface ChannelViewProps {
   /** Whether the Attachments-list pane is currently open (drives the
    *  toggle's active styling + aria-pressed). */
   filesListActive?: boolean;
-  /** Open the tasks board for THIS conversation's container (#task:2041). The
-   *  entry lives here, in the conversation's own action group, so a channel and
-   *  a direct line reach the board the same way — the titlebar entry it replaces
-   *  could only be offered where a workspace existed, which is why a DM had
-   *  none. Only the primary pane passes it: a thread / side pane is a child view
-   *  of the same container, and a second entry to one board is noise. */
-  onOpenTasks?: () => void;
-  /** Whether the tasks drawer is currently open (active styling +
-   *  aria-pressed), like the two pane toggles above. */
-  tasksActive?: boolean;
   /** When set, renders an X button in the header that calls this back.
    *  Used by the right-side secondary pane to close itself. */
   onCloseChild?: () => void;
@@ -219,6 +215,16 @@ interface ChannelViewProps {
    *  seeds its workspace, a `direct_pair` seeds its counterpart as the sender.
    *  See `AdvancedSearchSeed` for why a pair cannot seed a container. */
   onOpenAdvancedSearch?: (seed: AdvancedSearchSeed) => void;
+  /** Enables the per-conversation view tab bar (#task:2121) — Chat / Tasks (+
+   *  the viewer's custom tabs) under the header, with the Tasks board hosted
+   *  inline. Only the PRIMARY pane passes it: a thread / side pane is a child
+   *  view of the same container and gets no tab strip of its own. */
+  viewTabsEnabled?: boolean;
+  /** Opens a task's detail MODAL from a Tasks-tab card (`?task=<id>`). Distinct
+   *  from {@link onOpenTask} (inline `#task` chips → side pane): a board card
+   *  matches the drawer/section, which open the modal. Only meaningful with
+   *  `viewTabsEnabled`. */
+  onOpenTaskDetail?: (taskId: string) => void;
 }
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
@@ -298,8 +304,6 @@ function ActiveChannelView({
   threadsListActive = false,
   onToggleFilesList,
   filesListActive = false,
-  onOpenTasks,
-  tasksActive = false,
   onCloseChild,
   closeLabel = 'Close thread',
   onJumpToOriginal,
@@ -318,6 +322,8 @@ function ActiveChannelView({
   onOpenTask,
   onJumpToMessage,
   onOpenAdvancedSearch,
+  viewTabsEnabled = false,
+  onOpenTaskDetail,
 }: ChannelViewProps & { conversation: ConversationPaneDescriptor }): JSX.Element {
   const {
     data: messages = [],
@@ -373,6 +379,32 @@ function ActiveChannelView({
     conversation.id,
     gate.allowMemberEffects,
   );
+
+  // Per-conversation view tabs (#task:2121). The strip shows only on the primary
+  // pane (`viewTabsEnabled`), behind the same member gate the header Tasks entry
+  // used (a non-member browsing a public channel still sees only Chat), AND only
+  // when this position forms a real Tasks-board container. The controller/hook
+  // run unconditionally (React) — the gates only decide rendering.
+  const tabController = useConversationTabs(conversation.id);
+  // Derived from the SAME placement projection every other affordance reads
+  // (`paneMode`), not re-sniffed from `workspace_id`. FAIL-CLOSED: a workspace
+  // channel with no real workspace id (old/corrupt carrier) or an unsupported
+  // placement yields `null`. That `null` is the SOLE gate for BOTH the board
+  // mount and the Tasks affordance — see `viewTabsShown` — so a position that
+  // cannot form a container shows no Tasks tab at all rather than a selectable
+  // tab that reveals Chat beneath it (Cindy review).
+  const taskBoardContainer = useMemo<TaskBoardContainer | null>(
+    () =>
+      taskBoardContainerForPane(paneMode, {
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        workspaceName: parentTitle ?? null,
+      }),
+    [paneMode, conversation.id, conversation.title, parentTitle],
+  );
+  const viewTabsShown =
+    viewTabsEnabled && gate.allowMemberEffects && taskBoardContainer !== null;
+  const tasksTabActive = viewTabsShown && tabController.activeKey === 'tasks';
 
   // Per-viewer server-scored unread for this conversation's reply-clusters
   // (#task:1226). The SINGLE source of the chip's "N new" + first-unread —
@@ -839,29 +871,6 @@ function ActiveChannelView({
               <Paperclip className="size-3.5" />
             </button>
           ) : null}
-          {onOpenTasks && gate.allowMemberEffects ? (
-            // Same gate as the two pane toggles, for the same reason rather than
-            // by imitation: the board's population semi-joins the viewer's
-            // conversation rows, so for a viewer this gate excludes the entry
-            // would open onto nothing. A `direct_pair` passes it (an endpoint
-            // always has member effects), which is what gives a DM the entry it
-            // had none of.
-            <button
-              type="button"
-              onClick={onOpenTasks}
-              aria-label="Tasks"
-              aria-pressed={tasksActive}
-              title="Tasks"
-              className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
-                (tasksActive
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
-              }
-            >
-              <CheckSquare className="size-3.5" />
-            </button>
-          ) : null}
           {rosterTarget !== null ? (
             // Carries the member count (shiki 2026-07-28). The number is
             // derived inside from the roster read model the strip already
@@ -913,15 +922,33 @@ function ActiveChannelView({
         </div>
       </header>
 
+      {/* Per-conversation view tabs (#task:2121) — a flex sibling under the
+          header. When shown it adds an h-9 strip, so the find-bar overlay below
+          drops from `top-12` to clear it. */}
+      {viewTabsShown ? (
+        <ConversationTabBar
+          tabs={tabController.tabs}
+          activeKey={tabController.activeKey}
+          onActivate={tabController.setActive}
+          onReorder={tabController.reorder}
+          onClose={tabController.closeTab}
+        />
+      ) : null}
+
       {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
-          the message list. Anchored just below the h-12 header (`top-12`) and
-          taken out of flow (`absolute`) so opening / closing / typing NEVER
-          changes the scroll container's height → no Virtuoso reflow / flicker
-          (shiki: 搜索框不应挤压对话流、不应触发重渲染). It only drives the
-          search controller + this overlay; the message window is untouched
-          until the user navigates to a match (ensure-visible below). */}
+          the message list. Anchored just below the h-12 header (`top-12`, or
+          below the h-9 tab strip when it shows) and taken out of flow
+          (`absolute`) so opening / closing / typing NEVER changes the scroll
+          container's height → no Virtuoso reflow / flicker (shiki: 搜索框不应挤压
+          对话流、不应触发重渲染). It only drives the search controller + this
+          overlay; the message window is untouched until the user navigates to a
+          match (ensure-visible below). */}
       {findAvailable && find.open ? (
-        <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
+        <div
+          className={`absolute inset-x-0 z-[var(--z-sticky)] ${
+            viewTabsShown ? 'top-[5.25rem]' : 'top-12'
+          }`}
+        >
           <InlineFindBar
             controller={find}
             onOpenAdvanced={() =>
@@ -1008,7 +1035,7 @@ function ActiveChannelView({
         />
       ) : null}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Message area + activity dock share a relative box so the dock
             can float out-of-flow at the bottom (above the composer). The
             scroller's viewport height never changes when the dock shows /
@@ -1103,6 +1130,22 @@ function ActiveChannelView({
             joining={joinChannel.isPending}
             channelTitle={conversation.title}
           />
+        ) : null}
+
+        {/* Tasks tab (#task:2121) — an opaque overlay over the chat column
+            (message list + composer) rather than a mount swap, so Chat stays
+            mounted and its Virtuoso scroll survives a tab round-trip. Rendered
+            only while the Tasks tab is active, a detail-open handler exists (the
+            primary pane), AND a board container resolved (fail-closed: a
+            workspace channel with no real workspace id mounts nothing).
+            `inset-0` covers the whole column. */}
+        {tasksTabActive && taskBoardContainer && onOpenTaskDetail ? (
+          <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+            <ChannelTasksTab
+              container={taskBoardContainer}
+              onOpenTask={onOpenTaskDetail}
+            />
+          </div>
         ) : null}
       </div>
     </main>

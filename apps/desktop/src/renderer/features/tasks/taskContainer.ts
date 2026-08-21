@@ -25,6 +25,7 @@ import {
   DEFAULT_TASK_FILTERS,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
+import type { ConversationPaneMode } from '@/features/conversations/pane-mode';
 
 export type TaskBoardContainer =
   | {
@@ -79,6 +80,56 @@ export function taskContainerForPosition(position: {
     };
   }
   return null;
+}
+
+/**
+ * The Tasks-board container a conversation PANE belongs to, derived from the one
+ * placement projection every other affordance reads (`ConversationPaneMode`) —
+ * never re-sniffed from `workspace_id`.
+ *
+ * Returns `null` for exactly the positions that HAVE no board container, and this
+ * `null` is the SOLE gate for the conversation's Tasks affordance: the tab strip
+ * only offers a Tasks tab when a container forms, so a placement that cannot form
+ * one shows no Tasks surface at all (rather than a selectable tab that reveals
+ * Chat beneath it). The two null cases:
+ *
+ *  - `unsupported` — a placement this build has no mode for (an older renderer
+ *    against a newer server). Fails safe, same as {@link paneCapabilities}.
+ *  - `workspace_channel` with NO workspace id — an old/corrupt carrier. An
+ *    empty/absent id is not an identity, and a board must not fetch a filter for a
+ *    workspace that does not exist. FAIL-CLOSED to `null`, not a container anchored
+ *    on `''`.
+ *
+ * A `direct_message` always forms a `direct_pair` (its conversation id is the
+ * whole coordinate; no workspace is invented). PURE: no queries, no navigation.
+ */
+export function taskBoardContainerForPane(
+  paneMode: ConversationPaneMode,
+  facts: {
+    conversationId: string;
+    conversationTitle: string;
+    workspaceName: string | null;
+  },
+): TaskBoardContainer | null {
+  switch (paneMode.kind) {
+    case 'direct_message':
+      return {
+        kind: 'direct_pair',
+        conversationId: facts.conversationId,
+        label: facts.conversationTitle,
+      };
+    case 'workspace_channel':
+      return paneMode.workspaceId
+        ? {
+            kind: 'workspace_channel',
+            workspaceId: paneMode.workspaceId,
+            workspaceName: facts.workspaceName,
+            conversationId: facts.conversationId,
+          }
+        : null;
+    case 'unsupported':
+      return null;
+  }
 }
 
 /**
