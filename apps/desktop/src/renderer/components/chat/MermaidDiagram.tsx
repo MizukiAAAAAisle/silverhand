@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, Copy, Minus, Plus } from 'lucide-react';
+import { Check, Copy, Maximize2, Minus, Plus } from 'lucide-react';
+import { MermaidLightbox } from './MermaidLightbox';
 
 /**
  * Renders a ```mermaid fenced block as an actual diagram (#task:1322), inside its
@@ -132,6 +133,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const [view, setView] = useState<'diagram' | 'code'>('diagram');
   const [zoomIndex, setZoomIndex] = useState(ZOOM_BASE_INDEX);
   const [copied, setCopied] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Re-render on app theme switch so diagram colors track the UI.
@@ -216,17 +218,48 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
       data-mermaid-view={view}
     >
       <div className="code-block__header">
-        <span className="code-block__lang">mermaid</span>
+        {/* LEFT: the view switch IS the label (shiki #task:2130「header 上固定的
+            mermaid label 去掉，变成 mermaid + source 固定常驻，点击切换」). Two
+            persistent segments, not one flip-button: both destinations stay
+            visible and directly clickable, and the active segment names the
+            current view — so the switch subsumes the old static `mermaid` tag
+            rather than sitting beside it. */}
+        <div className="mermaid-block__switch" role="group" aria-label="View">
+          <button
+            type="button"
+            className="mermaid-block__seg"
+            data-active={view === 'diagram'}
+            data-sticker
+            data-sticker-size="sm"
+            aria-pressed={view === 'diagram'}
+            onClick={() => setView('diagram')}
+          >
+            Mermaid
+          </button>
+          <button
+            type="button"
+            className="mermaid-block__seg"
+            data-active={view === 'code'}
+            data-sticker
+            data-sticker-size="sm"
+            aria-pressed={view === 'code'}
+            onClick={() => setView('code')}
+          >
+            Source
+          </button>
+        </div>
+        {/* RIGHT: view-scoped actions. Zoom + fullscreen belong to the diagram
+            view only — in the code view they would be present and inert, a worse
+            answer than their absence. The code view answers with Copy in the same
+            slot, matching `CodeBlock`'s header. */}
         <div className="mermaid-block__controls">
-          {/* Zoom belongs to the diagram view only — in the code view the same
-              buttons would be present and inert, which is a worse answer than
-              their absence. The code view answers with Copy in the same slot,
-              matching `CodeBlock`'s header exactly. */}
           {view === 'diagram' ? (
             <>
               <button
                 type="button"
                 className="mermaid-block__icon"
+                data-sticker
+                data-sticker-size="sm"
                 onClick={() => setZoomIndex(i => Math.max(0, i - 1))}
                 disabled={!diagramReady || zoomIndex === 0}
                 aria-label="Zoom out"
@@ -241,6 +274,8 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               <button
                 type="button"
                 className="mermaid-block__zoom"
+                data-sticker
+                data-sticker-size="sm"
                 onClick={() => setZoomIndex(ZOOM_BASE_INDEX)}
                 disabled={!diagramReady || zoomIndex === ZOOM_BASE_INDEX}
                 aria-label="Reset zoom"
@@ -251,6 +286,8 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               <button
                 type="button"
                 className="mermaid-block__icon"
+                data-sticker
+                data-sticker-size="sm"
                 onClick={() =>
                   setZoomIndex(i => Math.min(ZOOM_STEPS.length - 1, i + 1))
                 }
@@ -260,11 +297,28 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               >
                 <Plus className="size-3" />
               </button>
+              {/* Fullscreen opens the read-only pan/zoom modal (#task:2130):
+                  inline zoom is capped and bounded to the message column, the
+                  modal is the room to inspect a large diagram. */}
+              <button
+                type="button"
+                className="mermaid-block__icon"
+                data-sticker
+                data-sticker-size="sm"
+                onClick={() => setFullscreen(true)}
+                disabled={!diagramReady}
+                aria-label="Open fullscreen"
+                title="Fullscreen"
+              >
+                <Maximize2 className="size-3" />
+              </button>
             </>
           ) : (
             <button
               type="button"
               className="code-block__copy"
+              data-sticker
+              data-sticker-size="sm"
               onClick={onCopy}
               title={copied ? 'Copied' : 'Copy source'}
               aria-label="Copy source"
@@ -272,18 +326,6 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
             </button>
           )}
-          {/* One button, labelled with the view it takes you TO — the pair of
-              tabs this replaces would carry a selected state for a two-state
-              choice the label already states. Text, not a glyph: there is no
-              icon that reads as "the source of this diagram". */}
-          <button
-            type="button"
-            className="mermaid-block__view"
-            onClick={() => setView(v => (v === 'diagram' ? 'code' : 'diagram'))}
-            aria-label={view === 'diagram' ? 'Show source' : 'Show diagram'}
-          >
-            {view === 'diagram' ? 'Source' : 'Diagram'}
-          </button>
         </div>
       </div>
       {view === 'code' ? (
@@ -316,6 +358,15 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           )}
         </div>
       )}
+      {/* Fullscreen viewer, mounted only with a rendered diagram to show — it
+          replays the SAME sanitized SVG string, never a re-render. */}
+      {diagramReady ? (
+        <MermaidLightbox
+          open={fullscreen}
+          onOpenChange={setFullscreen}
+          svg={state.svg}
+        />
+      ) : null}
     </div>
   );
 }

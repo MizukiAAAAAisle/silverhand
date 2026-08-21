@@ -1188,6 +1188,55 @@
   background: var(--forza6-lime);
 }
 
+/* ── Mermaid header controls — forza6 poster stickers (#task:2130) ───
+   shiki「header 上的这些 button 在 forza6 下适配成 poster sticker 样式」. Each
+   control opts in with `data-sticker` (inert in every other theme — the
+   primitive at the top of this file only paints under `[data-theme='forza6']`),
+   so it inherits the shared poster geometry there: 0 radius + ink frame + hard
+   1px offset shadow (`data-sticker-size="sm"`). This block supplies only what
+   the primitive leaves open — the FILL and interior padding.
+
+   Utility controls (zoom / fullscreen) and the INACTIVE view segment take a
+   NEUTRAL paper fill: they wear the poster SHAPE without spending the accent
+   hue on chrome. The ACTIVE view segment earns the lime fill — a genuine
+   selected state, the one place loud is paid for. Hover peels to lime too (the
+   forza6 interactive-preview vocabulary), ink text throughout so contrast
+   holds. The extra header gap keeps each sticker's offset shadow off its
+   neighbour. */
+[data-theme='forza6'] .markdown-body .mermaid-block__controls,
+[data-theme='forza6'] .markdown-body .mermaid-block__switch {
+  gap: 0.3em;
+}
+[data-theme='forza6'] .markdown-body .mermaid-block__controls [data-sticker],
+[data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker] {
+  background: var(--forza6-paper);
+  color: var(--forza6-ink);
+  padding: 0.1em 0.3em;
+}
+[data-theme='forza6'] .markdown-body .mermaid-block__controls .mermaid-block__icon[data-sticker],
+[data-theme='forza6'] .markdown-body .mermaid-block__controls .code-block__copy[data-sticker] {
+  /* Icon-only controls stay square — symmetric hit area, not text padding. */
+  padding: 0.15em;
+}
+[data-theme='forza6'] .markdown-body .mermaid-block__switch .mermaid-block__seg[data-sticker],
+[data-theme='forza6'] .markdown-body .mermaid-block__controls .mermaid-block__zoom[data-sticker] {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+/* Active view segment = lime poster sticker (earned selected state). Wins over
+   the neutral paper fill above by the same specificity + later source order. */
+[data-theme='forza6'] .markdown-body .mermaid-block__switch .mermaid-block__seg[data-sticker][data-active='true'] {
+  background: var(--forza6-lime);
+  color: var(--forza6-ink);
+}
+[data-theme='forza6'] .markdown-body .mermaid-block__controls [data-sticker]:hover:not(:disabled),
+[data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker]:hover:not(:disabled) {
+  background: var(--forza6-lime);
+  color: var(--forza6-ink);
+}
+
 /* ── #v5.5b — Forza6 code island syntax palette (dark) ───────────────
    Cindy `z06bLIkQ7jnxc17V` blocker. global.css:23 imports
    `highlight.js/styles/github.css` (light theme); rehype-highlight

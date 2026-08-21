@@ -130,6 +130,9 @@
   /* ── Islands ── */
   --bg-island: #E9EEF6;
   --bg-island-deep: #DDE3EC;
+  /* Code / mermaid header strip: pure white above the tinted island body
+     (shiki #task:2130, choice A). */
+  --code-block-header-bg: #FFFFFF;
 
   /* ── Text ── */
   --text-primary: #111725;

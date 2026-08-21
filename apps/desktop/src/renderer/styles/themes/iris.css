@@ -152,6 +152,9 @@
   /* ── Islands ── */
   --bg-island: #F6F4F0;
   --bg-island-deep: #F1EEE8;
+  /* Code / mermaid header strip: pure white above the warm-paper island body
+     (shiki #task:2130, choice A). */
+  --code-block-header-bg: #FFFFFF;
 
   /* ── Text（暖墨阶梯，白底对比度标在后面）──
      例外是 muted：白底是 iris 最亮的一面，只量它会放过 `--bg-hover` /

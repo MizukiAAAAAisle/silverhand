@@ -1094,7 +1094,12 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   align-items: center;
   justify-content: space-between;
   padding: 0.25em 0.6em;
-  background: var(--bg-island-deep);
+  /* The header strip sits one shade off the code body. Light themes paint it
+     pure white (shiki #task:2130「这类 pre block header 直接改成白色」, choice A);
+     dark themes (slack-dark / forza6) keep their own `island-deep` — a white
+     strip on a near-black HUD would blow out — so the token is unset there and
+     falls back to the deeper island shade. */
+  background: var(--code-block-header-bg, var(--bg-island-deep));
   border-bottom: 1px solid var(--border-island);
   font-family: var(--appearance-code-font, var(--font-mono));
   font-size: 0.75em;
@@ -1208,20 +1213,42 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 .markdown-body .mermaid-block__icon:hover:not(:disabled) {
   color: var(--text-primary);
 }
+/* The view switch: two persistent segments (Mermaid / Source) that name the
+   two views and select between them (#task:2130). Text controls in a flat
+   header strip — no fill/border at rest (a chip inside a chip is one lift too
+   many); the ACTIVE segment earns emphasis via ink weight + full-strength
+   colour, the inactive one sits muted and answers hover. */
+.markdown-body .mermaid-block__switch {
+  display: flex;
+  align-items: center;
+  gap: 0.15em;
+}
+.markdown-body .mermaid-block__seg {
+  padding: 0.15em 0.4em;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: inherit;
+  transition: color 120ms ease;
+}
+.markdown-body .mermaid-block__seg:hover {
+  color: var(--text-primary);
+}
+.markdown-body .mermaid-block__seg[data-active='true'] {
+  color: var(--text-primary);
+  font-weight: 600;
+}
 /* Zoom readout + view toggle are TEXT controls in an icon strip, so they take
    the header's own muted-to-primary hover instead of a second treatment. No
    fill, no border: the header strip is already a surface, and a chip inside a
    chip is one lift too many. */
-.markdown-body .mermaid-block__zoom,
-.markdown-body .mermaid-block__view {
+.markdown-body .mermaid-block__zoom {
   padding: 0.15em 0.35em;
   color: var(--text-muted);
   font-family: inherit;
   font-size: inherit;
   transition: color 120ms ease;
 }
-.markdown-body .mermaid-block__zoom:hover:not(:disabled),
-.markdown-body .mermaid-block__view:hover {
+.markdown-body .mermaid-block__zoom:hover:not(:disabled) {
   color: var(--text-primary);
 }
 /* A control that cannot act reads as absent-but-reserved, not as clickable:
