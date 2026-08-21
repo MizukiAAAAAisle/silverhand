@@ -496,6 +496,12 @@ function RuntimePicker({
     );
   const selectedAbsent =
     detectionActive && runtimeStateByKind.get(value) === 'absent';
+  // The one status line under the runtime list: the mode hint, or the
+  // no-runtime empty state. Null when there is nothing to say — the slot then
+  // renders nothing and reserves no height.
+  const runtimeHint =
+    sectionHint
+    ?? (allAbsent ? 'No supported runtime detected on this computer.' : null);
 
   // Report the gating facts up. Deps are the two primitives, so this fires only
   // when they actually flip — the isReprobing spinner toggling or a Recheck
@@ -586,16 +592,9 @@ function RuntimePicker({
           );
         })}
       </div>
-      {/* Always-reserved single-line status slot. Rendering it unconditionally
-          (even when empty) keeps the section — and thus the vertically-centered
-          dialog — height-stable across probing / detected / hint / empty-state,
-          so it can't jitter (shiki: runtime list 有->无->有 高度变化导致抖动). */}
-      <div className="min-h-4 text-xs text-text-muted">
-        {sectionHint
-          ?? (allAbsent
-            ? 'No supported runtime detected on this computer.'
-            : null)}
-      </div>
+      {runtimeHint ? (
+        <div className="text-xs text-text-muted">{runtimeHint}</div>
+      ) : null}
     </div>
   );
 }
