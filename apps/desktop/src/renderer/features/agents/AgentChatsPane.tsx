@@ -63,6 +63,7 @@ import {
   useWorkspaces,
 } from '@/features/workspaces/hooks';
 import { useAgentAuditChats } from './audit-hooks';
+import { AGENT_PANE_INSET } from './agent-pane-layout';
 import {
   collectMemberConversationIds,
   decideAgentChatRowAccess,
@@ -164,7 +165,7 @@ export function AgentChatsPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="space-y-5 px-8 py-6">
+      <div className={cn('space-y-5', AGENT_PANE_INSET)}>
         {groupAgentChats(chats).map(group => (
           <section key={group.key}>
             {/* Group chrome mirrors SearchPanel's sections — same product

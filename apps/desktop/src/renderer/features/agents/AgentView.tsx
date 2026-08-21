@@ -24,6 +24,7 @@ import { AgentMcpPane } from './AgentMcpPane';
 import { AgentActivityPane } from './AgentActivityPane';
 import { AgentActivityTimeline } from './AgentActivityTimeline';
 import { AgentChatsPane } from './AgentChatsPane';
+import { AGENT_PANE_INSET } from './agent-pane-layout';
 import { AgentSidebar, type AgentSection } from './AgentSidebar';
 import {
   useAgent,
@@ -227,12 +228,10 @@ export function AgentView({
             // two-internal-scroll design and chop the pane off below
             // the fold). #task:812.
             //
-            // Tighter inset than the sibling sections' `px-8 py-6` (shiki
-            // 2026-08-07「不需要这么大的 padding」): those are prose/form panes
-            // where wide margins aid reading, while this is a dense two-pane
-            // browser that already carries its own card border — the margin
-            // only ate file-name width. Equal 12px on all four sides.
-            <div className="flex min-h-0 flex-1 flex-col p-3">
+            // Inset is the shared `AGENT_PANE_INSET` (12px, one authority for
+            // every section pane — #task:2116, shiki: 统一成 workspace nav 的
+            // padding). This pane is the reference the others were unified to.
+            <div className={cn('flex min-h-0 flex-1 flex-col', AGENT_PANE_INSET)}>
               {canViewFiles ? (
                 <AgentWorkspacePane
                   agentId={agent.id}
@@ -267,7 +266,7 @@ export function AgentView({
                 effectiveSection === 'profile' && '[scrollbar-gutter:stable]',
               )}
             >
-              <div className="px-8 py-6">
+              <div className={AGENT_PANE_INSET}>
                 {effectiveSection === 'profile' ? (
                   <AgentProfileCard agent={agent} />
                 ) : null}
