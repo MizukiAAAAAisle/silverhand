@@ -266,6 +266,9 @@ function SortableTab({
         // Tab semantics win over dnd-kit's default `role="button"` (spread above).
         role="tab"
         aria-selected={active}
+        // Unread folds into the accessible name (same as the header Threads
+        // entry: "Threads (unread)"); the dot itself stays decorative.
+        aria-label={unread ? `${label} (unread)` : undefined}
         className={cn(
           'flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap pl-2.5 text-xs transition-colors',
           showInlineClose ? 'pr-1' : 'pr-2.5',
