@@ -1,4 +1,4 @@
-import type { ConversationActivityEvent } from '@silverhand/shared';
+import type { ConversationActivityEvent, ToolOutcome } from '@silverhand/shared';
 
 /**
  * Presentation helpers for the Activity timeline. Pure, framework-free, and
@@ -407,6 +407,13 @@ export type ActivityDisplayItem =
        *  matching `compaction_finished` was folded in — both render a
        *  completion marker (✓ / done icon) in place of the in-flight state. */
       completed?: boolean;
+      /** The folded `tool_output`'s classified outcome, carried onto a completed
+       *  `tool_call` so the row paints the honest marker: only `success` earns a
+       *  green ✓; `failed` is an error mark, `cancelled` neutral, and `completed`
+       *  (the wire default for old frames / historical rows that never classified)
+       *  a neutral "done" — a finished call whose success we cannot prove is
+       *  never upgraded to green. Absent while the call is still in flight. */
+      outcome?: ToolOutcome;
     };
 
 function textOf(e: ConversationActivityEvent): string {
@@ -420,6 +427,20 @@ function callIdOf(e: ConversationActivityEvent): string | null {
   return typeof v === 'string' ? v : null;
 }
 
+/** A `tool_output`'s classified outcome. Anything missing or unrecognised —
+ *  old wire frames and historical rows persisted before the outcome contract —
+ *  reads as the neutral `completed`: a finished call is never upgraded to a
+ *  provable `success` it did not record. */
+function outcomeOf(e: ConversationActivityEvent): ToolOutcome {
+  const v = (e.payload as Record<string, unknown> | null)?.['outcome'];
+  return v === 'success' || v === 'failed' || v === 'cancelled' ? v : 'completed';
+}
+
+function sessionIdOf(e: ConversationActivityEvent): string | null {
+  const v = (e.payload as Record<string, unknown> | null)?.['session_id'];
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
 /**
  * Coalesce a sorted (ascending-by-id) event list into display items:
  *
@@ -428,16 +449,24 @@ function callIdOf(e: ConversationActivityEvent): string | null {
  *    reasoning block arrives as dozens of one-word rows; grouping restores
  *    block granularity. A run breaks on ANY non-fragment kind AND on a
  *    thinking↔text switch, so distinct passes never merge across a tool call.
+ *    A whitespace-only `text` group is dropped (codex's empty end-of-turn
+ *    assistant block, which used to render as a bare "(message)" placeholder).
  *  - a `tool_output` is NOT shown on its own (the marker-only body carries no
  *    information — #task:1186). When its `tool_call_id` matches a `tool_call`
- *    in the window the output is dropped and the call is flagged `completed`
- *    (rendered as a ✓ after the title); an orphan output (no matching call,
- *    e.g. its call paged out) degrades to one light `returned` line.
+ *    in the window the output is dropped and the call is flagged `completed`,
+ *    carrying the output's `outcome` so the row paints an honest marker (green ✓
+ *    only for a proven `success`; neutral otherwise — see the `outcome` field on
+ *    ActivityDisplayItem); an orphan output (no matching call, e.g. its call
+ *    paged out) degrades to one light `returned` line.
  *  - a `compaction_started` / `compaction_finished` pair folds the same way:
  *    the started row shows a loading marker until its finished pairs in (FIFO,
  *    no id on these rows), then flips to a done marker and the finished is
  *    dropped. An orphan finished is a standalone done row; an orphan started
  *    stays loading (never fabricated as complete).
+ *  - a `turn_end` is dropped: a turn boundary is not a user-facing fact (it
+ *    rendered as a noise-only "Turn ended" line).
+ *  - repeated `session_init` rows for the SAME session_id collapse to the first
+ *    (some runtimes re-announce the session every turn); an id-less init passes.
  *  - every other kind passes through as a singleton.
  *
  * Raw ids/rows are untouched (a group keys off its first id), so this composes
@@ -450,11 +479,15 @@ export function coalesceActivity(
   // Pass 1: correlate tool_call ⇄ tool_output by id within the window.
   const callIds = new Set<string>();
   const outputIds = new Set<string>();
+  const outcomeById = new Map<string, ToolOutcome>();
   for (const e of events) {
     const id = callIdOf(e);
     if (id === null) continue;
     if (e.kind === 'tool_call') callIds.add(id);
-    else if (e.kind === 'tool_output') outputIds.add(id);
+    else if (e.kind === 'tool_output') {
+      outputIds.add(id);
+      outcomeById.set(id, outcomeOf(e));
+    }
   }
 
   // Pass 1b: pair compaction_started ⇄ compaction_finished. These rows carry no
@@ -482,17 +515,28 @@ export function coalesceActivity(
   }
 
   const out: ActivityDisplayItem[] = [];
+  const seenSessionIds = new Set<string>();
   let run: ConversationActivityEvent[] = [];
   let runKind: 'thinking' | 'text' | null = null;
 
   const flush = (): void => {
     if (run.length === 0) return;
     const first = run[0]!;
+    const text = run.map(textOf).join('');
+    // Codex ends a turn with an empty assistant `text` block; it used to render
+    // as a bare "(message)" placeholder — pure noise. A whitespace-only text
+    // group carries nothing, so drop it. `thinking` is kept even when empty: the
+    // "Thinking" label is itself the fact that a reasoning pass happened.
+    if (runKind === 'text' && text.trim().length === 0) {
+      run = [];
+      runKind = null;
+      return;
+    }
     out.push({
       type: 'group',
       key: `g${first.id}`,
       kind: runKind!,
-      text: run.map(textOf).join(''),
+      text,
       representative: first,
       count: run.length,
     });
@@ -524,11 +568,13 @@ export function coalesceActivity(
 
     if (e.kind === 'tool_call') {
       const id = callIdOf(e);
+      const completed = id !== null && outputIds.has(id);
       out.push({
         type: 'event',
         key: String(e.id),
         event: e,
-        completed: id !== null && outputIds.has(id),
+        completed,
+        ...(completed && id !== null ? { outcome: outcomeById.get(id) } : {}),
       });
       continue;
     }
@@ -548,6 +594,27 @@ export function coalesceActivity(
     if (e.kind === 'compaction_finished') {
       // Folded into its started → drop. Orphan → standalone done row.
       if (foldedFinishedIds.has(e.id)) continue;
+      out.push({ type: 'event', key: String(e.id), event: e });
+      continue;
+    }
+
+    if (e.kind === 'turn_end') {
+      // A turn boundary is not a user-facing activity fact — it rendered as a
+      // "Turn ended" line that only added noise between real events. The turn's
+      // real outcome shows on its tool calls (✓) and assistant text. Drop it.
+      continue;
+    }
+
+    if (e.kind === 'session_init') {
+      // Some runtimes re-announce the SAME session on every turn (stream-json
+      // emits one per `system/init` frame). Keep only the first row per distinct
+      // session_id — a repeat carries no new fact. An id-less init can't be
+      // deduped, so it passes through.
+      const sid = sessionIdOf(e);
+      if (sid !== null) {
+        if (seenSessionIds.has(sid)) continue;
+        seenSessionIds.add(sid);
+      }
       out.push({ type: 'event', key: String(e.id), event: e });
       continue;
     }

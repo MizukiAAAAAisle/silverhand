@@ -383,4 +383,71 @@ describe('coalesceActivity', () => {
       items.map(i => (i.type === 'event' ? `${i.event.kind}:${i.completed ? 'done' : 'loading'}` : 'group')),
     ).toEqual(['compaction_started:done', 'compaction_started:done']);
   });
+
+  it('drops a whitespace-only text group (codex empty end-of-turn "(message)")', () => {
+    const items = coalesceActivity([
+      tev(1, 'text', '  '),
+      tev(2, 'text', '\n'),
+    ]);
+    expect(items).toHaveLength(0);
+  });
+
+  it('keeps a text group with real content and a thinking group even when empty', () => {
+    const items = coalesceActivity([
+      tev(1, 'text', 'hello'),
+      tev(2, 'thinking', '  '),
+    ]);
+    // the "Thinking" label is itself a fact; only empty TEXT is noise.
+    expect(items.map(i => (i.type === 'group' ? `g:${i.kind}` : 'e'))).toEqual([
+      'g:text',
+      'g:thinking',
+    ]);
+  });
+
+  it('drops a turn_end row (a turn boundary is not a user-facing fact)', () => {
+    const items = coalesceActivity([
+      tev(1, 'text', 'done'),
+      ev(2, { kind: 'turn_end' }),
+    ]);
+    expect(items.map(i => (i.type === 'group' ? `g:${i.kind}` : `e:${i.event.kind}`))).toEqual([
+      'g:text',
+    ]);
+  });
+
+  it('carries the tool_output outcome onto the completed tool_call', () => {
+    const items = coalesceActivity([
+      ev(1, { kind: 'tool_call', payload: { name: 'Bash', tool_call_id: 'tc1' } }),
+      ev(2, { kind: 'tool_output', payload: { name: 'Bash', tool_call_id: 'tc1', outcome: 'failed' } }),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: 'event', completed: true, outcome: 'failed' });
+  });
+
+  it('defaults a completed tool_call to neutral outcome when the output never classified', () => {
+    const items = coalesceActivity([
+      ev(1, { kind: 'tool_call', payload: { name: 'Bash', tool_call_id: 'tc1' } }),
+      ev(2, { kind: 'tool_output', payload: { name: 'Bash', tool_call_id: 'tc1' } }),
+    ]);
+    // Old wire / historical rows never carry `outcome` → neutral `completed`,
+    // never upgraded to a green `success`.
+    expect(items[0]).toMatchObject({ type: 'event', completed: true, outcome: 'completed' });
+  });
+
+  it('collapses repeated session_init for the same session_id, keeps distinct ones', () => {
+    const items = coalesceActivity([
+      ev(1, { kind: 'session_init', payload: { session_id: 's1' } }),
+      ev(2, { kind: 'session_init', payload: { session_id: 's1' } }),
+      ev(3, { kind: 'session_init', payload: { session_id: 's2' } }),
+    ]);
+    expect(items).toHaveLength(2);
+    expect(items.map(i => (i.type === 'event' ? i.event.id : null))).toEqual([1, 3]);
+  });
+
+  it('keeps an id-less session_init (nothing to dedupe on)', () => {
+    const items = coalesceActivity([
+      ev(1, { kind: 'session_init' }),
+      ev(2, { kind: 'session_init' }),
+    ]);
+    expect(items).toHaveLength(2);
+  });
 });

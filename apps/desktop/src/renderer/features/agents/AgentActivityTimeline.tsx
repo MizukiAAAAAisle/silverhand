@@ -7,6 +7,7 @@ import {
   ChevronUp,
   Hourglass,
   History,
+  Inbox,
   Info,
   Layers,
   Loader2,
@@ -14,11 +15,13 @@ import {
   Power,
   Terminal,
   Wrench,
+  XCircle,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import type {
   ConversationActivityEvent,
   ConversationEventKind,
+  ToolOutcome,
 } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { Markdown } from '@/components/chat/Markdown';
@@ -209,7 +212,7 @@ export function AgentActivityTimeline({
                 item.type === 'group' ? (
                   <GroupRow key={item.key} item={item} />
                 ) : (
-                  <EventRow key={item.key} event={item.event} completed={item.completed} />
+                  <EventRow key={item.key} event={item.event} completed={item.completed} outcome={item.outcome} />
                 ),
               )}
             </ol>
@@ -264,6 +267,11 @@ function visualForKind(kind: ConversationEventKind): KindVisual {
       return { Icon: Hourglass, tone: 'warning' };
     case 'session_init':
       return { Icon: Power, tone: 'muted' };
+    case 'message_received':
+      // An inbound delivery the runtime accepted (#task:2146) — a real input
+      // fact, so neutral (not the muted lifecycle tone session_init uses). Inbox
+      // reads as "received", distinct from MessageSquare (assistant `text`).
+      return { Icon: Inbox, tone: 'neutral' };
     case 'compaction_started':
     case 'compaction_finished':
       return { Icon: Layers, tone: 'muted' };
@@ -334,13 +342,11 @@ function GroupRow({
   const time = dayjs(representative.created_at).format('HH:mm:ss');
 
   if (kind === 'text') {
-    const body =
-      text.trim().length > 0 ? (
-        <Markdown content={text} />
-      ) : (
-        <span className="text-text-muted">(message)</span>
-      );
-    return <RowShell Icon={Icon} tone={tone} time={time} title={body} />;
+    // Whitespace-only text groups are dropped in `coalesceActivity`, so a text
+    // group that reaches here always has content.
+    return (
+      <RowShell Icon={Icon} tone={tone} time={time} title={<Markdown content={text} />} />
+    );
   }
 
   return (
@@ -360,15 +366,35 @@ function GroupRow({
   );
 }
 
-/** A single non-coalesced event: tool_call (via `presentToolCall`, with a ✓
- *  when its output was folded in), an orphan tool_output marker, error/dropped
- *  reasons, lifecycle markers. */
+/** The trailing marker on a finished `tool_call`. Colour carries the verdict:
+ *  only a proven `success` is green — `failed` is an error mark, `cancelled`
+ *  neutral, and `completed` (the wire default for old / unclassified outputs) a
+ *  neutral "done". A finished call whose success we can't prove is never green. */
+function ToolOutcomeMark({ outcome }: { outcome: ToolOutcome }): JSX.Element {
+  const base = 'ml-1.5 inline-block size-3 -translate-y-px';
+  switch (outcome) {
+    case 'success':
+      return <CheckCircle2 className={cn(base, 'text-success')} strokeWidth={2.5} aria-label="succeeded" />;
+    case 'failed':
+      return <XCircle className={cn(base, 'text-error')} strokeWidth={2.5} aria-label="failed" />;
+    case 'cancelled':
+      return <Ban className={cn(base, 'text-text-muted')} strokeWidth={2.5} aria-label="cancelled" />;
+    case 'completed':
+      return <CheckCircle2 className={cn(base, 'text-text-muted')} strokeWidth={2.5} aria-label="finished" />;
+  }
+}
+
+/** A single non-coalesced event: tool_call (via `presentToolCall`, with an
+ *  outcome-coloured mark when its output was folded in), an orphan tool_output
+ *  marker, error/dropped reasons, lifecycle markers. */
 function EventRow({
   event,
   completed,
+  outcome,
 }: {
   event: ConversationActivityEvent;
   completed?: boolean;
+  outcome?: ToolOutcome;
 }): JSX.Element {
   const { kind, payload } = event;
   let { Icon, tone } = visualForKind(kind);
@@ -395,13 +421,7 @@ function EventRow({
             {p.arg ? (
               <span className="ml-1.5 font-mono text-text-secondary">{p.arg}</span>
             ) : null}
-            {completed ? (
-              <CheckCircle2
-                className="ml-1.5 inline-block size-3 -translate-y-px text-success"
-                strokeWidth={2.5}
-                aria-label="completed"
-              />
-            ) : null}
+            {completed ? <ToolOutcomeMark outcome={outcome ?? 'completed'} /> : null}
           </span>
         }
         preview={p.detail ? <ToolDetailView detail={p.detail} /> : null}
@@ -483,8 +503,17 @@ function EventRow({
     title = <span className="text-warning">Message send stale</span>;
   } else if (kind === 'session_init') {
     title = <span className="text-text-muted">Session started</span>;
-  } else if (kind === 'turn_end') {
-    title = <span className="text-text-muted">Turn ended</span>;
+  } else if (kind === 'message_received') {
+    // #task:2146: the runtime accepted an inbound delivery. Payload is just the
+    // accepted count (no body/ids — the timeline records that input arrived, not
+    // what it said). A single message is the common case; pluralise only when a
+    // batch settled at once.
+    const count = typeof payload?.['count'] === 'number' ? (payload['count'] as number) : 1;
+    title = (
+      <span className="text-text-secondary">
+        {count > 1 ? `${count} messages received` : 'Message received'}
+      </span>
+    );
   } else {
     title = <span className="text-text-muted">{kind}</span>;
   }
