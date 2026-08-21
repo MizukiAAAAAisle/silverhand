@@ -8,7 +8,7 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
 import type { PanelTabKind } from '@/lib/conversation-tabs';
 import { ChannelAttachmentsContent } from '@/components/layout/ChannelAttachmentsPanel';
 import { ChannelThreadsContent } from '@/components/layout/ChannelThreadsPanel';
-import { ChannelMembersContent } from './members-dialog';
+import { ChannelAddMemberEntry, ChannelMembersContent } from './members-dialog';
 
 /**
  * The custom-tab HOST for a conversation surface. It owns only the tab's
@@ -79,9 +79,23 @@ export function ConversationPanelTab({
     case 'members':
       return (
         // The roster is a short list, so it seats at the TOP of the tab rather
-        // than filling it — a full-height stretch would strand the Add-member
-        // action at the bottom of an empty pane.
-        <div className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3">
+        // than filling it — a full-height stretch would strand the content in an
+        // empty pane.
+        <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto px-3 py-3">
+          {/* Add member rides the TOP of both hosts (shiki #task:2140), above
+              the roster, so a long list never scrolls it out of reach. A tab can
+              be as wide as the main pane, where a full-width CTA reads as an odd
+              banner; cap it so it stays a button, while a narrow tab still fills
+              to an easy tap target. Gated by the same add-member floor as the
+              header `+` — absent → no entry. */}
+          {addMemberWorkspaceId ? (
+            <ChannelAddMemberEntry
+              workspaceId={addMemberWorkspaceId}
+              conversationId={channelId}
+              triggerWidthClass="w-full max-w-[220px]"
+              align="start"
+            />
+          ) : null}
           <ChannelMembersContent
             channelId={channelId}
             agentRuntime={agentRuntime}
@@ -89,7 +103,6 @@ export function ConversationPanelTab({
             onLeave={onLeave}
             canLeave={canLeave}
             leaveBlockedReason={leaveBlockedReason}
-            addMemberWorkspaceId={addMemberWorkspaceId}
             visibility={visibility}
           />
         </div>

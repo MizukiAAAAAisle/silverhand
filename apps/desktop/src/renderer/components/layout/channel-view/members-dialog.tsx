@@ -114,9 +114,9 @@ interface ChannelMembersDialogProps {
   /** Workspace of this channel, present ONLY when the viewer meets the
    *  add-member FLOOR (a member of a non-closed regular channel) — the same
    *  gate the header `+` uses, so the two entries can't disagree. Absent → no
-   *  bottom entry. It is deliberately not a `can_add_member` boolean from the
-   *  backend: WHOM the viewer may add is a per-candidate answer (own agents vs
-   *  other people's vs humans), and the picker already asks it. */
+   *  Add-member entry. It is deliberately not a `can_add_member` boolean from
+   *  the backend: WHOM the viewer may add is a per-candidate answer (own agents
+   *  vs other people's vs humans), and the picker already asks it. */
   addMemberWorkspaceId?: string;
   /** Drives the leave consequence sentence (rejoinable or not). */
   visibility?: ConversationVisibility;
@@ -141,16 +141,63 @@ function leaveBlockedCopy(
 }
 
 /** The roster surface's own inputs — everything except the modal's chrome
- *  (`open` / `onOpenChange`) and the bulk agent cluster that rides its corner. */
+ *  (`open` / `onOpenChange`) and the bulk agent cluster that rides its corner.
+ *  The Add-member entry is the HOST's, seated at the top of each host, so it is
+ *  not one of these inputs. */
 type ChannelMembersContentProps = Omit<
   ChannelMembersDialogProps,
-  'open' | 'onOpenChange' | 'onRestartAllAgents' | 'onStopAllAgents' | 'bulkAgentPending'
+  | 'open'
+  | 'onOpenChange'
+  | 'onRestartAllAgents'
+  | 'onStopAllAgents'
+  | 'bulkAgentPending'
+  | 'addMemberWorkspaceId'
 > & {
   /** Called after a successful self-leave, so a host that is a transient shell
    *  can dismiss itself. The modal passes `onOpenChange(false)`; the tab host
    *  passes nothing — the roster it was showing is simply gone. */
   onLeft?: () => void;
 };
+
+/**
+ * The Add-member entry: the one primary action that extends this roster. Shared
+ * by both hosts so WHOM you may add (the picker's per-candidate answer) and the
+ * fail-closed floor stay defined once — only the trigger's width and the panel's
+ * anchoring are the host's, because a fixed-width modal and a wide tab want
+ * different button footprints.
+ */
+export function ChannelAddMemberEntry({
+  workspaceId,
+  conversationId,
+  triggerWidthClass,
+  align,
+  popoverWidthClass,
+  modal = false,
+}: {
+  workspaceId: string;
+  conversationId: string;
+  /** Extra classes for the trigger Button — the host's width budget. */
+  triggerWidthClass?: string;
+  align?: 'start' | 'center' | 'end';
+  popoverWidthClass?: string;
+  modal?: boolean;
+}): JSX.Element {
+  return (
+    <AddConversationMemberPopover
+      workspaceId={workspaceId}
+      conversationId={conversationId}
+      align={align}
+      widthClass={popoverWidthClass}
+      modal={modal}
+      trigger={
+        <Button size="sm" {...primaryAction(triggerWidthClass)}>
+          <Plus className="size-4" aria-hidden />
+          Add member
+        </Button>
+      }
+    />
+  );
+}
 
 /**
  * The Members roster as a MODAL — the shell only: `Dialog`, the title with its
@@ -164,6 +211,7 @@ export function ChannelMembersDialog({
   onRestartAllAgents,
   onStopAllAgents,
   bulkAgentPending = false,
+  addMemberWorkspaceId,
   ...content
 }: ChannelMembersDialogProps): JSX.Element {
   // The count in the title is chrome, so the shell reads it itself rather than
@@ -178,7 +226,7 @@ export function ChannelMembersDialog({
       <DialogContent
         // A roster is one column of short rows, so a wider shell would only buy
         // empty space right of every name; a long name is budgeted in the row.
-        // The bottom picker matches this width exactly.
+        // The Add-member trigger matches this width exactly.
         className="max-w-[360px]"
         cornerActions={
           showBulk ? (
@@ -228,6 +276,23 @@ export function ChannelMembersDialog({
             ) : null}
           </DialogTitle>
         </DialogHeader>
+        {/* Add member is the roster's ONE primary action and sits at the top,
+            above the search + list, so a long roster never scrolls it out of
+            reach. Full width to span the fixed 360px shell; the picker is the
+            shared one, so candidates and their grading come from it. */}
+        {addMemberWorkspaceId ? (
+          <ChannelAddMemberEntry
+            workspaceId={addMemberWorkspaceId}
+            conversationId={content.channelId}
+            triggerWidthClass="w-full"
+            align="center"
+            // 360px = the shell's own `max-w`, so a centred panel sits flush.
+            popoverWidthClass="w-[360px]"
+            // The Dialog's scroll-lock would block wheel scroll on the portaled
+            // candidate list, so the picker opens modal to reclaim it.
+            modal
+          />
+        ) : null}
         {/* The modal caps the roster's height; the roster itself only asks to
             fill whatever box it is given. */}
         <div className="flex max-h-[52vh] min-h-0 flex-col">
@@ -256,7 +321,6 @@ export function ChannelMembersContent({
   onLeft,
   canLeave = false,
   leaveBlockedReason = null,
-  addMemberWorkspaceId,
   visibility,
 }: ChannelMembersContentProps): JSX.Element {
   const membersResult = useConversationMembers(channelId);
@@ -598,37 +662,6 @@ export function ChannelMembersContent({
           </div>
         )}
       </div>
-      {addMemberWorkspaceId ? (
-        // The roster's last line is how you extend it, and it ranks as this
-        // surface's ONE primary action: `primaryAction()` on the Button
-        // `default` variant, so the fill is the CTA token cluster and forza6
-        // adds the poster frame — no colour literal, no second recipe. Seated
-        // OUTSIDE the scroller so it stays reachable with a long roster. The
-        // picker is the shared one: candidates and their grading come from it,
-        // never recomputed here.
-        <div className="pt-0.5">
-          <AddConversationMemberPopover
-            workspaceId={addMemberWorkspaceId}
-            conversationId={channelId}
-            align="center"
-            // 360px = the modal host's own `max-w-[360px]`, so a centred panel
-            // sits flush with the modal edges. In a wider host the trigger is
-            // wider than the panel, which is fine — a candidate list has no
-            // reason to grow with the pane.
-            widthClass="w-[360px]"
-            // In the modal host the Dialog's scroll-lock would block wheel
-            // scroll on the portaled candidate list, so the picker opens modal
-            // to reclaim it. Harmless in a non-modal host.
-            modal
-            trigger={
-              <Button size="sm" {...primaryAction('w-full')}>
-                <Plus className="size-4" aria-hidden />
-                Add member
-              </Button>
-            }
-          />
-        </div>
-      ) : null}
     </div>
   );
 }
