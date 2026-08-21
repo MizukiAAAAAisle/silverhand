@@ -18,8 +18,9 @@ interface TaskRefProps {
    *  sprout chrome. Only a resolved-present task yields a chip, identical
    *  to the explicit sigil. Default (false) keeps the explicit `#task:<n>`
    *  behaviour, which differs only in the transient states: no-context and
-   *  loading show a muted pill (bare stays raw there). A definitively-missing
-   *  ref renders raw in BOTH modes, and a resolved one yields the chip. */
+   *  loading show a muted pill (bare stays raw there). An unresolvable ref
+   *  (authoritative miss or request error) renders raw in BOTH modes, and a
+   *  resolved one yields the chip. */
   bare?: boolean;
 }
 
@@ -53,8 +54,8 @@ export interface StaticTaskRefSummary {
  * The export pre-resolves refs, so a null here means "not resolvable at
  * snapshot time" — an unknown, not a definitive miss. It therefore mirrors the
  * live no-context / loading pill (the states that still carry a fill), NOT the
- * live definitively-missing ref, which demotes to raw prose text (see
- * `TaskRef`).
+ * live unresolvable ref (miss or request error), which demotes to raw prose
+ * text (see `TaskRef`).
  */
 export function TaskRefStaticChip({
   taskNumber,
@@ -102,9 +103,9 @@ export function TaskRefStaticChip({
  *  - Lookup loading → inert (no spinner / placeholder shimmer) on the
  *    chip itself. The hover popover shows a skeleton if the user
  *    hovers ≥500ms while the fetch is still in flight.
- *  - Resolved + missing → inert (the task was deleted or doesn't
- *    exist on this conversation's board). Surfacing a broken chip would
- *    be worse than a silent demote.
+ *  - Unresolvable (authoritative miss — deleted / never existed — or a
+ *    request error that outlived its retries) → raw prose text. Surfacing a
+ *    broken chip would be worse than a silent demote.
  *  - Resolved + present → clickable borderless accent link, label
  *    `#<n> title` (number and title read as one link, no `·` separator;
  *    no leading glyph — the `#` is the task's inline identity marker,
@@ -142,9 +143,9 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
 
   // Bare `#<n>` with no resolved task → render the literal `#<n>` text,
   // no chip. One gate covers no-context (hook disabled → no data),
-  // loading (data not yet settled), and resolved-missing (task deleted /
-  // never existed). The explicit `#task:<n>` sigil keeps a muted chip only
-  // in the transient no-context / loading states; a definitive miss demotes
+  // loading (data not yet settled), and every terminal non-resolution (miss
+  // or request error). The explicit `#task:<n>` sigil keeps a muted chip only
+  // in the transient no-context / loading states; an unresolvable ref demotes
   // to raw text in both modes (below). A bare number is too ambiguous to mark
   // up until it's confirmed to be a real task.
   if (bare && !task) {
@@ -155,8 +156,8 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // renders a tooltip-only pill with no popover — there's nothing meaningful to
   // surface on hover. Loading WITH conversation context goes through
   // HoverPopover with `isContentReady=false` so a hover ≥500ms while the fetch
-  // is still in flight gets a skeleton; a definitive miss instead demotes to
-  // raw text below.
+  // is still in flight gets a skeleton; an unresolvable ref (miss or request
+  // error) instead demotes to raw text below.
   if (!conversationId) {
     return (
       <span
@@ -202,12 +203,14 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   }
 
   if (!task) {
-    // Definitive resolution failure (resolved + not found: deleted or never
-    // existed on this board) → demote to the raw authored `#task:<n>`, fully
-    // inheriting prose style: no chip fill / border / hover / cursor, not
-    // navigable. A dead ref must not masquerade as an openable chip. loading
-    // (pending) and no-context (no board to resolve against) are NOT resolution
-    // failures and keep their muted pill (#task:2143).
+    // No entity resolved — either an authoritative miss (404: deleted / never
+    // existed / not visible on this board) or a request error that outlived its
+    // retries (backend unreachable / transport). Both demote to the raw authored
+    // `#task:<n>`, fully inheriting prose style: no chip fill / border / hover /
+    // cursor, not navigable. A ref that resolves to no openable task must not
+    // masquerade as an openable chip. Only loading (pending) and no-context (no
+    // board to resolve against) keep the muted pill — they are not terminal
+    // (#task:2143).
     return <>{inertLabel}</>;
   }
 

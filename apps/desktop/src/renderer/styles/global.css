@@ -1094,8 +1094,9 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    - A box — anything with a fill + horizontal padding (`#name` / `#conv:<id>`
      pills, and the degraded task-ref states `static` / `loading` /
      `no-context` / `resolved-no-handler`, which all carry `bg-bg-elevated
-     px-1.5`). A definitively-missing task ref is NOT a box — it demotes to raw
-     prose text (TaskRef.tsx) and never reaches these rules. Fill + padding make
+     px-1.5`). An unresolvable task ref — an authoritative miss or a request
+     error — is NOT a box: it demotes to raw prose text (TaskRef.tsx) and never
+     reaches these rules. Fill + padding make
      the box taller than the line it sits in, so
      14px inside it reads oversized against the prose; it stays on the family
      base one notch down (12px). This is why the selector below is state-scoped
