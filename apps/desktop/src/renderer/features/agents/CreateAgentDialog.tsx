@@ -496,9 +496,6 @@ function RuntimePicker({
     );
   const selectedAbsent =
     detectionActive && runtimeStateByKind.get(value) === 'absent';
-  // The one status line under the runtime list: the mode hint, or the
-  // no-runtime empty state. Null when there is nothing to say — the slot then
-  // renders nothing and reserves no height.
   const runtimeHint =
     sectionHint
     ?? (allAbsent ? 'No supported runtime detected on this computer.' : null);
