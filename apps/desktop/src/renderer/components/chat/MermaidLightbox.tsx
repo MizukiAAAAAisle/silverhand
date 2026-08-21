@@ -220,48 +220,57 @@ export function MermaidLightbox({
             />
           </div>
 
+          {/* Footer = the image Lightbox's zoom triad, left-aligned. The controls
+              MUST stay inside a nested inline group: `.settings-font-size-slider`
+              sets `width:100%` (unlayered, so it beats Tailwind's `w-28`), and as
+              a direct flex child that width consumes the whole footer — a full-
+              width track that reads as a giant scrollbar (shiki #task:2130). The
+              wrapper is a shrink-to-fit flex item, so the slider resolves to its
+              `w-28` intrinsic width, exactly as in the image Lightbox. */}
           <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-3 py-2 text-xs">
-            <button
-              type="button"
-              aria-label="Zoom out"
-              disabled={scale <= MIN_SCALE}
-              onClick={() => setZoom(scale / STEP)}
-              className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
-            >
-              <Minus className="size-4" />
-            </button>
-            {/* Same slider chrome as the image Lightbox / Settings font-size
-                slider so the thumb/track read identically across themes. */}
-            <input
-              type="range"
-              data-settings-slider
-              className="settings-font-size-slider w-28"
-              min={MIN_SCALE * 100}
-              max={MAX_SCALE * 100}
-              step="any"
-              value={scale * 100}
-              aria-label="Zoom level"
-              onChange={e => setZoom(Number(e.target.value) / 100)}
-            />
-            <button
-              type="button"
-              aria-label="Zoom in"
-              disabled={scale >= MAX_SCALE}
-              onClick={() => setZoom(scale * STEP)}
-              className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
-            >
-              <Plus className="size-4" />
-            </button>
-            {/* Percentage readout doubles as reset-to-fit. */}
-            <button
-              type="button"
-              aria-label="Reset zoom to fit"
-              disabled={scale === MIN_SCALE}
-              onClick={() => setZoom(1)}
-              className="flex h-7 min-w-[3.25rem] items-center justify-center rounded-[var(--control-radius)] px-1.5 tabular-nums text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-60 focus-outline"
-            >
-              {Math.round(scale * 100)}%
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-label="Zoom out"
+                disabled={scale <= MIN_SCALE}
+                onClick={() => setZoom(scale / STEP)}
+                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
+              >
+                <Minus className="size-4" />
+              </button>
+              {/* Same slider chrome as the image Lightbox / Settings font-size
+                  slider so the thumb/track read identically across themes. */}
+              <input
+                type="range"
+                data-settings-slider
+                className="settings-font-size-slider w-28"
+                min={MIN_SCALE * 100}
+                max={MAX_SCALE * 100}
+                step="any"
+                value={scale * 100}
+                aria-label="Zoom level"
+                onChange={e => setZoom(Number(e.target.value) / 100)}
+              />
+              <button
+                type="button"
+                aria-label="Zoom in"
+                disabled={scale >= MAX_SCALE}
+                onClick={() => setZoom(scale * STEP)}
+                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
+              >
+                <Plus className="size-4" />
+              </button>
+              {/* Percentage readout doubles as reset-to-fit. */}
+              <button
+                type="button"
+                aria-label="Reset zoom to fit"
+                disabled={scale === MIN_SCALE}
+                onClick={() => setZoom(1)}
+                className="flex h-7 min-w-[3.25rem] items-center justify-center rounded-[var(--control-radius)] px-1.5 tabular-nums text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-60 focus-outline"
+              >
+                {Math.round(scale * 100)}%
+              </button>
+            </div>
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

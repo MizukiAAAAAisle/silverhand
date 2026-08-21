@@ -134,7 +134,22 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const [zoomIndex, setZoomIndex] = useState(ZOOM_BASE_INDEX);
   const [copied, setCopied] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // While the fullscreen modal is open the SAME sanitized SVG lives there, so the
+  // inline copy is withdrawn: a Mermaid SVG carries internal ids and `url(#…)` /
+  // marker / clipPath fragment references, and two live copies in one document
+  // collide (duplicate ids → the modal's refs can resolve into the inline
+  // `<defs>`). We do NOT re-render or rewrite ids; we simply hold the inline
+  // slot's measured height with an id-free placeholder so the message doesn't
+  // reflow underneath the modal, then restore the SVG on close (Cindy B1,
+  // #task:2130).
+  const [inlineHold, setInlineHold] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  const openFullscreen = useCallback(() => {
+    setInlineHold(viewportRef.current?.offsetHeight ?? null);
+    setFullscreen(true);
+  }, []);
 
   // Re-render on app theme switch so diagram colors track the UI.
   useEffect(() => {
@@ -305,7 +320,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 className="mermaid-block__icon"
                 data-sticker
                 data-sticker-size="sm"
-                onClick={() => setFullscreen(true)}
+                onClick={openFullscreen}
                 disabled={!diagramReady}
                 aria-label="Open fullscreen"
                 title="Fullscreen"
@@ -334,10 +349,16 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
         </pre>
       ) : (
         <div
+          ref={viewportRef}
           className="mermaid-block__viewport"
           data-mermaid-scroll={scrollOwner}
         >
-          {diagramReady ? (
+          {fullscreen ? (
+            // Inline SVG withdrawn while the modal owns the only live copy
+            // (Cindy B1). An id-free, aria-hidden spacer holds the measured
+            // height so the message doesn't reflow behind the backdrop.
+            <div aria-hidden style={{ height: inlineHold ?? undefined }} />
+          ) : diagramReady ? (
             <div
               className="mermaid-block__canvas"
               // At 100% the SVG participates in ordinary document layout: no

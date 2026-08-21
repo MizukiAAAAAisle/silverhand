@@ -1134,47 +1134,55 @@
        (`--inline-code-radius: 0`), floating frames (`--floating-radius:
        0`) and controls (`--control-radius: 0`).
      - Header is a full-bleed cap, NOT a slab framed inside the outline.
-       The indigo header carries a `-2px` top/left/right margin so it
+       The header carries a `-2px` top/left/right margin so it
        overlaps the 2px black frame and meets the island's outer edge,
        which needs `overflow: visible` on the island (safe at radius 0 —
        the rounded-corner clip the base rule relied on is moot here, and
        `pre` keeps its own `overflow:auto`). The black frame then reads
        as the body's border only, so the island reads as two parts:
-       indigo header cap + framed code body (shiki #task:796 — the slab
+       white header cap + framed code body (shiki #task:796 — the slab
        used to sit inside the frame and looked embedded/box-in-box).
        Not a code-island role — a forza6 chrome role.
-     - Header strip: indigo slab (`--forza6-indigo-slab`) with
-       island-light foreground. Header bg stays forza6-scoped because
-       studio-light's cool `--bg-island-deep` would be wrong here,
-       and global keeps the header transparent.
-     - lime small label for the language tag (this is the `lime/粉
-       只做边框或小标题` Cindy asked for).
+     - Header strip: WHITE cap (shiki #task:2130「forza6 的 header 也改白色」,
+       superseding the earlier indigo slab) with ink foreground + an ink
+       hairline dividing it from the navy body. slack-dark is the only theme
+       that keeps a dark header now. Header bg stays forza6-scoped because it
+       overrides the global `--code-block-header-bg` token this rule ignores.
+     - ink small label for the language tag (was lime — unreadable on white;
+       lime/粉 now survives only on the body border + the mermaid active
+       segment).
      - lime-tinted hover on the expand toggle to match the rest of
        the forza6 hover vocabulary. */
 [data-theme='forza6'] .markdown-body .code-block {
   border: 2px solid var(--forza6-ink);
   border-radius: var(--control-radius);
-  overflow: visible;
 }
 [data-theme='forza6'] .markdown-body .code-block__header {
-  margin: -2px -2px 0;
-  background: var(--forza6-indigo-slab);
-  /* The seam under the cap is the island ground itself — read it from the
-     token rather than repeating the hex, which is how it drifted out of step
-     when the ground changed (#task:1835). */
-  border-bottom: 1px solid var(--bg-island);
+  /* WHITE cap (shiki #task:2130) — was `--forza6-indigo-slab`. It sits INSIDE
+     the 2px ink frame (no negative-margin cap trick any more): once the cap
+     went white it lost its boundary against the light page, so shiki asked for
+     a border — the block frame now outlines the header too, and the ink
+     border-bottom divides it from the navy body. This is not the box-in-box
+     #task:796 rejected: the header carries no inset border of its own, it fills
+     flush to the frame's inner edge. */
+  background: #FFFFFF;
+  border-bottom: 1px solid var(--forza6-ink);
 }
 [data-theme='forza6'] .markdown-body .code-block__lang {
-  color: var(--forza6-lime);
+  /* Ink, not lime: lime is unreadable on white (#task:2130). */
+  color: var(--forza6-ink);
   font-family: var(--font-display);
   letter-spacing: 0.10em;
   font-weight: 700;
 }
 [data-theme='forza6'] .markdown-body .code-block__copy {
-  color: #E8F1EF;
+  color: var(--forza6-ink);
 }
 [data-theme='forza6'] .markdown-body .code-block__copy:hover {
-  color: var(--forza6-lime);
+  /* Peel to a lime chip on hover — the forza6 interactive vocabulary, and
+     ink-on-lime holds contrast where lime text on white would not. */
+  color: var(--forza6-ink);
+  background: var(--forza6-lime);
 }
 [data-theme='forza6'] .markdown-body .code-block pre code {
   color: inherit;
