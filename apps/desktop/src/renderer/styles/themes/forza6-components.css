@@ -2405,8 +2405,7 @@
      - `data-popover-frame="info"` → border + radius come from the
         floating-frame token cluster shared with info popovers (forza6 =
         2px ink + 0 radius; warm = 1px subtle + radius-md; slack-dark =
-        1px white-10% + radius-md). Adds 2px ink frame to forza6
-        dialogs (which previously had no resting border).
+        1px white-10% + radius-md).
      - `data-modal-shell` → forza6-only sticker shadow rule below.
         Doesn't touch warm/slack-dark (they keep the existing
         `--shadow-modal` soft halo via the `shadow-modal` Tailwind
@@ -2420,27 +2419,19 @@
    larger surface area; same proportion the host-hero sticker uses
    (also a large block).
 
-   Why `data-modal-shell` instead of selecting `[role='dialog']`
-   broadly: the hook is opt-in per shell, so a Radix-Dialog-based
-   surface only takes the poster treatment when it wants it. Current
-   opt-ins: the generic Dialog primitive, the three startup gates,
-   `ImagePreviewModal`, `Lightbox` and the Mermaid modal. All of them
-   wear the SAME forza6 frame: those that also carry `data-popover-frame`
-   (Dialog, gates) get the 2px ink frame from that shared cluster; the
-   frameless viewers (both image modals + Mermaid) get the identical ink
-   frame from the `:not([data-popover-frame])` rule below, so no forza6
-   modal drifts frameless. (The image viewers' hand-drawn frame was
-   dropped in #task:1959; forza6 now gives them one uniformly via the
-   shell — other themes keep them frameless.) */
+   `data-modal-shell` is opt-in per shell (not a broad `[role='dialog']`
+   select), so a Radix-Dialog surface takes the forza6 poster treatment
+   only when it asks. In forza6 THIS one rule is the whole modal frame —
+   ink border + poster shadow — identical on every opt-in shell (the
+   generic Dialog, the three startup gates, `ImagePreviewModal`,
+   `Lightbox`, the Mermaid modal); no per-shell branch, so no modal can
+   drift frameless. `data-popover-frame` still carries the cross-theme
+   radius/base frame, but forza6's final modal frame is this rule. Other
+   themes project their own via their own `[data-modal-shell]` rule
+   (iris/studio-light zero it; slack-dark omits it). */
 [data-theme='forza6'] [data-modal-shell] {
-  box-shadow: var(--forza6-poster-shadow-lg);
-}
-/* A modal shell that doesn't bring its own floating frame still wears the
-   standard forza6 ink frame, so image/diagram viewers match dialogs. Width from
-   the shared `--control-border-width`; other themes zero or omit this per their
-   own `[data-modal-shell]` rule. */
-[data-theme='forza6'] [data-modal-shell]:not([data-popover-frame]) {
   border: var(--control-border-width) solid var(--forza6-ink);
+  box-shadow: var(--forza6-poster-shadow-lg);
 }
 
 /* ── Computer footer action stack — poster sticker (#task:1619) ──
