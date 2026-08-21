@@ -27,13 +27,15 @@ import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
  * Inline rendering of a `silverhand://` LOCATOR — a coordinate for a container
  * (#task:2119 / #task:2120), as opposed to a reference, which addresses a person.
  *
- * WHAT IT DRAWS (shiki, 2026-08-21, v2 mockup). One sigil per segment, all of equal
- * weight and all flat: the workspace wears a serif `W`, a channel `#`, a DM pair `@`,
- * a thread the product's thread glyph followed by the fixed word "thread". There is
- * NO separator character between segments — each segment's own glyph is its left
- * delimiter, which is why the chip stays readable without borrowing the URI's slashes.
- * The two handles of a pair are joined by `&`, which is unambiguous because the handle
- * charset cannot contain one.
+ * WHAT IT DRAWS (shiki, 2026-08-21). One sigil per segment, all of equal weight:
+ * the workspace wears a serif `W`, a channel `#`, a DM pair `@`, a thread the
+ * product's thread glyph followed by the fixed word "thread". There is NO
+ * separator character between segments — each segment's own glyph is its left
+ * delimiter, which is why the chip stays readable without borrowing the URI's
+ * slashes. The two handles of a pair are joined by `&`, which is unambiguous
+ * because the handle charset cannot contain one. The whole coordinate sits inside
+ * ONE filled block — the same box the sibling `#conv:` chip draws — so a
+ * multi-segment locator reads as a single interactive object; see `LocatorChip`.
  *
  * EVERY SEGMENT THE LOCATOR SPELLS IS DRAWN, including a workspace the reader is
  * already in. The chip is a COORDINATE, so dropping a segment because it happens to
@@ -49,12 +51,13 @@ import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
  * THREE OUTCOMES, and only the last two are this component's:
  *   - a destination the grammar refuses is not a chip at all — it stays the literal
  *     text the author typed (`classifyReferenceHref`), silently;
- *   - a locator the viewer cannot open draws an INERT sigil: same shape, same glyphs,
- *     same size, accent ink swapped for muted, no pointer, no click. One state for
- *     "no such name", "two such names", "not your workspace" and "not your DM" —
- *     telling them apart is exactly the existence oracle the design refuses;
- *   - a navigable locator draws the accent chip. Closed or archived keeps the chip and
- *     dims it, as `ChannelRef` does: the container is still reachable.
+ *   - a locator the viewer cannot open draws an INERT box: same shape, same glyphs,
+ *     same size, the accent wash swapped for a neutral fill and the ink for muted,
+ *     no pointer, no click. One state for "no such name", "two such names", "not
+ *     your workspace" and "not your DM" — telling them apart is exactly the
+ *     existence oracle the design refuses;
+ *   - a navigable locator draws the accent-wash box. Closed or archived keeps the
+ *     box and dims it, as `ChannelRef` does: the container is still reachable.
  */
 
 /** Live locator chip. Resolves against the viewer's own caches — see
@@ -141,12 +144,21 @@ function LocatorChip({
 }): JSX.Element {
   const tooltip = locatorTooltip(locator);
   const body = <LocatorSegments locator={locator} />;
-  const shared = 'inline-flex max-w-[280px] items-center gap-1 align-baseline';
+  // Both states are the SAME box the sibling `#conv:` chip draws
+  // (`ConversationRef`): a filled, radiused, padded block, so the whole
+  // coordinate reads as ONE object instead of a run of loose words wearing two
+  // colours (shiki dogfood, 2026-08-21 — the flat form read as "grey workspace +
+  // accent channel", two controls). The state lives entirely in fill + ink:
+  // navigable is the faint accent wash under accent ink, inert is a neutral fill
+  // under one muted ink. Nothing is coloured per-segment — that split was the
+  // bug, and the box now carries "these belong together" on its own.
+  const shared =
+    'inline-flex max-w-[280px] items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 align-baseline font-medium';
 
   if (!target || !onOpen) {
     return (
       <span
-        className={`${shared} text-text-muted`}
+        className={`${shared} bg-bg-elevated text-text-muted`}
         title={tooltip}
         data-locator-ref={locator.kind}
         data-locator-navigable="false"
@@ -161,7 +173,7 @@ function LocatorChip({
       role="button"
       tabIndex={0}
       className={
-        `${shared} cursor-pointer font-medium text-accent focus-outline ` +
+        `${shared} cursor-pointer bg-accent-soft text-accent focus-outline ` +
         INLINE_REF_HOVER_CLASS +
         (dim ? ' opacity-60' : '')
       }
@@ -196,7 +208,7 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
   if (locator.kind === 'channel') {
     return (
       <>
-        <WorkspaceSegment name={locator.workspace.name} context />
+        <WorkspaceSegment name={locator.workspace.name} />
         <Segment
           sigil={<Hash className="size-3 shrink-0" />}
           label={locator.channel.title}
@@ -221,14 +233,11 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
 /** The workspace's sigil is a flat serif `W` — a letter, not the rail's ink badge
  *  (shiki, 2026-08-21). The badge is the workspace's identity primitive where it
  *  IS the subject; inside a coordinate every segment has to weigh the same, and a
- *  filled badge beside a hairline `#` does not. */
-function WorkspaceSegment({
-  name,
-  context = false,
-}: {
-  name: string;
-  context?: boolean;
-}): JSX.Element {
+ *  filled badge beside a hairline `#` does not. Segment ink is not set here: the
+ *  chip is one colour end to end (see `LocatorChip`), so a leading workspace reads
+ *  as context through its position and sigil, not through a colour demotion that
+ *  would split the coordinate back into two voices. */
+function WorkspaceSegment({ name }: { name: string }): JSX.Element {
   return (
     <Segment
       sigil={
@@ -240,11 +249,6 @@ function WorkspaceSegment({
         </span>
       }
       label={name}
-      // A leading workspace in a longer coordinate is CONTEXT: it says where the
-      // leaf lives, and it should not compete with the leaf for the reader's eye.
-      // Ink only — same glyph, same size, same position (`user-preferences.md`:
-      // emphasis is a budget, spend it on the subject).
-      muted={context}
     />
   );
 }
@@ -253,31 +257,18 @@ function WorkspaceSegment({
  *  "thread" — a root message id is not a name, so the segment says what it is
  *  instead of showing an opaque id the reader cannot check. */
 function ThreadSegment(): JSX.Element {
-  return (
-    <Segment
-      sigil={<ThreadIcon className="size-3 shrink-0" />}
-      label="thread"
-      muted
-    />
-  );
+  return <Segment sigil={<ThreadIcon className="size-3 shrink-0" />} label="thread" />;
 }
 
 function Segment({
   sigil,
   label,
-  muted = false,
 }: {
   sigil: JSX.Element;
   label: string;
-  muted?: boolean;
 }): JSX.Element {
   return (
-    <span
-      className={
-        'inline-flex min-w-0 items-center gap-0.5' +
-        (muted ? ' text-text-muted' : '')
-      }
-    >
+    <span className="inline-flex min-w-0 items-center gap-0.5">
       {sigil}
       <span className="truncate">{label}</span>
     </span>
