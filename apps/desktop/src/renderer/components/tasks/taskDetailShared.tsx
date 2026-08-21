@@ -642,14 +642,13 @@ export function InlineFieldEditor({
 
   const isTitle = field === 'title';
 
-  // Both fields auto-grow so the box never scrolls internally — the pane owns
+  // Both fields auto-grow so the box never scrolls internally — the host owns
   // the scroll. Reset to `auto` first (so a shrink after a delete is measured
   // too), then grow the border-box by whatever is still clipped until nothing
   // is hidden. A single `height = scrollHeight` pass leaves the last line or two
   // clipped: the box is border-box, so setting height to scrollHeight leaves the
-  // content area short by the border, and that first write can re-wrap the text
-  // (a newly shown pane scrollbar narrows the box), pushing scrollHeight past the
-  // value just measured (#task:2145).
+  // content area short by the border, and the first write can change wrapping so
+  // the settled scrollHeight exceeds the value just measured (#task:2145).
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
