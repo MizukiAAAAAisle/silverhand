@@ -647,6 +647,13 @@
   --sticker-border-w: 1px;
   --sticker-shadow: var(--forza6-poster-shadow-sm);
 }
+/* md is the default, but it still declares both axes explicitly: a size-less
+   fallback would let an ancestor sticker's `--sticker-border-w` inherit down
+   and drift md to 1px. All three sizes own their pair; none inherits. */
+[data-theme='forza6'] [data-sticker][data-sticker-size='md'] {
+  --sticker-border-w: 1.5px;
+  --sticker-shadow: var(--forza6-poster-shadow);
+}
 [data-theme='forza6'] [data-sticker][data-sticker-size='lg'] {
   --sticker-border-w: var(--control-border-width);
   --sticker-shadow: var(--forza6-poster-shadow-lg);
