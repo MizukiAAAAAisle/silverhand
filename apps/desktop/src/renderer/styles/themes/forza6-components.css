@@ -636,8 +636,6 @@
      · `data-sticker-flat` = drop the rest shadow. `data-sticker-no-frame` =
        drop the border (a fill that IS ink, or too low-contrast against it,
        leans on the shadow to read as a poster).
-     · `data-sticker-still` = a `button` that opts OUT of the peel (keeps its
-       own transition; no lift, no hover shadow rung).
    Per-instance layout (content-box scaling, padding, glyph `stroke-width`)
    stays on the element's own rule. Frame colour is ink via `--sticker-frame`;
    no tone sets it. Other themes ignore `data-sticker`. */
@@ -646,11 +644,8 @@
    sticker's `--sticker-border-w` / `--sticker-shadow`. sm / lg override; md needs
    no rule of its own. Border is sm=1px, md=lg=`--control-border-width` (2px);
    md and lg differ only on the shadow rung. `--sticker-frame` has no setter, so
-   its fallback can't be shadowed.
-   `[data-channel-actions] button` rides these blocks as a CONTAINER ALIAS: the
-   cluster paints every button dropped into it (its drop-in API) through this one
-   authority at md+neutral, instead of a second rule with the same tokens. */
-[data-theme='forza6'] :is([data-sticker], [data-channel-actions] button) {
+   its fallback can't be shadowed. */
+[data-theme='forza6'] [data-sticker] {
   --sticker-border-w: var(--control-border-width);
   --sticker-shadow: var(--forza6-poster-shadow);
   border: var(--sticker-border-w) solid var(--sticker-frame, var(--forza6-ink));
@@ -674,39 +669,35 @@
    raises its shadow to its size's hover tier (sm 2 / md 3 / lg 4 px). Redefining
    `--sticker-shadow` recomputes the box-shadow, so `data-sticker` +
    `data-sticker-size` alone own BOTH states. Scoped to `button[data-sticker]` so
-   a static identity glyph (channel `#`, workspace icon) never lifts.
-   `data-sticker-still` opts a button OUT of the peel entirely — both the
-   transition and the hover rungs skip it — so a consumer that owns its own
-   transition (a FAB's opacity fade) keeps it, with no translate and no shadow
-   rung layered on top. */
-[data-theme='forza6'] :is(button[data-sticker], [data-channel-actions] button):not([data-sticker-still]) {
+   a static identity glyph (channel `#`, workspace icon) never lifts. The lift is
+   `transform: translateY`, which composes with a consumer's own `translate`
+   property (e.g. a FAB's `-translate-x-1/2` centring) rather than replacing it. */
+[data-theme='forza6'] button[data-sticker] {
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
-[data-theme='forza6'] :is(button[data-sticker], [data-channel-actions] button):not([data-sticker-still]):hover:not(:disabled) {
+[data-theme='forza6'] button[data-sticker]:hover:not(:disabled) {
   transform: translateY(-1px);
   --sticker-shadow: var(--forza6-poster-shadow-hover-md);
 }
-[data-theme='forza6'] button[data-sticker][data-sticker-size='sm']:not([data-sticker-still]):hover:not(:disabled) {
+[data-theme='forza6'] button[data-sticker][data-sticker-size='sm']:hover:not(:disabled) {
   --sticker-shadow: var(--forza6-poster-shadow-hover-sm);
 }
-[data-theme='forza6'] button[data-sticker][data-sticker-size='lg']:not([data-sticker-still]):hover:not(:disabled) {
+[data-theme='forza6'] button[data-sticker][data-sticker-size='lg']:hover:not(:disabled) {
   --sticker-shadow: var(--forza6-poster-shadow-hover-lg);
 }
-/* Focus ring — the gap-filler for direct interactive stickers with no base focus
-   of their own (Dialog corner close, Mermaid header, find / jump icons).
-   `:not(.focus-outline)` defers to the global `.focus-outline` class wherever a
-   consumer already opts in, and the channel-actions cluster keeps its own global
-   `[data-channel-actions] button:focus-visible` — so this is the only remaining
-   arm, not a third copy of the same outline. Only `button` focuses; a static
-   identity glyph never does. Disabled dimming is deliberately NOT here: consumers
-   carry their own opacity floor (.30 / .35 / .40), which a primitive `.4` would
+/* Focus ring — the gap-filler for interactive stickers with no base focus of
+   their own (channel/thread header actions, Dialog corner close, Mermaid, find,
+   jump). `:not(.focus-outline)` defers to the global `.focus-outline` class
+   wherever a consumer already opts in. Only `button` focuses; a static identity
+   glyph never does. Disabled dimming is deliberately NOT here: consumers carry
+   their own opacity floor (.30 / .35 / .40), which a primitive `.4` would
    regress. */
 [data-theme='forza6'] button[data-sticker]:not(.focus-outline):focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
 /* Tone map — the semantic hue each sticker carries (fill + glyph). */
-[data-theme='forza6'] :is([data-sticker-tone='neutral'], [data-channel-actions] button) {
+[data-theme='forza6'] [data-sticker-tone='neutral'] {
   background-color: var(--bg-floating);
   color: var(--forza6-ink);
 }
@@ -1377,10 +1368,9 @@
 
 /* ── Chat header action cluster — layout only ───────────────────────
    The cluster resets any outer frame so its buttons fall back to the JSX
-   layout defaults. It paints NOTHING itself: `[data-channel-actions] button`
-   rides the sticker primitive as a container alias (see the primitive blocks
-   above) at md+neutral, so a button dropped into the cluster becomes a poster
-   sticker with no second recipe to drift. */
+   layout defaults. It paints NOTHING itself: each action button consumes the
+   sticker primitive explicitly (`data-sticker data-sticker-tone="neutral"`), so
+   the cluster carries only gap / flow, with no button-painting rule to drift. */
 [data-theme='forza6'] [data-channel-actions] {
   border: 0;
   border-radius: var(--control-radius);

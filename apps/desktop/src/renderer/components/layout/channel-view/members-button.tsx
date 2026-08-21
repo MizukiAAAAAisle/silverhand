@@ -41,6 +41,8 @@ export function MembersButton({
   return (
     <button
       type="button"
+      data-sticker
+      data-sticker-tone="neutral"
       onClick={onOpen}
       aria-label={count === null ? 'Members' : `Members (${count})`}
       title="Members"

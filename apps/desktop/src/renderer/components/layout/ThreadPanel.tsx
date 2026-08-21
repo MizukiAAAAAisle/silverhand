@@ -853,6 +853,8 @@ export function ThreadPanel({
             {findAvailable ? (
               <button
                 type="button"
+                data-sticker
+                data-sticker-tone="neutral"
                 onClick={find.open ? find.close : find.openFind}
                 aria-label="Search this thread"
                 aria-pressed={find.open}
@@ -870,6 +872,8 @@ export function ThreadPanel({
             {followers.data && canParticipate ? (
               <button
                 type="button"
+                data-sticker
+                data-sticker-tone="neutral"
                 aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
                 aria-pressed={viewerFollowing}
                 title={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
@@ -892,6 +896,8 @@ export function ThreadPanel({
             {onViewInChannel ? (
               <button
                 type="button"
+                data-sticker
+                data-sticker-tone="neutral"
                 aria-label="View in channel"
                 title="View in channel"
                 onClick={onViewInChannel}
@@ -1052,7 +1058,6 @@ export function ThreadPanel({
               data-sticker
               data-sticker-size="lg"
               data-sticker-tone="neutral"
-              data-sticker-still
               aria-label={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
               title={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
               onClick={handleScrollBottomClick}

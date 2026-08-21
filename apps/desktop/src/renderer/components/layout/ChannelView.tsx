@@ -961,6 +961,8 @@ function ActiveChannelView({
           {findAvailable ? (
             <button
               type="button"
+              data-sticker
+              data-sticker-tone="neutral"
               onClick={find.open ? find.close : find.openFind}
               aria-label="Search this channel"
               aria-pressed={find.open}
@@ -978,6 +980,8 @@ function ActiveChannelView({
           {onToggleThreadsList && gate.allowMemberEffects ? (
             <button
               type="button"
+              data-sticker
+              data-sticker-tone="neutral"
               onClick={onToggleThreadsList}
               aria-label={hasFollowedThreadUnread ? 'Threads (unread)' : 'Threads'}
               aria-pressed={threadsListActive}
@@ -1004,6 +1008,8 @@ function ActiveChannelView({
           {onToggleFilesList && gate.allowMemberEffects ? (
             <button
               type="button"
+              data-sticker
+              data-sticker-tone="neutral"
               onClick={onToggleFilesList}
               aria-label="Attachments"
               aria-pressed={filesListActive}
@@ -1032,6 +1038,8 @@ function ActiveChannelView({
           {canRenameChannel || canToggleArchive ? (
             <button
               type="button"
+              data-sticker
+              data-sticker-tone="neutral"
               onClick={() => setSettingsOpen(true)}
               aria-label="Channel settings"
               title="Channel settings"
@@ -1043,6 +1051,8 @@ function ActiveChannelView({
           {onToggleFullscreen ? (
             <button
               type="button"
+              data-sticker
+              data-sticker-tone="neutral"
               onClick={onToggleFullscreen}
               aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
               title={isFullscreen ? 'Exit full screen' : 'Full screen'}
@@ -1058,6 +1068,8 @@ function ActiveChannelView({
           {onCloseChild ? (
             <button
               type="button"
+              data-sticker
+              data-sticker-tone="neutral"
               onClick={onCloseChild}
               aria-label={closeLabel}
               title={closeLabel}

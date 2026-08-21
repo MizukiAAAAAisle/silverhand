@@ -8,8 +8,7 @@ import { X } from 'lucide-react';
  * *structurally*, so no panel can drift the way the agent panel did
  * (shiki 2026-07-21: it had crept to 51px from an auto-height `py-2.5` + a 28px
  * avatar / two-line block, against the channel's 48px). Height, the bottom
- * hairline, the horizontal padding, the close affordance, and the forza6 sticker
- * hooks (`data-channel-actions` / `data-sticker-close`) all live here once
+ * hairline, the horizontal padding, and the close affordance all live here once
  * instead of being re-typed — and re-drifted — per panel.
  *
  * Only the header is shared, not the frame: each panel keeps its own outer
@@ -29,8 +28,9 @@ export function SidePanelHeader({
    *  row's free width (`flex-1`), so the trailing controls pin right. */
   children: React.ReactNode;
   /** Extra trailing controls rendered before the close button (search, follow,
-   *  view-in-channel…). When present they + the close button form the forza6
-   *  `data-channel-actions` sticker cluster, matching the channel header. */
+   *  view-in-channel…). When present they + the close button sit in the
+   *  `data-channel-actions` layout cluster, matching the channel header; each
+   *  control carries its own forza6 `data-sticker` hook. */
   actions?: React.ReactNode;
   onClose?: () => void;
 }): JSX.Element {
@@ -40,10 +40,11 @@ export function SidePanelHeader({
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
       {children}
       {actions ? (
-        // Actions + close share the forza6 `[data-channel-actions]` sticker
-        // cluster (same hook the channel header uses) so the poster theme paints
-        // them as one row of stickers. The `flex-1` header content pins the
-        // cluster right, so no `ml-auto` is needed on the close button here.
+        // Actions + close sit in the `[data-channel-actions]` layout cluster
+        // (same wrapper the channel header uses); each button carries its own
+        // forza6 `data-sticker` hook, the cluster only lays them out. The
+        // `flex-1` header content pins the cluster right, so no `ml-auto` is
+        // needed on the close button here.
         <div
           data-channel-actions
           className="ml-auto flex shrink-0 items-center gap-1.5"
@@ -53,9 +54,9 @@ export function SidePanelHeader({
         </div>
       ) : onClose ? (
         // Close-only panels keep the button standalone (no `data-channel-actions`
-        // wrapper) — matching the pre-existing markup so forza6 styles it purely
-        // through `[data-sticker-close]`, not the cluster rule. `ml-auto` pins it
-        // right even when there is no `flex-1` header content (loading / error).
+        // wrapper). It still carries its own `data-sticker` hook, so forza6 paints
+        // it whether or not the cluster is present. `ml-auto` pins it right even
+        // when there is no `flex-1` header content (loading / error).
         <SidePanelCloseButton onClose={onClose} className="ml-auto" />
       ) : null}
     </header>

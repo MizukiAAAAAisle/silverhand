@@ -496,6 +496,8 @@ function AgentSidePanel({
         canMessage && onMessageAgent ? (
           <button
             type="button"
+            data-sticker
+            data-sticker-tone="neutral"
             aria-label={`Message @${agent.name}`}
             title={`Message @${agent.name}`}
             onClick={() => onMessageAgent(agent.id)}

@@ -849,7 +849,6 @@ export function MessageList({
           data-sticker
           data-sticker-size="lg"
           data-sticker-tone="neutral"
-          data-sticker-still
           aria-label={shouldResetToLatest ? 'Jump to latest' : 'Scroll to bottom'}
           title={shouldResetToLatest ? 'Jump to latest' : 'Scroll to bottom'}
           onClick={() => {
