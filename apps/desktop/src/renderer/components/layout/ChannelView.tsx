@@ -962,6 +962,7 @@ function ActiveChannelView({
             <button
               type="button"
               data-sticker
+              data-sticker-size="md"
               data-sticker-tone="neutral"
               onClick={find.open ? find.close : find.openFind}
               aria-label="Search this channel"
@@ -981,6 +982,7 @@ function ActiveChannelView({
             <button
               type="button"
               data-sticker
+              data-sticker-size="md"
               data-sticker-tone="neutral"
               onClick={onToggleThreadsList}
               aria-label={hasFollowedThreadUnread ? 'Threads (unread)' : 'Threads'}
@@ -1009,6 +1011,7 @@ function ActiveChannelView({
             <button
               type="button"
               data-sticker
+              data-sticker-size="md"
               data-sticker-tone="neutral"
               onClick={onToggleFilesList}
               aria-label="Attachments"
@@ -1039,6 +1042,7 @@ function ActiveChannelView({
             <button
               type="button"
               data-sticker
+              data-sticker-size="md"
               data-sticker-tone="neutral"
               onClick={() => setSettingsOpen(true)}
               aria-label="Channel settings"
@@ -1052,6 +1056,7 @@ function ActiveChannelView({
             <button
               type="button"
               data-sticker
+              data-sticker-size="md"
               data-sticker-tone="neutral"
               onClick={onToggleFullscreen}
               aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
@@ -1069,6 +1074,7 @@ function ActiveChannelView({
             <button
               type="button"
               data-sticker
+              data-sticker-size="md"
               data-sticker-tone="neutral"
               onClick={onCloseChild}
               aria-label={closeLabel}

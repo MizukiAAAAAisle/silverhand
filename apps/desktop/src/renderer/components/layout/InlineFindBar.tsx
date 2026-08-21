@@ -85,6 +85,7 @@ export function InlineFindBar({
           type="button"
           data-find-action
           data-sticker
+          data-sticker-size="md"
           data-sticker-tone="neutral"
           onClick={prev}
           disabled={!hasMatches}
@@ -98,6 +99,7 @@ export function InlineFindBar({
           type="button"
           data-find-action
           data-sticker
+          data-sticker-size="md"
           data-sticker-tone="neutral"
           onClick={next}
           disabled={!hasMatches}
@@ -115,6 +117,7 @@ export function InlineFindBar({
         type="button"
         data-find-action
         data-sticker
+        data-sticker-size="md"
         data-sticker-tone="neutral"
         onClick={onOpenAdvanced}
         title="Open advanced search (cross-channel · filters)"
@@ -127,6 +130,7 @@ export function InlineFindBar({
         type="button"
         data-find-action
         data-sticker
+        data-sticker-size="md"
         data-sticker-tone="neutral"
         onClick={close}
         aria-label="Close search"

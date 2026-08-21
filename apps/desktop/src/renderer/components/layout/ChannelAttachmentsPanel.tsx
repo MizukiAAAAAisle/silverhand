@@ -779,6 +779,7 @@ function AttachmentRow({
           type="button"
           data-attachment-row-action
           data-sticker
+          data-sticker-size="md"
           data-sticker-tone="neutral"
           onClick={() => void saveAttachmentToDisk(attachment)}
           className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus-outline"
@@ -792,6 +793,7 @@ function AttachmentRow({
           type="button"
           data-attachment-row-action
           data-sticker
+          data-sticker-size="md"
           data-sticker-tone="neutral"
           onClick={onJump}
           className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus-outline"

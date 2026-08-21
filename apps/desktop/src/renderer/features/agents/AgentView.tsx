@@ -497,6 +497,7 @@ function AgentSidePanel({
           <button
             type="button"
             data-sticker
+            data-sticker-size="md"
             data-sticker-tone="neutral"
             aria-label={`Message @${agent.name}`}
             title={`Message @${agent.name}`}

@@ -36,6 +36,7 @@ export const DialogCornerButton = forwardRef<
     type="button"
     data-dialog-corner-action
     data-sticker
+    data-sticker-size="md"
     data-sticker-tone="neutral"
     className={cn(dialogCornerButtonClass, className)}
     {...props}
@@ -124,7 +125,7 @@ export const DialogContent = forwardRef<
         )}
       >
         {cornerActions}
-        <DialogPrimitive.Close data-sticker-close data-sticker data-sticker-tone="neutral" className={dialogCornerButtonClass}>
+        <DialogPrimitive.Close data-sticker-close data-sticker data-sticker-size="md" data-sticker-tone="neutral" className={dialogCornerButtonClass}>
           <X className="size-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>

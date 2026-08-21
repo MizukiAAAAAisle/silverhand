@@ -854,6 +854,7 @@ export function ThreadPanel({
               <button
                 type="button"
                 data-sticker
+                data-sticker-size="md"
                 data-sticker-tone="neutral"
                 onClick={find.open ? find.close : find.openFind}
                 aria-label="Search this thread"
@@ -873,6 +874,7 @@ export function ThreadPanel({
               <button
                 type="button"
                 data-sticker
+                data-sticker-size="md"
                 data-sticker-tone="neutral"
                 aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
                 aria-pressed={viewerFollowing}
@@ -897,6 +899,7 @@ export function ThreadPanel({
               <button
                 type="button"
                 data-sticker
+                data-sticker-size="md"
                 data-sticker-tone="neutral"
                 aria-label="View in channel"
                 title="View in channel"

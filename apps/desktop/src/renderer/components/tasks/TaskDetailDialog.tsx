@@ -177,6 +177,7 @@ export function TaskDetailDialog({
               type="button"
               data-task-view-jump
               data-sticker
+              data-sticker-size="md"
               data-sticker-tone="neutral"
               title="View in conversation"
               aria-label="View in conversation"
