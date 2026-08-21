@@ -210,7 +210,7 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
       <>
         <WorkspaceSegment name={locator.workspace.name} />
         <Segment
-          sigil={<Hash className="size-3 shrink-0" />}
+          sigil={<Hash className="size-3 shrink-0 self-center" />}
           label={locator.channel.title}
         />
         {locator.threadRootId !== null && <ThreadSegment />}
@@ -220,7 +220,7 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
   return (
     <>
       <Segment
-        sigil={<AtSign className="size-3 shrink-0" />}
+        sigil={<AtSign className="size-3 shrink-0 self-center" />}
         // `&` joins the pair rather than a slash: the two handles are one
         // coordinate, not a path, and neither of them can contain this character.
         label={`${locator.endpoints[0]} & ${locator.endpoints[1]}`}
@@ -243,7 +243,7 @@ function WorkspaceSegment({ name }: { name: string }): JSX.Element {
       sigil={
         <span
           aria-hidden
-          className="shrink-0 font-serif text-[length:var(--text-badge)] font-semibold leading-none"
+          className="shrink-0 self-center font-serif text-[length:var(--text-badge)] font-semibold leading-none"
         >
           W
         </span>
@@ -257,7 +257,7 @@ function WorkspaceSegment({ name }: { name: string }): JSX.Element {
  *  "thread" — a root message id is not a name, so the segment says what it is
  *  instead of showing an opaque id the reader cannot check. */
 function ThreadSegment(): JSX.Element {
-  return <Segment sigil={<ThreadIcon className="size-3 shrink-0" />} label="thread" />;
+  return <Segment sigil={<ThreadIcon className="size-3 shrink-0 self-center" />} label="thread" />;
 }
 
 function Segment({
@@ -267,8 +267,20 @@ function Segment({
   sigil: JSX.Element;
   label: string;
 }): JSX.Element {
+  // Segments align to EACH OTHER on their label's text baseline, not on a
+  // synthesized flex baseline. The chip itself is baseline-aligned to the prose
+  // line by the family rule (`.markdown-body [data-locator-ref]`, global.css), so
+  // it takes ITS baseline from these segments; when each segment was
+  // `items-center` its baseline was synthesized from content, and a serif-`W`
+  // sigil vs an SVG sigil synthesized to different heights — the segments sat
+  // ~2.7px apart (shiki dogfood, measured over CDP). `items-baseline` here makes
+  // every segment expose its label baseline instead, which is identical across
+  // segments (one font, one size), so the multi-segment block reads as one line
+  // and the chip still sits on the prose baseline. The sigil keeps `self-center`
+  // (see the call sites) so the glyph stays centred against its label — the same
+  // baseline-container + centred-icon idiom the family rule uses for a chip.
   return (
-    <span className="inline-flex min-w-0 items-center gap-0.5">
+    <span className="inline-flex min-w-0 items-baseline gap-0.5">
       {sigil}
       <span className="truncate">{label}</span>
     </span>
