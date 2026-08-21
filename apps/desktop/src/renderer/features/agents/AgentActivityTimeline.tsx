@@ -283,10 +283,12 @@ const TONE_TEXT: Record<KindVisual['tone'], string> = {
 };
 
 /**
- * Shared row chrome: a bare tone-coloured glyph aligned to the FIRST line of
- * the content (items-start — a multi-line body keeps the glyph on the opening
- * line, not floating to the vertical middle), the body in the flex column, the
- * time pinned top-right, and an optional indented preview below.
+ * Shared row chrome: the time leads the row, then a tone-coloured glyph, then
+ * the body — a left-to-right `time → icon → name → params` read. Everything is
+ * aligned to the FIRST line of the content (items-start — a multi-line body
+ * keeps time + glyph on the opening line, not floating to the vertical middle).
+ * The preview sits in the body column so it indents under the title with no
+ * magic margin, regardless of the leading columns' widths.
  */
 function RowShell({
   Icon,
@@ -304,18 +306,18 @@ function RowShell({
   return (
     <li className="py-1">
       <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 shrink-0 font-mono text-[length:var(--text-badge)] tabular-nums text-text-muted">
+          {time}
+        </span>
         <Icon
           className={cn('mt-0.5 size-3.5 shrink-0', TONE_TEXT[tone])}
           strokeWidth={2}
         />
-        <div className="min-w-0 flex-1 break-words text-xs leading-snug">
-          {title}
+        <div className="min-w-0 flex-1 text-xs leading-snug">
+          <div className="break-words">{title}</div>
+          {preview ? <div className="mt-1 min-w-0">{preview}</div> : null}
         </div>
-        <span className="mt-0.5 shrink-0 font-mono text-[length:var(--text-badge)] tabular-nums text-text-muted">
-          {time}
-        </span>
       </div>
-      {preview ? <div className="ml-[22px] mt-1 min-w-0">{preview}</div> : null}
     </li>
   );
 }
