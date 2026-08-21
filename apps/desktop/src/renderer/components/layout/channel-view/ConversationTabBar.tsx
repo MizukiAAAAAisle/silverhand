@@ -68,6 +68,11 @@ export interface ConversationTabBarProps {
   /** Open (or focus) a panel surface's tab. Required whenever
    *  {@link ConversationTabBarProps.addablePanels} is non-empty. */
   onAddPanel?: (panel: PanelTabKind) => void;
+  /** The conversation's followed-thread unread flag, passed straight through
+   *  from the header's {@link useConversationUnread} authority. The Threads tab
+   *  wears the same dot as the header entry — never re-queried here, never
+   *  derived from the Threads list, and never a count. */
+  threadsUnread?: boolean;
 }
 
 interface TabPresentation {
@@ -111,6 +116,7 @@ export function ConversationTabBar({
   onClose,
   addablePanels,
   onAddPanel,
+  threadsUnread,
 }: ConversationTabBarProps): JSX.Element {
   const ids = tabs.map(tabKey);
   const sensors = useSensors(
@@ -155,6 +161,8 @@ export function ConversationTabBar({
                 // Only attachment previews carry the inline close; panel tabs
                 // stay right-click-only.
                 closable={tab.kind === 'attachment'}
+                // Same followed-thread unread dot the header Threads entry wears.
+                unread={tab.kind === 'panel' && tab.panel === 'threads' && !!threadsUnread}
               />
             );
           })}
@@ -200,6 +208,7 @@ function SortableTab({
   onActivate,
   onClose,
   closable,
+  unread,
 }: {
   id: string;
   presentation: TabPresentation;
@@ -211,6 +220,9 @@ function SortableTab({
   /** Whether this tab shows the inline close icon beside its label (attachment
    *  previews only). Panel tabs are removable but stay right-click-only. */
   closable?: boolean;
+  /** Show the followed-thread unread dot (Threads tab only). Stays visible when
+   *  active, matching the header entry. */
+  unread?: boolean;
 }): JSX.Element {
   const {
     attributes,
@@ -262,6 +274,12 @@ function SortableTab({
       >
         <Icon className="size-3.5 shrink-0" aria-hidden />
         {label}
+        {unread ? (
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full bg-[var(--unread)]"
+          />
+        ) : null}
       </button>
       {showInlineClose ? (
         <button

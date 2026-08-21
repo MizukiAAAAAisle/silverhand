@@ -1083,6 +1083,7 @@ function ActiveChannelView({
           onClose={tabController.closeTab}
           addablePanels={addablePanels}
           onAddPanel={handleAddPanel}
+          threadsUnread={hasFollowedThreadUnread}
         />
       ) : null}
 
