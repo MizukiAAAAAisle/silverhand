@@ -78,18 +78,19 @@ export function ConversationPanelTab({
       );
     case 'members':
       return (
-        <div className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto px-3 py-3">
-          {/* Add member is the host's, seated at the top; the roster body never
-              owns it. The width cap keeps a wide pane from stretching the CTA
-              into a banner while a narrow tab still fills to an easy tap. Gate is
-              the header `+`'s add-member floor. */}
+        <div className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3">
+          {/* Add member sits in a top toolbar band spanning the roster width,
+              hairline-separated from the groups below — chrome over all columns,
+              not a lone button floating above one. Natural width, not stretched.
+              Gate is the header `+`'s add-member floor. */}
           {addMemberWorkspaceId ? (
-            <ChannelAddMemberEntry
-              workspaceId={addMemberWorkspaceId}
-              conversationId={channelId}
-              triggerWidthClass="w-full max-w-[220px]"
-              align="start"
-            />
+            <div className="mb-3 flex items-center border-b border-border pb-3">
+              <ChannelAddMemberEntry
+                workspaceId={addMemberWorkspaceId}
+                conversationId={channelId}
+                align="start"
+              />
+            </div>
           ) : null}
           <ChannelMembersContent
             channelId={channelId}
