@@ -60,7 +60,7 @@ import {
   type AdvancedSearchSeed,
 } from '@/features/search/advanced-search-seed';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import type { ConversationVisibility } from '@silverhand/shared';
+import type { AttachmentSnapshot, ConversationVisibility } from '@silverhand/shared';
 import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
 import {
   paneCapabilities,
@@ -72,7 +72,9 @@ import { ConversationHeaderIdentity } from './channel-view/conversation-header-i
 import { paneChrome } from './pane-chrome';
 import { ConversationTabBar } from './channel-view/ConversationTabBar';
 import { ChannelTasksTab } from './channel-view/ChannelTasksTab';
+import { ChannelAttachmentTab } from './channel-view/ChannelAttachmentTab';
 import { useConversationTabs } from '@/features/conversations/useConversationTabs';
+import { tabKey } from '@/lib/conversation-tabs';
 import {
   taskBoardContainerForPane,
   type TaskBoardContainer,
@@ -405,6 +407,30 @@ function ActiveChannelView({
   const viewTabsShown =
     viewTabsEnabled && gate.allowMemberEffects && taskBoardContainer !== null;
   const tasksTabActive = viewTabsShown && tabController.activeKey === 'tasks';
+  // The attachment previewer tab currently in front, if any (#task:2122). Same
+  // gate as the Tasks overlay — no tab strip, no attachment tabs. Resolved from
+  // the ordered tabs so a removed/stale active key can't mount a ghost preview.
+  const activeAttachmentTab = useMemo(() => {
+    if (!viewTabsShown) return null;
+    const active = tabController.tabs.find(
+      t => tabKey(t) === tabController.activeKey,
+    );
+    return active && active.kind === 'attachment' ? active : null;
+  }, [viewTabsShown, tabController.tabs, tabController.activeKey]);
+  // Open (or focus) a md/html attachment's previewer tab. Only handed to the
+  // message list when the tab strip is shown — otherwise md/html keep the
+  // open-with-OS behaviour every other attachment type has.
+  const handleOpenAttachment = useCallback(
+    (attachment: AttachmentSnapshot) => {
+      tabController.openTab({
+        kind: 'attachment',
+        attachmentId: attachment.id,
+        filename: attachment.filename,
+        contentType: attachment.content_type,
+      });
+    },
+    [tabController.openTab],
+  );
 
   // Per-viewer server-scored unread for this conversation's reply-clusters
   // (#task:1226). The SINGLE source of the chip's "N new" + first-unread —
@@ -1091,6 +1117,7 @@ function ActiveChannelView({
             threadUnreadByRoot={threadUnreadByRoot}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
+            onOpenAttachment={viewTabsShown ? handleOpenAttachment : undefined}
             onOpenChannelRef={
               // A `#channel` chip resolves inside a workspace, so a
               // workspace-less pane offers no navigation for one (it still
@@ -1144,6 +1171,22 @@ function ActiveChannelView({
             <ChannelTasksTab
               container={taskBoardContainer}
               onOpenTask={onOpenTaskDetail}
+            />
+          </div>
+        ) : null}
+
+        {/* Attachment previewer tab (#task:2122) — same overlay discipline as
+            Tasks: Chat stays mounted underneath so its scroll survives a tab
+            round-trip. Keyed on the attachment id so switching between two
+            attachment tabs remounts the fetch/decode rather than reusing stale
+            body state. */}
+        {activeAttachmentTab ? (
+          <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+            <ChannelAttachmentTab
+              key={activeAttachmentTab.attachmentId}
+              attachmentId={activeAttachmentTab.attachmentId}
+              filename={activeAttachmentTab.filename}
+              contentType={activeAttachmentTab.contentType}
             />
           </div>
         ) : null}

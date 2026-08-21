@@ -1,7 +1,7 @@
 import { type FocusEvent, useCallback, useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Bookmark, Check, Clock, Download, FileText, SmilePlus } from 'lucide-react';
+import { Bookmark, Check, Clock, Download, Eye, FileText, SmilePlus } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -31,6 +31,7 @@ import {
 import { Lightbox } from './Lightbox';
 import { saveAttachmentToDisk } from './save-attachment';
 import { openAttachmentExternally } from './open-attachment';
+import { attachmentPreviewKind } from '@/lib/attachment-preview';
 import { Markdown } from './Markdown';
 import { presentAuthor, authorStateLabel, classifyRowAuthor, type AuthorPresentation } from './author-presentation';
 import { AuthorAvatarView, AuthorName } from './author-avatar-view';
@@ -83,6 +84,11 @@ export interface MessageItemProps {
   /** Lookup by conversation id for inline `#conv:<id>` references. */
   conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
+  /** Open a `.md` / `.html` attachment in its in-app previewer tab (#task:2122),
+   *  open-or-focus on the attachment id. Wired by the parent to the
+   *  conversation's tab controller. Absent (e.g. thread pane, or view tabs
+   *  disabled) → md/html keep the open-with-OS behaviour of every other type. */
+  onOpenAttachment?: (attachment: AttachmentSnapshot) => void;
   onStartThread?: (msg: CachedMessage, jumpToMessageId?: string) => void;
   /** When this message has an open thread anchored to it, the count of
    *  non-system replies in that thread. Drives the button label
@@ -322,6 +328,7 @@ function ActorMessageItem({
   onOpenChannelRef,
   conversationRefsById,
   onOpenConversationRef,
+  onOpenAttachment,
   onStartThread,
   threadReplyCount,
   threadReplySummary,
@@ -595,6 +602,7 @@ function ActorMessageItem({
         attachments={message.attachments}
         alignRight={alignRight}
         canExport={canParticipate}
+        onOpenAttachment={onOpenAttachment}
       />
     ) : null;
   // Null when the message has no reactions — keeps the shared bottom row
@@ -1383,6 +1391,7 @@ function AttachmentList({
   attachments,
   alignRight,
   canExport = true,
+  onOpenAttachment,
 }: {
   attachments: AttachmentSnapshot[];
   alignRight: boolean;
@@ -1390,6 +1399,9 @@ function AttachmentList({
    *  `false` for a non-member browsing a public channel: inline
    *  PREVIEW stays, but the download / open affordances are withheld. */
   canExport?: boolean;
+  /** Open a md/html attachment in its previewer tab (#task:2122). Absent → the
+   *  tile keeps the open-with-OS main click for every type. */
+  onOpenAttachment?: (attachment: AttachmentSnapshot) => void;
 }): JSX.Element {
   // Resolve every tile's label once at the list level so ordinals match the
   // agent-facing stdin suffix exactly (same shared resolver). This lets a
@@ -1407,6 +1419,7 @@ function AttachmentList({
           attachment={att}
           label={labels[i]}
           canExport={canExport}
+          onOpenAttachment={onOpenAttachment}
         />
       ))}
     </div>
@@ -1417,12 +1430,24 @@ function AttachmentTile({
   attachment,
   label,
   canExport = true,
+  onOpenAttachment,
 }: {
   attachment: AttachmentSnapshot;
   label?: string;
   canExport?: boolean;
+  onOpenAttachment?: (attachment: AttachmentSnapshot) => void;
 }): JSX.Element {
   const isImage = attachment.content_type.startsWith('image/');
+  // A md/html attachment opens in the in-app previewer tab (#task:2122),
+  // replacing open-with-OS as this CARD's main click — but only when the parent
+  // wired a tab controller. This is not a global single destination: the
+  // Attachments panel and the thread pane still OS-open md/html (see the panel
+  // and thread ancestors), so the previewer is the sole viewer only for the
+  // member-main-pane message card. Classification tolerates legacy rows that
+  // persisted a generic `content_type` (falls back to the suffix).
+  const previewable =
+    onOpenAttachment != null
+    && attachmentPreviewKind(attachment.content_type, attachment.filename) != null;
   // Generation token for this attachment (#task:1769). Bumps when the creator
   // updates the bytes in place (`attachment_changed`) or a reconnect gap forces
   // a coarse epoch bump — either way we re-fetch the latest bytes and swap them
@@ -1593,7 +1618,7 @@ function AttachmentTile({
       <div className="flex max-w-[320px] items-stretch overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-outline-within">
         <button
           type="button"
-          onClick={downloadAndOpen}
+          onClick={previewable ? () => onOpenAttachment?.(attachment) : downloadAndOpen}
           className="group flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-xs text-text-secondary hover:text-text-primary focus:outline-none"
           title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
         >
@@ -1603,6 +1628,17 @@ function AttachmentTile({
             {formatBytes(attachment.size)}
           </span>
         </button>
+        {previewable ? (
+          <button
+            type="button"
+            onClick={() => onOpenAttachment?.(attachment)}
+            className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus-outline"
+            title="View"
+            aria-label={`View ${attachment.filename}`}
+          >
+            <Eye className="size-3.5" />
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => void saveAttachmentToDisk(attachment)}

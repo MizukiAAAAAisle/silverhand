@@ -11,6 +11,7 @@ import {
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ArrowDown } from 'lucide-react';
 import type {
+  AttachmentSnapshot,
   MessageAuthorDto,
   ReplyBadgeSummary,
   StreamUnreadDto,
@@ -69,6 +70,7 @@ export function MessageList({
   replyPreviewsByRoot,
   conversationRefsById,
   onOpenConversationRef,
+  onOpenAttachment,
   onOpenChannelRef,
   canReact,
   canSave = true,
@@ -138,6 +140,9 @@ export function MessageList({
   replyPreviewsByRoot?: Record<string, ThreadReplyPreviewRow[]>;
   conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
+  /** Open a `.md` / `.html` attachment in its previewer tab (#task:2122).
+   *  Threaded to each row's attachment card; absent → md/html keep open-with-OS. */
+  onOpenAttachment?: (attachment: AttachmentSnapshot) => void;
   /** Pre-bound (workspace already resolved) click handler for inline
    *  `#<channel_name>` chips. */
   onOpenChannelRef?: (channelId: string) => void;
@@ -672,6 +677,7 @@ export function MessageList({
           onOpenChannelRef={onOpenChannelRef}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={onOpenConversationRef}
+          onOpenAttachment={onOpenAttachment}
           {...actions.rowActionProps(m)}
           onStartThread={onOpenThread ? handleOpenThread : undefined}
           threadReplyCount={
@@ -710,6 +716,7 @@ export function MessageList({
       onOpenChannelRef,
       conversationRefsById,
       onOpenConversationRef,
+      onOpenAttachment,
       actions.rowActionProps,
       onOpenThread,
       handleOpenThread,
