@@ -245,8 +245,9 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
  *  (`--text-strong`) to look the same size. Aim the cap-height JUST UNDER the
  *  icon's stroke ink, not level with it: a solid letter carries more ink per unit
  *  height than a hairline glyph, so equal height would let the `W` dominate. A
- *  `--text-*` token (not a magic px) so a live edit hot-reloads; `font-serif`
- *  resolves to sans in every current theme. */
+ *  `--text-*` token (not a magic px) keeps the sigil on the theme's typography
+ *  scale rather than a one-off size; `font-serif` resolves to sans in every
+ *  current theme. */
 function WorkspaceSegment({ name }: { name: string }): JSX.Element {
   return (
     <Segment
