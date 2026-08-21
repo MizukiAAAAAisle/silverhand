@@ -1095,9 +1095,9 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   justify-content: space-between;
   padding: 0.25em 0.6em;
   /* The header strip sits one shade off the code body. Light themes paint it
-     pure white (choice A); dark themes (slack-dark / forza6) keep their own
-     `island-deep` — a white strip on a near-black HUD would blow out — so the
-     token is unset there and falls back to the deeper island shade. */
+     pure white; dark themes (slack-dark / forza6) keep their own `island-deep`
+     — a white strip on a near-black HUD would blow out — so the token is unset
+     there and falls back to the deeper island shade. */
   background: var(--code-block-header-bg, var(--bg-island-deep));
   border-bottom: 1px solid var(--border-island);
   font-family: var(--appearance-code-font, var(--font-mono));

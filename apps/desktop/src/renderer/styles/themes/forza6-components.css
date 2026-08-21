@@ -1140,16 +1140,14 @@
        the rounded-corner clip the base rule relied on is moot here, and
        `pre` keeps its own `overflow:auto`). The black frame then reads
        as the body's border only, so the island reads as two parts:
-       white header cap + framed code body (shiki #task:796 — the slab
-       used to sit inside the frame and looked embedded/box-in-box).
-       Not a code-island role — a forza6 chrome role.
-     - Header strip: WHITE cap (superseding the earlier indigo slab) with ink
-       foreground + an ink hairline dividing it from the navy body. slack-dark
-       is the only theme that keeps a dark header now. Header bg stays
-       forza6-scoped because it
+       white header cap + framed code body. Not a code-island role — a
+       forza6 chrome role.
+     - Header strip: WHITE cap with ink foreground + an ink hairline dividing
+       it from the navy body. slack-dark is the only theme that keeps a dark
+       header now. Header bg stays forza6-scoped because it
        overrides the global `--code-block-header-bg` token this rule ignores.
-     - ink small label for the language tag (was lime — unreadable on white;
-       lime/粉 now survives only on the body border + the mermaid active
+     - ink small label for the language tag (lime is unreadable on white;
+       lime/粉 survives only on the body border + the mermaid active
        segment).
      - lime-tinted hover on the expand toggle to match the rest of
        the forza6 hover vocabulary. */
@@ -1158,11 +1156,9 @@
   border-radius: var(--control-radius);
 }
 [data-theme='forza6'] .markdown-body .code-block__header {
-  /* WHITE cap — was `--forza6-indigo-slab`. It sits INSIDE the 2px ink frame
-     (no negative-margin cap trick any more): once the cap went white it lost
-     its boundary against the light page, so it takes a border — the block
-     frame now outlines the header too, and the ink border-bottom divides it
-     from the navy body. Not the box-in-box #task:796 rejected: the header
+  /* WHITE cap inside the 2px ink frame. On a light page a white cap has no
+     boundary of its own, so it takes the block frame's outline plus an ink
+     border-bottom to divide it from the navy body. Not box-in-box: the header
      carries no inset border of its own, it fills flush to the frame's inner
      edge. */
   background: #FFFFFF;
@@ -1251,10 +1247,10 @@
 }
 
 /* ── Fullscreen viewer modals — forza6 poster frame + footer stickers ──
-   The generic `[data-modal-shell]` is deliberately frameless in forza6 (poster
-   drop shadow only, image viewers). The Mermaid modal is a poster, not a
-   floating image, so it earns the ink frame back — scoped to
-   `data-mermaid-modal` so the image viewers stay frameless. */
+   The generic `[data-modal-shell]` is frameless in forza6 (poster drop shadow
+   only). The Mermaid modal is a poster, not a floating image, so it takes the
+   ink frame — scoped to `data-mermaid-modal` so the image viewers stay
+   frameless. */
 [data-theme='forza6'] [data-mermaid-modal] {
   border: var(--control-border-width) solid var(--forza6-ink);
 }
