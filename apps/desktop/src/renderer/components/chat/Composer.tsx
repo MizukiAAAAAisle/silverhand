@@ -90,10 +90,11 @@ interface ComposerProps {
    *  the workspace list it already holds — never recovered from `workspaceId` by
    *  an ambient lookup here (a leaf that re-derived it would be a second name
    *  authority). A workspace-derived fact carried as a sibling to the descriptor,
-   *  exactly like {@link ComposerProps.hasChannelNamespace}. `null` ⇔
-   *  `workspaceId` is null (a `direct_pair`, which has no channel picker). The `#`
-   *  picker spells its pick as a semantic locator over this name and the selected
-   *  channel's title (#task:2126). */
+   *  exactly like {@link ComposerProps.hasChannelNamespace}. `null` in a WIDER set
+   *  than `workspaceId` is null: a `direct_pair`, an unresolved row, AND a resolved
+   *  Agent Space — whose name the locator grammar cannot spell, so the pane owner
+   *  passes null (see `locatorWorkspaceName`). On any null the `#` picker emits the
+   *  `#conv:<id>` fallback instead of the semantic locator (#task:2126). */
   workspaceName: string | null;
   /** Whether that workspace has a `#` channel namespace to resolve against —
    *  false whenever `workspaceId` is null, and also while the container's own row
@@ -1830,10 +1831,13 @@ function rowKey(item: PickerItem): string {
  *                 total over the type, so the emitted string always round-trips
  *                 through `parseLocator`.
  *
- * FALLS BACK to `#conv:<id>` only when the workspace name is absent — a state the
- * `#` picker does not reach today (it is gated on `hasChannelNamespace`, which
- * implies a workspace), kept total rather than throwing. `#conv:` parsing is
- * unchanged and still carries every existing body and permanent-id deep link.
+ * FALLS BACK to `#conv:<id>` whenever the workspace name is absent. This is a
+ * LIVE path, not just a totality guard: the pane owner passes null for an Agent
+ * Space — whose name the locator grammar cannot spell — even though its `#` picker
+ * is live, so an Agent-Space channel pick lands as the permanent-id form (see
+ * `locatorWorkspaceName`). It is also null for a workspace-less/unresolved
+ * conversation. `#conv:` parsing is unchanged and still carries every existing
+ * body and permanent-id deep link.
  *
  * The user can still type `#general` or a locator by hand; the picker just emits
  * the readable, reliable form.

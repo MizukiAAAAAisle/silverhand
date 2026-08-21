@@ -94,8 +94,10 @@ interface ChannelViewProps {
   /** Display name of this conversation's workspace, resolved ONCE by the pane
    *  owner from its id→name authority and threaded down as a sibling to
    *  `hasChannelNamespace` — never looked up in this leaf (#task:2126). The
-   *  Composer's `#` picker spells a semantic channel locator with it; null for a
-   *  workspace-less conversation or an unresolved row, where the picker falls back
+   *  Composer's `#` picker spells a semantic channel locator with it. Null in a
+   *  WIDER set than `workspace_id` is null: a workspace-less conversation, an
+   *  unresolved row, AND a resolved Agent Space (whose name the locator grammar
+   *  cannot spell — see `locatorWorkspaceName`). Every null falls the picker back
    *  to `#conv:<id>`. */
   workspaceName: string | null;
   conversation: ConversationPaneDescriptor | null;

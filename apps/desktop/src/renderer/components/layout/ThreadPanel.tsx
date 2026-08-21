@@ -68,9 +68,10 @@ interface ThreadPanelProps {
   workspaceId: string | null;
   /** Display name of the parent's workspace, resolved by the pane owner and
    *  forwarded to the composer's `#` picker so it spells a semantic channel
-   *  locator (#task:2126). Null for a `direct_pair` or an unresolved workspace,
-   *  where the picker falls back to `#conv:<id>` — the same null domain as
-   *  `workspaceId`. */
+   *  locator (#task:2126). Null in a WIDER set than `workspaceId`: a `direct_pair`,
+   *  an unresolved workspace, AND a resolved Agent Space (unspellable by the
+   *  locator grammar — see `locatorWorkspaceName`); each falls the picker back to
+   *  `#conv:<id>`. */
   workspaceName: string | null;
   /** Whether the parent's container has a `#` channel namespace, forwarded to the
    *  composer's `#` channel query. Required and un-defaulted: the parent

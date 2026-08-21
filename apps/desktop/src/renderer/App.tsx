@@ -129,6 +129,7 @@ import {
   type ConversationPaneDescriptor,
 } from '@/features/conversations/pane-descriptor';
 import { inheritedPaneCapabilities } from '@/features/conversations/pane-mode';
+import { locatorWorkspaceName } from '@/features/conversations/locator-source';
 import { ConversationPaneCapabilitiesProvider } from '@/features/conversations/pane-capabilities-context';
 import {
   directPairPaneProps,
@@ -461,12 +462,13 @@ function RegisteredAppShell({
   // The pane owner already holds the workspace id→name authority (`workspaces`),
   // so it resolves the display name a Composer needs to spell a semantic channel
   // locator and hands it down as a SIBLING prop — no leaf lookup, mirroring how
-  // `hasChannelNamespace` is threaded (#task:2126). Null for a workspace-less
-  // conversation or an unresolved row, which the Composer treats as "fall back to
-  // `#conv:<id>`".
+  // `hasChannelNamespace` is threaded (#task:2126). The Agent-Space / workspace-less
+  // / unresolved gate lives in `locatorWorkspaceName` (a locator is spellable ONLY
+  // for a regular workspace, mirror of `locator-target.ts`'s resolver exclusion);
+  // a null result means the Composer falls back to `#conv:<id>`.
   const workspaceNameById = useCallback(
     (wid: string | null): string | null =>
-      wid === null ? null : (workspaces.find(w => w.id === wid)?.name ?? null),
+      wid === null ? null : locatorWorkspaceName(workspaces.find(w => w.id === wid)),
     [workspaces],
   );
   // The workspace a pending channel creation targets — resolved off the id the
