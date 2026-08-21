@@ -30,7 +30,7 @@ import {
 import { useNav } from '@/router';
 import { focusAgentSideSection } from '@/features/agents/AgentView';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useAgentPresence } from '@/features/agents/hooks';
+import { useAgent, useAgentPresence } from '@/features/agents/hooks';
 import {
   PRESENCE_TONE_DOT,
   projectPresence,
@@ -98,13 +98,17 @@ export function ConversationHeaderIdentity({
 }
 
 /**
- * The pair's face + name. The avatar is a SIBLING of the title span, not a child:
- * the theme hooks are attribute-scoped (`[data-conversation-title]`) and the title
- * truncates, so an avatar must not live inside it.
+ * The pair's face + name. The avatar is a SIBLING of the identity block, not a
+ * child: the theme hooks are attribute-scoped (`[data-conversation-title]`) and
+ * the name truncates, so an avatar must not live inside it.
  *
  * Only an ACTIVE AGENT counterpart's face is a button that opens its Activity,
  * keyed on the counterpart's OWN resolved id — a human or deleted endpoint has no
  * Agent Activity and stays a plain face.
+ *
+ * An active agent also gets its description under the name; the counterpart union
+ * carries no description, so it is read from the same agent authority by that id,
+ * and an empty one renders nothing rather than an empty line.
  */
 function CounterpartIdentity({
   title,
@@ -123,6 +127,11 @@ function CounterpartIdentity({
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
   const { openAgentPanel } = useNav();
+  const agentId =
+    counterpart.status === 'active' && counterpart.kind === 'agent'
+      ? counterpart.id
+      : null;
+  const description = useAgent(agentId).data?.description?.trim() || null;
   const face = (
     <AuthorAvatarView
       avatar={presentation.avatar}
@@ -135,12 +144,12 @@ function CounterpartIdentity({
   );
   return (
     <>
-      {counterpart.status === 'active' && counterpart.kind === 'agent' ? (
+      {agentId !== null ? (
         <button
           type="button"
           onClick={() => {
-            focusAgentSideSection(counterpart.id, 'activity');
-            openAgentPanel(counterpart.id);
+            focusAgentSideSection(agentId, 'activity');
+            openAgentPanel(agentId);
           }}
           aria-label={`Open ${presentation.label} activity`}
           title={`Open ${presentation.label} activity`}
@@ -151,16 +160,28 @@ function CounterpartIdentity({
       ) : (
         face
       )}
-      <span data-conversation-title className={TITLE_CLASS}>
-        {title}
-      </span>
-      {presentation.isDeleted ? (
-        <span className="flex shrink-0 items-center">
-          <DeletedActorMarker />
+      <span className="flex min-w-0 flex-col justify-center">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span data-conversation-title className={TITLE_CLASS}>
+            {title}
+          </span>
+          {presentation.isDeleted ? (
+            <span className="flex shrink-0 items-center">
+              <DeletedActorMarker />
+            </span>
+          ) : (
+            <CounterpartPresenceDot counterpart={counterpart} />
+          )}
         </span>
-      ) : (
-        <CounterpartPresenceDot counterpart={counterpart} />
-      )}
+        {description ? (
+          <span
+            className="min-w-0 truncate text-[length:var(--text-meta)] leading-tight text-text-muted"
+            title={description}
+          >
+            {description}
+          </span>
+        ) : null}
+      </span>
     </>
   );
 }
