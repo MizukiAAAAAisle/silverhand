@@ -1049,6 +1049,10 @@ export function ThreadPanel({
             <button
               type="button"
               data-scroll-bottom
+              data-sticker
+              data-sticker-size="lg"
+              data-sticker-tone="neutral"
+              data-sticker-still
               aria-label={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
               title={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
               onClick={handleScrollBottomClick}

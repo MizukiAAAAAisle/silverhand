@@ -626,36 +626,42 @@
    forza6's poster-sticker shape language, parameterized once. A consumer
    opts in with `data-sticker` (+ `data-sticker-tone` for its hue). Axes:
      · `data-sticker` = ink frame + 0 radius + rest shadow.
-     · `data-sticker-size` = sm / md=default / lg — border width AND the
-       rest + hover shadow rung, moved together.
-     · `button[data-sticker]` = interactive: fixed 1px lift, hover shadow one
-       rung up from its size's rest (see the peel block).
-     · `data-sticker-tone` = fill + glyph colour by MEANING (the theme owns
-       which hue each meaning maps to — see forza6.css); never geometry.
+     · `data-sticker-size` = sm / md=default / lg. Border is sm=1px, md=lg=2px;
+       md and lg part only on the shadow rung, never on frame width.
+     · `button[data-sticker]` = interactive: fixed 1px lift, shadow raised to the
+       size's hover tier (see the peel block).
+     · `data-sticker-tone` = fill + glyph colour by MEANING; never geometry.
+       `neutral` = white paper ground + ink glyph over the default ink frame (the
+       app's framed action buttons).
      · `data-sticker-flat` = drop the rest shadow. `data-sticker-no-frame` =
        drop the border (a fill that IS ink, or too low-contrast against it,
        leans on the shadow to read as a poster).
+     · `data-sticker-still` = a `button` that opts OUT of the peel (keeps its
+       own transition; no lift, no hover shadow rung).
    Per-instance layout (content-box scaling, padding, glyph `stroke-width`)
    stays on the element's own rule. Frame colour is ink via `--sticker-frame`;
    no tone sets it. Other themes ignore `data-sticker`. */
-[data-theme='forza6'] [data-sticker] {
-  border: var(--sticker-border-w, 1.5px) solid var(--sticker-frame, var(--forza6-ink));
+/* Base is the md default AND the inheritance floor: it SETS both custom
+   properties, so a size-less sticker resolves md without inheriting an ancestor
+   sticker's `--sticker-border-w` / `--sticker-shadow`. sm / lg override; md needs
+   no rule of its own. Border is sm=1px, md=lg=`--control-border-width` (2px);
+   md and lg differ only on the shadow rung. `--sticker-frame` has no setter, so
+   its fallback can't be shadowed.
+   `[data-channel-actions] button` rides these blocks as a CONTAINER ALIAS: the
+   cluster paints every button dropped into it (its drop-in API) through this one
+   authority at md+neutral, instead of a second rule with the same tokens. */
+[data-theme='forza6'] :is([data-sticker], [data-channel-actions] button) {
+  --sticker-border-w: var(--control-border-width);
+  --sticker-shadow: var(--forza6-poster-shadow);
+  border: var(--sticker-border-w) solid var(--sticker-frame, var(--forza6-ink));
   border-radius: var(--chip-radius);
-  box-shadow: var(--sticker-shadow, var(--forza6-poster-shadow));
+  box-shadow: var(--sticker-shadow);
 }
 [data-theme='forza6'] [data-sticker][data-sticker-size='sm'] {
   --sticker-border-w: 1px;
   --sticker-shadow: var(--forza6-poster-shadow-sm);
 }
-/* md is the default, but it still declares both axes explicitly: a size-less
-   fallback would let an ancestor sticker's `--sticker-border-w` inherit down
-   and drift md to 1px. All three sizes own their pair; none inherits. */
-[data-theme='forza6'] [data-sticker][data-sticker-size='md'] {
-  --sticker-border-w: 1.5px;
-  --sticker-shadow: var(--forza6-poster-shadow);
-}
 [data-theme='forza6'] [data-sticker][data-sticker-size='lg'] {
-  --sticker-border-w: var(--control-border-width);
   --sticker-shadow: var(--forza6-poster-shadow-lg);
 }
 [data-theme='forza6'] [data-sticker][data-sticker-flat] {
@@ -665,26 +671,45 @@
   border: none;
 }
 /* Interactive peel — an INTERACTIVE sticker (a `button`) lifts a fixed 1px and
-   steps its shadow up exactly one rung of the shared `--forza6-poster-shadow*`
-   ladder. Each size maps its own rest→hover pair so md and lg never collapse to
-   the same hover: sm -sm→base, md base→-lg, lg -lg→-xl. Redefining
-   `--sticker-shadow` recomputes the base box-shadow, so `data-sticker` +
-   `data-sticker-size` alone own BOTH states. Scoped to `button[data-sticker]`
-   so a static identity glyph (channel `#`, workspace icon) never lifts. */
-[data-theme='forza6'] button[data-sticker] {
+   raises its shadow to its size's hover tier (sm 2 / md 3 / lg 4 px). Redefining
+   `--sticker-shadow` recomputes the box-shadow, so `data-sticker` +
+   `data-sticker-size` alone own BOTH states. Scoped to `button[data-sticker]` so
+   a static identity glyph (channel `#`, workspace icon) never lifts.
+   `data-sticker-still` opts a button OUT of the peel entirely — both the
+   transition and the hover rungs skip it — so a consumer that owns its own
+   transition (a FAB's opacity fade) keeps it, with no translate and no shadow
+   rung layered on top. */
+[data-theme='forza6'] :is(button[data-sticker], [data-channel-actions] button):not([data-sticker-still]) {
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
-[data-theme='forza6'] button[data-sticker]:hover:not(:disabled) {
+[data-theme='forza6'] :is(button[data-sticker], [data-channel-actions] button):not([data-sticker-still]):hover:not(:disabled) {
   transform: translateY(-1px);
-  --sticker-shadow: var(--forza6-poster-shadow-lg);
+  --sticker-shadow: var(--forza6-poster-shadow-hover-md);
 }
-[data-theme='forza6'] button[data-sticker][data-sticker-size='sm']:hover:not(:disabled) {
-  --sticker-shadow: var(--forza6-poster-shadow);
+[data-theme='forza6'] button[data-sticker][data-sticker-size='sm']:not([data-sticker-still]):hover:not(:disabled) {
+  --sticker-shadow: var(--forza6-poster-shadow-hover-sm);
 }
-[data-theme='forza6'] button[data-sticker][data-sticker-size='lg']:hover:not(:disabled) {
-  --sticker-shadow: var(--forza6-poster-shadow-xl);
+[data-theme='forza6'] button[data-sticker][data-sticker-size='lg']:not([data-sticker-still]):hover:not(:disabled) {
+  --sticker-shadow: var(--forza6-poster-shadow-hover-lg);
+}
+/* Focus ring — the gap-filler for direct interactive stickers with no base focus
+   of their own (Dialog corner close, Mermaid header, find / jump icons).
+   `:not(.focus-outline)` defers to the global `.focus-outline` class wherever a
+   consumer already opts in, and the channel-actions cluster keeps its own global
+   `[data-channel-actions] button:focus-visible` — so this is the only remaining
+   arm, not a third copy of the same outline. Only `button` focuses; a static
+   identity glyph never does. Disabled dimming is deliberately NOT here: consumers
+   carry their own opacity floor (.30 / .35 / .40), which a primitive `.4` would
+   regress. */
+[data-theme='forza6'] button[data-sticker]:not(.focus-outline):focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 /* Tone map — the semantic hue each sticker carries (fill + glyph). */
+[data-theme='forza6'] :is([data-sticker-tone='neutral'], [data-channel-actions] button) {
+  background-color: var(--bg-floating);
+  color: var(--forza6-ink);
+}
 [data-theme='forza6'] [data-sticker-tone='channel'] {
   background-color: var(--forza6-yellow);
   color: var(--forza6-ink);
@@ -728,7 +753,7 @@
   margin-right: 0.4em;
   stroke-width: 2.5;
   /* colour + poster shape via `data-sticker data-sticker-tone="channel"`
-     (default md size = 1.5px frame + shadow, the hero lift). */
+     (default md size = 2px frame + base shadow, the hero lift). */
 }
 
 /* ── #task:491 — channel header italic (forza6 only) ─────────────────
@@ -834,40 +859,6 @@
   width: 12px;
   height: 12px;
   padding: 0;
-}
-
-/* Channel / thread header right-side action icons (search / threads / restart /
-   stop / settings / fullscreen / close): paint the glyphs in the SAME ink the
-   theme draws its BORDERS with (`--forza6-ink`), not the teal `--text-muted` —
-   so the poster header's controls read as crisp ink marks consistent with
-   forza6's ink-frame language (shiki #task:1442). The hover/pressed states keep
-   their `bg-bg-hover` feedback; only the resting glyph tone changes. Scoped to
-   the shared `[data-channel-actions]` cluster, so channel + thread headers stay
-   in lock-step. Other themes keep `--text-muted`. */
-[data-theme='forza6'] [data-channel-actions] button {
-  color: var(--forza6-ink);
-}
-
-/* ── Scroll-to-bottom FAB — poster sticker, not Material blob (#task:1184) ──
-   The back-to-bottom button (ChannelView + ThreadPanel, one shared primitive)
-   ships as a round pink pill with a soft `shadow-lg` blur — the generic
-   Material FAB. In forza6 that round/blurred shape is the lone non-poster
-   element floating over the message list; everything else is a square,
-   ink-framed sticker.
-
-   Adapt it into the poster sticker family: square (0 radius) + ink frame at
-   the shared `--control-border-width` (forza6 = 2px) + hard offset ink shadow
-   replacing the blur. Fill is WHITE (`--bg-floating`, the floating-surface
-   token) + ink glyph — shiki review: pink fill + black frame read ugly, so
-   this drops `bg-accent` for the same white-paper-on-ink recipe as the other
-   chrome stickers (the FAB earns ink frame + glyph, not a loud pink ground).
-   Theme-neutral hook; warm / slack keep the Tailwind round pink pill + soft
-   shadow untouched. */
-[data-theme='forza6'] [data-scroll-bottom] {
-  background-color: var(--bg-floating);
-  color: var(--forza6-ink);
-  border: var(--control-border-width) solid var(--forza6-ink);
-  box-shadow: var(--forza6-poster-shadow-lg);
 }
 
 /* ── Workspace `W` identity badge — filled ink square (#task:1160) ──
@@ -1219,7 +1210,7 @@
    Each control opts in with `data-sticker` (inert in every other theme — the
    primitive at the top of this file only paints under `[data-theme='forza6']`),
    so it inherits the shared poster geometry there: 0 radius + ink frame + hard
-   offset shadow at the `lg` size (2px border, `-lg` rest shadow). This block
+   offset shadow at the `md` size (2px border, base rest shadow). This block
    supplies only what the primitive leaves open — the FILL and interior padding.
 
    Utility controls (zoom / fullscreen) and the INACTIVE view segment take a
@@ -1239,7 +1230,7 @@
   color: var(--forza6-ink);
   padding: 0.1em 0.3em;
   /* Only fill / padding / typography live here. Frame width, rest + hover
-     shadow, lift and transition are owned by the sticker primitive + the `lg`
+     shadow, lift and transition are owned by the sticker primitive + the `md`
      size on the buttons — no private `--sticker-*` override. */
 }
 [data-theme='forza6'] .markdown-body .mermaid-block__controls .mermaid-block__icon[data-sticker],
@@ -1384,63 +1375,17 @@
   font-weight: 700;
 }
 
-/* ── #v5.5 — Chat header action buttons as poster control cluster ───
-   Originally (Cindy `VGm9HpWGWyDx5bhf`) the right-side action cluster
-   was wrapped in a 2px black poster sticker frame so it read as one
-   compact control. shiki `Yu3fFDZs3hvZehb3` (#task:545) reframes the
-   ask: drop the outer frame entirely, give each icon its own white
-   box (no border), and add a slight hover displacement so the lift —
-   not a colour change — carries the interaction feedback.
-
-   Layout:
-     - Container resets the v5 outer poster frame (border / radius /
-       padding / gap) so the cluster falls back to the JSX defaults
-       (`gap-1` = 4px between buttons).
-   Per-button:
-     - Default: white ground (`--bg-floating: #FFFFFF`) with 2px solid
-       near-black poster border. shiki `pgbrwFLJryxRFjPd` followed up
-       on the v5.5→v5.7 refactor (which had dropped the per-button
-       frame entirely) and asked the boxes back at button level — same
-       hardness, just per-icon instead of one wrapping cluster.
-     - Square corners (`border-radius: 0`) — same hard-cut language as
-       `--control-radius: 0` / `--floating-radius: 0` /
-       `--inline-code-radius: 0`. shiki `npbm1_xryIbWicIw` "forza6 主题
-       去掉圆角，保持直角，这是海报的风格".
-     - Hover: `translateY(-1px)` lift. transition kept short (150ms)
-       so the icons feel snappy, not floaty. Icon colour shift
-       (muted → primary) stays the JSX default — Cindy
-       `LzYY_zOmTInbJjYx`.
-     - Disabled: keep the JSX `opacity-35` and skip the lift, matching
-       the rest of forza6's disabled icon language.
-   Specificity:
-     - `[data-theme='forza6'] [data-channel-actions] button` = (0,3,1)
-       wins over Tailwind utility `bg-bg-hover`, `text-text-muted`,
-       etc. (each 0,1,0) — JSX classes stay theme-neutral. */
+/* ── Chat header action cluster — layout only ───────────────────────
+   The cluster resets any outer frame so its buttons fall back to the JSX
+   layout defaults. It paints NOTHING itself: `[data-channel-actions] button`
+   rides the sticker primitive as a container alias (see the primitive blocks
+   above) at md+neutral, so a button dropped into the cluster becomes a poster
+   sticker with no second recipe to drift. */
 [data-theme='forza6'] [data-channel-actions] {
   border: 0;
   border-radius: var(--control-radius);
   padding: 0;
   background: transparent;
-}
-[data-theme='forza6'] [data-channel-actions] button {
-  background-color: var(--bg-floating);
-  border: 2px solid var(--forza6-ink);
-  border-radius: var(--control-radius);
-  /* Poster sticker drop (shiki `NBHpEtEc42PDCGFX`): promote the bordered
-     box to a true sticker — hard ink shadow at rest, growing on the hover
-     lift. Same offset family as `[data-channel-icon]` / `[data-collection-card]`.
-     The channel-settings modal used to have its OWN copy of this rank on
-     `[data-channel-settings-action]`; its buttons now consume the app-wide
-     `neutralAction()` / `destructiveAction()` hooks instead, so that selector is
-     gone and this rule is back to the one surface it names. Other themes keep
-     the JSX defaults. */
-  box-shadow: var(--forza6-poster-shadow);
-  transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
-}
-[data-theme='forza6'] [data-channel-actions] button:hover:not(:disabled) {
-  background-color: var(--bg-floating);
-  transform: translateY(-1px);
-  box-shadow: var(--forza6-poster-shadow-xl);
 }
 /* ── Primary CTA — the filled poster sticker (#task:1623) ─────────────
    Every solid-filled commit in the app: the settings modals' `Save`, the
@@ -1504,54 +1449,14 @@
    for follow, the Bell → BellOff icon swap. (Earlier #1109 painted an
    inverted-ink fill here; intentionally dropped.) */
 
-/* ── Corner-action poster sticker (#task:1199) ───────────────────────
-   shiki: give the X close button a forza6 poster sticker across modals
-   (channel/workspace settings, new workspace, new agent — all via the
-   generic DialogContent close), the conversation side panel (AgentView),
-   the Image Preview / Lightbox modals, and the per-conversation Tasks tab. Same
-   sticker-button family as `[data-channel-actions] button` above: white
-   paper body + 2px ink border + 0 radius + hard ink drop shadow that
-   grows on the hover lift. The hook paints identity only — each consumer
-   keeps its own size / position (`p-1` / `size-6/7/8` / absolute corner).
-   The glyph drops to full ink so it reads as the sticker's stamp. Focus is
-   an `outline` (not box-shadow) so it never collides with the drop
-   shadow. Other themes keep the JSX icon-button defaults.
-
-   The `data-task-view-jump` peer (the task detail's "View in conversation"
-   jump) is a close-button peer: it shares this exact sticker via the `:is(...)`
-   family, and DialogContent seats both in one `items-center` flex corner
-   cluster — so spacing/centering come from the cluster, NOT per-theme box math
-   (the 2px border grows both boxes symmetrically and `items-center` keeps their
-   glyphs co-linear). No positional override.
-
-   `data-dialog-corner-action` is the GENERIC arm of the same family: the
-   `DialogCornerButton` primitive stamps it on every corner peer, so a new peer
-   inherits the sticker instead of depending on its author remembering a marker
-   (shiki 2026-07-28: the members modal's stop/restart pair carried the shared
-   class but no marker, and read as two flat glyphs beside a bold sticker ✕). */
-[data-theme='forza6']
-  :is([data-sticker-close], [data-task-view-jump], [data-dialog-corner-action]) {
-  background-color: var(--bg-floating);
-  border: 2px solid var(--forza6-ink);
-  border-radius: var(--control-radius);
-  color: var(--forza6-ink);
-  box-shadow: var(--forza6-poster-shadow);
-  transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
-}
-[data-theme='forza6']
-  :is(
-    [data-sticker-close],
-    [data-task-view-jump],
-    [data-dialog-corner-action]
-  ):hover:not(:disabled) {
-  background-color: var(--bg-floating);
-  color: var(--forza6-ink);
-  transform: translateY(-1px);
-  box-shadow: var(--forza6-poster-shadow-xl);
-}
-/* A settling bulk action stays a sticker but reads inert. Stated here as the
-   family's own floor, so a corner peer whose consumer forgot a
-   `disabled:opacity-*` class still can't look live while it is inert. */
+/* ── Corner-action disabled floor ────────────────────────────────────
+   The close ✕ and its corner peers (`data-task-view-jump`,
+   `data-dialog-corner-action`) now ride the shared `data-sticker` primitive
+   for frame / tone / shadow / peel / focus — each consumer also carries
+   `data-sticker data-sticker-tone="neutral"`. Only the disabled floor stays
+   bespoke: primitive guarantees `:disabled` won't peel but sets no opacity, so
+   a settling bulk action whose consumer forgot a `disabled:opacity-*` class
+   still can't look live while inert. */
 [data-theme='forza6']
   :is(
     [data-sticker-close],
@@ -1560,78 +1465,19 @@
   ):disabled {
   opacity: 0.4;
 }
-[data-theme='forza6']
-  :is(
-    [data-sticker-close],
-    [data-task-view-jump],
-    [data-dialog-corner-action]
-  ):focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: 2px;
-}
 
-/* ── Inline find bar icons — poster sticker family (#task:1335) ──────
-   shiki dogfood: "ui 上 icon 在 forza6 下都需要 poster sticker 风格",
-   refined to "input 前面的 icon 不需要 poster sticker，Advanced 做成
-   poster sticker button". The header search toggle already earns the
-   sticker via the `[data-channel-actions]` cluster; when the bar opens,
-   its own controls were plain lucide buttons — off-language next to that
-   crisp cluster. So the bar's ACTIONS join the same poster sticker
-   family as `[data-channel-actions] button` / `[data-sticker-close]`:
-   white paper body + 2px ink border + 0 radius + hard ink drop shadow
-   that grows on the hover lift. `[data-find-action]` covers prev / next
-   / close (icon buttons) AND the "Advanced" text button — the text
-   button becomes a labelled poster chip, the accent label its stamp.
-   The leading search glyph stays a plain mode marker (shiki: not a
-   sticker), and other themes keep the flat JSX controls. */
-[data-theme='forza6'] [data-inline-find-bar] [data-find-action] {
-  background-color: var(--bg-floating);
-  /* One ink for the whole action family — prev / next / advanced / close read
-     as the same stamp, not a muted glyph next to the full-ink close. Disabled
-     prev/next still degrade via their JSX `opacity-30`. */
-  color: var(--forza6-ink);
-  border: 2px solid var(--forza6-ink);
-  border-radius: var(--control-radius);
-  box-shadow: var(--forza6-poster-shadow);
-  transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
-}
-[data-theme='forza6'] [data-inline-find-bar] [data-find-action]:hover:not(:disabled) {
-  background-color: var(--bg-floating);
-  transform: translateY(-1px);
-  box-shadow: var(--forza6-poster-shadow-xl);
-}
-[data-theme='forza6'] [data-inline-find-bar] [data-find-action]:focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: 2px;
-}
+/* ── Inline find bar actions — ride the sticker primitive ────────────
+   The bar's actions (prev / next / Advanced / close) ride the shared
+   `data-sticker` primitive (`data-sticker data-sticker-tone="neutral"`); the
+   leading search glyph stays a plain mode marker. No bespoke disabled floor:
+   prev/next degrade via their JSX `disabled:opacity-30`. */
 
 /* ── Attachment row action stamps — the one attachment-only inner level ──
-   The attachment row's frame + hover is the shared `[data-collection-card]`
-   poster rule above. On top of it, the two right-side actions (Download, Show)
-   are small poster stamps: paper + ink border + 0 radius + 1.5px ink shadow
-   (2.5px on their own hover). Layout geometry (28 hitbox, gap, padding) is in
-   the JSX; this paints only stamp identity. Scoped under
-   `[data-collection-card]` so it lands only on attachment rows (the sole card
-   carrying `data-attachment-row-action`). Actions use their own hook, NOT
-   `data-find-action` / `data-sticker-close`. */
-[data-theme='forza6'] [data-collection-card] [data-attachment-row-action] {
-  background-color: var(--bg-floating);
-  color: var(--forza6-ink);
-  border: var(--control-border-width) solid var(--forza6-ink);
-  border-radius: var(--control-radius);
-  box-shadow: var(--forza6-poster-shadow);
-  transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
-}
-[data-theme='forza6'] [data-collection-card] [data-attachment-row-action]:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: var(--forza6-poster-shadow-xl);
-}
-[data-theme='forza6'] [data-collection-card] [data-attachment-row-action]:focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: 2px;
-  /* re-assert the sticker shadow so the JSX focus ring doesn't clobber it */
-  box-shadow: var(--forza6-poster-shadow);
-}
+   The row's two right-side actions (Download, Show) now ride the shared
+   `data-sticker` primitive (`data-sticker data-sticker-tone="neutral"`); the
+   row frame itself is still the `[data-collection-card]` poster rule above.
+   `.focus-outline` (JSX) paints the outline only and never touches box-shadow,
+   so the primitive's rest shadow carries through focus with no re-assert. */
 
 /* ── #v5.6 — Task panel (global section + per-conversation Tasks tab) poster polish ────────
    shiki `kx1DNk-PwdkIcQ_Y` "先做核心 4 个". ChannelTasksTab.tsx
@@ -2513,9 +2359,8 @@
    The two failures bracket the whole channel: keeping the red LABEL legible
    (≥4.5:1) forces any red ground to be pale, and any ground dark enough to
    read as inked coincides with the frame it sits inside. So this sticker's
-   hover uses the channel forza6 already uses everywhere else
-   (`[data-find-action]`, `[data-attachment-row-action]`): the shadow GROWS
-   1.5px → 2.5px while the consumer's 1px lift moves the sticker the other
+   hover is the poster peel: the hard shadow GROWS one rung (error →
+   error-xl) while the consumer's 1px lift moves the sticker the other
    way, so the gap opens and it reads as peeling off the paper. Geometry and
    hard shadow are exactly what shiki asked to keep ("我需要 poster sticker
    的几何与硬投影效果") — this makes them the hover, instead of decorating
@@ -2574,8 +2419,7 @@
    `ring` — which is ALSO box-shadow, at lower specificity, on a base that
    already declared `outline-none`. So the sticker silently swallowed the
    focus ring: nothing at all was visible on tab. An `outline` is the one
-   channel the shadow can't contest (and the file's own precedent —
-   `[data-find-action]`, `[data-attachment-row-action]`). Ink for the
+   channel the shadow can't contest. Ink for the
    neutral half, `--error` for the destructive commit, so focus joins each
    sticker's hue set instead of introducing a third colour. */
 [data-theme='forza6'] [data-destructive-action='commit']:focus-visible {

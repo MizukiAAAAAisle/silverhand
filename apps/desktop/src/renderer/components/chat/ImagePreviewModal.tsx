@@ -432,6 +432,8 @@ export function ImagePreviewModal({
             <Dialog.Close
               aria-label="Close"
               data-sticker-close
+              data-sticker
+              data-sticker-tone="neutral"
               className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
               <X className="size-4" />

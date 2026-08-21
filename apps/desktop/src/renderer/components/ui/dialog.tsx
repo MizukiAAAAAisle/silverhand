@@ -8,32 +8,24 @@ export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
 export const DialogPortal = DialogPrimitive.Portal;
 
-/** The corner-button skin (surface / ghost ink / hover / focus / box), shared
- *  by the modal close ✕ AND any sibling top-right action (e.g. the task
- *  detail's "View in conversation" jump) so the two are visual TWINS and can't
- *  drift. It is POSITION-AGNOSTIC: the `DialogContent` corner cluster owns the
- *  `absolute` slot and the inter-button gap. In forza6 the shared
- *  `data-sticker-close` / peer markers turn this into the poster-sticker skin
- *  via the per-theme component CSS. A consumer's twin carries its OWN marker so
- *  the theme rule reaches it too.
+/** The corner-button skin (surface / ghost ink / hover), shared by the modal
+ *  close ✕ AND any sibling top-right action (e.g. the task detail's jump) so the
+ *  two can't drift. POSITION-AGNOSTIC: the `DialogContent` corner cluster owns
+ *  the `absolute` slot and the inter-button gap. forza6 identity comes from the
+ *  `data-sticker` primitive on each button, not from this class.
  *
- *  Rest / hover is a COLOUR step (`--text-muted` → `--text-primary`), not an
- *  opacity step: `opacity-70` on top of an already-muted ink dilutes the same
- *  glyph twice, and a 16px multi-stroke glyph at 70% reads as smudged rather
- *  than as quiet (shiki 2026-07-28 on the members modal's stop/restart:
- *  "看着糊"). forza6 had to cancel it with `opacity: 1` to keep its sticker
- *  stamp legible, which is the same finding from the other side. `opacity` is
- *  left to `disabled:` alone, where fading the WHOLE control is the point. */
+ *  Rest→hover is a COLOUR step (`--text-muted` → `--text-primary`), never an
+ *  opacity step: dropping opacity on an already-muted multi-stroke glyph reads
+ *  as smudged, not quiet. `opacity` is left to `disabled:` alone. */
 export const dialogCornerButtonClass =
   'cursor-pointer rounded-[var(--control-radius)] p-1 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus:outline-none';
 
 /**
  * A corner-cluster action — the close ✕'s twin. Use this instead of hand-rolling
- * `dialogCornerButtonClass`: the button carries the `data-dialog-corner-action`
- * theme marker itself, so a peer can no longer ship as a flat ghost next to a
- * bold poster sticker (shiki 2026-07-28 on the members modal's stop/restart
- * pair — the marker was the one thing a consumer had to remember, and didn't).
- * The consumer still owns behaviour and glyph; identity comes from the theme.
+ * `dialogCornerButtonClass`: the button carries the `data-sticker` +
+ * `data-dialog-corner-action` markers itself, so a peer can't ship as a flat
+ * ghost next to the poster-sticker close. The consumer owns behaviour and glyph;
+ * identity comes from the theme.
  */
 export const DialogCornerButton = forwardRef<
   HTMLButtonElement,
@@ -43,6 +35,8 @@ export const DialogCornerButton = forwardRef<
     ref={ref}
     type="button"
     data-dialog-corner-action
+    data-sticker
+    data-sticker-tone="neutral"
     className={cn(dialogCornerButtonClass, className)}
     {...props}
   />
@@ -130,7 +124,7 @@ export const DialogContent = forwardRef<
         )}
       >
         {cornerActions}
-        <DialogPrimitive.Close data-sticker-close className={dialogCornerButtonClass}>
+        <DialogPrimitive.Close data-sticker-close data-sticker data-sticker-tone="neutral" className={dialogCornerButtonClass}>
           <X className="size-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>

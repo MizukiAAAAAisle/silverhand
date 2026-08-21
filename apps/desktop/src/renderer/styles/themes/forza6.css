@@ -202,6 +202,12 @@
   --forza6-poster-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   --forza6-poster-shadow-lg: 2px 2px 0 var(--forza6-ink);
   --forza6-poster-shadow-xl: 2.5px 2.5px 0 var(--forza6-ink);
+  /* Hover tier for the `[data-sticker]` primitive — each size's raised offset
+     (sm 2 / md 3 / lg 4 px, 2× its rest). The rest scale above stops at 2.5px,
+     so md/lg hover need their own steps; consumers read these, never a literal. */
+  --forza6-poster-shadow-hover-sm: 2px 2px 0 var(--forza6-ink);
+  --forza6-poster-shadow-hover-md: 3px 3px 0 var(--forza6-ink);
+  --forza6-poster-shadow-hover-lg: 4px 4px 0 var(--forza6-ink);
   /* Destructive variant — same base→xl lift, but the drop is `--error` so the
      danger sticker's frame + shadow stay one hue. Only base + xl exist (the
      destructive sticker only lifts on hover); sm/lg have no consumer. */

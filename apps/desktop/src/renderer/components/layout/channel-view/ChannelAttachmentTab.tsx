@@ -84,11 +84,9 @@ export function ChannelAttachmentTab({
         <button
           type="button"
           onClick={() => void openAttachmentExternally({ id: attachmentId, filename })}
-          // forza6 paints these as poster stickers (rest frame/shadow + hover
-          // lift) through the shared data-sticker hook; other themes ignore it
-          // and keep the flat text button.
           data-sticker
           data-sticker-size="md"
+          data-sticker-tone="neutral"
           className="flex shrink-0 items-center gap-1.5 rounded-[var(--chip-radius)] px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
           title="Open in default app"
         >
@@ -100,6 +98,7 @@ export function ChannelAttachmentTab({
           onClick={() => void saveAttachmentToDisk({ id: attachmentId, filename })}
           data-sticker
           data-sticker-size="md"
+          data-sticker-tone="neutral"
           className="flex shrink-0 items-center gap-1.5 rounded-[var(--chip-radius)] px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
           title="Download"
         >

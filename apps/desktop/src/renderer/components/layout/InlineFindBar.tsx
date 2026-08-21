@@ -84,6 +84,8 @@ export function InlineFindBar({
         <button
           type="button"
           data-find-action
+          data-sticker
+          data-sticker-tone="neutral"
           onClick={prev}
           disabled={!hasMatches}
           aria-label="Previous match"
@@ -95,6 +97,8 @@ export function InlineFindBar({
         <button
           type="button"
           data-find-action
+          data-sticker
+          data-sticker-tone="neutral"
           onClick={next}
           disabled={!hasMatches}
           aria-label="Next match"
@@ -110,6 +114,8 @@ export function InlineFindBar({
       <button
         type="button"
         data-find-action
+        data-sticker
+        data-sticker-tone="neutral"
         onClick={onOpenAdvanced}
         title="Open advanced search (cross-channel · filters)"
         className="flex h-7 shrink-0 items-center whitespace-nowrap rounded-[var(--control-radius)] px-2 text-xs font-medium text-text-primary hover:bg-bg-hover"
@@ -120,6 +126,8 @@ export function InlineFindBar({
       <button
         type="button"
         data-find-action
+        data-sticker
+        data-sticker-tone="neutral"
         onClick={close}
         aria-label="Close search"
         title="Close (Esc)"

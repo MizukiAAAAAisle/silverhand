@@ -176,6 +176,8 @@ export function TaskDetailDialog({
             <button
               type="button"
               data-task-view-jump
+              data-sticker
+              data-sticker-tone="neutral"
               title="View in conversation"
               aria-label="View in conversation"
               onClick={() => onJump(jumpTarget)}
