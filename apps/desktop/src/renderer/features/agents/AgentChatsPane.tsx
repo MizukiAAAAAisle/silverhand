@@ -87,7 +87,14 @@ export function AgentChatsPane({
   onOpenChat,
 }: AgentChatsPaneProps): JSX.Element {
   const chatsQuery = useAgentAuditChats(agentId, true);
-  const chats = chatsQuery.data?.chats;
+  // Archived conversations are excluded from this list (shiki #task:2116): the
+  // owner-audit endpoint returns them, but the Chats page shows only live lines.
+  // Filtered once here so grouping, counts, avatar batch and the empty state all
+  // speak of the same set.
+  const chats = useMemo(
+    () => chatsQuery.data?.chats.filter(c => c.archived_at === null),
+    [chatsQuery.data],
+  );
 
   // Only the viewer's OWN workspaces that could hold one of these rows: a list
   // from a workspace they are not in would simply be refused. This query is an
@@ -339,9 +346,6 @@ function ChatRow({
         <span className="flex shrink-0 items-center">
           <DeletedActorMarker />
         </span>
-      ) : null}
-      {chat.archived_at !== null ? (
-        <span className="shrink-0 text-xs text-text-muted">Archived</span>
       ) : null}
     </>
   );
