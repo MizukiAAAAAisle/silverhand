@@ -198,18 +198,13 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   }
 
   if (!task) {
-    // Resolved-missing — tooltip only, no popover. A "task not found"
-    // popover doesn't add information beyond the inert pill.
-    return (
-      <span
-        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
-        title={`Task ${inertLabel}`}
-        data-task-ref={String(taskNumber)}
-        data-task-ref-state="missing"
-      >
-        <span className="truncate">{inertLabel}</span>
-      </span>
-    );
+    // Definitive resolution failure (resolved + not found: deleted or never
+    // existed on this board) → demote to the raw authored `#task:<n>`, fully
+    // inheriting prose style: no chip fill / border / hover / cursor, not
+    // navigable. A dead ref must not masquerade as an openable chip. loading
+    // (pending) and no-context (no board to resolve against) are NOT resolution
+    // failures and keep their muted pill (shiki, #task:2143).
+    return <>{inertLabel}</>;
   }
 
   const label = `#${task.task_number} · ${task.title}`;
