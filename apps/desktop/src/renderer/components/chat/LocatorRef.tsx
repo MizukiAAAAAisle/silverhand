@@ -238,16 +238,8 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
  *  as context through its position and sigil, not through a colour demotion that
  *  would split the coordinate back into two voices.
  *
- *  SIZE is optical, not nominal. The sibling sigils are `size-3` lucide glyphs
- *  whose stroke ink nearly fills the box; a letter's apparent height is its
- *  cap-height, which is shorter than its font-size, so a `W` at the icons' nominal
- *  size reads visibly smaller. It therefore takes a LARGER typography token
- *  (`--text-strong`) to look the same size. Aim the cap-height JUST UNDER the
- *  icon's stroke ink, not level with it: a solid letter carries more ink per unit
- *  height than a hairline glyph, so equal height would let the `W` dominate. A
- *  `--text-*` token (not a magic px) keeps the sigil on the theme's typography
- *  scale rather than a one-off size; `font-serif` resolves to sans in every
- *  current theme. */
+ *  Its cap-height is shorter than a same-box lucide glyph, so it takes a larger
+ *  typography token than the icons to read as the same size. */
 function WorkspaceSegment({ name }: { name: string }): JSX.Element {
   return (
     <Segment
@@ -278,18 +270,11 @@ function Segment({
   sigil: JSX.Element;
   label: string;
 }): JSX.Element {
-  // Segments align to EACH OTHER on their label's text baseline, not on a
-  // synthesized flex baseline. The chip itself is baseline-aligned to the prose
-  // line by the family rule (`.markdown-body [data-locator-ref]`, global.css), so
-  // it takes ITS baseline from these segments; when each segment was
-  // `items-center` its baseline was synthesized from content, and a serif-`W`
-  // sigil vs an SVG sigil synthesized to different heights — the segments sat
-  // ~2.7px apart (shiki dogfood, measured over CDP). `items-baseline` here makes
-  // every segment expose its label baseline instead, which is identical across
-  // segments (one font, one size), so the multi-segment block reads as one line
-  // and the chip still sits on the prose baseline. The sigil keeps `self-center`
-  // (see the call sites) so the glyph stays centred against its label — the same
-  // baseline-container + centred-icon idiom the family rule uses for a chip.
+  // Each segment aligns on its label's text baseline (`items-baseline`), with the
+  // sigil `self-center`, so a multi-segment chip reads as one line; `items-center`
+  // would align segments on synthesized baselines that differ between a letter and
+  // an SVG sigil. The chip in turn sits on the prose baseline via the family rule
+  // (`.markdown-body [data-locator-ref]`, global.css).
   return (
     <span className="inline-flex min-w-0 items-baseline gap-0.5">
       {sigil}
