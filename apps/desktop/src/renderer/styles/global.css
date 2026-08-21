@@ -113,6 +113,10 @@
   --sidebar-width: 240px;
   --titlebar-sidebar-toggle-left: 78px;
   --titlebar-controls-safe-width: 138px;
+  /* Per-conversation view-tab strip height. ONE authority: the tab bar reads it
+     as its height and the find-bar overlay anchors below it via calc, so the two
+     never drift when the strip is retuned (#task:2121). */
+  --conversation-tab-strip-height: 30px;
 }
 
 /* ── Z-index ladder ──

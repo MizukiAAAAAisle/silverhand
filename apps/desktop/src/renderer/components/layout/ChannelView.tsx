@@ -1010,8 +1010,10 @@ function ActiveChannelView({
       </header>
 
       {/* Per-conversation view tabs (#task:2121) — a flex sibling under the
-          header. When shown it adds a 30px strip, so the find-bar overlay below
-          drops from `top-12` to `top-[78px]` (48px header + 30px strip). */}
+          header. When shown it adds the tab strip, so the find-bar overlay below
+          drops from `top-12` to clear the h-12 header PLUS the strip. Strip
+          height is the single `--conversation-tab-strip-height` authority the bar
+          itself reads, so the two never drift. */}
       {viewTabsShown ? (
         <ConversationTabBar
           tabs={tabController.tabs}
@@ -1024,7 +1026,7 @@ function ActiveChannelView({
 
       {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
           the message list. Anchored just below the h-12 header (`top-12`, or
-          below the 30px tab strip when it shows) and taken out of flow
+          below the header + tab strip when it shows) and taken out of flow
           (`absolute`) so opening / closing / typing NEVER changes the scroll
           container's height → no Virtuoso reflow / flicker (shiki: 搜索框不应挤压
           对话流、不应触发重渲染). It only drives the search controller + this
@@ -1033,7 +1035,9 @@ function ActiveChannelView({
       {findAvailable && find.open ? (
         <div
           className={`absolute inset-x-0 z-[var(--z-sticky)] ${
-            viewTabsShown ? 'top-[78px]' : 'top-12'
+            viewTabsShown
+              ? 'top-[calc(3rem_+_var(--conversation-tab-strip-height))]'
+              : 'top-12'
           }`}
         >
           <InlineFindBar

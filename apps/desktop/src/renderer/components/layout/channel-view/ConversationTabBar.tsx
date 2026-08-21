@@ -87,7 +87,7 @@ export function ConversationTabBar({
   return (
     <div
       data-conversation-tabs
-      className="flex h-[30px] shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border-subtle px-2 scrollbar-hide"
+      className="flex h-[var(--conversation-tab-strip-height)] shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border-subtle px-2 scrollbar-hide"
     >
       <DndContext
         sensors={sensors}
