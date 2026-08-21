@@ -23,11 +23,12 @@
 import { useMemo } from 'react';
 import { Hash } from 'lucide-react';
 import type { DirectPairCounterpart } from '@silverhand/shared';
-import { AVATAR_PX } from '@/components/avatar-scale';
 import {
   AuthorAvatarView,
   DeletedActorMarker,
 } from '@/components/chat/author-avatar-view';
+import { useNav } from '@/router';
+import { focusAgentSideSection } from '@/features/agents/AgentView';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useAgentPresence } from '@/features/agents/hooks';
 import {
@@ -44,6 +45,26 @@ import type { ConversationPaneCapabilities } from '@/features/conversations/pane
 
 const TITLE_CLASS =
   'min-w-0 truncate font-serif text-base font-semibold text-text-primary';
+
+/** Both header arms — the channel `#` and the DM avatar — share this one box edge
+ *  so switching conversation kind never resizes the identity. */
+export const HEADER_IDENTITY_PX = 30;
+
+const HEADER_IDENTITY_GLYPH_PX = 18;
+
+/** Inline size WINS over a theme's own `#` selectors, so the box is fixed here and
+ *  a theme only projects paint/effect — it must never carry the size itself. */
+const IDENTITY_BOX_STYLE = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  inlineSize: HEADER_IDENTITY_PX,
+  blockSize: HEADER_IDENTITY_PX,
+  boxSizing: 'border-box',
+  padding: 0,
+  verticalAlign: 'middle',
+  flex: 'none',
+} as const;
 
 export function ConversationHeaderIdentity({
   identity,
@@ -62,12 +83,14 @@ export function ConversationHeaderIdentity({
   return (
     <span data-conversation-title className={TITLE_CLASS}>
       {identity === 'channel_hash' ? (
-        <Hash
+        <span
           data-conversation-hash-icon
           data-sticker
           data-sticker-tone="channel"
-          className="size-4 shrink-0 align-[-0.15em]"
-        />
+          style={IDENTITY_BOX_STYLE}
+        >
+          <Hash size={HEADER_IDENTITY_GLYPH_PX} />
+        </span>
       ) : null}
       {title}
     </span>
@@ -76,16 +99,12 @@ export function ConversationHeaderIdentity({
 
 /**
  * The pair's face + name. The avatar is a SIBLING of the title span, not a child:
- * the title truncates and an avatar must never be clipped by that, and the theme
- * hooks are attribute-scoped (`[data-conversation-title]`), so nothing depends on
- * the glyph living inside it.
+ * the theme hooks are attribute-scoped (`[data-conversation-title]`) and the title
+ * truncates, so an avatar must not live inside it.
  *
- * `sm` (20px) — one tier above the sidebar row's `xs`, because this is the pane's
- * hero identity, and still well inside the 48px header so the face keeps its
- * padding instead of filling the bar.
- *
- * A deleted endpoint carries the same quiet marker its byline shows; it is also
- * the header's only explanation for the read-only composer below.
+ * Only an ACTIVE AGENT counterpart's face is a button that opens its Activity,
+ * keyed on the counterpart's OWN resolved id — a human or deleted endpoint has no
+ * Agent Activity and stays a plain face.
  */
 function CounterpartIdentity({
   title,
@@ -103,16 +122,35 @@ function CounterpartIdentity({
   );
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
+  const { openAgentPanel } = useNav();
+  const face = (
+    <AuthorAvatarView
+      avatar={presentation.avatar}
+      size={HEADER_IDENTITY_PX}
+      label={presentation.label}
+      className="shrink-0"
+      agentAvatarUrls={agentAvatarUrls}
+      humanAvatarUrls={humanAvatarUrls}
+    />
+  );
   return (
     <>
-      <AuthorAvatarView
-        avatar={presentation.avatar}
-        size={AVATAR_PX.sm}
-        label={presentation.label}
-        className="shrink-0"
-        agentAvatarUrls={agentAvatarUrls}
-        humanAvatarUrls={humanAvatarUrls}
-      />
+      {counterpart.status === 'active' && counterpart.kind === 'agent' ? (
+        <button
+          type="button"
+          onClick={() => {
+            focusAgentSideSection(counterpart.id, 'activity');
+            openAgentPanel(counterpart.id);
+          }}
+          aria-label={`Open ${presentation.label} activity`}
+          title={`Open ${presentation.label} activity`}
+          className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
+        >
+          {face}
+        </button>
+      ) : (
+        face
+      )}
       <span data-conversation-title className={TITLE_CLASS}>
         {title}
       </span>
