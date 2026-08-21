@@ -238,15 +238,15 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
  *  as context through its position and sigil, not through a colour demotion that
  *  would split the coordinate back into two voices.
  *
- *  SIZE is optical, not nominal (shiki 2026-08-21: `W` read smaller than `#`). The
- *  sibling sigils are `size-3` lucide glyphs — a 12px box whose stroke ink stands
- *  ~10px tall. A letter's apparent height is its cap-height, ~0.7em, so a 10px `W`
- *  (`--text-badge`) inked only ~7px and sat visibly smaller. `--text-strong` (13px)
- *  lands the cap-height at ~9px: a solid letter carries more ink mass per unit
- *  height than a hairline glyph, so matching cap-height JUST UNDER the icon ink —
- *  not to it — reads as equal size without the `W` dominating. Measured over CDP
- *  against the running app. A `--text-*` token (not a magic px) so a live edit
- *  hot-reloads; `font-serif` resolves to sans in every current theme. */
+ *  SIZE is optical, not nominal. The sibling sigils are `size-3` lucide glyphs
+ *  whose stroke ink nearly fills the box; a letter's apparent height is its
+ *  cap-height, which is shorter than its font-size, so a `W` at the icons' nominal
+ *  size reads visibly smaller. It therefore takes a LARGER typography token
+ *  (`--text-strong`) to look the same size. Aim the cap-height JUST UNDER the
+ *  icon's stroke ink, not level with it: a solid letter carries more ink per unit
+ *  height than a hairline glyph, so equal height would let the `W` dominate. A
+ *  `--text-*` token (not a magic px) so a live edit hot-reloads; `font-serif`
+ *  resolves to sans in every current theme. */
 function WorkspaceSegment({ name }: { name: string }): JSX.Element {
   return (
     <Segment
