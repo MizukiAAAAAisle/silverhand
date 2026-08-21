@@ -41,6 +41,24 @@ const RequiredUnknownSchema = z
     message: 'field is required (opaque payload must be present)',
   });
 
+/**
+ * Normalized terminal outcome of a tool call, projected from each runtime's
+ * own completion signal (codex `status`+`exitCode`, Claude `tool_result.is_error`,
+ * ACP terminal status). It is the SOLE input to the activity log's success ✓:
+ * only `success` paints green; `failed`/`cancelled` must never masquerade as
+ * success; `completed` is the neutral "finished but outcome not provable"
+ * downgrade. A runtime that cannot prove success (missing/ambiguous status,
+ * unknown exit-code semantics) emits `completed`, never a guessed `success`.
+ */
+export const TOOL_OUTCOMES = [
+  'success',
+  'failed',
+  'cancelled',
+  'completed',
+] as const;
+export const ToolOutcomeSchema = z.enum(TOOL_OUTCOMES);
+export type ToolOutcome = (typeof TOOL_OUTCOMES)[number];
+
 export const ParsedEventSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -105,6 +123,13 @@ export const ParsedEventSchema = z.discriminatedUnion('kind', [
       kind: z.literal('tool_output'),
       name: z.string().min(1).optional(),
       toolCallId: z.string().min(1).optional(),
+      /** Terminal outcome — REQUIRED on the emit type (`z.infer` output makes
+       *  it non-optional, so every driver that builds a `tool_output` must
+       *  classify it; a new producer cannot silently omit it). Wire-optional
+       *  via `.default('completed')`: pre-outcome daemon frames and historical
+       *  rows parse to the neutral `completed`, never rejected and never
+       *  upgraded to `success`. */
+      outcome: ToolOutcomeSchema.default('completed'),
     })
     .strict(),
   z

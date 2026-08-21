@@ -2,6 +2,7 @@ import {
   type DriverIO,
   type DriverSpawnContext,
   type ParsedEvent,
+  type ToolOutcome,
 } from './index.js';
 
 type JsonRpcId = number | string | null;
@@ -281,7 +282,11 @@ export class AcpClient {
           ...(toolCallId ? { toolCallId } : {}),
         });
         if (isTerminalToolStatus(update.status)) {
-          events.push({ kind: 'tool_output', ...(toolCallId ? { toolCallId } : {}) });
+          events.push({
+            kind: 'tool_output',
+            ...(toolCallId ? { toolCallId } : {}),
+            outcome: acpToolOutcome(update.status),
+          });
         }
         break;
       }
@@ -310,6 +315,7 @@ export class AcpClient {
           events.push({
             kind: 'tool_output',
             ...(toolCallId ? { toolCallId } : {}),
+            outcome: acpToolOutcome(update.status),
           });
         }
         break;
@@ -441,6 +447,16 @@ function toolName(update: Record<string, any>): string {
 
 function isTerminalToolStatus(status: unknown): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+/** ACP's terminal tool status maps 1:1 to a tool outcome: `completed` is a
+ *  proven success (the protocol's distinct failure/cancel states carry the
+ *  bad news), `failed`/`cancelled` pass through, anything else stays neutral. */
+function acpToolOutcome(status: unknown): ToolOutcome {
+  if (status === 'completed') return 'success';
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  return 'completed';
 }
 
 function planSummary(entries: unknown): string | null {

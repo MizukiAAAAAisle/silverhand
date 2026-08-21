@@ -96,7 +96,9 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
             ],
           },
         }),
-        expected: [{ kind: 'tool_output', name: 'Bash', toolCallId: 'tool-1' }],
+        expected: [
+          { kind: 'tool_output', name: 'Bash', toolCallId: 'tool-1', outcome: 'completed' },
+        ],
       },
       {
         line: j({
@@ -206,7 +208,7 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
           method: 'item/completed',
           params: { item: { type: 'commandExecution', command: 'ls -al' } },
         }),
-        expected: [{ kind: 'tool_output', name: 'shell' }],
+        expected: [{ kind: 'tool_output', name: 'shell', outcome: 'completed' }],
       },
       {
         line: j({
@@ -270,7 +272,9 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
           method: 'item/started',
           params: { item: { type: 'webSearch', id: 'ws-1', query: 'silverhand' } },
         }),
-        expected: [{ kind: 'tool_call', name: 'web_search', input: { query: 'silverhand' } }],
+        expected: [
+          { kind: 'tool_call', name: 'web_search', input: { query: 'silverhand' }, toolCallId: 'ws-1' },
+        ],
       },
       {
         line: j({
@@ -312,8 +316,18 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
           },
         }),
         expected: [
-          { kind: 'tool_call', name: 'file_change', input: { path: 'a.ts', kind: 'modify' } },
-          { kind: 'tool_call', name: 'file_change', input: { path: 'b.ts', kind: 'create' } },
+          {
+            kind: 'tool_call',
+            name: 'file_change',
+            input: { path: 'a.ts', kind: 'modify' },
+            toolCallId: 'fc-1',
+          },
+          {
+            kind: 'tool_call',
+            name: 'file_change',
+            input: { path: 'b.ts', kind: 'create' },
+            toolCallId: 'fc-1',
+          },
         ],
       },
       {
@@ -323,9 +337,75 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
           params: { item: { type: 'fileChange', id: 'fc-1' } },
         }),
         expected: [
-          { kind: 'tool_output', name: 'file_change' },
-          { kind: 'tool_output', name: 'file_change' },
+          { kind: 'tool_output', name: 'file_change', toolCallId: 'fc-1', outcome: 'completed' },
+          { kind: 'tool_output', name: 'file_change', toolCallId: 'fc-1', outcome: 'completed' },
         ],
+      },
+    ],
+  },
+  {
+    id: 'claude-tool-outcome-from-is-error',
+    runtime: 'claude',
+    description: 'Claude tool_result outcome derives ONLY from an explicit is_error boolean',
+    incident: 'activity ✓ must mean success, not merely returned',
+    steps: [
+      {
+        line: j({
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 't-ok', name: 'Bash', is_error: false }],
+          },
+        }),
+        expected: [{ kind: 'tool_output', name: 'Bash', toolCallId: 't-ok', outcome: 'success' }],
+      },
+      {
+        line: j({
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 't-bad', name: 'Bash', is_error: true }],
+          },
+        }),
+        expected: [{ kind: 'tool_output', name: 'Bash', toolCallId: 't-bad', outcome: 'failed' }],
+      },
+    ],
+  },
+  {
+    id: 'codex-command-outcome-from-status-and-exit',
+    runtime: 'codex',
+    description: 'Codex commandExecution outcome derives from status then exitCode',
+    incident: 'shell completions must not all read as neutral',
+    steps: [
+      {
+        line: j({
+          jsonrpc: '2.0',
+          method: 'item/completed',
+          params: { item: { type: 'commandExecution', id: 'c1', status: 'completed', exitCode: 0 } },
+        }),
+        expected: [{ kind: 'tool_output', name: 'shell', toolCallId: 'c1', outcome: 'success' }],
+      },
+      {
+        line: j({
+          jsonrpc: '2.0',
+          method: 'item/completed',
+          params: { item: { type: 'commandExecution', id: 'c2', status: 'completed', exitCode: 2 } },
+        }),
+        expected: [{ kind: 'tool_output', name: 'shell', toolCallId: 'c2', outcome: 'failed' }],
+      },
+      {
+        line: j({
+          jsonrpc: '2.0',
+          method: 'item/completed',
+          params: { item: { type: 'commandExecution', id: 'c3', status: 'failed' } },
+        }),
+        expected: [{ kind: 'tool_output', name: 'shell', toolCallId: 'c3', outcome: 'failed' }],
+      },
+      {
+        line: j({
+          jsonrpc: '2.0',
+          method: 'item/completed',
+          params: { item: { type: 'commandExecution', id: 'c4', status: 'declined' } },
+        }),
+        expected: [{ kind: 'tool_output', name: 'shell', toolCallId: 'c4', outcome: 'cancelled' }],
       },
     ],
   },

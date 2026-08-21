@@ -117,11 +117,22 @@ export function parseStreamJsonLine(
       if (Array.isArray(content)) {
         for (const block of content) {
           if (block?.type === 'tool_result') {
+            // `is_error` is Claude's only outcome bit. Only an explicit
+            // boolean is trusted: `true` → failed, `false` → success; a
+            // missing/non-boolean field is NOT proven success, so it
+            // downgrades to the neutral `completed`.
+            const outcome =
+              block.is_error === true
+                ? 'failed'
+                : block.is_error === false
+                  ? 'success'
+                  : 'completed';
             events.push({
               kind: 'tool_output',
               name: typeof block.name === 'string' ? block.name : undefined,
               toolCallId:
                 typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined,
+              outcome,
             });
           }
         }

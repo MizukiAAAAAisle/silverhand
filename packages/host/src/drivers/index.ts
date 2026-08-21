@@ -17,9 +17,9 @@
  * of `@silverhand/backend` / `better-sqlite3` dependencies (enforced
  * by `tests/dependency-guard.test.ts`).
  */
-import type { ParsedEvent, RuntimeKind } from '@silverhand/shared';
+import type { ParsedEvent, RuntimeKind, ToolOutcome } from '@silverhand/shared';
 
-export type { ParsedEvent };
+export type { ParsedEvent, ToolOutcome };
 
 /**
  * Spawn-time context handed to a driver's `buildArgs` / `applyEnv`.

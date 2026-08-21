@@ -7,6 +7,7 @@ import {
   type DriverIO,
   type DriverSpawnContext,
   type ParsedEvent,
+  type ToolOutcome,
 } from './index.js';
 
 /**
@@ -406,56 +407,85 @@ export class CodexDriver implements Driver {
           this.streamedAgentMessageIds.delete(item.id);
         }
         break;
-      case 'commandExecution':
+      case 'commandExecution': {
+        const callId = typeof item.id === 'string' ? item.id : undefined;
         if (isStarted && typeof item.command === 'string') {
           events.push({
             kind: 'tool_call',
             name: 'shell',
             input: { command: item.command },
+            ...(callId ? { toolCallId: callId } : {}),
           });
         }
-        if (isCompleted) events.push({ kind: 'tool_output', name: 'shell' });
+        if (isCompleted) {
+          events.push({
+            kind: 'tool_output',
+            name: 'shell',
+            ...(callId ? { toolCallId: callId } : {}),
+            outcome: codexToolOutcome(item, true),
+          });
+        }
         break;
+      }
       case 'contextCompaction':
         if (isStarted) events.push({ kind: 'compaction_started' });
         if (isCompleted) events.push({ kind: 'compaction_finished' });
         break;
-      case 'fileChange':
+      case 'fileChange': {
+        // One fileChange item fans out to N per-file rows that share its id;
+        // the renderer folds by id-set, so all N calls flip to done and all N
+        // outputs drop. Status is per-item (whole batch), so every output
+        // carries the same outcome.
+        const callId = typeof item.id === 'string' ? item.id : undefined;
         if (isStarted && Array.isArray(item.changes)) {
           for (const change of item.changes) {
             events.push({
               kind: 'tool_call',
               name: 'file_change',
               input: { path: change?.path, kind: change?.kind },
+              ...(callId ? { toolCallId: callId } : {}),
             });
           }
-          if (typeof item.id === 'string') {
-            this.pendingFileChangeCounts.set(item.id, item.changes.length);
+          if (callId) {
+            this.pendingFileChangeCounts.set(callId, item.changes.length);
           }
         }
-        if (isCompleted && typeof item.id === 'string') {
+        if (isCompleted && callId) {
           // Only emit tool_outputs we explicitly remembered from item/started.
           // Late item/completed events that arrive after turn/completed
           // (which clears the map) emit nothing — by then the manager has
           // already reset outstandingToolUses on turn_end, and a phantom
           // tool_output here would resurrect a resolved run.
-          const count = this.pendingFileChangeCounts.get(item.id) ?? 0;
+          const count = this.pendingFileChangeCounts.get(callId) ?? 0;
+          const outcome = codexToolOutcome(item, false);
           for (let i = 0; i < count; i += 1) {
-            events.push({ kind: 'tool_output', name: 'file_change' });
+            events.push({ kind: 'tool_output', name: 'file_change', toolCallId: callId, outcome });
           }
-          this.pendingFileChangeCounts.delete(item.id);
+          this.pendingFileChangeCounts.delete(callId);
         }
         break;
+      }
       case 'mcpToolCall': {
         const toolName =
           item.server === 'chat'
             ? `mcp_chat_${item.tool}`
             : `mcp_${item.server}_${item.tool}`;
+        const callId = typeof item.id === 'string' ? item.id : undefined;
         if (isStarted) {
-          events.push({ kind: 'tool_call', name: toolName, input: item.arguments });
+          events.push({
+            kind: 'tool_call',
+            name: toolName,
+            input: item.arguments,
+            ...(callId ? { toolCallId: callId } : {}),
+          });
         }
         if (isCompleted) {
-          events.push({ kind: 'tool_output', name: toolName });
+          events.push({
+            kind: 'tool_output',
+            name: toolName,
+            ...(callId ? { toolCallId: callId } : {}),
+            outcome: codexToolOutcome(item, false),
+          });
         }
         break;
       }
@@ -465,15 +495,18 @@ export class CodexDriver implements Driver {
             kind: 'tool_call',
             name: 'web_search',
             input: { query: item.query },
+            ...(typeof item.id === 'string' ? { toolCallId: item.id } : {}),
           });
           if (typeof item.id === 'string') this.pendingWebSearchIds.add(item.id);
         }
         if (isCompleted) {
           // Drop the event silently if we never saw the matching started
           // (e.g. cleared by turn/completed) — see fileChange comment above.
+          // webSearch has no failure bit in the protocol — completed is the
+          // only terminal state, so its outcome stays the neutral `completed`.
           const id = typeof item.id === 'string' ? item.id : null;
           if (id && this.pendingWebSearchIds.delete(id)) {
-            events.push({ kind: 'tool_output', name: 'web_search' });
+            events.push({ kind: 'tool_output', name: 'web_search', toolCallId: id, outcome: 'completed' });
           }
         }
         break;
@@ -549,6 +582,29 @@ function classifyCodexError(message: string): { code?: string; fatal?: boolean }
     return { code: 'session_archived', fatal: true };
   }
   return {};
+}
+
+/**
+ * Terminal outcome of a codex `item/completed`, from the app-server's own
+ * `status` (+ `exitCode` for shell). Guarded reads: an old frame or a fixture
+ * that omits these fields yields `completed` (neutral) — never a guessed
+ * `success`. `hasExitCode` marks `commandExecution`, where success must be
+ * PROVEN by exit 0; a null/absent exit code is unproven → neutral `completed`.
+ * Non-shell items (mcp / file_change) have no exit code, so their own
+ * `completed` status is the success proof.
+ */
+function codexToolOutcome(item: any, hasExitCode: boolean): ToolOutcome {
+  const status = typeof item?.status === 'string' ? item.status : null;
+  if (status === 'failed') return 'failed';
+  if (status === 'declined') return 'cancelled';
+  if (status === 'completed') {
+    if (!hasExitCode) return 'success';
+    const code = (item as { exitCode?: unknown }).exitCode;
+    if (code === 0) return 'success';
+    if (typeof code === 'number') return 'failed';
+    return 'completed';
+  }
+  return 'completed';
 }
 
 function joinReasoningText(item: any): string {

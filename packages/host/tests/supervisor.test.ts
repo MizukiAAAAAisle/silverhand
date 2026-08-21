@@ -1813,7 +1813,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       [],                                                  // READY (no-op)
       [{ kind: 'thinking', text: 'pondering' }],          // A → thinking
       [{ kind: 'tool_call', name: 'Bash', input: {} }],   // B → tool_running(Bash)
-      [{ kind: 'tool_output', name: 'Bash' }],            // C → thinking (outstanding=0)
+      [{ kind: 'tool_output', name: 'Bash', outcome: 'success' }], // C → thinking (outstanding=0)
       [{ kind: 'text', text: 'hello' }],                   // D → text snippet, still thinking
       [{ kind: 'turn_end' }],                              // E → idle (turn_ended)
     ];
@@ -1910,7 +1910,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       // `toolCallCounts.Bash` would reach 2 and `outstandingToolUses` 2 —
       // leaving the runtime stuck in tool_running after the single output.
       [{ kind: 'tool_call_input', toolCallId: 't1', input: { command: 'ls' } }],
-      [{ kind: 'tool_output', name: 'Bash' }],
+      [{ kind: 'tool_output', name: 'Bash', outcome: 'success' }],
       [{ kind: 'turn_end' }],
     ];
     driver.parseLine = () => sequence[step++] ?? [];
