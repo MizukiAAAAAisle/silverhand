@@ -646,21 +646,37 @@
 [data-theme='forza6'] [data-sticker] {
   border: var(--sticker-border-w, 1.5px) solid var(--sticker-frame, var(--forza6-ink));
   border-radius: var(--chip-radius);
-  box-shadow: var(--sticker-shadow, 1.5px 1.5px 0 var(--sticker-frame, var(--forza6-ink)));
+  box-shadow: var(--sticker-shadow, var(--forza6-poster-shadow));
 }
 [data-theme='forza6'] [data-sticker][data-sticker-size='sm'] {
   --sticker-border-w: 1px;
-  --sticker-shadow: 1px 1px 0 var(--sticker-frame, var(--forza6-ink));
+  --sticker-shadow: var(--forza6-poster-shadow-sm);
 }
 [data-theme='forza6'] [data-sticker][data-sticker-size='lg'] {
   --sticker-border-w: var(--control-border-width);
-  --sticker-shadow: 2px 2px 0 var(--sticker-frame, var(--forza6-ink));
+  --sticker-shadow: var(--forza6-poster-shadow-lg);
 }
 [data-theme='forza6'] [data-sticker][data-sticker-flat] {
   box-shadow: none;
 }
 [data-theme='forza6'] [data-sticker][data-sticker-no-frame] {
   border: none;
+}
+/* Interactive peel — an INTERACTIVE sticker (a `button`) rises 1px onto the
+   next step of the shared `--forza6-poster-shadow*` scale on hover. Scoped to
+   `button[data-sticker]` so a static identity glyph (channel `#`, workspace
+   icon) carrying a sticker never lifts. Redefining `--sticker-shadow` recomputes
+   the base box-shadow, so `data-sticker` + `data-sticker-size` alone own BOTH
+   states and the ONE shadow ladder scales them together. */
+[data-theme='forza6'] button[data-sticker] {
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+[data-theme='forza6'] button[data-sticker]:hover:not(:disabled) {
+  transform: translateY(-1px);
+  --sticker-shadow: var(--forza6-poster-shadow-xl);
+}
+[data-theme='forza6'] button[data-sticker][data-sticker-size='sm']:hover:not(:disabled) {
+  --sticker-shadow: var(--forza6-poster-shadow-lg);
 }
 /* Tone map — the semantic hue each sticker carries (fill + glyph). */
 [data-theme='forza6'] [data-sticker-tone='channel'] {
@@ -1237,14 +1253,6 @@
 [data-theme='forza6'] .markdown-body .mermaid-block__switch .mermaid-block__seg[data-sticker][data-active='true'] {
   background: var(--forza6-lime);
   color: var(--forza6-ink);
-}
-/* Hover = shadow-lift, not a fill swap. The selected segment keeps its lime;
-   every control just rises 1px on a deepened offset shadow, so hover reads as
-   "liftable" without stealing the accent. */
-[data-theme='forza6'] .markdown-body .mermaid-block__controls [data-sticker]:hover:not(:disabled),
-[data-theme='forza6'] .markdown-body .mermaid-block__switch [data-sticker]:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 2px 2px 0 var(--forza6-ink);
 }
 
 /* ── Fullscreen viewer modals — forza6 dividers + footer stickers ──
