@@ -21,9 +21,9 @@ import { type Migration, migrations } from '@silverhand/shared/db/migrations';
  *  2. tests/migration-baseline/schema-baseline-v44.normalized.txt — the
  *     normalized v44 schema oracle (drift-guard stage a; §5.2.1-2a).
  *  3. tests/migration-baseline/schema-current.normalized.txt — the
- *     normalized end-state oracle, captured from the REAL chain v1..v50,
- *     so the post-compaction guard (baseline + v45.. == current) is NOT a
- *     tautology (§5.2.1-2b).
+ *     normalized end-state oracle, captured from the REAL chain v1..v50.
+ *  4. tests/migration-baseline/schema-current.sql — an executable current
+ *     snapshot emitted from the same sqlite_master catalog.
  *
  * Before writing, it VERIFIES against the real chain (the proof that
  * lives forever in this PR's git history):
@@ -127,6 +127,7 @@ describe('migration baseline generator (#task:1213, one-shot)', () => {
     const fullDb = freshDb();
     applyChain(fullDb, migrations, Number.MAX_SAFE_INTEGER);
     const currentNorm = normalizeSchema(fullDb);
+    const currentSql = dumpExecutableSchema(fullDb);
 
     // Proof 1: the executable snapshot reproduces the v44 schema exactly.
     const replayBaseline = freshDb();
@@ -164,6 +165,7 @@ describe('migration baseline generator (#task:1213, one-shot)', () => {
     mkdirSync(fxDir, { recursive: true });
     writeFileSync(join(fxDir, 'schema-baseline-v44.normalized.txt'), v44Norm);
     writeFileSync(join(fxDir, 'schema-current.normalized.txt'), currentNorm);
+    writeFileSync(join(fxDir, 'schema-current.sql'), currentSql);
   });
 
   it('is inert in normal runs (generation is opt-in)', () => {
