@@ -23,6 +23,8 @@ use sqlx::{
 };
 use thiserror::Error;
 
+pub mod host_runtime;
+
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 const POOL_CONNECTIONS: u32 = 4;

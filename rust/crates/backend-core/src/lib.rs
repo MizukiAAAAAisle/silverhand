@@ -6,4 +6,5 @@
 //! wire adapters live in sibling crates and project from application facts.
 
 pub mod foundation_message;
+pub mod host_runtime;
 pub mod persistence;
