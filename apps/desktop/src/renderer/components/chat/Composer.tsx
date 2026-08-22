@@ -1775,18 +1775,6 @@ export interface ChannelSlice {
   data?: ChannelListItem[];
 }
 
-/** {@link filterViewerChannels}'s result, carrying the fan-out's settle fact
- *  alongside the page. */
-export interface ViewerChannelResult extends PickerResult {
-  /** The fan-out fail-closed seam (#task:2148): true ONLY when the workspace
-   *  id list has settled AND every per-workspace slice SUCCEEDED. Any slice still
-   *  pending — or in ERROR — leaves it false. An error is NEVER folded into
-   *  "settled and empty": that would silently drop a whole workspace's channels
-   *  and read downstream as a complete-but-smaller set, the exact
-   *  looks-answered-but-isn't failure the three-value authority exists to prevent. */
-  sourceKnown: boolean;
-}
-
 /**
  * The viewer arm's `#` candidates (#task:2148): every channel the viewer is
  * CURRENTLY a member of, across ALL their workspaces, flattened from the
@@ -1800,20 +1788,18 @@ export interface ViewerChannelResult extends PickerResult {
  *    `workspace_id` via `workspaceNameById`), so a cross-workspace locator spells
  *    the right coordinate and same-named channels stay distinguishable.
  *
- * Items are PROGRESSIVE — built from whatever slices have already succeeded — while
- * `sourceKnown` reports whether the WHOLE set has settled (see
- * {@link ViewerChannelResult}). A `#` pick inserts a full canonical locator carrying
- * the candidate's own coordinate, so a partial list never mis-addresses; only the
- * completeness signal waits. Pure.
+ * Items are PROGRESSIVE — built from whatever slices have already succeeded. The
+ * fan-out's settledness is NOT decided here: {@link viewerChannelPickerResult} is
+ * the one authority that projects it onto {@link ChannelSourceStatus}, so there is
+ * never a second completion judgement to drift against. A `#` pick inserts a full
+ * canonical locator carrying the candidate's own coordinate, so a partial list
+ * never mis-addresses. Pure.
  */
 export function filterViewerChannels(
   slices: readonly ChannelSlice[],
-  workspacesSettled: boolean,
   workspaceNameById: ReadonlyMap<string, string>,
   query: string,
-): ViewerChannelResult {
-  const sourceKnown =
-    workspacesSettled && slices.every(s => s.status === 'success');
+): PickerResult {
   const q = query.toLowerCase();
   const items: PickerItem[] = [];
   let matchedCount = 0;
@@ -1840,7 +1826,7 @@ export function filterViewerChannels(
       });
     }
   }
-  return { items, hiddenCount: matchedCount - items.length, sourceKnown };
+  return { items, hiddenCount: matchedCount - items.length };
 }
 
 /** Collapse a single React Query settledness onto a {@link ChannelSourceStatus}
@@ -1855,21 +1841,26 @@ export function channelSourceStatusOf(
       : 'loading';
 }
 
-/** The viewer arm's `#` channel-source page: {@link filterViewerChannels}'s
- *  candidates plus the fan-out's settledness projected onto a THREE-valued
- *  {@link ChannelSourceStatus}, so pending and error never re-fold to one bit. An
- *  errored slice (or workspace list) DOMINATES a still-pending sibling: an
- *  unavailable workspace is terminal, so the page reports `partial_error` rather
- *  than a "still loading" that would never resolve (#task:2148). Pure. */
+/**
+ * The viewer arm's `#` channel-source page — the SINGLE authority for both the
+ * candidates and the fan-out's settledness (#task:2148). Candidates come from
+ * {@link filterViewerChannels}; settledness is projected here onto a THREE-valued
+ * {@link ChannelSourceStatus}, so pending and error never re-fold to one bit:
+ *
+ *  - every slice AND the workspace list settled → `complete`;
+ *  - any slice or the workspace list still pending, none errored → `loading`;
+ *  - any error DOMINATES → `partial_error`. An unavailable workspace is terminal,
+ *    so it wins over a still-pending sibling (monotonic, decidable) rather than a
+ *    "still loading" that would never resolve.
+ */
 export function viewerChannelPickerResult(
   slices: readonly ChannelSlice[],
   workspacesStatus: 'pending' | 'error' | 'success',
   workspaceNameById: ReadonlyMap<string, string>,
   query: string,
 ): ChannelPickerResult {
-  const r = filterViewerChannels(
+  const { items, hiddenCount } = filterViewerChannels(
     slices,
-    workspacesStatus === 'success',
     workspaceNameById,
     query,
   );
@@ -1879,7 +1870,7 @@ export function viewerChannelPickerResult(
       : workspacesStatus === 'pending' || slices.some(s => s.status === 'pending')
         ? 'loading'
         : 'complete';
-  return { items: r.items, hiddenCount: r.hiddenCount, status };
+  return { items, hiddenCount, status };
 }
 
 /** The picker memo's per-trigger projection, extracted so the seam that carries a
@@ -2016,21 +2007,23 @@ function PickerMenu({
       ) : null}
       {/* Source-settledness marker (#task:2148). The `#` channel source has not
           fully settled, so the rows above are a progressive slice, not the whole
-          set. Loading and partial-error stay DISTINCT: an errored workspace is
-          terminal, so saying "still loading" would be a lie that never resolves.
-          Same divider treatment as the truncation footer; shown even with zero
-          rows, so an empty-but-unsettled `#` picker reads as its real state, never
-          "no channels". */}
+          set. This is a CORRECTNESS state, not a visual nudge like the truncation
+          footer above: a screen-reader user must not read the partial slice as the
+          complete candidate set, so it carries `role="status"` (a polite live
+          region) and is NOT `aria-hidden`. Loading and partial-error stay DISTINCT:
+          an errored workspace is terminal, so saying "still loading" would be a lie
+          that never resolves. Shown even with zero rows, so an empty-but-unsettled
+          `#` picker announces its real state, never "no channels". */}
       {channelStatus === 'loading' ? (
         <div
-          aria-hidden
+          role="status"
           className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
         >
           Loading channels…
         </div>
       ) : channelStatus === 'partial_error' ? (
         <div
-          aria-hidden
+          role="status"
           className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
         >
           Some channels unavailable

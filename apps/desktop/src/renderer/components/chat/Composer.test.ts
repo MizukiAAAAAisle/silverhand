@@ -755,18 +755,14 @@ describe('buildViewerShorthandResolver', () => {
 
 /**
  * #task:2148 — the viewer arm's `#` fan-out across every workspace the viewer
- * belongs to. Two facts live here and both fail silently:
- *  - **Alice's fail-closed seam.** `sourceKnown` is true ONLY when the workspace
- *    id list has settled AND every per-workspace slice succeeded. A slice still
- *    pending — or in ERROR — must leave it false; an error must NEVER read as
- *    "settled and empty", which would drop a whole workspace's channels and look
- *    downstream like a complete-but-smaller set.
+ * belongs to. It flattens the succeeded slices into candidates; the fan-out's
+ * settledness is NOT decided here (that is `viewerChannelPickerResult`'s single
+ * authority), so this only pins the item shape:
  *  - **Per-candidate coordinate.** Each surviving row is stamped with its OWN
  *    workspace name (from its own `workspace_id`), so a cross-workspace locator
  *    spells the right coordinate and same-named channels stay distinguishable.
- * Items are PROGRESSIVE — built from whatever slices already succeeded — while
- * `sourceKnown` reports whole-set settlement; a `#` pick inserts a full canonical
- * locator, so a partial list never mis-addresses.
+ *  - **Progressive.** Only succeeded slices contribute rows; a pending/errored
+ *    slice contributes nothing but never removes what already succeeded.
  */
 describe('filterViewerChannels', () => {
   const names = new Map([
@@ -787,8 +783,7 @@ describe('filterViewerChannels', () => {
         viewerChannel({ id: 'c2', workspace_id: 'w-2', title: 'design', is_member: true }),
       ]),
     ];
-    const { items, sourceKnown } = filterViewerChannels(slices, true, names, '');
-    expect(sourceKnown).toBe(true);
+    const { items } = filterViewerChannels(slices, names, '');
     expect(
       items.map(i =>
         i.kind === 'channel'
@@ -810,7 +805,7 @@ describe('filterViewerChannels', () => {
         viewerChannel({ id: 'nobit', title: 'c' }),
       ]),
     ];
-    const { items } = filterViewerChannels(slices, true, names, '');
+    const { items } = filterViewerChannels(slices, names, '');
     expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
       'mine',
     ]);
@@ -824,7 +819,7 @@ describe('filterViewerChannels', () => {
         viewerChannel({ id: 'closed', title: 'y', is_member: true, closed_at: 1 }),
       ]),
     ];
-    const { items, hiddenCount } = filterViewerChannels(slices, true, names, '');
+    const { items, hiddenCount } = filterViewerChannels(slices, names, '');
     expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
       'live',
     ]);
@@ -838,7 +833,7 @@ describe('filterViewerChannels', () => {
         viewerChannel({ id: 'c2', workspace_id: null, title: 'floating', is_member: true }),
       ]),
     ];
-    const { items } = filterViewerChannels(slices, true, names, '');
+    const { items } = filterViewerChannels(slices, names, '');
     expect(
       items.map(i => (i.kind === 'channel' ? i.workspaceName : 'n/a')),
     ).toEqual([null, null]);
@@ -848,7 +843,7 @@ describe('filterViewerChannels', () => {
     const data = Array.from({ length: 11 }, (_, i) =>
       viewerChannel({ id: `c-${i}`, title: `chan-${i}`, is_member: true }),
     );
-    const { items, hiddenCount } = filterViewerChannels([success(data)], true, names, '');
+    const { items, hiddenCount } = filterViewerChannels([success(data)], names, '');
     expect(items).toHaveLength(8);
     expect(hiddenCount).toBe(3);
   });
@@ -858,51 +853,22 @@ describe('filterViewerChannels', () => {
       success([viewerChannel({ id: 'a', title: 'UI polish', is_member: true })]),
       success([viewerChannel({ id: 'b', title: 'backend', is_member: true })]),
     ];
-    const { items } = filterViewerChannels(slices, true, names, 'POL');
+    const { items } = filterViewerChannels(slices, names, 'POL');
     expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
       'a',
     ]);
   });
 
-  it('fail-closed: a still-PENDING slice leaves sourceKnown false but keeps the settled items', () => {
+  it('is progressive: a pending/errored slice contributes nothing but does not drop the settled rows', () => {
     const slices: ChannelSlice[] = [
       success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
       { status: 'pending' },
-    ];
-    const { items, sourceKnown } = filterViewerChannels(slices, true, names, '');
-    // Progressive: the succeeded slice's channel is offered NOW…
-    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
-      'c1',
-    ]);
-    // …but the whole set is not settled, so a hand-typed handle stays pending.
-    expect(sourceKnown).toBe(false);
-  });
-
-  it('fail-closed: an ERROR slice is NOT folded into settled-empty (sourceKnown false)', () => {
-    // The failure this pins: reading an error as "this workspace has no channels"
-    // would drop it silently and report the smaller set as complete.
-    const slices: ChannelSlice[] = [
-      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
       { status: 'error' },
     ];
-    const { items, sourceKnown } = filterViewerChannels(slices, true, names, '');
+    const { items } = filterViewerChannels(slices, names, '');
     expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
       'c1',
     ]);
-    expect(sourceKnown).toBe(false);
-  });
-
-  it('fail-closed: an unsettled workspace-id list leaves sourceKnown false even if every slice succeeded', () => {
-    const slices: ChannelSlice[] = [
-      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
-    ];
-    expect(filterViewerChannels(slices, false, names, '').sourceKnown).toBe(false);
-  });
-
-  it('settled-empty is a known answer: no slices, list settled → sourceKnown true', () => {
-    const { items, sourceKnown } = filterViewerChannels([], true, names, '');
-    expect(items).toEqual([]);
-    expect(sourceKnown).toBe(true);
   });
 });
 
