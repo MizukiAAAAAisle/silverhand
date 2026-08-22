@@ -1,32 +1,56 @@
 //! Messaging application boundary: the real create-message contract.
 //!
-//! Driver-free. Wire projection and persistence live in sibling crates and both
-//! project from the facts defined here.
+//! Driver-free and transport-free. Persistence and wire projection live in
+//! sibling crates; both project from the facts defined here, and neither's
+//! vocabulary — statement text, status codes, wire codes, operator instructions —
+//! appears in this module.
 
 pub mod attachments;
+pub mod environment;
 pub mod freshness;
 
-use std::future::Future;
-
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use std::{error::Error, future::Future};
 
 use crate::persistence::PersistenceFailure;
 
-/// UTF-8 bytes. Rust's `str::len()` is already a byte count, so the "bytes, not
-/// UTF-16 code units" distinction cannot be lost here.
+/// The content bound is a UTF-8 byte count. Rust's `str::len()` is already a byte
+/// count, so the "bytes, not UTF-16 code units" distinction cannot be lost here.
 pub const MAX_MESSAGE_CONTENT_BYTES: usize = 64 * 1024;
-pub const MAX_MESSAGE_CONTENT_LABEL: &str = "64KiB";
-/// Envelope bound for a send request: worst-case JSON escaping of a full-size
-/// body plus headroom. Distinct from the content cap and reported separately.
-pub const MESSAGE_SEND_MAX_BODY_BYTES: usize = 6 * 64 * 1024 + 128 * 1024;
-pub const MAX_MESSAGE_ATTACHMENTS: usize = 20;
 
-pub fn content_byte_length(content: &str) -> usize {
-    content.len()
+/// Message content that has been shown to satisfy the size invariant.
+///
+/// The invariant travels with the value rather than with a caller's discipline:
+/// the only way to obtain one is to pass the check, so no adapter — including a
+/// future one — can hand oversized content to the write unit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageContent(String);
+
+impl MessageContent {
+    pub fn parse(raw: impl Into<String>) -> Result<Self, ContentTooLong> {
+        let raw = raw.into();
+        if raw.len() > MAX_MESSAGE_CONTENT_BYTES {
+            return Err(ContentTooLong {
+                actual_bytes: raw.len(),
+                max_bytes: MAX_MESSAGE_CONTENT_BYTES,
+            });
+        }
+        Ok(Self(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn byte_length(&self) -> usize {
+        self.0.len()
+    }
 }
 
-pub fn content_exceeds_limit(content: &str) -> bool {
-    content.len() > MAX_MESSAGE_CONTENT_BYTES
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("message content is {actual_bytes} bytes, above the limit of {max_bytes}")]
+pub struct ContentTooLong {
+    pub actual_bytes: usize,
+    pub max_bytes: usize,
 }
 
 /// A message identity as the application handles it: opaque, and never parsed for
@@ -59,7 +83,7 @@ pub struct AttachmentId(String);
 macro_rules! opaque_id {
     ($name:ident) => {
         impl $name {
-            /// Rejects only emptiness. An identity also arrives from the wire,
+            /// Rejects only emptiness. An identity also arrives from outside,
             /// where it is a coordinate rather than a claim, so validating its
             /// shape here would refuse ids this system itself once minted.
             pub fn parse(raw: impl Into<String>) -> Result<Self, EmptyIdentifier> {
@@ -92,48 +116,48 @@ opaque_id!(AttachmentId);
 #[error("identifier must not be empty")]
 pub struct EmptyIdentifier;
 
-#[derive(Debug, thiserror::Error)]
-#[error("system entropy is unavailable")]
-pub struct EntropyUnavailable;
-
 /// Bytes of entropy behind a minted message id. Twelve encode to exactly sixteen
 /// base64url characters with no padding, which is the identity clients already
 /// hold.
 const MESSAGE_ID_ENTROPY_BYTES: usize = 12;
 
 impl MessageId {
-    /// Mints a new identity. The format is part of what this system publishes, so
-    /// it is owned here rather than by whichever store happens to write the row.
-    pub fn mint() -> Result<Self, EntropyUnavailable> {
+    /// Mints a new identity from supplied entropy. The format is part of what this
+    /// system publishes, so it is owned here rather than by whichever store writes
+    /// the row; the entropy is a capability the caller provides, because reaching
+    /// for it implicitly would hide a failure that has to stay reportable.
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
         let mut bytes = [0u8; MESSAGE_ID_ENTROPY_BYTES];
-        getrandom::fill(&mut bytes).map_err(|_| EntropyUnavailable)?;
-        Ok(Self(URL_SAFE_NO_PAD.encode(bytes)))
+        entropy.fill(&mut bytes)?;
+        Ok(Self(environment::base64url(&bytes)))
     }
 }
 
 impl MessageSeq {
-    /// The store is the only origin: it advances the conversation's counter and
-    /// hands back what it reserved.
-    pub fn reserved(value: i64) -> Self {
-        Self(value)
-    }
-
-    /// The wire carries a JSON number, so decoding validates rather than casts.
-    pub fn decode(value: i64) -> Result<Self, InvalidSeq> {
-        if value < 0 {
-            return Err(InvalidSeq);
-        }
-        Ok(Self(value))
-    }
-
     pub fn get(self) -> i64 {
         self.0
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("message seq must be a non-negative integer")]
-pub struct InvalidSeq;
+/// The only way to obtain an ordinal, whichever direction it came from. A negative
+/// ordinal has no meaning in either, so there is no unchecked constructor for a
+/// caller — including a store reading its own column — to prefer.
+impl TryFrom<i64> for MessageSeq {
+    type Error = InvalidSeq;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if value < 0 {
+            return Err(InvalidSeq { value });
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("message ordinal {value} is negative")]
+pub struct InvalidSeq {
+    pub value: i64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FromKind {
@@ -155,6 +179,39 @@ impl SendActor {
         match self {
             Self::User(_) => FromKind::User,
             Self::Agent(_) => FromKind::Agent,
+        }
+    }
+}
+
+/// Randomness, as a capability rather than an ambient fact of the process. A
+/// failure keeps its cause: "no identity could be minted" is only actionable with
+/// the reason attached.
+pub trait SendEntropy {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable>;
+}
+
+/// The moment a send happened, likewise a capability. The unit reads it once and
+/// reports the same value it stored.
+pub trait SendClock {
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable>;
+}
+
+/// The environment could not answer. Not a refusal: the caller did nothing wrong,
+/// and nothing about the request would change the outcome.
+#[derive(Debug, thiserror::Error)]
+#[error("the environment this send depends on could not answer")]
+pub struct EnvironmentUnavailable {
+    #[source]
+    source: Box<dyn Error + Send + Sync + 'static>,
+}
+
+impl EnvironmentUnavailable {
+    pub fn from_source<E>(source: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        Self {
+            source: Box::new(source),
         }
     }
 }
@@ -196,13 +253,14 @@ pub struct ConversationFacts {
     pub is_closed: bool,
     pub is_archived: bool,
     /// Present only for a direct pair. The endpoints themselves, not a verdict
-    /// about them: a store that answered "read-only" would be a second authority
-    /// free to drift from this one.
+    /// about them: a verdict from the store would be a second authority, free to
+    /// drift from the one that answers the same question elsewhere.
     pub direct_pair: Option<DirectPairEndpoints>,
 }
 
-/// Why a write was refused. Each refusal carries the wire code it is identified
-/// by; choosing a status from it is the transport adapter's business.
+/// Why a write was refused, as the business reason and nothing else. How a reason
+/// is reported — status, code, wording, what an operator should do next — belongs
+/// to whichever boundary is speaking.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ConversationRefusal {
     #[error("conversation not found")]
@@ -215,17 +273,6 @@ pub enum ConversationRefusal {
     EndpointGone,
 }
 
-impl ConversationRefusal {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::NotFound => "conversation_not_found",
-            Self::Closed => "conversation_closed",
-            Self::Archived => "conversation_archived",
-            Self::EndpointGone => "conversation_endpoint_gone",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ActorRefusal {
     #[error("agent not found")]
@@ -236,25 +283,16 @@ pub enum ActorRefusal {
     UserNotParticipant,
 }
 
-impl ActorRefusal {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::AgentNotFound => "agent_not_found",
-            Self::AgentNotParticipant => "agent_not_participant_of_conversation",
-            Self::UserNotParticipant => "user_not_participant_of_conversation",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("target message not found in target conversation")]
 pub struct ReplyTargetRefusal;
 
-impl ReplyTargetRefusal {
-    pub fn code(&self) -> &'static str {
-        "reply_target_not_found"
-    }
-}
+/// The named root is not a reply cluster of the target conversation. Unknown, from
+/// another conversation, and "a reply, so not a root" are one answer: a sender
+/// naming a cluster it cannot use learns nothing about what exists.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("no reply cluster of this conversation is named by that root")]
+pub struct ThreadRootRefusal;
 
 /// An attachment reference the store would not accept. "Unknown" and "belongs to
 /// another conversation" are deliberately one answer, so a reference cannot be
@@ -268,13 +306,6 @@ pub enum AttachmentRefusal {
 }
 
 impl AttachmentRefusal {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::OutsideChannel { .. } => "attachment_outside_channel",
-            Self::LabelKindMismatch { .. } => "attachment_label_kind_mismatch",
-        }
-    }
-
     pub fn attachment_id(&self) -> &AttachmentId {
         match self {
             Self::OutsideChannel { attachment_id } | Self::LabelKindMismatch { attachment_id } => {
@@ -288,22 +319,15 @@ impl AttachmentRefusal {
 /// carries no message body, no ordinal and no count, because a stale answer must
 /// not become a side channel for content the caller has not been delivered.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[error(
-    "message is stale: this runtime has undelivered input it must consume before sending (drain it, or resend with --anyway)"
-)]
+#[error("this runtime has undelivered input it must consume before sending")]
 pub struct StaleRefusal {
     pub stale_event_id: freshness::StaleEventId,
     pub target_conversation_id: ConversationId,
 }
 
-impl StaleRefusal {
-    pub fn code(&self) -> &'static str {
-        "message_stale"
-    }
-}
-
-/// Everything that can stop a send. Concrete per family: a caller can act on the
-/// distinction, and no status code appears at this layer.
+/// Everything that can stop a send, concrete per family so a caller can act on the
+/// distinction. The last three are this system's own failures rather than answers
+/// about the request.
 #[derive(Debug, thiserror::Error)]
 pub enum SendMessageError {
     #[error(transparent)]
@@ -313,45 +337,33 @@ pub enum SendMessageError {
     #[error(transparent)]
     ReplyTarget(#[from] ReplyTargetRefusal),
     #[error(transparent)]
+    ThreadRoot(#[from] ThreadRootRefusal),
+    #[error(transparent)]
     Attachment(#[from] AttachmentRefusal),
     #[error(transparent)]
     Stale(#[from] StaleRefusal),
     #[error(transparent)]
     Invariant(#[from] freshness::FreshnessGuardInvariant),
     #[error(transparent)]
+    Environment(#[from] EnvironmentUnavailable),
+    #[error(transparent)]
     Persistence(#[from] PersistenceFailure),
-}
-
-impl SendMessageError {
-    /// The wire code identifying this refusal, or `None` when the send failed for
-    /// a reason the domain has no answer for: an infrastructure failure and a
-    /// violated invariant are both this system's fault, not a caller's, and
-    /// naming them would invite a caller to handle them.
-    pub fn code(&self) -> Option<&'static str> {
-        match self {
-            Self::Conversation(refusal) => Some(refusal.code()),
-            Self::Actor(refusal) => Some(refusal.code()),
-            Self::ReplyTarget(refusal) => Some(refusal.code()),
-            Self::Attachment(refusal) => Some(refusal.code()),
-            Self::Stale(refusal) => Some(refusal.code()),
-            Self::Invariant(_) | Self::Persistence(_) => None,
-        }
-    }
 }
 
 /// Where a send lands within its conversation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SendDestination {
     MainLine,
-    /// A reply cluster named directly, as an address already resolved against the
-    /// target conversation.
+    /// A reply cluster named by its root. The name is checked inside the atomic
+    /// unit: a resolved address is a coordinate, not a capability, so carrying it
+    /// here grants nothing.
     Thread(ThreadRootId),
-    /// A reply to one message. The cluster follows from that message, so it is
-    /// resolved inside the atomic unit.
+    /// A reply to one message. The cluster follows from that message.
     Reply(MessageId),
 }
 
-/// One create-message request, as the application states it.
+/// One create-message request, as the application states it. Every field is a
+/// value that has already satisfied its own invariant.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendMessage {
     /// The conversation the sender is bound to. It keys freshness — the sender's
@@ -359,7 +371,7 @@ pub struct SendMessage {
     pub source_conversation: ConversationId,
     pub target_conversation: ConversationId,
     pub actor: SendActor,
-    pub content: String,
+    pub content: MessageContent,
     pub destination: SendDestination,
     pub attachment_refs: Vec<attachments::AttachmentRef>,
     pub freshness_bypass: bool,
@@ -371,9 +383,8 @@ pub struct SendMessage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageCreatedFact {
     pub message: CreatedMessage,
-    /// Present only for a reply: absolute counts computed inside the atomic unit
-    /// so they already include the message being reported.
-    pub projections: Option<ThreadProjections>,
+    /// Present only for a reply.
+    pub thread: Option<ThreadReplyFact>,
     /// The guard was skipped at the sender's request. Carried for the post-commit
     /// record, not for the reply to the caller.
     pub freshness_bypassed: bool,
@@ -396,17 +407,20 @@ pub struct CreatedMessage {
     pub from_agent_id: Option<AgentId>,
     pub from_user_id: Option<UserId>,
     pub author: Option<MessageAuthor>,
-    pub content: String,
+    pub content: MessageContent,
     pub attachments: Vec<attachments::AttachmentSnapshot>,
     pub seq: MessageSeq,
     pub created_at_ms: i64,
     pub thread_root_id: Option<ThreadRootId>,
 }
 
-/// Reply-cluster absolutes. Viewer-invariant: they describe the cluster, not one
-/// reader's view of it.
+/// What a reply changed about its cluster: the absolute count of what participants
+/// said there, computed inside the atomic unit so it already includes this reply.
+///
+/// Not the whole of what a reply publishes — the cluster's list entry is a second
+/// projection and is not part of this fact yet.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ThreadProjections {
+pub struct ThreadReplyFact {
     pub thread_root_id: ThreadRootId,
     pub reply_count: i64,
 }
@@ -534,9 +548,12 @@ pub async fn assert_post_authority(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{
+        collections::HashSet,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
-    use super::*;
+    use super::{environment::OsEntropy, *};
 
     fn conversation() -> ConversationId {
         ConversationId::parse("conv-1").unwrap()
@@ -630,35 +647,67 @@ mod tests {
         SendActor::Agent(AgentId::parse("agent-1").unwrap())
     }
 
-    #[test]
-    fn the_content_cap_counts_utf8_bytes() {
-        let three_byte_chars = "汉".repeat(MAX_MESSAGE_CONTENT_BYTES / 3);
+    /// A unit of work that records whether it was ever asked to write.
+    #[derive(Default)]
+    struct CountingUnitOfWork {
+        calls: AtomicUsize,
+    }
 
-        assert_eq!(content_byte_length("汉"), 3);
-        assert!(!content_exceeds_limit(&three_byte_chars));
-        assert!(content_exceeds_limit(
-            &"汉".repeat(MAX_MESSAGE_CONTENT_BYTES)
-        ));
-        assert!(!content_exceeds_limit(
-            &"a".repeat(MAX_MESSAGE_CONTENT_BYTES)
-        ));
-        assert!(content_exceeds_limit(
-            &"a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1)
-        ));
+    impl SendMessageUnitOfWork for CountingUnitOfWork {
+        async fn send_message(
+            &self,
+            _command: SendMessage,
+        ) -> Result<MessageCreatedFact, SendMessageError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ConversationRefusal::NotFound.into())
+        }
     }
 
     #[test]
-    fn the_envelope_bound_is_separate_from_the_content_cap() {
-        assert_eq!(MAX_MESSAGE_CONTENT_BYTES, 65_536);
-        assert_eq!(MESSAGE_SEND_MAX_BODY_BYTES, 524_288);
+    fn the_content_bound_counts_utf8_bytes() {
+        let full = "汉".repeat(MAX_MESSAGE_CONTENT_BYTES / 3);
+
+        assert_eq!(MessageContent::parse("汉").unwrap().byte_length(), 3);
+        assert!(MessageContent::parse(&full).is_ok());
+        assert!(MessageContent::parse("a".repeat(MAX_MESSAGE_CONTENT_BYTES)).is_ok());
+        // Three bytes per character but one UTF-16 code unit: counting the wrong
+        // unit would admit three times the intended size.
+        let over = MessageContent::parse("汉".repeat(MAX_MESSAGE_CONTENT_BYTES)).unwrap_err();
+        assert_eq!(over.actual_bytes, MAX_MESSAGE_CONTENT_BYTES * 3);
+        assert_eq!(over.max_bytes, MAX_MESSAGE_CONTENT_BYTES);
+        assert!(MessageContent::parse("a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1)).is_err());
+    }
+
+    /// The counter-example for the size invariant: an oversized send cannot be
+    /// expressed, so no caller can carry one to the write unit.
+    #[tokio::test]
+    async fn oversized_content_never_reaches_the_write_unit() {
+        let unit = CountingUnitOfWork::default();
+        let oversized = "a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1);
+
+        if let Ok(content) = MessageContent::parse(&oversized) {
+            let _ = unit
+                .send_message(SendMessage {
+                    source_conversation: conversation(),
+                    target_conversation: conversation(),
+                    actor: agent(),
+                    content,
+                    destination: SendDestination::MainLine,
+                    attachment_refs: Vec::new(),
+                    freshness_bypass: false,
+                })
+                .await;
+        }
+
+        assert_eq!(unit.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
-    fn an_ordinal_is_reserved_by_the_store_and_validated_from_the_wire() {
-        assert_eq!(MessageSeq::reserved(7).get(), 7);
-        assert_eq!(MessageSeq::decode(0).unwrap().get(), 0);
-        assert!(MessageSeq::decode(-1).is_err());
-        assert!(MessageSeq::reserved(2) > MessageSeq::reserved(1));
+    fn an_ordinal_has_no_unchecked_constructor() {
+        assert_eq!(MessageSeq::try_from(7).unwrap().get(), 7);
+        assert_eq!(MessageSeq::try_from(0).unwrap().get(), 0);
+        assert_eq!(MessageSeq::try_from(-1).unwrap_err().value, -1);
+        assert!(MessageSeq::try_from(2).unwrap() > MessageSeq::try_from(1).unwrap());
     }
 
     #[test]
@@ -675,8 +724,8 @@ mod tests {
     /// per mint.
     #[test]
     fn a_minted_message_id_has_the_shape_clients_already_hold() {
-        let first = MessageId::mint().unwrap();
-        let second = MessageId::mint().unwrap();
+        let first = MessageId::mint(&OsEntropy).unwrap();
+        let second = MessageId::mint(&OsEntropy).unwrap();
 
         assert_ne!(first, second);
         assert_eq!(first.as_str().len(), 16);
@@ -687,6 +736,30 @@ mod tests {
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
             "minted id left the base64url alphabet: {}",
             first.as_str()
+        );
+    }
+
+    /// Entropy is a capability, so its failure is reportable with the reason
+    /// intact rather than collapsing into "could not mint".
+    #[test]
+    fn a_failing_entropy_source_keeps_its_cause() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("entropy device is offline")]
+        struct Offline;
+
+        struct Broken;
+
+        impl SendEntropy for Broken {
+            fn fill(&self, _buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+                Err(EnvironmentUnavailable::from_source(Offline))
+            }
+        }
+
+        let failure = MessageId::mint(&Broken).unwrap_err();
+
+        assert_eq!(
+            failure.source().unwrap().to_string(),
+            "entropy device is offline"
         );
     }
 
@@ -706,7 +779,10 @@ mod tests {
 
         // The actor is not a participant either; the lifecycle answer wins so a
         // closed conversation does not report who may write to it.
-        assert_eq!(error.code(), Some("conversation_closed"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::Closed)
+        ));
     }
 
     #[tokio::test]
@@ -723,7 +799,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_archived"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::Archived)
+        ));
     }
 
     #[tokio::test]
@@ -734,7 +813,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_not_found"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::NotFound)
+        ));
     }
 
     #[tokio::test]
@@ -749,20 +831,18 @@ mod tests {
             ..FakeReads::default()
         };
 
-        assert_eq!(
+        assert!(matches!(
             assert_post_authority(&mut unknown, &conversation(), &agent())
                 .await
-                .unwrap_err()
-                .code(),
-            Some("agent_not_found")
-        );
-        assert_eq!(
+                .unwrap_err(),
+            SendMessageError::Actor(ActorRefusal::AgentNotFound)
+        ));
+        assert!(matches!(
             assert_post_authority(&mut known_but_outside, &conversation(), &agent())
                 .await
-                .unwrap_err()
-                .code(),
-            Some("agent_not_participant_of_conversation")
-        );
+                .unwrap_err(),
+            SendMessageError::Actor(ActorRefusal::AgentNotParticipant)
+        ));
     }
 
     #[tokio::test]
@@ -780,7 +860,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(error.code(), Some("user_not_participant_of_conversation"));
+        assert!(matches!(
+            error,
+            SendMessageError::Actor(ActorRefusal::UserNotParticipant)
+        ));
     }
 
     #[tokio::test]
@@ -799,7 +882,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_endpoint_gone"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::EndpointGone)
+        ));
     }
 
     /// A pair can outlive its peer's row without ever being stamped, so absence
@@ -819,7 +905,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_endpoint_gone"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::EndpointGone)
+        ));
     }
 
     #[tokio::test]
@@ -850,36 +939,27 @@ mod tests {
         assert_eq!(facts.id, conversation());
     }
 
+    /// Infrastructure failure keeps its cause and stays distinguishable from a
+    /// refusal: nothing about the request would have changed the outcome.
     #[test]
-    fn an_infrastructure_failure_publishes_no_domain_code() {
+    fn an_infrastructure_failure_is_not_a_refusal() {
         #[derive(Debug, thiserror::Error)]
         #[error("driver refused the statement")]
         struct Driver;
 
         let error = SendMessageError::from(PersistenceFailure::from_source(Driver));
 
-        assert_eq!(error.code(), None);
-    }
-
-    /// An undeterminable freshness scope is this system's fault, so it carries no
-    /// code a caller could branch on.
-    #[test]
-    fn a_violated_invariant_publishes_no_domain_code() {
-        let error = SendMessageError::from(freshness::FreshnessGuardInvariant::AgentAbsent {
-            agent: AgentId::parse("agent-1").unwrap(),
-        });
-
-        assert_eq!(error.code(), None);
+        assert!(matches!(error, SendMessageError::Persistence(_)));
     }
 
     #[test]
     fn a_stale_refusal_carries_signal_metadata_only() {
         let refusal = StaleRefusal {
-            stale_event_id: freshness::StaleEventId::mint().unwrap(),
+            stale_event_id: freshness::StaleEventId::mint(&OsEntropy).unwrap(),
             target_conversation_id: conversation(),
         };
 
-        assert_eq!(refusal.code(), "message_stale");
+        assert_eq!(refusal.target_conversation_id, conversation());
         assert!(refusal.to_string().contains("undelivered input"));
     }
 
@@ -889,7 +969,6 @@ mod tests {
             attachment_id: AttachmentId::parse("att-1").unwrap(),
         };
 
-        assert_eq!(refusal.code(), "attachment_outside_channel");
         assert_eq!(refusal.attachment_id().as_str(), "att-1");
     }
 }

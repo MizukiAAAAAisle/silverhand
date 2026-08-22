@@ -5,7 +5,7 @@
 //! has no runtime and therefore no consumption position to be behind, so a human
 //! send never meets this guard.
 
-use super::{AgentId, EntropyUnavailable, SendActor};
+use super::{AgentId, EnvironmentUnavailable, SendActor, SendEntropy};
 
 /// The delivery scope a runtime's freshness is judged in. It is the agent's own
 /// declared session scope, not a property of the send.
@@ -65,9 +65,9 @@ pub enum FreshnessGuardInvariant {
 pub struct StaleEventId(String);
 
 impl StaleEventId {
-    pub fn mint() -> Result<Self, EntropyUnavailable> {
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
         let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|_| EntropyUnavailable)?;
+        entropy.fill(&mut bytes)?;
         // Version 4, variant 1: the shape consumers already parse.
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -90,7 +90,7 @@ impl StaleEventId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging::UserId;
+    use crate::messaging::{UserId, environment::OsEntropy};
 
     fn agent() -> AgentId {
         AgentId::parse("agent-1").unwrap()
@@ -129,8 +129,8 @@ mod tests {
 
     #[test]
     fn a_stale_event_id_is_a_distinct_version_4_identity() {
-        let first = StaleEventId::mint().unwrap();
-        let second = StaleEventId::mint().unwrap();
+        let first = StaleEventId::mint(&OsEntropy).unwrap();
+        let second = StaleEventId::mint(&OsEntropy).unwrap();
 
         assert_ne!(first, second);
         assert_eq!(first.as_str().len(), 36);
