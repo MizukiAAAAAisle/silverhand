@@ -5,6 +5,7 @@ import {
   Brain,
   CheckCircle2,
   ChevronUp,
+  CornerDownLeft,
   Hourglass,
   History,
   Inbox,
@@ -245,7 +246,10 @@ function visualForKind(kind: ConversationEventKind): KindVisual {
     case 'tool_call':
       return { Icon: Wrench, tone: 'neutral' };
     case 'tool_output':
-      return { Icon: CheckCircle2, tone: 'muted' };
+      // Orphan only (folded outputs never reach EventRow). A neutral "returned"
+      // glyph, NOT a check — the verdict rides a per-outcome trailing mark so a
+      // failed orphan never leads with a success icon.
+      return { Icon: CornerDownLeft, tone: 'muted' };
     case 'shell':
       return { Icon: Terminal, tone: 'neutral' };
     case 'error':
@@ -467,12 +471,18 @@ function EventRow({
 
   let title: React.ReactNode;
   if (kind === 'tool_output') {
-    // Orphan output (its tool_call paged out): the marker-only body carries no
-    // info, so keep it to one light line — the noisy "output not stored" badge
-    // is gone (correlated outputs fold into their call as a ✓).
+    // Orphan output (its tool_call paged out by retention): a one-line marker.
+    // This row is the only surviving record of that call's verdict, so the
+    // outcome rides the same mark a folded call uses — a failed/cancelled orphan
+    // reads honestly, never as a neutral "returned". Missing/unknown → completed.
     const name = str(payload, 'name');
+    const oc = outcome ?? 'completed';
+    const verb = oc === 'failed' ? 'failed' : oc === 'cancelled' ? 'cancelled' : 'returned';
     title = (
-      <span className="text-text-muted">{name ? `${name} returned` : 'returned'}</span>
+      <span className={oc === 'failed' ? 'text-error' : 'text-text-muted'}>
+        {name ? `${name} ${verb}` : verb}
+        <ToolOutcomeMark outcome={oc} />
+      </span>
     );
   } else if (kind === 'error' || kind === 'stderr') {
     title = (

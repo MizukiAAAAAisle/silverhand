@@ -560,9 +560,12 @@ export function coalesceActivity(
 
     if (e.kind === 'tool_output') {
       const id = callIdOf(e);
-      // Folded into its tool_call → drop. Orphan → fall through to a light row.
+      // Folded into its tool_call → drop. Orphan (its call paged out by
+      // retention) → light row that still carries the verdict: a failed/cancelled
+      // orphan is the only surviving record of that outcome, so it must not
+      // render as a neutral success.
       if (id !== null && callIds.has(id)) continue;
-      out.push({ type: 'event', key: String(e.id), event: e });
+      out.push({ type: 'event', key: String(e.id), event: e, outcome: outcomeOf(e) });
       continue;
     }
 

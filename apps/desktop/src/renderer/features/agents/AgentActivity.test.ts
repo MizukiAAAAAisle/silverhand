@@ -343,6 +343,23 @@ describe('coalesceActivity', () => {
     expect(item.type === 'event' && item.event.kind).toBe('tool_output');
   });
 
+  it('carries the normalized outcome onto an orphan tool_output (4-cell matrix)', () => {
+    // A retention/pagination orphan is the ONLY surviving record of the call's
+    // verdict, so each outcome must ride through honestly — a failed orphan must
+    // never collapse to a neutral success. Unknown/missing degrades to completed.
+    const cell = (payload: Record<string, unknown>) => {
+      const items = coalesceActivity([ev(1, { kind: 'tool_output', payload })]);
+      const item = items[0]!;
+      return item.type === 'event' ? item.outcome : undefined;
+    };
+    expect(cell({ name: 'shell', outcome: 'success' })).toBe('success');
+    expect(cell({ name: 'shell', outcome: 'failed' })).toBe('failed');
+    expect(cell({ name: 'shell', outcome: 'cancelled' })).toBe('cancelled');
+    expect(cell({ name: 'shell', outcome: 'completed' })).toBe('completed');
+    // no outcome on the row (historical no-id Codex output) → neutral completed
+    expect(cell({ name: 'shell' })).toBe('completed');
+  });
+
   it('folds compaction_finished into its compaction_started (loading → done)', () => {
     const items = coalesceActivity([
       ev(1, { kind: 'compaction_started' }),
