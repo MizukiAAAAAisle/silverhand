@@ -270,6 +270,18 @@ describe('presentToolCall', () => {
     expect(createSuffix.arg).toBeNull();
   });
 
+  it('reads task status as an update only when it writes a status (#task:2149)', () => {
+    // A `--status` write reads as "Task update"; a bare `task status` (a help/read,
+    // e.g. `--help`) is not a mutation and stays "Task status" rather than posing
+    // as one. Outcome, not verb spelling, still carries success/failure.
+    expect(
+      presentToolCall('Bash', { command: 'silverhand task status 42 --status done' }).verb,
+    ).toBe('Task update');
+    const help = presentToolCall('Bash', { command: 'silverhand task status --help' });
+    expect(help.verb).toBe('Task status');
+    expect(help.arg).toBeNull();
+  });
+
   it('does NOT mislabel a quoted "silverhand …" argument as a real action', () => {
     // silverhand only counts at command position — a search/echo argument that
     // merely contains the string must stay Bash/Shell (no fabricated action).

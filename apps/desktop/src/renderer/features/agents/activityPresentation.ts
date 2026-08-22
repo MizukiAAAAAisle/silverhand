@@ -236,8 +236,11 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
   const { noun, verb: verbTok, args } = found;
   const cap = noun.charAt(0).toUpperCase() + noun.slice(1);
   let label = verbTok ? `${cap} ${verbTok.replace(/-/g, ' ')}` : cap;
-  // One product-flavoured override (shiki/Cindy #task:1187): `task status`
-  // mutates a task's status → reads as "Task update".
+  // One product-flavoured override (shiki/Cindy #task:1187, #task:2149): a
+  // `task status --status <s>` writes a task's status → reads as "Task update".
+  // A `task status` with no `--status` is a help/read, not a mutation, and keeps
+  // the plain "Task status" label rather than posing as one — so the override is
+  // applied below, once `--status` is known.
   //
   // `message send` used to get a `Message send stale` label here when its args
   // contained `--stale-resolution` / `--anyway`. That is DELETED (#task:2099):
@@ -249,7 +252,6 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
   // `Message send`; the `message_stale` activity row is the only producer of the
   // stale label. `message stale-receive` / `stale-resolve` keep their ordinary
   // labels here — they are real CLI actions, not evidence a 409 happened.
-  if (noun === 'task' && verbTok === 'status') label = 'Task update';
 
   // Task actions carry their target id + status change as secondary metadata.
   // The number comes from the retired `--task-number` flag OR the new
@@ -261,6 +263,7 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
     const num = taskNumberFromCommand(verbTok, args);
     const status =
       verbTok === 'status' ? (/--status[=\s]+([a-z_]+)/.exec(args)?.[1] ?? null) : null;
+    if (verbTok === 'status' && status) label = 'Task update';
     if (num && status) arg = `#${num} → ${status}`;
     else if (num) arg = `#${num}`;
     else if (status) arg = `→ ${status}`;
