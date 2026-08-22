@@ -65,15 +65,63 @@ export const HTML_PREVIEW_CSP = [
   "child-src 'none'",
 ].join('; ');
 
+/**
+ * The trackpad-pinch bridge (#task:2161). The preview lives in an opaque-origin
+ * iframe, so a `ctrl+wheel` pinch fires INSIDE the frame and never reaches the
+ * host — the image Lightbox's host-side wheel listener cannot see it. This tiny
+ * TRUSTED script (host-authored, never author bytes; governed by the CSP above)
+ * is the only path to a preview-scoped pinch: it forwards the pinch's `deltaY`
+ * to the parent and nothing else. It carries NO DOM, size, URL, or author body;
+ * the parent applies the zoom (`AttachmentHtmlPreview` validates source/shape,
+ * clamps, and coalesces). `preventDefault` fires only for a pinch, so ordinary
+ * two-finger scroll still scrolls the author page. It sits in body position
+ * after the policy, so the "nothing active precedes the CSP" invariant holds.
+ */
+export const HTML_PREVIEW_PINCH_TYPE = 'silverhand:html-preview:pinch';
+export const HTML_PREVIEW_PINCH_VERSION = 1;
+/** A single wheel event's `deltaY` is clamped to this before it can move scale,
+ *  so a spoofed or flooded value cannot jump the zoom. */
+export const HTML_PREVIEW_PINCH_MAX_DELTA = 100;
+
+const HTML_PREVIEW_PINCH_BRIDGE =
+  `<script>(function(){`
+  + `var T=${JSON.stringify(HTML_PREVIEW_PINCH_TYPE)},V=${HTML_PREVIEW_PINCH_VERSION};`
+  + `window.addEventListener('wheel',function(e){`
+  + `if(!e.ctrlKey)return;`
+  + `e.preventDefault();`
+  + `parent.postMessage({type:T,version:V,deltaY:e.deltaY},'*');`
+  + `},{capture:true,passive:false});`
+  + `})();</script>`;
+
 /** The fixed, author-independent document head — charset first (so UTF-8 is
  *  fixed before the author body parses), then the policy. Nothing here derives
- *  from author bytes, so no input can place an active element before it. */
+ *  from author bytes, so no input can place an active element before it. The
+ *  trusted pinch bridge sits in body position, strictly after the policy. */
 export const HTML_PREVIEW_TRUSTED_PREFIX =
   `<!DOCTYPE html><html><head><meta charset="utf-8">`
   + `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`
-  + `</head><body>`;
+  + `</head><body>${HTML_PREVIEW_PINCH_BRIDGE}`;
 
 const TRUSTED_SUFFIX = `</body></html>`;
+
+/**
+ * Read a pinch `deltaY` out of a `postMessage` payload, or `null` if it is not a
+ * well-formed pinch message from our bridge. The caller must ALSO check
+ * `event.source === iframe.contentWindow` — this validates only the shape:
+ * fixed type + version and a finite `deltaY`, clamped to `±MAX_DELTA`. An author
+ * script on the opaque origin can forge this shape, but the only effect is a
+ * visible, revocable zoom of its own preview.
+ */
+export function readPinchDelta(data: unknown): number | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const msg = data as Record<string, unknown>;
+  if (msg.type !== HTML_PREVIEW_PINCH_TYPE || msg.version !== HTML_PREVIEW_PINCH_VERSION) {
+    return null;
+  }
+  const deltaY = msg.deltaY;
+  if (typeof deltaY !== 'number' || !Number.isFinite(deltaY)) return null;
+  return Math.max(-HTML_PREVIEW_PINCH_MAX_DELTA, Math.min(HTML_PREVIEW_PINCH_MAX_DELTA, deltaY));
+}
 
 /**
  * The `srcDoc` for the preview iframe: the author's HTML wrapped VERBATIM inside

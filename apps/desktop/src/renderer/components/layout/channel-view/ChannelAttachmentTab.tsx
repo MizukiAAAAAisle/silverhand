@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Download, ExternalLink } from 'lucide-react';
+import { Download, ExternalLink, ZoomIn, ZoomOut } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { fetchAttachmentBytes } from '@/lib/api';
 import { useAttachmentBlobToken } from '@/lib/attachment-blob-cache';
 import { attachmentPreviewKind } from '@/lib/attachment-preview';
+import { usePinchZoomLease } from '@/lib/pinch-zoom-lease';
 import { toastIcon } from '@/lib/toast-icons';
 import { Markdown } from '@/components/chat/Markdown';
 import { AttachmentHtmlPreview } from '@/components/chat/AttachmentHtmlPreview';
@@ -40,6 +41,15 @@ type LoadState =
   | { status: 'ready'; text: string; contentType: string }
   | { status: 'error'; message: string };
 
+// Continuous host zoom for the HTML preview. Min below 100% so a fixed-size
+// author page can shrink into the pane; the slider/pinch move it continuously,
+// the buttons and keyboard step it by a fixed multiplier.
+const HTML_ZOOM_MIN = 0.25;
+const HTML_ZOOM_MAX = 2;
+const HTML_ZOOM_STEP = 1.25;
+const clampHtmlZoom = (value: number): number =>
+  Math.min(HTML_ZOOM_MAX, Math.max(HTML_ZOOM_MIN, value));
+
 export function ChannelAttachmentTab({
   attachmentId,
   filename,
@@ -48,7 +58,22 @@ export function ChannelAttachmentTab({
   const token = useAttachmentBlobToken(attachmentId);
   const revision = Number(token.split(':')[1] ?? 0);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [htmlZoom, setHtmlZoom] = useState(1);
   const shownRef = useRef<{ attachmentId: string; revision: number } | null>(null);
+
+  const zoomTo = useCallback((raw: number): void => {
+    setHtmlZoom(clampHtmlZoom(raw));
+  }, []);
+
+  // Trackpad pinch arrives as a merged `deltaY`; the exponential maps it to a
+  // multiplicative factor (pinch-out shrinks deltaY negative → factor > 1).
+  const onPinch = useCallback((deltaY: number): void => {
+    setHtmlZoom(current => clampHtmlZoom(current * Math.exp(-deltaY / 100)));
+  }, []);
+
+  useEffect(() => {
+    setHtmlZoom(1);
+  }, [attachmentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,12 +116,65 @@ export function ChannelAttachmentTab({
     };
   }, [attachmentId, token]);
 
+  const readyKind =
+    state.status === 'ready'
+      ? attachmentPreviewKind(state.contentType || contentType, filename)
+      : null;
+  const atMinZoom = htmlZoom <= HTML_ZOOM_MIN + 1e-3;
+  const atMaxZoom = htmlZoom >= HTML_ZOOM_MAX - 1e-3;
+  usePinchZoomLease(readyKind === 'html');
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-base">
       <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-2">
         <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={filename}>
           {filename}
         </span>
+        {readyKind === 'html' ? (
+          <div className="flex shrink-0 items-center gap-1.5" role="group" aria-label="Zoom">
+            <button
+              type="button"
+              data-sticker
+              data-sticker-size="md"
+              data-sticker-tone="neutral"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
+              onClick={() => zoomTo(htmlZoom / HTML_ZOOM_STEP)}
+              disabled={atMinZoom}
+              aria-label="Zoom out"
+              title="Zoom out"
+            >
+              <ZoomOut className="size-3.5" />
+            </button>
+            <input
+              type="range"
+              data-settings-slider
+              className="settings-font-size-slider w-24"
+              min={HTML_ZOOM_MIN * 100}
+              max={HTML_ZOOM_MAX * 100}
+              step="any"
+              value={htmlZoom * 100}
+              aria-label="Zoom level"
+              onChange={e => zoomTo(Number(e.target.value) / 100)}
+            />
+            <button
+              type="button"
+              data-sticker
+              data-sticker-size="md"
+              data-sticker-tone="neutral"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
+              onClick={() => zoomTo(htmlZoom * HTML_ZOOM_STEP)}
+              disabled={atMaxZoom}
+              aria-label="Zoom in"
+              title="Zoom in"
+            >
+              <ZoomIn className="size-3.5" />
+            </button>
+            <span className="min-w-[2.75rem] text-center text-xs tabular-nums text-text-secondary">
+              <span className="sr-only">Zoom </span>
+              {Math.round(htmlZoom * 100)}%
+            </span>
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={() => void openAttachmentExternally({ id: attachmentId, filename })}
@@ -126,6 +204,8 @@ export function ChannelAttachmentTab({
         state={state}
         filename={filename}
         fallbackContentType={contentType}
+        htmlZoom={htmlZoom}
+        onPinch={onPinch}
       />
     </div>
   );
@@ -135,10 +215,14 @@ function AttachmentTabBody({
   state,
   filename,
   fallbackContentType,
+  htmlZoom,
+  onPinch,
 }: {
   state: LoadState;
   filename: string;
   fallbackContentType: string;
+  htmlZoom: number;
+  onPinch: (deltaY: number) => void;
 }): JSX.Element {
   if (state.status === 'loading') {
     return <TabStatus>Loading…</TabStatus>;
@@ -150,7 +234,7 @@ function AttachmentTabBody({
   if (kind === 'html') {
     return (
       <div className="min-h-0 flex-1">
-        <AttachmentHtmlPreview html={state.text} title={filename} />
+        <AttachmentHtmlPreview html={state.text} title={filename} zoom={htmlZoom} onPinch={onPinch} />
       </div>
     );
   }

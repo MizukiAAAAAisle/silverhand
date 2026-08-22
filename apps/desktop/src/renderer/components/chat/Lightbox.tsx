@@ -4,6 +4,7 @@ import { Download, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { neutralAction } from '@/features/common/ControlInkBorder';
+import { usePinchZoomLease } from '@/lib/pinch-zoom-lease';
 import { SelectionActionButton } from './SelectionToolbar';
 
 interface LightboxProps {
@@ -240,13 +241,9 @@ export function Lightbox({
   // Enable trackpad pinch only while open (preload `setPinchZoom` →
   // `webFrame.setVisualZoomLevelLimits`). macOS Electron disables pinch by
   // default, and a disabled pinch is never dispatched to the page as
-  // `ctrl+wheel` at all. Restore on close. Optional-chained so a renderer on
-  // a not-yet-restarted preload can't throw.
-  useEffect(() => {
-    if (!open) return;
-    window.silverhand.setPinchZoom?.(true);
-    return () => window.silverhand.setPinchZoom?.(false);
-  }, [open]);
+  // `ctrl+wheel` at all. Refcounted so a peer previewer mounted underneath
+  // keeps pinch alive when this one closes.
+  usePinchZoomLease(open);
 
   // Drag-to-pan: when the image overflows the well, grabbing it scrolls the
   // well (the hand-tool idiom), complementing native scroll. Capture the

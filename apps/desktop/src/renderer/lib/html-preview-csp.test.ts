@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   HTML_PREVIEW_CSP,
+  HTML_PREVIEW_PINCH_MAX_DELTA,
+  HTML_PREVIEW_PINCH_TYPE,
+  HTML_PREVIEW_PINCH_VERSION,
   HTML_PREVIEW_TRUSTED_PREFIX,
   htmlPreviewSrcDoc,
+  readPinchDelta,
 } from './html-preview-csp';
 
 describe('htmlPreviewSrcDoc', () => {
@@ -47,6 +51,43 @@ describe('htmlPreviewSrcDoc', () => {
     expect(HTML_PREVIEW_CSP).toContain("object-src 'none'");
     expect(HTML_PREVIEW_CSP).toContain("frame-src 'none'");
     expect(HTML_PREVIEW_CSP).toContain("child-src 'none'");
+  });
+});
+
+describe('readPinchDelta', () => {
+  const ok = (deltaY: number): unknown => ({
+    type: HTML_PREVIEW_PINCH_TYPE,
+    version: HTML_PREVIEW_PINCH_VERSION,
+    deltaY,
+  });
+
+  it('reads a well-formed pinch payload', () => {
+    expect(readPinchDelta(ok(-40))).toBe(-40);
+    expect(readPinchDelta(ok(12.5))).toBe(12.5);
+  });
+
+  it('clamps the delta to ±MAX so a flooded value cannot jump scale', () => {
+    expect(readPinchDelta(ok(9999))).toBe(HTML_PREVIEW_PINCH_MAX_DELTA);
+    expect(readPinchDelta(ok(-9999))).toBe(-HTML_PREVIEW_PINCH_MAX_DELTA);
+  });
+
+  it('rejects a wrong or missing type / version', () => {
+    expect(readPinchDelta({ ...(ok(5) as object), type: 'other' })).toBeNull();
+    expect(readPinchDelta({ ...(ok(5) as object), version: 2 })).toBeNull();
+    expect(readPinchDelta({ version: HTML_PREVIEW_PINCH_VERSION, deltaY: 5 })).toBeNull();
+  });
+
+  it('rejects a non-finite or non-number delta', () => {
+    expect(readPinchDelta(ok(Number.NaN))).toBeNull();
+    expect(readPinchDelta(ok(Number.POSITIVE_INFINITY))).toBeNull();
+    expect(readPinchDelta({ ...(ok(0) as object), deltaY: '5' })).toBeNull();
+  });
+
+  it('rejects non-object payloads', () => {
+    expect(readPinchDelta(null)).toBeNull();
+    expect(readPinchDelta(undefined)).toBeNull();
+    expect(readPinchDelta('silverhand:html-preview:pinch')).toBeNull();
+    expect(readPinchDelta(42)).toBeNull();
   });
 });
 

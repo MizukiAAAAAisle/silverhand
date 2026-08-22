@@ -3,6 +3,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { neutralAction } from '@/features/common/ControlInkBorder';
+import { usePinchZoomLease } from '@/lib/pinch-zoom-lease';
 
 interface MermaidLightboxProps {
   open: boolean;
@@ -115,12 +116,9 @@ export function MermaidLightbox({
   );
 
   // Enable trackpad pinch only while open (macOS Electron disables it by
-  // default, so `ctrl+wheel` is never dispatched otherwise). Restore on close.
-  useEffect(() => {
-    if (!open) return;
-    window.silverhand.setPinchZoom?.(true);
-    return () => window.silverhand.setPinchZoom?.(false);
-  }, [open]);
+  // default, so `ctrl+wheel` is never dispatched otherwise). Refcounted so a
+  // peer previewer mounted underneath keeps pinch alive when this one closes.
+  usePinchZoomLease(open);
 
   // Drag-to-pan: when the diagram overflows the well, grabbing it scrolls the
   // well (the hand-tool idiom). Capture the pointer so a drag that leaves the
