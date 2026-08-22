@@ -124,17 +124,20 @@ async fn drive_event_socket(mut socket: WebSocket, mut events: broadcast::Receiv
     }
 }
 
+/// The only place a status code is chosen. Inner layers carry causes, not codes.
 #[derive(Debug)]
 enum AppError {
     InvalidMessage,
-    Persistence,
+    /// The cause is retained so the boundary can log the whole chain. It is
+    /// never rendered into the response body.
+    Persistence(CreateMessageError),
 }
 
 impl From<CreateMessageError> for AppError {
     fn from(value: CreateMessageError) -> Self {
         match value {
             CreateMessageError::InvalidBody => Self::InvalidMessage,
-            CreateMessageError::Persistence(_) => Self::Persistence,
+            persistence @ CreateMessageError::Persistence(_) => Self::Persistence(persistence),
         }
     }
 }
@@ -147,11 +150,19 @@ impl IntoResponse for AppError {
                 Json(serde_json::json!({"error": "body must contain 1..=10000 characters"})),
             )
                 .into_response(),
-            Self::Persistence => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "internal server error"})),
-            )
-                .into_response(),
+            Self::Persistence(cause) => {
+                // Exactly one log for one refusal, carrying every layer down to
+                // the driver message.
+                tracing::error!(
+                    error_chain = %crate::infra::error::describe(&cause),
+                    "request failed at the persistence boundary"
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "internal server error"})),
+                )
+                    .into_response()
+            }
         }
     }
 }

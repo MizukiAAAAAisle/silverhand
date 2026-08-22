@@ -14,7 +14,7 @@ Use the following pinned foundation for the first Rust backend slice:
 | Concern | Selected version | Decision |
 | --- | --- | --- |
 | Async runtime / HTTP / WebSocket | Tokio `1.53.1`, Axum `0.8.9` | One Tokio/Tower service model; Axum owns HTTP and WebSocket upgrade. |
-| SQLite / pool / migrations | SQLx `0.9.0` with Tokio, SQLite, macros and migrations only | Bundled SQLite, explicit WAL/foreign-key/synchronous/busy-timeout configuration, bounded pool and transactional migrations. `NORMAL` is an experiment, not the selected foundation durability policy. |
+| SQLite / pool / migrations | SQLx `0.9.0` with Tokio, SQLite, macros and migrations only | Bundled SQLite, explicit WAL/foreign-key/synchronous/busy-timeout configuration, bounded pool and transactional migrations. `NORMAL` was this spike's experiment; the decided policy is `FULL` (see note 4). |
 | HTTP middleware / observability | tower-http `0.7.0`, tracing `0.1.44`, tracing-subscriber `0.3.23` | Shared structured spans, JSON logs and runtime filtering. |
 | Rust-to-TypeScript wire types | ts-rs `12.0.1` | Narrow explicit export manifest and checked-in deterministic generated artifacts. |
 | WebSocket test client | tokio-tungstenite `0.30.0` | Protocol test dependency only; no second server stack. |
@@ -58,7 +58,7 @@ growing without limit.
 | --- | --- | --- |
 | HTTP write, committed event and WebSocket payload agree | `tests/vertical_slice.rs` starts a real TCP server and client | Passed |
 | Message and durable event are atomic | SQLite trigger forces event failure; row count remains zero | Passed |
-| SQLite runtime configuration is effective on every pooled connection | Adapter test holds four connections and reads PRAGMAs | `foreign_keys=1`, `journal_mode=wal`, `synchronous=1`, `busy_timeout=5000` |
+| SQLite runtime configuration is effective on every pooled connection | Adapter test holds four connections and reads PRAGMAs | `foreign_keys=1`, `journal_mode=wal`, `synchronous=2` (`FULL` since #task:2166; measured as `1`/`NORMAL` in this spike), `busy_timeout=5000` |
 | Root write reserves the writer before its first write | tx1 executes `BEGIN IMMEDIATE` with zero writes; tx2 uses a 25 ms busy timeout | tx2 fails at begin with `SQLITE_BUSY` |
 | Nested root immediate cannot silently become a savepoint | call SQLx `begin_with("BEGIN IMMEDIATE")` at non-zero transaction depth | explicit `InvalidSavePointStatement` |
 | Fanout is bounded and lag visible | Broadcast capacity-one test | `Lagged(1)` and close code `1013` |
@@ -161,13 +161,21 @@ need the same transaction and no durable event authority already exists.
 2. SQLx SQLite migration locking is a no-op. Concurrent process migration
    startup is unsupported until one named owner or an external serialization
    protocol is proved.
+   **Narrowed in #task:2166:** shiki confirmed ECS always deploys with the
+   service stopped — stop, migrate in a single process, then start — so this
+   no-op is not a gap there, and no general cross-process migrator lock is
+   required. What remains is a deployment constraint: a single migrator owner is
+   guaranteed by that ordering.
 3. SQLite remains single-writer. Four pooled connections bound resources and
    improve reads; they do not create parallel write capacity. The five-second
    busy timeout is a visible failure boundary, not a retry policy.
-4. `synchronous=NORMAL` is only an experimental value proving SQLx configuration
+4. `synchronous=NORMAL` was only an experimental value proving SQLx configuration
    and observation. It can lose a recently acknowledged transaction on power
-   loss/hard reset. The foundation must not inherit it; shiki must explicitly
-   choose the product durability/acknowledgement policy before migration.
+   loss/hard reset, so the foundation was told not to inherit it.
+   **Superseded in #task:2166:** shiki decided the policy — the adapter now runs
+   `synchronous=FULL`, matching the TypeScript backend, which never sets the
+   pragma and therefore already runs on SQLite's `FULL` default. This entry is
+   kept as the record of what was measured here, not as the current value.
 5. ts-rs proves static TypeScript shape only. Runtime validation remains
    provisional: retain existing Zod and add accepted/rejected fixture parity,
    or separately prove a generated validator chain before deleting it.

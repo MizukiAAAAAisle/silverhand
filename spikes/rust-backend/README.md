@@ -23,7 +23,7 @@ Use this combination for the first real Rust backend foundation:
 | Concern | Choice and pinned spike version | Why |
 | --- | --- | --- |
 | Runtime / HTTP | Tokio `1.53.1` + Axum `0.8.9` | One Tokio/Tower/Hyper service model, macro-free routing, built-in WebSocket upgrade, and reusable Tower middleware. |
-| SQLite / pool / migrations | SQLx `0.9.0` with only Tokio + SQLite + migration/macro features | One adapter owns async connection scheduling, a bounded pool, transactions, and embedded migrations. The slice explicitly configures and observes WAL, foreign keys, an experimental `NORMAL` sync setting, a 5 s busy timeout, and four connections. The foundation must not inherit `NORMAL` until durability policy is decided. |
+| SQLite / pool / migrations | SQLx `0.9.0` with only Tokio + SQLite + migration/macro features | One adapter owns async connection scheduling, a bounded pool, transactions, and embedded migrations. The slice explicitly configures and observes WAL, foreign keys, `synchronous=FULL` (shiki's durability decision in #task:2166, replacing the `NORMAL` first experimented with here), a 5 s busy timeout, and four connections. |
 | WebSocket | Axum's `ws` server; `tokio-tungstenite 0.30.0` as test client | No second server framework. The server fanout is bounded; lag becomes a visible close (`1013`) instead of unbounded memory growth. |
 | Tracing | `tracing 0.1.44`, `tracing-subscriber 0.3.23`, `tower-http 0.7.0` | Contextual spans, JSON output, runtime `RUST_LOG` filtering, and HTTP middleware use the same instrumentation model. |
 | Rust -> TypeScript | `ts-rs 12.0.1` | Stable, focused derivation with Serde-name compatibility and deterministic checked-in output. |
@@ -236,18 +236,18 @@ savepoint-based nesting remain valid, separately named semantics.
 ### 1. SQLite configuration and write concurrency
 
 The pool test holds all four connections simultaneously and reads their actual
-PRAGMAs. Each has `foreign_keys=1`, `journal_mode=wal`, `synchronous=1` (`NORMAL`),
+PRAGMAs. Each has `foreign_keys=1`, `journal_mode=wal`, `synchronous=2` (`FULL`),
 and `busy_timeout=5000`. The bundled runtime is at least SQLite `3.51.3`, which
 contains the 2026 WAL-reset race fix called out by SQLite's WAL documentation.
 
 WAL allows readers and one writer to overlap; it still permits only one writer
-at a time and requires every process to be on the same host. The spike uses
-`NORMAL` only to prove SQLx can explicitly configure and observe the setting.
-`NORMAL` avoids an fsync on each commit, so a power loss/hard reset may roll
-back a recently acknowledged transaction even though process-crash atomicity
-remains. The real foundation **must not inherit this experiment**; shiki must
-choose the product durability policy (for example, whether the acknowledgement
-contract requires `FULL`) before migration. After 5 seconds of writer
+at a time and requires every process to be on the same host. The adapter runs
+`synchronous=FULL`. That is shiki's durability decision (#task:2166), replacing
+the `NORMAL` this spike originally experimented with: `NORMAL` skips an fsync at
+commit, so a power loss or hard reset can roll back a recently acknowledged
+transaction. The TypeScript backend never sets this pragma and therefore already
+runs on SQLite's `FULL` default, so inheriting `NORMAL` would have been a
+durability regression rather than a neutral default. After 5 seconds of writer
 contention the operation fails; no handler may turn that into an unbounded
 retry loop.
 

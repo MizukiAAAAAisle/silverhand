@@ -1,16 +1,33 @@
 use std::{path::Path, time::Duration};
 
 use sqlx::{
-    SqlitePool,
+    Row, Sqlite, SqlitePool, Transaction,
     migrate::MigrateError,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use thiserror::Error;
 
-use crate::application::{Message, MessageCreatedFact, MessageUnitOfWork, PersistenceFailure};
+use crate::application::{
+    Message, MessageCreatedFact, MessagePageFact, MessageReadUnitOfWork, MessageUnitOfWork,
+    PersistenceFailure,
+};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
+const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
+
+/// Which transaction capability an operation needs. A private adapter concern:
+/// it is derived from the operation's own semantics and never appears in an
+/// application port, use case, or repository signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TxMode {
+    /// Multi-statement write invariant: reserve the single writer before the
+    /// first statement so contention surfaces before any work is done.
+    RootWrite,
+    /// Read-only unit needing one snapshot across several statements. It must
+    /// not take a writer reservation it never uses.
+    DeferredRead,
+}
 
 #[derive(Clone)]
 pub struct SqliteDatabase {
@@ -43,7 +60,10 @@ impl SqliteDatabase {
             .create_if_missing(true)
             .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
+            // An acknowledged write must survive power loss, so WAL runs with
+            // FULL. NORMAL would skip the commit fsync and let a recently
+            // acknowledged transaction roll back.
+            .synchronous(SqliteSynchronous::Full)
             .busy_timeout(busy_timeout);
 
         let pool = SqlitePoolOptions::new()
@@ -53,6 +73,36 @@ impl SqliteDatabase {
 
         MIGRATOR.run(&pool).await?;
         Ok(Self { pool })
+    }
+
+    /// The single place that turns a required capability into a begin statement.
+    async fn begin(&self, mode: TxMode) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
+        match mode {
+            TxMode::RootWrite => self.pool.begin_with(ROOT_WRITE_BEGIN).await,
+            TxMode::DeferredRead => self.pool.begin_with(DEFERRED_READ_BEGIN).await,
+        }
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn latest_page_transaction(&self) -> Result<MessagePageFact, SqliteAdapterError> {
+        let mut tx = self.begin(TxMode::DeferredRead).await?;
+        let total: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+            .fetch_one(&mut *tx)
+            .await?;
+        let row =
+            sqlx::query("SELECT id, body, created_at_ms FROM messages ORDER BY id DESC LIMIT 1")
+                .fetch_optional(&mut *tx)
+                .await?;
+        let latest = match row {
+            Some(row) => Some(Message {
+                id: row.try_get("id")?,
+                body: row.try_get("body")?,
+                created_at_ms: row.try_get("created_at_ms")?,
+            }),
+            None => None,
+        };
+        tx.commit().await?;
+        Ok(MessagePageFact { total, latest })
     }
 
     #[tracing::instrument(skip(self, body), fields(body_len = body.len()))]
@@ -66,10 +116,10 @@ impl SqliteDatabase {
             .as_millis();
         let created_at_ms = i64::try_from(created_at_ms).map_err(|_| SqliteAdapterError::Clock)?;
 
-        // This use case is a root-only write unit of work. Reserve SQLite's
-        // single writer before any reads/business work, rather than deferring
-        // contention until the first INSERT.
-        let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
+        // A root-only write unit of work: reserve SQLite's single writer before
+        // any reads or business work, rather than deferring contention until the
+        // first INSERT. The mode follows from this operation's semantics.
+        let mut tx = self.begin(TxMode::RootWrite).await?;
         let result = sqlx::query("INSERT INTO messages (body, created_at_ms) VALUES (?, ?)")
             .bind(&body)
             .bind(created_at_ms)
@@ -126,12 +176,19 @@ impl MessageUnitOfWork for SqliteDatabase {
         &self,
         body: String,
     ) -> Result<MessageCreatedFact, PersistenceFailure> {
+        // The driver error becomes the source, not a log line. Exactly one place
+        // renders this failure, and it renders the whole chain.
         self.create_message_transaction(body)
             .await
-            .map_err(|error| {
-                tracing::error!(error = ?error, "SQLite unit of work failed");
-                PersistenceFailure
-            })
+            .map_err(PersistenceFailure::from_source)
+    }
+}
+
+impl MessageReadUnitOfWork for SqliteDatabase {
+    async fn latest_page(&self) -> Result<MessagePageFact, PersistenceFailure> {
+        self.latest_page_transaction()
+            .await
+            .map_err(PersistenceFailure::from_source)
     }
 }
 
@@ -202,7 +259,7 @@ mod tests {
 
             assert_eq!(foreign_keys, 1);
             assert_eq!(journal_mode, "wal");
-            assert_eq!(synchronous, 1); // NORMAL
+            assert_eq!(synchronous, 2); // FULL
             assert_eq!(busy_timeout_ms, 5_000);
         }
         drop(connections);
@@ -281,5 +338,101 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, sqlx::Error::InvalidSavePointStatement));
         root.rollback().await.unwrap();
+    }
+
+    #[test]
+    fn the_two_modes_are_distinct_capabilities() {
+        assert_ne!(TxMode::RootWrite, TxMode::DeferredRead);
+        assert_ne!(ROOT_WRITE_BEGIN, DEFERRED_READ_BEGIN);
+    }
+
+    /// The discriminator for the deferred mode: a read unit must not queue behind
+    /// a writer reservation it never uses. With a 25ms busy timeout, a read that
+    /// wrongly asked for the writer would fail instead of returning a snapshot.
+    #[tokio::test]
+    async fn deferred_read_reads_a_snapshot_while_a_writer_is_held() {
+        let dir = tempdir().unwrap();
+        let db = SqliteDatabase::open_with_busy_timeout(
+            dir.path().join("deferred-read.db"),
+            Duration::from_millis(25),
+        )
+        .await
+        .unwrap();
+        db.create_message_transaction("committed before".into())
+            .await
+            .unwrap();
+
+        let held_writer = db.begin(TxMode::RootWrite).await.unwrap();
+        let started = Instant::now();
+        let page = db.latest_page_transaction().await.unwrap();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the deferred read waited on the writer reservation"
+        );
+        assert_eq!(page.total, 1);
+        assert_eq!(page.latest.unwrap().body, "committed before");
+
+        // A root write asked for while the writer is held does fail, which is what
+        // keeps the assertion above from being vacuous.
+        let contended = db.begin(TxMode::RootWrite).await.unwrap_err();
+        assert_eq!(
+            contended.as_database_error().unwrap().code().as_deref(),
+            Some("5") // SQLITE_BUSY
+        );
+
+        held_writer.rollback().await.unwrap();
+    }
+
+    /// A read unit reads one snapshot. Statements inside a deferred read see the
+    /// database as of that unit's first read, so a commit landing between them is
+    /// invisible until a new transaction begins — which is what lets a total and
+    /// a latest row be reported together without disagreeing.
+    #[tokio::test]
+    async fn deferred_read_holds_one_snapshot_across_statements() {
+        let dir = tempdir().unwrap();
+        let db = SqliteDatabase::open(dir.path().join("snapshot.db"))
+            .await
+            .unwrap();
+        db.create_message_transaction("first".into()).await.unwrap();
+
+        let mut read_tx = db.begin(TxMode::DeferredRead).await.unwrap();
+        // The first statement is what establishes the snapshot for this tx.
+        let total_before: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+            .fetch_one(&mut *read_tx)
+            .await
+            .unwrap();
+        assert_eq!(total_before, 1);
+
+        // A different pooled connection commits while the read tx is open.
+        db.create_message_transaction("committed mid-read".into())
+            .await
+            .unwrap();
+
+        let total_after: i64 = sqlx::query_scalar("SELECT count(*) FROM messages")
+            .fetch_one(&mut *read_tx)
+            .await
+            .unwrap();
+        let latest_body: Option<String> =
+            sqlx::query_scalar("SELECT body FROM messages ORDER BY id DESC LIMIT 1")
+                .fetch_optional(&mut *read_tx)
+                .await
+                .unwrap();
+
+        assert_eq!(
+            total_after, 1,
+            "the second statement left the transaction's snapshot"
+        );
+        assert_eq!(
+            latest_body.as_deref(),
+            Some("first"),
+            "count and latest disagreed inside one read unit"
+        );
+        read_tx.rollback().await.unwrap();
+
+        // The commit was real: a fresh read unit sees it.
+        let page = db.latest_page_transaction().await.unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.latest.unwrap().body, "committed mid-read");
     }
 }
