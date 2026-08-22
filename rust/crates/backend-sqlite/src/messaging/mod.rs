@@ -1,25 +1,25 @@
 //! SQLite adapter for the product create-message write unit.
 //!
 //! This store CONSUMES the product database. It creates no table, runs no
-//! migrator and claims no schema version: the schema is owned elsewhere, and a
-//! second owner would be a second migration authority.
+//! migrator, claims no schema version, and refuses to open a database that does
+//! not exist: the schema has an owner, and a second one would be a second
+//! migration authority.
 //!
 //! Everything engine-specific stays here — SQL text, PRAGMAs, transaction mode,
 //! driver errors. The port returns application facts and refusals, so no driver
 //! type reaches the application or the wire.
 
-#[cfg(test)]
-mod tests;
-
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::messaging::{
     self, ConversationEndpoint, ConversationFacts, ConversationId, ConversationRefusal,
-    CreatedMessage, DirectPairEndpoints, EndpointKind, EndpointPrincipalReads, MessageAuthor,
-    MessageCreatedFact, MessageId, MessageSeq, PostAuthorityReads, ReplyTargetRefusal, SendActor,
-    SendDestination, SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadProjections,
-    ThreadRootId, UserId,
+    CreatedMessage, DirectPairEndpoints, EndpointKind, EndpointPrincipalReads, InvalidSeq,
+    MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, PostAuthorityReads,
+    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
+    SendMessageError, SendMessageUnitOfWork, ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
+    UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
+    environment::{OsEntropy, SystemClock},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
@@ -57,7 +57,7 @@ const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id
      'direct_pair' AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ?) OR \
      (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?))))";
 
-const SELECT_REPLY_TARGET: &str =
+const SELECT_MESSAGE_IN_CONVERSATION: &str =
     "SELECT id, thread_root_id FROM messages WHERE conversation_id = ? AND id = ?";
 const SELECT_ATTACHMENT_SOURCE: &str =
     "SELECT id, channel_id, filename, size, content_type FROM attachments WHERE id = ?";
@@ -100,9 +100,24 @@ const PLACEMENT_DIRECT_PAIR: &str = "direct_pair";
 const ENDPOINT_KIND_HUMAN: &str = "human";
 const ENDPOINT_KIND_AGENT: &str = "agent";
 
-#[derive(Clone)]
-pub struct MessagingStore {
+/// The host capabilities this store uses unless a caller injects others.
+pub struct HostEnvironment;
+
+impl SendClock for HostEnvironment {
+    fn now_unix_ms(&self) -> Result<i64, messaging::EnvironmentUnavailable> {
+        SystemClock.now_unix_ms()
+    }
+}
+
+impl SendEntropy for HostEnvironment {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), messaging::EnvironmentUnavailable> {
+        OsEntropy.fill(buffer)
+    }
+}
+
+pub struct MessagingStore<E = HostEnvironment> {
     pool: SqlitePool,
+    environment: E,
 }
 
 /// Startup and driver failures, surfaced only to the composition root that opens
@@ -111,12 +126,12 @@ pub struct MessagingStore {
 pub enum MessagingStoreError {
     #[error("database operation failed")]
     Sql(#[from] sqlx::Error),
-    #[error("system time is outside the supported Unix-millisecond range")]
-    Clock,
     #[error("attachment snapshot could not be serialized")]
     Serialization(#[from] serde_json::Error),
-    #[error("system entropy is unavailable")]
-    Entropy,
+    /// A stored ordinal outside the domain's range. The column is the store's own,
+    /// so this is a broken database rather than a caller's mistake.
+    #[error("stored message ordinal is outside the range the domain defines")]
+    Ordinal(#[from] InvalidSeq),
     /// A direct pair whose endpoint columns are absent or unknown contradicts the
     /// schema's own constraints, so there is no participation question to answer.
     #[error("conversation row contradicts the placement constraints of its schema")]
@@ -131,15 +146,25 @@ fn driver(error: sqlx::Error) -> PersistenceFailure {
     PersistenceFailure::from_source(MessagingStoreError::Sql(error))
 }
 
-impl MessagingStore {
-    /// Opens an existing product database. A missing file is a failure rather than
-    /// an empty database: provisioning belongs to the schema's owner.
+impl MessagingStore<HostEnvironment> {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, MessagingStoreError> {
-        Self::open_with_busy_timeout(path, BUSY_TIMEOUT).await
+        Self::open_with(path, HostEnvironment).await
+    }
+}
+
+impl<E> MessagingStore<E> {
+    /// Opens an existing product database with injected host capabilities. A
+    /// missing file is a failure rather than an empty database.
+    pub async fn open_with(
+        path: impl AsRef<Path>,
+        environment: E,
+    ) -> Result<Self, MessagingStoreError> {
+        Self::open_with_busy_timeout(path, environment, BUSY_TIMEOUT).await
     }
 
     async fn open_with_busy_timeout(
         path: impl AsRef<Path>,
+        environment: E,
         busy_timeout: Duration,
     ) -> Result<Self, MessagingStoreError> {
         let options = SqliteConnectOptions::new()
@@ -158,7 +183,7 @@ impl MessagingStore {
             .connect_with(options)
             .await?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, environment })
     }
 
     /// Reserves the single writer before the first statement, so contention
@@ -166,19 +191,28 @@ impl MessagingStore {
     async fn begin_root_write(&self) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
         self.pool.begin_with(ROOT_WRITE_BEGIN).await
     }
+}
 
+impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
     #[tracing::instrument(skip(self, command), fields(
         target_conversation = command.target_conversation.as_str(),
-        content_bytes = command.content.len(),
+        content_bytes = command.content.byte_length(),
     ))]
     async fn send_message_transaction(
         &self,
         command: SendMessage,
     ) -> Result<MessageCreatedFact, SendMessageError> {
+        // The environment is asked before a transaction exists, so a host that
+        // cannot answer costs nothing: there is no writer to reserve and no
+        // statement to roll back.
+        let created_at_ms = self.environment.now_unix_ms()?;
+        let message_id = MessageId::mint(&self.environment)?;
+
         let mut scope = TxScope {
             tx: self.begin_root_write().await.map_err(driver)?,
+            entropy: &self.environment,
         };
-        match scope.write(command).await {
+        match scope.write(command, message_id, created_at_ms).await {
             Ok(fact) => {
                 scope.tx.commit().await.map_err(driver)?;
                 Ok(fact)
@@ -193,7 +227,7 @@ impl MessagingStore {
     }
 }
 
-impl SendMessageUnitOfWork for MessagingStore {
+impl<E: SendClock + SendEntropy + Send + Sync> SendMessageUnitOfWork for MessagingStore<E> {
     async fn send_message(
         &self,
         command: SendMessage,
@@ -204,14 +238,17 @@ impl SendMessageUnitOfWork for MessagingStore {
 
 /// The transaction's own scope. Every fact the write depends on is read through
 /// it, so a concurrent change cannot land between a check and the insert.
-struct TxScope<'connection> {
+struct TxScope<'connection, 'entropy, E> {
     tx: Transaction<'connection, Sqlite>,
+    entropy: &'entropy E,
 }
 
-impl TxScope<'_> {
+impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn write(
         &mut self,
         command: SendMessage,
+        message_id: MessageId,
+        created_at_ms: i64,
     ) -> Result<MessageCreatedFact, SendMessageError> {
         // The sender's own binding must still exist. Read for existence only: what
         // the send is authorized against is the target.
@@ -239,14 +276,23 @@ impl TxScope<'_> {
         let seq = self.reserve_next_seq(&facts.id).await?;
         let author = self.author_snapshot(&command.actor).await?;
         let message = self
-            .insert_message(&command, &facts.id, thread_root, seq, author, snapshots)
+            .insert_message(
+                &command,
+                &facts.id,
+                message_id,
+                created_at_ms,
+                thread_root,
+                seq,
+                author,
+                snapshots,
+            )
             .await?;
         self.bump_stream_head(&facts.id, message.thread_root_id.as_ref(), seq)
             .await?;
 
-        let projections = match &message.thread_root_id {
+        let thread = match &message.thread_root_id {
             None => None,
-            Some(root) => Some(ThreadProjections {
+            Some(root) => Some(ThreadReplyFact {
                 thread_root_id: root.clone(),
                 // Counted after the insert, so the reported total already
                 // includes this reply and is never a value from the future.
@@ -256,11 +302,13 @@ impl TxScope<'_> {
 
         Ok(MessageCreatedFact {
             message,
-            projections,
+            thread,
             freshness_bypassed,
         })
     }
 
+    /// Resolves the cluster this send belongs to, checking the caller's name for it
+    /// here rather than trusting that some earlier layer did.
     async fn resolve_thread_root(
         &mut self,
         conversation: &ConversationId,
@@ -268,29 +316,50 @@ impl TxScope<'_> {
     ) -> Result<Option<ThreadRootId>, SendMessageError> {
         match destination {
             SendDestination::MainLine => Ok(None),
-            SendDestination::Thread(root) => Ok(Some(root.clone())),
+            // A named root must be a message of this conversation that starts a
+            // cluster. Unknown, foreign, and "is itself a reply" are one answer.
+            SendDestination::Thread(root) => {
+                let row = self
+                    .message_in_conversation(conversation, root.as_str())
+                    .await?
+                    .ok_or(ThreadRootRefusal)?;
+                if row.thread_root_id.is_some() {
+                    return Err(ThreadRootRefusal.into());
+                }
+                Ok(Some(root.clone()))
+            }
             // A reply names a message; the cluster is that message's own root, or
             // the message itself when it starts one.
             SendDestination::Reply(target) => {
-                let row = sqlx::query(SELECT_REPLY_TARGET)
-                    .bind(conversation.as_str())
-                    .bind(target.as_str())
-                    .fetch_optional(&mut *self.tx)
-                    .await
-                    .map_err(driver)?
+                let row = self
+                    .message_in_conversation(conversation, target.as_str())
+                    .await?
                     .ok_or(ReplyTargetRefusal)?;
-
-                let existing_root: Option<String> =
-                    row.try_get("thread_root_id").map_err(driver)?;
-                let root = match existing_root {
-                    Some(root) => root,
-                    None => row.try_get::<String, _>("id").map_err(driver)?,
-                };
+                let root = row.thread_root_id.unwrap_or(row.id);
                 Ok(Some(ThreadRootId::parse(root).map_err(|_| {
                     infrastructure(MessagingStoreError::MalformedPlacement)
                 })?))
             }
         }
+    }
+
+    async fn message_in_conversation(
+        &mut self,
+        conversation: &ConversationId,
+        message_id: &str,
+    ) -> Result<Option<MessageRow>, SendMessageError> {
+        let row = sqlx::query(SELECT_MESSAGE_IN_CONVERSATION)
+            .bind(conversation.as_str())
+            .bind(message_id)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        let Some(row) = row else { return Ok(None) };
+
+        Ok(Some(MessageRow {
+            id: row.try_get("id").map_err(driver)?,
+            thread_root_id: row.try_get("thread_root_id").map_err(driver)?,
+        }))
     }
 
     async fn resolve_attachments(
@@ -378,8 +447,7 @@ impl TxScope<'_> {
 
         if undelivered.is_some() {
             return Err(messaging::StaleRefusal {
-                stale_event_id: StaleEventId::mint()
-                    .map_err(|_| infrastructure(MessagingStoreError::Entropy))?,
+                stale_event_id: StaleEventId::mint(self.entropy)?,
                 target_conversation_id: target.clone(),
             }
             .into());
@@ -389,7 +457,7 @@ impl TxScope<'_> {
 
     /// Advances the conversation's counter and reads back what it reserved. The
     /// counter is conversation-global: a reply and a main-line message draw from
-    /// it alike, which is what makes `(conversation, seq)` a total order.
+    /// it alike, which is what makes `(conversation, ordinal)` a total order.
     async fn reserve_next_seq(
         &mut self,
         conversation: &ConversationId,
@@ -404,7 +472,11 @@ impl TxScope<'_> {
             .fetch_one(&mut *self.tx)
             .await
             .map_err(driver)?;
-        Ok(MessageSeq::reserved(reserved))
+
+        // The column is this store's own, so a value the domain rejects is a
+        // broken database and is reported with the value that broke it.
+        MessageSeq::try_from(reserved)
+            .map_err(|error| infrastructure(MessagingStoreError::Ordinal(error)))
     }
 
     /// Read live and copied onto the row, so the message keeps reporting its
@@ -431,17 +503,18 @@ impl TxScope<'_> {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn insert_message(
         &mut self,
         command: &SendMessage,
         conversation: &ConversationId,
+        id: MessageId,
+        created_at_ms: i64,
         thread_root: Option<ThreadRootId>,
         seq: MessageSeq,
         author: Option<MessageAuthor>,
         attachments: Vec<AttachmentSnapshot>,
     ) -> Result<CreatedMessage, SendMessageError> {
-        let id = MessageId::mint().map_err(|_| infrastructure(MessagingStoreError::Entropy))?;
-        let created_at_ms = now_unix_ms()?;
         let metadata = metadata_json(&attachments)?;
         let (from_kind, agent_id, user_id) = match &command.actor {
             SendActor::Agent(agent) => (FROM_KIND_AGENT, Some(agent.as_str()), None),
@@ -454,7 +527,7 @@ impl TxScope<'_> {
             .bind(from_kind)
             .bind(agent_id)
             .bind(user_id)
-            .bind(&command.content)
+            .bind(command.content.as_str())
             .bind(metadata)
             .bind(seq.get())
             .bind(created_at_ms)
@@ -536,7 +609,12 @@ impl TxScope<'_> {
     }
 }
 
-impl EndpointPrincipalReads for TxScope<'_> {
+struct MessageRow {
+    id: String,
+    thread_root_id: Option<String>,
+}
+
+impl<E: Send + Sync> EndpointPrincipalReads for TxScope<'_, '_, E> {
     async fn endpoint_principal_exists(
         &mut self,
         endpoint: &ConversationEndpoint,
@@ -554,7 +632,7 @@ impl EndpointPrincipalReads for TxScope<'_> {
     }
 }
 
-impl PostAuthorityReads for TxScope<'_> {
+impl<E: Send + Sync> PostAuthorityReads for TxScope<'_, '_, E> {
     async fn conversation_facts(
         &mut self,
         conversation: &ConversationId,
@@ -572,8 +650,8 @@ impl PostAuthorityReads for TxScope<'_> {
 
         let direct_pair = if placement == PLACEMENT_DIRECT_PAIR {
             Some(DirectPairEndpoints {
-                a: endpoint_from_row(&row, "endpoint_a")?,
-                b: endpoint_from_row(&row, "endpoint_b")?,
+                a: endpoint_from_row(&row, EndpointSlot::A)?,
+                b: endpoint_from_row(&row, EndpointSlot::B)?,
             })
         } else {
             None
@@ -633,14 +711,19 @@ impl PostAuthorityReads for TxScope<'_> {
     }
 }
 
+enum EndpointSlot {
+    A,
+    B,
+}
+
 fn endpoint_from_row(
     row: &sqlx::sqlite::SqliteRow,
-    prefix: &str,
+    slot: EndpointSlot,
 ) -> Result<ConversationEndpoint, PersistenceFailure> {
     let malformed = || PersistenceFailure::from_source(MessagingStoreError::MalformedPlacement);
-    let (kind_column, id_column, deleted_column) = match prefix {
-        "endpoint_a" => ("endpoint_a_kind", "endpoint_a_id", "endpoint_a_deleted_at"),
-        _ => ("endpoint_b_kind", "endpoint_b_id", "endpoint_b_deleted_at"),
+    let (kind_column, id_column, deleted_column) = match slot {
+        EndpointSlot::A => ("endpoint_a_kind", "endpoint_a_id", "endpoint_a_deleted_at"),
+        EndpointSlot::B => ("endpoint_b_kind", "endpoint_b_id", "endpoint_b_deleted_at"),
     };
 
     let kind: Option<String> = row.try_get(kind_column).map_err(driver)?;
@@ -660,8 +743,8 @@ fn endpoint_from_row(
     })
 }
 
-/// The durable snapshot shape, versioned by the schema that holds it rather than
-/// by the application type it is projected from.
+/// The durable snapshot shape, owned by the schema that holds it rather than by
+/// the application type it is projected from.
 #[derive(serde::Serialize)]
 struct StoredAttachmentSnapshot<'a> {
     id: &'a str,
@@ -694,9 +777,67 @@ fn metadata_json(attachments: &[AttachmentSnapshot]) -> Result<Option<String>, S
         .map_err(|error| infrastructure(MessagingStoreError::Serialization(error)))
 }
 
-fn now_unix_ms() -> Result<i64, SendMessageError> {
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| infrastructure(MessagingStoreError::Clock))?;
-    i64::try_from(elapsed.as_millis()).map_err(|_| infrastructure(MessagingStoreError::Clock))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Opening needs a database file but no product schema, so these two facts
+    /// about the connection itself are checked without one.
+    async fn empty_database(path: &Path) {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        SqlitePool::connect_with(options)
+            .await
+            .unwrap()
+            .close()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_store_refuses_to_provision_a_database_it_does_not_own() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("absent.db");
+
+        let outcome = MessagingStore::open(&path).await;
+
+        assert!(matches!(outcome, Err(MessagingStoreError::Sql(_))));
+        assert!(!path.exists(), "the store created a database file");
+    }
+
+    #[tokio::test]
+    async fn every_pool_connection_carries_the_durability_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("configuration.db");
+        empty_database(&path).await;
+        let store = MessagingStore::open(&path).await.unwrap();
+
+        let mut connections = Vec::new();
+        for _ in 0..POOL_CONNECTIONS {
+            connections.push(store.pool.acquire().await.unwrap());
+        }
+        for connection in &mut connections {
+            let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            let busy_timeout_ms: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+
+            assert_eq!(journal_mode, "wal");
+            assert_eq!(synchronous, 2); // FULL
+            assert_eq!(foreign_keys, 1);
+            assert_eq!(busy_timeout_ms, 5_000);
+        }
+    }
 }

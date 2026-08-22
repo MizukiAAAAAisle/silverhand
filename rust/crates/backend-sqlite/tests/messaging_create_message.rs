@@ -1,0 +1,1102 @@
+//! The create-message write unit against the real product schema.
+//!
+//! Each test builds its own database from the checked-in executable schema
+//! artifact under the system temp root; no live database is opened, and the store
+//! under test provisions nothing.
+
+use silverhand_backend_core::messaging::{
+    ActorRefusal, AgentId, AttachmentId, ConversationId, ConversationRefusal,
+    EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent, MessageId, MessageSeq,
+    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
+    SendMessageError, SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId,
+    attachments::AttachmentRef, environment::OsEntropy,
+};
+use silverhand_backend_sqlite::messaging::MessagingStore;
+use sqlx::{Row, SqliteConnection};
+use std::{error::Error, path::PathBuf};
+use tempfile::TempDir;
+
+#[path = "support/current_schema_snapshot.rs"]
+mod current_schema;
+
+const HOST_ID: &str = "host-1";
+const USER_ID: &str = "user-1";
+const AGENT_ID: &str = "agent-1";
+/// A second runtime, declared at birth to judge freshness across every
+/// conversation. The scope is immutable, so the broad arm needs its own agent.
+const BROAD_AGENT_ID: &str = "agent-2";
+const WORKSPACE_ID: &str = "ws-1";
+const CHANNEL_ID: &str = "conv-1";
+const OTHER_CHANNEL_ID: &str = "conv-2";
+const PAIR_ID: &str = "pair-1";
+
+struct Fixture {
+    _directory: TempDir,
+    path: PathBuf,
+    db: SqliteConnection,
+}
+
+impl Fixture {
+    async fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("product.sqlite");
+        let mut db = current_schema::create_current_schema(&path).await;
+        seed(&mut db).await;
+        Self {
+            _directory: directory,
+            path,
+            db,
+        }
+    }
+
+    async fn store(&self) -> MessagingStore {
+        MessagingStore::open(&self.path).await.unwrap()
+    }
+
+    async fn store_with<E>(&self, environment: E) -> MessagingStore<E> {
+        MessagingStore::open_with(&self.path, environment)
+            .await
+            .unwrap()
+    }
+
+    async fn count(&mut self, sql: &'static str) -> i64 {
+        sqlx::query_scalar(sql)
+            .fetch_one(&mut self.db)
+            .await
+            .unwrap()
+    }
+
+    async fn latest_seq(&mut self, conversation: &str) -> i64 {
+        sqlx::query_scalar("SELECT latest_message_seq FROM conversations WHERE id = ?")
+            .bind(conversation)
+            .fetch_one(&mut self.db)
+            .await
+            .unwrap()
+    }
+
+    async fn stream_head(&mut self, conversation: &str, thread_root: Option<&str>) -> Option<i64> {
+        sqlx::query_scalar(
+            "SELECT latest_seq FROM conversation_stream_heads WHERE conversation_id = ? AND \
+             thread_root_id IS ?",
+        )
+        .bind(conversation)
+        .bind(thread_root)
+        .fetch_optional(&mut self.db)
+        .await
+        .unwrap()
+    }
+
+    async fn execute(&mut self, sql: &'static str) {
+        sqlx::query(sql).execute(&mut self.db).await.unwrap();
+    }
+
+    async fn enqueue_inbox_row(
+        &mut self,
+        agent: &str,
+        conversation: &str,
+        message_id: &str,
+        delivered_at: Option<i64>,
+    ) {
+        sqlx::query(
+            "INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, \
+             delivered_at, delivery_kind, created_at) VALUES (?, ?, ?, ?, 'turn', 0)",
+        )
+        .bind(conversation)
+        .bind(agent)
+        .bind(message_id)
+        .bind(delivered_at)
+        .execute(&mut self.db)
+        .await
+        .unwrap();
+    }
+}
+
+/// The Messaging seed: the smallest set of rows the send path reads, expressed
+/// against the real constraints rather than around them.
+async fn seed(db: &mut SqliteConnection) {
+    sqlx::query("INSERT INTO hosts (id, name, kind, created_at) VALUES (?, 'host', 'local', 0)")
+        .bind(HOST_ID)
+        .execute(&mut *db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES (?, 'human', \
+         'Human', 0, 0)",
+    )
+    .bind(USER_ID)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+         created_by_user_id) VALUES (?, 'lio', 'claude', ?, 0, 0, 'Lio', ?)",
+    )
+    .bind(AGENT_ID)
+    .bind(HOST_ID)
+    .bind(USER_ID)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+         created_by_user_id, session_scope) VALUES (?, 'broad', 'claude', ?, 0, 0, 'Broad', ?, \
+         'agent')",
+    )
+    .bind(BROAD_AGENT_ID)
+    .bind(HOST_ID)
+    .bind(USER_ID)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workspaces (id, name, name_key, created_at, updated_at, owner_user_id) VALUES \
+         (?, 'Space', 'space', 0, 0, ?)",
+    )
+    .bind(WORKSPACE_ID)
+    .bind(USER_ID)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO workspace_users (workspace_id, user_id, joined_at) VALUES (?, ?, 0)")
+        .bind(WORKSPACE_ID)
+        .bind(USER_ID)
+        .execute(&mut *db)
+        .await
+        .unwrap();
+
+    for (id, title_key) in [(CHANNEL_ID, "general"), (OTHER_CHANNEL_ID, "other")] {
+        sqlx::query(
+            "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
+             title_key, status, created_at, updated_at) VALUES (?, ?, 'workspace', 'open', \
+             'Channel', ?, 'open', 0, 0)",
+        )
+        .bind(id)
+        .bind(WORKSPACE_ID)
+        .bind(title_key)
+        .execute(&mut *db)
+        .await
+        .unwrap();
+        for agent in [AGENT_ID, BROAD_AGENT_ID] {
+            sqlx::query(
+                "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES (?, \
+                 ?, 0)",
+            )
+            .bind(id)
+            .bind(agent)
+            .execute(&mut *db)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES (?, ?, 0)",
+        )
+        .bind(id)
+        .bind(USER_ID)
+        .execute(&mut *db)
+        .await
+        .unwrap();
+    }
+
+    // A direct pair carries its participants on the row: no roster rows exist for
+    // it by construction.
+    sqlx::query(
+        "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
+         endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, updated_at) \
+         VALUES (?, 'direct_pair', 'fixed', 'DM', 'open', 'agent', ?, 'human', ?, 0, 0)",
+    )
+    .bind(PAIR_ID)
+    .bind(AGENT_ID)
+    .bind(USER_ID)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+
+    for (id, channel, filename, size, content_type, key) in [
+        ("att-here", CHANNEL_ID, "note.txt", 12, "text/plain", "k1"),
+        (
+            "att-elsewhere",
+            OTHER_CHANNEL_ID,
+            "other.png",
+            34,
+            "image/png",
+            "k2",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO attachments (id, channel_id, filename, size, content_type, storage, \
+             storage_key, created_by_kind, created_by_id, created_at) VALUES (?, ?, ?, ?, ?, \
+             'local', ?, 'user', ?, 0)",
+        )
+        .bind(id)
+        .bind(channel)
+        .bind(filename)
+        .bind(size)
+        .bind(content_type)
+        .bind(key)
+        .bind(USER_ID)
+        .execute(&mut *db)
+        .await
+        .unwrap();
+    }
+}
+
+fn agent_actor() -> SendActor {
+    SendActor::Agent(AgentId::parse(AGENT_ID).unwrap())
+}
+
+fn user_actor() -> SendActor {
+    SendActor::User(UserId::parse(USER_ID).unwrap())
+}
+
+fn send(actor: SendActor, conversation: &str, content: &str) -> SendMessage {
+    SendMessage {
+        source_conversation: ConversationId::parse(conversation).unwrap(),
+        target_conversation: ConversationId::parse(conversation).unwrap(),
+        actor,
+        content: MessageContent::parse(content).unwrap(),
+        destination: SendDestination::MainLine,
+        attachment_refs: Vec::new(),
+        freshness_bypass: false,
+    }
+}
+
+fn reply_to(actor: SendActor, conversation: &str, content: &str, target: &str) -> SendMessage {
+    SendMessage {
+        destination: SendDestination::Reply(MessageId::parse(target).unwrap()),
+        ..send(actor, conversation, content)
+    }
+}
+
+fn into_thread(actor: SendActor, conversation: &str, content: &str, root: &str) -> SendMessage {
+    SendMessage {
+        destination: SendDestination::Thread(ThreadRootId::parse(root).unwrap()),
+        ..send(actor, conversation, content)
+    }
+}
+
+fn root_cause(error: &(dyn Error + 'static)) -> String {
+    let mut current = error;
+    while let Some(next) = current.source() {
+        current = next;
+    }
+    current.to_string()
+}
+
+/// The main line writes exactly three rows: the reserved ordinal, the message, the
+/// stream head. Delivery is a consequence of the commit, so no inbox row and no
+/// durable event may exist yet.
+#[tokio::test]
+async fn a_main_line_send_writes_the_ordinal_the_message_and_the_head_only() {
+    let mut fixture = Fixture::new().await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "first"))
+        .await
+        .unwrap();
+
+    assert_eq!(fact.message.seq, MessageSeq::try_from(1).unwrap());
+    assert_eq!(fact.thread, None);
+    assert!(!fact.freshness_bypassed);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+    assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(1));
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM conversation_inboxes")
+            .await,
+        0
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM conversation_events")
+            .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn the_committed_row_reports_the_same_facts_the_caller_was_given() {
+    let fixture = Fixture::new().await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(user_actor(), CHANNEL_ID, "spoken once"))
+        .await
+        .unwrap();
+
+    let mut fixture = fixture;
+    let row = sqlx::query(
+        "SELECT id, from_kind, from_agent_id, from_user_id, content, metadata, seq, created_at, \
+         thread_root_id, author_id, author_name, author_display_name, cc_source_message_id FROM \
+         messages WHERE id = ?",
+    )
+    .bind(fact.message.id.as_str())
+    .fetch_one(&mut fixture.db)
+    .await
+    .unwrap();
+
+    assert_eq!(row.get::<String, _>("from_kind"), "user");
+    assert_eq!(row.get::<Option<String>, _>("from_agent_id"), None);
+    assert_eq!(
+        row.get::<Option<String>, _>("from_user_id").as_deref(),
+        Some(USER_ID)
+    );
+    assert_eq!(row.get::<String, _>("content"), "spoken once");
+    assert_eq!(row.get::<Option<String>, _>("metadata"), None);
+    assert_eq!(row.get::<i64, _>("seq"), fact.message.seq.get());
+    assert_eq!(row.get::<i64, _>("created_at"), fact.message.created_at_ms);
+    assert_eq!(row.get::<Option<String>, _>("thread_root_id"), None);
+    assert_eq!(row.get::<Option<String>, _>("cc_source_message_id"), None);
+    // The author is copied onto the row, so the message keeps naming its sender
+    // after a rename or a deletion.
+    assert_eq!(
+        row.get::<Option<String>, _>("author_name").as_deref(),
+        Some("human")
+    );
+    assert_eq!(
+        row.get::<Option<String>, _>("author_display_name")
+            .as_deref(),
+        Some("Human")
+    );
+    // The identity the caller was handed is the identity that was stored.
+    assert_eq!(row.get::<String, _>("id"), fact.message.id.as_str());
+    assert_eq!(fact.message.id.as_str().len(), 16);
+}
+
+#[tokio::test]
+async fn ordinals_are_conversation_global_and_a_thread_keeps_its_own_head() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "reply", &root_id))
+        .await
+        .unwrap();
+    let after = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "main line again"))
+        .await
+        .unwrap();
+
+    // The reply draws from the conversation's counter, not from a per-thread one.
+    assert_eq!(reply.message.seq, MessageSeq::try_from(2).unwrap());
+    assert_eq!(after.message.seq, MessageSeq::try_from(3).unwrap());
+    assert_eq!(
+        reply.message.thread_root_id.as_ref().unwrap().as_str(),
+        root_id
+    );
+    assert_eq!(
+        fixture.stream_head(CHANNEL_ID, Some(&root_id)).await,
+        Some(2)
+    );
+    assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(3));
+}
+
+#[tokio::test]
+async fn ordinals_of_two_conversations_do_not_share_a_counter() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    store
+        .send_message(send(agent_actor(), CHANNEL_ID, "here"))
+        .await
+        .unwrap();
+    let elsewhere = store
+        .send_message(send(agent_actor(), OTHER_CHANNEL_ID, "there"))
+        .await
+        .unwrap();
+
+    assert_eq!(elsewhere.message.seq, MessageSeq::try_from(1).unwrap());
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+    assert_eq!(fixture.latest_seq(OTHER_CHANNEL_ID).await, 1);
+}
+
+#[tokio::test]
+async fn the_main_line_head_is_updated_rather_than_duplicated() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    for _ in 0..3 {
+        store
+            .send_message(send(agent_actor(), CHANNEL_ID, "again"))
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM conversation_stream_heads")
+            .await,
+        1
+    );
+    assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(3));
+}
+
+/// The reply count is absolute and computed after the insert, so it already
+/// includes the reply being reported; system copies are not participants' words
+/// and stay out of it.
+#[tokio::test]
+async fn a_reply_reports_an_absolute_count_that_excludes_system_copies() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    let first = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "one", &root_id))
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at, \
+         thread_root_id) VALUES ('sys-copy-000000', ?, 'system', 'copied', 99, 0, ?)",
+    )
+    .bind(CHANNEL_ID)
+    .bind(&root_id)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+
+    let second = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "two", &root_id))
+        .await
+        .unwrap();
+
+    assert_eq!(first.thread.unwrap().reply_count, 1);
+    let thread = second.thread.unwrap();
+    assert_eq!(thread.reply_count, 2);
+    assert_eq!(thread.thread_root_id.as_str(), root_id);
+}
+
+/// A reply to a message of another conversation is refused as if the message did
+/// not exist, so a reply cannot be used to probe another stream.
+#[tokio::test]
+async fn a_reply_target_outside_the_conversation_is_not_found() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let elsewhere = store
+        .send_message(send(agent_actor(), OTHER_CHANNEL_ID, "far away"))
+        .await
+        .unwrap();
+
+    let error = store
+        .send_message(reply_to(
+            agent_actor(),
+            CHANNEL_ID,
+            "reply",
+            elsewhere.message.id.as_str(),
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SendMessageError::ReplyTarget(ReplyTargetRefusal)
+    ));
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+}
+
+/// A named cluster is checked here, not trusted from whoever resolved the address.
+/// Unknown, foreign and "that message is itself a reply" are one refusal, and none
+/// of them may reach the database as a constraint violation.
+#[tokio::test]
+async fn a_thread_root_that_names_no_cluster_of_this_conversation_is_refused() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let elsewhere = store
+        .send_message(send(agent_actor(), OTHER_CHANNEL_ID, "far away"))
+        .await
+        .unwrap();
+    let mid_cluster = store
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            "a reply",
+            root.message.id.as_str(),
+        ))
+        .await
+        .unwrap();
+    let seq_before = fixture.latest_seq(CHANNEL_ID).await;
+
+    for candidate in [
+        "AAAAAAAAAAAAAAAA",
+        elsewhere.message.id.as_str(),
+        mid_cluster.message.id.as_str(),
+    ] {
+        let error = store
+            .send_message(into_thread(agent_actor(), CHANNEL_ID, "into it", candidate))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, SendMessageError::ThreadRoot(ThreadRootRefusal)),
+            "root {candidate} was not refused as a cluster name: {error}"
+        );
+    }
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, seq_before);
+}
+
+#[tokio::test]
+async fn a_send_into_a_named_cluster_joins_that_cluster() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    let fact = store
+        .send_message(into_thread(
+            user_actor(),
+            CHANNEL_ID,
+            "in the cluster",
+            &root_id,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fact.message.thread_root_id.as_ref().unwrap().as_str(),
+        root_id
+    );
+    assert_eq!(fact.thread.unwrap().reply_count, 1);
+    assert_eq!(
+        fixture.stream_head(CHANNEL_ID, Some(&root_id)).await,
+        Some(2)
+    );
+}
+
+#[tokio::test]
+async fn a_closed_conversation_answers_with_its_lifecycle() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute("UPDATE conversations SET closed_at = 1 WHERE id = 'conv-1'")
+        .await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "too late"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SendMessageError::Conversation(ConversationRefusal::Closed)
+    ));
+}
+
+#[tokio::test]
+async fn an_archived_conversation_answers_with_its_lifecycle() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute("UPDATE conversations SET archived_at = 1 WHERE id = 'conv-1'")
+        .await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "too late"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SendMessageError::Conversation(ConversationRefusal::Archived)
+    ));
+}
+
+/// A refused send leaves the conversation exactly as it was: the ordinal it would
+/// have consumed is still unissued.
+#[tokio::test]
+async fn a_refused_send_consumes_no_ordinal() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute(
+            "DELETE FROM conversation_agents WHERE conversation_id = 'conv-1' AND agent_id = \
+             'agent-1'",
+        )
+        .await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "outsider"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SendMessageError::Actor(ActorRefusal::AgentNotParticipant)
+    ));
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM conversation_stream_heads")
+            .await,
+        0
+    );
+}
+
+/// A direct pair has no roster rows: its participants are the endpoints on the
+/// row, and a roster-shaped question would refuse both of them.
+#[tokio::test]
+async fn a_direct_pair_endpoint_participates_without_a_roster_row() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    let by_agent = store
+        .send_message(send(agent_actor(), PAIR_ID, "from the agent"))
+        .await
+        .unwrap();
+    let by_human = store
+        .send_message(send(user_actor(), PAIR_ID, "from the human"))
+        .await
+        .unwrap();
+
+    assert_eq!(by_agent.message.seq, MessageSeq::try_from(1).unwrap());
+    assert_eq!(by_human.message.seq, MessageSeq::try_from(2).unwrap());
+}
+
+#[tokio::test]
+async fn a_pair_whose_endpoint_departed_refuses_its_survivor() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute("UPDATE conversations SET endpoint_b_deleted_at = 1 WHERE id = 'pair-1'")
+        .await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), PAIR_ID, "anyone there"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SendMessageError::Conversation(ConversationRefusal::EndpointGone)
+    ));
+}
+
+/// A person's channel seat is two facts. A seat that outlived the workspace
+/// membership admits nobody, because the membership is what the seat was granted
+/// under.
+#[tokio::test]
+async fn a_human_needs_the_seat_and_the_workspace_membership() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute("DELETE FROM workspace_users WHERE workspace_id = 'ws-1' AND user_id = 'user-1'")
+        .await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(user_actor(), CHANNEL_ID, "still seated"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SendMessageError::Actor(ActorRefusal::UserNotParticipant)
+    ));
+}
+
+#[tokio::test]
+async fn an_attachment_of_another_channel_is_refused_and_nothing_is_written() {
+    let mut fixture = Fixture::new().await;
+    let mut command = send(user_actor(), CHANNEL_ID, "look at this");
+    command.attachment_refs = vec![AttachmentRef {
+        id: AttachmentId::parse("att-elsewhere").unwrap(),
+        label: None,
+    }];
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(command)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Attachment(_)));
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+}
+
+#[tokio::test]
+async fn an_accepted_attachment_is_stored_as_a_snapshot_in_the_message_metadata() {
+    let mut fixture = Fixture::new().await;
+    let mut command = send(user_actor(), CHANNEL_ID, "with a file");
+    command.attachment_refs = vec![AttachmentRef {
+        id: AttachmentId::parse("att-here").unwrap(),
+        label: Some("File #1".to_owned()),
+    }];
+
+    let fact = fixture.store().await.send_message(command).await.unwrap();
+
+    let metadata: String = sqlx::query_scalar("SELECT metadata FROM messages WHERE id = ?")
+        .bind(fact.message.id.as_str())
+        .fetch_one(&mut fixture.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&metadata).unwrap(),
+        serde_json::json!({
+            "attachments": [{
+                "id": "att-here",
+                "filename": "note.txt",
+                "size": 12,
+                "content_type": "text/plain",
+                "label": "File #1",
+            }]
+        })
+    );
+    assert_eq!(fact.message.attachments.len(), 1);
+}
+
+#[tokio::test]
+async fn an_agent_holding_undelivered_input_is_refused_as_stale() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let existing = store
+        .send_message(send(user_actor(), CHANNEL_ID, "read me first"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message.id.as_str(), None)
+        .await;
+
+    let error = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "talking over it"))
+        .await
+        .unwrap_err();
+
+    let SendMessageError::Stale(refusal) = &error else {
+        panic!("expected a stale refusal, got {error}");
+    };
+    assert_eq!(refusal.target_conversation_id.as_str(), CHANNEL_ID);
+    assert_eq!(refusal.stale_event_id.as_str().len(), 36);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+}
+
+/// The guard counts rows a runtime cannot yet drain, so an in-flight lease still
+/// reads as undelivered.
+#[tokio::test]
+async fn an_in_flight_delivery_still_counts_as_undelivered() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let existing = store
+        .send_message(send(user_actor(), CHANNEL_ID, "leased"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message.id.as_str(), None)
+        .await;
+    fixture
+        .execute("UPDATE conversation_inboxes SET in_flight_owner = 'runtime-1', in_flight_at = 1")
+        .await;
+
+    let error = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "talking over it"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Stale(_)));
+}
+
+#[tokio::test]
+async fn a_delivered_row_leaves_the_runtime_fresh() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let existing = store
+        .send_message(send(user_actor(), CHANNEL_ID, "consumed"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message.id.as_str(), Some(1))
+        .await;
+
+    let after_drain = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "my turn"))
+        .await
+        .unwrap();
+
+    assert_eq!(after_drain.message.seq, MessageSeq::try_from(2).unwrap());
+    assert!(!after_drain.freshness_bypassed);
+}
+
+#[tokio::test]
+async fn sending_anyway_lands_and_records_that_the_guard_was_skipped() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let existing = store
+        .send_message(send(user_actor(), CHANNEL_ID, "unread"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message.id.as_str(), None)
+        .await;
+
+    let mut command = send(agent_actor(), CHANNEL_ID, "anyway");
+    command.freshness_bypass = true;
+    let fact = store.send_message(command).await.unwrap();
+
+    assert!(fact.freshness_bypassed);
+    assert_eq!(fact.message.seq, MessageSeq::try_from(2).unwrap());
+}
+
+/// A person has no runtime, so undelivered agent input cannot make a human send
+/// stale.
+#[tokio::test]
+async fn a_human_send_is_never_stale() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let existing = store
+        .send_message(send(user_actor(), CHANNEL_ID, "unread by the agent"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message.id.as_str(), None)
+        .await;
+
+    let fact = store
+        .send_message(send(user_actor(), CHANNEL_ID, "people keep talking"))
+        .await
+        .unwrap();
+
+    assert_eq!(fact.message.seq, MessageSeq::try_from(2).unwrap());
+}
+
+/// The conversation arm asks about the runtime's own binding, so undelivered input
+/// in one conversation does not gag a runtime bound to another.
+#[tokio::test]
+async fn the_conversation_arm_keys_on_the_runtimes_binding() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let existing = store
+        .send_message(send(user_actor(), OTHER_CHANNEL_ID, "elsewhere"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(
+            AGENT_ID,
+            OTHER_CHANNEL_ID,
+            existing.message.id.as_str(),
+            None,
+        )
+        .await;
+
+    let fact = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "unrelated stream"))
+        .await
+        .unwrap();
+
+    assert_eq!(fact.message.seq, MessageSeq::try_from(1).unwrap());
+}
+
+/// An agent-scoped runtime sees its whole field of view, so undelivered input
+/// anywhere makes it stale.
+#[tokio::test]
+async fn the_agent_arm_spans_every_conversation() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let existing = store
+        .send_message(send(user_actor(), OTHER_CHANNEL_ID, "elsewhere"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(
+            BROAD_AGENT_ID,
+            OTHER_CHANNEL_ID,
+            existing.message.id.as_str(),
+            None,
+        )
+        .await;
+
+    let broad = SendActor::Agent(AgentId::parse(BROAD_AGENT_ID).unwrap());
+    let error = store
+        .send_message(send(broad, CHANNEL_ID, "unrelated stream"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Stale(_)));
+}
+
+#[tokio::test]
+async fn content_is_stored_byte_exact_at_the_utf8_bound() {
+    let mut fixture = Fixture::new().await;
+    let content = "汉".repeat(MAX_MESSAGE_CONTENT_BYTES / 3);
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(user_actor(), CHANNEL_ID, &content))
+        .await
+        .unwrap();
+
+    let stored: String = sqlx::query_scalar("SELECT content FROM messages WHERE id = ?")
+        .bind(fact.message.id.as_str())
+        .fetch_one(&mut fixture.db)
+        .await
+        .unwrap();
+    assert_eq!(stored, content);
+    assert_eq!(stored.len(), 65_535);
+}
+
+/// A stored ordinal the domain rejects is a broken database, not a refusal: it is
+/// reported as infrastructure, with the offending value in the cause, and nothing
+/// is written.
+#[tokio::test]
+async fn a_negative_stored_ordinal_fails_as_a_data_invariant() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute("UPDATE conversations SET latest_message_seq = -5 WHERE id = 'conv-1'")
+        .await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "impossible ordinal"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Persistence(_)));
+    assert!(
+        root_cause(&error).contains("-4"),
+        "the offending ordinal was not reported: {}",
+        root_cause(&error)
+    );
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+}
+
+/// A driver failure reaches the caller as an infrastructure failure with its cause
+/// intact, and rolls the unit back.
+#[tokio::test]
+async fn a_driver_failure_rolls_back_and_keeps_its_cause() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute(
+            "CREATE TRIGGER reject_test_message BEFORE INSERT ON messages BEGIN SELECT \
+             RAISE(ABORT, 'forced insert failure'); END",
+        )
+        .await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "never lands"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Persistence(_)));
+    assert!(
+        root_cause(&error).contains("forced insert failure"),
+        "driver cause was lost: {}",
+        root_cause(&error)
+    );
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+}
+
+#[tokio::test]
+async fn a_send_into_a_conversation_that_does_not_exist_is_not_found() {
+    let fixture = Fixture::new().await;
+
+    let error = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), "conv-absent", "into the void"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SendMessageError::Conversation(ConversationRefusal::NotFound)
+    ));
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the host capability was withdrawn for this test")]
+struct Withdrawn;
+
+/// A host that cannot answer fails the send before a transaction exists, so the
+/// database is untouched and the reason survives to the caller.
+struct BrokenClock;
+
+impl SendClock for BrokenClock {
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable> {
+        Err(EnvironmentUnavailable::from_source(Withdrawn))
+    }
+}
+
+impl SendEntropy for BrokenClock {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+        OsEntropy.fill(buffer)
+    }
+}
+
+struct BrokenEntropy;
+
+impl SendClock for BrokenEntropy {
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable> {
+        Ok(1)
+    }
+}
+
+impl SendEntropy for BrokenEntropy {
+    fn fill(&self, _buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+        Err(EnvironmentUnavailable::from_source(Withdrawn))
+    }
+}
+
+#[tokio::test]
+async fn a_clock_that_cannot_answer_writes_nothing_and_keeps_its_reason() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store_with(BrokenClock).await;
+
+    let error = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "when was this"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Environment(_)));
+    assert_eq!(
+        root_cause(&error),
+        "the host capability was withdrawn for this test"
+    );
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+}
+
+#[tokio::test]
+async fn an_entropy_source_that_cannot_answer_writes_nothing_and_keeps_its_reason() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store_with(BrokenEntropy).await;
+
+    let error = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "who am i"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Environment(_)));
+    assert_eq!(
+        root_cause(&error),
+        "the host capability was withdrawn for this test"
+    );
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+}
