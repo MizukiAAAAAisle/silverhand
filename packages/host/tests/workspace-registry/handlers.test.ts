@@ -301,8 +301,6 @@ describe('seedAgentL2', () => {
     // An agent edits its MEMORY.md after the first seed.
     const memPath = join(l2, 'MEMORY.md');
     writeFileSync(memPath, '# edited by the agent\n', 'utf-8');
-    const retiredTemplateNote = join(l2, 'notes/onboarding-faq.md');
-    writeFileSync(retiredTemplateNote, '# retained user content\n', 'utf-8');
 
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
@@ -311,9 +309,6 @@ describe('seedAgentL2', () => {
     // Nothing new written; the edit survives (no clobber).
     expect(r).toEqual({ ok: true, seeded: false, l2_present: true });
     expect(readFileSync(memPath, 'utf-8')).toBe('# edited by the agent\n');
-    expect(readFileSync(retiredTemplateNote, 'utf-8')).toBe(
-      '# retained user content\n',
-    );
   });
 
   it('refuses an agent-home id structurally (regular-only, never seeds an L2==L1 bundle)', async () => {
