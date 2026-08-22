@@ -528,11 +528,14 @@ const api = {
     ipcRenderer.invoke('dialog:pickDirectory', options),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
   setPinchZoom: setPreviewPinchZoom,
-  /** Save attachment bytes to a per-app temp dir and hand the file off
-   *  to the OS default handler (e.g. open `.html` in the user's
-   *  browser). The renderer fetches the bytes through the main-owned
-   *  backend proxy, then hands them here for the OS boundary. */
+  /** Materialize attachment bytes to ONE stable per-id scratch file and
+   *  hand it off to the OS default handler (e.g. open `.html` in the
+   *  user's browser). The renderer fetches current bytes through the
+   *  main-owned backend proxy on every open, then hands them here with the
+   *  attachment id; main overwrites the same path so reopening shows the
+   *  latest bytes instead of spawning a new temp file each time. */
   openAttachmentExternal: (input: {
+    attachmentId: string;
     filename: string;
     bytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; reason: string }> =>

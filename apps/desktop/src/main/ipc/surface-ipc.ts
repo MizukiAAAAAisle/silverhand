@@ -1,9 +1,7 @@
 import { app, BrowserWindow, dialog, Notification, shell } from 'electron';
 import type { GuardedIpcRegistrar } from './guarded-ipc.js';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { isSafeOpenExtension } from '@silverhand/shared';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { materializeAndOpenAttachment } from './attachment-open.js';
 import { handleAttachmentSave } from './attachment-save.js';
 
 export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
@@ -33,97 +31,45 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
 
   /**
    * Hand an attachment off to the OS default app for that MIME (e.g. open
-   * `.html` in the user's browser, `.pdf` in Preview). The renderer
-   * fetches the bytes via the authenticated backend route and ships them
-   * here over IPC; we write to a per-app temp dir and call
-   * `shell.openPath`. macOS resolves the default handler from the
-   * extension on disk.
+   * `.html` in the user's browser, `.pdf` in Preview). The renderer fetches
+   * current bytes via the authenticated backend route on every open and ships
+   * them here; we materialize to a single stable per-id scratch path and call
+   * `shell.openPath`. Reopening an agent-updated attachment overwrites that
+   * same file rather than spawning a new temp, so external open always shows
+   * the latest bytes without accumulating stale copies. macOS resolves the
+   * default handler from the on-disk extension, so the path + gating contract
+   * (id validation, filename sanitize, `isSafeOpenExtension`) lives in the
+   * pure `attachment-open` seam.
    *
-   * Security gate — extension allowlist (`isSafeOpenExtension` in
-   * `@silverhand/shared`):
-   *   - The attachment system accepts arbitrary files (image, doc,
-   *     archive, ...). On macOS, `shell.openPath` goes through Launch
-   *     Services, which dispatches on the on-disk extension. A `.command`
-   *     would open in Terminal; a `.pkg` in Installer; a `.app` would
-   *     launch. None of those are acceptable for "click a chat
-   *     attachment to view it".
-   *   - We therefore allow only viewer / sandboxed extensions
-   *     (html, htm, pdf, txt, log, md, markdown, json, csv, plus image
-   *     types). Anything outside that list returns `unsafe_extension` and
-   *     the renderer surfaces an error — the user can still download via
-   *     a follow-up flow if we add one.
-   *   - We deliberately do NOT trust the renderer-supplied MIME as the
-   *     primary check: pre-existing attachment rows can carry
-   *     `application/octet-stream` from before the MIME contract landed,
-   *     so MIME-only gating would either break legitimate `.html` opens
-   *     or require a DB backfill.
+   * Not tracking `content_revision` to live-rewrite an already-open external
+   * file is deliberate: external open refreshes on reopen only; live
+   * auto-update is the in-app tab's job.
    *
-   * Why not `window.open(blob_url)` in the renderer? Electron's
-   * `setWindowOpenHandler` redirects new-window opens to
-   * `shell.openExternal`, which can't resolve `blob:` URLs (they're
-   * scoped to the renderer process). The result was: clicking any
-   * non-image attachment silently did nothing — the symptom that
-   * surfaced as the original `.html` bug (`#task:383`).
-   *
-   * Why not load HTML in a fresh BrowserWindow? Even with sandboxing,
-   * keeping untrusted HTML out of any Electron-controlled WebContents is
-   * simpler — the OS browser already provides the right sandbox, CSP,
-   * and origin isolation. So HTML files leave Electron entirely.
+   * Why not `window.open(blob_url)` / a fresh BrowserWindow? `shell.openExternal`
+   * can't resolve a renderer-scoped `blob:` URL (the original `.html` bug,
+   * #task:383), and keeping untrusted HTML out of any Electron WebContents is
+   * simpler than sandboxing it — the OS browser already provides origin
+   * isolation and CSP.
    */
   ipc.handle(
     'attachment:openExternal',
     async (
       _event,
-      input: { filename?: unknown; bytes?: unknown },
+      input: { attachmentId?: unknown; filename?: unknown; bytes?: unknown },
     ): Promise<{ ok: true } | { ok: false; reason: string }> => {
-      const filenameRaw = input?.filename;
-      if (typeof filenameRaw !== 'string' || filenameRaw.length === 0) {
-        return { ok: false, reason: 'invalid_filename' };
-      }
       const bytesRaw = input?.bytes;
       if (!(bytesRaw instanceof Uint8Array) && !Buffer.isBuffer(bytesRaw)) {
         return { ok: false, reason: 'invalid_payload' };
       }
-      const buffer = Buffer.isBuffer(bytesRaw) ? bytesRaw : Buffer.from(bytesRaw);
-      if (buffer.length === 0) {
-        return { ok: false, reason: 'empty_payload' };
-      }
-      // Strip path separators / control chars; keep the original
-      // extension because that's what the OS uses to pick a handler.
-      const safeName = filenameRaw
-        .replace(/[\\/]/g, '_')
-        .replace(/[\x00-\x1f]+/g, '')
-        .trim()
-        .slice(0, 255);
-      if (!safeName) return { ok: false, reason: 'invalid_filename' };
-      // Security gate: refuse extensions that Launch Services would hand
-      // to a shell, installer, or runtime. See `isSafeOpenExtension`.
-      if (!isSafeOpenExtension(safeName)) {
-        return { ok: false, reason: 'unsafe_extension' };
-      }
-      let dir: string;
-      try {
-        dir = mkdtempSync(join(tmpdir(), 'silverhand-att-'));
-      } catch (err) {
-        return {
-          ok: false,
-          reason: `mkdtemp_failed:${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
-      const fullPath = join(dir, safeName);
-      try {
-        writeFileSync(fullPath, buffer, { mode: 0o600 });
-      } catch (err) {
-        return {
-          ok: false,
-          reason: `write_failed:${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
-      const openErr = await shell.openPath(fullPath);
-      if (openErr) {
-        return { ok: false, reason: `open_failed:${openErr}` };
-      }
-      return { ok: true };
+      const bytes = Buffer.isBuffer(bytesRaw) ? bytesRaw : Buffer.from(bytesRaw);
+      return materializeAndOpenAttachment(
+        { attachmentId: input?.attachmentId, filename: input?.filename, bytes },
+        {
+          ensureDir: dir => mkdirSync(dir, { recursive: true }),
+          writeFile: (path, data) => writeFileSync(path, data, { mode: 0o600 }),
+          openPath: path => shell.openPath(path),
+        },
+      );
     },
   );
 

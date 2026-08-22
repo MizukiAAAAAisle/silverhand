@@ -588,6 +588,7 @@ declare global {
       pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
       openExternal(url: string): Promise<void>;
       openAttachmentExternal(input: {
+        attachmentId: string;
         filename: string;
         bytes: Uint8Array;
       }): Promise<{ ok: true } | { ok: false; reason: string }>;

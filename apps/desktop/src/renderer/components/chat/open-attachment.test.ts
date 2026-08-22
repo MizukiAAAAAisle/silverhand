@@ -32,7 +32,7 @@ describe('openAttachmentExternally', () => {
     );
 
     expect(d.fetchBytes).toHaveBeenCalledWith('a1');
-    expect(d.open).toHaveBeenCalledWith({ filename: 'x.pdf', bytes: BYTES });
+    expect(d.open).toHaveBeenCalledWith({ attachmentId: 'a1', filename: 'x.pdf', bytes: BYTES });
     expect(d.toastError).not.toHaveBeenCalled();
   });
 

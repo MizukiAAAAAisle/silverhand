@@ -31,6 +31,7 @@ export async function openAttachmentExternally(
 ): Promise<void> {
   await openBytesExternally(
     () => deps.fetchBytes(attachment.id),
+    attachment.id,
     attachment.filename,
     opts,
     deps,
@@ -43,13 +44,14 @@ export async function openAttachmentExternally(
  *  source stays the only axis an additional caller would vary. */
 async function openBytesExternally(
   fetchBytes: () => Promise<{ bytes: Uint8Array }>,
+  attachmentId: string,
   filename: string,
   opts: OpenAttachmentOptions,
   deps: OpenAttachmentCoreDeps,
 ): Promise<void> {
   try {
     const { bytes } = await fetchBytes();
-    const result = await deps.open({ filename, bytes });
+    const result = await deps.open({ attachmentId, filename, bytes });
     if (result.ok) return;
     reportFailure(describeOpenFailure(result.reason), opts, deps);
   } catch (err) {
@@ -108,6 +110,7 @@ export interface OpenAttachmentOptions {
  *  sources its own bytes needs only these two. */
 export interface OpenAttachmentCoreDeps {
   open: (input: {
+    attachmentId: string;
     filename: string;
     bytes: Uint8Array;
   }) => Promise<{ ok: true } | { ok: false; reason: string }>;
