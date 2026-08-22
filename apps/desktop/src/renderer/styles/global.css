@@ -635,6 +635,30 @@ html[data-theme] [data-sonner-toast][data-styled='true'] {
 html[data-theme='forza6'] [data-sonner-toast][data-styled='true'] {
   border: var(--floating-border);
 }
+/* Sonner's action button mapped onto our secondary-control tokens so it tracks
+   the active theme. `html[data-theme]` keeps this above Sonner's runtime-injected
+   defaults on specificity. */
+html[data-theme] [data-sonner-toast][data-styled='true'] [data-button] {
+  border-radius: var(--control-radius);
+  border: var(--control-border-width) solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+}
+html[data-theme] [data-sonner-toast][data-styled='true'] [data-button]:hover {
+  background: var(--bg-hover);
+}
+html[data-theme]
+  [data-sonner-toast][data-styled='true']
+  [data-button]:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+html[data-theme]
+  [data-sonner-toast][data-styled='true']
+  [data-button][data-disabled='true'] {
+  opacity: 0.5;
+}
 
 /* Row-state border color (PR-5 token promotion). Sidebar rows
    (`.sidebar-row-border` class on WorkspaceChannels / WorkspacesPanel /
