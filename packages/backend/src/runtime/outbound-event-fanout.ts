@@ -14,10 +14,14 @@ import type {
   AgentDto,
   AgentRunState,
   AgentRunTerminalReason,
+  AddressFallbackReason,
   RuntimeKind,
   StreamNaming,
 } from '@silverhand/shared';
-import { isBaselineReasoningEffort } from '@silverhand/shared';
+import {
+  composeRuntimeDeliveryPresentation,
+  isBaselineReasoningEffort,
+} from '@silverhand/shared';
 import {
   HOST_AGENT_LIVENESS_CHANGED_EVENT,
   type HostAgentLivenessChangedEvent,
@@ -246,11 +250,32 @@ interface HostFanoutState {
 }
 
 interface PendingDeliveryBatch {
+  claimed: RuntimeClaimedInboxDelivery[];
   deliveryIds: number[];
   deliveries: RuntimeDelivery[];
   text: string;
+  /** Claimed behind this bounded prefix; returned to pending immediately by
+   * `claimPendingBatch` because these ids are not present in encoded output. */
+  remainderIds: number[];
   agentRuntime: string;
   driver: ReturnType<typeof getDriver>;
+}
+
+/** One backend→daemon delivery claim is bounded independently from the
+ * daemon's own deferred queue. Twenty matches the daemon queue's entry cap;
+ * the byte cap is measured over the JSON-encoded batch fields and leaves
+ * ample headroom below the 1MiB protocol-frame ceiling. */
+export const PENDING_DELIVERY_BATCH_MAX_ITEMS = 20;
+export const PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES = 256 * 1024;
+
+export class PendingDeliveryOversizeError extends Error {
+  constructor(readonly inboxId: number, readonly encodedBytes: number) {
+    super(
+      `single runtime delivery ${inboxId} exceeds encoded batch limit ` +
+      `${PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES} bytes (${encodedBytes})`,
+    );
+    this.name = 'PendingDeliveryOversizeError';
+  }
 }
 
 // EventFrameSchema.ready historically models the Unix-socket daemon handshake
@@ -1231,47 +1256,25 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         'outbound start reclaimed stale inbox rows claimed by an old host connection',
       );
     }
-    if (this.inbox.listPending(conversationId, agentId).length === 0) {
-      // Idempotency guard for concurrent claimants. A pending row can
-      // already be in-flight when an explicit `runtimeHost.start` / HTTP
-      // POST `/start` races another path that just claimed it — the
-      // scoped reattach re-drive of a LIVE runtime
-      // (`replayPendingForHost`), a per-pair `ready_for_drain` replay,
-      // or another in-flight start. The racing caller then sees an empty
-      // `listPending` even though a `runtime_start`/delivery dispatch is
-      // already in flight (the winner transitioned the rows to
-      // `in_flight_owner = <conn>`). Without this guard the explicit
-      // start would throw `HostRuntimeDisabledError` ("nothing to
-      // drain") and the route would return a generic 400 — strictly
-      // worse UX than an idempotent success.
-      //
-      // We treat rows claimed by this live connection as proof that
-      // the runtime is being started, and return success. Rows claimed
-      // by old connection ids are stale leases and were reclaimed
-      // above; they must not make an explicit restart/start look
-      // successful while dispatching nothing.
-      if (
-        this.inbox.countInFlightForPairOwner(
-          conversationId,
-          agentId,
-          connectionId,
-        ) > 0
-      ) {
-        return true;
-      }
-      return false;
-    }
     // #task:1417 Stage 2b — NO cache-entry-live fork. We claim pending and
     // submit `runtime_deliver`; the daemon decides spawn-vs-admit. The
     // ready-for-drain submit path runs the fs guards + injects
     // `spawn_options` in the coordinator's bridge closure.
-    const claimed = this.inbox.claimPending(
+    const batch = this.claimPendingBatch(
       conversationId,
       agentId,
       connectionId,
     );
-    if (claimed.length === 0) return false;
-    const batch = this.pendingBatch(conversationId, agentId, claimed);
+    if (!batch) {
+      // Idempotency guard for concurrent claimants. Another path may already
+      // own this pair under the same live connection; a bounded claim returns
+      // empty without first materializing the entire pending backlog.
+      return this.inbox.countInFlightForPairOwner(
+        conversationId,
+        agentId,
+        connectionId,
+      ) > 0;
+    }
     try {
       const decision = await this.stateForHost(
         hostId,
@@ -1279,7 +1282,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         {
           deliveryIds: batch.deliveryIds,
           deliveries: batch.deliveries,
-          dedupKey: claimed[0]!.message.id,
+          dedupKey: batch.claimed[0]!.message.id,
           text: batch.text,
           driver: {
             runtime: batch.agentRuntime,
@@ -1295,10 +1298,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // nothing → roll back to pending. A thrown dispatch (transport /
       // fs-guard) rolls back below.
       if (decision.kind !== 'dispatched') {
-        this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
+        this.rollbackBatchClaims(batch, connectionId, false);
+      } else {
+        this.rollbackBatchClaims(batch, connectionId, true);
       }
     } catch (err) {
-      this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
+      this.rollbackBatchClaims(batch, connectionId, false);
       throw err;
     }
     return true;
@@ -2125,9 +2130,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           );
           return;
         }
-        if (this.inbox.listPending(conversationId, agentId).length === 0) {
-          continue;
-        }
         try {
           await this.replayPendingForAgent(
             hostId,
@@ -2153,13 +2155,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   ): Promise<void> {
     if (this.runtimeTransitioning(agentId)) return;
     this.assertTargetParticipant(conversationId, agentId);
-    const claimed = this.inbox.claimPending(
+    const batch = this.claimPendingBatch(
       conversationId,
       agentId,
       connectionId,
     );
-    if (claimed.length === 0) return;
-    const batch = this.pendingBatch(conversationId, agentId, claimed);
+    if (!batch) return;
     try {
       const decision = await this.stateForHost(
         hostId,
@@ -2169,7 +2170,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         [{
           deliveryIds: batch.deliveryIds,
           deliveries: batch.deliveries,
-          dedupKey: claimed[0]!.message.id,
+          dedupKey: batch.claimed[0]!.message.id,
           text: batch.text,
           driver: {
             runtime: batch.agentRuntime,
@@ -2185,10 +2186,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // incl. a live oneShot the daemon sync-refuses) took nothing → roll
       // back.
       if (decision.kind !== 'dispatched') {
-        this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
+        this.rollbackBatchClaims(batch, connectionId, false);
+      } else {
+        this.rollbackBatchClaims(batch, connectionId, true);
       }
     } catch (err) {
-      this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
+      this.rollbackBatchClaims(batch, connectionId, false);
       throw err;
     }
   }
@@ -2320,13 +2323,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   ): Promise<void> {
     if (this.runtimeTransitioning(agentId)) return;
     this.assertTargetParticipant(conversationId, agentId);
-    const claimed = this.inbox.claimPending(
+    const batch = this.claimPendingBatch(
       conversationId,
       agentId,
       connectionId,
     );
-    if (claimed.length === 0) return;
-    const batch = this.pendingBatch(conversationId, agentId, claimed);
+    if (!batch) return;
     try {
       const decision = await this.stateForHost(
         hostId,
@@ -2336,7 +2338,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         [{
           deliveryIds: batch.deliveryIds,
           deliveries: batch.deliveries,
-          dedupKey: claimed[0]!.message.id,
+          dedupKey: batch.claimed[0]!.message.id,
           text: batch.text,
           driver: {
             runtime: batch.agentRuntime,
@@ -2355,10 +2357,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // `rollbackInFlightForOwner` (paired with the daemon's owner-scoped
       // `cleanupDeferredForOwner`); a thrown dispatch rolls back below.
       if (decision.kind === 'refused') {
-        this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
+        this.rollbackBatchClaims(batch, connectionId, false);
+      } else {
+        this.rollbackBatchClaims(batch, connectionId, true);
       }
     } catch (err) {
-      this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
+      this.rollbackBatchClaims(batch, connectionId, false);
       throw err;
     }
   }
@@ -2372,9 +2376,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (!agent) throw new Error(`agent ${agentId} not found`);
     const driver = getDriver(agent.runtime);
     const addressing = this.streamAddressing(agentId);
-    const format = (rows: readonly RuntimeClaimedInboxDelivery[]) =>
-      formatInboxBatchPresentation(
-        [...rows],
+    // Formatting may discover an address fallback, but byte admission has not
+    // yet decided which claimed rows are observable on the wire. Buffer those
+    // effects per row and commit only the final encoded prefix; a rolled-back
+    // tail must be indistinguishable from a row we never formatted.
+    const formattedRows = claimed.map(row => {
+      const fallbackReasons: AddressFallbackReason[] = [];
+      const formatted = formatInboxBatchPresentation(
+        [row],
         id => this.agents.get(id)?.name,
         id => this.agents.get(id)?.host_id,
         id => this.users.nameOf(id) ?? undefined,
@@ -2382,21 +2391,149 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         agent.name,
         sendMessageToolName(),
         message => this.references.referencesOf(message),
-        addressing,
+        {
+          namingOf: addressing.namingOf,
+          recordFallback: reason => fallbackReasons.push(reason),
+        },
       );
-    const formatted = format(claimed);
+      return {
+        row,
+        presentation: formatted.presentations[0]!,
+        fallbackReasons,
+      };
+    });
+    const batchFor = (rows: typeof formattedRows) => {
+      const presentations = rows.map(item => item.presentation);
+      const text = composeRuntimeDeliveryPresentation(
+        presentations,
+        sendMessageToolName(),
+      );
+      const deliveryIds = rows.map(item => item.row.inboxId);
+      const deliveries = rows.map(item => ({
+        delivery_id: item.row.inboxId,
+        seq: item.row.message.seq,
+        presentation: item.presentation,
+      }));
+      const encodedBytes = Buffer.byteLength(
+        JSON.stringify({
+          delivery_ids: deliveryIds,
+          deliveries,
+          text,
+        }),
+        'utf8',
+      );
+      return { deliveryIds, deliveries, text, encodedBytes };
+    };
+    const selected: typeof formattedRows = [];
+    let bounded: ReturnType<typeof batchFor> | null = null;
+    for (const candidate of formattedRows) {
+      const next = batchFor([...selected, candidate]);
+      if (next.encodedBytes > PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES) {
+        if (selected.length === 0) {
+          throw new PendingDeliveryOversizeError(
+            candidate.row.inboxId,
+            next.encodedBytes,
+          );
+        }
+        break;
+      }
+      selected.push(candidate);
+      bounded = next;
+    }
+    if (!bounded) throw new Error('pending batch cannot be empty');
+    for (const item of selected) {
+      for (const reason of item.fallbackReasons) addressing.recordFallback(reason);
+    }
     this.maybeFlushAddressFallbacks();
     return {
-      deliveryIds: claimed.map(row => row.inboxId),
-      deliveries: claimed.map((row, index) => ({
-        delivery_id: row.inboxId,
-        seq: row.message.seq,
-        presentation: formatted.presentations[index]!,
-      })),
-      text: formatted.text,
+      claimed: selected.map(item => item.row),
+      deliveryIds: bounded.deliveryIds,
+      deliveries: bounded.deliveries,
+      text: bounded.text,
+      remainderIds: formattedRows
+        .slice(selected.length)
+        .map(item => item.row.inboxId),
       agentRuntime: agent.runtime,
       driver,
     };
+  }
+
+  private claimPendingBatch(
+    conversationId: string,
+    agentId: string,
+    connectionId: string,
+  ): PendingDeliveryBatch | null {
+    // An invalid oversized head must not permanently starve later legal rows.
+    // Fail that one row under the lease already held, then continue claiming
+    // the next FIFO prefix in this same delivery attempt.
+    while (true) {
+      const claimed = this.inbox.claimPending(
+        conversationId,
+        agentId,
+        connectionId,
+        PENDING_DELIVERY_BATCH_MAX_ITEMS,
+      );
+      if (claimed.length === 0) return null;
+      try {
+        const batch = this.pendingBatch(conversationId, agentId, claimed);
+        // The encoded-byte cut may be shorter than the SQL count prefix. Those
+        // rows were not encoded and must immediately return to pending custody.
+        this.inbox.rollbackInFlight(batch.remainderIds, connectionId);
+        batch.remainderIds = [];
+        return batch;
+      } catch (error) {
+        if (error instanceof PendingDeliveryOversizeError) {
+          const rejected = this.inbox.settleFailed({
+            conversationId,
+            agentId,
+            inFlightOwner: connectionId,
+            inboxIds: [error.inboxId],
+            reason: 'encoded_oversize',
+          });
+          this.inbox.rollbackInFlight(
+            claimed
+              .map(row => row.inboxId)
+              .filter(inboxId => inboxId !== error.inboxId),
+            connectionId,
+          );
+          if (!rejected) throw error;
+          this.opts.logger.error(
+            {
+              kind: 'inbox',
+              action: 'runtime_delivery_rejected_oversize',
+              conversationId,
+              agent_id: agentId,
+              inbox_id: error.inboxId,
+              encoded_bytes: error.encodedBytes,
+              max_encoded_bytes: PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES,
+            },
+            'single runtime delivery exceeded encoded batch limit',
+          );
+          continue;
+        }
+        this.inbox.rollbackInFlight(
+          claimed.map(row => row.inboxId),
+          connectionId,
+        );
+        throw error;
+      }
+    }
+  }
+
+  /** Keep a transferred prefix leased until its async daemon ack. The byte-
+   * bounded tail was already restored before dispatch and `remainderIds` is
+   * therefore empty here. */
+  private rollbackBatchClaims(
+    batch: PendingDeliveryBatch,
+    connectionId: string,
+    prefixTransferred: boolean,
+  ): void {
+    this.inbox.rollbackInFlight(
+      prefixTransferred
+        ? batch.remainderIds
+        : [...batch.deliveryIds, ...batch.remainderIds],
+      connectionId,
+    );
   }
 
   private runtimeTransitioning(agentId: string): boolean {

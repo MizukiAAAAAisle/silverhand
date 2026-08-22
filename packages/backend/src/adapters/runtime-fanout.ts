@@ -172,9 +172,9 @@ export function createRuntimeFanoutDbDeps(deps: {
         inbox.listPending(conversationId, agentId).map(toRuntimeInboxDelivery),
       listPendingConversationIdsForAgent: agentId =>
         inbox.listPendingConversationIdsForAgent(agentId),
-      claimPending: (conversationId, agentId, inFlightOwner) =>
+      claimPending: (conversationId, agentId, inFlightOwner, maxItems) =>
         inbox
-          .claimPending(conversationId, agentId, inFlightOwner)
+          .claimPending(conversationId, agentId, inFlightOwner, maxItems)
           .map(item => ({
             ...toRuntimeInboxDelivery(item),
             inFlightOwner: item.inFlightOwner,
@@ -185,6 +185,7 @@ export function createRuntimeFanoutDbDeps(deps: {
         inbox.countInFlightForPairOwner(conversationId, agentId, inFlightOwner),
       settleDelivered: input => inbox.settleDelivered(input),
       settleUndelivered: input => inbox.settleUndelivered(input),
+      settleFailed: input => inbox.settleFailed(input),
       rollbackInFlight: (inboxIds, inFlightOwner) => {
         inbox.rollbackInFlight(inboxIds, inFlightOwner);
       },

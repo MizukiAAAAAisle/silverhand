@@ -141,6 +141,7 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
       f.channelId,
       f.agentId,
       'conn-1',
+      20,
     );
     expect(claimed).toHaveLength(1);
     expect(Object.keys(claimed[0]!).sort()).toEqual([

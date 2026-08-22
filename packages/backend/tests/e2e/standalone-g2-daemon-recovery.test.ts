@@ -323,6 +323,7 @@ describe('Standalone G2 — daemon disconnect + pending inbox replay recovery', 
       conversationId,
       agentId,
       oldConnectionId,
+      1,
     );
     expect(claimed).toHaveLength(1);
     expect(claimed[0]!.message.id).toBe(secondMessageId);

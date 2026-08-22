@@ -124,12 +124,14 @@ export interface RuntimeInboxCustodyPort {
   /** Pending origin conversations for a live AgentSlot, ordered by their
    * first durable inbox row. ConversationSlot callers never need this fold. */
   listPendingConversationIdsForAgent(agentId: string): string[];
-  /** Atomically lease every currently-claimable row to `inFlightOwner`.
-   *  Concurrent claimants cannot both win a row. */
+  /** Atomically lease at most `maxItems` currently-claimable rows to
+   * `inFlightOwner`, preserving FIFO order. Concurrent claimants cannot both
+   * win a row. */
   claimPending(
     conversationId: string,
     agentId: string,
     inFlightOwner: string,
+    maxItems: number,
   ): RuntimeClaimedInboxDelivery[];
   /** Any undelivered row for the pair, claimed or not. */
   hasUndeliveredForPair(conversationId: string, agentId: string): boolean;
@@ -151,6 +153,15 @@ export interface RuntimeInboxCustodyPort {
     agentId: string;
     inFlightOwner: string;
     inboxIds: readonly number[];
+  }): boolean;
+  /** Permanently reject a corrupt/unrepresentable delivery while holding its
+   * exact lease, so a poison head cannot starve the FIFO. */
+  settleFailed(input: {
+    conversationId: string;
+    agentId: string;
+    inFlightOwner: string;
+    inboxIds: readonly number[];
+    reason: string;
   }): boolean;
   /** Return rows leased to THIS owner to pending custody. */
   rollbackInFlight(inboxIds: readonly number[], inFlightOwner: string): void;

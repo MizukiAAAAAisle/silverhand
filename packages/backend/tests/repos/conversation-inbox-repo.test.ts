@@ -118,7 +118,7 @@ describe('ConversationInboxRepo', () => {
     })).toBe(false);
     expect(inbox.listPending(channel.id, agentA)).toHaveLength(2);
 
-    const claimed = inbox.claimPending(channel.id, agentA, 'conn-1');
+    const claimed = inbox.claimPending(channel.id, agentA, 'conn-1', 2);
     expect(inbox.settleDelivered({
       conversationId: channel.id,
       agentId: agentA,
@@ -146,10 +146,10 @@ describe('ConversationInboxRepo', () => {
     inbox.enqueue(channel.id, agentA, m1.id);
     inbox.enqueue(channel.id, agentA, m2.id);
 
-    const claimed = inbox.claimPending(channel.id, agentA, 'conn-1');
+    const claimed = inbox.claimPending(channel.id, agentA, 'conn-1', 2);
     expect(claimed.map(row => row.message.content)).toEqual(['1', '2']);
     expect(inbox.listPending(channel.id, agentA)).toEqual([]);
-    expect(inbox.claimPending(channel.id, agentA, 'conn-2')).toEqual([]);
+    expect(inbox.claimPending(channel.id, agentA, 'conn-2', 2)).toEqual([]);
 
     inbox.rollbackInFlight([claimed[0]!.inboxId], 'conn-1');
     expect(inbox.listPending(channel.id, agentA).map(row => row.message.content)).toEqual([
@@ -163,6 +163,81 @@ describe('ConversationInboxRepo', () => {
       inboxIds: [claimed[1]!.inboxId],
     })).toBe(true);
     expect(inbox.listInFlightForOwner('conn-1')).toEqual([]);
+  });
+
+  it('claims only the requested FIFO prefix and leaves the remainder pending', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    for (let index = 0; index < 23; index += 1) {
+      const message = messages.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        content: `message-${index}`,
+      });
+      inbox.enqueue(channel.id, agentA, message.id);
+    }
+
+    const claimed = inbox.claimPending(channel.id, agentA, 'conn-1', 20);
+    expect(claimed.map(row => row.message.content)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `message-${index}`),
+    );
+    expect(inbox.listPending(channel.id, agentA).map(row => row.message.content)).toEqual([
+      'message-20',
+      'message-21',
+      'message-22',
+    ]);
+    const secondClaim = inbox.claimPending(channel.id, agentA, 'conn-2', 20);
+    expect(secondClaim.map(row => row.message.content)).toEqual([
+      'message-20',
+      'message-21',
+      'message-22',
+    ]);
+    expect(new Set([
+      ...claimed.map(row => row.inboxId),
+      ...secondClaim.map(row => row.inboxId),
+    ]).size).toBe(23);
+  });
+
+  it('rejects invalid claim limits before touching custody', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    const message = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      content: 'still pending',
+    });
+    inbox.enqueue(channel.id, agentA, message.id);
+
+    for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        inbox.claimPending(channel.id, agentA, 'conn-invalid', invalid),
+      ).toThrow('claimPending maxItems must be a positive safe integer');
+    }
+    expect(inbox.listPending(channel.id, agentA)).toHaveLength(1);
+  });
+
+  it('atomically gives interleaved owners disjoint FIFO prefixes', () => {
+    const { channel, messages, inbox, agentA } = bootstrap();
+    for (let index = 0; index < 7; index += 1) {
+      const message = messages.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        content: `message-${index}`,
+      });
+      inbox.enqueue(channel.id, agentA, message.id);
+    }
+
+    const first = inbox.claimPending(channel.id, agentA, 'owner-a', 2);
+    const second = inbox.claimPending(channel.id, agentA, 'owner-b', 3);
+    const third = inbox.claimPending(channel.id, agentA, 'owner-a', 2);
+    const claimed = [...first, ...second, ...third];
+
+    expect(claimed.map(row => row.message.content)).toEqual(
+      Array.from({ length: 7 }, (_, index) => `message-${index}`),
+    );
+    expect(new Set(claimed.map(row => row.inboxId)).size).toBe(7);
+    expect(first.every(row => row.inFlightOwner === 'owner-a')).toBe(true);
+    expect(second.every(row => row.inFlightOwner === 'owner-b')).toBe(true);
+    expect(third.every(row => row.inFlightOwner === 'owner-a')).toBe(true);
+    expect(inbox.listPending(channel.id, agentA)).toEqual([]);
   });
 
   it('reclaims stale in-flight rows for a pair without touching the live owner', () => {
@@ -180,9 +255,9 @@ describe('ConversationInboxRepo', () => {
     inbox.enqueue(channel.id, agentA, m1.id);
     inbox.enqueue(channel.id, agentA, m2.id);
 
-    const [oldClaim, liveClaim] = inbox.claimPending(channel.id, agentA, 'old-conn');
+    const [oldClaim, liveClaim] = inbox.claimPending(channel.id, agentA, 'old-conn', 2);
     inbox.rollbackInFlight([liveClaim!.inboxId], 'old-conn');
-    inbox.claimPending(channel.id, agentA, 'conn-1');
+    inbox.claimPending(channel.id, agentA, 'conn-1', 2);
 
     expect(
       inbox.rollbackInFlightForPairExceptOwner(channel.id, agentA, 'conn-1'),
@@ -209,7 +284,7 @@ describe('ConversationInboxRepo', () => {
 
     expect(inbox.hasUndeliveredForPair(channel.id, agentA)).toBe(true);
 
-    const [claimed] = inbox.claimPending(channel.id, agentA, 'conn-1');
+    const [claimed] = inbox.claimPending(channel.id, agentA, 'conn-1', 1);
     expect(inbox.listPending(channel.id, agentA)).toEqual([]);
     expect(inbox.hasUndeliveredForPair(channel.id, agentA)).toBe(true);
 
@@ -239,9 +314,9 @@ describe('ConversationInboxRepo', () => {
     const aId = enqueue(channel.id, agentA, 'origin A');
     const bId = enqueue(channelB.id, agentA, 'origin B');
     const otherAgentId = enqueue(channelB.id, agentB, 'other agent');
-    inbox.claimPending(channel.id, agentA, 'conn-1');
-    inbox.claimPending(channelB.id, agentA, 'conn-1');
-    inbox.claimPending(channelB.id, agentB, 'conn-1');
+    inbox.claimPending(channel.id, agentA, 'conn-1', 1);
+    inbox.claimPending(channelB.id, agentA, 'conn-1', 1);
+    inbox.claimPending(channelB.id, agentB, 'conn-1', 1);
 
     const row = (id: number) => db.prepare(
       `SELECT id, conversation_id, agent_id, delivered_at, failed_at,
@@ -279,7 +354,7 @@ describe('ConversationInboxRepo', () => {
     expect(row(otherAgentId)).toEqual(before.get(otherAgentId));
 
     const retryId = enqueue(channelB.id, agentA, 'retry B');
-    inbox.claimPending(channelB.id, agentA, 'conn-1');
+    inbox.claimPending(channelB.id, agentA, 'conn-1', 1);
     expect(inbox.settleUndelivered(authority([retryId]))).toBe(true);
     expect(row(retryId)).toMatchObject({
       delivered_at: null,
