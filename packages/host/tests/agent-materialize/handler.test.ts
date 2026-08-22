@@ -75,7 +75,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
     expect(existsSync(join(agentDir, 'system_prompt.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'MEMORY.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/onboarding-guide.md'))).toBe(true);
-    expect(existsSync(join(agentDir, 'notes/onboarding-faq.md'))).toBe(true);
+    expect(existsSync(join(agentDir, 'notes/onboarding-faq.md'))).toBe(false);
     expect(existsSync(join(agentDir, 'notes/user-preferences.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/project.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/work-log.md'))).toBe(true);

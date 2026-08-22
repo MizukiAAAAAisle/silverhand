@@ -330,7 +330,7 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
     const retriedL1 = agentL1Dir(tmpAgentsRoot, retriedJson.agent.id);
     expect(existsSync(join(retriedL1, '.materialized'))).toBe(true);
     expect(existsSync(join(retriedL1, 'MEMORY.md'))).toBe(true);
-    expect(existsSync(join(retriedL1, 'notes', 'onboarding-faq.md'))).toBe(true);
+    expect(existsSync(join(retriedL1, 'notes', 'onboarding-faq.md'))).toBe(false);
 
     // ────────────────────────────────────────────────────────────
     // PHASE 3 — §3.2 echo over real wire (same key + same body).

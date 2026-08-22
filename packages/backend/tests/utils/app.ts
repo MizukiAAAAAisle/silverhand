@@ -757,7 +757,6 @@ async function seedFakeAgentL2(l2Dir: string): Promise<boolean> {
   const files: ReadonlyArray<[string, string]> = [
     ['MEMORY.md', '# Memory\n'],
     ['notes/onboarding-guide.md', '# Onboarding Guide\n'],
-    ['notes/onboarding-faq.md', '# Onboarding FAQ\n'],
     ['notes/user-preferences.md', '# User Preferences\n'],
     ['notes/project.md', '# Project Notes\n'],
     ['notes/work-log.md', '# Work Log\n'],

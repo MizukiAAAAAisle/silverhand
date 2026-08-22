@@ -134,82 +134,6 @@ Do not leave the user with a list of options to decide between.
   the work there.
 `;
 
-const ONBOARDING_FAQ_MD = `---
-name: silverhand-onboarding-faq
-description: Answers for Silverhand setup, channels, threads, tasks, agents, memory, and stuck runtimes; read before answering product onboarding questions.
-metadata:
-  category: project
----
-# Silverhand Onboarding FAQ
-
-Reference answers to common user questions.
-Understand the core idea and guardrail for each item, then answer in your own
-words based on the user's context. Do not copy these answers verbatim.
-
-## FAQ 1: What is Silverhand? What can agents do here?
-### Answer idea
-- Silverhand is a desktop workspace where you work with persistent AI agents
-  in shared channels — like a team chat, but agents are real collaborators.
-- Agents keep memory, claim tasks, and hand off work to each other.
-### Next step
-- Ask what the user is working on and propose a starter setup.
-### Guardrail
-- One differentiator, then move to the user's actual work immediately.
-
-## FAQ 2: How do channels, threads, and tasks work?
-### Answer idea
-- Channels are workstreams. Threads are focused discussions tied to a message.
-  Tasks are claimable work units with status tracking.
-- Common pattern: post work in channel → convert to task → agent claims it →
-  progress in task's thread → mark in_review → user approves.
-### Next step
-- Help the user create their first channel and send their first task message.
-### Guardrail
-- These are tools, not rules. Match to the user's actual workflow.
-
-## FAQ 3: How do I add agents to a workspace or channel?
-### Answer idea
-- Agents are created from the Agents section (People tab → + button).
-- Once created, add them to channels during channel creation or via Channel
-  Settings → Members.
-### Next step
-- Give the user a copyable agent name and role description, then guide them to
-  the + button.
-### Guardrail
-- Do not imply you created an agent unless it actually happened.
-
-## FAQ 4: How does agent memory work?
-### Answer idea
-- Each agent keeps MEMORY.md and a notes/ folder that persist across restarts.
-- Active Context preserves live handoffs. Durable notes hold only stable
-  knowledge absent from the codebase, task board, and channel/thread history.
-- Users can explicitly ask an agent to remember something important.
-### Next step
-- If the user wants to check what an agent knows, suggest asking the agent
-  directly or asking it to show its memory/notes.
-### Guardrail
-- Do not promise perfect recall; important items should be explicit in notes.
-
-## FAQ 5: Agent not responding or seems stuck
-### Answer idea
-- Could be a long-running task, a spawn/connection issue, or context pressure.
-- Try @mentioning the agent to prompt a response.
-### Next step
-- Ask the user to @mention the agent and describe what they were doing last.
-### Guardrail
-- Acknowledge the friction directly; do not blame the user.
-
-## FAQ 6: Why use multiple agents?
-### Answer idea
-- Agents handle one major task at a time; multiple agents parallelize work.
-- Different agents can have different specializations — these emerge naturally.
-- A common starter: 2–3 general agents; let roles emerge through real work.
-### Next step
-- Ask for 2–3 recurring work types and map each to an agent.
-### Guardrail
-- Start simple. Unspecialized start is valid; avoid over-scaling early.
-`;
-
 const USER_PREFERENCES_MD = `---
 name: user-preferences
 description: Durable communication, coding, testing, review, and product preferences; read before proposing work or making user-facing decisions.
@@ -295,7 +219,6 @@ const DEFAULT_TEMPLATE: AgentHomeTemplate = {
     { relPath: 'system_prompt.md', content: INITIAL_SYSTEM_PROMPT_MD },
     { relPath: 'MEMORY.md', content: INITIAL_MEMORY_MD },
     { relPath: 'notes/onboarding-guide.md', content: ONBOARDING_GUIDE_MD },
-    { relPath: 'notes/onboarding-faq.md', content: ONBOARDING_FAQ_MD },
     { relPath: 'notes/user-preferences.md', content: USER_PREFERENCES_MD },
     { relPath: 'notes/project.md', content: PROJECT_MD },
     { relPath: 'notes/work-log.md', content: WORK_LOG_MD },
