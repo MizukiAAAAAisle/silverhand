@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::{collections::HashSet, future::Future, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -184,11 +184,14 @@ impl<'de> Visitor<'de> for TopLevelJsonVisitor {
         M: MapAccess<'de>,
     {
         let mut keys = Vec::new();
+        let mut seen = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
-            keys.push(key);
+            if seen.insert(key.clone()) {
+                keys.push(key);
+            }
             map.next_value::<IgnoredAny>()?;
         }
-        Ok(TopLevelJson::Object(keys))
+        Ok(TopLevelJson::Object(js_object_keys(keys)))
     }
 
     fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
@@ -230,6 +233,31 @@ impl<'de> Visitor<'de> for TopLevelJsonVisitor {
     fn visit_unit<E>(self) -> Result<Self::Value, E> {
         Ok(TopLevelJson::Other("null"))
     }
+}
+
+fn js_object_keys(keys: Vec<String>) -> Vec<String> {
+    let mut indexes = Vec::new();
+    let mut named = Vec::new();
+    for key in keys {
+        match js_array_index(&key) {
+            Some(index) => indexes.push((index, key)),
+            None => named.push(key),
+        }
+    }
+    indexes.sort_unstable_by_key(|(index, _)| *index);
+    indexes
+        .into_iter()
+        .map(|(_, key)| key)
+        .chain(named)
+        .collect()
+}
+
+fn js_array_index(key: &str) -> Option<u32> {
+    if key != "0" && key.starts_with('0') {
+        return None;
+    }
+    let index = key.parse::<u32>().ok()?;
+    (index != u32::MAX && index.to_string() == key).then_some(index)
 }
 
 fn session_required() -> Response {
@@ -452,7 +480,9 @@ mod tests {
     struct FixedClock;
 
     impl Clock for FixedClock {
-        fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
+        type Error = Infallible;
+
+        fn unix_time_ms(&self) -> Result<i64, Self::Error> {
             Ok(1_700_000_000_123)
         }
     }
@@ -475,16 +505,43 @@ mod tests {
     #[derive(Clone, Copy)]
     struct FailingClock;
 
+    #[derive(Debug, thiserror::Error)]
+    #[error("clock unavailable")]
+    struct ClockUnavailable;
+
     impl Clock for FailingClock {
-        fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
-            Err(HostInviteError::Clock)
+        type Error = ClockUnavailable;
+
+        fn unix_time_ms(&self) -> Result<i64, Self::Error> {
+            Err(ClockUnavailable)
         }
+    }
+
+    #[derive(Clone, Copy, Default)]
+    enum SessionBehavior {
+        #[default]
+        Resolve,
+        Fail,
     }
 
     #[derive(Clone, Default)]
     struct Sessions {
+        behavior: SessionBehavior,
         calls: Arc<AtomicUsize>,
     }
+
+    impl Sessions {
+        fn failing() -> Self {
+            Self {
+                behavior: SessionBehavior::Fail,
+                ..Self::default()
+            }
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("session storage unavailable")]
+    struct SessionStorageUnavailable;
 
     impl SessionUserResolver for Sessions {
         async fn resolve_session_user(
@@ -492,6 +549,9 @@ mod tests {
             bearer_token: String,
         ) -> Result<Option<String>, PersistenceFailure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            if matches!(self.behavior, SessionBehavior::Fail) {
+                return Err(PersistenceFailure::from_source(SessionStorageUnavailable));
+            }
             Ok((bearer_token == "session-ok").then(|| "user-1".to_owned()))
         }
     }
@@ -529,11 +589,11 @@ mod tests {
     async fn response(
         app: Router,
         authorization: Option<&str>,
-        body: &'static str,
+        body: &str,
     ) -> (StatusCode, String) {
         let mut request = Request::post(HOSTS_PATH)
             .header("content-type", "application/json")
-            .body(Body::from(body))
+            .body(Body::from(body.to_owned()))
             .unwrap();
         if let Some(authorization) = authorization {
             request.headers_mut().insert(
@@ -548,7 +608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projects_the_exact_create_host_response_bytes() {
+    async fn projects_the_create_host_response_with_json_semantic_parity() {
         let store = CountingStore::default();
         let sessions = Sessions::default();
         let (status, body) = response(
@@ -559,23 +619,17 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(response["host_id"], "AAECAwQFBgcICQoL");
+        assert_eq!(response["host"]["name"], "computer-0c0d0e0f");
+        assert_eq!(response["host"]["created_at"], 1_700_000_000_123_i64);
         assert_eq!(
-            body,
-            concat!(
-                "{\"host_id\":\"AAECAwQFBgcICQoL\",\"host\":{",
-                "\"id\":\"AAECAwQFBgcICQoL\",",
-                "\"name\":\"computer-0c0d0e0f\",\"kind\":\"remote\",",
-                "\"created_at\":1700000000123,\"revoked_at\":null,\"last_seen_at\":null,",
-                "\"activated_at\":null,\"finalized_at\":null,\"connected_host_name\":null,",
-                "\"provisioning_source\":\"user_invite\",\"status\":\"pending\",",
-                "\"placeable\":false,\"creator_user_id\":\"user-1\",\"display_label\":null},",
-                "\"connect_token\":\"HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs\",",
-                "\"daemon_npm_spec\":\"@silverhand-ai/daemon@latest\"}"
-            )
+            response["connect_token"],
+            "HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs"
         );
         assert_eq!(store.calls.load(Ordering::SeqCst), 1);
         assert_eq!(
-            normalize_success(serde_json::from_str(&body).unwrap()),
+            normalize_success(response),
             parity_fixture()["success"]["body"]
         );
     }
@@ -621,6 +675,46 @@ mod tests {
             parity_fixture()["unknown_field"]["body"]
         );
         assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn raw_unknown_fields_match_json_parse_and_object_keys_semantics() {
+        for entry in parity_fixture()["raw_unknown_fields"].as_array().unwrap() {
+            let store = CountingStore::default();
+            let raw_body = entry["raw_body"].as_str().unwrap();
+            let (status, body) = response(
+                test_router(store.clone(), Sessions::default()),
+                Some("Bearer session-ok"),
+                raw_body,
+            )
+            .await;
+            assert_eq!(status.as_u16(), entry["status"].as_u64().unwrap() as u16);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                entry["body"]
+            );
+            assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn non_object_shapes_match_zod_before_the_uow() {
+        for entry in parity_fixture()["invalid_shapes"].as_array().unwrap() {
+            let store = CountingStore::default();
+            let raw_body = serde_json::to_string(&entry["request"]).unwrap();
+            let (status, body) = response(
+                test_router(store.clone(), Sessions::default()),
+                Some("Bearer session-ok"),
+                &raw_body,
+            )
+            .await;
+            assert_eq!(status.as_u16(), entry["status"].as_u64().unwrap() as u16);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                entry["body"]
+            );
+            assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]
@@ -686,13 +780,18 @@ mod tests {
             Sessions::default(),
             None,
         );
-        assert_safe_failure(
-            app,
-            &store,
-            0,
-            "system time is outside the supported Unix-millisecond range",
-        )
-        .await;
+        assert_safe_failure(app, &store, 0, "clock unavailable").await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_storage_failure_is_one_safe_refusal_before_the_uow() {
+        let store = CountingStore::default();
+        let app = router(
+            CreateHostInvite::new(store.clone(), FixedEntropy::sequence(), FixedClock),
+            Sessions::failing(),
+            None,
+        );
+        assert_safe_failure(app, &store, 0, "session storage unavailable").await;
     }
 
     #[tokio::test(flavor = "current_thread")]

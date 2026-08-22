@@ -161,7 +161,8 @@ pub trait EntropySource: Send + Sync {
 }
 
 pub trait Clock: Send + Sync {
-    fn unix_time_ms(&self) -> Result<i64, HostInviteError>;
+    type Error: std::error::Error + Send + Sync + 'static;
+    fn unix_time_ms(&self) -> Result<i64, Self::Error>;
 }
 
 #[derive(Debug, Error)]
@@ -267,7 +268,7 @@ pub async fn verify_host_token<S: HostCredentialLookup>(
             HostTokenRejection::HostRevoked,
         ));
     }
-    let Some(user_id) = state.host_user_id else {
+    let Some(user_id) = state.host_user_id.filter(|user_id| !user_id.is_empty()) else {
         return Ok(VerifyHostTokenFact::Rejected(
             HostTokenRejection::HostUnbound,
         ));
@@ -283,8 +284,8 @@ pub async fn verify_host_token<S: HostCredentialLookup>(
 pub enum HostInviteError {
     #[error("secure random source failed")]
     Entropy(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("system time is outside the supported Unix-millisecond range")]
-    Clock,
+    #[error("system clock failed")]
+    Clock(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("unable to allocate a unique host name")]
     NameAllocation,
     #[error(transparent)]
@@ -322,7 +323,10 @@ where
                 id: host_id.clone(),
                 name: host_name,
                 user_id: user_id.clone(),
-                created_at: self.clock.unix_time_ms()?,
+                created_at: self
+                    .clock
+                    .unix_time_ms()
+                    .map_err(|error| HostInviteError::Clock(Box::new(error)))?,
             };
             let created = CreatedUserInviteHost::from_new(&host);
             let credential = NewLongLivedCredential {
@@ -389,13 +393,23 @@ impl EntropySource for OsEntropy {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemClock;
 
+#[derive(Debug, Error)]
+pub enum SystemClockError {
+    #[error("system time precedes the Unix epoch")]
+    BeforeUnixEpoch(#[source] std::time::SystemTimeError),
+    #[error("system Unix-millisecond timestamp exceeds i64")]
+    TimestampOutOfRange(#[source] std::num::TryFromIntError),
+}
+
 impl Clock for SystemClock {
-    fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
+    type Error = SystemClockError;
+
+    fn unix_time_ms(&self) -> Result<i64, Self::Error> {
         let milliseconds = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| HostInviteError::Clock)?
+            .map_err(SystemClockError::BeforeUnixEpoch)?
             .as_millis();
-        i64::try_from(milliseconds).map_err(|_| HostInviteError::Clock)
+        i64::try_from(milliseconds).map_err(SystemClockError::TimestampOutOfRange)
     }
 }
 
@@ -498,15 +512,23 @@ mod tests {
 
     struct FixedClock;
     impl Clock for FixedClock {
-        fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
+        type Error = Infallible;
+
+        fn unix_time_ms(&self) -> Result<i64, Self::Error> {
             Ok(1_700_000_000_123)
         }
     }
 
+    #[derive(Debug, Error)]
+    #[error("clock unavailable")]
+    struct ClockUnavailable;
+
     struct FailingClock;
     impl Clock for FailingClock {
-        fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
-            Err(HostInviteError::Clock)
+        type Error = ClockUnavailable;
+
+        fn unix_time_ms(&self) -> Result<i64, Self::Error> {
+            Err(ClockUnavailable)
         }
     }
 
@@ -549,7 +571,7 @@ mod tests {
         let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(60), FailingClock);
         assert!(matches!(
             service.execute("user-1".into()).await,
-            Err(HostInviteError::Clock)
+            Err(HostInviteError::Clock(error)) if error.to_string() == "clock unavailable"
         ));
         assert_eq!(store.calls.load(Ordering::SeqCst), 0);
     }

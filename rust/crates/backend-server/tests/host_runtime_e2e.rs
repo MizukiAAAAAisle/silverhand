@@ -22,7 +22,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
 
-#[path = "../../backend-sqlite/tests/support/current_schema.rs"]
+#[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
 mod current_schema;
 
 #[derive(Clone)]
@@ -61,11 +61,15 @@ impl SessionUserResolver for Sessions {
 async fn fixture(name: &str) -> (TempDir, std::path::PathBuf, SqliteHostRuntimeStore) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(name);
-    current_schema::create_current_host_schema(&path)
-        .await
-        .close()
-        .await
-        .unwrap();
+    let mut connection = current_schema::create_current_schema(&path).await;
+    sqlx::query(
+        "INSERT INTO users (id, name, display_name, created_at, updated_at)
+         VALUES ('user-1', 'user-1', 'User One', 1, 1)",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
     let store = SqliteHostRuntimeStore::open(&path).await.unwrap();
     (directory, path, store)
 }

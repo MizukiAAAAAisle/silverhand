@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
+import { HostTokenService } from '../../src/auth/host-token.js';
 
 const fixture = JSON.parse(
   readFileSync(
@@ -18,6 +19,21 @@ const fixture = JSON.parse(
   request: unknown;
   status: number;
   body: unknown;
+}>;
+
+const credentialVerdicts = JSON.parse(
+  readFileSync(
+    new URL(
+      '../../../../rust/crates/backend-sqlite/tests/fixtures/host_credential_verdicts.json',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+) as Array<{
+  name: string;
+  now: number;
+  state: Record<string, unknown>;
+  expected: string;
 }>;
 
 function normalizeSuccess(body: any): unknown {
@@ -62,6 +78,60 @@ describe('create host invite parity oracle', () => {
     expect(parsed.error.issues).toEqual(
       (fixture.unknown_field!.body as { issues: unknown[] }).issues,
     );
+  });
+
+  it('matches JSON.parse and Object.keys semantics for raw unknown fields', () => {
+    const cases = fixture.raw_unknown_fields as unknown as Array<{
+      raw_body: string;
+      body: { error: string; issues: unknown[] };
+    }>;
+    for (const entry of cases) {
+      const parsed = HostCreateInputSchema.safeParse(JSON.parse(entry.raw_body));
+      expect(parsed.success).toBe(false);
+      if (parsed.success) {
+        throw new Error('unknown fields unexpectedly passed validation');
+      }
+      expect({ error: 'invalid input', issues: parsed.error.issues }).toEqual(entry.body);
+    }
+  });
+
+  it('locks non-object Zod issues without opening a database', () => {
+    const cases = fixture.invalid_shapes as unknown as Array<{
+      request: unknown;
+      body: { error: string; issues: unknown[] };
+    }>;
+    for (const entry of cases) {
+      const parsed = HostCreateInputSchema.safeParse(entry.request);
+      expect(parsed.success).toBe(false);
+      if (parsed.success) {
+        throw new Error('non-object input unexpectedly passed validation');
+      }
+      expect({ error: 'invalid input', issues: parsed.error.issues }).toEqual(entry.body);
+    }
+  });
+
+  it('locks every credential lifecycle verdict without opening a database', () => {
+    for (const entry of credentialVerdicts) {
+      const row = {
+        id: 'credential-1',
+        host_id: 'host-1',
+        token_hash: 'not-observed-by-the-verdict',
+        kind: 'long_lived',
+        expires_at: null,
+        consumed_at: null,
+        revoked_at: null,
+        host_user_id: 'user-1',
+        host_revoked_at: null,
+        ...entry.state,
+      };
+      const service = new HostTokenService({
+        credentials: { lookupVerification: () => row } as any,
+        hosts: {} as any,
+        uow: {} as any,
+      });
+      const result = service.verifyHostToken('presented-token', { now: entry.now });
+      expect(result.ok ? 'accepted' : result.code, entry.name).toBe(entry.expected);
+    }
   });
 
   it('matches the shared success fixture', async () => {
