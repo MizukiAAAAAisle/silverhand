@@ -115,6 +115,7 @@ export function drainInput(
     conversationId,
     agentId,
     inFlightOwner,
+    Number.MAX_SAFE_INTEGER,
   );
   if (claimed.length === 0) return;
   t.persistence.repos.conversationInboxes.settleDelivered({

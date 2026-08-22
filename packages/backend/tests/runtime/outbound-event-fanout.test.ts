@@ -37,6 +37,8 @@ import {
   ClearSessionInProgressError,
 } from '../../src/runtime/agent-runtime-host.js';
 import {
+  PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES,
+  PENDING_DELIVERY_BATCH_MAX_ITEMS,
   OutboundRuntimeEventFanout,
   outboundEventToEventFrame,
 } from '../../src/runtime/outbound-event-fanout.js';
@@ -72,6 +74,11 @@ vi.mock('@silverhand/shared/reference-markdown', async importOriginal => {
 });
 
 describe('OutboundRuntimeEventFanout', () => {
+  it('locks the public backlog admission budgets to 20 rows and 256KiB', () => {
+    expect(PENDING_DELIVERY_BATCH_MAX_ITEMS).toBe(20);
+    expect(PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES).toBe(256 * 1024);
+  });
+
   it('keeps outbound event projection in lockstep with EventFrameSchema', () => {
     for (const kind of OUTBOUND_DAEMON_EVENT_KINDS) {
       const projected = outboundEventToEventFrame(outboundEventFixture(kind));
@@ -287,7 +294,7 @@ describe('OutboundRuntimeEventFanout', () => {
         content: 'deliver me',
       });
       const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
-      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1', 1);
 
       fix.fanout.onEvent(fix.hostId, {
         direction: 'daemon_to_server',
@@ -316,7 +323,7 @@ describe('OutboundRuntimeEventFanout', () => {
         content: 'retry me',
       });
       const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
-      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1', 1);
 
       fix.fanout.onEvent(fix.hostId, {
         direction: 'daemon_to_server',
@@ -334,6 +341,174 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toMatchObject([
         { inboxId: delivery.inboxId },
       ]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('drains a backlog in ordered count-and-byte-bounded prefixes with one ack per row', async () => {
+    const fix = makeFixture();
+    try {
+      const expectedIds: number[] = [];
+      for (let index = 0; index < 105; index += 1) {
+        const message = fix.messages.insertForConversation({
+          conversationId: fix.channelId,
+          fromKind: 'user',
+          content: `${String(index).padStart(2, '0')}:${'x'.repeat(12 * 1024)}`,
+        });
+        expectedIds.push(
+          fix.inbox.ensureDelivery(fix.channelId, fix.agentId, message.id).inboxId,
+        );
+      }
+
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+
+      const acked: number[] = [];
+      while (acked.length < expectedIds.length) {
+        const callIndex = fix.transport.deliverCalls().length - 1;
+        const params = fix.transport.deliverCalls()[callIndex]!
+          .params as unknown as RuntimeDeliverParams;
+        expect(params.delivery_ids.length).toBeGreaterThan(0);
+        expect(params.delivery_ids.length).toBeLessThanOrEqual(
+          PENDING_DELIVERY_BATCH_MAX_ITEMS,
+        );
+        expect(Buffer.byteLength(JSON.stringify({
+          delivery_ids: params.delivery_ids,
+          deliveries: params.deliveries,
+          text: params.text,
+        }), 'utf8')).toBeLessThanOrEqual(
+          PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES,
+        );
+        acked.push(...params.delivery_ids);
+
+        fix.fanout.onEvent(fix.hostId, {
+          runtime_generation: 1,
+          direction: 'daemon_to_server',
+          type: 'event',
+          kind: 'runtime_delivery_consumed',
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: fix.channelId,
+            agent_id: fix.agentId,
+          },
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+          delivery_ids: params.delivery_ids,
+          ts: 1_700_000_000_000 + callIndex,
+        }, 'conn-1');
+        if (acked.length === expectedIds.length) break;
+
+        const previousCallCount = fix.transport.deliverCalls().length;
+        fix.fanout.onEvent(
+          fix.hostId,
+          readyForDrainEvent(fix),
+          'conn-1',
+        );
+        await waitFor(
+          () => fix.transport.deliverCalls().length === previousCallCount + 1,
+        );
+      }
+
+      expect(acked).toEqual(expectedIds);
+      expect(new Set(acked).size).toBe(expectedIds.length);
+      expect(fix.inbox.hasUndeliveredForPair(fix.channelId, fix.agentId)).toBe(false);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('fails one oversized FIFO head and continues with the following legal delivery', async () => {
+    const errors: Array<Record<string, unknown>> = [];
+    const fix = makeFixture({
+      logger: {
+        ...SILENT_LOGGER,
+        error: (obj: Record<string, unknown>) => errors.push(obj),
+      },
+    });
+    try {
+      const poison = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'x'.repeat(PENDING_DELIVERY_BATCH_MAX_ENCODED_BYTES),
+      });
+      const poisonDelivery = fix.inbox.ensureDelivery(
+        fix.channelId,
+        fix.agentId,
+        poison.id,
+      );
+      const legal = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content: 'legal follower',
+      });
+      const legalDelivery = fix.inbox.ensureDelivery(
+        fix.channelId,
+        fix.agentId,
+        legal.id,
+      );
+
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(true);
+
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
+        delivery_ids: [legalDelivery.inboxId],
+      });
+      expect(fix.transport.deliverCalls()[0]!.params).not.toMatchObject({
+        delivery_ids: expect.arrayContaining([poisonDelivery.inboxId]),
+      });
+
+      const row = (id: number) => fix.db.prepare(
+        `SELECT delivered_at, failed_at, failed_reason,
+                in_flight_owner, in_flight_at
+           FROM conversation_inboxes WHERE id = ?`,
+      ).get(id);
+      expect(row(poisonDelivery.inboxId)).toMatchObject({
+        delivered_at: null,
+        failed_at: expect.any(Number),
+        failed_reason: 'encoded_oversize',
+        in_flight_owner: null,
+        in_flight_at: null,
+      });
+
+      fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: 1,
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_delivery_consumed',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: fix.channelId,
+          agent_id: fix.agentId,
+        },
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        delivery_ids: [legalDelivery.inboxId],
+        ts: 1_700_000_000_000,
+      }, 'conn-1');
+      expect(row(legalDelivery.inboxId)).toMatchObject({
+        delivered_at: expect.any(Number),
+        failed_at: null,
+        failed_reason: null,
+        in_flight_owner: null,
+        in_flight_at: null,
+      });
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
+      expect(fix.inbox.listInFlightForOwner('conn-1')).toEqual([]);
+      expect(fix.inbox.hasUndeliveredForPair(fix.channelId, fix.agentId)).toBe(false);
+
+      const rejectionLogs = () => errors.filter(
+        error => error.action === 'runtime_delivery_rejected_oversize',
+      );
+      expect(rejectionLogs()).toHaveLength(1);
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).resolves.toBe(false);
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(rejectionLogs()).toHaveLength(1);
     } finally {
       fix.cleanup();
     }
@@ -364,9 +539,9 @@ describe('OutboundRuntimeEventFanout', () => {
       const aId = enqueue(fix.channelId, fix.agentId, 'A');
       const bId = enqueue(channelB.id, fix.agentId, 'B');
       const otherAgentId = enqueue(channelB.id, otherAgent.id, 'other');
-      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
-      fix.inbox.claimPending(channelB.id, fix.agentId, 'conn-1');
-      fix.inbox.claimPending(channelB.id, otherAgent.id, 'conn-1');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1', 1);
+      fix.inbox.claimPending(channelB.id, fix.agentId, 'conn-1', 1);
+      fix.inbox.claimPending(channelB.id, otherAgent.id, 'conn-1', 1);
       const row = (id: number) => fix.db.prepare(
         `SELECT id, conversation_id, agent_id, delivered_at, failed_at,
                 in_flight_owner, in_flight_at
@@ -418,7 +593,7 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(row(otherAgentId)).toEqual(before.get(otherAgentId));
 
       const retryId = enqueue(channelB.id, fix.agentId, 'B retry');
-      fix.inbox.claimPending(channelB.id, fix.agentId, 'conn-1');
+      fix.inbox.claimPending(channelB.id, fix.agentId, 'conn-1', 1);
       emit('runtime_delivery_failed', [retryId, aId]);
       expect(row(retryId)).toMatchObject({ in_flight_owner: 'conn-1' });
       emit('runtime_delivery_failed', [retryId]);
@@ -452,7 +627,7 @@ describe('OutboundRuntimeEventFanout', () => {
       };
       const consumedId = enqueue('consume');
       const failedId = enqueue('fail');
-      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1', 2);
       const row = (id: number) => fix.db.prepare(
         `SELECT id, conversation_id, agent_id, delivered_at, failed_at,
                 in_flight_owner, in_flight_at
@@ -1497,6 +1672,107 @@ describe('OutboundRuntimeEventFanout', () => {
       expect(windows()[1]).toMatchObject({
         total: 1,
         counts: { token_budget: 1 },
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('records an address fallback only when its byte-cut tail is actually sent', async () => {
+    const warnings: Array<Record<string, unknown>> = [];
+    const fix = makeFixture({
+      logger: {
+        ...SILENT_LOGGER,
+        warn: (obj: Record<string, unknown>) => warnings.push(obj),
+      },
+    });
+    const windows = (): Array<Record<string, unknown>> =>
+      warnings.filter(w => w.workspace_address_event === 'fallback_window');
+    try {
+      const workspace = new WorkspaceRepo(fix.db).insert({
+        name: fixedWorkspaceName('w'.repeat(64)),
+        description: null,
+      });
+      const conversation = fix.conversations.insertChannel({
+        workspaceId: workspace.id,
+        // The main-line name fits the address-token budget, while adding a
+        // real thread suffix crosses it (shared delivery-target contract).
+        title: fixedConversationTitle('\u{1F680}'.repeat(106)),
+      });
+      fix.conversations.addAgent(conversation.id, fix.agentId);
+      const root = fix.messages.insertForConversation({
+        conversationId: conversation.id,
+        fromKind: 'user',
+        content: 'thread root',
+      });
+      const head = fix.messages.insertForConversation({
+        conversationId: conversation.id,
+        fromKind: 'user',
+        content: 'h'.repeat(120 * 1024),
+      });
+      const tail = fix.messages.insertForConversation({
+        conversationId: conversation.id,
+        fromKind: 'user',
+        content: 't'.repeat(16 * 1024),
+        threadRootId: root.id,
+      });
+      const headDelivery = fix.inbox.ensureDelivery(
+        conversation.id,
+        fix.agentId,
+        head.id,
+      );
+      const tailDelivery = fix.inbox.ensureDelivery(
+        conversation.id,
+        fix.agentId,
+        tail.id,
+      );
+
+      await expect(
+        fix.fanout.deliverPending(conversation.id, fix.agentId),
+      ).resolves.toBe(true);
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.transport.deliverCalls()[0]!.params).toMatchObject({
+        delivery_ids: [headDelivery.inboxId],
+      });
+      expect(windows()).toHaveLength(0);
+
+      fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: 1,
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_delivery_consumed',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: conversation.id,
+          agent_id: fix.agentId,
+        },
+        conversation_id: conversation.id,
+        agent_id: fix.agentId,
+        delivery_ids: [headDelivery.inboxId],
+        ts: 1_700_000_000_000,
+      }, 'conn-1');
+      fix.fanout.onEvent(fix.hostId, {
+        runtime_generation: 1,
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_ready_for_drain',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: conversation.id,
+          agent_id: fix.agentId,
+        },
+        conversation_id: conversation.id,
+        agent_id: fix.agentId,
+        ts: 1_700_000_001_000,
+      }, 'conn-1');
+      await waitFor(() => fix.transport.deliverCalls().length === 2);
+      expect(fix.transport.deliverCalls()[1]!.params).toMatchObject({
+        delivery_ids: [tailDelivery.inboxId],
+      });
+      expect(windows()).toHaveLength(1);
+      expect(windows()[0]).toMatchObject({
+        total: 1,
+        counts: { token_budget: 1, agent_home: 0, unrenderable: 0 },
       });
     } finally {
       fix.cleanup();
@@ -2628,7 +2904,7 @@ describe('OutboundRuntimeEventFanout', () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       const delivery = enqueueMessage(fix, 'stuck behind old owner');
-      fix.inbox.claimPending(fix.channelId, fix.agentId, 'old-conn');
+      fix.inbox.claimPending(fix.channelId, fix.agentId, 'old-conn', 1);
 
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
@@ -3065,7 +3341,7 @@ describe('OutboundRuntimeEventFanout', () => {
     const inFlight = makeFixture();
     try {
       enqueueMessage(inFlight, 'already claimed');
-      inFlight.inbox.claimPending(inFlight.channelId, inFlight.agentId, 'conn-1');
+      inFlight.inbox.claimPending(inFlight.channelId, inFlight.agentId, 'conn-1', 1);
       await hydrateRuntime(inFlight, 'ready', {
         status: 'idle',
         lastActivityAt: 1700000000000,
@@ -3096,7 +3372,7 @@ describe('OutboundRuntimeEventFanout', () => {
           if (checksForPair === 1) return false;
           if (checksForPair === 2) {
             enqueueMessage(fix, 'raced in');
-            this.claimPending(conversationId, agentId, 'conn-race');
+            this.claimPending(conversationId, agentId, 'conn-race', 1);
           }
         }
         return original.call(this, conversationId, agentId);
@@ -4141,7 +4417,7 @@ describe('OutboundRuntimeEventFanout', () => {
             content: `deliver @ ${ts}`,
           });
           const delivery = fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
-          fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1');
+          fix.inbox.claimPending(fix.channelId, fix.agentId, 'conn-1', 1);
           fix.fanout.onEvent(fix.hostId, {
             direction: 'daemon_to_server',
             type: 'event',

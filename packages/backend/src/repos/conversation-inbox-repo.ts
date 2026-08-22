@@ -47,6 +47,10 @@ export interface ConversationInboxSettlement {
   inboxIds: readonly number[];
 }
 
+export interface ConversationInboxFailureSettlement extends ConversationInboxSettlement {
+  reason: string;
+}
+
 export class ConversationInboxRepo {
   constructor(private readonly db: Db) {}
 
@@ -129,9 +133,14 @@ export class ConversationInboxRepo {
     return this.settle(settlement, 'pending');
   }
 
+  settleFailed(settlement: ConversationInboxFailureSettlement): boolean {
+    return this.settle(settlement, 'failed', settlement.reason);
+  }
+
   private settle(
     settlement: ConversationInboxSettlement,
-    disposition: 'delivered' | 'pending',
+    disposition: 'delivered' | 'pending' | 'failed',
+    failedReason?: string,
   ): boolean {
     const inboxIds = [...settlement.inboxIds];
     if (inboxIds.length === 0 || new Set(inboxIds).size !== inboxIds.length) {
@@ -160,6 +169,13 @@ export class ConversationInboxRepo {
         WHERE id = ? AND conversation_id = ? AND agent_id = ?
           AND in_flight_owner = ? AND delivered_at IS NULL AND failed_at IS NULL`,
     );
+    const failed = this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET failed_at = ?, failed_reason = ?,
+              in_flight_owner = NULL, in_flight_at = NULL
+        WHERE id = ? AND conversation_id = ? AND agent_id = ?
+          AND in_flight_owner = ? AND delivered_at IS NULL AND failed_at IS NULL`,
+    );
     const tx = this.db.transaction(() => {
       for (const id of inboxIds) {
         if (!owns.get(
@@ -178,7 +194,9 @@ export class ConversationInboxRepo {
         ] as const;
         const changes = disposition === 'delivered'
           ? delivered.run(now, ...args).changes
-          : pending.run(...args).changes;
+          : disposition === 'failed'
+            ? failed.run(now, failedReason ?? 'unknown', ...args).changes
+            : pending.run(...args).changes;
         if (changes !== 1) {
           throw new Error('conversation inbox settlement lost custody inside transaction');
         }
@@ -192,12 +210,16 @@ export class ConversationInboxRepo {
     conversationId: string,
     agentId: string,
     inFlightOwner: string,
+    maxItems: number,
   ): ClaimedConversationInboxItem[] {
+    if (!Number.isSafeInteger(maxItems) || maxItems <= 0) {
+      throw new Error('claimPending maxItems must be a positive safe integer');
+    }
     const now = Date.now();
     // `in_flight_at` is written for rotation/reconnect diagnostics and a
     // future stale in-flight watchdog. Current replay correctness is owned by
     // the per-connection `in_flight_owner` lease plus disconnect sweep.
-    const select = this.db.prepare<[string, string], JoinedRow>(
+    const select = this.db.prepare<[string, string, number], JoinedRow>(
       `SELECT i.id AS inbox_id, i.delivery_kind, m.*
          FROM conversation_inboxes i
          JOIN messages m ON m.id = i.message_id
@@ -206,7 +228,8 @@ export class ConversationInboxRepo {
           AND i.delivered_at IS NULL
           AND i.failed_at IS NULL
           AND i.in_flight_owner IS NULL
-        ORDER BY i.id ASC`,
+        ORDER BY i.id ASC
+        LIMIT ?`,
     );
     const update = this.db.prepare(
       `UPDATE conversation_inboxes
@@ -218,7 +241,7 @@ export class ConversationInboxRepo {
           AND in_flight_owner IS NULL`,
     );
     return this.db.transaction(() => {
-      const rows = select.all(conversationId, agentId);
+      const rows = select.all(conversationId, agentId, maxItems);
       const claimed: ClaimedConversationInboxItem[] = [];
       for (const { inbox_id, delivery_kind, ...message } of rows) {
         const changed = update.run(inFlightOwner, now, inbox_id).changes;

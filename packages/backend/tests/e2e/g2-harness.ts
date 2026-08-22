@@ -43,14 +43,15 @@
  */
 import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
   spawn as nodeSpawn,
   type ChildProcess,
   type SpawnOptions,
 } from 'node:child_process';
 import { execPath } from 'node:process';
+import { fileURLToPath } from 'node:url';
 import type { OutboundDaemonToServerEventFrame } from '@silverhand/host';
 import {
   OutboundDaemonClient,
@@ -64,6 +65,11 @@ import {
   type OutboundDaemonClientOptions,
   type DaemonLogger,
 } from '@silverhand/host/daemon';
+import {
+  spawnDaemonChild,
+  type DaemonGenerationInfo,
+  type DaemonHandle,
+} from '@silverhand/host';
 import type { Driver } from '@silverhand/host/drivers';
 import {
   DAEMON_HOST_CONFIG_FILENAME,
@@ -72,6 +78,7 @@ import {
   type ServerConfig,
 } from '@silverhand/shared';
 import {
+  defaultAppRoot,
   resolveBackendDataPaths,
 } from '@silverhand/shared/app-data-layout';
 import {
@@ -184,6 +191,45 @@ export interface G2HarnessOptions {
   /** Toggle backend logging — useful when debugging a failing
    *  test. Default: silent. */
   verbose?: boolean;
+  /** Lifecycle tests opt into a fail-closed preflight that prints every
+   * temp coordinate before any backend/daemon subprocess starts. */
+  assertIsolation?: boolean;
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const leftToRight = relative(resolve(left), resolve(right));
+  const rightToLeft = relative(resolve(right), resolve(left));
+  const contains = (candidate: string) =>
+    candidate === '' || (!candidate.startsWith('..') && !isAbsolute(candidate));
+  return contains(leftToRight) || contains(rightToLeft);
+}
+
+function assertIsolatedTestRoot(tempRoot: string, coordinates: readonly string[]): void {
+  const liveRoots = [
+    defaultAppRoot(),
+    join(homedir(), '.qoder'),
+    join(homedir(), '.config', 'qoder'),
+    ...(process.env['SILVERHAND_DATA_DIR']
+      ? [process.env['SILVERHAND_DATA_DIR']!]
+      : []),
+  ];
+  const root = resolve(tempRoot);
+  for (const coordinate of coordinates) {
+    const absolute = resolve(coordinate);
+    if (!pathsOverlap(root, absolute) || absolute === root) {
+      throw new Error(`G2 isolation violation: ${absolute} is outside temp root ${root}`);
+    }
+    for (const liveRoot of liveRoots) {
+      if (pathsOverlap(absolute, liveRoot)) {
+        throw new Error(
+          `G2 isolation violation: ${absolute} overlaps live root ${resolve(liveRoot)}`,
+        );
+      }
+    }
+  }
+  process.stderr.write(
+    `[g2-isolation] ${JSON.stringify({ tempRoot: root, coordinates })}\n`,
+  );
 }
 
 /**
@@ -199,6 +245,9 @@ export async function bootG2Harness(
   const tempDir = mkdtempSync(join(tmpdir(), 'silverhand-g2-'));
   const dbPath = join(tempDir, 'silverhand.db');
   const silverhandDir = join(tempDir, '.silverhand');
+  if (opts.assertIsolation) {
+    assertIsolatedTestRoot(tempDir, [dbPath, silverhandDir]);
+  }
   const verbose = opts.verbose ?? false;
   const userId = opts.userId ?? 'local';
 
@@ -464,6 +513,82 @@ export interface DaemonWithSupervisorOptions {
 export interface DaemonWithSupervisorHandle {
   daemon: RunningDaemon;
   stop: (reason?: string) => Promise<void>;
+}
+
+export interface DesktopSupervisedDaemonHandle {
+  daemon: DaemonHandle;
+  generationChanges: DaemonGenerationInfo[];
+  stop: () => Promise<void>;
+}
+
+/**
+ * Launch the isolated daemon fixture through the same production process
+ * supervisor Desktop main uses. This is deliberately distinct from
+ * `bootDaemonWithSupervisor`: that helper proves the daemon's inner contract,
+ * while this one keeps the outer restart/generation observer in the tree.
+ */
+export async function bootDesktopSupervisedDaemon(
+  harness: G2Harness,
+  opts: { shortWatchdogs?: boolean } = {},
+): Promise<DesktopSupervisedDaemonHandle> {
+  // Keep Unix-socket coordinates below macOS' ~104-byte sockaddr_un limit.
+  const daemonDir = join(harness.silverhandDir, 'd');
+  const logDir = join(daemonDir, 'l');
+  const runtimePidRootDir = join(daemonDir, 'p');
+  const agentHomeRootDir = join(daemonDir, 'a');
+  const socketPath = join(daemonDir, 'd.sock');
+  const pidFilePath = join(daemonDir, 'd.pid');
+  assertIsolatedTestRoot(harness.silverhandDir, [
+    socketPath,
+    pidFilePath,
+    logDir,
+    runtimePidRootDir,
+    agentHomeRootDir,
+    harness.daemonConfigPath,
+  ]);
+  mkdirSync(logDir, { recursive: true });
+  mkdirSync(runtimePidRootDir, { recursive: true });
+  mkdirSync(agentHomeRootDir, { recursive: true });
+  const fixture = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '_fixtures/desktop-supervised-daemon.ts',
+  );
+  const tsxLoader = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../host/node_modules/tsx/dist/loader.mjs',
+  );
+  const daemon = await spawnDaemonChild({
+    launcher: {
+      command: execPath,
+      args: [
+        '--import',
+        tsxLoader,
+        fixture,
+        '--test-agent-home-root',
+        agentHomeRootDir,
+        '--test-short-watchdogs',
+        opts.shortWatchdogs ? 'true' : 'false',
+      ],
+    },
+    socketPath,
+    pidFilePath,
+    logDir,
+    hostConfigPath: harness.daemonConfigPath,
+    runtimePidRootDir,
+    alsoStderr: false,
+    readyTimeoutMs: 15_000,
+    backoffSchedule: [10, 20, 40],
+    maxRestarts: 3,
+    restartWindowMs: 10_000,
+    successResetMs: 60_000,
+  });
+  const generationChanges: DaemonGenerationInfo[] = [];
+  daemon.onDaemonGenerationChanged(info => generationChanges.push(info));
+  return {
+    daemon,
+    generationChanges,
+    stop: () => daemon.kill({ gracefulMs: 1_000 }),
+  };
 }
 
 export async function bootDaemonWithSupervisor(
