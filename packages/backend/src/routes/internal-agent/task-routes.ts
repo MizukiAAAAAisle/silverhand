@@ -227,34 +227,30 @@ export function registerTaskRoutes(
     if (!resolved.ok) return resolved.response;
     const destination = resolved.target.stream.conversationId;
     // Cross-conversation create (the address named a stream other than the one
-    // this session is anchored in) is a DISPATCH: the task is filed UNCLAIMED so a
-    // member of the DESTINATION picks it up. `--claim` self-assigns to the CALLER,
+    // this session is anchored in) is a dispatch: the task is filed unclaimed so a
+    // member of the destination picks it up. `--claim` self-assigns to the caller,
     // which defeats that intent and would let A pin work it cannot execute onto B.
     // Refused before any task/event is written, as the typed 200 op-error envelope
     // (like source_conflict) so the CLI classifies it by `code` and owns the sole
     // human-readable reason string. Same-stream create+claim is untouched.
     //
-    // "Cross" is a fact about the RUNTIME actor, not the auth principal: it is the
-    // SAME predicate the service's `crossConversation` bit uses (task-service.ts),
-    // DEFINED ONLY for a ConversationSlot (`runtimeScope === 'conversation'`), which
-    // has an origin anchor to compare against the destination. An AgentSlot has NO
-    // anchor (`conversationId` is null), so the comparison is UNDEFINED for it and
-    // its correct answer is "not cross": it falls through to the normal
-    // create_tasks/write_tasks (workspace) or participation (direct_pair) gate
-    // below, matching the two-step "create → by-id claim" authority exactly
-    // (#task:2150). Reading the auth principal's nullable `conversationId` here
-    // was the bug — it is null for EVERY agent slot, so `--claim` from an
-    // agent-scoped runtime was ALWAYS misjudged as cross and refused.
+    // "Cross" is a fact about the runtime actor, not the auth principal — the same
+    // predicate the service's `crossConversation` bit uses (task-service.ts),
+    // defined only for a ConversationSlot (`runtimeScope === 'conversation'`), which
+    // has an origin anchor to compare against the destination. An AgentSlot has no
+    // anchor (`conversationId` is null), so "cross" does not apply to it: it falls
+    // through to the normal create_tasks/write_tasks (workspace) or participation
+    // (direct_pair) gate below — the same authority the two-step
+    // "create → by-id claim" spends (#task:2150).
     //
-    // It is decided AFTER resolution, because "another conversation" is a fact
-    // about the resolved stream and no longer a flag this route can read off the
-    // request. That costs nothing in disclosure — being a participant is already
-    // observable to a participant, which is the only case that gets this far — and
-    // one artifact worth naming rather than defending against: `--claim` with a
-    // `dm:@handle` that has no pair yet opens the pair (main-line write intent)
-    // and then lands here. An empty pair between two principals who may DM is not
-    // a leak, and bending the intent to avoid it would make the SAME address
-    // answer differently depending on an unrelated flag.
+    // Decided after resolution, because "another conversation" is a fact about the
+    // resolved stream and not a flag this route can read off the request. That
+    // costs nothing in disclosure — being a participant is already observable to a
+    // participant, which is the only case that gets this far — and `--claim` with a
+    // `dm:@handle` that has no pair yet opens the pair (main-line write intent) and
+    // lands here: an empty pair between two principals who may DM is not a leak, and
+    // bending the intent to avoid it would make the same address answer differently
+    // depending on an unrelated flag.
     const actor = taskActorFrom(c);
     if (
       parsed.data.claim === true

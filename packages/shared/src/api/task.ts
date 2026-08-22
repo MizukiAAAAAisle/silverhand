@@ -559,20 +559,19 @@ export const CreateTasksOpErrorSchema = z.enum([
   /** A task already exists for this source message (permanent 1:1). The
    *  failure carries `existing_task` so the caller can point at it. */
   'source_conflict',
-  /** `--claim` was combined with a cross-conversation create. This fires ONLY for
-   *  a conversation-anchored runtime whose `target` names a stream OTHER than its
-   *  anchor: that create is a DISPATCH — the task is filed UNCLAIMED so a member of
+  /** `--claim` was combined with a cross-conversation create. Defined only for a
+   *  conversation-anchored runtime whose `target` names a stream other than its
+   *  anchor: that create is a dispatch — the task is filed unclaimed so a member of
    *  the destination conversation picks it up — so self-claiming to the caller is
-   *  refused. An agent-scoped runtime has NO anchor for a destination to differ
-   *  from, so it is never refused here (#task:2150); its `--claim` is gated only by
-   *  the normal create_tasks/write_tasks capability (or, on a direct pair,
-   *  participation) — the SAME authority the two-step create-then-by-id-claim
-   *  spends. Decided at the route on the RESOLVED destination — the conflict is a
-   *  fact about which stream the address named, so it can only be answered after
-   *  resolution, and an address that resolves to nothing is answered by the
-   *  resolver instead (#task:2021 P4-4). Either way no task or event is written, and
-   *  the two refusals are not distinguishable by anyone who could not already see
-   *  the destination. The human-readable reason lives only in the CLI mapper. */
+   *  refused. An agent-scoped runtime has no anchor for a destination to differ
+   *  from, so it is never refused here (#task:2150); its `--claim` is gated by the
+   *  normal create_tasks/write_tasks capability (or, on a direct pair, participation)
+   *  — the same authority the two-step create-then-by-id-claim spends. Decided at
+   *  the route on the resolved destination; an address that resolves to nothing is
+   *  answered by the resolver instead (#task:2021 P4-4). Either way no task or event
+   *  is written, and the two refusals are not distinguishable by anyone who could
+   *  not already see the destination. The human-readable reason lives only in the
+   *  CLI mapper. */
   'cross_conversation_claim',
   /** The destination conversation is READ-ONLY: a direct-pair endpoint is
    *  gone (P0-e survivor-readonly). Nothing may write a task row or its
