@@ -43,7 +43,8 @@
   "unknown_field": {
     "authorization": "valid_session",
     "request": {
-      "extra": true
+      "zeta": true,
+      "alpha": true
     },
     "status": 400,
     "body": {
@@ -52,10 +53,11 @@
         {
           "code": "unrecognized_keys",
           "keys": [
-            "extra"
+            "zeta",
+            "alpha"
           ],
           "path": [],
-          "message": "Unrecognized key(s) in object: 'extra'"
+          "message": "Unrecognized key(s) in object: 'zeta', 'alpha'"
         }
       ]
     }

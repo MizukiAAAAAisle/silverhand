@@ -22,22 +22,8 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
 
-const TEST_SCHEMA: &str = "
-    CREATE TABLE users (id TEXT PRIMARY KEY);
-    CREATE TABLE hosts (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
-        user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-        installation_id TEXT, last_seen_at INTEGER, revoked_at INTEGER,
-        created_at INTEGER NOT NULL, display_label TEXT, activated_at INTEGER,
-        finalized_at INTEGER, provisioning_source TEXT NOT NULL DEFAULT 'system'
-    );
-    CREATE TABLE host_credentials (
-        id TEXT PRIMARY KEY,
-        host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
-        token_hash TEXT NOT NULL UNIQUE,
-        kind TEXT NOT NULL CHECK (kind IN ('long_lived', 'bootstrap')),
-        expires_at INTEGER, consumed_at INTEGER, revoked_at INTEGER
-    );";
+#[path = "../../backend-sqlite/tests/support/current_schema.rs"]
+mod current_schema;
 
 #[derive(Clone)]
 struct FixedEntropy(Arc<Mutex<VecDeque<u8>>>);
@@ -75,26 +61,11 @@ impl SessionUserResolver for Sessions {
 async fn fixture(name: &str) -> (TempDir, std::path::PathBuf, SqliteHostRuntimeStore) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(name);
-    let options = SqliteConnectOptions::new()
-        .filename(&path)
-        .create_if_missing(true)
-        .foreign_keys(true);
-    let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
-    for statement in TEST_SCHEMA
-        .split(';')
-        .map(str::trim)
-        .filter(|sql| !sql.is_empty())
-    {
-        sqlx::query(statement)
-            .execute(&mut connection)
-            .await
-            .unwrap();
-    }
-    sqlx::query("INSERT INTO users (id) VALUES ('user-1')")
-        .execute(&mut connection)
+    current_schema::create_current_host_schema(&path)
+        .await
+        .close()
         .await
         .unwrap();
-    connection.close().await.unwrap();
     let store = SqliteHostRuntimeStore::open(&path).await.unwrap();
     (directory, path, store)
 }

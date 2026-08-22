@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { apiPaths } from '@silverhand/shared';
+import { apiPaths, HostCreateInputSchema } from '@silverhand/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -51,6 +51,17 @@ describe('create host invite parity oracle', () => {
   afterEach(() => {
     target?.cleanup();
     target = null;
+  });
+
+  it('preserves the input order of multiple unknown keys', () => {
+    const parsed = HostCreateInputSchema.safeParse(fixture.unknown_field!.request);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      throw new Error('unknown fields unexpectedly passed validation');
+    }
+    expect(parsed.error.issues).toEqual(
+      (fixture.unknown_field!.body as { issues: unknown[] }).issues,
+    );
   });
 
   it('matches the shared success fixture', async () => {

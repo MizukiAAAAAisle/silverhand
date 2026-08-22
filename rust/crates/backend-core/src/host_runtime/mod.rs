@@ -14,46 +14,93 @@ const CREDENTIAL_ID_BYTES: usize = 12;
 const CONNECT_TOKEN_BYTES: usize = 32;
 const HOST_NAME_ATTEMPTS: usize = 8;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HostKind {
-    Remote,
+/// The only host state this operation may create. Lifecycle fields that are
+/// impossible for a fresh invitation do not exist in the core model.
+pub struct NewUserInviteHost {
+    id: String,
+    name: String,
+    user_id: String,
+    created_at: i64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HostProvisioningSource {
-    UserInvite,
+impl NewUserInviteHost {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+    pub fn created_at(&self) -> i64 {
+        self.created_at
+    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HostCredentialKind {
-    LongLived,
+/// A committed invitation fact. Fixed row/DTO defaults are projections owned
+/// by adapters, not optional state carried through the application layer.
+pub struct CreatedUserInviteHost {
+    id: String,
+    name: String,
+    user_id: String,
+    created_at: i64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Host {
-    pub id: String,
-    pub name: String,
-    pub kind: HostKind,
-    pub user_id: String,
-    pub installation_id: Option<String>,
-    pub last_seen_at: Option<i64>,
-    pub revoked_at: Option<i64>,
-    pub created_at: i64,
-    pub activated_at: Option<i64>,
-    pub finalized_at: Option<i64>,
-    pub provisioning_source: HostProvisioningSource,
-    pub display_label: Option<String>,
+impl CreatedUserInviteHost {
+    fn from_new(host: &NewUserInviteHost) -> Self {
+        Self {
+            id: host.id.clone(),
+            name: host.name.clone(),
+            user_id: host.user_id.clone(),
+            created_at: host.created_at,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+    pub fn created_at(&self) -> i64 {
+        self.created_at
+    }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NewHostCredential {
-    pub id: String,
-    pub host_id: String,
-    pub token_hash: String,
-    pub kind: HostCredentialKind,
-    pub expires_at: Option<i64>,
-    pub consumed_at: Option<i64>,
-    pub revoked_at: Option<i64>,
+/// Persistence input for the first credential. Its type fixes the lifecycle to
+/// active, long-lived and unconsumed; no caller can construct another state.
+///
+/// ```compile_fail
+/// use silverhand_backend_core::host_runtime::NewLongLivedCredential;
+/// fn requires_debug<T: std::fmt::Debug>() {}
+/// requires_debug::<NewLongLivedCredential>();
+/// ```
+///
+/// ```compile_fail
+/// use silverhand_backend_core::host_runtime::NewLongLivedCredential;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<NewLongLivedCredential>();
+/// ```
+pub struct NewLongLivedCredential {
+    id: String,
+    host_id: String,
+    token_hash: String,
+}
+
+impl NewLongLivedCredential {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn host_id(&self) -> &str {
+        &self.host_id
+    }
+    pub fn token_hash(&self) -> &str {
+        &self.token_hash
+    }
 }
 
 /// Reveal-once credential. Its public surface intentionally has no `Clone`,
@@ -104,13 +151,12 @@ impl fmt::Debug for PresentedConnectToken {
 }
 
 pub struct HostInviteCreatedFact {
-    pub host: Host,
+    pub host: CreatedUserInviteHost,
     pub connect_token: ConnectToken,
 }
 
 pub trait EntropySource: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
-
     fn fill(&self, destination: &mut [u8]) -> Result<(), Self::Error>;
 }
 
@@ -129,9 +175,15 @@ pub enum HostInviteWriteError {
 pub trait HostInviteUnitOfWork: Clone + Send + Sync + 'static {
     fn create_host_and_credential(
         &self,
-        host: Host,
-        credential: NewHostCredential,
-    ) -> impl Future<Output = Result<Host, HostInviteWriteError>> + Send;
+        host: NewUserInviteHost,
+        credential: NewLongLivedCredential,
+    ) -> impl Future<Output = Result<(), HostInviteWriteError>> + Send;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CredentialKind {
+    LongLived,
+    Bootstrap,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,7 +191,7 @@ pub struct CredentialAuthState {
     pub credential_id: String,
     pub host_id: String,
     pub host_user_id: Option<String>,
-    pub kind: String,
+    pub kind: CredentialKind,
     pub expires_at: Option<i64>,
     pub consumed_at: Option<i64>,
     pub credential_revoked_at: Option<i64>,
@@ -184,7 +236,7 @@ pub async fn verify_host_token<S: HostCredentialLookup>(
     let Some(state) = store.lookup_by_token_hash(token.hash()).await? else {
         return Ok(VerifyHostTokenFact::Rejected(HostTokenRejection::Missing));
     };
-    if state.kind != "long_lived" {
+    if state.kind != CredentialKind::LongLived {
         return Ok(VerifyHostTokenFact::Rejected(
             HostTokenRejection::CredentialNotUsable,
         ));
@@ -261,36 +313,22 @@ where
     }
 
     pub async fn execute(&self, user_id: String) -> Result<HostInviteCreatedFact, HostInviteError> {
-        let created_at = self.clock.unix_time_ms()?;
         for _ in 0..HOST_NAME_ATTEMPTS {
             let host_id = self.random_base64url(HOST_ID_BYTES)?;
             let host_name = format!("computer-{}", self.random_hex(HOST_NAME_BYTES)?);
             let credential_id = self.random_base64url(CREDENTIAL_ID_BYTES)?;
             let raw_token = self.random_base64url(CONNECT_TOKEN_BYTES)?;
-            let token_hash = hash_host_token(&raw_token);
-
-            let host = Host {
+            let host = NewUserInviteHost {
                 id: host_id.clone(),
                 name: host_name,
-                kind: HostKind::Remote,
                 user_id: user_id.clone(),
-                installation_id: None,
-                last_seen_at: None,
-                revoked_at: None,
-                created_at,
-                activated_at: None,
-                finalized_at: None,
-                provisioning_source: HostProvisioningSource::UserInvite,
-                display_label: None,
+                created_at: self.clock.unix_time_ms()?,
             };
-            let credential = NewHostCredential {
+            let created = CreatedUserInviteHost::from_new(&host);
+            let credential = NewLongLivedCredential {
                 id: credential_id,
                 host_id,
-                token_hash,
-                kind: HostCredentialKind::LongLived,
-                expires_at: None,
-                consumed_at: None,
-                revoked_at: None,
+                token_hash: hash_host_token(&raw_token),
             };
 
             match self
@@ -298,9 +336,9 @@ where
                 .create_host_and_credential(host, credential)
                 .await
             {
-                Ok(host) => {
+                Ok(()) => {
                     return Ok(HostInviteCreatedFact {
-                        host,
+                        host: created,
                         connect_token: ConnectToken(raw_token),
                     });
                 }
@@ -334,7 +372,7 @@ fn base64url(input: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(input)
 }
 
-pub fn hash_host_token(token: &str) -> String {
+fn hash_host_token(token: &str) -> String {
     base64url(&Sha256::digest(token.as_bytes()))
 }
 
@@ -343,7 +381,6 @@ pub struct OsEntropy;
 
 impl EntropySource for OsEntropy {
     type Error = getrandom::Error;
-
     fn fill(&self, destination: &mut [u8]) -> Result<(), Self::Error> {
         getrandom::fill(destination)
     }
@@ -367,30 +404,76 @@ mod tests {
     use std::{
         collections::VecDeque,
         convert::Infallible,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use super::*;
 
-    #[derive(Clone, Default)]
-    struct RecordingStore(Arc<Mutex<Vec<(Host, NewHostCredential)>>>);
+    #[derive(Clone, Copy)]
+    enum StoreBehavior {
+        Succeed,
+        DuplicateOnce,
+        AlwaysDuplicate,
+    }
+
+    type RecordedWrite = (String, String, String, String, String, i64);
+
+    #[derive(Clone)]
+    struct RecordingStore {
+        behavior: StoreBehavior,
+        calls: Arc<AtomicUsize>,
+        writes: Arc<Mutex<Vec<RecordedWrite>>>,
+    }
+
+    impl RecordingStore {
+        fn new(behavior: StoreBehavior) -> Self {
+            Self {
+                behavior,
+                calls: Arc::new(AtomicUsize::new(0)),
+                writes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
 
     impl HostInviteUnitOfWork for RecordingStore {
         async fn create_host_and_credential(
             &self,
-            host: Host,
-            credential: NewHostCredential,
-        ) -> Result<Host, HostInviteWriteError> {
-            self.0.lock().unwrap().push((host.clone(), credential));
-            Ok(host)
+            host: NewUserInviteHost,
+            credential: NewLongLivedCredential,
+        ) -> Result<(), HostInviteWriteError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.writes.lock().unwrap().push((
+                host.id,
+                host.name,
+                host.user_id,
+                credential.id,
+                credential.token_hash,
+                host.created_at,
+            ));
+            match self.behavior {
+                StoreBehavior::Succeed => Ok(()),
+                StoreBehavior::DuplicateOnce if call == 0 => {
+                    Err(HostInviteWriteError::DuplicateHostName)
+                }
+                StoreBehavior::DuplicateOnce => Ok(()),
+                StoreBehavior::AlwaysDuplicate => Err(HostInviteWriteError::DuplicateHostName),
+            }
         }
     }
 
     struct FixedEntropy(Mutex<VecDeque<u8>>);
 
+    impl FixedEntropy {
+        fn bytes(count: usize) -> Self {
+            Self(Mutex::new((0..count).map(|index| index as u8).collect()))
+        }
+    }
+
     impl EntropySource for FixedEntropy {
         type Error = Infallible;
-
         fn fill(&self, destination: &mut [u8]) -> Result<(), Self::Error> {
             let mut bytes = self.0.lock().unwrap();
             for destination in destination {
@@ -400,41 +483,95 @@ mod tests {
         }
     }
 
-    struct FixedClock;
+    #[derive(Debug, Error)]
+    #[error("entropy unavailable")]
+    struct EntropyUnavailable;
 
+    struct FailingEntropy;
+
+    impl EntropySource for FailingEntropy {
+        type Error = EntropyUnavailable;
+        fn fill(&self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(EntropyUnavailable)
+        }
+    }
+
+    struct FixedClock;
     impl Clock for FixedClock {
         fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
             Ok(1_700_000_000_123)
         }
     }
 
-    #[tokio::test]
-    async fn creates_the_host_and_default_credential_as_one_semantic_write() {
-        let store = RecordingStore::default();
-        let entropy = FixedEntropy(Mutex::new((0_u8..60).collect()));
-        let service = CreateHostInvite::new(store.clone(), entropy, FixedClock);
+    struct FailingClock;
+    impl Clock for FailingClock {
+        fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
+            Err(HostInviteError::Clock)
+        }
+    }
 
+    #[tokio::test]
+    async fn creates_only_the_state_owned_by_a_fresh_user_invite() {
+        let store = RecordingStore::new(StoreBehavior::Succeed);
+        let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(60), FixedClock);
         let fact = service.execute("user-1".into()).await.unwrap();
         let raw_token = fact.connect_token.reveal_once();
-        let writes = store.0.lock().unwrap();
-        let (host, credential) = &writes[0];
+        let writes = store.writes.lock().unwrap();
+        let (host_id, name, user_id, credential_id, token_hash, created_at) = &writes[0];
 
-        assert_eq!(host.id, "AAECAwQFBgcICQoL");
-        assert_eq!(host.name, "computer-0c0d0e0f");
-        assert_eq!(host.user_id, "user-1");
-        assert_eq!(host.created_at, 1_700_000_000_123);
-        assert_eq!(host.kind, HostKind::Remote);
-        assert_eq!(host.provisioning_source, HostProvisioningSource::UserInvite);
-        assert_eq!(host.activated_at, None);
-        assert_eq!(host.finalized_at, None);
-        assert_eq!(credential.id, "EBESExQVFhcYGRob");
-        assert_eq!(credential.host_id, host.id);
-        assert_eq!(credential.kind, HostCredentialKind::LongLived);
-        assert_eq!(credential.expires_at, None);
-        assert_eq!(credential.consumed_at, None);
-        assert_eq!(credential.revoked_at, None);
+        assert_eq!(host_id, "AAECAwQFBgcICQoL");
+        assert_eq!(name, "computer-0c0d0e0f");
+        assert_eq!(user_id, "user-1");
+        assert_eq!(created_at, &1_700_000_000_123);
+        assert_eq!(credential_id, "EBESExQVFhcYGRob");
+        assert_eq!(fact.host.id(), host_id);
+        assert_eq!(fact.host.name(), name);
+        assert_eq!(fact.host.user_id(), user_id);
         assert_eq!(raw_token.len(), 43);
-        assert_ne!(credential.token_hash, raw_token);
+        assert_ne!(token_hash, &raw_token);
+        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn entropy_failure_happens_before_the_unit_of_work() {
+        let store = RecordingStore::new(StoreBehavior::Succeed);
+        let service = CreateHostInvite::new(store.clone(), FailingEntropy, FixedClock);
+        assert!(matches!(
+            service.execute("user-1".into()).await,
+            Err(HostInviteError::Entropy(_))
+        ));
+        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn clock_failure_happens_before_the_unit_of_work() {
+        let store = RecordingStore::new(StoreBehavior::Succeed);
+        let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(60), FailingClock);
+        assert!(matches!(
+            service.execute("user-1".into()).await,
+            Err(HostInviteError::Clock)
+        ));
+        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn retries_one_duplicate_name_then_succeeds() {
+        let store = RecordingStore::new(StoreBehavior::DuplicateOnce);
+        let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(120), FixedClock);
+        let fact = service.execute("user-1".into()).await.unwrap();
+        assert_eq!(store.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(fact.host.name(), "computer-48494a4b");
+    }
+
+    #[tokio::test]
+    async fn eight_duplicate_names_exhaust_the_contract() {
+        let store = RecordingStore::new(StoreBehavior::AlwaysDuplicate);
+        let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(8 * 60), FixedClock);
+        assert!(matches!(
+            service.execute("user-1".into()).await,
+            Err(HostInviteError::NameAllocation)
+        ));
+        assert_eq!(store.calls.load(Ordering::SeqCst), 8);
     }
 
     #[test]

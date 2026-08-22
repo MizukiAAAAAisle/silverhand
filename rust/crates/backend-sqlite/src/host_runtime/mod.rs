@@ -2,8 +2,8 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     host_runtime::{
-        CredentialAuthState, Host, HostCredentialKind, HostCredentialLookup, HostInviteUnitOfWork,
-        HostInviteWriteError, HostKind, HostProvisioningSource, NewHostCredential,
+        CredentialAuthState, CredentialKind, HostCredentialLookup, HostInviteUnitOfWork,
+        HostInviteWriteError, NewLongLivedCredential, NewUserInviteHost,
     },
     persistence::PersistenceFailure,
 };
@@ -44,9 +44,9 @@ impl SqliteHostRuntimeStore {
 
     async fn create_transaction(
         &self,
-        host: Host,
-        credential: NewHostCredential,
-    ) -> Result<Host, HostInviteWriteError> {
+        host: NewUserInviteHost,
+        credential: NewLongLivedCredential,
+    ) -> Result<(), HostInviteWriteError> {
         let mut tx = self
             .pool
             .begin_with(ROOT_WRITE_BEGIN)
@@ -54,7 +54,7 @@ impl SqliteHostRuntimeStore {
             .map_err(persistence)?;
         let name_exists: i64 =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM hosts WHERE name = ?)")
-                .bind(&host.name)
+                .bind(host.name())
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(persistence)?;
@@ -66,20 +66,12 @@ impl SqliteHostRuntimeStore {
             "INSERT INTO hosts
                 (id, name, kind, user_id, installation_id, last_seen_at, revoked_at,
                  created_at, display_label, activated_at, finalized_at, provisioning_source)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, 'remote', ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, 'user_invite')",
         )
-        .bind(&host.id)
-        .bind(&host.name)
-        .bind(host_kind(host.kind))
-        .bind(&host.user_id)
-        .bind(&host.installation_id)
-        .bind(host.last_seen_at)
-        .bind(host.revoked_at)
-        .bind(host.created_at)
-        .bind(&host.display_label)
-        .bind(host.activated_at)
-        .bind(host.finalized_at)
-        .bind(provisioning_source(host.provisioning_source))
+        .bind(host.id())
+        .bind(host.name())
+        .bind(host.user_id())
+        .bind(host.created_at())
         .execute(&mut *tx)
         .await
         .map_err(persistence)?;
@@ -87,30 +79,26 @@ impl SqliteHostRuntimeStore {
         sqlx::query(
             "INSERT INTO host_credentials
                 (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, 'long_lived', NULL, NULL, NULL)",
         )
-        .bind(&credential.id)
-        .bind(&credential.host_id)
-        .bind(&credential.token_hash)
-        .bind(credential_kind(credential.kind))
-        .bind(credential.expires_at)
-        .bind(credential.consumed_at)
-        .bind(credential.revoked_at)
+        .bind(credential.id())
+        .bind(credential.host_id())
+        .bind(credential.token_hash())
         .execute(&mut *tx)
         .await
         .map_err(persistence)?;
 
         tx.commit().await.map_err(persistence)?;
-        Ok(host)
+        Ok(())
     }
 }
 
 impl HostInviteUnitOfWork for SqliteHostRuntimeStore {
     async fn create_host_and_credential(
         &self,
-        host: Host,
-        credential: NewHostCredential,
-    ) -> Result<Host, HostInviteWriteError> {
+        host: NewUserInviteHost,
+        credential: NewLongLivedCredential,
+    ) -> Result<(), HostInviteWriteError> {
         self.create_transaction(host, credential).await
     }
 }
@@ -133,11 +121,12 @@ impl HostCredentialLookup for SqliteHostRuntimeStore {
         .await
         .map_err(PersistenceFailure::from_source)?;
         row.map(|row| -> Result<CredentialAuthState, sqlx::Error> {
+            let kind: String = row.try_get("kind")?;
             Ok(CredentialAuthState {
                 credential_id: row.try_get("credential_id")?,
                 host_id: row.try_get("host_id")?,
                 host_user_id: row.try_get("host_user_id")?,
-                kind: row.try_get("kind")?,
+                kind: decode_credential_kind(&kind)?,
                 expires_at: row.try_get("expires_at")?,
                 consumed_at: row.try_get("consumed_at")?,
                 credential_revoked_at: row.try_get("credential_revoked_at")?,
@@ -153,23 +142,21 @@ fn persistence(error: sqlx::Error) -> HostInviteWriteError {
     HostInviteWriteError::Persistence(PersistenceFailure::from_source(error))
 }
 
-fn host_kind(kind: HostKind) -> &'static str {
+fn decode_credential_kind(kind: &str) -> Result<CredentialKind, sqlx::Error> {
     match kind {
-        HostKind::Remote => "remote",
+        "long_lived" => Ok(CredentialKind::LongLived),
+        "bootstrap" => Ok(CredentialKind::Bootstrap),
+        _ => Err(sqlx::Error::Decode(Box::new(InvalidCredentialKind))),
     }
 }
 
-fn provisioning_source(source: HostProvisioningSource) -> &'static str {
-    match source {
-        HostProvisioningSource::UserInvite => "user_invite",
-    }
-}
+#[derive(Debug, Error)]
+#[error("persisted host credential kind is unsupported")]
+struct InvalidCredentialKind;
 
-fn credential_kind(kind: HostCredentialKind) -> &'static str {
-    match kind {
-        HostCredentialKind::LongLived => "long_lived",
-    }
-}
+#[cfg(test)]
+#[path = "../../tests/support/current_schema.rs"]
+mod current_schema;
 
 #[cfg(test)]
 mod tests {
@@ -177,51 +164,19 @@ mod tests {
         CreateHostInvite, HostTokenRejection, OsEntropy, SystemClock, VerifyHostTokenFact,
         verify_host_token,
     };
+    use sqlx::Connection;
     use tempfile::TempDir;
 
     use super::*;
 
-    const TEST_SCHEMA: &str = "
-        CREATE TABLE users (id TEXT PRIMARY KEY);
-        CREATE TABLE hosts (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
-            user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-            installation_id TEXT, last_seen_at INTEGER, revoked_at INTEGER,
-            created_at INTEGER NOT NULL, display_label TEXT, activated_at INTEGER,
-            finalized_at INTEGER, provisioning_source TEXT NOT NULL DEFAULT 'system'
-        );
-        CREATE TABLE host_credentials (
-            id TEXT PRIMARY KEY,
-            host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
-            token_hash TEXT NOT NULL UNIQUE,
-            kind TEXT NOT NULL CHECK (kind IN ('long_lived', 'bootstrap')),
-            expires_at INTEGER, consumed_at INTEGER, revoked_at INTEGER
-        );";
-
     async fn fixture() -> (TempDir, SqliteHostRuntimeStore) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("host.sqlite");
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
+        super::current_schema::create_current_host_schema(&path)
+            .await
+            .close()
             .await
             .unwrap();
-        for statement in TEST_SCHEMA
-            .split(';')
-            .map(str::trim)
-            .filter(|sql| !sql.is_empty())
-        {
-            sqlx::query(statement).execute(&pool).await.unwrap();
-        }
-        sqlx::query("INSERT INTO users (id) VALUES ('user-1')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
         let store = SqliteHostRuntimeStore::open(&path).await.unwrap();
         (directory, store)
     }
@@ -231,7 +186,7 @@ mod tests {
         let (directory, store) = fixture().await;
         let service = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock);
         let fact = service.execute("user-1".into()).await.unwrap();
-        let host_id = fact.host.id.clone();
+        let host_id = fact.host.id().to_owned();
         let redacted = format!("{:?}", fact.connect_token);
         let raw_token = fact.connect_token.reveal_once();
         drop(service);
@@ -256,6 +211,41 @@ mod tests {
         assert_ne!(stored, raw_token);
         assert_eq!(redacted, "ConnectToken([REDACTED])");
         assert!(!redacted.contains(&raw_token));
+
+        let row = sqlx::query(
+            "SELECT h.kind, h.provisioning_source, h.installation_id, h.last_seen_at,
+                    h.revoked_at, h.display_label, h.activated_at, h.finalized_at,
+                    c.kind AS credential_kind, c.expires_at, c.consumed_at,
+                    c.revoked_at AS credential_revoked_at
+               FROM hosts h
+               JOIN host_credentials c ON c.host_id = h.id
+              WHERE h.id = ?",
+        )
+        .bind(&host_id)
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("kind"), "remote");
+        assert_eq!(row.get::<String, _>("provisioning_source"), "user_invite");
+        assert_eq!(row.get::<String, _>("credential_kind"), "long_lived");
+        for column in ["installation_id", "display_label"] {
+            assert_eq!(
+                row.get::<Option<String>, _>(column),
+                None,
+                "column {column}"
+            );
+        }
+        for column in [
+            "last_seen_at",
+            "revoked_at",
+            "activated_at",
+            "finalized_at",
+            "expires_at",
+            "consumed_at",
+            "credential_revoked_at",
+        ] {
+            assert_eq!(row.get::<Option<i64>, _>(column), None, "column {column}");
+        }
     }
 
     #[tokio::test]
@@ -292,5 +282,18 @@ mod tests {
                 .unwrap(),
             VerifyHostTokenFact::Rejected(HostTokenRejection::Missing)
         );
+    }
+
+    #[test]
+    fn credential_kind_is_decoded_at_the_sqlite_boundary() {
+        assert_eq!(
+            decode_credential_kind("long_lived").unwrap(),
+            CredentialKind::LongLived
+        );
+        assert_eq!(
+            decode_credential_kind("bootstrap").unwrap(),
+            CredentialKind::Bootstrap
+        );
+        assert!(decode_credential_kind("future_kind").is_err());
     }
 }

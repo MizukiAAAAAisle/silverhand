@@ -8,11 +8,14 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde::Serialize;
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{IgnoredAny, MapAccess, SeqAccess, Visitor},
+};
 use silverhand_backend_core::{
     host_runtime::{
-        Clock, CreateHostInvite, EntropySource, Host, HostInviteError, HostInviteUnitOfWork,
-        HostKind, HostProvisioningSource,
+        Clock, CreateHostInvite, CreatedUserInviteHost, EntropySource, HostInviteError,
+        HostInviteUnitOfWork,
     },
     persistence::PersistenceFailure,
 };
@@ -95,7 +98,7 @@ where
     match state.0.create_host_invite.execute(user_id).await {
         Ok(fact) => {
             let response = HostCreateResponse {
-                host_id: fact.host.id.clone(),
+                host_id: fact.host.id().to_owned(),
                 host: HostDto::from(fact.host),
                 connect_token: fact.connect_token.reveal_once(),
                 daemon_npm_spec: state.0.daemon_npm_spec.clone(),
@@ -121,48 +124,111 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn validate_empty_object(body: &[u8]) -> Option<Response> {
-    let value = serde_json::from_slice(body).unwrap_or_else(|_| serde_json::json!({}));
-    match value {
-        serde_json::Value::Object(object) if object.is_empty() => None,
-        serde_json::Value::Object(object) => {
-            let keys = object.keys().cloned().collect();
+    let shape = serde_json::from_slice::<TopLevelJson>(body)
+        .unwrap_or_else(|_| TopLevelJson::Object(Vec::new()));
+    match shape {
+        TopLevelJson::Object(keys) if keys.is_empty() => None,
+        TopLevelJson::Object(keys) => {
+            let message = unrecognized_keys_message(&keys);
             Some(invalid_input(vec![ZodIssue::UnrecognizedKeys {
                 code: "unrecognized_keys",
                 keys,
                 path: Vec::new(),
-                message: unrecognized_keys_message(&object),
+                message,
             }]))
         }
-        other => {
-            let received = json_type(&other);
-            Some(invalid_input(vec![ZodIssue::InvalidType {
-                code: "invalid_type",
-                expected: "object",
-                received,
-                path: Vec::new(),
-                message: format!("Expected object, received {received}"),
-            }]))
-        }
+        TopLevelJson::Other(received) => Some(invalid_input(vec![ZodIssue::InvalidType {
+            code: "invalid_type",
+            expected: "object",
+            received,
+            path: Vec::new(),
+            message: format!("Expected object, received {received}"),
+        }])),
     }
 }
 
-fn unrecognized_keys_message(object: &serde_json::Map<String, serde_json::Value>) -> String {
-    let quoted = object
-        .keys()
+fn unrecognized_keys_message(keys: &[String]) -> String {
+    let quoted = keys
+        .iter()
         .map(|key| format!("'{key}'"))
         .collect::<Vec<_>>()
         .join(", ");
     format!("Unrecognized key(s) in object: {quoted}")
 }
 
-fn json_type(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
+enum TopLevelJson {
+    Object(Vec<String>),
+    Other(&'static str),
+}
+
+impl<'de> Deserialize<'de> for TopLevelJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(TopLevelJsonVisitor)
+    }
+}
+
+struct TopLevelJsonVisitor;
+
+impl<'de> Visitor<'de> for TopLevelJsonVisitor {
+    type Value = TopLevelJson;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut keys = Vec::new();
+        while let Some(key) = map.next_key::<String>()? {
+            keys.push(key);
+            map.next_value::<IgnoredAny>()?;
+        }
+        Ok(TopLevelJson::Object(keys))
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(TopLevelJson::Other("array"))
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("boolean"))
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("number"))
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("number"))
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("number"))
+    }
+
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("string"))
+    }
+
+    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("string"))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("null"))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(TopLevelJson::Other("null"))
     }
 }
 
@@ -242,29 +308,23 @@ struct HostDto {
     display_label: Option<String>,
 }
 
-impl From<Host> for HostDto {
-    fn from(host: Host) -> Self {
-        let kind = match host.kind {
-            HostKind::Remote => "remote",
-        };
-        let provisioning_source = match host.provisioning_source {
-            HostProvisioningSource::UserInvite => "user_invite",
-        };
+impl From<CreatedUserInviteHost> for HostDto {
+    fn from(host: CreatedUserInviteHost) -> Self {
         Self {
-            id: host.id,
-            name: host.name,
-            kind,
-            created_at: host.created_at,
-            revoked_at: host.revoked_at,
-            last_seen_at: host.last_seen_at,
-            activated_at: host.activated_at,
-            finalized_at: host.finalized_at,
+            id: host.id().to_owned(),
+            name: host.name().to_owned(),
+            kind: "remote",
+            created_at: host.created_at(),
+            revoked_at: None,
+            last_seen_at: None,
+            activated_at: None,
+            finalized_at: None,
             connected_host_name: None,
-            provisioning_source,
+            provisioning_source: "user_invite",
             status: "pending",
             placeable: false,
-            creator_user_id: host.user_id,
-            display_label: host.display_label,
+            creator_user_id: host.user_id().to_owned(),
+            display_label: None,
         }
     }
 }
@@ -298,6 +358,7 @@ mod tests {
     use std::{
         collections::VecDeque,
         convert::Infallible,
+        io::{self, Write},
         sync::{
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
@@ -308,26 +369,59 @@ mod tests {
         body::{Body, to_bytes},
         http::Request,
     };
-    use silverhand_backend_core::host_runtime::{HostInviteWriteError, NewHostCredential};
+    use silverhand_backend_core::host_runtime::{
+        HostInviteWriteError, NewLongLivedCredential, NewUserInviteHost,
+    };
     use tower::ServiceExt;
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
 
+    #[derive(Clone, Copy, Default)]
+    enum StoreBehavior {
+        #[default]
+        Succeed,
+        DuplicateOnce,
+        AlwaysDuplicate,
+    }
+
     #[derive(Clone, Default)]
     struct CountingStore {
+        behavior: StoreBehavior,
         calls: Arc<AtomicUsize>,
-        writes: Arc<Mutex<Vec<(Host, NewHostCredential)>>>,
+        writes: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl CountingStore {
+        fn with_behavior(behavior: StoreBehavior) -> Self {
+            Self {
+                behavior,
+                ..Self::default()
+            }
+        }
     }
 
     impl HostInviteUnitOfWork for CountingStore {
         async fn create_host_and_credential(
             &self,
-            host: Host,
-            credential: NewHostCredential,
-        ) -> Result<Host, HostInviteWriteError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            self.writes.lock().unwrap().push((host.clone(), credential));
-            Ok(host)
+            host: NewUserInviteHost,
+            credential: NewLongLivedCredential,
+        ) -> Result<(), HostInviteWriteError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.behavior {
+                StoreBehavior::DuplicateOnce if call == 0 => {
+                    return Err(HostInviteWriteError::DuplicateHostName);
+                }
+                StoreBehavior::AlwaysDuplicate => {
+                    return Err(HostInviteWriteError::DuplicateHostName);
+                }
+                StoreBehavior::Succeed | StoreBehavior::DuplicateOnce => {}
+            }
+            self.writes
+                .lock()
+                .unwrap()
+                .push((host.id().to_owned(), credential.id().to_owned()));
+            Ok(())
         }
     }
 
@@ -336,7 +430,9 @@ mod tests {
 
     impl FixedEntropy {
         fn sequence() -> Self {
-            Self(Arc::new(Mutex::new((0_u8..=u8::MAX).collect())))
+            Self(Arc::new(Mutex::new(
+                (0..1024).map(|index| index as u8).collect(),
+            )))
         }
     }
 
@@ -358,6 +454,30 @@ mod tests {
     impl Clock for FixedClock {
         fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
             Ok(1_700_000_000_123)
+        }
+    }
+
+    #[derive(Clone)]
+    struct FailingEntropy;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("entropy unavailable")]
+    struct EntropyUnavailable;
+
+    impl EntropySource for FailingEntropy {
+        type Error = EntropyUnavailable;
+
+        fn fill(&self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(EntropyUnavailable)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct FailingClock;
+
+    impl Clock for FailingClock {
+        fn unix_time_ms(&self) -> Result<i64, HostInviteError> {
+            Err(HostInviteError::Clock)
         }
     }
 
@@ -482,19 +602,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strict_unknown_field_matches_zod_before_the_uow() {
+    async fn strict_unknown_fields_preserve_zod_input_order_before_the_uow() {
         let store = CountingStore::default();
         let sessions = Sessions::default();
         let (status, body) = response(
             test_router(store.clone(), sessions),
             Some("Bearer session-ok"),
-            "{\"extra\":true}",
+            "{\"zeta\":true,\"alpha\":true}",
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             body,
-            "{\"error\":\"invalid input\",\"issues\":[{\"code\":\"unrecognized_keys\",\"keys\":[\"extra\"],\"path\":[],\"message\":\"Unrecognized key(s) in object: 'extra'\"}]}"
+            "{\"error\":\"invalid input\",\"issues\":[{\"code\":\"unrecognized_keys\",\"keys\":[\"zeta\",\"alpha\"],\"path\":[],\"message\":\"Unrecognized key(s) in object: 'zeta', 'alpha'\"}]}"
         );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&body).unwrap(),
@@ -536,5 +656,114 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&body).unwrap()["daemon_npm_spec"],
             "file:/repo/packages/silverhand-daemon"
         );
+    }
+
+    #[tokio::test]
+    async fn one_duplicate_name_retries_then_returns_success() {
+        let store = CountingStore::with_behavior(StoreBehavior::DuplicateOnce);
+        let app = test_router(store.clone(), Sessions::default());
+        let (status, _) = response(app, Some("Bearer session-ok"), "{}").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(store.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn entropy_failure_is_one_safe_boundary_refusal_before_the_uow() {
+        let store = CountingStore::default();
+        let app = router(
+            CreateHostInvite::new(store.clone(), FailingEntropy, FixedClock),
+            Sessions::default(),
+            None,
+        );
+        assert_safe_failure(app, &store, 0, "entropy unavailable").await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clock_failure_is_one_safe_boundary_refusal_before_the_uow() {
+        let store = CountingStore::default();
+        let app = router(
+            CreateHostInvite::new(store.clone(), FixedEntropy::sequence(), FailingClock),
+            Sessions::default(),
+            None,
+        );
+        assert_safe_failure(
+            app,
+            &store,
+            0,
+            "system time is outside the supported Unix-millisecond range",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn name_exhaustion_is_one_safe_boundary_refusal_after_eight_attempts() {
+        let store = CountingStore::with_behavior(StoreBehavior::AlwaysDuplicate);
+        let app = test_router(store.clone(), Sessions::default());
+        assert_safe_failure(app, &store, 8, "unable to allocate a unique host name").await;
+    }
+
+    async fn assert_safe_failure(
+        app: Router,
+        store: &CountingStore,
+        expected_calls: usize,
+        expected_chain: &str,
+    ) {
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (status, body) = response(app, Some("Bearer session-ok"), "{}").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, "Internal Server Error");
+        assert_eq!(store.calls.load(Ordering::SeqCst), expected_calls);
+
+        let errors = logs
+            .events()
+            .into_iter()
+            .filter(|event| event["level"] == "ERROR")
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 1);
+        let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+        assert!(chain.contains(expected_chain));
+        assert!(!chain.contains("HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs"));
+    }
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl LogBuffer {
+        fn events(&self) -> Vec<serde_json::Value> {
+            let bytes = self.0.lock().unwrap().clone();
+            String::from_utf8(bytes)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        }
+    }
+
+    struct LogWriter(LogBuffer);
+
+    impl Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuffer {
+        type Writer = LogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            LogWriter(self.clone())
+        }
     }
 }
