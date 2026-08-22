@@ -149,6 +149,7 @@
      `--bg-hover` 4.65:1、白底 5.42:1，五个面全过 AA。深色面不受影响：NavRail
      那块深板岩用自己的 `--text-nav-rail`，muted 从不落在深底上。 */
   --text-muted: #616A7F;
+  --activity-meta: oklab(0 0 0 / 0.4);
   --text-inverse: #F7F9FC;
   --text-island: #1B2233;
   --text-inline-code: #39415A;  /* 冷墨，不吃 accent：inline code 的身份来自

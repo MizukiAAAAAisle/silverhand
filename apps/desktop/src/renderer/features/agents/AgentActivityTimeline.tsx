@@ -294,6 +294,10 @@ const TONE_TEXT: Record<KindVisual['tone'], string> = {
   muted: 'text-text-muted',
 };
 
+/** Time + tool params share one dim tier (`--activity-meta`) so the row reads
+ *  name-first; defined once here, never per event. */
+const ACTIVITY_META = 'text-[color:var(--activity-meta)]';
+
 /**
  * Shared row chrome: the time leads the row, then a tone-coloured glyph, then
  * the body — a left-to-right `time → icon → name → params` read. Everything is
@@ -318,7 +322,7 @@ function RowShell({
   return (
     <li className="py-1">
       <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 shrink-0 font-mono text-[length:var(--text-badge)] tabular-nums text-text-muted">
+        <span className={cn('mt-0.5 shrink-0 font-mono text-[length:var(--text-badge)] tabular-nums', ACTIVITY_META)}>
           {time}
         </span>
         <Icon
@@ -423,7 +427,7 @@ function EventRow({
           <span className="text-text-primary">
             <span className="font-semibold">{p.verb}</span>
             {p.arg ? (
-              <span className="ml-1.5 font-mono text-text-secondary">{p.arg}</span>
+              <span className={cn('ml-1.5 font-mono', ACTIVITY_META)}>{p.arg}</span>
             ) : null}
             {completed ? <ToolOutcomeMark outcome={outcome ?? 'completed'} /> : null}
           </span>
@@ -520,7 +524,7 @@ function EventRow({
     // batch settled at once.
     const count = typeof payload?.['count'] === 'number' ? (payload['count'] as number) : 1;
     title = (
-      <span className="text-text-secondary">
+      <span className="font-semibold text-text-secondary">
         {count > 1 ? `${count} messages received` : 'Message received'}
       </span>
     );
@@ -538,7 +542,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
     return <DiffView removed={detail.removed} added={detail.added} />;
   }
   return (
-    <pre className="whitespace-pre-wrap break-all border border-border-subtle bg-bg-base px-2 py-1 font-mono text-[length:var(--text-meta)] leading-relaxed text-text-secondary">
+    <pre className={cn('whitespace-pre-wrap break-all bg-bg-base px-2 py-1 font-mono text-[length:var(--text-meta)] leading-relaxed', ACTIVITY_META)}>
       {detail.text}
     </pre>
   );

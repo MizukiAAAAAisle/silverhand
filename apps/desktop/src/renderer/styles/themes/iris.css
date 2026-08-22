@@ -168,6 +168,7 @@
   --text-primary: #1F1A12; /* 17.3:1 */
   --text-secondary: #5A5145; /* 7.8:1 */
   --text-muted: #756D63; /* 4.56:1 on --bg-hover（最暗承载面）；白底 5.09:1 */
+  --activity-meta: oklab(0 0 0 / 0.4);
   --text-inverse: #FDFCFA;
   --text-island: #1F1A12;
   /* inline code 不吃 accent：它的身份来自等宽 + 暖洗底。一段技术消息里 code

@@ -331,6 +331,9 @@
      4.50:1: sidebar 5.23:1, `--bg-elevated` 4.89:1, `--bg-chat` 5.87:1,
      floating 6.04:1. */
   --text-muted: #566663;
+  /* Agent Activity time + tool params: a dim tier below the tool name so the
+     row reads name-first. Light themes use shiki's exact black alpha. */
+  --activity-meta: oklab(0 0 0 / 0.4);
   --text-inverse: #F7F8F6;
   --text-island: #E8F1EF;
   /* `--text-inline-code` — near-black ink. The chip is now a quiet
