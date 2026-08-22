@@ -366,7 +366,6 @@ export function CreateAgentDialog({
                 ? 'One persistent session across participating conversations.'
                 : 'Independent session for each conversation.'}
             </p>
-            <p className="text-xs text-text-muted">Cannot be changed after creation.</p>
           </div>
 
           <RuntimePicker
