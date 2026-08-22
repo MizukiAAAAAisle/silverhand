@@ -522,9 +522,11 @@ function EventRow({
     // accepted count (no body/ids — the timeline records that input arrived, not
     // what it said). One canonical label; the count is a dim suffix only when a
     // batch of more than one settled at once, never a second phrasing.
+    // Same text color as a command label (no independent hue): a row's outcome is
+    // carried only by its marker, so a distinct color here would read as a state.
     const count = typeof payload?.['count'] === 'number' ? (payload['count'] as number) : 1;
     title = (
-      <span className="font-semibold text-text-secondary">
+      <span className="font-semibold text-text-primary">
         Message received
         {count > 1 ? (
           <span className={cn('ml-1.5 font-normal tabular-nums', ACTIVITY_META)}>×{count}</span>

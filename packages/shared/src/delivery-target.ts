@@ -2,7 +2,6 @@ import { ENTITY_NAME_MAX_LENGTH, PARTICIPANT_HANDLE_PATTERN } from './api/name.j
 import {
   ADDRESS_TOKEN_MAX_BYTES,
   addressTokenByteLength,
-  TARGET_SEGMENT_CODEC,
 } from './address-segment.js';
 import {
   formatConversationAddressSegment,
@@ -654,38 +653,31 @@ export function formatStreamAddressToken(
 
 /**
  * The human-READABLE spelling of a target token — the display inverse of the
- * address formatters above, and DISPLAY ONLY.
+ * address formatters above, and DISPLAY ONLY (#task:2149).
  *
- * Here, beside the formatters and sharing their one segment engine (@shiki: the
- * two directions live in one file so a grammar change surfaces both). The named
- * arm is the only form that carries escapes — `#conv:<id>` and `dm:@<handle>`
- * spell their bodies from character classes that need none — so this decodes its
- * two segments with {@link TARGET_SEGMENT_CODEC}, the SAME codec
- * {@link formatStreamAddressToken} encodes them with (via the name domains'
- * segment formatters). Encode and decode cannot drift because neither writes its
- * own escape table.
+ * Co-located with the formatters and delegating to the SAME grammar authority:
+ * it runs the token through {@link parseNamedArm}, so a label is produced ONLY
+ * for a canonical named target — one whose segments decode AND whose decoded
+ * names are valid in the current name domain. An encoded leading space is
+ * canonical as an ESCAPE but not as a NAME, and is refused here exactly as the
+ * resolver refuses it, rather than shown as a name no target could carry. Every
+ * other input — the id and pair forms (which hold no escapes), a non-canonical
+ * escape, or a name the domain rejects — returns RAW and unchanged: no
+ * best-effort decode, and no second validator beside the grammar. The structural
+ * `/` and the `/thread:<id>` suffix are grammar, not name bytes, and pass
+ * through verbatim.
  *
- * NEVER an input to identity, navigation or resolution. A decoded `%2F` becomes
- * an in-segment `/` that the parser would read as a segment boundary, and a
- * decoded space would split the header token — so the RAW token stays the
+ * NEVER an input to identity, navigation or resolution: a decoded `%2F` is an
+ * in-segment `/` the parser would read as a boundary, so the RAW token stays the
  * canonical value a surface stores or hands back to `--target`, and this string
- * only ever reaches a label. The structural `/` and the `/thread:<id>` suffix are
- * NOT decoded (they are grammar, not name bytes); they pass through verbatim.
- *
- * TOTAL, with a raw fallback. A token that is not the named arm returns
- * unchanged (nothing to decode), and a named arm whose segment is not in
- * canonical form for this carrier (lowercase hex, an unknown `%XX`, a raw
- * separator) makes the segment decoder return `null` — in which case the raw
- * token is returned as-is rather than a best-effort decode, so a malformed
- * target displays exactly as it was sent instead of silently mutating.
+ * only ever reaches a label.
  */
 export function decodeTargetForDisplay(raw: string): string {
-  const match = NAMED_STREAM_RE.exec(raw);
-  if (!match) return raw;
-  const workspace = TARGET_SEGMENT_CODEC.decode(match[1]!);
-  const title = TARGET_SEGMENT_CODEC.decode(match[2]!);
-  if (workspace === null || title === null) return raw;
+  const named = parseNamedArm(raw);
+  if (named === null) return raw;
   const suffix =
-    match[3] === undefined ? '' : `${THREAD_ADDRESS_SEPARATOR}${match[3]}`;
-  return `${NAMED_STREAM_ADDRESS_PREFIX}${workspace}/${title}${suffix}`;
+    named.threadRootId === null
+      ? ''
+      : `${THREAD_ADDRESS_SEPARATOR}${named.threadRootId}`;
+  return `${NAMED_STREAM_ADDRESS_PREFIX}${named.workspace.name}/${named.title.title}${suffix}`;
 }

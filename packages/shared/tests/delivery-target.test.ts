@@ -685,9 +685,11 @@ describe('addressability is a property of the type', () => {
  * DISPLAY ONLY. Locked here beside the grammar so a change to either direction
  * shows up in one maintenance face: it must round-trip the encoder over every
  * escaped character (`/`, `%`, and the Unicode space class) while leaving the
- * carrier's raw members (`#`, `?`, `<`, `>`) untouched, and it must fall back to
- * the raw token — never a best-effort decode — for anything not in canonical
- * form.
+ * carrier's raw members (`#`, `?`, `<`, `>`) untouched. It produces a label only
+ * for a canonical named target — one whose segments decode AND whose decoded
+ * names the grammar accepts — and otherwise returns the raw token, never a
+ * best-effort decode: a non-canonical escape and a name the domain rejects (a
+ * decoded leading space) both fall back to raw.
  */
 describe('decodeTargetForDisplay', () => {
   it('round-trips the encoder: escaped bytes decode, raw members pass through', () => {
@@ -729,6 +731,18 @@ describe('decodeTargetForDisplay', () => {
       '#silverhand/a%',    // truncated escape
       '#silverhand/a%ZZb', // unknown escape
       'not-a-target',      // not the named arm at all
+    ]) {
+      expect(decodeTargetForDisplay(raw), raw).toBe(raw);
+    }
+  });
+
+  it('returns the raw token when the escape is canonical but the decoded name is not', () => {
+    // `%20` is a canonical escape, yet a leading space is not a legal name — the
+    // grammar refuses it, so this is not a target any surface could carry and it
+    // stays raw rather than rendering a name the resolver would reject.
+    for (const raw of [
+      '#silverhand/%20room', // decoded title has a leading space
+      '#%20team/room',       // decoded workspace has a leading space
     ]) {
       expect(decodeTargetForDisplay(raw), raw).toBe(raw);
     }
