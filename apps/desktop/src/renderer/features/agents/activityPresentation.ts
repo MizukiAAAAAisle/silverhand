@@ -236,7 +236,7 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
   const { noun, verb: verbTok, args } = found;
   const cap = noun.charAt(0).toUpperCase() + noun.slice(1);
   let label = verbTok ? `${cap} ${verbTok.replace(/-/g, ' ')}` : cap;
-  // One product-flavoured override (shiki/Cindy #task:1187, #task:2149): a
+  // One product-flavoured override (#task:1187, #task:2149): a
   // `task status --status <s>` writes a task's status → reads as "Task update".
   // A `task status` with no `--status` is a help/read, not a mutation, and keeps
   // the plain "Task status" label rather than posing as one — so the override is
