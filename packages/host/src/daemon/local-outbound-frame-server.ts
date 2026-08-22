@@ -79,7 +79,7 @@ export function deriveLocalOutboundFrameSocketPath(home = homedir()): string {
   // #task:1598/#task:1603 — delegate to the shared app-data path
   // authority; env-AWARE since the v2 cutover (contract §8). The `home`
   // seam keeps the historical test signature.
-  return resolveDesktopAppPaths(defaultAppRoot(process.env, () => home), 'legacy-v1')
+  return resolveDesktopAppPaths(defaultAppRoot(process.env, () => home))
     .run.outboundSocket;
 }
 

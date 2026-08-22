@@ -10,7 +10,6 @@ import {
   defaultAppRoot,
   resolveDesktopAppPaths,
   type DesktopAppPaths,
-  type DesktopLayoutVersion,
 } from '@silverhand/shared/app-data-layout';
 
 // `event_ws_allowed_origins` is NEVER persisted. For embedded it is a
@@ -42,29 +41,12 @@ export function shouldRedirectElectronUserData(
   return appRootEnvOverride(env) !== null;
 }
 
-/**
- * #task:1598/#task:1603 — the desktop process's resolved app-data paths,
- * produced by the ONE path authority (`resolveDesktopAppPaths`). The
- * layout version starts at `legacy-v1` and is flipped to `v2` exactly
- * once per process by `initializeDesktopLayoutVersion` after the startup
- * migration reads/writes the data-layout marker. All main-process path
- * consumers read from here instead of joining off the root themselves.
- */
-let activeLayoutVersion: DesktopLayoutVersion = 'legacy-v1';
-
-export function initializeDesktopLayoutVersion(
-  version: DesktopLayoutVersion,
-): void {
-  activeLayoutVersion = version;
-}
-
 export function desktopAppPaths(): DesktopAppPaths {
-  return resolveDesktopAppPaths(silverhandDir(), activeLayoutVersion);
+  return resolveDesktopAppPaths(silverhandDir());
 }
 
 export function electronUserDataPath(silverhandRoot = silverhandDir()): string {
-  return resolveDesktopAppPaths(silverhandRoot, 'legacy-v1').desktop
-    .electronUserData;
+  return resolveDesktopAppPaths(silverhandRoot).desktop.electronUserData;
 }
 
 export async function loadOrCreateServerConfig(): Promise<ServerConfig> {

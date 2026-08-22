@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { SERVER_CONFIG_FILENAME } from '@silverhand/shared';
+import { dirname, join } from 'node:path';
+import { resolveDesktopAppPaths } from '@silverhand/shared/app-data-layout';
 import {
   electronUserDataPath,
   loadOrCreateServerConfig,
@@ -41,8 +41,9 @@ describe('desktop server config', () => {
   it('reads old auth_token configs but omits the field on rewrite', async () => {
     tmp = mkdtempSync(join(tmpdir(), 'silverhand-config-'));
     process.env.SILVERHAND_DIR = tmp;
+    mkdirSync(dirname(configPath(tmp)), { recursive: true });
     writeFileSync(
-      join(tmp, SERVER_CONFIG_FILENAME),
+      configPath(tmp),
       JSON.stringify({
         mode: 'embedded',
         url: 'http://127.0.0.1:0',
@@ -74,8 +75,9 @@ describe('desktop server config', () => {
     // config carries one.
     tmp = mkdtempSync(join(tmpdir(), 'silverhand-config-'));
     process.env.SILVERHAND_DIR = tmp;
+    mkdirSync(dirname(configPath(tmp)), { recursive: true });
     writeFileSync(
-      join(tmp, SERVER_CONFIG_FILENAME),
+      configPath(tmp),
       JSON.stringify({
         mode: 'embedded',
         url: 'http://127.0.0.1:4321',
@@ -110,8 +112,12 @@ describe('desktop server config', () => {
 
 function readConfig(dir: string): Record<string, unknown> {
   return JSON.parse(
-    readFileSync(join(dir, SERVER_CONFIG_FILENAME), 'utf8'),
+    readFileSync(configPath(dir), 'utf8'),
   ) as Record<string, unknown>;
+}
+
+function configPath(dir: string): string {
+  return resolveDesktopAppPaths(dir).embeddedServer.serverConfig;
 }
 
 describe('silverhandDir — the ONE unified SILVERHAND_DIR contract (#task:1603)', () => {

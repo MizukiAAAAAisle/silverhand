@@ -5,20 +5,12 @@ import {
   resolveComputerSlotPaths,
   resolveConnectProfilePaths,
   safeComputerDirId,
-  resolveLegacyStandaloneDaemonPaths,
+  resolveStandaloneDaemonPaths,
   resolveBackendDataPaths,
   resolveComputerDataPaths,
   resolveDesktopAppPaths,
   resolveServerDataPaths,
 } from '../src/app-data-layout.js';
-
-/**
- * #task:1598 — the app-data path authority. The `legacy-v1` table below is
- * the LOAD-BEARING compatibility contract: these strings must equal the
- * historical physical layout byte-for-byte, so pinning the resolver output
- * pins "dogfood on the real ~/.silverhand changes nothing". The v2 shape
- * pins the migration target (docs/app-data-layout-v2.md §2).
- */
 
 const R = '/tmp/approot';
 
@@ -40,12 +32,11 @@ describe('root-resolution semantics matrix (v2: ONE unified SILVERHAND_DIR contr
   // Path SHAPE of the historical daemon/ facet; the ROOT now comes from
   // the unified SILVERHAND_DIR contract like every other default
   // (#task:1603 — the host defaults matrix pins the env adoption).
-  it('resolveLegacyStandaloneDaemonPaths — the historical ~/.silverhand/daemon facet', () => {
-    const legacy = resolveLegacyStandaloneDaemonPaths('/home/u/.silverhand');
+  it('resolveStandaloneDaemonPaths — the ~/.silverhand/daemon facet', () => {
+    const legacy = resolveStandaloneDaemonPaths('/home/u/.silverhand');
     expect(legacy.stateDir).toBe('/home/u/.silverhand/daemon');
     expect(legacy.identity).toBe('/home/u/.silverhand/daemon/identity.json');
     expect(legacy.runtimePids).toBe('/home/u/.silverhand/daemon/runtime-pids');
-    expect(legacy.proxyConfig).toBe('/home/u/.silverhand/daemon/proxy-config.json');
   });
 
   it('computersRootDir — the per-computer profiles root', () => {
@@ -55,22 +46,17 @@ describe('root-resolution semantics matrix (v2: ONE unified SILVERHAND_DIR contr
   });
 });
 
-describe('resolveDesktopAppPaths — legacy-v1 (byte-identical to the historical flat layout)', () => {
-  const p = resolveDesktopAppPaths(R, 'legacy-v1');
+describe('resolveDesktopAppPaths — current desktop layout', () => {
+  const p = resolveDesktopAppPaths(R);
 
   it('desktop facet', () => {
     expect(p.desktop.root).toBe(`${R}/desktop`);
     expect(p.desktop.electronUserData).toBe(`${R}/desktop/electron-user-data`);
     expect(p.desktop.serverProfile).toBe(`${R}/desktop/server-profile.bin`);
     expect(p.desktop.session).toBe(`${R}/desktop/session.bin`);
-    expect(p.desktop.layoutMarker).toBe(`${R}/desktop/data-layout.json`);
   });
 
-  it('app-scoped run/ + legacy flat local-computer coordinates', () => {
-    expect(p.legacyLocalComputer.agents).toBe(`${R}/agents`);
-    expect(p.legacyLocalComputer.workspaceData).toBe(`${R}/workspace-data`);
-    expect(p.legacyLocalComputer.daemonConfig).toBe(`${R}/daemon-config.json`);
-    expect(p.legacyLocalComputer.proxyConfig).toBe(`${R}/daemon/proxy-config.json`);
+  it('app-scoped run/', () => {
     expect(p.run.root).toBe(`${R}/run`);
     expect(p.run.socket).toBe(`${R}/run/daemon.sock`);
     expect(p.run.outboundSocket).toBe(`${R}/run/daemon-outbound.sock`);
@@ -80,31 +66,20 @@ describe('resolveDesktopAppPaths — legacy-v1 (byte-identical to the historical
     expect(p.run.controlPlaneServerUrl).toBe(`${R}/run/control-plane-server-url`);
   });
 
-  it('embedded server facet (flat on the app root)', () => {
-    expect(p.embeddedServer.root).toBe(R);
-    expect(p.embeddedServer.database).toBe(`${R}/silverhand.db`);
-    expect(p.embeddedServer.databaseWal).toBe(`${R}/silverhand.db-wal`);
-    expect(p.embeddedServer.databaseShm).toBe(`${R}/silverhand.db-shm`);
-    expect(p.embeddedServer.blobs).toBe(`${R}/blobs`);
-    expect(p.embeddedServer.serverConfig).toBe(`${R}/server-config.json`);
-    expect(p.embeddedServer.bootstrap).toBe(`${R}/embedded-bootstrap`);
+  it('embedded server facet', () => {
+    expect(p.embeddedServer.root).toBe(`${R}/embedded-server`);
+    expect(p.embeddedServer.database).toBe(`${R}/embedded-server/silverhand.db`);
+    expect(p.embeddedServer.databaseWal).toBe(`${R}/embedded-server/silverhand.db-wal`);
+    expect(p.embeddedServer.databaseShm).toBe(`${R}/embedded-server/silverhand.db-shm`);
+    expect(p.embeddedServer.blobs).toBe(`${R}/embedded-server/blobs`);
+    expect(p.embeddedServer.serverConfig).toBe(`${R}/embedded-server/config/server-config.json`);
+    expect(p.embeddedServer.bootstrap).toBe(`${R}/embedded-server/embedded-bootstrap`);
   });
 
   it('shared roots', () => {
     expect(p.installationId).toBe(`${R}/installation_id`);
     expect(p.logs).toBe(`${R}/logs`);
     expect(p.attachmentsCache).toBe(`${R}/attachments-cache`);
-    expect(p.legacyWorkspacesRoot).toBe(`${R}/workspaces`);
-  });
-});
-
-describe('resolveDesktopAppPaths — v2 (migration target, #task:1608 computer_id model)', () => {
-  const p = resolveDesktopAppPaths(R, 'v2');
-
-  it('run/ is app-scoped and IDENTICAL across versions (pre-claim transient)', () => {
-    const legacy = resolveDesktopAppPaths(R, 'legacy-v1');
-    expect(p.run).toEqual(legacy.run);
-    expect(p.run.root).toBe(`${R}/run`);
   });
 
   it('there is no computers/local special case; slots key by computer id', () => {
@@ -112,7 +87,6 @@ describe('resolveDesktopAppPaths — v2 (migration target, #task:1608 computer_i
     const slot = resolveComputerSlotPaths(R, 'Pj8F4THwMPAYyaPe');
     expect(slot.root).toBe(`${R}/computers/Pj8F4THwMPAYyaPe`);
     expect(slot.agents).toBe(`${R}/computers/Pj8F4THwMPAYyaPe/agents`);
-    expect(slot.workspaceData).toBe(`${R}/computers/Pj8F4THwMPAYyaPe/workspace-data`);
     expect(slot.proxyConfig).toBe(`${R}/computers/Pj8F4THwMPAYyaPe/proxy-config.json`);
   });
 
@@ -128,28 +102,12 @@ describe('resolveDesktopAppPaths — v2 (migration target, #task:1608 computer_i
     expect(p.desktop.computerBinding).toBe(`${R}/desktop/computer-binding.json`);
   });
 
-  it('embedded server facet under embedded-server/', () => {
-    expect(p.embeddedServer.root).toBe(`${R}/embedded-server`);
-    expect(p.embeddedServer.database).toBe(`${R}/embedded-server/silverhand.db`);
-    expect(p.embeddedServer.serverConfig).toBe(
-      `${R}/embedded-server/config/server-config.json`,
-    );
-  });
-
-  it('stable roots do not move between versions (logs / attachments-cache / installation_id / desktop / run)', () => {
-    const legacy = resolveDesktopAppPaths(R, 'legacy-v1');
-    expect(p.logs).toBe(legacy.logs);
-    expect(p.attachmentsCache).toBe(legacy.attachmentsCache);
-    expect(p.installationId).toBe(legacy.installationId);
-    expect(p.desktop).toEqual(legacy.desktop);
-  });
 });
 
 describe('resolveComputerDataPaths — explicit data roots (connect / custom)', () => {
   it('matches the historical connect layout (flat under the data root)', () => {
     const c = resolveComputerDataPaths('/data/root');
     expect(c.agents).toBe('/data/root/agents');
-    expect(c.workspaceData).toBe('/data/root/workspace-data');
     expect(c.daemonConfig).toBe('/data/root/daemon-config.json');
     expect(c.proxyConfig).toBe('/data/root/proxy-config.json');
     expect(c.logs).toBe('/data/root/logs');

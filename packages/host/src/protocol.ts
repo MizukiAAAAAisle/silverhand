@@ -151,39 +151,6 @@ export const KNOWN_CAPABILITIES_V1 = [
 ] as const;
 export type KnownCapabilityV1 = typeof KNOWN_CAPABILITIES_V1[number];
 
-// ── #task:1613: layout-v2 migration outcome token ───────────────────
-//
-// The migration outcome rides the existing OPEN `capabilities: string[]`
-// handshake (no protocol bump, no new reporting channel). Exactly one
-// token per daemon boot, stamped by the composition entry that ran the
-// migration unit (desktop startup / `silverhand-daemon connect`); the
-// backend logs it as the observation-first evidence for deleting the
-// migration unit. A failed migration never starts the daemon, so a
-// "failed" token cannot exist on the wire — pre-connection failures stay
-// in daemon-local logs/stderr with their typed code. Token ABSENCE means
-// an older daemon build: the deletion gate counts that computer as
-// UNOBSERVED (gate stays closed), never as migrated.
-export type LayoutMigrationOutcome = 'migrated' | 'already_current';
-const LAYOUT_MIGRATION_CAPABILITY_PREFIX = 'layout_migration.v2.';
-export function layoutMigrationCapability(
-  outcome: LayoutMigrationOutcome,
-): string {
-  return `${LAYOUT_MIGRATION_CAPABILITY_PREFIX}${outcome}`;
-}
-export function layoutMigrationOutcomeFromCapabilities(
-  capabilities: readonly string[],
-): LayoutMigrationOutcome | 'contradictory' | null {
-  // Exactly ONE outcome token is trustworthy evidence. Zero = unobserved
-  // (older daemon build). Two = malformed evidence — surfaced as
-  // 'contradictory' so the consumer can warn, but it must NEVER count as
-  // a successful migration status (deletion gate stays fail-closed).
-  const present = (['migrated', 'already_current'] as const).filter(outcome =>
-    capabilities.includes(layoutMigrationCapability(outcome)),
-  );
-  if (present.length === 1) return present[0]!;
-  return present.length === 0 ? null : 'contradictory';
-}
-
 export const HelloParamsSchema = z.object({}).strict();
 export type HelloParams = z.infer<typeof HelloParamsSchema>;
 
@@ -2013,7 +1980,6 @@ const AgentStaleReceiveIpcErrorSchema = z
   })
   .strict();
 
-
 // ── agent_workspace_index ─────────────────────────────────────────────
 //
 // Data-plane READ intent that makes the daemon the sole authority for
@@ -2023,13 +1989,9 @@ const AgentStaleReceiveIpcErrorSchema = z
 // the daemon resolves the absolute path via its own layout. Per-command typed
 // error scoping mirrors agent_materialize.
 //
-// relocation-v1 §7-4 (#task:1808): the registry WRITE/reconcile intents that
-// used to sit alongside this one — `workspace_provision` /
-// `workspace_path_index` / `workspace_unbind` / `workspace_registry_ids` —
-// were retired when the workspace-registry was demoted from a runtime path
-// authority to a marker-absent, migration-only inventory reader. Workspace
-// creation is now a pure DB write; the daemon resolves regular workspaces by
-// their deterministic agent-centric bundle coordinate.
+// Workspace creation is a pure DB write. The daemon resolves regular
+// workspaces by their deterministic agent-centric bundle coordinate; there is
+// no registry establishment or reconciliation step.
 
 export const AgentWorkspaceIndexParamsSchema = z
   .object({

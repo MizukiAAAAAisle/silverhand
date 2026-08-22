@@ -25,8 +25,6 @@ import {
   encodeFrame,
   intentSchemas,
   intentErrorSchema,
-  layoutMigrationCapability,
-  layoutMigrationOutcomeFromCapabilities,
   splitNdjson,
 } from '../src/protocol.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
@@ -1831,63 +1829,5 @@ describe('runtime custody generation (current protocol generation)', () => {
       parsed: { kind: 'session_init', sessionId: 's1' },
       ts: 1,
     }).success).toBe(false);
-  });
-});
-
-describe('layout-v2 migration capability token (#task:1613)', () => {
-  it('mints the exact wire tokens and parses them back', () => {
-    // Literal pins — the backend log tests pin the same strings; a rename
-    // on either side must fail one of the two suites.
-    expect(layoutMigrationCapability('migrated')).toBe(
-      'layout_migration.v2.migrated',
-    );
-    expect(layoutMigrationCapability('already_current')).toBe(
-      'layout_migration.v2.already_current',
-    );
-    expect(
-      layoutMigrationOutcomeFromCapabilities([
-        ...KNOWN_CAPABILITIES_V1,
-        'layout_migration.v2.migrated',
-      ]),
-    ).toBe('migrated');
-    expect(
-      layoutMigrationOutcomeFromCapabilities([
-        'layout_migration.v2.already_current',
-      ]),
-    ).toBe('already_current');
-  });
-
-  it('absence (pre-#1613 daemon) parses to null, never a default outcome', () => {
-    expect(layoutMigrationOutcomeFromCapabilities([...KNOWN_CAPABILITIES_V1])).toBe(null);
-    expect(layoutMigrationOutcomeFromCapabilities([])).toBe(null);
-  });
-
-  it('BOTH tokens at once is contradictory — never resolved to migrated by ordering', () => {
-    // Falsifier for the deletion gate: malformed evidence must not count
-    // as a successful migration status, regardless of token order.
-    expect(
-      layoutMigrationOutcomeFromCapabilities([
-        'layout_migration.v2.migrated',
-        'layout_migration.v2.already_current',
-      ]),
-    ).toBe('contradictory');
-    expect(
-      layoutMigrationOutcomeFromCapabilities([
-        'layout_migration.v2.already_current',
-        'layout_migration.v2.migrated',
-      ]),
-    ).toBe('contradictory');
-  });
-
-  it('the token stays wire-valid on the open capabilities array (no schema change)', () => {
-    const parsed = HelloResultSchema.safeParse({
-      protocol_version: HOST_PROTOCOL_VERSION,
-      daemon_version: '0.0.0-test',
-      daemon_id: 'local',
-      instance_id: '__test_instance__',
-      host_descriptor: { name: 'local', kind: 'local' },
-      capabilities: [...KNOWN_CAPABILITIES_V1, layoutMigrationCapability('migrated')],
-    });
-    expect(parsed.success).toBe(true);
   });
 });

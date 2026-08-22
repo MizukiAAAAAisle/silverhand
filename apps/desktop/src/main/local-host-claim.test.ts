@@ -30,7 +30,7 @@ import {
 } from './local-host-claim.js';
 
 // #task:1598 — the leaf takes RESOLVED file paths; tests build them the
-// way the desktop selector does (legacy-v1 flattens both onto the root).
+// way the desktop resolver does.
 const installationIdPath = (dir: string) => join(dir, 'installation_id');
 const daemonHostConfigPath = (dir: string) => join(dir, 'daemon-config.json');
 

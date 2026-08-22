@@ -1,22 +1,15 @@
 /**
  * Neutral path-authority for the agent-centric bundle layout.
  *
- * relocation-v1 §7-4 — the workspace-registry was demoted from a runtime path
- * authority to a marker-absent migration/preflight inventory reader. The one
- * path-security invariant that OUTLIVES that demotion — "a server-supplied
- * workspace id may become a filesystem path SEGMENT only after structural
- * validation" — lives here, deliberately OUTSIDE the registry so the runtime
- * resolvers (agent-materialize, runtime-start-resolve, agent-workspace-fs) and
- * the relocation reader can depend on it WITHOUT importing the demoted
- * registry. This is the sole authority that turns a semantic workspace id into
- * a safe path component; nothing downstream re-derives or "repairs" an id.
+ * A server-supplied workspace id may become a filesystem path segment only
+ * after structural validation. The runtime resolvers share this authority so
+ * nothing downstream re-derives or repairs an id.
  */
 
 /**
  * An unsafe workspace id can never become a path segment under the agent home.
- * A dedicated typed error (not the registry's error) so every consumer catches
- * this ONE concern by class — `code` stays `'invalid_path'` for wire/log
- * continuity with the pre-demotion taxonomy.
+ * A dedicated typed error lets every consumer catch this concern by class;
+ * `code` stays `'invalid_path'` for wire compatibility.
  */
 export class WorkspaceIdSegmentError extends Error {
   readonly code = 'invalid_path' as const;

@@ -73,10 +73,9 @@ interface OccurrenceExemption {
 /**
  * The occurrence inventory. Every entry is a genuinely NON-app-data use
  * (workspace-local conventions, user-home probing, safety guards), a
- * canonical constant declaration the resolver consumes, or an explicitly
- * documented legacy-migration source. App-data legacy coordinates are NOT
- * listed here — they live in the resolver
- * (`resolveLegacyStandaloneDaemonPaths`, `defaultAppRoot`, `computersRootDir`).
+ * canonical constant declaration the resolver consumes. App-data default
+ * coordinates are not listed here — they live in the resolver
+ * (`resolveStandaloneDaemonPaths`, `defaultAppRoot`, `computersRootDir`).
  */
 const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
   {
@@ -157,292 +156,7 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     reason: 'user PATH augmentation, not app-data',
     count: 1,
   },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'homedir()',
-    line: 'sessionStoreHome: seams.sessionStoreHome ?? homedir(),',
-    reason: 'migration engine: third-party session STORE home (not app-data); test seam overrides it (#task:1603)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'workspace-data',
-    line: "join(localStaging, 'workspace-data'),",
-    reason: 'migration engine: the staged workspace-data remainder, read by session enumeration, registry adoption/rewrite, and flatten-plan probes (#task:1603/#task:1608/#task:1638)',
-    count: 4,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'workspace-data',
-    line: "staged: join(stagingRoot, 'workspace-data', ns),",
-    reason: 'migration engine: run-era namespace staged destination inside the resolver-supplied staging root (#task:1603)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "{ legacy: legacy.embeddedServer.blobs, staged: join(stagingRoot, 'blobs'), kind: 'dir' },",
-    reason: 'migration engine: staged entry name inside the resolver-supplied staging root (#task:1603)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "join(map.oldNamespaceRoot(ns), 'workspaces', slug),",
-    reason: 'migration engine: coordinate-map-computed old cwd for the session pair (#task:1603/#task:1608, §5.2)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "join(map.newWorkspaceData, ns, 'workspaces', slug),",
-    reason: 'migration engine: coordinate-map-computed new cwd for the session pair (#task:1603/#task:1608, §5.2)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "for (const slug of listSessionSourceDirs(join(nsRoot, ns, 'workspaces'))) {",
-    reason: 'migration engine: slug enumeration of the classified workspace-data-shaped source (#task:1603)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "for (const slug of listSessionSourceDirs(join(nsDir, 'workspaces'))) {",
-    reason: 'migration engine: slug enumeration of the provable run-era namespace source (#task:1603)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/connect-command.ts',
-    token: 'homedir()',
-    line: 'sessionStoreHome: homedir(),',
-    reason: 'connect preflight: third-party session STORE home (not app-data), passed into the shared startup preflight (#task:1608/#task:1805)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/direct-startup-preflight.ts',
-    token: 'homedir()',
-    line: 'sessionStoreHome: opts.sessionStoreHome ?? homedir(),',
-    reason: 'direct-daemon preflight: third-party session STORE home (not app-data), passed into the same shared startup preflight as connect (#task:1806)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/convergence-pass.ts',
-    token: 'app-data dir join',
-    line: "oldCwd: join(workspaceDataRoot, entry.namespaceName, 'workspaces', entry.legacySlugName),",
-    reason: 'workspace-data convergence unit: the slot-era slug old cwd for the session pair (#task:1608)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/convergence-pass.ts',
-    token: 'app-data dir join',
-    line: "const flatWorkspacesRoot = join(workspaceDataRoot, 'workspaces');",
-    reason: 'workspace-data convergence unit: the FLAT managed root used for migration and released-slug repair cwd coordinates (#task:1608/#task:1663)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "const workspacesRoot = join(slot.workspaceData, 'workspaces');",
-    reason: 'completed-v2 repair: current slot managed root used only to derive authoritative cwd coordinates (#task:1663)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "oldCwd: join(",
-    reason: 'workspace-data flatten: coordinate-map-computed old cwd for the current-binding managed pair (#task:1608 convergence, §5.2)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "newCwd: join(slot.workspaceData, 'workspaces', entry.workspaceId),",
-    reason: 'workspace-data flatten: the FLAT raw-id new cwd for the session pair (#task:1608 convergence)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: 'const legacyNamespaced = join(',
-    reason: 'cross-binding adoption: predecessor namespace cwd for session migration (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: 'const slotNamespaced = join(',
-    reason: 'cross-binding adoption: slot-era namespace cwd for session migration (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "const target = join(slot.workspaceData, 'workspaces', entry.workspaceId);",
-    reason: 'cross-binding adoption: FLAT raw-id target cwd for session migration (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "const ownLegacyPath = join(input.legacyRunRoot, target.namespace, 'workspaces', slug);",
-    reason: 'cross-binding adoption: exact legacy coordinate used to prove current ownership (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "const ownV2Path = join(input.v2WorkspaceData, target.namespace, 'workspaces', slug);",
-    reason: 'cross-binding adoption: exact v2 coordinate used to prove current ownership (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "const sourceLegacyPath = join(input.legacyRunRoot, source.namespace, 'workspaces', slug);",
-    reason: 'cross-binding adoption: exact predecessor legacy coordinate used for provenance (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "const sourceV2Path = join(input.v2WorkspaceData, source.namespace, 'workspaces', slug);",
-    reason: 'cross-binding adoption: exact predecessor v2 coordinate used for provenance (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: 'const sourceDir = join(',
-    reason: 'cross-binding adoption: proven predecessor directory selected for the atomic move (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: 'const targetDir = join(',
-    reason: 'cross-binding adoption: proven current-binding directory selected for the atomic move (#task:1638)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: "const legacySlotRoot = join(appRoot, 'computers', 'local');",
-    reason: 'computer-slot catch-up: the retired dogfood alias exists ONLY inside this deletable unit (#task:1608)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'daemon-config.json',
-    line: "const legacyBinding = join(legacySlotRoot, 'config', 'daemon-config.json');",
-    reason: 'computer-slot catch-up: the pre-revision dogfood binding location, read for provenance then relocated (#task:1608)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'workspace-data',
-    line: "const oldWorkspaceData = join(legacySlotRoot, 'workspace-data');",
-    reason: 'computer-slot catch-up: the alias workspace-data child moving to the id-keyed slot (#task:1608)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: 'const legacyExact = join(legacyRunRoot, ns, \'workspaces\', managedWorkspaceSlug(workspaceId));',
-    reason: 'migration engine: exact-provenance registry rewrite coordinate (#task:1603, §6.1)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    token: 'app-data dir join',
-    line: 'const v2Exact = join(v2WorkspaceData, ns, \'workspaces\', managedWorkspaceSlug(workspaceId));',
-    reason: 'migration engine: exact-provenance registry rewrite coordinate (#task:1603, §6.1)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/layout-relocation.ts',
-    token: '.silverhand',
-    line: "const agentsDir = join(oldRoot, '.silverhand', 'agents');",
-    reason:
-      'relocation-v1 facet: the workspace-LOCAL .silverhand/agents/* legacy layout is the migration SOURCE this facet reads and copies FROM; the destination bundle comes from the resolver (#task:1805, §5)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/layout-relocation.ts',
-    token: '.silverhand',
-    line: "source: join(entry.path, '.silverhand', 'agents', agentId),",
-    reason:
-      'relocation-v1 facet: the per-agent workspace-LOCAL .silverhand/agents/<id> legacy subtree is the migration SOURCE coordinate copied to the resolver-computed bundle destination (#task:1805, §5)',
-    count: 1,
-  },
 ];
-
-/**
- * #task:1598 round 4 (Cindy P1-1) — the layout-version literal is the
- * single switch the migration release flips. It may appear ONLY in the
- * resolver's own type/branch, the composition selectors, and the
- * independent process-boundary fallback wrappers (CLI / bare daemon).
- * Every other production occurrence would re-split the version authority:
- * flipping the selector to v2 would leave that consumer on legacy paths.
- */
-/** Matches the version literal in ANY quote style — a leaf writing
- *  "legacy-v1" or `legacy-v1` is the same authority split as 'legacy-v1'. */
-const VERSION_LITERAL_RE = /['"`]legacy-v1['"`]/g;
-const VERSION_LITERAL_ALLOWLIST: Array<{
-  file: string;
-  reason: string;
-  count: number;
-}> = [
-  {
-    file: AUTHORITY_FILE,
-    reason: 'the resolver: DesktopLayoutVersion union + the legacy branch',
-    count: 2,
-  },
-  {
-    file: 'apps/desktop/src/main/config.ts',
-    reason:
-      'the desktop composition selector (`desktopAppPaths()` + electron-user-data pre-logger accessor)',
-    count: 2,
-  },
-  {
-    file: 'packages/cli/src/commands/file.ts',
-    reason: 'CLI process boundary — attachment cache root wrapper',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/state-dir.ts',
-    reason:
-      'bare-daemon fallback wrapper (defaultWorkspaceDataRootDir; legacy source inventory retired with #task:1612)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/local-outbound-frame-server.ts',
-    reason: 'bare-daemon fallback wrapper (deriveLocalOutboundFrameSocketPath)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/engine.ts',
-    reason: 'the migration itself resolves BOTH versions to move between them (#task:1603)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/quiesce.ts',
-    reason: 'the §5.1 preflight reclaims the LEGACY daemon coordinates before any move (#task:1603)',
-    count: 1,
-  },
-  {
-    file: 'apps/desktop/src/main/layout-migration/marker.ts',
-    reason: 'the layout marker records/reports the legacy-v1 → v2 transition fact (#task:1603)',
-    count: 3,
-  },
-];
-
-// #task:1603 — the eager layout-v2 migration engine is the one legitimate
-// "legacy migration inventory" consumer §3 carves out: it stages between
-// resolver-supplied coordinates and spells facet-internal segment names
-// while doing so. Deleted with the legacy readers. Folded into the main
-// inventory below so count-exact applies uniformly.
 
 /**
  * Blank out comments while preserving line structure and string bodies.
@@ -520,7 +234,7 @@ export interface PathAuthorityViolation {
 }
 
 const FILENAME_CONSTANTS =
-  /\b(INSTALLATION_ID_FILENAME|DAEMON_HOST_CONFIG_FILENAME|SERVER_CONFIG_FILENAME|EMBEDDED_BOOTSTRAP_FILENAME|SERVER_CONNECTION_PROFILE_FILENAME|WORKSPACE_DATA_DIR_NAME|DATA_LAYOUT_MARKER_FILENAME)\b/;
+  /\b(INSTALLATION_ID_FILENAME|DAEMON_HOST_CONFIG_FILENAME|SERVER_CONFIG_FILENAME|EMBEDDED_BOOTSTRAP_FILENAME|SERVER_CONNECTION_PROFILE_FILENAME)\b/;
 const APP_DATA_DIR_JOIN = /['"`](computers|logs|workspaces|blobs)['"`]/;
 
 /** Extract the balanced-paren argument span following `join(`. */
@@ -623,13 +337,6 @@ export function scanSourceForPathAuthorityViolations(
   return out.map(({ idx: _idx, ...v }) => v);
 }
 
-/** Count occurrences of the layout-version literal (single, double, or
- *  backtick quoted) in comment-stripped code. */
-export function countVersionLiterals(source: string): number {
-  const stripped = stripCommentsPreservingLines(source);
-  return [...stripped.matchAll(VERSION_LITERAL_RE)].length;
-}
-
 function collectTsFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name);
@@ -694,44 +401,7 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
     ).toEqual([]);
   });
 
-  it("the layout-version literal 'legacy-v1' appears only in the selector and process-boundary wrappers", () => {
-    const violations: string[] = [];
-    const allowHits = new Map<string, number>();
-    for (const root of PRODUCTION_ROOTS) {
-      for (const file of collectTsFiles(root)) {
-        const rel = relative(REPO_ROOT, file);
-        const count = countVersionLiterals(readFileSync(file, 'utf-8'));
-        if (count === 0) continue;
-        const allowance = VERSION_LITERAL_ALLOWLIST.find(a => a.file === rel);
-        if (!allowance) {
-          violations.push(
-            `${rel} — ${count} production 'legacy-v1' literal(s); consume a resolved path/DesktopAppPaths instead`,
-          );
-          continue;
-        }
-        allowHits.set(rel, count);
-        if (count !== allowance.count) {
-          violations.push(
-            `${rel} — expected ${allowance.count} 'legacy-v1' literal(s), saw ${count}`,
-          );
-        }
-      }
-    }
-    for (const allowance of VERSION_LITERAL_ALLOWLIST) {
-      if (!allowHits.has(allowance.file)) {
-        violations.push(
-          `${allowance.file} — stale allowlist entry (no 'legacy-v1' literal found)`,
-        );
-      }
-    }
-    expect(
-      violations,
-      'the migration release must flip ONE selector; leaves must accept resolved coordinates:\n' +
-        violations.join('\n'),
-    ).toEqual([]);
-  });
-
-  // ── Scanner falsifiers: the guard must demonstrably CATCH regressions ──
+   // ── Scanner falsifiers: the guard must demonstrably CATCH regressions ──
 
   it('catches single/double/backtick-quoted app-data literals', () => {
     expect(
@@ -870,40 +540,4 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
     ).toHaveLength(1);
   });
 
-  it("counts version literals in code, not comments, and catches a leaf re-selecting 'legacy-v1'", () => {
-    expect(countVersionLiterals(`// pinned to 'legacy-v1' for now`)).toBe(0);
-    expect(
-      countVersionLiterals(
-        `const p = resolveDesktopAppPaths(root, 'legacy-v1').desktop.session;`,
-      ),
-    ).toBe(1);
-    expect(
-      countVersionLiterals(
-        [
-          `const a = resolveDesktopAppPaths(root, 'legacy-v1');`,
-          `const b = resolveDesktopAppPaths(root, 'legacy-v1');`,
-        ].join('\n'),
-      ),
-    ).toBe(2);
-  });
-
-  it('catches the version literal in EVERY quote style (no double/backtick bypass)', () => {
-    expect(
-      countVersionLiterals(`const p = resolveDesktopAppPaths(root, "legacy-v1");`),
-    ).toBe(1);
-    expect(
-      countVersionLiterals(
-        'const q = resolveDesktopAppPaths(root, `legacy-v1`);',
-      ),
-    ).toBe(1);
-    expect(
-      countVersionLiterals(
-        [
-          `const a = resolveDesktopAppPaths(root, 'legacy-v1');`,
-          `const b = resolveDesktopAppPaths(root, "legacy-v1");`,
-          'const c = resolveDesktopAppPaths(root, `legacy-v1`);',
-        ].join('\n'),
-      ),
-    ).toBe(3);
-  });
-});
+ });

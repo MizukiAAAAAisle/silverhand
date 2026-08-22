@@ -1,10 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import {
@@ -64,61 +58,6 @@ export function writeDaemonProxyConfig(
   });
   renameSync(tmp, path);
   return config;
-}
-
-export function migrateLegacyDaemonProxyConfig(input: {
-  legacyPath: string | null | undefined;
-  targetPath: string;
-  logger?: Pick<DaemonLogger, 'warn' | 'info'>;
-}): void {
-  const legacyPath = input.legacyPath;
-  if (!legacyPath || legacyPath === input.targetPath || !existsSync(legacyPath)) {
-    return;
-  }
-
-  if (existsSync(input.targetPath)) {
-    markLegacyMigrated(legacyPath, input.logger);
-    return;
-  }
-
-  try {
-    const config = readDaemonProxyConfig(legacyPath, input.logger);
-    writeDaemonProxyConfig(input.targetPath, config);
-    markLegacyMigrated(legacyPath, input.logger);
-    input.logger?.info?.(
-      { legacy_path: legacyPath, target_path: input.targetPath },
-      'daemon proxy config migrated to per-computer profile',
-    );
-  } catch (err) {
-    input.logger?.warn(
-      {
-        err: err instanceof Error ? err.message : String(err),
-        legacy_path: legacyPath,
-        target_path: input.targetPath,
-      },
-      'daemon proxy config migration failed; keeping legacy file untouched',
-    );
-  }
-}
-
-function markLegacyMigrated(
-  legacyPath: string,
-  logger?: Pick<DaemonLogger, 'warn'>,
-): void {
-  if (!existsSync(legacyPath)) return;
-  const migratedPath = `${legacyPath}.migrated`;
-  try {
-    renameSync(legacyPath, migratedPath);
-  } catch (err) {
-    logger?.warn(
-      {
-        err: err instanceof Error ? err.message : String(err),
-        legacy_path: legacyPath,
-        migrated_path: migratedPath,
-      },
-      'daemon proxy config legacy marker rename failed',
-    );
-  }
 }
 
 function uniqueRuntimes(values: RuntimeKind[]): RuntimeKind[] {

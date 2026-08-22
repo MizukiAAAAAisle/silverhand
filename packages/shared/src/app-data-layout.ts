@@ -16,33 +16,9 @@ import {
  * Business code receives resolved, typed paths; it never derives a path
  * from a root (`join(appRoot, ...)`) and never reconstructs a root from a
  * child (`dirname(...)` inverses). The resolver is PURE: no filesystem
- * probes, no migration, no fallback, no mode decision. The migration
- * (layout v2, later release) consumes this same API's `legacy-v1`/`v2`
- * pairs — it must not become a second resolver.
- *
- * Version selection (#task:1603, corrected #task:1813): production is on
- * `v2`. The desktop process flips to it exactly once at startup, right after
- * `prepareDesktopDataLayout` reads/writes the data-layout marker
- * (`initializeDesktopLayoutVersion('v2')`); every main-process path consumer
- * then reads the resolved bundle. The two versions differ in the
- * `embeddedServer` facet ONLY — `legacy-v1` puts it directly on the app root,
- * `v2` under `embedded-server/`; every other facet is byte-identical in both.
- *
- * `legacy-v1` therefore survives in exactly three roles, none of them a
- * "production is still flat" claim: the desktop config module's PRE-INIT
- * default (before the migration has run), the migration's own SOURCE
- * coordinates, and callers outside the desktop process that read only
- * version-independent facets (attachments cache, `run/`, the legacy flat
- * local-computer facet) — there the argument is inert.
+ * probes, no migration, no fallback, no mode decision. Layout-v2 is the only
+ * supported desktop layout; callers receive its resolved coordinates directly.
  */
-
-export type DesktopLayoutVersion = 'legacy-v1' | 'v2';
-
-/** Durable per-computer workspace registry/root dir name. */
-export const WORKSPACE_DATA_DIR_NAME = 'workspace-data';
-
-/** The desktop layout marker file, relative to `desktop/`. */
-export const DATA_LAYOUT_MARKER_FILENAME = 'data-layout.json';
 
 /** #task:1608 — the desktop-owned computer binding file, relative to
  *  `desktop/` (daemon-config schema; the LOCATION expresses the owner). */
@@ -81,64 +57,18 @@ export function defaultAppRoot(
 }
 
 /**
- * Historical standalone-daemon state facet (`<app-root>/daemon/**`).
- * Pre-#task:1596 registries lived here too; today it holds the standalone
- * identity/runtime-pid defaults and the legacy desktop proxy config. Kept
- * as an explicitly-modeled legacy facet so no caller re-derives it.
+ * Standalone-daemon defaults under `<app-root>/daemon/**`.
  */
-export function resolveLegacyStandaloneDaemonPaths(appRoot: string): {
+export function resolveStandaloneDaemonPaths(appRoot: string): {
   stateDir: string;
   identity: string;
   runtimePids: string;
-  proxyConfig: string;
 } {
   const stateDir = join(appRoot, 'daemon');
   return {
     stateDir,
     identity: join(stateDir, 'identity.json'),
     runtimePids: join(stateDir, 'runtime-pids'),
-    proxyConfig: join(stateDir, 'proxy-config.json'),
-  };
-}
-
-/**
- * #task:1603 — the two independently atomic staging roots of the layout-v2
- * migration (docs/app-data-layout-v2.md §6). Owned by the resolver so the
- * migration never invents its own coordinates.
- */
-export function localComputerStagingDir(appRoot: string): string {
-  return join(appRoot, 'computers', '.local-layout-v2.staging');
-}
-
-export function embeddedServerStagingDir(appRoot: string): string {
-  return join(appRoot, '.embedded-server-layout-v2.staging');
-}
-
-/** #task:1664 — the layout-migration failure breadcrumb file name, relative to
- *  `diagnostics/`. */
-export const LAYOUT_MIGRATION_DIAGNOSTICS_FILENAME =
-  'layout-migration-failures.json';
-
-/**
- * #task:1664 — app-scoped diagnostics coordinates (`<app-root>/diagnostics/**`).
- *
- * Top-level and layout-version INDEPENDENT, for the same reason `run/` is: the
- * only thing written here records a FAILURE of the layout migration, so it must
- * not sit in any coordinate that migration moves, renames, or stages. Never
- * migrated. Both writers (the desktop's pre-connection preparation and the
- * daemon's workspace-data convergence) and the single reporter resolve the file
- * through here, so there is exactly one path fact.
- */
-export interface DiagnosticsPaths {
-  root: string;
-  layoutMigrationFailures: string;
-}
-
-export function resolveDiagnosticsPaths(appRoot: string): DiagnosticsPaths {
-  const root = join(appRoot, 'diagnostics');
-  return {
-    root,
-    layoutMigrationFailures: join(root, LAYOUT_MIGRATION_DIAGNOSTICS_FILENAME),
   };
 }
 
@@ -175,8 +105,6 @@ export interface ComputerSlotPaths {
   root: string;
   /** L1 agent identity root (`<root>/agents/<agent_id>/...`). */
   agents: string;
-  /** Durable workspace registry + managed workspace roots (holds L2). */
-  workspaceData: string;
   /** Per-computer proxy config. */
   proxyConfig: string;
 }
@@ -201,7 +129,6 @@ export function resolveComputerSlotFromComputersRoot(
   return {
     root,
     agents: join(root, 'agents'),
-    workspaceData: join(root, WORKSPACE_DATA_DIR_NAME),
     proxyConfig: join(root, 'proxy-config.json'),
   };
 }
@@ -209,7 +136,7 @@ export function resolveComputerSlotFromComputersRoot(
 /**
  * #task:1608 — the DEFAULT `silverhand-daemon connect` profile: the durable
  * slot plus its app-scoped transient/run and log coordinates. The slot holds
- * ONLY durable state (agents, workspace-data, proxy-config); sockets,
+ * ONLY durable state (agents and proxy-config); sockets,
  * pidfiles, and runtime pidfiles live under the app-scoped transient root
  * (`run/connect-<computer_dir>/`), and logs under the single support-bundle
  * root (`logs/connect-<computer_dir>/`). An EXPLICIT `--data-root` keeps the
@@ -244,24 +171,15 @@ export function resolveConnectProfilePaths(
   };
 }
 
-/** The pre-D4.e backend-generated workspaces root (`<app-root>/workspaces`). */
-export function legacyWorkspacesRootDir(appRoot: string): string {
-  return join(appRoot, 'workspaces');
-}
-
 /**
- * The per-computer daemon data slot: L1 agents, durable workspace-data,
- * daemon binding config, and the disposable run/ dir. Desktop's bundled
- * daemon and standalone `connect` profiles share this shape; only the
- * root differs (and `legacy-v1` flattens the desktop one onto the app
- * root itself).
+ * The per-computer daemon data slot: L1 agents, daemon binding config,
+ * proxy config, logs, and the disposable run/ dir. Standalone `connect`
+ * profiles and explicit data roots share this shape; only the root differs.
  */
 export interface ComputerDataPaths {
   root: string;
   /** L1 agent identity root (`<root>/agents/<agent_id>/...`). */
   agents: string;
-  /** Durable workspace registry + managed workspace roots (holds L2). */
-  workspaceData: string;
   /** Daemon → server binding config (`daemon-config.json`). */
   daemonConfig: string;
   /** Daemon-local proxy config. */
@@ -302,21 +220,19 @@ export interface AppRunPaths {
 
 export interface DesktopAppPaths {
   appRoot: string;
-  version: DesktopLayoutVersion;
   installationId: string;
   desktop: {
     root: string;
     electronUserData: string;
     serverProfile: string;
     session: string;
-    layoutMarker: string;
     /** #task:1608 — the desktop-owned "which computer is this app bound
      *  to" authority (daemon-config schema; v2 location). */
     computerBinding: string;
   };
   /**
    * #task:1608 — the app-scoped transient runtime root. IDENTICAL
-   * coordinates in both layout versions (top-level `run/`): it must exist
+   * coordinates (top-level `run/`): it must exist
    * before any computer id does, holds only rebuildable state (sockets,
    * pidfiles, instance identity, control-plane URL), and may be cleared
    * only while the app/daemon is stopped. Never migrated.
@@ -325,29 +241,11 @@ export interface DesktopAppPaths {
   /** The per-computer durable slots root (`<app-root>/computers`);
    *  individual slots resolve via `resolveComputerSlotPaths`. */
   computersRoot: string;
-  /**
-   * The legacy-v1 flat local-computer coordinates (historical facts, used
-   * ONLY as migration sources and the legacy binding-config location).
-   */
-  legacyLocalComputer: {
-    agents: string;
-    workspaceData: string;
-    daemonConfig: string;
-    /** Historical desktop-daemon proxy config (`daemon/proxy-config.json`). */
-    proxyConfig: string;
-  };
   embeddedServer: EmbeddedServerPaths;
   /** Single support-bundle log root (deliberately not split per owner). */
   logs: string;
   /** CLI `file view` cache; never moves (returned paths must stay valid). */
   attachmentsCache: string;
-  /**
-   * Historical backend-managed workspace root (`<app-root>/workspaces`).
-   * legacy-v1 only: the v2 target has no backend-managed root (pathless
-   * workspaces are materialized by the owning daemon under its
-   * workspace-data). Existing DB rows keep their absolute paths.
-   */
-  legacyWorkspacesRoot: string;
 }
 
 /**
@@ -360,7 +258,6 @@ export function resolveComputerDataPaths(root: string): ComputerDataPaths {
   return {
     root,
     agents: join(root, 'agents'),
-    workspaceData: join(root, WORKSPACE_DATA_DIR_NAME),
     daemonConfig: join(root, DAEMON_HOST_CONFIG_FILENAME),
     proxyConfig: join(root, 'proxy-config.json'),
     logs: join(root, 'logs'),
@@ -396,22 +293,18 @@ export function resolveServerDataPaths(dataRoot: string): EmbeddedServerPaths & 
   };
 }
 
-export function resolveDesktopAppPaths(
-  appRoot: string,
-  version: DesktopLayoutVersion,
-): DesktopAppPaths {
+export function resolveDesktopAppPaths(appRoot: string): DesktopAppPaths {
   const desktopRoot = join(appRoot, 'desktop');
   const runRoot = join(appRoot, 'run');
-  const shared = {
+  const embeddedRoot = join(appRoot, 'embedded-server');
+  return {
     appRoot,
-    version,
     installationId: join(appRoot, INSTALLATION_ID_FILENAME),
     desktop: {
       root: desktopRoot,
       electronUserData: join(desktopRoot, 'electron-user-data'),
       serverProfile: join(desktopRoot, 'server-profile.bin'),
       session: join(desktopRoot, 'session.bin'),
-      layoutMarker: join(desktopRoot, DATA_LAYOUT_MARKER_FILENAME),
       computerBinding: join(desktopRoot, COMPUTER_BINDING_FILENAME),
     },
     // Top-level run/ in BOTH versions (#task:1608): the transient runtime
@@ -426,40 +319,6 @@ export function resolveDesktopAppPaths(
       controlPlaneServerUrl: join(runRoot, 'control-plane-server-url'),
     },
     computersRoot: computersRootDir(appRoot),
-    legacyLocalComputer: {
-      agents: join(appRoot, 'agents'),
-      workspaceData: join(appRoot, WORKSPACE_DATA_DIR_NAME),
-      daemonConfig: join(appRoot, DAEMON_HOST_CONFIG_FILENAME),
-      proxyConfig: join(appRoot, 'daemon', 'proxy-config.json'),
-    },
-    logs: join(appRoot, 'logs'),
-    attachmentsCache: join(appRoot, 'attachments-cache'),
-    legacyWorkspacesRoot: join(appRoot, 'workspaces'),
-  };
-
-  if (version === 'legacy-v1') {
-    // Byte-identical to the historical flat layout: the embedded-server
-    // facet sits directly on the app root.
-    return {
-      ...shared,
-      embeddedServer: {
-        root: appRoot,
-        database: join(appRoot, 'silverhand.db'),
-        databaseWal: join(appRoot, 'silverhand.db-wal'),
-        databaseShm: join(appRoot, 'silverhand.db-shm'),
-        blobs: join(appRoot, 'blobs'),
-        serverConfig: join(appRoot, SERVER_CONFIG_FILENAME),
-        bootstrap: join(appRoot, EMBEDDED_BOOTSTRAP_FILENAME),
-      },
-    };
-  }
-
-  // v2 (docs/app-data-layout-v2.md §2): computer-scoped durable facets
-  // live in per-id slots (resolveComputerSlotPaths); nothing here is
-  // keyed by a computer id.
-  const embeddedRoot = join(appRoot, 'embedded-server');
-  return {
-    ...shared,
     embeddedServer: {
       root: embeddedRoot,
       database: join(embeddedRoot, 'silverhand.db'),
@@ -469,6 +328,8 @@ export function resolveDesktopAppPaths(
       serverConfig: join(embeddedRoot, 'config', SERVER_CONFIG_FILENAME),
       bootstrap: join(embeddedRoot, EMBEDDED_BOOTSTRAP_FILENAME),
     },
+    logs: join(appRoot, 'logs'),
+    attachmentsCache: join(appRoot, 'attachments-cache'),
   };
 }
 

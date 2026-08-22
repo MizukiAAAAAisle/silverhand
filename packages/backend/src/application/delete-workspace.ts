@@ -80,11 +80,8 @@ export async function deleteWorkspace(
   // file contents: home AND guest computers' local roots stay behind (#1594:
   // zero implicit deletion of user data).
   //
-  // relocation-v1 §3.4 / §7-4 — registry demotion: a regular workspace no
-  // longer holds a daemon-side registry identity binding, so there is NO
-  // `workspace_unbind` fan-out to tear down. The workspace-registry survives
-  // only as a §5 migration/preflight inventory reader, never a runtime
-  // participant; nothing on the delete path talks to a daemon registry.
+  // A regular workspace has no daemon-side registry identity binding, so
+  // deletion has no registry fan-out or host-local path teardown.
   stopWorkspaceRuntime(deps, plan);
   await sweepWorkspaceAttachments(deps, plan);
   deleteWorkspaceRow(deps, workspace.id);

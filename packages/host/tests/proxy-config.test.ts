@@ -1,5 +1,4 @@
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +9,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  migrateLegacyDaemonProxyConfig,
   readDaemonProxyConfig,
   writeDaemonProxyConfig,
 } from '../src/daemon/proxy-config.js';
@@ -72,25 +70,6 @@ describe('daemon proxy config', () => {
       proxy_url: 'socks5://127.0.0.1:1080',
       proxy_runtimes: ['codex'],
     });
-  });
-
-  it('migrates the legacy global proxy config into the per-computer profile once', () => {
-    const legacyPath = tempPath();
-    const targetPath = join(dir!, 'computers', 'host-1', 'proxy-config.json');
-    mkdirSync(dirname(legacyPath), { recursive: true });
-    writeDaemonProxyConfig(legacyPath, {
-      proxy_url: 'http://127.0.0.1:7890',
-      proxy_runtimes: ['codex'],
-    });
-
-    migrateLegacyDaemonProxyConfig({ legacyPath, targetPath });
-
-    expect(readDaemonProxyConfig(targetPath)).toEqual({
-      proxy_url: 'http://127.0.0.1:7890',
-      proxy_runtimes: ['codex'],
-    });
-    expect(existsSync(legacyPath)).toBe(false);
-    expect(existsSync(`${legacyPath}.migrated`)).toBe(true);
   });
 
   it('logs corrupt local config and falls back without crashing', () => {

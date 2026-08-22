@@ -34,53 +34,6 @@ export {
 export { SocketTransport } from './client/socket-transport.js';
 export type { Transport, TransportEvents, DecodedFrame } from './client/transport.js';
 export { enableNodeSystemCa, type NodeSystemCaActivation } from './node-system-ca.js';
-export {
-  bindingSlug,
-  managedWorkspaceSlug,
-  parseWorkspaceRegistryFileStrict,
-  type RegistryBinding,
-  type WorkspaceRegistryFile,
-} from './daemon/workspace-registry/registry.js';
-// #task:1608 workspace-data convergence — one-time flatten consumed by the
-// desktop layout engine (and, if sanctioned, the connect startup pass).
-export {
-  FlattenLayoutError,
-  executeWorkspaceDataConvergence,
-  planWorkspaceDataConvergence,
-} from './daemon/workspace-registry/flatten-layout.js';
-export {
-  runWorkspaceDataConvergencePass,
-  runWorkspaceStartupPreflight,
-  type WorkspaceStartupPreflightOptions,
-  type WorkspaceStartupPreflightResult,
-} from './daemon/workspace-registry/convergence-pass.js';
-// #task:1664 — the local failure-breadcrumb store for layout-v2 migration
-// diagnostics. Written by both failing components, consumed by the desktop
-// reporter; host owns local-filesystem authority.
-export {
-  readLayoutMigrationFailures,
-  recordLayoutMigrationFailure,
-  takeLayoutMigrationFailures,
-  type LayoutMigrationBreadcrumbLogger,
-} from './diagnostics/layout-migration-breadcrumb.js';
-export {
-  CWD_SCOPED_SESSION_RUNTIMES,
-  SessionMigrationError,
-  SessionStoreConfigError,
-  assertSessionStoreRootVerifiable,
-  cwdSessionSlug,
-  defaultNamespaceProbe,
-  normalizeStoreRootOverride,
-  runSessionRenamePass,
-  runSessionSlugRepairPass,
-  sessionNamespaceFor,
-  type NamespaceState,
-  type SessionCwdPair,
-  type SessionPassDeps,
-  type SessionPassResult,
-  type SessionStoreConfigOrigin,
-  type SessionStoreEnv,
-} from './daemon/workspace-registry/session-migration.js';
 // #task:1603 — legacy-runtime quiesce primitives for the desktop layout-v2
 // migration preflight (§5.1): reclaim the legacy daemon pid/socket and reap
 // orphan runtime children BEFORE any durable move.
@@ -97,23 +50,12 @@ export {
   type SpawnDaemonOptions,
 } from './spawn.js';
 export {
-  spawnWorkspaceStartupPreflight,
-  type SpawnWorkspacePreflightOptions,
-} from './preflight-spawn.js';
-// #task:1815 — the launcher-visible refusal: a typed error whose `code` is a
-// member of the daemon diagnostics closed set, so the desktop startup-failure
-// window can name the cause instead of showing an exit status.
-export { WorkspaceStartupPreflightFailure } from './workspace-preflight-protocol.js';
-export {
   AnyFrameSchema,
   EventFrameSchema,
   HelloParamsSchema,
   HelloResultSchema,
   HOST_PROTOCOL_VERSION,
   KNOWN_CAPABILITIES_V1,
-  layoutMigrationCapability,
-  layoutMigrationOutcomeFromCapabilities,
-  type LayoutMigrationOutcome,
   LooseAnyFrameSchema,
   LooseResponseFrameSchema,
   RequestFrameSchema,

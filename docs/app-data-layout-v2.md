@@ -1,6 +1,9 @@
 # Desktop app data layout v2
 
-Status: proposed design for #task:1597.
+Status: implemented. The one-time migration, its diagnostics, and rollout
+observation protocol were removed after the deletion gate passed (#task:2164).
+Migration sections below are retained as historical design rationale; they are
+not current runtime behavior.
 
 This document defines the physical layout below the desktop app root, the
 single path-resolution boundary, and the one-time migration from the legacy
@@ -613,7 +616,7 @@ delete residual `workspaces/`, `daemon/`, top-level `run/` leftovers, old
 bootstrap files, or `db.sqlite`; each has a different provenance and deletion
 proof.
 
-### Observation log for the deletion gate (#task:1613)
+### Historical observation log for the deletion gate (#task:1613)
 
 The rollout evidence above is collected through the existing attach
 handshake, with no new protocol or migration state:

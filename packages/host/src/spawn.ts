@@ -86,7 +86,6 @@ import {
   HOST_PROTOCOL_VERSION,
   splitNdjson,
   type EventFrame,
-  type LayoutMigrationOutcome,
 } from './protocol.js';
 import {
   reclaimStaleDaemonIfPresent,
@@ -221,14 +220,8 @@ export interface SpawnDaemonOptions {
   daemonIdentityPath?: string | null;
   /** Daemon-local runtime proxy config file. */
   proxyConfigPath?: string | null;
-  /** Legacy app-managed proxy config file to migrate into the per-computer profile. */
-  legacyProxyConfigPath?: string | null;
   /** Host-local control-plane URL file for runtime CLI env injection. */
   controlPlaneServerUrlPath?: string | null;
-  /** #task:1613 — outcome of the layout-v2 migration the launcher ran
-   *  before this spawn, forwarded as `--layout-migration-outcome` so the
-   *  daemon's ready handshake advertises the observation token. */
-  layoutMigrationOutcome?: LayoutMigrationOutcome | null;
   /** Mirror daemon log lines to stderr too. Default true in dev. */
   alsoStderr?: boolean;
   /** Max time to wait for the `ready` handshake. Default 10_000ms. */
@@ -413,14 +406,8 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       ...(opts.proxyConfigPath
         ? ['--proxy-config-path', opts.proxyConfigPath]
         : []),
-      ...(opts.legacyProxyConfigPath
-        ? ['--legacy-proxy-config-path', opts.legacyProxyConfigPath]
-        : []),
       ...(opts.controlPlaneServerUrlPath
         ? ['--control-plane-server-url-path', opts.controlPlaneServerUrlPath]
-        : []),
-      ...(opts.layoutMigrationOutcome
-        ? ['--layout-migration-outcome', opts.layoutMigrationOutcome]
         : []),
       ...(alsoStderr ? ['--stderr'] : []),
     ];

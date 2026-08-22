@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
@@ -136,57 +136,4 @@ describe('daemon control-plane URL resolution', () => {
     expect(readDaemonProxyConfig(expectedPath)).toEqual(written.config);
   });
 
-  it('migrates the embedded local-placeholder proxy config to the attached local host id', async () => {
-    const dir = mkdtempSync('/tmp/sh-cpu-');
-    dirs.push(dir);
-    const hostConfigPath = join(dir, 'daemon-config.json');
-    writeHostConfigAtomic(hostConfigPath, {
-      server_url: 'http://127.0.0.1:58128',
-      host_id: 'local-host-2',
-      host_token: 'token-2',
-    });
-    const placeholderPath = computerProxyConfigPath({ host_id: 'local' }, dir);
-    writeDaemonProxyConfig(placeholderPath, {
-      proxy_url: 'http://127.0.0.1:7897',
-      proxy_runtimes: ['codex'],
-    });
-
-    const daemon = await runDaemon({
-      socketPath: join(dir, 'daemon.sock'),
-      silverhandStateRootDir: dir,
-      daemonIdentityPath: join(dir, 'identity.json'),
-      agentHomeRootDir: join(dir, 'agents'),
-      pidFilePath: join(dir, 'daemon.pid'),
-      logDir: join(dir, 'logs'),
-      runtimePidRootDir: join(dir, 'daemon', 'runtime-pids'),
-      localOutboundSocketPath: join(dir, 'daemon-outbound.sock'),
-      installSignals: false,
-      writeStdoutHandshake: false,
-      alsoStderr: false,
-      supervisorFactory: null,
-    });
-    daemons.push(daemon);
-
-    const client = new HostClient({ socketPath: join(dir, 'daemon.sock') });
-    await client.connect();
-    let read: Awaited<ReturnType<typeof client.hostProxyConfigGet>>;
-    try {
-      const attached = await client.hostOutboundAttach({
-        config_path: hostConfigPath,
-      });
-      expect(attached.attached).toBe(true);
-      read = await client.hostProxyConfigGet();
-    } finally {
-      await client.close();
-    }
-
-    const expectedPath = computerProxyConfigPath({ host_id: 'local-host-2' }, dir);
-    expect(read.config).toEqual({
-      proxy_url: 'http://127.0.0.1:7897',
-      proxy_runtimes: ['codex'],
-    });
-    expect(readDaemonProxyConfig(expectedPath)).toEqual(read.config);
-    expect(existsSync(placeholderPath)).toBe(false);
-    expect(existsSync(`${placeholderPath}.migrated`)).toBe(true);
-  });
 });

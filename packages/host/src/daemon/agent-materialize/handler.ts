@@ -144,8 +144,7 @@ export function resolveAgentDir(
  * workspaces (relocation-v1 §7 task 1/4 — the registry is no longer a runtime
  * path source). As the sole path authority it self-validates the id before
  * making it a path SEGMENT — `assertSafeWorkspaceIdSegment` (the neutral
- * `workspace-path-authority` module's single id-safety predicate, shared with
- * the relocation reader, NOT the demoted registry) throws a typed
+ * `workspace-path-authority` module's single id-safety predicate) throws a typed
  * `WorkspaceIdSegmentError` on an unsafe id so a traversal segment can never
  * escape the agent home. The coordinate is always computable from
  * `(computer, agent, workspace)`; whether it is a usable cwd / has readable

@@ -6,13 +6,10 @@ import { join, relative, resolve } from 'node:path';
  * #task:1596 round 3 (Cindy) — test-isolation wiring guard. The acceptance
  * target is that daemon fixtures CANNOT address the real `~/.silverhand`.
  *
- * relocation-v1 §7-4 re-derived the protected axis from what `runDaemon` can
- * actually write. `workspaceDataRootDir` is gone (the daemon owns no registry
- * and no workspace-data root), so requiring it would guard nothing. What the
- * daemon does root is the DURABLE AGENT TREE — agent L1 plus the per-agent L2
- * bundles under it. #task:1813 removed the homedir-derived fallback: the agents
- * root is now a REQUIRED explicit coordinate, so an un-rooted daemon refuses
- * agent-file work instead of quietly resolving `~/.silverhand/agents`. This
+ * The protected axis is what `runDaemon` can actually write: the durable agent
+ * tree, including agent L1 and the per-agent L2 bundles under it. The agents
+ * root is a required explicit coordinate, so an un-rooted daemon refuses
+ * agent-file work instead of resolving `~/.silverhand/agents`. This
  * guard therefore pins the POSITIVE requirement — a fixture states where the
  * durable tree lives rather than relying on that refusal — via either of the
  * two remaining seams, any ONE of which is sufficient: `agentHomeRootDir`

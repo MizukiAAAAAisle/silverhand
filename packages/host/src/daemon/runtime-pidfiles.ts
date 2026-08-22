@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import {
   defaultAppRoot,
-  resolveLegacyStandaloneDaemonPaths,
+  resolveStandaloneDaemonPaths,
 } from '@silverhand/shared/app-data-layout';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
@@ -57,7 +57,7 @@ type ProbeResult = 'alive' | 'dead' | 'eperm' | 'error';
 
 export function defaultRuntimePidRootDir(): string {
   // Standalone default; env-AWARE since the v2 cutover (#task:1603, §8).
-  return resolveLegacyStandaloneDaemonPaths(defaultAppRoot()).runtimePids;
+  return resolveStandaloneDaemonPaths(defaultAppRoot()).runtimePids;
 }
 
 export function buildDaemonInstanceId(startedAtMs: number, pid = process.pid): string {

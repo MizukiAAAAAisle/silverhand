@@ -1,17 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   assembleConnectCommand,
   buildConnectArgv,
 } from '@silverhand/shared';
-import {
-  DAEMON_VERSION,
-  bindingSlug,
-  managedWorkspaceSlug,
-  readLayoutMigrationFailures,
-} from '../src/index.js';
 import {
   defaultConnectRuntimePaths,
   discoverStopTarget,
@@ -331,208 +325,6 @@ describe('silverhand-daemon connect command', () => {
     }
   });
 
-  it('connect converges workspace-data BEFORE starting; a convergence conflict blocks startup fail-closed (#task:1608)', async () => {
-    // PRODUCTION WIRING falsifier for the connect composition entry over
-    // the ONE migration unit: a workspace present at both the slug and the
-    // flat coordinate is a typed conflict — the daemon must NOT start and
-    // no run-state may appear.
-    const stateRoot = mkdtempSync(join(tmpdir(), 'silverhand-conv-'));
-    const prevEnv = process.env.SILVERHAND_DIR;
-    process.env.SILVERHAND_DIR = stateRoot;
-    const stderrWrites: string[] = [];
-    const origWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    }) as typeof process.stderr.write;
-    vi.stubGlobal(
-      'fetch',
-      async () =>
-        new Response(JSON.stringify({ host_id: 'host-real' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-    );
-    try {
-      const wsData = join(stateRoot, 'computers', 'host-real', 'workspace-data');
-      // The candidate the connect entry derives: origin(--server-url) + hostId.
-      const binding = { server_origin: 'http://127.0.0.1:18080', host_id: 'host-real' };
-      const slugManaged = join(
-        wsData,
-        bindingSlug(binding),
-        'workspaces',
-        managedWorkspaceSlug('r6Cb5cuDnS2hAP9l'),
-      );
-      mkdirSync(slugManaged, { recursive: true });
-      writeFileSync(
-        join(wsData, bindingSlug(binding), 'workspace-registry.json'),
-        JSON.stringify({
-          schema_version: 1,
-          binding,
-          workspaces: {
-            r6Cb5cuDnS2hAP9l: { path: slugManaged, provisioned_at: 1 },
-          },
-        }),
-      );
-      // The conflicting flat twin.
-      mkdirSync(join(wsData, 'workspaces', 'r6Cb5cuDnS2hAP9l'), { recursive: true });
-
-      const code = await runConnectCommand([
-        '--server-url',
-        'http://127.0.0.1:18080',
-        '--connect-token',
-        'ct_123',
-        '--foreground',
-      ]);
-      expect(code).toBe(1);
-      expect(stderrWrites.join('')).toContain('workspace-data migration failed');
-      // #task:1613 — the pre-connection failure leaves daemon-local
-      // STRUCTURED evidence (typed code + stage + versions + hostId), not
-      // just stderr text: the daemon never attaches, so this line is the
-      // only failure record the deletion gate can consult.
-      const logDir = join(stateRoot, 'logs', 'connect-host-real');
-      const logFiles = readdirSync(logDir).filter(f => f.endsWith('.log'));
-      expect(logFiles.length).toBeGreaterThan(0);
-      const logBody = logFiles
-        .map(f => readFileSync(join(logDir, f), 'utf8'))
-        .join('\n');
-      expect(logBody).toContain('"action":"layout_v2_migration_failed"');
-      expect(logBody).toContain('"stage":"workspace_data_convergence"');
-      expect(logBody).toContain('"hostId":"host-real"');
-      // #task:1664 — the same failure also leaves the app-scoped breadcrumb the
-      // next authenticated desktop start reports. It sits OUTSIDE the slot and
-      // outside every migration coordinate, and carries the MAPPED code only.
-      expect(readLayoutMigrationFailures({ appRoot: stateRoot })).toEqual({
-        reports: [
-          {
-            component: 'daemon',
-            daemon_version: DAEMON_VERSION,
-            stage: 'workspace_data_convergence',
-            code: 'flatten_conflict',
-            layout_version: 2,
-            count: 1,
-          },
-        ],
-      });
-      // Fail closed: source registry not retired, no daemon run-state.
-      expect(
-        existsSync(join(wsData, bindingSlug(binding), 'workspace-registry.json')),
-      ).toBe(true);
-      expect(existsSync(join(stateRoot, 'run', 'connect-host-real', 'daemon.sock'))).toBe(false);
-      expect(
-        existsSync(join(stateRoot, 'run', 'connect-host-real', 'silverhand-daemon.pid')),
-      ).toBe(false);
-    } finally {
-      vi.unstubAllGlobals();
-      process.stderr.write = origWrite;
-      if (prevEnv === undefined) delete process.env.SILVERHAND_DIR;
-      else process.env.SILVERHAND_DIR = prevEnv;
-      rmSync(stateRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('connect runs the L2-relocation facet after convergence; a relocation conflict blocks startup fail-closed (#task:1805)', async () => {
-    // PRODUCTION WIRING falsifier for the relocation facet's sibling step in
-    // the SAME connect preflight: convergence settles (already flat), then the
-    // relocation facet hits a poisoned agent-centric L2 destination and fails
-    // closed. The daemon must NOT start, the failure is stamped with stage
-    // `workspace_layout_relocation` (not `workspace_data_convergence`), and no
-    // marker or run-state appears.
-    const stateRoot = mkdtempSync(join(tmpdir(), 'silverhand-reloc-'));
-    const prevEnv = process.env.SILVERHAND_DIR;
-    process.env.SILVERHAND_DIR = stateRoot;
-    const stderrWrites: string[] = [];
-    const origWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    }) as typeof process.stderr.write;
-    vi.stubGlobal(
-      'fetch',
-      async () =>
-        new Response(JSON.stringify({ host_id: 'host-real' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-    );
-    try {
-      const wsData = join(stateRoot, 'computers', 'host-real', 'workspace-data');
-      const binding = { server_origin: 'http://127.0.0.1:18080', host_id: 'host-real' };
-      const workspaceId = 'r6Cb5cuDnS2hAP9l';
-      // A fully-settled FLAT workspace (its cwd already sits at the flat raw-id
-      // coordinate), so convergence is a no-op and the relocation facet runs.
-      const flatCwd = join(wsData, 'workspaces', workspaceId);
-      mkdirSync(join(flatCwd, '.silverhand', 'agents', 'agentAAA'), { recursive: true });
-      writeFileSync(
-        join(flatCwd, '.silverhand', 'agents', 'agentAAA', 'MEMORY.md'),
-        'agent memory',
-      );
-      writeFileSync(
-        join(wsData, 'workspace-registry.json'),
-        JSON.stringify({
-          schema_version: 1,
-          binding,
-          workspaces: { [workspaceId]: { path: flatCwd, provisioned_at: 1 } },
-        }),
-      );
-      // Poison the agent-centric L2 destination with conflicting content so the
-      // relocation classifier fails closed.
-      const l2Dest = join(
-        stateRoot,
-        'computers',
-        'host-real',
-        'agents',
-        'agentAAA',
-        'workspaces',
-        workspaceId,
-      );
-      mkdirSync(l2Dest, { recursive: true });
-      writeFileSync(join(l2Dest, 'MEMORY.md'), 'CONFLICTING');
-
-      const code = await runConnectCommand([
-        '--server-url',
-        'http://127.0.0.1:18080',
-        '--connect-token',
-        'ct_123',
-        '--foreground',
-      ]);
-      expect(code).toBe(1);
-      expect(stderrWrites.join('')).toContain('workspace-layout relocation');
-      const logDir = join(stateRoot, 'logs', 'connect-host-real');
-      const logBody = readdirSync(logDir)
-        .filter(f => f.endsWith('.log'))
-        .map(f => readFileSync(join(logDir, f), 'utf8'))
-        .join('\n');
-      expect(logBody).toContain('"action":"layout_v2_migration_failed"');
-      expect(logBody).toContain('"stage":"workspace_layout_relocation"');
-      expect(logBody).toContain('"hostId":"host-real"');
-      // App-scoped breadcrumb carries the relocation stage + a relocation_ code.
-      const breadcrumb = readLayoutMigrationFailures({ appRoot: stateRoot });
-      expect(breadcrumb).not.toBeNull();
-      expect(breadcrumb!.reports).toHaveLength(1);
-      expect(breadcrumb!.reports[0]).toMatchObject({
-        component: 'daemon',
-        daemon_version: DAEMON_VERSION,
-        stage: 'workspace_layout_relocation',
-        layout_version: 2,
-        count: 1,
-      });
-      expect(breadcrumb!.reports[0]!.code).toMatch(/^relocation_/);
-      // Fail closed: NO marker written, and no daemon run-state.
-      expect(existsSync(join(wsData, 'relocation-v1.marker.json'))).toBe(false);
-      expect(existsSync(join(stateRoot, 'run', 'connect-host-real', 'daemon.sock'))).toBe(false);
-      expect(
-        existsSync(join(stateRoot, 'run', 'connect-host-real', 'silverhand-daemon.pid')),
-      ).toBe(false);
-    } finally {
-      vi.unstubAllGlobals();
-      process.stderr.write = origWrite;
-      if (prevEnv === undefined) delete process.env.SILVERHAND_DIR;
-      else process.env.SILVERHAND_DIR = prevEnv;
-      rmSync(stateRoot, { recursive: true, force: true });
-    }
-  });
-
   it('the default profile maps to app-scoped run/logs and slot-scoped durable state', () => {
     const stateRoot = '/home/u/.silverhand';
     const p = defaultConnectRuntimePaths('host/1', stateRoot);
@@ -547,9 +339,6 @@ describe('silverhand-daemon connect command', () => {
       `${stateRoot}/logs/connect-host_1/connect-launcher.log`,
     );
     expect(p.agentHomeRootDir).toBe(`${stateRoot}/computers/host_1/agents`);
-    expect(p.workspaceDataRootDir).toBe(
-      `${stateRoot}/computers/host_1/workspace-data`,
-    );
     expect(p.proxyConfigPath).toBe(
       `${stateRoot}/computers/host_1/proxy-config.json`,
     );
@@ -563,7 +352,6 @@ describe('silverhand-daemon connect command', () => {
     expect(p.runtimePidRootDir).toBe('/data/custom/runtime-pids');
     expect(p.logDir).toBe('/data/custom/logs');
     expect(p.agentHomeRootDir).toBe('/data/custom/agents');
-    expect(p.workspaceDataRootDir).toBe('/data/custom/workspace-data');
     expect(p.proxyConfigPath).toBe('/data/custom/proxy-config.json');
   });
 

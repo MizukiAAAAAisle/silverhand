@@ -36,10 +36,8 @@ import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
 import {
   encodeFrame,
-  layoutMigrationCapability,
   type EventFrame,
   type AgentMaterializeParams,
-  type LayoutMigrationOutcome,
 } from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
@@ -48,7 +46,10 @@ import {
   type DaemonIdentity,
   readOrCreateDaemonIdentity,
 } from './identity.js';
-import { OutboundSupervisor } from './outbound-supervisor.js';
+import {
+  OutboundSupervisor,
+  type OutboundBinding,
+} from './outbound-supervisor.js';
 import {
   OutboundDaemonClient,
   type OutboundCommandDispatcher,
@@ -66,7 +67,6 @@ import {
   seedAgentL2,
   AgentFilesPurgeError,
   purgeAgentFiles,
-  type RegistryBinding,
 } from './workspace-registry/index.js';
 import {
   AgentWorkspaceFsError,
@@ -91,7 +91,6 @@ import {
 } from './runtime-pidfiles.js';
 import type { SupervisorContract } from './supervisor-contract.js';
 import {
-  migrateLegacyDaemonProxyConfig,
   readDaemonProxyConfig,
   writeDaemonProxyConfig,
 } from './proxy-config.js';
@@ -148,11 +147,6 @@ export interface RunDaemonOptions {
    * generation-scoped computer path context at attach; hot paths only
    * consume that context. An explicit `agentHomeRootDir` override
    * (connect --data-root, tests) wins over the slot.
-   *
-   * relocation-v1 §7-4: the slot's `workspace-data` half is NOT a runtime
-   * input any more. It is legacy inventory read once by the startup
-   * relocation preflight — which runs BEFORE `runDaemon` and takes its own
-   * root — so this function neither receives nor resolves it.
    */
   computersRootDir?: string | null;
   /**
@@ -179,13 +173,6 @@ export interface RunDaemonOptions {
    * current computer binding under `<silverhand>/computers/<profile>/`.
    */
   proxyConfigPath?: string | null;
-  /**
-   * Legacy app-managed proxy file (`<silverhand>/daemon/proxy-config.json`).
-   * When `proxyConfigPath` is null and a per-computer path can be resolved,
-   * daemon migrates this file once, then renames the legacy file aside. Runtime
-   * reads never permanently fall back to this path.
-   */
-  legacyProxyConfigPath?: string | null;
   /**
    * Host-local control-plane URL file for embedded desktop boots. Desktop
    * writes the finalized loopback URL after the embedded backend starts;
@@ -219,16 +206,6 @@ export interface RunDaemonOptions {
    *  ready event report the target machine hostname as diagnostic metadata
    *  without creating a desktop-style identity file. */
   daemonIdentity?: DaemonIdentity | null;
-  /**
-   * #task:1613 — outcome of the layout-v2 migration entry that ran before
-   * this daemon boot (desktop startup engine / connect convergence pass).
-   * When set, the ready handshake advertises the matching
-   * `layout_migration.v2.*` capability token so the backend can write the
-   * observation log that gates deleting the migration unit. Omitted for
-   * protocol-only assemblies and pre-#1613 launchers — absence is
-   * "unobserved", never "migrated".
-   */
-  layoutMigrationOutcome?: LayoutMigrationOutcome;
   /**
    * D5.a-2 — optional local outbound frame socket path. When set
    * (non-null), the daemon starts a {@link LocalOutboundFrameServer} on
@@ -385,7 +362,7 @@ function readControlPlaneServerUrl(
 }
 
 function resolveControlPlaneServerUrl(input: {
-  registryBinding: RegistryBinding | null;
+  controlPlaneBinding: OutboundBinding | null;
   controlPlaneServerUrlPath: string | null | undefined;
   logger: DaemonLogger;
 }): string | null {
@@ -395,7 +372,7 @@ function resolveControlPlaneServerUrl(input: {
   );
   if (daemonLocalUrl) return daemonLocalUrl;
 
-  const origin = input.registryBinding?.server_origin ?? null;
+  const origin = input.controlPlaneBinding?.server_origin ?? null;
   if (!origin) return null;
   try {
     const url = new URL(origin);
@@ -428,11 +405,6 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         ? undefined
         : readOrCreateDaemonIdentity(daemonIdentityPath);
   const helloResult = createDaemonHelloResult(daemonInstanceId, daemonIdentity);
-  if (opts.layoutMigrationOutcome) {
-    helloResult.capabilities.push(
-      layoutMigrationCapability(opts.layoutMigrationOutcome),
-    );
-  }
   const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
     event: 'ready',
     ...helloResult,
@@ -551,20 +523,16 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         host_id: opts.hostConfig.host_id,
       }
     : null;
-  // relocation-v1 §7-4 — this daemon owns NO workspace registry and NO
-  // workspace-data root. Runtime, seed, purge and file-read paths resolve the
-  // deterministic agent-centric coordinate (invariant I1); the only surviving
-  // registry reader is the marker-absent startup relocation preflight, which
-  // runs BEFORE `runDaemon` (connect-command / direct-startup-preflight) with
-  // its own root. Nothing below builds, reads, or roots an inventory.
+  // Runtime, seed, purge and file-read paths resolve the deterministic
+  // agent-centric coordinate. Nothing below builds, reads, or roots a
+  // workspace inventory.
   //
   // #task:1596 durability rule still holds for what this function DOES root:
   // durable state (agent L1/L2 under the agents root) must never live under
   // the identity file's directory (desktop's wipeable `~/.silverhand/run`) nor
   // the historical `~/.silverhand/daemon`. The embedder passes the durable
-  // coordinate EXPLICITLY — `agentHomeRootDir`, or `computersRootDir` for the
-  // binding-keyed slot below. The daemon performs no legacy physical moves;
-  // the desktop layout engine owns them (#task:1603 single-owner rule).
+  // coordinate explicitly — `agentHomeRootDir`, or `computersRootDir` for the
+  // binding-keyed slot below.
   // Non-slot root selection (explicit override / bare default). With
   // `computersRootDir` set this is superseded by the accepted binding's slot
   // inside the frozen computer path context below.
@@ -582,7 +550,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     opts.silverhandStateRootDir ??
     defaultAppRoot();
   const fallbackEmbeddedHostId = daemonIdentity?.daemon_id ?? 'local';
-  const liveOutboundBinding = (): RegistryBinding | null =>
+  const liveOutboundBinding = (): OutboundBinding | null =>
     directOutboundBinding ?? outboundSupervisor.currentBinding();
   // The binding the control-plane server URL is derived from — its ONLY
   // consumer (`resolveControlPlaneServerUrl` below). Distinct from
@@ -590,7 +558,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // `local-embedded` origin before desktop has claimed the real host, and
   // distinct from the frozen `computerContext` because a URL lookup does not
   // need generation-scoped path safety. Carries no path authority.
-  const resolveControlPlaneUrlBinding = (): RegistryBinding | null => {
+  const resolveControlPlaneUrlBinding = (): OutboundBinding | null => {
     if (localOutboundServer != null) {
       return {
         server_origin: 'local-embedded',
@@ -614,7 +582,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // Only what the runtime actually reads per generation: the binding (proxy
   // config coordinate) and the agents root (every agent-file + spawn path).
   interface ComputerPathContext {
-    binding: RegistryBinding;
+    binding: OutboundBinding;
     agentsRoot: string | undefined;
   }
   let computerContext: ComputerPathContext | null = null;
@@ -624,7 +592,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       computerContext = null;
       return;
     }
-    const binding: RegistryBinding =
+    const binding: OutboundBinding =
       localOutboundServer != null
         ? { server_origin: 'local-embedded', host_id: live.host_id }
         : live;
@@ -678,26 +646,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     if (opts.proxyConfigPath) return opts.proxyConfigPath;
     const binding = computerContext?.binding ?? null;
     if (binding == null) return null;
-    const targetPath = computerProxyConfigPath(binding, silverhandStateRoot);
-    if (
-      localOutboundServer != null &&
-      binding.host_id !== fallbackEmbeddedHostId
-    ) {
-      migrateLegacyDaemonProxyConfig({
-        legacyPath: computerProxyConfigPath(
-          { host_id: fallbackEmbeddedHostId },
-          silverhandStateRoot,
-        ),
-        targetPath,
-        logger,
-      });
-    }
-    migrateLegacyDaemonProxyConfig({
-      legacyPath: opts.legacyProxyConfigPath,
-      targetPath,
-      logger,
-    });
-    return targetPath;
+    return computerProxyConfigPath(binding, silverhandStateRoot);
   };
   // D4.e-6 — runtime_start path resolution deps. The wire options are
   // semantic-only; `resolveRuntimeStartPaths` resolves the L2/cwd PATH to the
@@ -749,7 +698,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         localSilverhandCliLauncher,
         controlPlaneServerUrl: () =>
           resolveControlPlaneServerUrl({
-            registryBinding: resolveControlPlaneUrlBinding(),
+            controlPlaneBinding: resolveControlPlaneUrlBinding(),
             controlPlaneServerUrlPath: opts.controlPlaneServerUrlPath,
             logger,
           }),

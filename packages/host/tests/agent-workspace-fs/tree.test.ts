@@ -30,12 +30,8 @@ import { agentHomeWorkspaceId } from '@silverhand/shared';
  *  - directory-first ordering, alphabetic within a parent.
  *  - HARD fs failure (chmod 000 on a sub-dir) → typed `fs_unavailable`.
  *
- * relocation-v1 §7 task 4 (registry demotion): a regular workspace resolves
- * PURELY by its deterministic agent-centric coordinate — no registry is
- * constructed or consulted anywhere in this call chain (the deps type has no
- * `registry` field at all). These tests never build a `WorkspaceRegistry`, so
- * any accidental re-introduction of a registry lookup would fail-closed with
- * no binding/file and break them.
+ * A regular workspace resolves purely by its deterministic agent-centric
+ * coordinate. The dependency shape carries no registry or stored path.
  */
 
 const AGENT_ID = 'aid-tree';

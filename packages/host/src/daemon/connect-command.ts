@@ -8,7 +8,7 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { Socket } from 'node:net';
-import { homedir, hostname } from 'node:os';
+import { hostname } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -24,7 +24,6 @@ import {
   CONNECT_ARG_STDERR,
   CONNECT_SUBCOMMAND,
   STOP_SUBCOMMAND,
-  daemonLayoutMigrationCode,
   readAllowInsecureRemoteFlag,
   shellQuoteConnectArg,
   type DaemonHostConfig,
@@ -35,25 +34,11 @@ import {
   computersRootDir,
 } from '@silverhand/shared/app-data-layout';
 import { runDaemon } from './run.js';
-import type { LayoutMigrationOutcome } from '../protocol.js';
-// #task:1664 — sibling import for the same reason as the convergence pass
-// below: never the public barrel.
-import { recordLayoutMigrationFailure } from '../diagnostics/layout-migration-breadcrumb.js';
-// #task:1608 (Cindy R4 P2-4) — sibling imports, never the public barrel.
-import { runWorkspaceStartupPreflight } from './workspace-registry/convergence-pass.js';
-import { FlattenLayoutError } from './workspace-registry/flatten-layout.js';
-import { RelocationError } from './workspace-registry/relocation-error.js';
-import {
-  SessionMigrationError,
-  type SessionStoreEnv,
-} from './workspace-registry/session-migration.js';
 import { Supervisor } from './supervisor/index.js';
 import type { DaemonIdentity } from './identity.js';
 import { hostConnectWebSocketUrl } from './outbound-client.js';
 import { defaultConnectDataRoot, defaultSilverhandStateRoot } from './computer-profile.js';
 import { logDaemon } from './daemon-logging.js';
-import { createDaemonLogger } from './logger.js';
-import { DAEMON_VERSION } from './version.js';
 
 const execFileAsync = promisify(execFile);
 const CONNECT_READY_TIMEOUT_MS = 10_000;
@@ -264,21 +249,6 @@ export async function runConnectCommand(
   mkdirSync(dataRoot, { recursive: true });
   mkdirSync(paths.runStateDir, { recursive: true });
 
-  if (useDefaultProfile) {
-    // #task:1608 transition guard (delete with the legacy layout
-    // inventory): pre-relocation connect daemons kept their pid file
-    // INSIDE the slot, where the new run/ coordinates would never collide
-    // with them. One live daemon per slot — fail closed until it stops.
-    const legacyPidPath = resolveComputerDataPaths(dataRoot).run.pidFile;
-    const legacy = await readExistingConnectDaemon(legacyPidPath, dataRoot);
-    if (legacy.status === 'matching' || legacy.status === 'eperm') {
-      process.stderr.write(
-        `silverhand-daemon connect: refusing to start; a pre-existing Silverhand daemon (pid ${legacy.pid}) still owns ${dataRoot} via the legacy pid file ${legacyPidPath}; stop it first\n`,
-      );
-      return 1;
-    }
-  }
-
   if (parsed.options.daemonMode) {
     return runConnectDaemonMode({
       options: parsed.options,
@@ -289,123 +259,14 @@ export async function runConnectCommand(
     });
   }
 
-  // Foreground = the actual daemon process. Refuse a double start BEFORE
-  // the one-time migration below can touch bytes another live daemon owns.
+  // Foreground = the actual daemon process. Refuse a double start before
+  // opening any runtime surface for this profile.
   const alreadyRunning = await readExistingConnectDaemon(paths.pidFilePath, dataRoot);
   if (alreadyRunning.status !== 'none') {
     process.stderr.write(
       `silverhand-daemon connect: refusing to start; pid ${alreadyRunning.pid} already owns ${dataRoot}\n`,
     );
     return 1;
-  }
-
-  // #task:1608 workspace-data convergence — the CONNECT composition entry
-  // over the ONE migration unit (Cindy ruling 2026-07-25): after the
-  // computer binding is resolved and verified, BEFORE any registry or
-  // data-plane surface exists, converge THIS computer's workspace-data to
-  // the flat raw-id layout (registry lift + dir renames + session cwd
-  // renames). Only the current root is touched — never another computer's
-  // directory. Failure is fail-closed: the daemon does not start, no new
-  // resolver coordinates are materialized.
-  let layoutMigrationOutcome: LayoutMigrationOutcome;
-  // The ONE binding a connect daemon can own: its full runtime binding
-  // (Cindy R4 P0-1 — never a bare host id). Shared by the convergence pass
-  // and the relocation facet (both are inventory-scoped to it).
-  const currentBinding = {
-    server_origin: new URL(parsed.options.serverUrl).origin,
-    host_id: hostId,
-  };
-  // The same effective env the daemon (and its runtime children) inherit —
-  // never a fresh process.env read (Cindy R4 P2-4).
-  const sessionEnv = env as SessionStoreEnv;
-  const migrationLogger = {
-    info: (_f: Record<string, unknown>, m: string) => {
-      if (parsed.options.alsoStderr) {
-        process.stderr.write(`silverhand-daemon connect: ${m}\n`);
-      }
-    },
-    warn: (_f: Record<string, unknown>, m: string) =>
-      process.stderr.write(`silverhand-daemon connect: ${m}\n`),
-  };
-  try {
-    const preflight = runWorkspaceStartupPreflight({
-      workspaceDataRootDir: paths.workspaceDataRootDir,
-      agentHomeRootDir: paths.agentHomeRootDir,
-      currentBinding,
-      sessionStoreHome: homedir(),
-      env: sessionEnv,
-      logger: migrationLogger,
-    });
-    // #task:1613/#task:1663 — the observation token for the backend log:
-    // either flattening or a released session-slug repair moved migration
-    // bytes. A pass with no rename is already final.
-    layoutMigrationOutcome = preflight.migrated
-      ? 'migrated'
-      : 'already_current';
-  } catch (err) {
-    if (
-      err instanceof FlattenLayoutError ||
-      err instanceof SessionMigrationError ||
-      err instanceof RelocationError
-    ) {
-      // #task:1613 — pre-connection failure: the backend is unreachable by
-      // construction, so this daemon-local structured line (typed code,
-      // versions, hostId) IS the failure evidence. stderr keeps the
-      // operator-facing text.
-      const stage =
-        err instanceof RelocationError
-          ? 'workspace_layout_relocation'
-          : 'workspace_data_convergence';
-      const code = daemonLayoutMigrationCode(err.code);
-      const failureLogger = createDaemonLogger({
-        dir: paths.logDir,
-        alsoStderr: false,
-        base: { component: 'silverhand-daemon' },
-      });
-      failureLogger.error(
-        {
-          action: 'layout_v2_migration_failed',
-          stage,
-          code,
-          layoutVersion: 2,
-          daemonVersion: DAEMON_VERSION,
-          hostId,
-        },
-        err instanceof RelocationError
-          ? 'workspace-layout relocation failed; daemon not started'
-          : 'layout-v2 workspace-data convergence failed; daemon not started',
-      );
-      // #task:1664 — drop the closed-payload breadcrumb the next authenticated
-      // desktop start reports. ONLY under the default profile: the breadcrumb
-      // is app-scoped (`<app-root>/diagnostics/`) and the desktop reporter is
-      // the only reader, so under an explicit `--data-root` there is no reader
-      // for a file written next to that root — writing it anyway would leave
-      // bytes nobody ever sends or clears. A remote-only machine's failures
-      // stay in this log line until a daemon-side reporting channel exists.
-      if (useDefaultProfile) {
-        recordLayoutMigrationFailure({
-          appRoot: stateRoot,
-          fact: {
-            component: 'daemon',
-            daemon_version: DAEMON_VERSION,
-            stage,
-            code,
-            layout_version: 2,
-          },
-          logger: failureLogger,
-        });
-      }
-      await failureLogger.close();
-      process.stderr.write(
-        `silverhand-daemon connect: ${
-          err instanceof RelocationError
-            ? 'workspace-layout relocation'
-            : 'workspace-data migration'
-        } failed (${err.code}): ${err.message}\n`,
-      );
-      return 1;
-    }
-    throw err;
   }
 
   const hostConfig: DaemonHostConfig = {
@@ -427,17 +288,14 @@ export async function runConnectCommand(
     logDir: paths.logDir,
     runtimePidRootDir: paths.runtimePidRootDir,
     agentHomeRootDir: paths.agentHomeRootDir,
-    // #task:1598 / relocation-v1 §7-4 — the state root stays the GLOBAL home
+    // The state root stays the GLOBAL home
     // root even for a custom data root: its live consumer is the per-computer
-    // proxy-config coordinate, which is global by design. The workspace-data
-    // root is deliberately NOT passed — the relocation preflight above is its
-    // only reader and takes it directly.
+    // proxy-config coordinate, which is global by design.
     silverhandStateRootDir: defaultSilverhandStateRoot(),
     proxyConfigPath: paths.proxyConfigPath,
     hostConfig,
     daemonIdentity,
     daemonIdentityPath: null,
-    layoutMigrationOutcome,
     installSignals: true,
     writeStdoutHandshake: false,
     alsoStderr: parsed.options.alsoStderr,
@@ -616,7 +474,6 @@ interface ConnectRuntimePaths {
   runStateDir: string;
   runtimePidRootDir: string;
   agentHomeRootDir: string;
-  workspaceDataRootDir: string;
   proxyConfigPath: string;
 }
 
@@ -639,7 +496,6 @@ export function defaultConnectRuntimePaths(
     runStateDir: profile.run.root,
     runtimePidRootDir: profile.run.runtimePids,
     agentHomeRootDir: profile.slot.agents,
-    workspaceDataRootDir: profile.slot.workspaceData,
     proxyConfigPath: profile.slot.proxyConfig,
   };
 }
@@ -656,7 +512,6 @@ export function explicitConnectRuntimePaths(dataRoot: string): ConnectRuntimePat
     runStateDir: computer.run.root,
     runtimePidRootDir: computer.run.runtimePids,
     agentHomeRootDir: computer.agents,
-    workspaceDataRootDir: computer.workspaceData,
     proxyConfigPath: computer.proxyConfig,
   };
 }

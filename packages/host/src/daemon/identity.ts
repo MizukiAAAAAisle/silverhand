@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { dirname } from 'node:path';
 import {
   defaultAppRoot,
-  resolveLegacyStandaloneDaemonPaths,
+  resolveStandaloneDaemonPaths,
 } from '@silverhand/shared/app-data-layout';
 
 import { HelloResultSchema, type HelloResult } from '../protocol.js';
@@ -35,7 +35,7 @@ export const DEFAULT_DAEMON_IDENTITY: DaemonIdentity = Object.freeze({
  * shipped the env-independent bare-daemon defaults).
  */
 export function defaultDaemonIdentityPath(): string {
-  return resolveLegacyStandaloneDaemonPaths(defaultAppRoot()).identity;
+  return resolveStandaloneDaemonPaths(defaultAppRoot()).identity;
 }
 
 export function readOrCreateDaemonIdentity(filePath: string): DaemonIdentity {

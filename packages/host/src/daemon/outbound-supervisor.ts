@@ -115,9 +115,7 @@ export interface OutboundClientLike {
 }
 
 /** D4.e-1 — the control-plane identity the daemon is currently attached
- *  to. Structurally identical to the workspace registry's
- *  `RegistryBinding` (origin + host id), kept local here to avoid a
- *  daemon→registry import cycle; `run.ts` consumes it directly. */
+ *  to. `run.ts` consumes it directly for generation-scoped host state. */
 export interface OutboundBinding {
   server_origin: string;
   host_id: string;

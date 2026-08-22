@@ -9,14 +9,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  WorkspaceRegistry,
-  WorkspaceRegistryError,
   indexAgentWorkspaces,
   AgentL2SeedError,
   seedAgentL2,
   AgentFilesPurgeError,
   purgeAgentFiles,
-  type RegistryBinding,
 } from '../../src/daemon/workspace-registry/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 import {
@@ -37,27 +34,15 @@ import { chmodSync, mkdirSync, readdirSync } from 'node:fs';
  *     / unsafe ids to `unresolved` (read fail-closed, agent_dir null).
  */
 
-const STANDALONE: RegistryBinding = {
-  server_origin: 'https://app.example.com',
-  host_id: 'host_abc',
-};
-
-let stateDir: string;
 let agentHomeRootDir: string;
 
 beforeEach(() => {
-  stateDir = mkdtempSync(join(tmpdir(), 'shd4e1-h-'));
   agentHomeRootDir = mkdtempSync(join(tmpdir(), 'shd4e1-agents-'));
 });
 
 afterEach(() => {
-  rmSync(stateDir, { recursive: true, force: true });
   rmSync(agentHomeRootDir, { recursive: true, force: true });
 });
-
-function makeRegistry(binding: RegistryBinding = STANDALONE) {
-  return new WorkspaceRegistry({ stateDir, binding });
-}
 
 /**
  * The deterministic agent-centric L2 bundle dir a regular workspace resolves

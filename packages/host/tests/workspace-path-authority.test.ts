@@ -5,17 +5,7 @@ import {
 } from '../src/daemon/workspace-path-authority.js';
 
 /**
- * relocation-v1 §7-4 (#task:1808) — this coverage was RE-HOMED, not written
- * fresh: it used to live in `workspace-registry/registry.test.ts` as the
- * "managed path safety (no traversal)" suite, exercised through `provision()` /
- * `resolve()`. Those methods went with the registry demotion, but the invariant
- * they were guarding OUTLIVED them and moved to `workspace-path-authority.ts`,
- * where every runtime resolver (agent-materialize, runtime-start-resolve,
- * agent-workspace-fs) and the relocation reader now depends on it. Deleting the
- * suite with the methods would have dropped the only unit coverage of a live
- * path-security boundary, so it is pinned here directly instead.
- *
- * The boundary: a server-supplied workspace id becomes a filesystem path
+ * A server-supplied workspace id becomes a filesystem path
  * SEGMENT under the agent bundle root, so an id that is not structurally safe
  * must fail closed — never be hashed, trimmed or otherwise "repaired" into
  * something acceptable.

@@ -7,16 +7,15 @@ import {
   REVEAL_LOGS_URL,
   type StartupFailureExitDeps,
 } from '../startup-failure-exit';
-import { LayoutMigrationError } from '../layout-migration/engine';
 import {
   ProfileUnusableError,
   RemoteOnlyServerProfileRequiredError,
 } from '../backend-boot-mode';
 
 const NOTICE = {
-  headline: 'Silverhand could not migrate its data folder.',
-  code: 'layout_conflict',
-  detail: 'both the legacy and the v2 root exist',
+  headline: 'Silverhand could not finish starting.',
+  code: 'startup_failed',
+  detail: 'startup dependency unavailable',
 };
 
 function deps(
@@ -143,11 +142,6 @@ describe('renderStartupFailureDocument', () => {
   });
 
   it('never claims the data was left alone', async () => {
-    // Semantic fence, not a styling one (#task:1641 review): the claim
-    // cannot be derived from the error — `LayoutMigrationError` is thrown
-    // both before and after the migration's renames, and
-    // `ProfileUnusableError` is evaluated after the migration has legally
-    // moved things. Saying it "when we can" is how it becomes a lie.
     for (const logsDir of ['/logs', null]) {
       const html = renderStartupFailureDocument(NOTICE, logsDir);
       expect(html).not.toMatch(/not (been )?(modified|touched|changed)/i);
@@ -158,14 +152,6 @@ describe('renderStartupFailureDocument', () => {
 
 describe('describeStartupFailure', () => {
   it('names the failing layer and carries a greppable code', () => {
-    expect(
-      describeStartupFailure(
-        new LayoutMigrationError('layout_conflict', 'both roots exist'),
-      ),
-    ).toMatchObject({
-      code: 'layout_conflict',
-      headline: 'Silverhand could not migrate its data folder.',
-    });
     expect(
       describeStartupFailure(
         new ProfileUnusableError({

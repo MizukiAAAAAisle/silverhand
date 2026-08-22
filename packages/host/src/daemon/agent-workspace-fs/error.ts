@@ -29,9 +29,9 @@ import type { AgentWorkspaceFsErrorCode } from '../../protocol.js';
  *    default. So binding/attach state is NOT the predicate and
  *    attaching is not the recovery for the second half: recovery is a
  *    root (a registered computer slot, or explicit configuration).
- *    Despite the legacy code name this is NOT a workspace-registry
- *    consult (relocation-v1 §3.4 left the registry a migration-only
- *    reader). Note the scope: an unsafe `workspace_id` segment is
+ *    Despite the legacy code name this is a missing agents-root condition,
+ *    not a workspace-registry consult. Note the scope: an unsafe
+ *    `workspace_id` segment is
  *    `forbidden_path` in THIS taxonomy (`source.ts`), unlike
  *    `runtime_start` where it shares this code. Maps to HTTP 503.
  *  - `fs_unavailable` — host-local fs read failed HARD (perm/IO/EROFS

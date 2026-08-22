@@ -1,7 +1,9 @@
 # Workspace layout relocation v1
 
-Status: proposed design for #task:1801. Revised after review rounds 1–2
-(@Cindy BLOCKER 1–4 / MEDIUM 1–2 of both rounds adopted; @shiki ruled §3.5).
+Status: implemented. The one-time relocation code, marker, diagnostics, and
+preflight protocol were removed after rollout completion (#task:2164). Sections
+describing migration mechanics are retained as historical rationale; the
+agent-centric target layout remains current.
 
 This document decouples a **workspace** from any agent working directory, moves
 the per-workspace agent L2 memory into the agent-centric home tree, and retires

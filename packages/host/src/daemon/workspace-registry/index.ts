@@ -1,15 +1,4 @@
 export {
-  WorkspaceRegistry,
-  WorkspaceRegistryError,
-  REGISTRY_SCHEMA_VERSION,
-  bindingSlug,
-  managedWorkspaceSlug,
-  type RegistryBinding,
-  type WorkspaceRegistryErrorCode,
-  type WorkspaceRegistryEntry,
-  type WorkspaceRegistryOptions,
-} from './registry.js';
-export {
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
   type IndexAgentWorkspacesDeps,
@@ -25,7 +14,3 @@ export {
   type PurgeAgentFilesDeps,
 } from './files-purge-handler.js';
 export { initWorkspaceSkeleton } from './workspace-skeleton.js';
-export {
-  WORKSPACE_DATA_DIR_NAME,
-  defaultWorkspaceDataRootDir,
-} from './state-dir.js';

@@ -39,28 +39,12 @@
  *                         Desktop passes the resolver's
  *                         `localComputer.run.identity`; omitted → the
  *                         bare-daemon default under `~/.silverhand/daemon`.
- *   --layout-migration-outcome <migrated|already_current>
- *                         optional (#task:1613); outcome of the layout-v2
- *                         migration the LAUNCHER ran before this spawn
- *                         (desktop startup engine). The ready handshake
- *                         advertises it as a `layout_migration.v2.*`
- *                         capability token for the backend observation log.
  *   --stderr              optional; mirror log lines to stderr too
- *
- * One-shot preflight mode (desktop runs this BEFORE spawning the supervised
- * daemon, so data-sized migration is outside the ready-handshake timeout):
- *
- *   silverhand-daemon preflight
- *     --log-dir <abs>
- *     --computers-root-dir <abs>
- *     --workspace-relocation-host-id <id>
- *     --workspace-relocation-server-origin <origin|local-embedded>
  *
  * Stdout:
  *   normal daemon: one NDJSON line on successful bind:
  *     {"event":"ready","socket_path":"...","daemon_pid":...,...}
  *   followed by nothing — stdout is reserved for the handshake.
- *   preflight: one result line followed by process exit.
  *
  * Stderr:
  *   parse errors before bind; nothing else unless `--stderr` is set.
@@ -77,11 +61,9 @@
  * dev run.
  */
 import { runDaemon } from './run.js';
-import type { LayoutMigrationOutcome } from '../protocol.js';
 import { Supervisor } from './supervisor/index.js';
 import { runConnectCommand, runStopCommand } from './connect-command.js';
 import { enableNodeSystemCa } from '../node-system-ca.js';
-import { runDirectStartupPreflightCommand } from './direct-startup-preflight.js';
 
 enableNodeSystemCa();
 
@@ -96,9 +78,7 @@ interface ParsedArgv {
   silverhandStateRootDir: string | null;
   daemonIdentityPath: string | null;
   proxyConfigPath: string | null;
-  legacyProxyConfigPath: string | null;
   controlPlaneServerUrlPath: string | null;
-  layoutMigrationOutcome: LayoutMigrationOutcome | null;
   alsoStderr: boolean;
 }
 
@@ -113,9 +93,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let silverhandStateRootDir: string | null = null;
   let daemonIdentityPath: string | null = null;
   let proxyConfigPath: string | null = null;
-  let legacyProxyConfigPath: string | null = null;
   let controlPlaneServerUrlPath: string | null = null;
-  let layoutMigrationOutcome: LayoutMigrationOutcome | null = null;
   let alsoStderr = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -150,23 +128,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
       case '--proxy-config-path':
         proxyConfigPath = argv[++i] ?? null;
         break;
-      case '--legacy-proxy-config-path':
-        legacyProxyConfigPath = argv[++i] ?? null;
-        break;
       case '--control-plane-server-url-path':
         controlPlaneServerUrlPath = argv[++i] ?? null;
         break;
-      case '--layout-migration-outcome': {
-        const value = argv[++i] ?? null;
-        if (value !== 'migrated' && value !== 'already_current') {
-          return {
-            error:
-              '--layout-migration-outcome must be migrated|already_current',
-          };
-        }
-        layoutMigrationOutcome = value;
-        break;
-      }
       case '--stderr':
         alsoStderr = true;
         break;
@@ -202,12 +166,6 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     return { error: '--proxy-config-path must be absolute' };
   }
   if (
-    legacyProxyConfigPath !== null &&
-    !legacyProxyConfigPath.startsWith('/')
-  ) {
-    return { error: '--legacy-proxy-config-path must be absolute' };
-  }
-  if (
     controlPlaneServerUrlPath !== null &&
     !controlPlaneServerUrlPath.startsWith('/')
   ) {
@@ -224,9 +182,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     silverhandStateRootDir,
     daemonIdentityPath,
     proxyConfigPath,
-    legacyProxyConfigPath,
     controlPlaneServerUrlPath,
-    layoutMigrationOutcome,
     alsoStderr,
   };
 }
@@ -241,10 +197,6 @@ async function main(): Promise<void> {
   if (argv[0] === 'stop') {
     const exitCode = await runStopCommand(argv.slice(1));
     process.exit(exitCode);
-  }
-  if (argv[0] === 'preflight') {
-    process.exitCode = await runDirectStartupPreflightCommand(argv.slice(1));
-    return; // let stdout drain before the one-shot process exits
   }
   const parsed = parseArgv(argv);
   if ('error' in parsed) {
@@ -263,10 +215,8 @@ async function main(): Promise<void> {
       silverhandStateRootDir: parsed.silverhandStateRootDir ?? undefined,
       daemonIdentityPath: parsed.daemonIdentityPath ?? undefined,
       proxyConfigPath: parsed.proxyConfigPath ?? undefined,
-      legacyProxyConfigPath: parsed.legacyProxyConfigPath ?? undefined,
       controlPlaneServerUrlPath:
         parsed.controlPlaneServerUrlPath ?? undefined,
-      layoutMigrationOutcome: parsed.layoutMigrationOutcome ?? undefined,
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,

@@ -56,16 +56,11 @@ import {
   HostClient,
   OUTBOUND_PROTOCOL_VERSION,
   spawnDaemonChild,
-  spawnWorkspaceStartupPreflight,
   type DaemonHandle,
-  type RegistryBinding,
 } from '@silverhand/host';
-import { prepareDesktopDataLayout } from './layout-migration/prepare.js';
-import { reportLayoutMigrationFailures } from './layout-migration/report-failures.js';
 import { describeStartupFailure } from './startup-failure.js';
 import { showStartupFailureWindow } from './startup-failure-window.js';
 import {
-  initializeDesktopLayoutVersion,
   electronUserDataPath,
   shouldRedirectElectronUserData,
   loadOrCreateServerConfig,
@@ -606,7 +601,6 @@ interface DaemonPaths {
   silverhandStateRootDir: string;
   daemonIdentityPath: string;
   hostConfigPath: string;
-  legacyProxyConfigPath: string;
   controlPlaneServerUrlPath: string;
   /** Local outbound frame socket — the daemon binds it and the embedded
    *  backend dials it for the D5.a R4-unified outbound envelope. */
@@ -614,13 +608,8 @@ interface DaemonPaths {
 }
 
 function daemonPaths(): DaemonPaths {
-  // #task:1598 — every path comes from the ONE app-data resolver
-  // (`desktopAppPaths()`, which reports whichever layout version the
-  // process settled on when the startup migration read the data-layout
-  // marker). run/ stays wholly disposable — the user can
-  // rm -rf it if the machine ends up in a weird state; durable
-  // workspace-data (registry + managed roots holding agent L2 memory)
-  // lives OUTSIDE run/ (#task:1596).
+  // Every path comes from the app-data resolver. run/ stays wholly disposable
+  // and contains no durable agent data.
   const paths = desktopAppPaths();
   return {
     socketPath: paths.run.socket,
@@ -631,34 +620,8 @@ function daemonPaths(): DaemonPaths {
     silverhandStateRootDir: paths.appRoot,
     daemonIdentityPath: paths.run.identity,
     hostConfigPath: paths.desktop.computerBinding,
-    legacyProxyConfigPath: paths.legacyLocalComputer.proxyConfig,
     controlPlaneServerUrlPath: paths.run.controlPlaneServerUrl,
     localOutboundSocketPath: paths.run.outboundSocket,
-  };
-}
-
-/** Resolve the existing desktop computer binding into the exact registry
- * identity the one-shot host preflight must migrate before daemon spawn. This mirrors the
- * layout engine's binding classifier: loopback profiles own the
- * `local-embedded` registry namespace; remote profiles own their URL origin.
- * No host token crosses into the daemon argv. */
-function workspaceRelocationBindingForPreflight(): RegistryBinding | null {
-  const config = readDaemonHostConfig(desktopAppPaths().desktop.computerBinding);
-  if (config === null) return null;
-  const classified = classifyServerUrl(config.server_url, {
-    allowInsecureRemote: true,
-  });
-  if (!classified.ok) {
-    throw new Error(
-      `computer binding cannot identify its workspace registry: ${classified.message}`,
-    );
-  }
-  return {
-    host_id: config.host_id,
-    server_origin:
-      classified.kind === 'loopback'
-        ? 'local-embedded'
-        : classified.url.origin,
   };
 }
 
@@ -850,40 +813,6 @@ async function storeUserSession(token: string, user: UserDto): Promise<void> {
   userSessionUser = user;
   persistUserSessionToken(token);
   await syncEventWsSessionCookie(token);
-  // #task:1664 — the ONE authenticated-promote point, so it is also the one
-  // place a pending migration-failure breadcrumb can be reported: before this
-  // returns there is no bearer to send it with. Deliberately not awaited — the
-  // session is already established and diagnostics must not sit in front of the
-  // window; and deliberately once per launch, because delivery is at-most-once:
-  // the reporter consumes the breadcrumb before it sends, so there is nothing
-  // left for a second attempt to carry.
-  void reportPendingLayoutMigrationFailuresOnce(token);
-}
-
-let layoutMigrationReportAttempted = false;
-
-async function reportPendingLayoutMigrationFailuresOnce(
-  token: string,
-): Promise<void> {
-  if (layoutMigrationReportAttempted) return;
-  layoutMigrationReportAttempted = true;
-  try {
-    await reportLayoutMigrationFailures({
-      appRoot: silverhandDir(),
-      endpoint: backendUrl(apiPaths.clientLayoutMigrationDiagnostics),
-      token,
-      fetchImpl: (input, init) => backendFetch(input, init),
-      logger,
-    });
-  } catch (err) {
-    // The reporter itself is fail-open; this catch only covers the wiring
-    // around it (e.g. resolving the backend URL) so a diagnostics attempt can
-    // never surface as an unhandled rejection on a healthy session.
-    logger?.warn(
-      { err, action: 'layout_v2_migration_report_wiring_failed' },
-      'could not attempt the layout-v2 migration diagnostics report',
-    );
-  }
 }
 
 /**
@@ -2193,30 +2122,6 @@ async function bootstrap(): Promise<void> {
       },
       'logger initialized',
     );
-    // #task:1603 — layout-v2 startup preparation (§5): single-instance
-    // ownership is held (module scope), the logger is up, and NOTHING has
-    // read host config / spawned the daemon / opened the embedded DB yet.
-    // Quiesce any legacy daemon + orphan runtime children, run the eager
-    // two-facet migration, then flip the resolver selector to the marker's
-    // version. Both desktop modes execute this identically; migration
-    // failures are startup-blocking by design; a failure may follow earlier
-    // atomic moves, and the filesystem progress record makes the next run
-    // resume or report the same typed conflict without guessing or merging.
-    // `prepareDesktopDataLayout` writes the daemon-local structured failure
-    // evidence before rethrowing (#task:1613). The returned outcome is
-    // advertised by the spawned daemon's ready handshake for the backend
-    // observation log.
-    const layoutMigrationOutcome = await prepareDesktopDataLayout({
-      appRoot: silverhandDir(),
-      logsDir: desktopAppPaths().logs,
-      logger,
-      appVersion: app.getVersion(),
-    });
-    initializeDesktopLayoutVersion('v2');
-    logger.info(
-      { action: 'layout_version_selected', version: 'v2' },
-      'desktop app data layout selected',
-    );
     // D4.a Commit 3 — boot-mode decision. We compute it AFTER the
     // logger is initialized so the decision can be logged actionably,
     // but BEFORE we spawn the daemon / start the embedded backend so
@@ -2365,20 +2270,7 @@ async function bootstrap(): Promise<void> {
     // in-process ConversationManager runtime, Commit C removed the
     // env switch). Recovery is fixing the daemon spawn / socket.
     const paths = daemonPaths();
-    const workspaceRelocationBinding = workspaceRelocationBindingForPreflight();
     const daemonLauncher = resolveDaemonLauncher();
-    const daemonLayoutMigrationOutcome =
-      workspaceRelocationBinding === null
-        ? layoutMigrationOutcome
-        : await spawnWorkspaceStartupPreflight({
-            launcher: daemonLauncher,
-            logDir: paths.logDir,
-            computersRootDir: paths.computersRootDir,
-            silverhandStateRootDir: paths.silverhandStateRootDir,
-            binding: workspaceRelocationBinding,
-            layoutMigrationOutcome,
-            alsoStderr: !app.isPackaged,
-          });
     daemon = await spawnDaemonChild({
       launcher: daemonLauncher,
       socketPath: paths.socketPath,
@@ -2388,13 +2280,9 @@ async function bootstrap(): Promise<void> {
       computersRootDir: paths.computersRootDir,
       silverhandStateRootDir: paths.silverhandStateRootDir,
       daemonIdentityPath: paths.daemonIdentityPath,
-      layoutMigrationOutcome: daemonLayoutMigrationOutcome,
-      // The data-sized relocation already completed in the one-shot preflight
-      // child. This is only the ordinary daemon ready deadline; 30s tolerates
-      // slower machines while retaining a finite stuck-start boundary.
+      // 30s tolerates slower machines while retaining a finite stuck-start boundary.
       readyTimeoutMs: 30_000,
       proxyConfigPath: null,
-      legacyProxyConfigPath: paths.legacyProxyConfigPath,
       controlPlaneServerUrlPath:
         startupPlan.mode === 'embedded'
           ? paths.controlPlaneServerUrlPath
@@ -3540,10 +3428,8 @@ guardedIpc.handle(
 registerSurfaceIpcHandlers(guardedIpc);
 registerSelectionExportIpcHandlers(guardedIpc);
 
-// #task:1603 — §5.1 process-ownership prerequisite: exactly one desktop
-// instance may run the startup preparation (and later the migration) per
-// machine. A second instance exits immediately; the first one keeps
-// working (no focus dance needed pre-window).
+// Exactly one desktop instance may own the local daemon and embedded data at a
+// time. A second instance exits immediately; the first keeps working.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
@@ -3596,8 +3482,8 @@ app.whenReady().then(async () => {
 
 /**
  * The single startup failure exit. `bootstrap()` and the window bring-up
- * above are fail-closed on purpose (refused layout migration, refused
- * server profile, unreachable-but-required work); this is the only place
+ * above are fail-closed on purpose (refused server profile or
+ * unreachable-but-required work); this is the only place
  * that turns such a refusal into something the user can see and act on.
  * Without it the rethrow died in an un-`.catch`ed promise and a
  * double-click produced no window and no message at all.

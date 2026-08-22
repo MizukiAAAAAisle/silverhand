@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { defaultDaemonIdentityPath } from '../src/daemon/identity.js';
 import { defaultRuntimePidRootDir } from '../src/daemon/runtime-pidfiles.js';
-import { defaultWorkspaceDataRootDir } from '../src/daemon/workspace-registry/state-dir.js';
 import { defaultSilverhandStateRoot } from '../src/daemon/computer-profile.js';
 import { deriveLocalOutboundFrameSocketPath } from '../src/daemon/local-outbound-frame-server.js';
 
@@ -31,7 +30,6 @@ describe('host default paths follow SILVERHAND_DIR (v2 contract §8)', () => {
   const expectedFor = (root: string) => ({
     identity: join(root, 'daemon', 'identity.json'),
     runtimePids: join(root, 'daemon', 'runtime-pids'),
-    workspaceData: join(root, 'workspace-data'),
     stateRoot: root,
     outboundSocket: join(root, 'run', 'daemon-outbound.sock'),
   });
@@ -39,12 +37,11 @@ describe('host default paths follow SILVERHAND_DIR (v2 contract §8)', () => {
   const readAll = () => ({
     identity: defaultDaemonIdentityPath(),
     runtimePids: defaultRuntimePidRootDir(),
-    workspaceData: defaultWorkspaceDataRootDir(),
     stateRoot: defaultSilverhandStateRoot(),
     outboundSocket: deriveLocalOutboundFrameSocketPath(),
   });
 
-  it('identity / runtime-pids / workspace-data / state root / outbound socket all move with an explicit env root', () => {
+  it('identity / runtime-pids / state root / outbound socket all move with an explicit env root', () => {
     process.env.SILVERHAND_DIR = ENV_ROOT;
     expect(readAll()).toEqual(expectedFor(ENV_ROOT));
   });

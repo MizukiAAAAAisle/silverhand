@@ -27,7 +27,7 @@ import {
 } from '../server-connection-profile.js';
 
 // #task:1598 — the leaf takes the RESOLVED profile path; tests build it
-// the way the desktop selector does (legacy-v1 desktop facet).
+// the way the desktop resolver does.
 const serverConnectionProfilePath = (root: string) =>
   join(root, 'desktop', 'server-profile.bin');
 

@@ -228,7 +228,7 @@ async function writeAttachmentCache(input: {
 export function attachmentCacheRoot(env: Record<string, string | undefined> = process.env): string {
   // #task:1603 — the ONE unified SILVERHAND_DIR contract (trim; blank =
   // unset); the historical CLI-local trim is now the shared semantics.
-  return resolveDesktopAppPaths(defaultAppRoot(env), 'legacy-v1').attachmentsCache;
+  return resolveDesktopAppPaths(defaultAppRoot(env)).attachmentsCache;
 }
 
 function safeSegment(value: string): string {

@@ -27,7 +27,6 @@ interface E2eFixture {
 
 async function setupFixture(
   opts: {
-    layoutMigrationOutcome?: 'migrated' | 'already_current';
     withLocalOutbound?: boolean;
   } = {},
 ): Promise<E2eFixture> {
@@ -47,9 +46,6 @@ async function setupFixture(
     agentHomeRootDir: join(dir, 'agents'),
     runtimePidRootDir,
     ...(localOutboundSocketPath ? { localOutboundSocketPath } : {}),
-    ...(opts.layoutMigrationOutcome
-      ? { layoutMigrationOutcome: opts.layoutMigrationOutcome }
-      : {}),
     installSignals: false,
     writeStdoutHandshake: false,
     alsoStderr: false,
@@ -205,49 +201,4 @@ describe('e2e — real Unix socket', () => {
     rmSync(f.dir, { recursive: true, force: true });
   });
 
-  it('runDaemon advertises the layout outcome on the REAL ready frame (#task:1613)', async () => {
-    // In-process half of the observation chain: runDaemon option → the
-    // actual ready frame the local outbound server writes on accept —
-    // the same readyEvent closure the outbound WS client sends.
-    const f = await setupFixture({
-      layoutMigrationOutcome: 'already_current',
-      withLocalOutbound: true,
-    });
-    fixtures.push(f);
-    const line = await new Promise<string>((resolve, reject) => {
-      const sock = createConnection(f.localOutboundSocketPath!);
-      let buf = '';
-      const timer = setTimeout(() => {
-        sock.destroy();
-        reject(new Error('timed out waiting for ready frame'));
-      }, 2_000);
-      sock.on('data', chunk => {
-        buf += String(chunk);
-        const nl = buf.indexOf('\n');
-        if (nl >= 0) {
-          clearTimeout(timer);
-          sock.destroy();
-          resolve(buf.slice(0, nl));
-        }
-      });
-      sock.on('error', err => {
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
-    const frame = JSON.parse(line) as { kind: string; capabilities: string[] };
-    expect(frame.kind).toBe('ready');
-    expect(frame.capabilities).toContain('layout_migration.v2.already_current');
-    expect(frame.capabilities).not.toContain('layout_migration.v2.migrated');
-  });
-
-  it('a boot WITHOUT layoutMigrationOutcome advertises no layout token (#task:1613)', async () => {
-    const f = await setupFixture();
-    fixtures.push(f);
-    const client = new HostClient({ socketPath: f.socketPath });
-    clients.push(client);
-    await client.connect();
-    expect(client.capabilities.has('layout_migration.v2.migrated')).toBe(false);
-    expect(client.capabilities.has('layout_migration.v2.already_current')).toBe(false);
-  });
 });

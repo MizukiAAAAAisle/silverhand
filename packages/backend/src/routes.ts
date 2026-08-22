@@ -23,7 +23,6 @@ import { createWorkspacesApp } from './routes/workspaces.js';
 import { createSortApp } from './routes/sort.js';
 import { createFavoritesApp } from './routes/favorites.js';
 import { createDirectPairsApp } from './routes/direct-pairs.js';
-import { createClientDiagnosticsApp } from './routes/client-diagnostics.js';
 import { createTasksApp } from './routes/tasks.js';
 import { createNotificationsApp } from './routes/notifications.js';
 import { createPresenceApp } from './routes/presence.js';
@@ -532,11 +531,6 @@ export function createApiRouter(
     '/',
     createDirectPairsApp({ ctx, directPairs: readModels.directPairs, conversations }),
   );
-
-  // Client-side diagnostics intake (#task:1664): failures the server cannot
-  // observe when they happen, reported by the desktop on its next
-  // authenticated start. Log-only, no read side.
-  app.route('/', createClientDiagnosticsApp({ ctx }));
 
   // Workspace membership routes.
   app.route('/', createWorkspaceMembershipApp(membershipDeps));
