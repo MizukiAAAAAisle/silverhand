@@ -8,7 +8,11 @@ const CURRENT_SCHEMA: &str =
 /// Materializes the checked-in executable current-schema artifact into a new
 /// database under the operating system temp root.
 pub async fn create_current_schema(path: &Path) -> SqliteConnection {
-    assert!(!path.exists(), "schema test database must be a fresh file");
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => panic!("schema test database path must have no directory entry"),
+        Err(error) => panic!("schema test database path could not be inspected: {error}"),
+    }
     let parent = path.parent().expect("test database path needs a parent");
     let parent = parent.canonicalize().expect("temp parent must exist");
     let temp_root = std::env::temp_dir()

@@ -57,3 +57,25 @@ async fn materializes_the_full_snapshot_with_constraints_and_triggers() {
 
     connection.close().await.unwrap();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejects_a_dangling_symlink_before_opening_sqlite() {
+    use std::os::unix::fs::symlink;
+
+    let target_directory = tempfile::tempdir().unwrap();
+    let sentinel_directory = tempfile::tempdir().unwrap();
+    let database_path = target_directory.path().join("current.sqlite");
+    let sentinel_path = sentinel_directory.path().join("sentinel.sqlite");
+    symlink(&sentinel_path, &database_path).unwrap();
+
+    let task_path = database_path.clone();
+    let failure = tokio::spawn(async move {
+        let _connection = current_schema::create_current_schema(&task_path).await;
+    })
+    .await
+    .unwrap_err();
+    assert!(failure.is_panic());
+    assert!(std::fs::symlink_metadata(database_path).is_ok());
+    assert!(!sentinel_path.exists());
+}
