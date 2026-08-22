@@ -241,11 +241,10 @@ export function rosterQueryTarget(
 export type ComposerDirectory =
   | {
       kind: 'workspace';
-      /** Nullable for the same reason {@link ConversationPaneMode} is: an
-       *  unresolved workspace row has no coordinate yet, which disables the
-       *  workspace-scoped queries so the arm stays unsettled rather than settling
-       *  empty. */
-      workspaceId: string | null;
+      /** Always resolved: a `workspace_channel` mode whose `workspaceId` is still
+       *  null projects to `withheld`, not here, so the workspace-scoped queries
+       *  never run without their coordinate. */
+      workspaceId: string;
       workspaceName: string | null;
       hasChannelNamespace: boolean;
     }
@@ -269,6 +268,10 @@ export function composerDirectory(
 ): ComposerDirectory {
   switch (mode.kind) {
     case 'workspace_channel':
+      // A workspace_channel whose workspace has not resolved yet carries no
+      // coordinate; it is unresolved, not resolved-empty, so it withholds
+      // rather than settling the workspace arm without an id.
+      if (mode.workspaceId === null) return { kind: 'withheld' };
       return {
         kind: 'workspace',
         workspaceId: mode.workspaceId,

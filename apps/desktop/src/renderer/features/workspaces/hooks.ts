@@ -169,11 +169,12 @@ async function fetchWorkspaces(): Promise<WorkspaceListPayload> {
   return { items: res.workspaces.map(workspaceToListItem), viewerSort: res.viewer_sort };
 }
 
-export function useWorkspaces() {
+export function useWorkspaces(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: workspacesKey,
     queryFn: fetchWorkspaces,
     select: r => r.items,
+    enabled: options?.enabled ?? true,
   });
 }
 

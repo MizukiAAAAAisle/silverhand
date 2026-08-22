@@ -339,27 +339,22 @@ describe('composerDirectory — the three-arm authority, exhaustive over the mod
     ]);
   });
 
-  it('gives the workspace arm the coordinate it was handed, carrying a null id', () => {
+  it('gives the workspace arm the coordinate it was handed, withholds an unresolved workspace', () => {
     expect(composerDirectory(MODE_SAMPLES.workspace_channel, COORD)).toEqual({
       kind: 'workspace',
       workspaceId: 'w-1',
       workspaceName: 'Acme',
       hasChannelNamespace: true,
     });
-    // A workspace row that has not resolved keeps the workspace arm with a null id
-    // — which disables the workspace-scoped queries, so the arm stays unsettled
-    // rather than settling on an empty candidate set.
+    // A workspace row that has not resolved has no coordinate yet, so it is
+    // unresolved — not resolved-empty. It withholds rather than settling the
+    // workspace arm with a null id (which would leak a source-known-empty read).
     expect(
       composerDirectory({ kind: 'workspace_channel', workspaceId: null }, {
         workspaceName: null,
         hasChannelNamespace: false,
       }),
-    ).toEqual({
-      kind: 'workspace',
-      workspaceId: null,
-      workspaceName: null,
-      hasChannelNamespace: false,
-    });
+    ).toEqual({ kind: 'withheld' });
   });
 
   it('consults the coordinate ONLY in the workspace arm', () => {

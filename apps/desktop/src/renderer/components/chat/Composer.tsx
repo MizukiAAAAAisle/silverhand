@@ -376,9 +376,9 @@ export function Composer({
   // Viewer arm `#` source: every channel the viewer still participates in, across
   // ALL their workspaces (#task:2148). The workspace list gives both the fan-out's
   // id set and the id→name map each cross-workspace candidate stamps onto its own
-  // locator (never the ambient name). Both stay empty off the viewer arm, so the
-  // fan-out starts no query there.
-  const workspacesQuery = useWorkspaces();
+  // locator (never the ambient name). `enabled` off in every other arm so the
+  // fan-out — and the workspace list it depends on — starts no query there.
+  const workspacesQuery = useWorkspaces({ enabled: isViewerArm });
   const viewerWorkspaceIds = useMemo(
     () => (isViewerArm ? (workspacesQuery.data ?? []).map(w => w.id) : []),
     [isViewerArm, workspacesQuery.data],
@@ -434,13 +434,14 @@ export function Composer({
     isViewerArm ? ownedAgents : agents,
   );
   const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
-  const { data: workspaceChannels = [] } = useChannelsForWorkspace(
-    armWorkspaceId,
-    // Sound as the hook's `workspaceResolved` argument: a namespace only exists
-    // for a RESOLVED workspace placement, so the bit implies the row resolved
-    // (the converse does not hold — hence two names, #task:2078).
-    armHasChannelNamespace,
-  );
+  const { data: workspaceChannels = [], isSuccess: workspaceChannelsSettled } =
+    useChannelsForWorkspace(
+      armWorkspaceId,
+      // Sound as the hook's `workspaceResolved` argument: a namespace only exists
+      // for a RESOLVED workspace placement, so the bit implies the row resolved
+      // (the converse does not hold — hence two names, #task:2078).
+      armHasChannelNamespace,
+    );
 
   // The `@` mention source, assembled ONCE per arm and read by all THREE consumers
   // — the picker below, the send-time rewrite in `submit`, and its settle gate —
@@ -502,13 +503,16 @@ export function Composer({
       case 'workspace':
         return {
           offersChannels: armHasChannelNamespace,
-          select: query => filterChannels(workspaceChannels, armWorkspaceName, query),
+          select: query => ({
+            ...filterChannels(workspaceChannels, armWorkspaceName, query),
+            complete: workspaceChannelsSettled,
+          }),
         };
       case 'viewer':
         return {
           offersChannels: true,
           select: query =>
-            filterViewerChannels(
+            viewerChannelPickerResult(
               viewerChannelSlices,
               workspacesQuery.isSuccess,
               workspaceNameById,
@@ -516,13 +520,14 @@ export function Composer({
             ),
         };
       case 'withheld':
-        return { offersChannels: false, select: () => EMPTY_PICKER };
+        return { offersChannels: false, select: () => ({ ...EMPTY_PICKER, complete: true }) };
     }
   }, [
     directory.kind,
     armHasChannelNamespace,
     armWorkspaceName,
     workspaceChannels,
+    workspaceChannelsSettled,
     viewerChannelSlices,
     workspacesQuery.isSuccess,
     workspaceNameById,
@@ -536,12 +541,16 @@ export function Composer({
     [draft, caret, composing],
   );
 
-  const { items, hiddenCount } = useMemo<PickerResult>(() => {
-    if (!trigger) return EMPTY_PICKER;
-    return trigger.kind === '@'
-      ? mentionSource.select(trigger.query)
-      : channelSource.select(trigger.query);
-  }, [trigger, mentionSource, channelSource]);
+  // `incomplete` is a `#`-only presentation fact: the channel source's page is a
+  // progressive slice, not the whole set (a fan-out workspace still pending/errored,
+  // or the single channel query unsettled). The `@` picker has no such notion — its
+  // completeness drives the SEND gate (`sourceKnown`), not the render — so it is
+  // always presented as whole. Extracted to {@link selectPickerView} so the seam
+  // that consumes `complete` into `incomplete` is fenced, not just computed.
+  const { items, hiddenCount, incomplete } = useMemo(
+    () => selectPickerView(trigger, mentionSource, channelSource),
+    [trigger, mentionSource, channelSource],
+  );
 
   // People-section headers ("In this channel" / "Other channels") and NOT-IN
   // dimming only mean something where a conversation roster exists — the workspace
@@ -562,7 +571,10 @@ export function Composer({
     setActive(0);
   }, [trigger?.pos, trigger?.kind]);
 
-  const menuOpen = !!trigger && items.length > 0;
+  // The `#` picker opens even with zero rows while the source is still incomplete,
+  // so the loading/incomplete projection can show instead of silently nothing (which
+  // would read as "no channels"). The `@` picker only opens on real rows.
+  const menuOpen = !!trigger && (items.length > 0 || incomplete);
 
   const insertPick = (item: PickerItem): void => {
     if (!trigger) return;
@@ -939,9 +951,11 @@ export function Composer({
   };
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
-    // Picker eats navigation keys whenever it's actually visible
-    // (matches available AND not dismissed for the current token).
-    if (menuOpen && !dismissed) {
+    // Picker eats navigation keys whenever it's actually visible with rows to
+    // navigate. A `#` picker showing only the loading marker (no rows yet) stays
+    // display-only, so Enter/arrows keep their normal editor behaviour and never
+    // index into an empty list.
+    if (menuOpen && !dismissed && items.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setActive(i => (i + 1) % items.length);
@@ -1015,6 +1029,7 @@ export function Composer({
           <PickerMenu
             items={items}
             hiddenCount={hiddenCount}
+            incomplete={incomplete}
             active={active}
             onPick={insertPick}
             onHover={setActive}
@@ -1418,10 +1433,20 @@ interface ComposerMentionSource {
 
 /** The `#` channel directory for the current arm. `offersChannels` gates the
  *  toolbar `#` button and the placeholder hint — a control that opens on nothing
- *  is worse than no control. */
+ *  is worse than no control. `select` carries `complete` so the picker can show
+ *  an explicit incomplete/loading projection rather than reading a partial
+ *  fan-out (one workspace's slice still pending or errored) as the whole set. */
 interface ComposerChannelSource {
   offersChannels: boolean;
-  select: (query: string) => PickerResult;
+  select: (query: string) => ChannelPickerResult;
+}
+
+/** A `#` picker page plus whether the source behind it has fully settled. For the
+ *  workspace arm `complete` is the single channel query settling; for the viewer
+ *  arm it is the cross-workspace fan-out's {@link ViewerChannelResult.sourceKnown}
+ *  (every slice succeeded). false ⇒ the page is progressive, not the whole set. */
+export interface ChannelPickerResult extends PickerResult {
+  complete: boolean;
 }
 
 /**
@@ -1738,7 +1763,7 @@ export interface ChannelSlice {
 /** {@link filterViewerChannels}'s result, carrying the fan-out's settle fact
  *  alongside the page. */
 export interface ViewerChannelResult extends PickerResult {
-  /** Alice's fan-out fail-closed seam (#task:2148): true ONLY when the workspace
+  /** The fan-out fail-closed seam (#task:2148): true ONLY when the workspace
    *  id list has settled AND every per-workspace slice SUCCEEDED. Any slice still
    *  pending — or in ERROR — leaves it false. An error is NEVER folded into
    *  "settled and empty": that would silently drop a whole workspace's channels
@@ -1803,11 +1828,45 @@ export function filterViewerChannels(
   return { items, hiddenCount: matchedCount - items.length, sourceKnown };
 }
 
+/** The viewer arm's `#` channel-source page: {@link filterViewerChannels}'s
+ *  candidates with its fan-out settle fact projected onto `complete`. A slice
+ *  still pending or errored yields `complete:false`, so the picker cannot present
+ *  a partial fan-out as the whole set — the settle fact is CONSUMED here, not
+ *  computed and dropped (#task:2148). Pure. */
+export function viewerChannelPickerResult(
+  slices: readonly ChannelSlice[],
+  workspacesSettled: boolean,
+  workspaceNameById: ReadonlyMap<string, string>,
+  query: string,
+): ChannelPickerResult {
+  const r = filterViewerChannels(slices, workspacesSettled, workspaceNameById, query);
+  return { items: r.items, hiddenCount: r.hiddenCount, complete: r.sourceKnown };
+}
+
+/** The picker memo's per-trigger projection, extracted so the seam that turns a
+ *  channel source's `complete` into the render's `incomplete` flag is fenced, not
+ *  merely inlined. `#` carries the completeness fact (incomplete ⇔ the source has
+ *  not fully settled); `@` is always whole — its completeness drives the SEND gate
+ *  (`sourceKnown`), never the render (#task:2147/#task:2148). Pure. */
+export function selectPickerView(
+  trigger: { kind: '@' | '#'; query: string } | null,
+  mentionSource: Pick<ComposerMentionSource, 'select'>,
+  channelSource: Pick<ComposerChannelSource, 'select'>,
+): { items: PickerItem[]; hiddenCount: number; incomplete: boolean } {
+  if (!trigger) return { ...EMPTY_PICKER, incomplete: false };
+  if (trigger.kind === '@') {
+    return { ...mentionSource.select(trigger.query), incomplete: false };
+  }
+  const r = channelSource.select(trigger.query);
+  return { items: r.items, hiddenCount: r.hiddenCount, incomplete: !r.complete };
+}
+
 // ── menu ──────────────────────────────────────────────────────────
 
 function PickerMenu({
   items,
   hiddenCount,
+  incomplete,
   active,
   onPick,
   onHover,
@@ -1818,6 +1877,12 @@ function PickerMenu({
 }: {
   items: PickerItem[];
   hiddenCount: number;
+  /** `#`-only: the channel source has not fully settled (a fan-out workspace
+   *  slice still pending or errored, or the single channel query unsettled). The
+   *  rows shown are a progressive slice, so the menu surfaces a loading marker —
+   *  pending and error both project here, never folding into a complete-looking
+   *  empty set (#task:2148). Always false for `@`. */
+  incomplete: boolean;
   active: number;
   onPick: (item: PickerItem) => void;
   onHover: (index: number) => void;
@@ -1908,6 +1973,21 @@ function PickerMenu({
           className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
         >
           +{hiddenCount} more
+        </div>
+      ) : null}
+      {/* Incomplete-source marker (#task:2148). The `#` channel source has not
+          fully settled — a fan-out workspace slice is still pending or errored —
+          so the rows above are a progressive slice, not the whole set. Naming that
+          keeps a partial list from reading as complete (the whole reason the
+          fan-out seam fails closed). Same divider treatment as the truncation
+          footer; shown even with zero rows, so an empty-but-loading `#` picker
+          reads as "still loading", never "no channels". */}
+      {incomplete ? (
+        <div
+          aria-hidden
+          className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
+        >
+          Loading channels…
         </div>
       ) : null}
     </div>

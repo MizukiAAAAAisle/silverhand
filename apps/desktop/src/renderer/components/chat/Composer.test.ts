@@ -26,7 +26,9 @@ import {
   filterViewerChannels,
   formatPickInsertion,
   selectMentionCandidates,
+  selectPickerView,
   selectViewerMentionCandidates,
+  viewerChannelPickerResult,
   type ChannelSlice,
   type HumanMentionCandidate,
 } from './Composer';
@@ -899,6 +901,79 @@ describe('filterViewerChannels', () => {
     const { items, sourceKnown } = filterViewerChannels([], true, names, '');
     expect(items).toEqual([]);
     expect(sourceKnown).toBe(true);
+  });
+});
+
+describe('viewerChannelPickerResult — the fan-out settle fact reaches the picker page', () => {
+  // The completeness signal must be CONSUMED, not computed and dropped:
+  // `sourceKnown` is projected onto `complete`, which the picker turns into its
+  // incomplete/loading marker — a partial fan-out can never read as the whole set.
+  const names = new Map([['w-1', 'silverhand']]);
+  const success = (data: ChannelListItem[]): ChannelSlice => ({ status: 'success', data });
+
+  it('one ERROR slice ⇒ complete:false while the settled slice still shows', () => {
+    const slices: ChannelSlice[] = [
+      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
+      { status: 'error' },
+    ];
+    const r = viewerChannelPickerResult(slices, true, names, '');
+    expect(r.items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual(['c1']);
+    expect(r.complete).toBe(false);
+  });
+
+  it('a still-PENDING slice ⇒ complete:false', () => {
+    const slices: ChannelSlice[] = [
+      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
+      { status: 'pending' },
+    ];
+    expect(viewerChannelPickerResult(slices, true, names, '').complete).toBe(false);
+  });
+
+  it('every slice settled ⇒ complete:true', () => {
+    const slices: ChannelSlice[] = [
+      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
+    ];
+    expect(viewerChannelPickerResult(slices, true, names, '').complete).toBe(true);
+  });
+});
+
+describe('selectPickerView — the render seam that consumes completeness', () => {
+  // The production picker memo IS this function. It proves the `#` completeness fact
+  // survives into `incomplete` (the loading marker), and that `@` never carries it.
+  const channelResult = (complete: boolean) => ({ items: [], hiddenCount: 3, complete });
+  const mention = { select: () => ({ items: [], hiddenCount: 0 }) };
+
+  it('# with an incomplete source ⇒ incomplete:true, page passed through untouched', () => {
+    const view = selectPickerView(
+      { kind: '#', query: '' },
+      mention,
+      { select: () => channelResult(false) },
+    );
+    expect(view.incomplete).toBe(true);
+    expect(view.hiddenCount).toBe(3); // the source's page is carried, not recomputed
+  });
+
+  it('# with a complete source ⇒ incomplete:false', () => {
+    const view = selectPickerView(
+      { kind: '#', query: '' },
+      mention,
+      { select: () => channelResult(true) },
+    );
+    expect(view.incomplete).toBe(false);
+  });
+
+  it('@ never carries completeness — always presented whole', () => {
+    const view = selectPickerView(
+      { kind: '@', query: '' },
+      { select: () => ({ items: [], hiddenCount: 0 }) },
+      { select: () => channelResult(false) },
+    );
+    expect(view.incomplete).toBe(false);
+  });
+
+  it('no trigger ⇒ empty and complete', () => {
+    const view = selectPickerView(null, mention, { select: () => channelResult(false) });
+    expect(view).toEqual({ items: [], hiddenCount: 0, incomplete: false });
   });
 });
 
