@@ -42,13 +42,24 @@ type LoadState =
   | { status: 'error'; message: string };
 
 // Continuous host zoom for the HTML preview. Min below 100% so a fixed-size
-// author page can shrink into the pane; the slider/pinch move it continuously,
-// the buttons and keyboard step it by a fixed multiplier.
+// author page can shrink into the pane; the slider and pinch move it
+// continuously, the buttons step it by a fixed multiplier.
 const HTML_ZOOM_MIN = 0.25;
 const HTML_ZOOM_MAX = 2;
 const HTML_ZOOM_STEP = 1.25;
 const clampHtmlZoom = (value: number): number =>
   Math.min(HTML_ZOOM_MAX, Math.max(HTML_ZOOM_MIN, value));
+
+/**
+ * Zoom last used for each attachment, so reopening one resumes where you left
+ * it instead of snapping back to 100% (#task:2163). Keyed by attachment id and
+ * scoped to the renderer session — the id only locates, so a revised attachment
+ * keeps the zoom the reader chose for it. Deliberately NOT persisted to disk:
+ * a stale ratio surviving a restart is more surprising than re-setting it once.
+ */
+const htmlZoomByAttachment = new Map<string, number>();
+const storedHtmlZoom = (attachmentId: string): number =>
+  htmlZoomByAttachment.get(attachmentId) ?? 1;
 
 export function ChannelAttachmentTab({
   attachmentId,
@@ -58,21 +69,34 @@ export function ChannelAttachmentTab({
   const token = useAttachmentBlobToken(attachmentId);
   const revision = Number(token.split(':')[1] ?? 0);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
-  const [htmlZoom, setHtmlZoom] = useState(1);
+  const [htmlZoom, setHtmlZoom] = useState(() => storedHtmlZoom(attachmentId));
   const shownRef = useRef<{ attachmentId: string; revision: number } | null>(null);
+  // Read during render so a zoom committed in the same tick keys off the
+  // attachment on screen, not the one a stale closure captured.
+  const attachmentIdRef = useRef(attachmentId);
+  attachmentIdRef.current = attachmentId;
 
+  // Single commit path for every zoom source (slider, buttons, pinch): clamp,
+  // remember it for this attachment, then render it.
   const zoomTo = useCallback((raw: number): void => {
-    setHtmlZoom(clampHtmlZoom(raw));
+    const next = clampHtmlZoom(raw);
+    htmlZoomByAttachment.set(attachmentIdRef.current, next);
+    setHtmlZoom(next);
   }, []);
 
   // Trackpad pinch arrives as a merged `deltaY`; the exponential maps it to a
-  // multiplicative factor (pinch-out shrinks deltaY negative → factor > 1).
-  const onPinch = useCallback((deltaY: number): void => {
-    setHtmlZoom(current => clampHtmlZoom(current * Math.exp(-deltaY / 100)));
-  }, []);
+  // multiplicative factor (pinch-out sends deltaY negative → factor > 1). The
+  // current zoom comes from the store rather than a closure, so the callback
+  // stays stable for the preview's listener.
+  const onPinch = useCallback(
+    (deltaY: number): void => {
+      zoomTo(storedHtmlZoom(attachmentIdRef.current) * Math.exp(-deltaY / 100));
+    },
+    [zoomTo],
+  );
 
   useEffect(() => {
-    setHtmlZoom(1);
+    setHtmlZoom(storedHtmlZoom(attachmentId));
   }, [attachmentId]);
 
   useEffect(() => {
