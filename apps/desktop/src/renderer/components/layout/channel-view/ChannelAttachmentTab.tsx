@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { Download, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { fetchAttachmentBytes } from '@/lib/api';
@@ -10,25 +11,20 @@ import { openAttachmentExternally } from '@/components/chat/open-attachment';
 import { saveAttachmentToDisk } from '@/components/chat/save-attachment';
 
 /**
- * The previewer TAB for a `.md` / `.html` attachment (#task:2122) — the in-app
- * destination the member-main-pane MESSAGE CARD routes these two types to
- * instead of open-with-OS. Not an app-wide single destination: the Attachments
- * panel and the thread pane still OS-open md/html. Mounted per conversation from
- * `ChannelView`, keyed on the attachment id so re-opening the same attachment
- * focuses this same tab (dedupe lives in `conversation-tabs.ts`; this component
- * only renders one already-resolved tab).
+ * The in-app previewer tab for a `.md` / `.html` attachment, keyed on the
+ * attachment id so re-opening the same attachment focuses this tab rather than
+ * minting another (dedupe lives in `conversation-tabs.ts`). The header's two
+ * actions route through the trusted host IPC helpers (`openAttachmentExternally`
+ * / `saveAttachmentToDisk`); the sandboxed HTML frame never receives those
+ * capabilities.
  *
- * SHELL: a header (filename + open-in-default-app + download) over the rendered
- * body. The two header actions go through the SAME trusted host IPC helpers the
- * message card uses (`openAttachmentExternally` / `saveAttachmentToDisk`) — the
- * sandboxed HTML frame never gets those capabilities (B boundary, 2026-08-21).
- *
- * BODY: bytes are fetched through the authenticated backend route every mount —
- * the persisted attachment id only LOCATES; it is never pinned to first bytes.
- * `useAttachmentBlobToken` bumps on in-place revision (or a reconnect epoch),
- * re-running the fetch so the preview follows the current bytes. Markdown
- * renders through the shared `Markdown`; HTML renders in the opaque-origin
- * sandbox iframe (`AttachmentHtmlPreview`).
+ * Bytes are fetched through the authenticated backend route on mount and again
+ * whenever `useAttachmentBlobToken` bumps, so the id only locates and the
+ * preview follows the current bytes. A same-attachment refetch keeps the shown
+ * content until the new bytes are ready, and keeps it on failure, so only a
+ * first mount shows the loader or an error pane. Markdown renders through
+ * `Markdown`; HTML renders in the opaque-origin sandbox iframe
+ * (`AttachmentHtmlPreview`).
  */
 export interface ChannelAttachmentTabProps {
   attachmentId: string;
@@ -49,21 +45,40 @@ export function ChannelAttachmentTab({
   contentType,
 }: ChannelAttachmentTabProps): JSX.Element {
   const token = useAttachmentBlobToken(attachmentId);
+  const revision = Number(token.split(':')[1] ?? 0);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const shownRef = useRef<{ attachmentId: string; revision: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: 'loading' });
+    const shown = shownRef.current;
+    const isRefresh = shown !== null && shown.attachmentId === attachmentId;
+    // First mount (or a switch to a different attachment) shows the loader; a
+    // same-attachment refetch keeps the shown content, so an in-place revision
+    // never flashes a spinner.
+    if (!isRefresh) setState({ status: 'loading' });
     fetchAttachmentBytes(attachmentId)
       .then(({ bytes, contentType: fetchedType }) => {
         if (cancelled) return;
         // Not `fatal` — a stray non-UTF-8 byte degrades to U+FFFD rather than
         // blanking the whole preview.
         const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+        // Toast only on a genuine content revision — the revision segment rising,
+        // not the reconnect epoch — so a bare reconnect never claims an update.
+        const isRevisionBump =
+          isRefresh &&
+          shown !== null &&
+          Number.isFinite(revision) &&
+          revision > shown.revision;
+        shownRef.current = { attachmentId, revision };
         setState({ status: 'ready', text, contentType: fetchedType });
+        if (isRevisionBump) toast('Attachment auto-updated');
       })
       .catch(err => {
         if (cancelled) return;
+        // A failed refetch keeps the content already on screen; only a first load
+        // has nothing to fall back to, so only it surfaces the error.
+        if (isRefresh) return;
         setState({
           status: 'error',
           message: err instanceof Error ? err.message : String(err),
@@ -72,7 +87,6 @@ export function ChannelAttachmentTab({
     return () => {
       cancelled = true;
     };
-    // `token` re-runs the fetch when the bytes are revised in place (#task:1769).
   }, [attachmentId, token]);
 
   return (
