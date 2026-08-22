@@ -128,7 +128,10 @@ import {
   directPairPaneDescriptor,
   type ConversationPaneDescriptor,
 } from '@/features/conversations/pane-descriptor';
-import { inheritedPaneCapabilities } from '@/features/conversations/pane-mode';
+import {
+  inheritedComposerDirectory,
+  inheritedPaneCapabilities,
+} from '@/features/conversations/pane-mode';
 import { locatorWorkspaceName } from '@/features/conversations/locator-source';
 import { ConversationPaneCapabilitiesProvider } from '@/features/conversations/pane-capabilities-context';
 import {
@@ -1862,6 +1865,19 @@ function RegisteredAppShell({
   const primaryPaneHasChannelNamespace = directPairDescriptor
     ? false
     : hasChannelNamespace;
+  // The thread composer's candidate directory, inherited from the SAME parent
+  // descriptor as `primaryPaneCapabilities` (#task:2147) — a thread has no
+  // placement of its own. Carries the parent's resolved workspace coordinate; a
+  // `direct_pair` parent projects to the `viewer` arm (coordinate ignored), a null
+  // parent to `withheld`.
+  const primaryThreadComposerDirectory = useMemo(
+    () =>
+      inheritedComposerDirectory(primaryPaneDescriptor, {
+        workspaceName: workspaceNameById(primaryPaneDescriptor?.workspace_id ?? null),
+        hasChannelNamespace: primaryPaneHasChannelNamespace,
+      }),
+    [primaryPaneDescriptor, workspaceNameById, primaryPaneHasChannelNamespace],
+  );
   // Single pure mapping from `secondaryDescriptor` into the props
   // ChannelView consumes for the secondary pane. Keeps the cross-workspace
   // wiring (foreign workspace_id / namespace bit / archive invalidation
@@ -2237,16 +2253,14 @@ function RegisteredAppShell({
         <ThreadPanel
           channelId={threadChannelId}
           workspaceId={threadWorkspaceId}
-          workspaceName={workspaceNameById(threadWorkspaceId)}
-          // A thread's composer resolves `@`/`#` shorthand in its parent's
-          // namespace, so it takes the DERIVED namespace bit the primary pane uses
-          // (`primaryPaneHasChannelNamespace`, the same value ChannelView reads),
-          // NOT the raw `hasChannelNamespace`: a `direct_pair` has no `#` namespace,
-          // so this is hard-false for the pair arm (#task:2096). That keeps `#name`
-          // refs inert in a DM thread — which is the premise of `handleOpenChannelRef`'s
-          // null-workspace guard; reading the raw bit would render them as live refs
-          // that dead-click on that guard.
-          hasChannelNamespace={primaryPaneHasChannelNamespace}
+          // The composer's `@`/`#` directory is INHERITED from the parent
+          // conversation (#task:2147) — projected once by App from the same
+          // descriptor `primaryPaneCapabilities` uses, never re-derived in the leaf.
+          // A `direct_pair` parent yields the `viewer` arm (the viewer's own agents
+          // + every channel they're in); a workspace parent yields that workspace's
+          // members/channels; a null parent yields `withheld`, so a cold DM-thread
+          // deep link never assumes a channel namespace.
+          directory={primaryThreadComposerDirectory}
           rootMessageId={threadRoot}
           parentTitle={selectedChannel?.title ?? null}
           closed={selectedChannelDescriptor?.closed_at != null}

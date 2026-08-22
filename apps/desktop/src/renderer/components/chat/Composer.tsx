@@ -39,12 +39,16 @@ import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
+  useChannelsAcrossWorkspaces,
   useChannelsForWorkspace,
   useWorkspaceMemberLists,
+  useWorkspaces,
   type ChannelListItem,
   type WorkspaceHumanMember,
   type WorkspaceMemberLists,
 } from '@/features/workspaces/hooks';
+import { useAgents } from '@/features/agents/hooks';
+import type { ComposerDirectory } from '@/features/conversations/pane-mode';
 
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
@@ -76,31 +80,21 @@ import { ComposerActivityHeader } from './ComposerActivityHeader';
 
 interface ComposerProps {
   conversationId: string;
-  /** The conversation's workspace, resolved by the PANE that owns the
-   *  descriptor — never re-derived here. `null` means this conversation has no
-   *  workspace at all (a `direct_pair`, #task:2035): a terminal fact, not a
-   *  loading state, so both autocompletes stay empty and no WORKSPACE roster is
-   *  fetched or awaited. The CONVERSATION roster read still happens (it is keyed
-   *  by conversation, and a pair endpoint is admitted by the placement ACL) — it
-   *  answers 200 with an EMPTY member set, since a fixed-roster placement has no
-   *  `conversation_users` rows; only unresolved `@human` chips degrade to plain
-   *  text. */
-  workspaceId: string | null;
-  /** The authoritative name of that workspace, resolved by the PANE owner from
-   *  the workspace list it already holds — never recovered from `workspaceId` by
-   *  an ambient lookup here (a leaf that re-derived it would be a second name
-   *  authority). A workspace-derived fact carried as a sibling to the descriptor,
-   *  exactly like {@link ComposerProps.hasChannelNamespace}. `null` in a WIDER set
-   *  than `workspaceId` is null: a `direct_pair`, an unresolved row, AND a resolved
-   *  Agent Space — whose name the locator grammar cannot spell, so the pane owner
-   *  passes null (see `locatorWorkspaceName`). On any null the `#` picker emits the
-   *  `#conv:<id>` fallback instead of the semantic locator (#task:2126). */
-  workspaceName: string | null;
-  /** Whether that workspace has a `#` channel namespace to resolve against —
-   *  false whenever `workspaceId` is null, and also while the container's own row
-   *  is unresolved; the `#` channel query treats both as "don't ask" (#task:2078
-   *  collapsed the container kind this used to carry into the one bit read). */
-  hasChannelNamespace: boolean;
+  /** Which directory the `@` mention picker, the `#` channel picker, and the
+   *  send-time shorthand resolver draw candidates from — projected ONCE by the
+   *  pane owner from the typed placement (never re-derived here from
+   *  `workspaceId === null`, the route, or a lone `hasRoster` boolean). Three
+   *  arms, exhaustive over the placement (see {@link ComposerDirectory}):
+   *   - `workspace` — a roster-bearing container: `@` = that workspace's
+   *     members, `#` = that workspace's channels, scoped to the coordinate the
+   *     arm carries.
+   *   - `viewer` — a `direct_pair`: `@` = the viewer's own canonical-owned
+   *     agents (agents-only, no humans), `#` = every channel the viewer still
+   *     participates in, across all their workspaces.
+   *   - `withheld` — placement unresolved/unsupported: no query starts, both
+   *     pickers offer nothing, and a hand-typed `@handle` stays PENDING (the
+   *     authority is undetermined, not "answered empty"). */
+  directory: ComposerDirectory;
   /** When set, this composer posts replies into the given root's reply
    *  cluster (sends `reply_to_message_id`) and keeps its own draft,
    *  isolated from the channel's main composer. The channel id in
@@ -142,6 +136,9 @@ const COMPOSER_TOOL_CLASS =
 // instead of re-firing on a fresh `[]` each render.
 const EMPTY_AGENTS: AgentDto[] = [];
 const EMPTY_HUMANS: WorkspaceHumanMember[] = [];
+// One frozen empty result, so an arm that offers nothing and a trigger with no
+// query return the same reference — no candidate memo re-fire on a fresh `[]`.
+const EMPTY_PICKER: PickerResult = { items: [], hiddenCount: 0 };
 
 /**
  * Best-effort mirror of the backend's `detectContentType` hint→suffix path
@@ -189,9 +186,7 @@ type SubmittingSnapshot = {
  */
 export function Composer({
   conversationId,
-  workspaceId,
-  workspaceName,
-  hasChannelNamespace,
+  directory,
   threadRootId,
   disabled: disabledProp,
   archived = false,
@@ -349,38 +344,51 @@ export function Composer({
     };
   }, [draftKey]);
 
-  // Both autocomplete kinds are scoped to the CURRENT conversation's
-  // workspace, and that coordinate comes from the PANE (which cannot render
-  // without a descriptor) rather than from a conversation-ref fetch of this
-  // component's own. Two consequences, both deliberate:
-  //  - There is no longer a window in which the coordinate is merely UNRESOLVED,
-  //    which is what used to make cold start / deep link / HMR / a restored
-  //    draft dangerous (#task:1720). The member-list QUERY still has its own
-  //    loading window, and everything downstream still fails CLOSED to empty
-  //    over it rather than falling back to a global directory.
-  //  - A null `workspaceId` is now a POSITIVE, terminal fact: this conversation
-  //    has no workspace at all (a `direct_pair`, #task:2035). The old premise
-  //    "there is no composer without a workspace" is FALSE as of that feature —
-  //    a DM has no container to scope candidates to, so both pickers offer
-  //    nothing and the send path stops waiting for a roster that can never land.
-  const isWorkspaceless = workspaceId === null;
-  // `@` mention candidates come ONLY from this workspace's members — an
-  // agent or human outside the workspace must never be offered. While
-  // `workspaceId` is null or the query is loading, `useWorkspaceMemberLists`
-  // yields no data, so both arrays stay empty (fail closed, no global
-  // fallback). Stable empty-array constants keep the memo deps below from
-  // re-firing every render during that window.
-  const memberLists = useWorkspaceMemberLists(workspaceId);
+  // The directory arm is projected ONCE by the pane owner (which cannot render
+  // without a descriptor) and handed down whole — this component never re-derives
+  // it from `workspaceId === null`, the route, or a lone `hasRoster` boolean. Each
+  // arm-specific query below is `enabled`-gated on the arm, so the two arms it
+  // does not belong to start NO query and leak no candidates (the withheld arm
+  // starts none at all). The workspace coordinate the workspace arm needs travels
+  // inside the arm, so there is no window in which it is merely UNRESOLVED — the
+  // member-list QUERY still has its own loading window, over which everything
+  // downstream fails CLOSED to empty rather than to a global directory.
+  const isWorkspaceArm = directory.kind === 'workspace';
+  const isViewerArm = directory.kind === 'viewer';
+  const armWorkspaceId = directory.kind === 'workspace' ? directory.workspaceId : null;
+  const armWorkspaceName =
+    directory.kind === 'workspace' ? directory.workspaceName : null;
+  const armHasChannelNamespace =
+    directory.kind === 'workspace' ? directory.hasChannelNamespace : false;
+  // Workspace arm `@` source: ONLY this workspace's members. Null id (any other
+  // arm, or an unresolved workspace) disables the query, so the arrays stay empty
+  // (fail closed, no global fallback); stable empty-array constants keep the memo
+  // deps below referentially stable during the loading window.
+  const memberLists = useWorkspaceMemberLists(armWorkspaceId);
   const agents = memberLists.data?.agents ?? EMPTY_AGENTS;
   const workspaceHumans = memberLists.data?.humans ?? EMPTY_HUMANS;
-  // The empty arrays above are "roster UNKNOWN", not "workspace with nobody in
-  // it" — a distinction the picker can ignore (an empty menu reads the same
-  // either way) but the send path cannot: an unresolvable handle is stored as
-  // authored and addresses no one, so treating the cold window as an empty
-  // roster sends a body that silently addresses nobody (#task:2001 review). One
-  // successful fetch is enough; a stale-but-real roster is authoritative, and
-  // react-query keeps `data` in place across background refetches.
-  const workspaceRosterKnown = memberLists.data !== undefined;
+  // Viewer arm `@` source: the viewer's canonical-owned agents (agents-only, no
+  // humans — a `direct_pair` has no workspace roster). `enabled` off in every
+  // other arm. The backend narrows `created_by_user_id == viewer` (#task:1256);
+  // the renderer never re-filters ownership client-side.
+  const ownedAgentsQuery = useAgents({ scope: 'owned', enabled: isViewerArm });
+  const ownedAgents = ownedAgentsQuery.data ?? EMPTY_AGENTS;
+  // Viewer arm `#` source: every channel the viewer still participates in, across
+  // ALL their workspaces (#task:2148). The workspace list gives both the fan-out's
+  // id set and the id→name map each cross-workspace candidate stamps onto its own
+  // locator (never the ambient name). Both stay empty off the viewer arm, so the
+  // fan-out starts no query there.
+  const workspacesQuery = useWorkspaces();
+  const viewerWorkspaceIds = useMemo(
+    () => (isViewerArm ? (workspacesQuery.data ?? []).map(w => w.id) : []),
+    [isViewerArm, workspacesQuery.data],
+  );
+  const viewerChannelSlices = useChannelsAcrossWorkspaces(viewerWorkspaceIds);
+  const workspaceNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const w of workspacesQuery.data ?? []) m.set(w.id, w.name);
+    return m;
+  }, [workspacesQuery.data]);
   const conversationMembers = useConversationMembers(conversationId);
   // #task:876 (2026-06-03): the viewer's own row in the mention picker
   // is noise — you can't @-mention yourself meaningfully. Resolve the
@@ -422,39 +430,106 @@ export function Composer({
     () => buildMentionHumans(workspaceHumans, viewerId),
     [workspaceHumans, viewerId],
   );
-  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
-  // Send-time shorthand → canonical reference (#task:2001). Built from the same
-  // workspace member arrays the picker uses, so a handle is rewritable exactly
-  // when it names someone the picker would have offered.
-  const resolveShorthand = useMemo(
-    () => buildShorthandResolver(agents, workspaceHumans),
-    [agents, workspaceHumans],
+  const agentAvatarUrls = useAgentAvatarObjectUrls(
+    isViewerArm ? ownedAgents : agents,
   );
-  // `#` autocomplete candidates come ONLY from the pane's own workspace: that
-  // container's per-viewer channel list (workspace-placed, joined ∪ active
-  // public), never a cross-workspace directory (#task:2088).
-  //
-  // The boundary is what this container makes VISIBLE to the viewer, not what
-  // would resolve if offered. The picker inserts a semantic channel locator (see
-  // {@link formatPickInsertion}), whose name segments resolve against live names
-  // in ANY workspace, so a cross-workspace candidate would produce a WORKING
-  // chip; what makes it wrong is the offer itself — the list would name
-  // conversations this container does not hold. Do not re-derive the scoping from
-  // "it would not resolve anyway": that was this comment's earlier rationale and
-  // it is false for the token the picker actually emits.
-  //
-  // A conversation with no workspace at all (a `direct_pair`) is the same rule's
-  // terminal cell: `workspaceId` is null, this query stays off, and the picker
-  // offers NO channels — a private line has no container whose channels it could
-  // name.
+  const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
   const { data: workspaceChannels = [] } = useChannelsForWorkspace(
-    workspaceId,
+    armWorkspaceId,
     // Sound as the hook's `workspaceResolved` argument: a namespace only exists
     // for a RESOLVED workspace placement, so the bit implies the row resolved
     // (the converse does not hold — hence two names, #task:2078).
-    hasChannelNamespace,
+    armHasChannelNamespace,
   );
+
+  // The `@` mention source, assembled ONCE per arm and read by all THREE consumers
+  // — the picker below, the send-time rewrite in `submit`, and its settle gate —
+  // so a candidate the picker offers is exactly one the send path can resolve, and
+  // they can never drift (#task:2147). `sourceKnown` is the three-value authority
+  // fact collapsed to a bool only here: `withheld` → false (undetermined, so a
+  // hand-typed `@handle` stays PENDING, never "answered empty"); `workspace` → the
+  // member roster has answered (one successful fetch; a stale-but-real roster is
+  // authoritative across background refetches); `viewer` → the owned-agents query
+  // settled, and a settled-EMPTY result is still KNOWN (resolves to no match, not
+  // pending).
+  const mentionSource = useMemo<ComposerMentionSource>(() => {
+    switch (directory.kind) {
+      case 'workspace':
+        return {
+          sourceKnown: memberLists.data !== undefined,
+          select: query =>
+            selectMentionCandidates(
+              memberLists.data,
+              rosterResolved,
+              agentMemberIds,
+              humanMemberIds,
+              viewerId,
+              query,
+            ),
+          resolveShorthand: buildShorthandResolver(agents, workspaceHumans),
+        };
+      case 'viewer':
+        return {
+          sourceKnown: ownedAgentsQuery.isSuccess,
+          select: query => selectViewerMentionCandidates(ownedAgents, query),
+          resolveShorthand: buildViewerShorthandResolver(ownedAgents),
+        };
+      case 'withheld':
+        return {
+          sourceKnown: false,
+          select: () => EMPTY_PICKER,
+          resolveShorthand: () => null,
+        };
+    }
+  }, [
+    directory.kind,
+    memberLists.data,
+    rosterResolved,
+    agentMemberIds,
+    humanMemberIds,
+    viewerId,
+    agents,
+    workspaceHumans,
+    ownedAgents,
+    ownedAgentsQuery.isSuccess,
+  ]);
+
+  // The `#` channel source, same one-source discipline. `offersChannels` gates the
+  // toolbar `#` button and the placeholder hint; a control that opens on nothing is
+  // worse than no control.
+  const channelSource = useMemo<ComposerChannelSource>(() => {
+    switch (directory.kind) {
+      case 'workspace':
+        return {
+          offersChannels: armHasChannelNamespace,
+          select: query => filterChannels(workspaceChannels, armWorkspaceName, query),
+        };
+      case 'viewer':
+        return {
+          offersChannels: true,
+          select: query =>
+            filterViewerChannels(
+              viewerChannelSlices,
+              workspacesQuery.isSuccess,
+              workspaceNameById,
+              query,
+            ),
+        };
+      case 'withheld':
+        return { offersChannels: false, select: () => EMPTY_PICKER };
+    }
+  }, [
+    directory.kind,
+    armHasChannelNamespace,
+    armWorkspaceName,
+    workspaceChannels,
+    viewerChannelSlices,
+    workspacesQuery.isSuccess,
+    workspaceNameById,
+  ]);
+
+  const offersMentions = directory.kind !== 'withheld';
+  const offersChannels = channelSource.offersChannels;
 
   const trigger = useMemo(
     () => (composing ? null : detectTrigger(draft, caret)),
@@ -462,27 +537,20 @@ export function Composer({
   );
 
   const { items, hiddenCount } = useMemo<PickerResult>(() => {
-    if (!trigger) return { items: [], hiddenCount: 0 };
-    if (trigger.kind === '@') {
-      return selectMentionCandidates(
-        memberLists.data,
-        rosterResolved,
-        agentMemberIds,
-        humanMemberIds,
-        viewerId,
-        trigger.query,
-      );
-    }
-    return filterChannels(workspaceChannels, trigger.query);
-  }, [
-    trigger,
-    memberLists.data,
-    rosterResolved,
-    agentMemberIds,
-    humanMemberIds,
-    viewerId,
-    workspaceChannels,
-  ]);
+    if (!trigger) return EMPTY_PICKER;
+    return trigger.kind === '@'
+      ? mentionSource.select(trigger.query)
+      : channelSource.select(trigger.query);
+  }, [trigger, mentionSource, channelSource]);
+
+  // People-section headers ("In this channel" / "Other channels") and NOT-IN
+  // dimming only mean something where a conversation roster exists — the workspace
+  // arm's `@` picker. The viewer arm's owned-agents list and the `#` channel list
+  // are flat, so they render without either.
+  const peopleSections = isWorkspaceArm && trigger?.kind === '@';
+  // Viewer-arm `#` candidates span workspaces, so the row names each channel's
+  // workspace to keep same-named channels distinguishable (#task:2148).
+  const showChannelWorkspace = isViewerArm && trigger?.kind === '#';
 
   const [active, setActive] = useState(0);
   // Keep the highlight in range as the candidate list shrinks/grows.
@@ -503,7 +571,7 @@ export function Composer({
     // Trailing space so the next keystroke isn't immediately treated
     // as continuation of the handle (and so the caret lands at a
     // typing-friendly spot).
-    const insertion = `${formatPickInsertion(item, workspaceName)} `;
+    const insertion = `${formatPickInsertion(item)} `;
     const nextDraft = before + insertion + after;
     const nextCaret = (before + insertion).length;
     updateDraft(nextDraft, nextCaret);
@@ -650,49 +718,53 @@ export function Composer({
     // shiki's ruling): the textarea keeps showing `@Alice` because that is what
     // the author typed, while the body that ships spells every resolvable
     // shorthand as `<silverhand://agent/Alice>` — the only form that addresses
-    // anyone.
-    // The rewrite is prose-position-aware, so a handle inside a code span, a
-    // quote, or a link label is stored exactly as written.
-    if (canResolveShorthandNow(content, workspaceRosterKnown)) {
-      dispatch(rewriteShorthandReferences(content, resolveShorthand));
+    // anyone. The rewrite is prose-position-aware, so a handle inside a code span,
+    // a quote, or a link label is stored exactly as written.
+    //
+    // The resolver and its settle gate both come from `mentionSource` — the SAME
+    // arm source the picker read — so a body resolves exactly when the arm's
+    // authority is known: a workspace roster that has answered, or the viewer's
+    // owned agents (which, settled-empty, resolve every handle to no match and
+    // ship the body as authored — a `direct_pair` delivers to its endpoint
+    // regardless).
+    if (canResolveShorthandNow(content, mentionSource.sourceKnown)) {
+      dispatch(rewriteShorthandReferences(content, mentionSource.resolveShorthand));
       return;
     }
-    // A workspace-less conversation has no roster to canonicalize against, and
-    // never will (#task:2035) — so "wait for it" below would mean this body can
-    // never be sent at all. Send it as authored instead: a `direct_pair`
-    // delivers to its ENDPOINT, so the recipient is the same whether or not a
-    // handle in the text also addresses them, and a plain `@handle` addressing
-    // nobody is exactly the documented meaning of the bytes the author typed.
-    if (isWorkspaceless) {
-      dispatch(content);
-      return;
-    }
-    // The roster has not landed and this body names someone, so spelling it as a
-    // canonical reference is part of sending it (#task:2001 review). Sending now
-    // would ship a body that addresses nobody with no signal anywhere, so wait
-    // for the authoritative member set instead — and if it cannot be had, hand
-    // the draft back exactly as a failed send does rather than store a
-    // half-truth. (There is no "workspace not resolved yet" arm left to guard:
-    // the coordinate is a prop, so `workspaceId` non-null is already established
-    // by the workspace-less branch above.)
-    void memberLists
-      .refetch()
-      .then(result => {
-        const roster = result.data;
-        if (!roster) {
+    // The arm's authority is not yet known and this body names someone, so
+    // spelling it canonically is part of sending it. Sending now would ship a body
+    // that addresses nobody with no signal anywhere, so settle the arm's source
+    // first — and if it cannot be had, hand the draft back exactly as a failed
+    // send does rather than store a half-truth. The `withheld` arm has no source to
+    // settle, so its refetch yields null and the draft is restored: a hand-typed
+    // handle correctly stays pending until the placement resolves.
+    void refetchMentionResolver()
+      .then(resolver => {
+        if (!resolver) {
           restoreDraft();
           return;
         }
-        dispatch(
-          rewriteShorthandReferences(
-            content,
-            buildShorthandResolver(roster.agents, roster.humans),
-          ),
-        );
+        dispatch(rewriteShorthandReferences(content, resolver));
       })
       // Only reachable if the query layer itself rejects; without it the draft
       // the user typed would be gone for good.
       .catch(restoreDraft);
+  }
+
+  /** Settle the current arm's `@` authority and return a resolver, or `null` when
+   *  it cannot be settled (a failed refetch, or the withheld arm which has no
+   *  source at all). Arm-aware so the wait targets the same authority the picker
+   *  and the resolver read — never a workspace roster in a DM or vice versa. */
+  async function refetchMentionResolver(): Promise<ShorthandResolver | null> {
+    if (directory.kind === 'workspace') {
+      const roster = (await memberLists.refetch()).data;
+      return roster ? buildShorthandResolver(roster.agents, roster.humans) : null;
+    }
+    if (directory.kind === 'viewer') {
+      const owned = (await ownedAgentsQuery.refetch()).data;
+      return owned ? buildViewerShorthandResolver(owned) : null;
+    }
+    return null;
   }
 
   function addFiles(files: FileList | File[]): void {
@@ -946,6 +1018,8 @@ export function Composer({
             active={active}
             onPick={insertPick}
             onHover={setActive}
+            peopleSections={peopleSections}
+            showChannelWorkspace={showChannelWorkspace}
             agentAvatarUrls={agentAvatarUrls}
             humanAvatarUrls={humanAvatarUrls}
           />
@@ -1005,12 +1079,15 @@ export function Composer({
                   ? 'This conversation is read-only'
                   : disabled
                     ? 'This conversation is closed'
-                    // `#channel` only where a channel namespace exists — on a
-                    // private line the picker has nothing to offer, so naming the
-                    // trigger there promises a menu that never opens (#task:2118).
-                    : hasChannelNamespace
+                    // Hints follow the arm: `#channel` only where the arm offers
+                    // channels, `@member` only where it offers mentions — naming a
+                    // trigger whose picker opens on nothing promises a menu that
+                    // never appears (#task:2118). The withheld arm offers neither.
+                    : offersChannels
                       ? 'Enter to send · Shift + Enter for a new line · @member · #channel'
-                      : 'Enter to send · Shift + Enter for a new line · @member'
+                      : offersMentions
+                        ? 'Enter to send · Shift + Enter for a new line · @member'
+                        : 'Enter to send · Shift + Enter for a new line'
             }
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the
@@ -1036,12 +1113,13 @@ export function Composer({
            *  textarea + toolbar as one box, and an internal divider
            *  read as two separate widgets stacked. */}
           <div className="flex items-center justify-between px-2 py-1.5">
-            {/* One flat group, no dividers: three peers that all put something
-                into the message. The `#` button is absent — not disabled — where
-                the placement has no channel namespace (a `direct_pair`): there is
-                no container whose channels it could name, so the picker would open
-                on nothing. A control that can never answer is worse than no
-                control (same reason the placeholder below drops `#channel` there). */}
+            {/* One flat group, no dividers: peers that all put something into the
+                message. The `@` and `#` buttons are absent — not disabled — in an
+                arm that offers no such candidates: the withheld arm offers neither,
+                and a picker that opens on nothing is worse than no control (same
+                reason the placeholder drops the hint there). The viewer arm offers
+                BOTH — a DM mentions the viewer's own agents and references any
+                channel the viewer is in (#task:2148). */}
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
@@ -1052,18 +1130,20 @@ export function Composer({
               >
                 <Paperclip className="size-4" />
               </button>
-              <button
-                type="button"
-                onClick={() => insertTriggerAtCaret('@')}
-                disabled={disabled}
-                title="Mention a member"
-                aria-label="Mention a member"
-                data-composer-tool="mention"
-                className={COMPOSER_TOOL_CLASS}
-              >
-                <AtSign className="size-4" />
-              </button>
-              {hasChannelNamespace ? (
+              {offersMentions ? (
+                <button
+                  type="button"
+                  onClick={() => insertTriggerAtCaret('@')}
+                  disabled={disabled}
+                  title="Mention a member"
+                  aria-label="Mention a member"
+                  data-composer-tool="mention"
+                  className={COMPOSER_TOOL_CLASS}
+                >
+                  <AtSign className="size-4" />
+                </button>
+              ) : null}
+              {offersChannels ? (
                 <button
                   type="button"
                   onClick={() => insertTriggerAtCaret('#')}
@@ -1302,7 +1382,17 @@ export interface HumanMentionCandidate {
 export type PickerItem =
   | { kind: 'agent'; agent: AgentDto; inConversation: boolean }
   | { kind: 'human'; human: HumanMentionCandidate; inConversation: boolean }
-  | { kind: 'channel'; channel: ChannelConversationDto };
+  | {
+      kind: 'channel';
+      channel: ChannelConversationDto;
+      /** The channel's OWN workspace name, stamped when the candidate is built
+       *  from its own `workspace_id` — NEVER the ambient pane workspace. The
+       *  viewer arm's `#` list spans workspaces, so a locator must spell the
+       *  channel's real coordinate; `null` when the name can't be spelled (Agent
+       *  Space, or an unresolved workspace) → `#conv:<id>` fallback in
+       *  {@link formatPickInsertion}. */
+      workspaceName: string | null;
+    };
 
 /** A filtered picker page: the visible (capped) items plus how many matched
  *  candidates the cap dropped, so the menu can surface a "+N more" hint
@@ -1310,6 +1400,28 @@ export type PickerItem =
 export interface PickerResult {
   items: PickerItem[];
   hiddenCount: number;
+}
+
+/** The `@` mention directory for the CURRENT arm, assembled once and read by all
+ *  three consumers — the picker, the send-time shorthand rewrite, and its settle
+ *  gate — so a candidate the picker offers is exactly one the send path can
+ *  resolve (#task:2147). See the `mentionSource` memo for the per-arm derivation
+ *  of `sourceKnown` (the three-value authority fact). */
+interface ComposerMentionSource {
+  /** Whether this arm's authority has ANSWERED. Feeds
+   *  {@link canResolveShorthandNow}: false ⇒ a hand-typed `@handle` stays PENDING
+   *  (undetermined, never "answered empty"). */
+  sourceKnown: boolean;
+  select: (query: string) => PickerResult;
+  resolveShorthand: ShorthandResolver;
+}
+
+/** The `#` channel directory for the current arm. `offersChannels` gates the
+ *  toolbar `#` button and the placeholder hint — a control that opens on nothing
+ *  is worse than no control. */
+interface ComposerChannelSource {
+  offersChannels: boolean;
+  select: (query: string) => PickerResult;
 }
 
 /**
@@ -1547,6 +1659,7 @@ export function selectMentionCandidates(
  */
 export function filterChannels(
   channels: ChannelListItem[],
+  workspaceName: string | null,
   query: string,
 ): PickerResult {
   const q = query.toLowerCase();
@@ -1558,9 +1671,136 @@ export function filterChannels(
     ? onlyLive.filter(c => c.title.toLowerCase().includes(q))
     : onlyLive;
   const items: PickerItem[] = matched
-    .slice(0, 8)
-    .map(channel => ({ kind: 'channel', channel }));
+    .slice(0, CHANNEL_PICKER_CAP)
+    // One workspace's list, so every row carries that one ambient name — the
+    // viewer arm's cross-workspace list (below) stamps each row's OWN name
+    // instead.
+    .map(channel => ({ kind: 'channel', channel, workspaceName }));
   return { items, hiddenCount: matched.length - items.length };
+}
+
+/** Both `#` pickers cap at the same depth — short and scannable, narrow by typing
+ *  rather than scroll. */
+const CHANNEL_PICKER_CAP = 8;
+
+/**
+ * The viewer arm's `@` candidates (#task:2147): the viewer's own canonical-owned
+ * agents, flat and agents-ONLY — a `direct_pair` has no workspace roster, so there
+ * are no human members to offer. Matched by name / display_name, capped at 10.
+ * Every row is `inConversation: true` so it renders at full opacity with NO
+ * "In this channel" / "Other channels" split: there is no conversation roster to
+ * split against, and the picker suppresses those headers in this arm
+ * (`peopleSections` is false). Pure, so the candidate boundary is testable.
+ */
+export function selectViewerMentionCandidates(
+  ownedAgents: AgentDto[],
+  query: string,
+): PickerResult {
+  const q = query.toLowerCase();
+  const matched = q
+    ? ownedAgents.filter(a =>
+        a.name.toLowerCase().includes(q) ||
+        (a.display_name ?? '').toLowerCase().includes(q),
+      )
+    : ownedAgents;
+  const VIEWER_MENTION_CAP = 10;
+  const items: PickerItem[] = matched
+    .slice(0, VIEWER_MENTION_CAP)
+    .map(agent => ({ kind: 'agent', agent, inConversation: true }));
+  return { items, hiddenCount: matched.length - items.length };
+}
+
+/**
+ * The viewer arm's send-time shorthand resolver (#task:2147): only the viewer's
+ * own canonical-owned agents resolve, all as `agent`. Mirrors
+ * {@link buildShorthandResolver}'s "membership is the admission test" — a handle
+ * outside the owned set is left as authored (a chip that addresses nobody, which
+ * is the truth) — but there is no human arm, because a `direct_pair` names no
+ * humans through a roster. Pure.
+ */
+export function buildViewerShorthandResolver(
+  ownedAgents: AgentDto[],
+): ShorthandResolver {
+  const kinds = new Map<string, ReferenceKind>();
+  for (const agent of ownedAgents) kinds.set(agent.name, 'agent');
+  return handle => kinds.get(handle) ?? null;
+}
+
+/** The per-workspace query slice {@link filterViewerChannels} reads — just the
+ *  fields the fail-closed classification needs, so the seam is testable without a
+ *  real React Query result. Structurally satisfied by one entry of
+ *  `useChannelsAcrossWorkspaces`. */
+export interface ChannelSlice {
+  status: 'pending' | 'error' | 'success';
+  data?: ChannelListItem[];
+}
+
+/** {@link filterViewerChannels}'s result, carrying the fan-out's settle fact
+ *  alongside the page. */
+export interface ViewerChannelResult extends PickerResult {
+  /** Alice's fan-out fail-closed seam (#task:2148): true ONLY when the workspace
+   *  id list has settled AND every per-workspace slice SUCCEEDED. Any slice still
+   *  pending — or in ERROR — leaves it false. An error is NEVER folded into
+   *  "settled and empty": that would silently drop a whole workspace's channels
+   *  and read downstream as a complete-but-smaller set, the exact
+   *  looks-answered-but-isn't failure the three-value authority exists to prevent. */
+  sourceKnown: boolean;
+}
+
+/**
+ * The viewer arm's `#` candidates (#task:2148): every channel the viewer is
+ * CURRENTLY a member of, across ALL their workspaces, flattened from the
+ * per-workspace fan-out.
+ *
+ *  - `is_member === true` only — the per-viewer discovery bit. A public channel
+ *    the viewer merely browses is not "theirs" to reference from a DM.
+ *  - Same live-channel product policy as the workspace arm's {@link filterChannels}:
+ *    open roster, not archived, not closed.
+ *  - Each surviving candidate is stamped with its OWN workspace name (from its own
+ *    `workspace_id` via `workspaceNameById`), so a cross-workspace locator spells
+ *    the right coordinate and same-named channels stay distinguishable.
+ *
+ * Items are PROGRESSIVE — built from whatever slices have already succeeded — while
+ * `sourceKnown` reports whether the WHOLE set has settled (see
+ * {@link ViewerChannelResult}). A `#` pick inserts a full canonical locator carrying
+ * the candidate's own coordinate, so a partial list never mis-addresses; only the
+ * completeness signal waits. Pure.
+ */
+export function filterViewerChannels(
+  slices: readonly ChannelSlice[],
+  workspacesSettled: boolean,
+  workspaceNameById: ReadonlyMap<string, string>,
+  query: string,
+): ViewerChannelResult {
+  const sourceKnown =
+    workspacesSettled && slices.every(s => s.status === 'success');
+  const q = query.toLowerCase();
+  const items: PickerItem[] = [];
+  let matchedCount = 0;
+  for (const slice of slices) {
+    if (slice.status !== 'success' || !slice.data) continue;
+    for (const c of slice.data) {
+      if (c.is_member !== true) continue;
+      if (
+        c.roster_policy !== 'open'
+        || c.archived_at !== null
+        || c.closed_at !== null
+      ) {
+        continue;
+      }
+      if (q && !c.title.toLowerCase().includes(q)) continue;
+      matchedCount += 1;
+      if (items.length >= CHANNEL_PICKER_CAP) continue;
+      items.push({
+        kind: 'channel',
+        channel: c,
+        workspaceName: c.workspace_id
+          ? workspaceNameById.get(c.workspace_id) ?? null
+          : null,
+      });
+    }
+  }
+  return { items, hiddenCount: matchedCount - items.length, sourceKnown };
 }
 
 // ── menu ──────────────────────────────────────────────────────────
@@ -1571,6 +1811,8 @@ function PickerMenu({
   active,
   onPick,
   onHover,
+  peopleSections,
+  showChannelWorkspace,
   agentAvatarUrls,
   humanAvatarUrls,
 }: {
@@ -1579,21 +1821,29 @@ function PickerMenu({
   active: number;
   onPick: (item: PickerItem) => void;
   onHover: (index: number) => void;
+  /** Whether to split rows into "In this channel" / "Other channels" headers —
+   *  only the workspace arm's `@` picker has a conversation roster to split
+   *  against. The viewer arm's owned-agent list and every `#` channel list are
+   *  flat (#task:2147). */
+  peopleSections: boolean;
+  /** Whether a channel row names its workspace — the viewer arm's `#` list spans
+   *  workspaces, so same-named channels must stay distinguishable (#task:2148). */
+  showChannelWorkspace: boolean;
   agentAvatarUrls: Map<string, string | null>;
   humanAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
-  // #task:876 (2026-06-03): split header labels per section. We compute
-  // the boundary index here (first item with !inConversation) and let
-  // the map render a header chip just before that row. People-only
-  // sections; channel rows skip the headers entirely because there is
-  // no membership concept for channels in this picker (they're already
-  // workspace-scoped).
-  const headerBoundaryIndex = items.findIndex(
-    item => item.kind !== 'channel' && !item.inConversation,
-  );
-  const hasInSection = items.some(
-    item => item.kind !== 'channel' && item.inConversation,
-  );
+  // #task:876 (2026-06-03): split header labels per section. We compute the
+  // boundary index here (first item with !inConversation) and let the map render a
+  // header chip just before that row. Gated on `peopleSections`: a flat arm (viewer
+  // `@`, any `#`) reports -1 / false so no header ever renders. Channel rows also
+  // carry no membership concept, so they never trigger a header even inside a
+  // people-sectioned arm.
+  const headerBoundaryIndex = peopleSections
+    ? items.findIndex(item => item.kind !== 'channel' && !item.inConversation)
+    : -1;
+  const hasInSection =
+    peopleSections
+    && items.some(item => item.kind !== 'channel' && item.inConversation);
   return (
     <div
       // Radius belongs on THIS element — the visible frame. The global
@@ -1628,6 +1878,7 @@ function PickerMenu({
             active={i === active}
             onPick={() => onPick(item)}
             onHover={() => onHover(i)}
+            showChannelWorkspace={showChannelWorkspace}
             agentAvatarUrl={
               item.kind === 'agent'
                 ? agentAvatarUrls.get(item.agent.id) ?? null
@@ -1684,6 +1935,7 @@ function Row({
   active,
   onPick,
   onHover,
+  showChannelWorkspace,
   agentAvatarUrl,
   humanAvatarUrl,
 }: {
@@ -1691,6 +1943,9 @@ function Row({
   active: boolean;
   onPick: () => void;
   onHover: () => void;
+  /** Name the channel's workspace on a channel row (viewer arm's cross-workspace
+   *  `#` list, #task:2148). Ignored for agent/human rows. */
+  showChannelWorkspace: boolean;
   agentAvatarUrl: string | null;
   humanAvatarUrl: string | null;
 }): JSX.Element {
@@ -1793,12 +2048,26 @@ function Row({
         // front already says "this is a channel", so we drop both the
         // literal `#` prefix on the title AND the fixed `channel` /
         // `closed` meta line. Less noise, faster scan. (Closed
-        // channels are filtered upstream in `filterChannels`.)
+        // channels are filtered upstream in `filterChannels`.) The viewer
+        // arm's cross-workspace list adds a muted workspace sub-line
+        // (`showChannelWorkspace`) so same-named channels in different
+        // workspaces stay distinguishable (#task:2148).
         <>
           <Hash className="size-4 shrink-0 text-text-muted" />
-          <span className="truncate text-sm font-medium text-text-primary">
-            {item.channel.title}
-          </span>
+          {showChannelWorkspace && item.workspaceName ? (
+            <div className="flex min-w-0 flex-1 flex-col leading-tight">
+              <span className="truncate text-sm font-medium text-text-primary">
+                {item.channel.title}
+              </span>
+              <span className="truncate text-[length:var(--text-meta)] text-text-muted">
+                {item.workspaceName}
+              </span>
+            </div>
+          ) : (
+            <span className="truncate text-sm font-medium text-text-primary">
+              {item.channel.title}
+            </span>
+          )}
         </>
       )}
     </button>
@@ -1831,27 +2100,28 @@ function rowKey(item: PickerItem): string {
  *                 total over the type, so the emitted string always round-trips
  *                 through `parseLocator`.
  *
- * FALLS BACK to `#conv:<id>` whenever the workspace name is absent. This is a
- * LIVE path, not just a totality guard: the pane owner passes null for an Agent
- * Space — whose name the locator grammar cannot spell — even though its `#` picker
- * is live, so an Agent-Space channel pick lands as the permanent-id form (see
- * `locatorWorkspaceName`). It is also null for a workspace-less/unresolved
- * conversation. `#conv:` parsing is unchanged and still carries every existing
- * body and permanent-id deep link.
+ * FALLS BACK to `#conv:<id>` whenever the channel's OWN workspace name is absent.
+ * This is a LIVE path, not just a totality guard: a candidate from an Agent Space
+ * — whose name the locator grammar cannot spell — carries a null `workspaceName`
+ * even though its `#` picker is live, so it lands as the permanent-id form. It is
+ * also null for a workspace-less/unresolved conversation. `#conv:` parsing is
+ * unchanged and still carries every existing body and permanent-id deep link.
+ *
+ * The workspace name is READ OFF THE ITEM (stamped at candidate build time from
+ * the channel's own `workspace_id`), never the ambient pane workspace: the viewer
+ * arm's list spans workspaces, so an ambient name would spell every cross-workspace
+ * locator with one workspace's coordinate.
  *
  * The user can still type `#general` or a locator by hand; the picker just emits
  * the readable, reliable form.
  */
-export function formatPickInsertion(
-  item: PickerItem,
-  workspaceName: string | null,
-): string {
+export function formatPickInsertion(item: PickerItem): string {
   if (item.kind === 'agent') return `@${item.agent.name}`;
   if (item.kind === 'human') return `@${item.human.name}`;
-  if (workspaceName === null) return `#conv:${item.channel.id}`;
+  if (item.workspaceName === null) return `#conv:${item.channel.id}`;
   const locator: Locator = {
     kind: 'channel',
-    workspace: canonicalizeStoredWorkspaceName(workspaceName),
+    workspace: canonicalizeStoredWorkspaceName(item.workspaceName),
     channel: canonicalizeStoredConversationTitle(item.channel.title),
     threadRootId: null,
   };

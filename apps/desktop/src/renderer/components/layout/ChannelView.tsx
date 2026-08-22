@@ -65,6 +65,7 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
 import type { AttachmentSnapshot, ConversationVisibility } from '@silverhand/shared';
 import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
 import {
+  composerDirectory,
   paneCapabilities,
   projectConversationPaneMode,
   rosterQueryTarget,
@@ -390,6 +391,13 @@ function ActiveChannelView({
   // backend's answer (@Cindy).
   const paneMode = projectConversationPaneMode(conversation);
   const paneCaps = paneCapabilities(paneMode);
+  // The composer's candidate directory, projected from the SAME typed mode (never
+  // re-derived in the leaf). The workspace coordinate the workspace arm carries is
+  // this pane's already-resolved name + namespace bit (#task:2147).
+  const composerDir = composerDirectory(paneMode, {
+    workspaceName,
+    hasChannelNamespace,
+  });
   const isDirectPair = paneMode.kind === 'direct_message';
   const { gate } = useChannelMembership(
     conversation,
@@ -1286,9 +1294,7 @@ function ActiveChannelView({
           <Composer
             key={conversation.id}
             conversationId={conversation.id}
-            workspaceId={conversation.workspace_id}
-            workspaceName={workspaceName}
-            hasChannelNamespace={hasChannelNamespace}
+            directory={composerDir}
             disabled={closed}
             archived={isArchived}
             // A pair whose counterpart principal is gone: writes can never

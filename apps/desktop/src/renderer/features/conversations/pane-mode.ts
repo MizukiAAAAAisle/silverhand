@@ -212,3 +212,86 @@ export function rosterQueryTarget(
 ): string | null {
   return capabilities.hasRoster && allowMemberEffects ? conversationId : null;
 }
+
+/**
+ * Which TYPED directory the composer's `@` mention and `#` channel pickers — and
+ * the send-time shorthand resolver they share — read their candidates from.
+ * Projected EXHAUSTIVELY from {@link ConversationPaneMode}, so it can never be
+ * re-derived from `workspaceId === null`, the route word "DM", or a lone
+ * {@link ConversationPaneCapabilities.hasRoster} boolean.
+ *
+ * The boolean is the trap this type exists to close: `paneCapabilities` returns
+ * `hasRoster:false` for a DirectPair AND for an unsupported/unresolved placement,
+ * so `hasRoster ? workspaceMembers : viewerOwnedAgents` folds three real states
+ * into two and hands the viewer's whole owned-agent directory to a cold-start or
+ * unknown placement. Three arms keep them apart:
+ *
+ *  - `workspace` — a resolved roster-bearing placement. Candidates are that
+ *    workspace's members / channels. Carries the workspace coordinate the two
+ *    workspace-scoped queries need, so the leaf never re-derives it.
+ *  - `viewer` — a resolved DirectPair. Candidates are the VIEWER's own directory
+ *    (canonical-owned agents, the channels the viewer participates in), never a
+ *    workspace roster.
+ *  - `withheld` — placement unresolved or unsupported. NOT "resolved and empty":
+ *    the authority is not yet KNOWN, so no directory query starts, no candidate is
+ *    offered, and a hand-typed `@handle` stays PENDING (never settles to
+ *    "addresses nobody") until a concrete arm resolves. Only the `workspace` and
+ *    `viewer` arms can ever settle.
+ */
+export type ComposerDirectory =
+  | {
+      kind: 'workspace';
+      /** Nullable for the same reason {@link ConversationPaneMode} is: an
+       *  unresolved workspace row has no coordinate yet, which disables the
+       *  workspace-scoped queries so the arm stays unsettled rather than settling
+       *  empty. */
+      workspaceId: string | null;
+      workspaceName: string | null;
+      hasChannelNamespace: boolean;
+    }
+  | { kind: 'viewer' }
+  | { kind: 'withheld' };
+
+/** Workspace-derived facts the `workspace` arm carries — resolved by the pane
+ *  owner from the workspace list it already holds, never re-derived in the leaf
+ *  (the same sibling-of-the-descriptor discipline the composer's props follow).
+ *  Consulted ONLY in the `workspace` arm. */
+export interface ComposerWorkspaceCoordinate {
+  workspaceName: string | null;
+  hasChannelNamespace: boolean;
+}
+
+/** Project a pane's mode onto its composer directory. Total over the mode union
+ *  so a new placement is named by whoever adds it, not silently absorbed. */
+export function composerDirectory(
+  mode: ConversationPaneMode,
+  workspace: ComposerWorkspaceCoordinate,
+): ComposerDirectory {
+  switch (mode.kind) {
+    case 'workspace_channel':
+      return {
+        kind: 'workspace',
+        workspaceId: mode.workspaceId,
+        workspaceName: workspace.workspaceName,
+        hasChannelNamespace: workspace.hasChannelNamespace,
+      };
+    case 'direct_message':
+      return { kind: 'viewer' };
+    case 'unsupported':
+      return { kind: 'withheld' };
+  }
+}
+
+/** The composer directory of a pane that hangs off a parent conversation — a
+ *  thread (#task:2098). A thread has no placement of its own, so it INHERITS the
+ *  parent's projection; a `null` parent (a cold deep link before the parent
+ *  resolves) is `withheld`, the same fail-safe {@link inheritedPaneCapabilities}
+ *  uses, so the thread composer never re-derives the arm from `workspaceId` or the
+ *  route. */
+export function inheritedComposerDirectory(
+  parent: ConversationPaneDescriptor | null,
+  workspace: ComposerWorkspaceCoordinate,
+): ComposerDirectory {
+  if (!parent) return { kind: 'withheld' };
+  return composerDirectory(projectConversationPaneMode(parent), workspace);
+}

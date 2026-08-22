@@ -10,8 +10,11 @@ import {
   projectConversationPaneMode,
   rosterQueryTarget,
   inheritedPaneCapabilities,
+  composerDirectory,
+  inheritedComposerDirectory,
   DEFAULT_PANE_CAPABILITIES,
   type ConversationPaneMode,
+  type ComposerWorkspaceCoordinate,
 } from './pane-mode';
 
 // #task:2039 — the pane's placement is read ONCE, here. Four dogfood findings
@@ -311,6 +314,109 @@ describe('inheritedPaneCapabilities — a thread is its parent (#task:2098)', ()
       ['direct_pair', null],
     ]);
     expect(rosterQueryTarget(inheritedPaneCapabilities(null), 'c-1', true)).toBeNull();
+  });
+});
+
+describe('composerDirectory — the three-arm authority, exhaustive over the mode union', () => {
+  // The trap this projection closes is a two-value one: `paneCapabilities`
+  // answers `hasRoster:false` for a DirectPair AND for unsupported/unresolved, so
+  // `hasRoster ? workspace : viewer` folds three states into two and hands a
+  // cold-start pane the viewer's whole owned-agent directory. Every mode kind must
+  // land in a NAMED arm, and the coordinate must reach the workspace arm and
+  // nowhere else.
+  const COORD: ComposerWorkspaceCoordinate = {
+    workspaceName: 'Acme',
+    hasChannelNamespace: true,
+  };
+
+  it('projects every mode kind into a named arm — nothing folds', () => {
+    // The `hasRoster:false` collision is the whole reason for three arms: the two
+    // modes that share it must NOT share a directory arm.
+    expect(MODE_KINDS.map(k => composerDirectory(MODE_SAMPLES[k], COORD).kind)).toEqual([
+      'workspace',
+      'viewer',
+      'withheld',
+    ]);
+  });
+
+  it('gives the workspace arm the coordinate it was handed, carrying a null id', () => {
+    expect(composerDirectory(MODE_SAMPLES.workspace_channel, COORD)).toEqual({
+      kind: 'workspace',
+      workspaceId: 'w-1',
+      workspaceName: 'Acme',
+      hasChannelNamespace: true,
+    });
+    // A workspace row that has not resolved keeps the workspace arm with a null id
+    // — which disables the workspace-scoped queries, so the arm stays unsettled
+    // rather than settling on an empty candidate set.
+    expect(
+      composerDirectory({ kind: 'workspace_channel', workspaceId: null }, {
+        workspaceName: null,
+        hasChannelNamespace: false,
+      }),
+    ).toEqual({
+      kind: 'workspace',
+      workspaceId: null,
+      workspaceName: null,
+      hasChannelNamespace: false,
+    });
+  });
+
+  it('consults the coordinate ONLY in the workspace arm', () => {
+    // The viewer and withheld arms carry no workspace fields — a DirectPair reads
+    // the viewer's own directory, not a workspace's, so a stray coordinate must not
+    // change either answer.
+    const other: ComposerWorkspaceCoordinate = {
+      workspaceName: 'Other',
+      hasChannelNamespace: false,
+    };
+    expect(composerDirectory(MODE_SAMPLES.direct_message, COORD)).toEqual({ kind: 'viewer' });
+    expect(composerDirectory(MODE_SAMPLES.direct_message, other)).toEqual({ kind: 'viewer' });
+    expect(composerDirectory(MODE_SAMPLES.unsupported, COORD)).toEqual({ kind: 'withheld' });
+    expect(composerDirectory(MODE_SAMPLES.unsupported, other)).toEqual({ kind: 'withheld' });
+  });
+
+  it('maps a DirectPair to the viewer arm and an unknown placement to withheld', () => {
+    // The bidirectional half restated for the directory: the DirectPair is the ONE
+    // mode that reads the viewer's own directory, and withheld is where an
+    // unresolved/unsupported placement fails safe (empty, source-unknown), never
+    // the viewer directory by default.
+    expect(MODE_KINDS.filter(k => composerDirectory(MODE_SAMPLES[k], COORD).kind === 'viewer')).toEqual([
+      'direct_message',
+    ]);
+    expect(MODE_KINDS.filter(k => composerDirectory(MODE_SAMPLES[k], COORD).kind === 'withheld')).toEqual([
+      'unsupported',
+    ]);
+  });
+});
+
+describe('inheritedComposerDirectory — a thread is its parent (#task:2098)', () => {
+  const COORD: ComposerWorkspaceCoordinate = {
+    workspaceName: 'Acme',
+    hasChannelNamespace: true,
+  };
+  const parent = (placement: ConversationPlacementKind) =>
+    descriptor({
+      placement_kind: placement,
+      workspace_id: placement === 'workspace' ? 'w-1' : null,
+    });
+
+  it('is the parent projection itself for every placement — never a second mapping', () => {
+    // The anti-drift assertion, same as capabilities: inheritance IS the parent's
+    // own directory, so the thread composer and the mainline composer cannot
+    // disagree about which directory a conversation offers.
+    for (const placement of PLACEMENTS) {
+      expect(inheritedComposerDirectory(parent(placement), COORD)).toEqual(
+        composerDirectory(projectConversationPaneMode(parent(placement)), COORD),
+      );
+    }
+  });
+
+  it('withholds when the parent has not resolved — not the viewer directory', () => {
+    // A cold deep link to `?thread=<root>` before the parent conversation is known.
+    // Inheriting anything but withheld here would leak a directory (the viewer's
+    // owned agents, or a channel's members) for a placement not yet determined.
+    expect(inheritedComposerDirectory(null, COORD)).toEqual({ kind: 'withheld' });
   });
 });
 

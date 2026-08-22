@@ -14,15 +14,20 @@ import {
   formatLocatorToken,
   parseLocator,
 } from '@silverhand/shared';
+import type { ChannelListItem } from '@/features/workspaces/hooks';
 import {
   buildMentionHumans,
   buildShorthandResolver,
+  buildViewerShorthandResolver,
   canResolveShorthandNow,
   detectTrigger,
   filterChannels,
   filterMentionPeople,
+  filterViewerChannels,
   formatPickInsertion,
   selectMentionCandidates,
+  selectViewerMentionCandidates,
+  type ChannelSlice,
   type HumanMentionCandidate,
 } from './Composer';
 
@@ -65,8 +70,11 @@ function expectChannelLocator(rawTitle: string, workspaceName: string): void {
   const emitted = formatPickInsertion(
     // `id` is deliberately ignored by the locator arm — the coordinate is the
     // name, not the opaque id — so a distinctive value proves it isn't leaking in.
-    { kind: 'channel', channel: channel({ id: 'IGNORED_00000000', title: rawTitle }) },
-    workspaceName,
+    {
+      kind: 'channel',
+      channel: channel({ id: 'IGNORED_00000000', title: rawTitle }),
+      workspaceName,
+    },
   );
   expect(emitted).toBe(formatLocatorToken(expected));
   // Autolink brackets are load-bearing (custom scheme has no bare autolink);
@@ -108,6 +116,15 @@ function channel(overrides: Partial<ChannelConversationDto> = {}): ChannelConver
   } as ChannelConversationDto;
 }
 
+/** A channel row as it arrives from `useChannelsAcrossWorkspaces` — carries the
+ *  per-viewer `is_member` discovery bit the viewer `#` arm filters on. */
+function viewerChannel(
+  overrides: Partial<ChannelConversationDto> & { is_member?: boolean } = {},
+): ChannelListItem {
+  const { is_member, ...rest } = overrides;
+  return { ...channel(rest), is_member } as ChannelListItem;
+}
+
 function human(
   overrides: Partial<HumanMentionCandidate> = {},
 ): HumanMentionCandidate {
@@ -141,19 +158,13 @@ function wsHuman(
 describe('formatPickInsertion', () => {
   it('agent → @<name> (handle is always url-safe by schema)', () => {
     expect(
-      formatPickInsertion(
-        { kind: 'agent', agent: agent(), inConversation: true },
-        'silverhand',
-      ),
+      formatPickInsertion({ kind: 'agent', agent: agent(), inConversation: true }),
     ).toBe('@alice');
   });
 
   it('human → @<name> (same mention namespace as agents)', () => {
     expect(
-      formatPickInsertion(
-        { kind: 'human', human: human(), inConversation: true },
-        'silverhand',
-      ),
+      formatPickInsertion({ kind: 'human', human: human(), inConversation: true }),
     ).toBe('@shiki');
   });
 
@@ -202,13 +213,11 @@ describe('formatPickInsertion', () => {
     // this arm today, but the producer stays total rather than throwing, and
     // `#conv:` is the documented fallback the renderer still parses.
     expect(
-      formatPickInsertion(
-        {
-          kind: 'channel',
-          channel: channel({ id: 'feat0000000clidg', title: 'feature/cli design' }),
-        },
-        null,
-      ),
+      formatPickInsertion({
+        kind: 'channel',
+        channel: channel({ id: 'feat0000000clidg', title: 'feature/cli design' }),
+        workspaceName: null,
+      }),
     ).toBe('#conv:feat0000000clidg');
   });
 });
@@ -354,7 +363,7 @@ describe('filterChannels', () => {
     const channels = Array.from({ length: 11 }, (_, i) =>
       channel({ id: `c-${i}`, title: `chan-${i}` }),
     );
-    const { items, hiddenCount } = filterChannels(channels, '');
+    const { items, hiddenCount } = filterChannels(channels, 'silverhand', '');
     expect(items).toHaveLength(8);
     // 11 live matched − 8 shown → 3 surfaced as the "+N more" footer count.
     expect(hiddenCount).toBe(3);
@@ -369,7 +378,7 @@ describe('filterChannels', () => {
       channel({ id: 'arch', title: 'archived-thing', archived_at: 1 }),
       channel({ id: 'closed', title: 'closed-thing', closed_at: 1 }),
     ];
-    const { items, hiddenCount } = filterChannels(channels, '');
+    const { items, hiddenCount } = filterChannels(channels, 'silverhand', '');
     expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
       'live',
     ]);
@@ -381,7 +390,7 @@ describe('filterChannels', () => {
       channel({ id: 'a', title: 'UI polish' }),
       channel({ id: 'b', title: 'backend' }),
     ];
-    const { items } = filterChannels(channels, 'POL');
+    const { items } = filterChannels(channels, 'silverhand', 'POL');
     expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
       'a',
     ]);
@@ -398,13 +407,13 @@ describe('filterChannels', () => {
       channel({ id: 'backend', title: 'backend' }),
     ];
     expect(
-      filterChannels(channels, '设计').items.map(i =>
+      filterChannels(channels, 'silverhand', '设计').items.map(i =>
         i.kind === 'channel' ? i.channel.id : null,
       ),
     ).toEqual(['design']);
     // Mid-string CJK match: '优化' is the tail of 'UI 优化'.
     expect(
-      filterChannels(channels, '优化').items.map(i =>
+      filterChannels(channels, 'silverhand', '优化').items.map(i =>
         i.kind === 'channel' ? i.channel.id : null,
       ),
     ).toEqual(['polish']);
@@ -677,46 +686,270 @@ describe('selectMentionCandidates', () => {
   });
 });
 
-describe('mention source wiring (falsifier for the workspace-scoped boundary)', () => {
-  // selectMentionCandidates / filterMentionPeople accept any arrays, so
-  // reverting the composer to the global useUsers()/useAgents() directories
-  // would leave every pure test above green. This fence pins the ONE wiring
-  // fact that makes the candidate boundary real: the composer feeds the `@`
-  // picker from the workspace-scoped member lists, never the global
-  // directories (#task:1720). Source-text, not a DOM/structure assertion.
+describe('selectViewerMentionCandidates', () => {
+  // The viewer arm's `@` set (#task:2147): the viewer's own canonical-owned
+  // agents, flat and agents-only — a direct_pair has no roster, so no humans and
+  // no In/Other split.
+  const mkAgent = (n: number) =>
+    agent({ id: `a-${n}`, name: `a${n}`, display_name: `A${n}` });
+
+  it('offers the owned agents flat, every row inConversation:true', () => {
+    const { items, hiddenCount } = selectViewerMentionCandidates(
+      [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
+      '',
+    );
+    expect(items).toEqual([
+      {
+        kind: 'agent',
+        agent: agent({ id: 'a-1', name: 'alice', display_name: 'Alice' }),
+        inConversation: true,
+      },
+    ]);
+    expect(hiddenCount).toBe(0);
+  });
+
+  it('matches by name and display_name, case-insensitively', () => {
+    const { items } = selectViewerMentionCandidates(
+      [
+        agent({ id: 'a-1', name: 'alice', display_name: 'Alice' }),
+        agent({ id: 'a-2', name: 'bob', display_name: 'Bob' }),
+      ],
+      'ALI',
+    );
+    expect(items.map(i => (i.kind === 'agent' ? i.agent.id : null))).toEqual([
+      'a-1',
+    ]);
+  });
+
+  it('caps at 10 and reports the truncated remainder', () => {
+    const owned = Array.from({ length: 13 }, (_, i) => mkAgent(i));
+    const { items, hiddenCount } = selectViewerMentionCandidates(owned, '');
+    expect(items).toHaveLength(10);
+    expect(hiddenCount).toBe(3);
+    expect(items.every(i => i.kind === 'agent' && i.inConversation)).toBe(true);
+  });
+});
+
+describe('buildViewerShorthandResolver', () => {
+  // #task:2147 — mirrors buildShorthandResolver's "membership is the admission
+  // test", but agents-only: a handle outside the owned set is left as authored.
+  it('resolves an owned agent to agent, everyone else to null', () => {
+    const resolve = buildViewerShorthandResolver([agent({ name: 'alice' })]);
+    expect(resolve('alice')).toBe('agent');
+    expect(resolve('elsewhere')).toBeNull();
+  });
+
+  it('is case-sensitive, like every other handle resolver', () => {
+    const resolve = buildViewerShorthandResolver([agent({ name: 'alice' })]);
+    expect(resolve('Alice')).toBeNull();
+  });
+
+  it('resolves nothing when the owned set is empty', () => {
+    expect(buildViewerShorthandResolver([])('alice')).toBeNull();
+  });
+});
+
+/**
+ * #task:2148 — the viewer arm's `#` fan-out across every workspace the viewer
+ * belongs to. Two facts live here and both fail silently:
+ *  - **Alice's fail-closed seam.** `sourceKnown` is true ONLY when the workspace
+ *    id list has settled AND every per-workspace slice succeeded. A slice still
+ *    pending — or in ERROR — must leave it false; an error must NEVER read as
+ *    "settled and empty", which would drop a whole workspace's channels and look
+ *    downstream like a complete-but-smaller set.
+ *  - **Per-candidate coordinate.** Each surviving row is stamped with its OWN
+ *    workspace name (from its own `workspace_id`), so a cross-workspace locator
+ *    spells the right coordinate and same-named channels stay distinguishable.
+ * Items are PROGRESSIVE — built from whatever slices already succeeded — while
+ * `sourceKnown` reports whole-set settlement; a `#` pick inserts a full canonical
+ * locator, so a partial list never mis-addresses.
+ */
+describe('filterViewerChannels', () => {
+  const names = new Map([
+    ['w-1', 'silverhand'],
+    ['w-2', 'Agent Space'],
+  ]);
+  const success = (data: ChannelListItem[]): ChannelSlice => ({
+    status: 'success',
+    data,
+  });
+
+  it('flattens is_member channels across workspaces, stamping each row its own name', () => {
+    const slices: ChannelSlice[] = [
+      success([
+        viewerChannel({ id: 'c1', workspace_id: 'w-1', title: 'general', is_member: true }),
+      ]),
+      success([
+        viewerChannel({ id: 'c2', workspace_id: 'w-2', title: 'design', is_member: true }),
+      ]),
+    ];
+    const { items, sourceKnown } = filterViewerChannels(slices, true, names, '');
+    expect(sourceKnown).toBe(true);
+    expect(
+      items.map(i =>
+        i.kind === 'channel'
+          ? { id: i.channel.id, ws: i.workspaceName }
+          : null,
+      ),
+    ).toEqual([
+      { id: 'c1', ws: 'silverhand' },
+      { id: 'c2', ws: 'Agent Space' },
+    ]);
+  });
+
+  it('excludes channels the viewer is not a member of', () => {
+    const slices: ChannelSlice[] = [
+      success([
+        viewerChannel({ id: 'mine', title: 'a', is_member: true }),
+        viewerChannel({ id: 'browsed', title: 'b', is_member: false }),
+        // A row with no discovery bit at all is not "mine" either.
+        viewerChannel({ id: 'nobit', title: 'c' }),
+      ]),
+    ];
+    const { items } = filterViewerChannels(slices, true, names, '');
+    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
+      'mine',
+    ]);
+  });
+
+  it('excludes archived/closed/non-open channels from both the list AND the count', () => {
+    const slices: ChannelSlice[] = [
+      success([
+        viewerChannel({ id: 'live', title: 'general', is_member: true }),
+        viewerChannel({ id: 'arch', title: 'x', is_member: true, archived_at: 1 }),
+        viewerChannel({ id: 'closed', title: 'y', is_member: true, closed_at: 1 }),
+      ]),
+    ];
+    const { items, hiddenCount } = filterViewerChannels(slices, true, names, '');
+    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
+      'live',
+    ]);
+    expect(hiddenCount).toBe(0);
+  });
+
+  it('a workspace name absent from the map → null (→ #conv fallback at insert time)', () => {
+    const slices: ChannelSlice[] = [
+      success([
+        viewerChannel({ id: 'c1', workspace_id: 'w-unknown', title: 'general', is_member: true }),
+        viewerChannel({ id: 'c2', workspace_id: null, title: 'floating', is_member: true }),
+      ]),
+    ];
+    const { items } = filterViewerChannels(slices, true, names, '');
+    expect(
+      items.map(i => (i.kind === 'channel' ? i.workspaceName : 'n/a')),
+    ).toEqual([null, null]);
+  });
+
+  it('caps at 8 and counts only offerable candidates into the remainder', () => {
+    const data = Array.from({ length: 11 }, (_, i) =>
+      viewerChannel({ id: `c-${i}`, title: `chan-${i}`, is_member: true }),
+    );
+    const { items, hiddenCount } = filterViewerChannels([success(data)], true, names, '');
+    expect(items).toHaveLength(8);
+    expect(hiddenCount).toBe(3);
+  });
+
+  it('filters by a title substring, case-insensitively, across all slices', () => {
+    const slices: ChannelSlice[] = [
+      success([viewerChannel({ id: 'a', title: 'UI polish', is_member: true })]),
+      success([viewerChannel({ id: 'b', title: 'backend', is_member: true })]),
+    ];
+    const { items } = filterViewerChannels(slices, true, names, 'POL');
+    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
+      'a',
+    ]);
+  });
+
+  it('fail-closed: a still-PENDING slice leaves sourceKnown false but keeps the settled items', () => {
+    const slices: ChannelSlice[] = [
+      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
+      { status: 'pending' },
+    ];
+    const { items, sourceKnown } = filterViewerChannels(slices, true, names, '');
+    // Progressive: the succeeded slice's channel is offered NOW…
+    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
+      'c1',
+    ]);
+    // …but the whole set is not settled, so a hand-typed handle stays pending.
+    expect(sourceKnown).toBe(false);
+  });
+
+  it('fail-closed: an ERROR slice is NOT folded into settled-empty (sourceKnown false)', () => {
+    // The failure this pins: reading an error as "this workspace has no channels"
+    // would drop it silently and report the smaller set as complete.
+    const slices: ChannelSlice[] = [
+      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
+      { status: 'error' },
+    ];
+    const { items, sourceKnown } = filterViewerChannels(slices, true, names, '');
+    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
+      'c1',
+    ]);
+    expect(sourceKnown).toBe(false);
+  });
+
+  it('fail-closed: an unsettled workspace-id list leaves sourceKnown false even if every slice succeeded', () => {
+    const slices: ChannelSlice[] = [
+      success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
+    ];
+    expect(filterViewerChannels(slices, false, names, '').sourceKnown).toBe(false);
+  });
+
+  it('settled-empty is a known answer: no slices, list settled → sourceKnown true', () => {
+    const { items, sourceKnown } = filterViewerChannels([], true, names, '');
+    expect(items).toEqual([]);
+    expect(sourceKnown).toBe(true);
+  });
+});
+
+describe('mention source wiring (falsifier for the per-arm candidate boundary)', () => {
+  // The pure selectors accept any arrays, so reverting the composer to a global
+  // directory — or wiring the wrong arm's source into the send gate — would leave
+  // every pure test above green. This fence pins the wiring facts that make the
+  // per-arm boundary real (#task:2147): the workspace arm feeds the `@` picker
+  // from the workspace-scoped member lists, the viewer arm from the viewer's OWN
+  // agents, and the send gate reads the SAME arm source the picker read.
+  // Source-text, not a DOM/structure assertion.
   const src = readFileSync(
     fileURLToPath(new URL('./Composer.tsx', import.meta.url)),
     'utf8',
   );
 
-  it('sources @ candidates from useWorkspaceMemberLists(workspaceId)', () => {
-    expect(src).toContain('useWorkspaceMemberLists(workspaceId)');
+  it('sources workspace-arm @ candidates from useWorkspaceMemberLists(armWorkspaceId)', () => {
+    expect(src).toContain('useWorkspaceMemberLists(armWorkspaceId)');
   });
 
-  it('never reads the global user / agent directories', () => {
+  it('sources viewer-arm @ candidates from the viewer OWNED agents, never a human directory', () => {
+    // The viewer arm now legitimately reads agents — but only the owned scope,
+    // and never the global human directory (a `direct_pair` names no humans
+    // through a roster).
+    expect(src).toContain("useAgents({ scope: 'owned'");
     expect(src).not.toContain('useUsers');
-    expect(src).not.toContain('useAgents');
   });
 
-  // #task:2001 review: `canResolveShorthandNow` is pure, so every branch test
-  // above stays green if `submit()` stops asking it — and the regression is
-  // invisible (a message that sends, renders a chip, and addresses nobody). These
-  // pin the three wiring facts that make the gate real.
-  it('gates the send on the gate, and on the roster having answered', () => {
+  // #task:2001 / #task:2147: `canResolveShorthandNow` is pure, so every branch test
+  // above stays green if `submit()` reads the wrong settle fact — and the regression
+  // is invisible (a message that sends, renders a chip, and addresses nobody). These
+  // pin the wiring facts that make the gate real AND arm-correct.
+  it('gates the send on the SAME arm source the picker read', () => {
     expect(src).toContain(
-      'canResolveShorthandNow(content, workspaceRosterKnown)',
+      'canResolveShorthandNow(content, mentionSource.sourceKnown)',
     );
-    expect(src).toContain('const workspaceRosterKnown = memberLists.data !==');
+    // The workspace arm's three-value authority: data present ⇒ answered.
+    expect(src).toContain('sourceKnown: memberLists.data !== undefined');
   });
 
-  it('waits for the authoritative roster instead of sending unresolved', () => {
-    // The waiting path must both refetch and rewrite with the roster it got back
-    // — rewriting with the stale closure resolver would defeat the wait.
-    expect(src).toContain('memberLists\n      .refetch()');
+  it('waits for the authoritative source per arm instead of sending unresolved', () => {
+    // The waiting path must refetch the CURRENT arm's source and rewrite with the
+    // resolver it got back — rewriting with the stale closure resolver, or waiting
+    // on the wrong arm's query, would defeat the wait.
+    expect(src).toContain('(await memberLists.refetch()).data');
     expect(src).toContain('buildShorthandResolver(roster.agents, roster.humans)');
+    expect(src).toContain('(await ownedAgentsQuery.refetch()).data');
+    expect(src).toContain('buildViewerShorthandResolver(owned)');
   });
 
-  it('hands the draft back rather than sending when the roster cannot be had', () => {
+  it('hands the draft back rather than sending when the source cannot be had', () => {
     expect(src).toContain('restoreDraft()');
   });
 });

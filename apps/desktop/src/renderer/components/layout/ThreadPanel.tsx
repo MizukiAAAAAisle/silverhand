@@ -48,6 +48,7 @@ import {
 } from '@/features/channels/hooks';
 import { isCommittedMessage } from '@/features/channels/pending-message';
 import type { MessageSeq } from '@silverhand/shared';
+import type { ComposerDirectory } from '@/features/conversations/pane-mode';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useJoinChannel } from '@/features/workspaces/hooks';
@@ -66,18 +67,14 @@ interface ThreadPanelProps {
    *  channel-ref nav), exactly as the primary `ChannelView` handles its own
    *  nullable `conversation.workspace_id`. */
   workspaceId: string | null;
-  /** Display name of the parent's workspace, resolved by the pane owner and
-   *  forwarded to the composer's `#` picker so it spells a semantic channel
-   *  locator (#task:2126). Null in a WIDER set than `workspaceId`: a `direct_pair`,
-   *  an unresolved workspace, AND a resolved Agent Space (unspellable by the
-   *  locator grammar — see `locatorWorkspaceName`); each falls the picker back to
-   *  `#conv:<id>`. */
-  workspaceName: string | null;
-  /** Whether the parent's container has a `#` channel namespace, forwarded to the
-   *  composer's `#` channel query. Required and un-defaulted: the parent
-   *  workspace ROW can still be unresolved while this pane is open, and a default
-   *  would silently claim a namespace that has not resolved (#task:2078). */
-  hasChannelNamespace: boolean;
+  /** The composer's candidate directory for this thread, projected by the pane
+   *  owner (App) from the PARENT conversation via `inheritedComposerDirectory` — a
+   *  thread has no placement of its own, so it inherits the parent's arm
+   *  (#task:2147). Threaded down whole; never re-derived here from `workspaceId`,
+   *  the route, or a lone boolean. A null parent (cold deep link before the parent
+   *  resolves) arrives as the `withheld` arm, so the thread composer withholds both
+   *  pickers rather than assuming a channel. */
+  directory: ComposerDirectory;
   /** The root (main-line) message whose thread this panel shows. */
   rootMessageId: string;
   /** Parent channel title, shown in the header subtitle. */
@@ -169,8 +166,7 @@ interface ThreadPanelProps {
 export function ThreadPanel({
   channelId,
   workspaceId,
-  workspaceName,
-  hasChannelNamespace,
+  directory,
   rootMessageId,
   parentTitle,
   closed = false,
@@ -1081,9 +1077,7 @@ export function ThreadPanel({
         <Composer
           key={`${channelId}#cluster#${rootMessageId}`}
           conversationId={channelId}
-          workspaceId={workspaceId}
-          workspaceName={workspaceName}
-          hasChannelNamespace={hasChannelNamespace}
+          directory={directory}
           threadRootId={rootMessageId}
           disabled={closed || rootCtx.isError || !rootCtx.root}
           archived={archived}
