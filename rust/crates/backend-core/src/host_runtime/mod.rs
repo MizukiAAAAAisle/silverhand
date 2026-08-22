@@ -239,6 +239,7 @@ pub enum HostInviteError {
     Persistence(#[from] PersistenceFailure),
 }
 
+#[derive(Clone)]
 pub struct CreateHostInvite<U, R, C> {
     unit_of_work: U,
     entropy: R,
