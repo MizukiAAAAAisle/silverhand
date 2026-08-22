@@ -7,4 +7,5 @@
 
 pub mod access;
 pub mod foundation_message;
+pub mod messaging;
 pub mod persistence;
