@@ -62,6 +62,7 @@
      `--bg-chat`(#FFFFFF)。冷中性一路，色温跟 `--shadow-base` (17,23,37) 同源，
      整屏不出现暖灰。 */
   --bg-base: #F2F5F9;
+  --activity-params-bg: var(--bg-base);
   --bg-primary: #EDF1F7;
   --bg-elevated: #E6EBF3;
   --bg-surface: #DEE3EB;

@@ -66,6 +66,7 @@
      它是 pane 级底色；需要凹一档的地方（task 列）由文件末尾的 scoped 规则
      显式给 `--bg-elevated`，不靠把 `--bg-primary` 整体压暗。 */
   --bg-base: #FFFFFF;
+  --activity-params-bg: var(--bg-base);
   --bg-primary: #FFFFFF;
   --bg-chat: #FFFFFF;
   --bg-channels-sidebar: #FFFFFF;

@@ -129,6 +129,9 @@
   --forza6-carrier-channels: #F6F7F1;/* list-pane carrier — paper −4 */
   /* ── Backgrounds (cool-neutral ladder for chat read area) ── */
   --bg-base: #F7F8F6;
+  /* Activity params block ground (borderless). Light panels are brighter than
+     `--bg-base`, so the block reads as a quiet recess; slack-dark lifts it. */
+  --activity-params-bg: var(--bg-base);
   --bg-primary: #ECEEEB;
   --bg-elevated: #E5E8E4;
   --bg-surface: #DDE0DC;
