@@ -15,8 +15,8 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::foundation_message::{
     Message, MessageCreatedFact, MessagePageFact, MessageReadUnitOfWork, MessageUnitOfWork,
-    PersistenceFailure,
 };
+use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},

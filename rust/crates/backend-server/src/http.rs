@@ -9,9 +9,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use silverhand_backend_core::foundation_message::{
-    MessageReadUnitOfWork, MessageUnitOfWork, PersistenceFailure,
-};
+use silverhand_backend_core::foundation_message::{MessageReadUnitOfWork, MessageUnitOfWork};
+use silverhand_backend_core::persistence::PersistenceFailure;
 use tokio::sync::broadcast;
 use tower_http::trace::TraceLayer;
 use tracing::info_span;

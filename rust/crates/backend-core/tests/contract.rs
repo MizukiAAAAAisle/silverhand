@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use silverhand_backend_core::foundation_message::{
     Message, MessageCreatedFact, MessagePageFact, MessageReadUnitOfWork, MessageUnitOfWork,
-    PersistenceFailure,
 };
+use silverhand_backend_core::persistence::PersistenceFailure;
 
 /// Implements both ports with no persistence technology in scope, backed by an
 /// in-memory vector so reads can reflect prior writes.

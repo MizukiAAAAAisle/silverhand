@@ -3,7 +3,7 @@
 
 use std::future::Future;
 
-use thiserror::Error;
+use crate::persistence::PersistenceFailure;
 
 /// A persisted message, as the application sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,29 +26,6 @@ pub struct MessageCreatedFact {
 pub struct MessagePageFact {
     pub total: i64,
     pub latest: Option<Message>,
-}
-
-/// Infrastructure failed. The cause travels as an erased source, so the chain
-/// survives to the boundary that renders it while this layer gains no driver
-/// type.
-#[derive(Debug, Error)]
-#[error("persistence operation failed")]
-pub struct PersistenceFailure {
-    #[source]
-    source: Box<dyn std::error::Error + Send + Sync + 'static>,
-}
-
-impl PersistenceFailure {
-    /// Wrap a concrete infrastructure error as an erased source; the adapter
-    /// keeps its driver type, callers only ever see `PersistenceFailure`.
-    pub fn from_source<E>(source: E) -> Self
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        Self {
-            source: Box::new(source),
-        }
-    }
 }
 
 /// Create a message and its durable event as one semantic atomic write. The

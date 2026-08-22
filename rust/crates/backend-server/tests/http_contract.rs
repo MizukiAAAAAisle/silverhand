@@ -12,8 +12,8 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation_message::{
     Message, MessageCreatedFact, MessagePageFact, MessageReadUnitOfWork, MessageUnitOfWork,
-    PersistenceFailure,
 };
+use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_server::{
     http,
     wire::{FOUNDATION_EVENT_WEBSOCKET_PATH, FOUNDATION_MESSAGE_PATH, HEALTH_PATH},
