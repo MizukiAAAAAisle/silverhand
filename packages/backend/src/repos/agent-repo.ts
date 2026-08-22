@@ -21,19 +21,17 @@ function newId(): string {
 }
 
 /**
- * The read shape every agent-DTO query produces: a plain `agents` row plus the
- * joined host's display columns. `agents.host_id` is NOT NULL, but the JOIN is
- * LEFT so a lingering agent whose host row was removed still maps (host label →
- * null) instead of vanishing from the list. `host_name` is aliased away from
- * `agents.name` to avoid the column collision; `agents` has no `display_label`.
+ * A plain `agents` row plus the LEFT-joined host's display columns. The join is
+ * LEFT (not INNER) so an agent whose host row is gone still maps, with a null
+ * label. `host_name` is aliased off `agents.name` to avoid the column clash.
  */
 export type AgentRowWithHost = AgentRow & {
   host_display_label: string | null;
   host_name: string | null;
 };
 
-/** `SELECT` prefix shared by every read: `agents.*` plus the host label columns,
- *  LEFT-joined so the row survives a missing host. Callers append WHERE/ORDER. */
+/** Every agent-DTO read selects through this: `agents.*` plus the host label
+ *  columns, LEFT-joined so a missing host does not drop the row. */
 const AGENT_SELECT_WITH_HOST =
   'SELECT a.*, h.display_label AS host_display_label, h.name AS host_name ' +
   'FROM agents a LEFT JOIN hosts h ON h.id = a.host_id';
@@ -51,9 +49,8 @@ export function agentRowToDto(row: AgentRowWithHost): AgentDto {
     fast_mode:
       fast === null || fast === undefined ? null : Boolean(fast),
     host_id: row.host_id,
-    // `display_label ?? name` priority, mirroring shared/host-diagnostics.ts:
-    // a claimed-but-unnamed host has a null label but always a stable `name`.
-    // Null survives only when the LEFT JOIN found no host row at all.
+    // `display_label ?? name`, matching shared/host-diagnostics.ts. Null only
+    // when the LEFT JOIN found no host row.
     host_label:
       row.host_display_label?.trim() || row.host_name || null,
     description: row.description,
@@ -114,10 +111,9 @@ export class AgentRepo {
   }
 
   /**
-   * Id-only projection of the agents bound to a host — the `agent_changed`
-   * fan-out set for a host rename (`PATCH /api/hosts/:id`). Kept separate from
-   * {@link listByHost} so the invalidation broadcast does not build and discard
-   * full DTOs (which now JOIN `hosts`) just to read their ids.
+   * Ids of the agents on a host — the `agent_changed` fan-out set for a host
+   * rename. Kept separate from {@link listByHost} so the broadcast does not
+   * build full DTOs (which JOIN `hosts`) only to read their ids.
    */
   listIdsByHost(hostId: string): string[] {
     return this.db

@@ -257,7 +257,8 @@ describe('agent materialization fields (D4.d v33)', () => {
     ).toBe(true);
   });
 
-  it('rejects unknown materialization_status values', () => {    expect(
+  it('rejects unknown materialization_status values', () => {
+    expect(
       AgentDtoSchema.safeParse({
         ...baseAgent,
         materialization_status: 'archived',

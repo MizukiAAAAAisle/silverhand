@@ -858,12 +858,10 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
         );
       case 'renamed':
       case 'finalized':
-        // Post-commit identity fan-out: `display_label` is denormalized onto
-        // `AgentDto.host_label`, and the host mutation touched no `agents` row,
-        // so nothing else would refresh viewers who see this computer's agents
-        // (the host list is owner-scoped; a non-owner has only the agent read).
-        // `updateHost` has already committed, so this never announces a label a
-        // rolled-back rename would leave unreadable.
+        // Post-commit fan-out: `display_label` is denormalized onto
+        // `AgentDto.host_label`, and this mutation touches no `agents` row, so
+        // nothing else refreshes it. After the commit, so a rolled-back rename
+        // never announces a label clients would read back unchanged.
         for (const agentId of agents.listIdsByHost(hostId)) {
           ctx.agentService.publishRefreshed(agentId);
         }

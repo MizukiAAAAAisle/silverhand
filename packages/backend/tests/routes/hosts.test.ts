@@ -2233,6 +2233,57 @@ describe('host routes', () => {
       expect(body.host.name).toBe(host!.name);
     });
 
+    it('fans out agent_changed for every agent on the host on a successful rename', async () => {
+      // `AgentDto.host_label` denormalizes this host's name, so a rename that
+      // does not refresh the host's agents leaves that label stale for every
+      // viewer (#task:2153). Repo-created agents emit nothing themselves, so
+      // any captured id came from the rename.
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+      const agents = new AgentRepo(t.ctx.db);
+      const a = agents.create({ name: 'a', runtime: 'claude' }, host.id, t.viewerUserId);
+      const b = agents.create({ name: 'b', runtime: 'claude' }, host.id, t.viewerUserId);
+
+      const changed: string[] = [];
+      const off = t.ctx.events.subscribeScope('app', e => {
+        if (e.kind === 'agent_changed') changed.push((e.payload as any).agent_id);
+      });
+      const res = await sessionHttp(t, userToken).patch(apiPaths.host(host.id), {
+        display_label: 'Studio Mac',
+      });
+      off();
+
+      expect(res.status).toBe(200);
+      expect(new Set(changed)).toEqual(new Set([a.id, b.id]));
+    });
+
+    it('does NOT fan out agent_changed when the rename is refused', async () => {
+      // The invalidation edge is gated on the committed rename: a refusal
+      // (here an over-long label → 400, no mutation) must not announce a label
+      // change that never happened.
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+      new AgentRepo(t.ctx.db).create({ name: 'a', runtime: 'claude' }, host.id, t.viewerUserId);
+
+      const changed: string[] = [];
+      const off = t.ctx.events.subscribeScope('app', e => {
+        if (e.kind === 'agent_changed') changed.push((e.payload as any).agent_id);
+      });
+      const res = await sessionHttp(t, userToken).patch(apiPaths.host(host.id), {
+        display_label: 'A'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 1),
+      });
+      off();
+
+      expect(res.status).toBe(400);
+      expect(changed).toEqual([]);
+    });
+
     it('clears the label with null', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({

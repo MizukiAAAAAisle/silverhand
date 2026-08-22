@@ -59,12 +59,9 @@ export function AgentProfileCard({
   const canEdit = canEditAgentProfile(viewerForPermissions, agent);
   const update = useUpdateAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
-  // Computer name is read from the server-resolved `agent.host_label`, NOT a
-  // local owned-hosts lookup: `GET /api/hosts` is owner-scoped, so when the
-  // viewer does not own this agent's computer the local lookup misses and the
-  // label collapses to "Unknown computer" (#task:2153). `host_label` crosses
-  // that ownership boundary; it is null only when the host row is truly gone,
-  // which is the sole case that still falls back to the unknown label.
+  // Server-resolved label, not a local owned-hosts lookup: `GET /api/hosts` is
+  // owner-scoped, so a non-owner viewer's lookup would miss and collapse to
+  // "Unknown computer". `host_label` is null only when the host is truly gone.
   const computerName = agent.host_label ?? UNKNOWN_COMPUTER_LABEL;
   const [nameEditing, setNameEditing] = useState(false);
   const [descriptionEditing, setDescriptionEditing] = useState(false);

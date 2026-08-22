@@ -160,18 +160,12 @@ export class AgentService {
   }
 
   /**
-   * Broadcast an identity refresh for an agent whose DTO changed because of a
-   * fact OUTSIDE the `agents` row — today, a host rename (`PATCH
-   * /api/hosts/:id` → `display_label`), which `AgentDto.host_label`
-   * denormalizes. The host repo mutation does not touch `agents.updated_at`, so
-   * the IDENTITY_CARRIERS ripple would never fire on its own; the host-rename
-   * route calls this for every agent on the renamed host so the denormalized
-   * label is not the forever-stale second read face `AgentDtoSchema` forbids.
-   *
-   * Reuses the SINGLE `agent_changed` seam (id-only payload; consumers refetch)
-   * rather than minting a host-specific event — the reaction is identical.
-   * MUST be called post-commit (the rename is durable) so a rolled-back rename
-   * never announces a label clients would then fail to read back.
+   * Announce an identity refresh for an agent whose DTO changed because of a
+   * fact outside its `agents` row — a host rename, which `AgentDto.host_label`
+   * denormalizes. The host mutation never bumps `agents.updated_at`, so without
+   * this call the label would go stale. Reuses the single `agent_changed` seam
+   * (consumers refetch). MUST be post-commit: a rolled-back rename must not
+   * announce a label clients would then read back unchanged.
    */
   publishRefreshed(id: string): void {
     this.publishChanged(id);
