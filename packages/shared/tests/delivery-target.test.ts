@@ -13,6 +13,7 @@ import {
   addressTokenByteLength,
   addressableId,
   conversationAddressOf,
+  decodeTargetForDisplay,
   fixedConversationTitle,
   fixedWorkspaceName,
   formatDeliveryTarget,
@@ -675,6 +676,61 @@ describe('addressability is a property of the type', () => {
       expect(token, raw).toBe(`#conv:${raw}`);
       expect(parseDeliveryTarget(token), raw).toBeNull();
       expect(parseDeliveryTargetInput(token), raw).toBeNull();
+    }
+  });
+});
+
+/**
+ * `decodeTargetForDisplay` — the readable inverse of the address formatters, and
+ * DISPLAY ONLY. Locked here beside the grammar so a change to either direction
+ * shows up in one maintenance face: it must round-trip the encoder over every
+ * escaped character (`/`, `%`, and the Unicode space class) while leaving the
+ * carrier's raw members (`#`, `?`, `<`, `>`) untouched, and it must fall back to
+ * the raw token — never a best-effort decode — for anything not in canonical
+ * form.
+ */
+describe('decodeTargetForDisplay', () => {
+  it('round-trips the encoder: escaped bytes decode, raw members pass through', () => {
+    // A title exercising every character the target carrier escapes (`/ %` and a
+    // full-width space, U+3000) alongside the ones it leaves raw (`# ? < >`).
+    const title = 'a/b%c#d?e<f>g　h';
+    const { token, fallback } = formatStreamAddressToken(
+      { conversationId: addressableId(CONV)!, threadRootId: null },
+      { kind: 'named', workspace: fixedWorkspaceName('silverhand'), title: fixedConversationTitle(title) },
+    );
+    expect(fallback).toBeNull();
+    // The escaped bytes come back to their characters; the raw members are
+    // unchanged; the structural `/` between segments stays a separator.
+    expect(decodeTargetForDisplay(token)).toBe(`#silverhand/${title}`);
+  });
+
+  it('decodes each segment while separators and the thread suffix stay grammar', () => {
+    expect(decodeTargetForDisplay('#silverhand/UI%2FUX%20优化')).toBe(
+      '#silverhand/UI/UX 优化',
+    );
+    // The `/thread:<id>` suffix is grammar, not a name byte — passed through.
+    expect(
+      decodeTargetForDisplay(`#silverhand/room${THREAD_ADDRESS_SEPARATOR}${CONV_ALT}`),
+    ).toBe(`#silverhand/room${THREAD_ADDRESS_SEPARATOR}${CONV_ALT}`);
+  });
+
+  it('leaves the id and pair forms untouched — neither carries escapes', () => {
+    expect(decodeTargetForDisplay(`${CONVERSATION_ADDRESS_PREFIX}${CONV}`)).toBe(
+      `${CONVERSATION_ADDRESS_PREFIX}${CONV}`,
+    );
+    expect(decodeTargetForDisplay(`${DIRECT_PAIR_SHORTHAND_PREFIX}shiki`)).toBe(
+      `${DIRECT_PAIR_SHORTHAND_PREFIX}shiki`,
+    );
+  });
+
+  it('returns the raw token for a non-canonical escape rather than guessing', () => {
+    for (const raw of [
+      '#silverhand/a%2fb', // lowercase hex — a second spelling, not decoded
+      '#silverhand/a%',    // truncated escape
+      '#silverhand/a%ZZb', // unknown escape
+      'not-a-target',      // not the named arm at all
+    ]) {
+      expect(decodeTargetForDisplay(raw), raw).toBe(raw);
     }
   });
 });

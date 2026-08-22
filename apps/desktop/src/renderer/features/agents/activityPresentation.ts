@@ -1,4 +1,5 @@
 import type { ConversationActivityEvent, ToolOutcome } from '@silverhand/shared';
+import { decodeTargetForDisplay } from '@silverhand/shared';
 
 /**
  * Presentation helpers for the Activity timeline. Pure, framework-free, and
@@ -270,7 +271,10 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
     // not what it said. `--target` is quote- or bare-valued; take the first one.
     const m = /--target[=\s]+(?:'([^']*)'|"([^"]*)"|(\S+))/.exec(args);
     const target = m?.[1] ?? m?.[2] ?? m?.[3] ?? null;
-    if (target) arg = `→ ${target}`;
+    // Show the readable spelling: `#silverhand/UI%2FUX%20优化` reads as
+    // `#silverhand/UI/UX 优化`. Decode is DISPLAY ONLY (`decodeTargetForDisplay`)
+    // and the raw token is never used for anything else here.
+    if (target) arg = `→ ${decodeTargetForDisplay(target)}`;
   }
   return { verb: label, arg, detail: null };
 }

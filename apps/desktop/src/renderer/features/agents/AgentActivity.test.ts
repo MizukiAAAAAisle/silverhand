@@ -194,7 +194,7 @@ describe('presentToolCall', () => {
     ).not.toBe('Bash');
   });
 
-  it('message send surfaces its --target as the operand, never the body', () => {
+  it('message send surfaces its --target as the operand, decoded, never the body', () => {
     // Quoted target after the label: `Message send → <target>`.
     const quoted = presentToolCall('Bash', {
       command: "silverhand message send --target '#silverhand/ui polish'",
@@ -204,6 +204,20 @@ describe('presentToolCall', () => {
     expect(
       presentToolCall('Bash', { command: 'silverhand message send --target=dm:@shiki' }).arg,
     ).toBe('→ dm:@shiki');
+    // The encoded name form is shown readably: `%2F` is an in-segment slash and
+    // `%20` a space, while the structural `/` between segments stays a separator.
+    expect(
+      presentToolCall('Bash', {
+        command: "silverhand message send --target '#silverhand/UI%2FUX%20优化'",
+      }).arg,
+    ).toBe('→ #silverhand/UI/UX 优化');
+    // A non-canonical escape (lowercase hex) is not decoded — the raw token shows
+    // exactly as sent rather than a best-effort guess.
+    expect(
+      presentToolCall('Bash', {
+        command: "silverhand message send --target '#silverhand/a%2fb'",
+      }).arg,
+    ).toBe('→ #silverhand/a%2fb');
     // The heredoc/STDIN body is never mixed into the summary — only the target.
     const withBody = presentToolCall('Bash', {
       command: "silverhand message send --target '#conv:abc' <<'EOF'\nhello --target sneaky\nEOF",

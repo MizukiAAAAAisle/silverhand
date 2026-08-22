@@ -2,6 +2,7 @@ import { ENTITY_NAME_MAX_LENGTH, PARTICIPANT_HANDLE_PATTERN } from './api/name.j
 import {
   ADDRESS_TOKEN_MAX_BYTES,
   addressTokenByteLength,
+  TARGET_SEGMENT_CODEC,
 } from './address-segment.js';
 import {
   formatConversationAddressSegment,
@@ -649,4 +650,42 @@ export function formatStreamAddressToken(
     case 'id_only':
       return { token: formatDeliveryTarget(stream), fallback: null };
   }
+}
+
+/**
+ * The human-READABLE spelling of a target token — the display inverse of the
+ * address formatters above, and DISPLAY ONLY.
+ *
+ * Here, beside the formatters and sharing their one segment engine (@shiki: the
+ * two directions live in one file so a grammar change surfaces both). The named
+ * arm is the only form that carries escapes — `#conv:<id>` and `dm:@<handle>`
+ * spell their bodies from character classes that need none — so this decodes its
+ * two segments with {@link TARGET_SEGMENT_CODEC}, the SAME codec
+ * {@link formatStreamAddressToken} encodes them with (via the name domains'
+ * segment formatters). Encode and decode cannot drift because neither writes its
+ * own escape table.
+ *
+ * NEVER an input to identity, navigation or resolution. A decoded `%2F` becomes
+ * an in-segment `/` that the parser would read as a segment boundary, and a
+ * decoded space would split the header token — so the RAW token stays the
+ * canonical value a surface stores or hands back to `--target`, and this string
+ * only ever reaches a label. The structural `/` and the `/thread:<id>` suffix are
+ * NOT decoded (they are grammar, not name bytes); they pass through verbatim.
+ *
+ * TOTAL, with a raw fallback. A token that is not the named arm returns
+ * unchanged (nothing to decode), and a named arm whose segment is not in
+ * canonical form for this carrier (lowercase hex, an unknown `%XX`, a raw
+ * separator) makes the segment decoder return `null` — in which case the raw
+ * token is returned as-is rather than a best-effort decode, so a malformed
+ * target displays exactly as it was sent instead of silently mutating.
+ */
+export function decodeTargetForDisplay(raw: string): string {
+  const match = NAMED_STREAM_RE.exec(raw);
+  if (!match) return raw;
+  const workspace = TARGET_SEGMENT_CODEC.decode(match[1]!);
+  const title = TARGET_SEGMENT_CODEC.decode(match[2]!);
+  if (workspace === null || title === null) return raw;
+  const suffix =
+    match[3] === undefined ? '' : `${THREAD_ADDRESS_SEPARATOR}${match[3]}`;
+  return `${NAMED_STREAM_ADDRESS_PREFIX}${workspace}/${title}${suffix}`;
 }
