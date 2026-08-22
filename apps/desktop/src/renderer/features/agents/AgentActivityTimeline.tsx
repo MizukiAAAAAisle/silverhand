@@ -542,7 +542,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
     return <DiffView removed={detail.removed} added={detail.added} />;
   }
   return (
-    <pre className={cn('whitespace-pre-wrap break-all bg-bg-base px-2 py-1 font-mono text-[length:var(--text-meta)] leading-relaxed', ACTIVITY_META)}>
+    <pre className={cn('whitespace-pre-wrap break-all bg-[var(--activity-params-bg)] px-2 py-1 font-mono text-[length:var(--text-meta)] leading-relaxed', ACTIVITY_META)}>
       {detail.text}
     </pre>
   );

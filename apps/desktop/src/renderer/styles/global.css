@@ -1771,6 +1771,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 :root {
   --bg-inset: color-mix(in oklab, var(--text-primary) 7%, transparent);
   --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
+  /* Ground for the Activity tool-params block (borderless). Defaults to
+     `--bg-base`, which reads on the light themes' brighter panel; slack-dark
+     lifts it to a container surface since its panel IS `--bg-base` and the
+     block would otherwise vanish. */
+  --activity-params-bg: var(--bg-base);
 }
 
 /* ── Own-message bubble (#task:1838) ──────────────────────────────────

@@ -126,6 +126,9 @@
   /* Dark analog of the light themes' `oklab(0 0 0 / 0.4)` — a white alpha wash
      of matching strength; a literal black would sink into the ground. */
   --activity-meta: oklab(1 0 0 / 0.4);
+  /* Params block ground: panel here IS `--bg-base`, so lift to the container
+     surface — a borderless block on `--bg-base` would be invisible. */
+  --activity-params-bg: var(--bg-elevated);
   --text-inverse: #1A1D21;        /* dark text，反色用 — 浅底场景下 */
   --text-island: #D1D2D3;
   /* inline-code 字色：暖橙 #E8912D（Slack 实际 inline code 颜色）；
