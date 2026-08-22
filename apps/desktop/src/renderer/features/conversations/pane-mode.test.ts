@@ -365,10 +365,69 @@ describe('composerDirectory — the three-arm authority, exhaustive over the mod
       workspaceName: 'Other',
       hasChannelNamespace: false,
     };
-    expect(composerDirectory(MODE_SAMPLES.direct_message, COORD)).toEqual({ kind: 'viewer' });
-    expect(composerDirectory(MODE_SAMPLES.direct_message, other)).toEqual({ kind: 'viewer' });
+    expect(composerDirectory(MODE_SAMPLES.direct_message, COORD)).toEqual({
+      kind: 'viewer',
+      counterpartAgent: null,
+    });
+    expect(composerDirectory(MODE_SAMPLES.direct_message, other)).toEqual({
+      kind: 'viewer',
+      counterpartAgent: null,
+    });
     expect(composerDirectory(MODE_SAMPLES.unsupported, COORD)).toEqual({ kind: 'withheld' });
     expect(composerDirectory(MODE_SAMPLES.unsupported, other)).toEqual({ kind: 'withheld' });
+  });
+
+  it('carries an active agent counterpart into the viewer arm; null for human / deleted', () => {
+    // The counterpart's mentionable identity rides the arm even when the viewer
+    // does not own it. A human counterpart and a deleted agent (kind+id only, no
+    // name/runtime) both project to null.
+    const agentCounterpart = {
+      kind: 'direct_message',
+      counterpart: {
+        status: 'active',
+        kind: 'agent',
+        id: 'a-9',
+        name: 'norman',
+        display_name: 'Norman',
+        avatar_url: null,
+        runtime: 'claude',
+      },
+    } as const;
+    expect(composerDirectory(agentCounterpart, COORD)).toEqual({
+      kind: 'viewer',
+      counterpartAgent: {
+        id: 'a-9',
+        name: 'norman',
+        display_name: 'Norman',
+        avatar_url: null,
+        runtime: 'claude',
+      },
+    });
+    const humanCounterpart = {
+      kind: 'direct_message',
+      counterpart: {
+        status: 'active',
+        kind: 'human',
+        id: 'u-3',
+        name: 'shiki',
+        display_name: 'shiki',
+        avatar_url: null,
+        runtime: null,
+      },
+    } as const;
+    expect(composerDirectory(humanCounterpart, COORD)).toEqual({
+      kind: 'viewer',
+      counterpartAgent: null,
+    });
+    // A deleted agent counterpart projects to null, not an id-only row.
+    const deletedAgentCounterpart = {
+      kind: 'direct_message',
+      counterpart: { status: 'deleted', kind: 'agent', id: 'a-gone' },
+    } as const;
+    expect(composerDirectory(deletedAgentCounterpart, COORD)).toEqual({
+      kind: 'viewer',
+      counterpartAgent: null,
+    });
   });
 
   it('maps a DirectPair to the viewer arm and an unknown placement to withheld', () => {

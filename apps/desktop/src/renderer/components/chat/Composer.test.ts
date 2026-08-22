@@ -26,6 +26,7 @@ import {
   filterMentionPeople,
   filterViewerChannels,
   formatPickInsertion,
+  mergeViewerMentionAgents,
   selectMentionCandidates,
   selectPickerView,
   selectViewerMentionCandidates,
@@ -691,25 +692,50 @@ describe('selectMentionCandidates', () => {
 });
 
 describe('selectViewerMentionCandidates', () => {
-  // The viewer arm's `@` set (#task:2147): the viewer's own canonical-owned
-  // agents, flat and agents-only — a direct_pair has no roster, so no humans and
-  // no In/Other split.
+  // The viewer arm's `@` sections over the pre-merged set (#task:2147): split by
+  // agent id, the counterpart row files under "In this channel", the rest under
+  // "Other channels".
   const mkAgent = (n: number) =>
     agent({ id: `a-${n}`, name: `a${n}`, display_name: `A${n}` });
 
-  it('offers the owned agents flat, every row inConversation:true', () => {
-    const { items, hiddenCount } = selectViewerMentionCandidates(
-      [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
+  it('files the counterpart agent first (inConversation:true), the rest after (false)', () => {
+    const { items } = selectViewerMentionCandidates(
+      [
+        agent({ id: 'a-1', name: 'alice', display_name: 'Alice' }),
+        agent({ id: 'a-2', name: 'bob', display_name: 'Bob' }),
+      ],
+      'a-2',
       '',
     );
-    expect(items).toEqual([
-      {
-        kind: 'agent',
-        agent: agent({ id: 'a-1', name: 'alice', display_name: 'Alice' }),
-        inConversation: true,
-      },
+    expect(
+      items.map(i => (i.kind === 'agent' ? [i.agent.id, i.inConversation] : null)),
+    ).toEqual([
+      ['a-2', true],
+      ['a-1', false],
     ]);
-    expect(hiddenCount).toBe(0);
+  });
+
+  it('leaves the in-section empty when the counterpart is null — never fabricated', () => {
+    const { items } = selectViewerMentionCandidates(
+      [
+        agent({ id: 'a-1', name: 'alice', display_name: 'Alice' }),
+        agent({ id: 'a-2', name: 'bob', display_name: 'Bob' }),
+      ],
+      null,
+      '',
+    );
+    expect(items.every(i => i.kind === 'agent' && !i.inConversation)).toBe(true);
+  });
+
+  it('leaves the in-section empty when the counterpart id is absent from the set', () => {
+    // Keyed by id: a counterpart id matching no row in the (already-merged) set
+    // files nothing into "In this channel" — never fabricated.
+    const { items } = selectViewerMentionCandidates(
+      [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
+      'a-999',
+      '',
+    );
+    expect(items.every(i => i.kind === 'agent' && !i.inConversation)).toBe(true);
   });
 
   it('matches by name and display_name, case-insensitively', () => {
@@ -718,6 +744,7 @@ describe('selectViewerMentionCandidates', () => {
         agent({ id: 'a-1', name: 'alice', display_name: 'Alice' }),
         agent({ id: 'a-2', name: 'bob', display_name: 'Bob' }),
       ],
+      null,
       'ALI',
     );
     expect(items.map(i => (i.kind === 'agent' ? i.agent.id : null))).toEqual([
@@ -725,12 +752,52 @@ describe('selectViewerMentionCandidates', () => {
     ]);
   });
 
-  it('caps at 10 and reports the truncated remainder', () => {
-    const owned = Array.from({ length: 13 }, (_, i) => mkAgent(i));
-    const { items, hiddenCount } = selectViewerMentionCandidates(owned, '');
-    expect(items).toHaveLength(10);
+  it('caps the "other" section at 10 but always keeps the counterpart', () => {
+    // 13 others + the counterpart. The counterpart shows regardless; the other
+    // section fills to 10, and the remaining 3 count into hiddenCount.
+    const owned = [
+      agent({ id: 'a-cp', name: 'cp', display_name: 'Counterpart' }),
+      ...Array.from({ length: 13 }, (_, i) => mkAgent(i)),
+    ];
+    const { items, hiddenCount } = selectViewerMentionCandidates(owned, 'a-cp', '');
+    expect(items).toHaveLength(11);
+    expect(items[0]).toEqual({
+      kind: 'agent',
+      agent: agent({ id: 'a-cp', name: 'cp', display_name: 'Counterpart' }),
+      inConversation: true,
+    });
     expect(hiddenCount).toBe(3);
-    expect(items.every(i => i.kind === 'agent' && i.inConversation)).toBe(true);
+  });
+});
+
+describe('mergeViewerMentionAgents', () => {
+  // The single merge truth the picker, avatar prefetch, and send-time resolver all
+  // read (#task:2147): the DM counterpart (a conversation fact, NOT gated on owning
+  // it) UNION the viewer's owned agents, counterpart first, deduped by id.
+  it('prepends a non-owned counterpart the viewer does not own', () => {
+    const cp = agent({ id: 'a-cp', name: 'cp', display_name: 'Counterpart' });
+    const owned = [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })];
+    expect(mergeViewerMentionAgents(cp, owned).map(a => a.id)).toEqual([
+      'a-cp',
+      'a-1',
+    ]);
+  });
+
+  it('keeps the counterpart once, first, when it is also owned', () => {
+    const cp = agent({ id: 'a-1', name: 'alice', display_name: 'Alice' });
+    const owned = [
+      agent({ id: 'a-0', name: 'zero', display_name: 'Zero' }),
+      agent({ id: 'a-1', name: 'alice', display_name: 'Alice' }),
+    ];
+    expect(mergeViewerMentionAgents(cp, owned).map(a => a.id)).toEqual([
+      'a-1',
+      'a-0',
+    ]);
+  });
+
+  it('returns the owned set unchanged when there is no counterpart', () => {
+    const owned = [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })];
+    expect(mergeViewerMentionAgents(null, owned)).toBe(owned);
   });
 });
 
@@ -986,14 +1053,13 @@ describe('selectPickerView — the render seam that consumes settledness', () =>
   });
 });
 
-describe('mention source wiring (falsifier for the per-arm candidate boundary)', () => {
-  // The pure selectors accept any arrays, so reverting the composer to a global
-  // directory — or wiring the wrong arm's source into the send gate — would leave
-  // every pure test above green. This fence pins the wiring facts that make the
-  // per-arm boundary real (#task:2147): the workspace arm feeds the `@` picker
-  // from the workspace-scoped member lists, the viewer arm from the viewer's OWN
-  // agents, and the send gate reads the SAME arm source the picker read.
-  // Source-text, not a DOM/structure assertion.
+describe('mention source wiring per arm (#task:2147)', () => {
+  // The pure selectors accept any arrays, so a global directory or the wrong arm's
+  // source wired into the send gate would leave the pure tests above green. This
+  // fence pins the wiring: the workspace arm feeds the `@` picker from the
+  // workspace-scoped member lists, the viewer arm from the viewer's owned agents,
+  // and the send gate reads the same arm source the picker read. Source-text, not a
+  // DOM/structure assertion.
   const src = readFileSync(
     fileURLToPath(new URL('./Composer.tsx', import.meta.url)),
     'utf8',
@@ -1003,7 +1069,7 @@ describe('mention source wiring (falsifier for the per-arm candidate boundary)',
     expect(src).toContain('useWorkspaceMemberLists(armWorkspaceId)');
   });
 
-  it('sources viewer-arm @ candidates from the viewer OWNED agents, never a human directory', () => {
+  it('sources viewer-arm @ candidates from the viewer owned agents, never a human directory', () => {
     // The viewer arm now legitimately reads agents — but only the owned scope,
     // and never the global human directory (a `direct_pair` names no humans
     // through a roster).
@@ -1011,11 +1077,10 @@ describe('mention source wiring (falsifier for the per-arm candidate boundary)',
     expect(src).not.toContain('useUsers');
   });
 
-  // #task:2001 / #task:2147: `canResolveShorthandNow` is pure, so every branch test
-  // above stays green if `submit()` reads the wrong settle fact — and the regression
-  // is invisible (a message that sends, renders a chip, and addresses nobody). These
-  // pin the wiring facts that make the gate real AND arm-correct.
-  it('gates the send on the SAME arm source the picker read', () => {
+  // `canResolveShorthandNow` is pure, so the branch tests above stay green even if
+  // `submit()` reads the wrong settle fact. These pin the gate to the arm the picker
+  // read (#task:2001 / #task:2147).
+  it('gates the send on the same arm source the picker read', () => {
     expect(src).toContain(
       'canResolveShorthandNow(content, mentionSource.sourceKnown)',
     );
@@ -1024,13 +1089,17 @@ describe('mention source wiring (falsifier for the per-arm candidate boundary)',
   });
 
   it('waits for the authoritative source per arm instead of sending unresolved', () => {
-    // The waiting path must refetch the CURRENT arm's source and rewrite with the
-    // resolver it got back — rewriting with the stale closure resolver, or waiting
-    // on the wrong arm's query, would defeat the wait.
+    // The waiting path refetches the current arm's source and rewrites with the
+    // resolver it got back, not the stale closure resolver.
     expect(src).toContain('(await memberLists.refetch()).data');
     expect(src).toContain('buildShorthandResolver(roster.agents, roster.humans)');
     expect(src).toContain('(await ownedAgentsQuery.refetch()).data');
-    expect(src).toContain('buildViewerShorthandResolver(owned)');
+    // The viewer resolver reads the same merged set the picker read, so a picked
+    // non-owned counterpart still resolves on send.
+    expect(src).toContain('buildViewerShorthandResolver(');
+    expect(src).toContain(
+      'mergeViewerMentionAgents(directory.counterpartAgent, owned)',
+    );
   });
 
   it('hands the draft back rather than sending when the source cannot be had', () => {

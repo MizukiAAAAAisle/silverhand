@@ -33,10 +33,22 @@
  * falling through. The arm is the point: an unknown placement fails safe.
  */
 import type {
+  AgentDto,
   ConversationPlacementKind,
   DirectPairCounterpart,
 } from '@silverhand/shared';
 import type { ConversationPaneDescriptor } from './pane-descriptor';
+
+/**
+ * The mentionable identity of an agent — what the composer's `@` picker, avatar
+ * prefetch, and send-time resolver read. A structural subset of both {@link AgentDto}
+ * and the active-agent arm of {@link DirectPairCounterpart}, so a DM counterpart and
+ * an owned agent fill one candidate list without a cast (#task:2147).
+ */
+export type MentionAgent = Pick<
+  AgentDto,
+  'id' | 'name' | 'display_name' | 'avatar_url' | 'runtime'
+>;
 
 export type ConversationPaneMode =
   /** A conversation inside a workspace container. `workspaceId` stays nullable
@@ -248,7 +260,16 @@ export type ComposerDirectory =
       workspaceName: string | null;
       hasChannelNamespace: boolean;
     }
-  | { kind: 'viewer' }
+  | {
+      kind: 'viewer';
+      /** The DM's counterpart when it is an active agent — a conversation fact, not
+       *  gated on viewer ownership, so a counterpart the viewer does not own is still
+       *  a candidate (filed under "In this channel"). null for a human / deleted /
+       *  unresolved counterpart. The picker merges it with the viewer's owned agents
+       *  by id and the send-time resolver reads that same set, so a picked non-owned
+       *  counterpart still resolves on send. */
+      counterpartAgent: MentionAgent | null;
+    }
   | { kind: 'withheld' };
 
 /** Workspace-derived facts the `workspace` arm carries — resolved by the pane
@@ -278,8 +299,25 @@ export function composerDirectory(
         workspaceName: workspace.workspaceName,
         hasChannelNamespace: workspace.hasChannelNamespace,
       };
-    case 'direct_message':
-      return { kind: 'viewer' };
+    case 'direct_message': {
+      // The counterpart is a candidate only when it is an active agent: the deleted
+      // arm carries no name/runtime to mention and a human has no `@`-agent identity,
+      // so both project to null.
+      const c = mode.counterpart;
+      return {
+        kind: 'viewer',
+        counterpartAgent:
+          c && c.status === 'active' && c.kind === 'agent'
+            ? {
+                id: c.id,
+                name: c.name,
+                display_name: c.display_name,
+                avatar_url: c.avatar_url,
+                runtime: c.runtime,
+              }
+            : null,
+      };
+    }
     case 'unsupported':
       return { kind: 'withheld' };
   }

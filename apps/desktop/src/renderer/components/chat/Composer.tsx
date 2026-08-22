@@ -48,7 +48,10 @@ import {
   type WorkspaceMemberLists,
 } from '@/features/workspaces/hooks';
 import { useAgents } from '@/features/agents/hooks';
-import type { ComposerDirectory } from '@/features/conversations/pane-mode';
+import type {
+  ComposerDirectory,
+  MentionAgent,
+} from '@/features/conversations/pane-mode';
 
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
@@ -355,6 +358,11 @@ export function Composer({
   // downstream fails CLOSED to empty rather than to a global directory.
   const isWorkspaceArm = directory.kind === 'workspace';
   const isViewerArm = directory.kind === 'viewer';
+  // The DM counterpart agent (viewer arm only) — a conversation fact, even when the
+  // viewer does not own it. null in every other arm and for a human / deleted /
+  // unresolved counterpart.
+  const counterpartAgent =
+    directory.kind === 'viewer' ? directory.counterpartAgent : null;
   const armWorkspaceId = directory.kind === 'workspace' ? directory.workspaceId : null;
   const armWorkspaceName =
     directory.kind === 'workspace' ? directory.workspaceName : null;
@@ -373,6 +381,15 @@ export function Composer({
   // the renderer never re-filters ownership client-side.
   const ownedAgentsQuery = useAgents({ scope: 'owned', enabled: isViewerArm });
   const ownedAgents = ownedAgentsQuery.data ?? EMPTY_AGENTS;
+  // The viewer arm's `@` candidate set: the counterpart agent (offered even when
+  // the viewer does not own it) merged with the owned agents by id. Shared by the
+  // picker, avatar prefetch, and send-time resolver so a non-owned counterpart the
+  // picker offers still resolves on send (#task:2147).
+  const viewerMentionAgents = useMemo<MentionAgent[]>(
+    () =>
+      isViewerArm ? mergeViewerMentionAgents(counterpartAgent, ownedAgents) : EMPTY_AGENTS,
+    [isViewerArm, counterpartAgent, ownedAgents],
+  );
   // Viewer arm `#` source: every channel the viewer still participates in, across
   // ALL their workspaces (#task:2148). The workspace list gives both the fan-out's
   // id set and the id→name map each cross-workspace candidate stamps onto its own
@@ -436,7 +453,7 @@ export function Composer({
     [workspaceHumans, viewerId],
   );
   const agentAvatarUrls = useAgentAvatarObjectUrls(
-    isViewerArm ? ownedAgents : agents,
+    isViewerArm ? viewerMentionAgents : agents,
   );
   const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
   const { data: workspaceChannels = [], status: workspaceChannelsStatus } =
@@ -476,9 +493,17 @@ export function Composer({
         };
       case 'viewer':
         return {
+          // Only the owned-agents query is async; the counterpart is a synchronous
+          // descriptor fact already folded into `viewerMentionAgents`, so it adds no
+          // pending-ness — the settle gate is exactly the owned query's success.
           sourceKnown: ownedAgentsQuery.isSuccess,
-          select: query => selectViewerMentionCandidates(ownedAgents, query),
-          resolveShorthand: buildViewerShorthandResolver(ownedAgents),
+          select: query =>
+            selectViewerMentionCandidates(
+              viewerMentionAgents,
+              counterpartAgent?.id ?? null,
+              query,
+            ),
+          resolveShorthand: buildViewerShorthandResolver(viewerMentionAgents),
         };
       case 'withheld':
         return {
@@ -496,7 +521,8 @@ export function Composer({
     viewerId,
     agents,
     workspaceHumans,
-    ownedAgents,
+    viewerMentionAgents,
+    counterpartAgent,
     ownedAgentsQuery.isSuccess,
   ]);
 
@@ -557,11 +583,13 @@ export function Composer({
     [trigger, mentionSource, channelSource],
   );
 
-  // People-section headers ("In this channel" / "Other channels") and NOT-IN
-  // dimming only mean something where a conversation roster exists — the workspace
-  // arm's `@` picker. The viewer arm's owned-agents list and the `#` channel list
-  // are flat, so they render without either.
-  const peopleSections = isWorkspaceArm && trigger?.kind === '@';
+  // People-section headers ("In this channel" / "Other channels") on the `@`
+  // picker. The workspace arm splits its roster; the viewer arm (a DM) files the
+  // counterpart agent under "In this channel" and the viewer's other owned agents
+  // under "Other channels". Both are `@`-only — the `#` channel lists are flat.
+  // `PickerMenu` still renders headers only when there IS an in-channel row, so a
+  // DM with no resolved agent counterpart shows one flat, header-less list.
+  const peopleSections = (isWorkspaceArm || isViewerArm) && trigger?.kind === '@';
   // Viewer-arm `#` candidates span workspaces, so the row names each channel's
   // workspace to keep same-named channels distinguishable (#task:2148).
   const showChannelWorkspace = isViewerArm && trigger?.kind === '#';
@@ -779,7 +807,12 @@ export function Composer({
     }
     if (directory.kind === 'viewer') {
       const owned = (await ownedAgentsQuery.refetch()).data;
-      return owned ? buildViewerShorthandResolver(owned) : null;
+      if (!owned) return null;
+      // Same merge the picker read, so a picked (or hand-typed) non-owned
+      // counterpart resolves on send instead of dropping to an unaddressed chip.
+      return buildViewerShorthandResolver(
+        mergeViewerMentionAgents(directory.counterpartAgent, owned),
+      );
     }
     return null;
   }
@@ -1402,7 +1435,7 @@ export interface HumanMentionCandidate {
 }
 
 export type PickerItem =
-  | { kind: 'agent'; agent: AgentDto; inConversation: boolean }
+  | { kind: 'agent'; agent: MentionAgent; inConversation: boolean }
   | { kind: 'human'; human: HumanMentionCandidate; inConversation: boolean }
   | {
       kind: 'channel';
@@ -1724,45 +1757,65 @@ export function filterChannels(
 const CHANNEL_PICKER_CAP = 8;
 
 /**
- * The viewer arm's `@` candidates (#task:2147): the viewer's own canonical-owned
- * agents, flat and agents-ONLY — a `direct_pair` has no workspace roster, so there
- * are no human members to offer. Matched by name / display_name, capped at 10.
- * Every row is `inConversation: true` so it renders at full opacity with NO
- * "In this channel" / "Other channels" split: there is no conversation roster to
- * split against, and the picker suppresses those headers in this arm
- * (`peopleSections` is false). Pure, so the candidate boundary is testable.
+ * The viewer arm's `@` candidate set: the DM's counterpart agent — offered even
+ * when the viewer does not own it — merged with the viewer's canonical-owned
+ * agents, deduped by id with the counterpart first. A null counterpart (human /
+ * deleted / unresolved) yields the owned list unchanged. Agents-only. The one merge
+ * both the picker and the send-time resolver read (#task:2147). */
+export function mergeViewerMentionAgents(
+  counterpartAgent: MentionAgent | null,
+  ownedAgents: MentionAgent[],
+): MentionAgent[] {
+  if (!counterpartAgent) return ownedAgents;
+  return [
+    counterpartAgent,
+    ...ownedAgents.filter(a => a.id !== counterpartAgent.id),
+  ];
+}
+
+/**
+ * The viewer arm's `@` picker sections over the pre-merged set: split by agent id,
+ * the counterpart row (`counterpartId`) files under "In this channel", the rest
+ * under "Other channels". A null counterpart leaves the in-section empty and
+ * `PickerMenu` renders one flat list (#task:2147).
  */
 export function selectViewerMentionCandidates(
-  ownedAgents: AgentDto[],
+  agents: MentionAgent[],
+  counterpartId: string | null,
   query: string,
 ): PickerResult {
   const q = query.toLowerCase();
   const matched = q
-    ? ownedAgents.filter(a =>
+    ? agents.filter(a =>
         a.name.toLowerCase().includes(q) ||
         (a.display_name ?? '').toLowerCase().includes(q),
       )
-    : ownedAgents;
-  const VIEWER_MENTION_CAP = 10;
-  const items: PickerItem[] = matched
-    .slice(0, VIEWER_MENTION_CAP)
+    : agents;
+  const inAgents: PickerItem[] = matched
+    .filter(a => a.id === counterpartId)
     .map(agent => ({ kind: 'agent', agent, inConversation: true }));
-  return { items, hiddenCount: matched.length - items.length };
+  const outAgents: PickerItem[] = matched
+    .filter(a => a.id !== counterpartId)
+    .map(agent => ({ kind: 'agent', agent, inConversation: false }));
+  const VIEWER_MENTION_CAP = 10;
+  // The counterpart (at most one) always shows; the rest fill up to the cap.
+  const items = [...inAgents, ...outAgents.slice(0, VIEWER_MENTION_CAP)];
+  return {
+    items,
+    hiddenCount: inAgents.length + outAgents.length - items.length,
+  };
 }
 
 /**
- * The viewer arm's send-time shorthand resolver (#task:2147): only the viewer's
- * own canonical-owned agents resolve, all as `agent`. Mirrors
- * {@link buildShorthandResolver}'s "membership is the admission test" — a handle
- * outside the owned set is left as authored (a chip that addresses nobody, which
- * is the truth) — but there is no human arm, because a `direct_pair` names no
- * humans through a roster. Pure.
+ * The viewer arm's send-time shorthand resolver: every agent in the merged set (the
+ * same one the picker offered) resolves as `agent`; a handle outside it is left as
+ * authored. No human arm — a `direct_pair` names no humans (#task:2147).
  */
 export function buildViewerShorthandResolver(
-  ownedAgents: AgentDto[],
+  agents: MentionAgent[],
 ): ShorthandResolver {
   const kinds = new Map<string, ReferenceKind>();
-  for (const agent of ownedAgents) kinds.set(agent.name, 'agent');
+  for (const agent of agents) kinds.set(agent.name, 'agent');
   return handle => kinds.get(handle) ?? null;
 }
 
@@ -1916,10 +1969,10 @@ function PickerMenu({
   active: number;
   onPick: (item: PickerItem) => void;
   onHover: (index: number) => void;
-  /** Whether to split rows into "In this channel" / "Other channels" headers —
-   *  only the workspace arm's `@` picker has a conversation roster to split
-   *  against. The viewer arm's owned-agent list and every `#` channel list are
-   *  flat (#task:2147). */
+  /** Whether to split rows into "In this channel" / "Other channels" headers on
+   *  the `@` picker — the workspace arm against its roster, the viewer arm (a DM)
+   *  filing the counterpart agent under "In this channel". Every `#` channel list
+   *  is flat (#task:2147). */
   peopleSections: boolean;
   /** Whether a channel row names its workspace — the viewer arm's `#` list spans
    *  workspaces, so same-named channels must stay distinguishable (#task:2148). */
@@ -1929,16 +1982,22 @@ function PickerMenu({
 }): JSX.Element {
   // #task:876 (2026-06-03): split header labels per section. We compute the
   // boundary index here (first item with !inConversation) and let the map render a
-  // header chip just before that row. Gated on `peopleSections`: a flat arm (viewer
-  // `@`, any `#`) reports -1 / false so no header ever renders. Channel rows also
-  // carry no membership concept, so they never trigger a header even inside a
-  // people-sectioned arm.
-  const headerBoundaryIndex = peopleSections
-    ? items.findIndex(item => item.kind !== 'channel' && !item.inConversation)
-    : -1;
+  // header chip just before that row. Gated on `peopleSections`: a flat arm (any
+  // `#`) reports -1 / false so no header ever renders. Channel rows also carry no
+  // membership concept, so they never trigger a header even inside a people-
+  // sectioned arm.
+  //
+  // Both headers require a non-empty in-section: the split only means something when
+  // something is in this channel. Without it (a roster the viewer sees no in-channel
+  // candidate for, or a DM whose counterpart is a human / not owned), the whole list
+  // is "other" and a lone "Other channels" header labels nothing — render it flat
+  // instead (#task:2147).
   const hasInSection =
     peopleSections
     && items.some(item => item.kind !== 'channel' && item.inConversation);
+  const headerBoundaryIndex = hasInSection
+    ? items.findIndex(item => item.kind !== 'channel' && !item.inConversation)
+    : -1;
   return (
     <div
       // Radius belongs on THIS element — the visible frame. The global
