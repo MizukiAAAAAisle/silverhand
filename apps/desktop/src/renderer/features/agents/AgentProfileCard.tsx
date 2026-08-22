@@ -185,8 +185,11 @@ export function AgentProfileCard({
           items={[
             { label: 'Computer', value: computerName },
             {
-              label: 'Session scope',
-              value: agent.session_scope === 'agent' ? 'Agent' : 'Conversation',
+              label: 'Session model',
+              value:
+                agent.session_scope === 'agent'
+                  ? 'Across conversations'
+                  : 'Per conversation',
             },
             {
               label: 'Created',

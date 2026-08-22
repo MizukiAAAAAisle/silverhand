@@ -336,8 +336,8 @@ export function CreateAgentDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label className="font-semibold">Session scope</Label>
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Session scope">
+            <Label className="font-semibold">Session model</Label>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Session model">
               <button
                 type="button"
                 className={chipClass(sessionScope === 'conversation')}
@@ -347,7 +347,7 @@ export function CreateAgentDialog({
                   setError(null);
                 }}
               >
-                Conversation
+                Per conversation
               </button>
               <button
                 type="button"
@@ -358,14 +358,15 @@ export function CreateAgentDialog({
                   setError(null);
                 }}
               >
-                Agent
+                Across conversations
               </button>
             </div>
             <p className="text-xs text-text-muted">
               {sessionScope === 'agent'
-                ? 'One persistent session follows this agent across conversations.'
-                : 'A separate session is kept for each conversation.'}
+                ? 'One persistent session across participating conversations.'
+                : 'Independent session for each conversation.'}
             </p>
+            <p className="text-xs text-text-muted">Cannot be changed after creation.</p>
           </div>
 
           <RuntimePicker

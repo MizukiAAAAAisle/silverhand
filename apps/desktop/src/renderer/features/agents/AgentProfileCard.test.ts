@@ -129,13 +129,13 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     expect(html).toContain('aria-label="Edit runtime configuration"');
   });
 
-  it('shows immutable session scope as profile metadata', () => {
+  it('shows the immutable session model as profile metadata', () => {
     const conversationHtml = render(makeAgent({ session_scope: 'conversation' }), 'u-creator');
     const agentHtml = render(makeAgent({ session_scope: 'agent' }), 'u-creator');
-    expect(conversationHtml).toContain('Session scope');
-    expect(conversationHtml).toContain('Conversation');
-    expect(agentHtml).toContain('Session scope');
-    expect(agentHtml).toContain('Agent');
-    expect(agentHtml).not.toContain('Edit session scope');
+    expect(conversationHtml).toContain('Session model');
+    expect(conversationHtml).toContain('Per conversation');
+    expect(agentHtml).toContain('Session model');
+    expect(agentHtml).toContain('Across conversations');
+    expect(agentHtml).not.toContain('Edit session model');
   });
 });
