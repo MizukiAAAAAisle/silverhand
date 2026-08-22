@@ -858,6 +858,15 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
         );
       case 'renamed':
       case 'finalized':
+        // Post-commit identity fan-out: `display_label` is denormalized onto
+        // `AgentDto.host_label`, and the host mutation touched no `agents` row,
+        // so nothing else would refresh viewers who see this computer's agents
+        // (the host list is owner-scoped; a non-owner has only the agent read).
+        // `updateHost` has already committed, so this never announces a label a
+        // rolled-back rename would leave unreadable.
+        for (const agentId of agents.listIdsByHost(hostId)) {
+          ctx.agentService.publishRefreshed(agentId);
+        }
         return c.json({ host: outcome.host });
       default: {
         const never: never = outcome;

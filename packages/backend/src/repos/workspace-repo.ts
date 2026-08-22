@@ -5,7 +5,6 @@ import {
   parseWorkspaceName,
   type CanonicalWorkspaceName,
   type AgentDto,
-  type AgentRow,
   type UserRow,
   type Workspace,
   type WorkspaceMemberDto,
@@ -15,7 +14,7 @@ import {
   type WorkspaceUserMemberDto,
   type WorkspaceUserMemberRow,
 } from '@silverhand/shared';
-import { agentRowToDto } from './agent-repo.js';
+import { agentRowToDto, type AgentRowWithHost } from './agent-repo.js';
 
 // Re-exported from the shared single source (`agent-home-workspace.ts`)
 // so existing backend importers (`./repos/workspace-repo.js`) keep
@@ -456,10 +455,11 @@ export class WorkspaceRepo {
 
   listMembers(workspaceId: string): AgentDto[] {
     return this.db
-      .prepare<[string], AgentRow>(
-        `SELECT a.*
+      .prepare<[string], AgentRowWithHost>(
+        `SELECT a.*, h.display_label AS host_display_label, h.name AS host_name
            FROM agents a
            JOIN workspace_members wm ON wm.agent_id = a.id
+           LEFT JOIN hosts h ON h.id = a.host_id
           WHERE wm.workspace_id = ?
           ORDER BY wm.joined_at ASC`,
       )

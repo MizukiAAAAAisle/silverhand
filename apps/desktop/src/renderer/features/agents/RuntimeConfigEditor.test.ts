@@ -16,6 +16,7 @@ import {
 const baseAgent: AgentDto = {
   id: 'a-1',
   host_id: 'h-1',
+  host_label: 'MacBook',
   name: 'alice',
   display_name: 'Alice',
   runtime: 'codex',

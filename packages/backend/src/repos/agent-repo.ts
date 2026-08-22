@@ -20,7 +20,25 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-export function agentRowToDto(row: AgentRow): AgentDto {
+/**
+ * The read shape every agent-DTO query produces: a plain `agents` row plus the
+ * joined host's display columns. `agents.host_id` is NOT NULL, but the JOIN is
+ * LEFT so a lingering agent whose host row was removed still maps (host label →
+ * null) instead of vanishing from the list. `host_name` is aliased away from
+ * `agents.name` to avoid the column collision; `agents` has no `display_label`.
+ */
+export type AgentRowWithHost = AgentRow & {
+  host_display_label: string | null;
+  host_name: string | null;
+};
+
+/** `SELECT` prefix shared by every read: `agents.*` plus the host label columns,
+ *  LEFT-joined so the row survives a missing host. Callers append WHERE/ORDER. */
+const AGENT_SELECT_WITH_HOST =
+  'SELECT a.*, h.display_label AS host_display_label, h.name AS host_name ' +
+  'FROM agents a LEFT JOIN hosts h ON h.id = a.host_id';
+
+export function agentRowToDto(row: AgentRowWithHost): AgentDto {
   // SQLite stores booleans as 0/1; coerce back to boolean | null.
   const fast = row.fast_mode as unknown as number | boolean | null;
   return {
@@ -33,6 +51,11 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     fast_mode:
       fast === null || fast === undefined ? null : Boolean(fast),
     host_id: row.host_id,
+    // `display_label ?? name` priority, mirroring shared/host-diagnostics.ts:
+    // a claimed-but-unnamed host has a null label but always a stable `name`.
+    // Null survives only when the LEFT JOIN found no host row at all.
+    host_label:
+      row.host_display_label?.trim() || row.host_name || null,
     description: row.description,
     session_scope: row.session_scope,
     created_by_user_id: row.created_by_user_id,
@@ -57,7 +80,7 @@ export function agentRowToDto(row: AgentRow): AgentDto {
   };
 }
 
-function rowToDto(row: AgentRow): AgentDto {
+function rowToDto(row: AgentRowWithHost): AgentDto {
   return agentRowToDto(row);
 }
 
@@ -66,7 +89,9 @@ export class AgentRepo {
 
   list(): AgentDto[] {
     const rows = this.db
-      .prepare<[], AgentRow>('SELECT * FROM agents ORDER BY created_at ASC')
+      .prepare<[], AgentRowWithHost>(
+        `${AGENT_SELECT_WITH_HOST} ORDER BY a.created_at ASC`,
+      )
       .all();
     return rows.map(rowToDto);
   }
@@ -81,23 +106,42 @@ export class AgentRepo {
    */
   listByHost(hostId: string): AgentDto[] {
     const rows = this.db
-      .prepare<[string], AgentRow>(
-        'SELECT * FROM agents WHERE host_id = ? ORDER BY created_at ASC',
+      .prepare<[string], AgentRowWithHost>(
+        `${AGENT_SELECT_WITH_HOST} WHERE a.host_id = ? ORDER BY a.created_at ASC`,
       )
       .all(hostId);
     return rows.map(rowToDto);
   }
 
+  /**
+   * Id-only projection of the agents bound to a host — the `agent_changed`
+   * fan-out set for a host rename (`PATCH /api/hosts/:id`). Kept separate from
+   * {@link listByHost} so the invalidation broadcast does not build and discard
+   * full DTOs (which now JOIN `hosts`) just to read their ids.
+   */
+  listIdsByHost(hostId: string): string[] {
+    return this.db
+      .prepare<[string], { id: string }>(
+        'SELECT id FROM agents WHERE host_id = ? ORDER BY created_at ASC',
+      )
+      .all(hostId)
+      .map(r => r.id);
+  }
+
   get(id: string): AgentDto | null {
     const row = this.db
-      .prepare<[string], AgentRow>('SELECT * FROM agents WHERE id = ?')
+      .prepare<[string], AgentRowWithHost>(
+        `${AGENT_SELECT_WITH_HOST} WHERE a.id = ?`,
+      )
       .get(id);
     return row ? rowToDto(row) : null;
   }
 
   getByName(name: string): AgentDto | null {
     const row = this.db
-      .prepare<[string], AgentRow>('SELECT * FROM agents WHERE name = ?')
+      .prepare<[string], AgentRowWithHost>(
+        `${AGENT_SELECT_WITH_HOST} WHERE a.name = ?`,
+      )
       .get(name);
     return row ? rowToDto(row) : null;
   }

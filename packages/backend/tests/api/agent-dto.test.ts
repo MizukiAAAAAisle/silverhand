@@ -46,6 +46,7 @@ describe('agent reasoning_effort validation', () => {
       reasoning_effort: 'giga',
       fast_mode: null,
       host_id: 'h1',
+      host_label: 'MacBook Pro',
       description: null,
       created_by_user_id: 'u1',
       avatar_url: null,
@@ -216,6 +217,7 @@ describe('agent materialization fields (D4.d v33)', () => {
     reasoning_effort: null,
     fast_mode: null,
     host_id: 'h1',
+    host_label: null,
     description: null,
     created_by_user_id: 'u1',
     avatar_url: null,
@@ -255,8 +257,7 @@ describe('agent materialization fields (D4.d v33)', () => {
     ).toBe(true);
   });
 
-  it('rejects unknown materialization_status values', () => {
-    expect(
+  it('rejects unknown materialization_status values', () => {    expect(
       AgentDtoSchema.safeParse({
         ...baseAgent,
         materialization_status: 'archived',

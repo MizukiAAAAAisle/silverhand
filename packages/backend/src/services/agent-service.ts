@@ -160,6 +160,24 @@ export class AgentService {
   }
 
   /**
+   * Broadcast an identity refresh for an agent whose DTO changed because of a
+   * fact OUTSIDE the `agents` row — today, a host rename (`PATCH
+   * /api/hosts/:id` → `display_label`), which `AgentDto.host_label`
+   * denormalizes. The host repo mutation does not touch `agents.updated_at`, so
+   * the IDENTITY_CARRIERS ripple would never fire on its own; the host-rename
+   * route calls this for every agent on the renamed host so the denormalized
+   * label is not the forever-stale second read face `AgentDtoSchema` forbids.
+   *
+   * Reuses the SINGLE `agent_changed` seam (id-only payload; consumers refetch)
+   * rather than minting a host-specific event — the reaction is identical.
+   * MUST be called post-commit (the rename is durable) so a rolled-back rename
+   * never announces a label clients would then fail to read back.
+   */
+  publishRefreshed(id: string): void {
+    this.publishChanged(id);
+  }
+
+  /**
    * Update an agent's stored fields (profile metadata + model/tuning)
    * and broadcast `agent_changed` on success. Returns null when the agent
    * does not exist (no event). This is the text/metadata counterpart of

@@ -19,8 +19,7 @@ import { rejectDisplayName } from '@/features/common/display-name';
 import { InlineTextarea } from './InlineTextarea';
 import { RuntimeConfigEditor } from './RuntimeConfigEditor';
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
-import { useHostsQuery } from '@/features/hosts/hooks';
-import { resolveComputerName } from '@/features/hosts/host-display';
+import { UNKNOWN_COMPUTER_LABEL } from '@/features/hosts/host-display';
 
 interface AgentProfileCardProps {
   agent: AgentDto;
@@ -60,10 +59,13 @@ export function AgentProfileCard({
   const canEdit = canEditAgentProfile(viewerForPermissions, agent);
   const update = useUpdateAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
-  const hostsQuery = useHostsQuery();
-  const computerName = resolveComputerName(
-    (hostsQuery.data?.hosts ?? []).find(h => h.id === agent.host_id),
-  );
+  // Computer name is read from the server-resolved `agent.host_label`, NOT a
+  // local owned-hosts lookup: `GET /api/hosts` is owner-scoped, so when the
+  // viewer does not own this agent's computer the local lookup misses and the
+  // label collapses to "Unknown computer" (#task:2153). `host_label` crosses
+  // that ownership boundary; it is null only when the host row is truly gone,
+  // which is the sole case that still falls back to the unknown label.
+  const computerName = agent.host_label ?? UNKNOWN_COMPUTER_LABEL;
   const [nameEditing, setNameEditing] = useState(false);
   const [descriptionEditing, setDescriptionEditing] = useState(false);
   const [runtimeEditing, setRuntimeEditing] = useState(false);

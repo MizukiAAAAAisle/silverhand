@@ -27,6 +27,17 @@ export const AgentDtoSchema = z.object({
   reasoning_effort: ReasoningEffortTokenSchema.nullable(),
   fast_mode: FastModeSchema.nullable(),
   host_id: z.string(),
+  // Server-resolved display label of the agent's computer (`hosts.display_label
+  // ?? hosts.name`), null only when the host row is unresolvable. This is a
+  // DENORMALIZED read face that deliberately crosses the ownership boundary:
+  // `GET /api/hosts` is owner-scoped, so a viewer who does NOT own the host has
+  // no other authority to resolve its name — the agent read is the only face
+  // they hold. Its invalidation edge is mandatory and named: a host rename
+  // (`PATCH /api/hosts/:id` → `display_label`) fires `agent_changed` for every
+  // agent on that host, so this label never becomes the forever-stale second
+  // read face the `last_activity_at` note below forbids. `host_id` stays for
+  // identity/routing; this is purely the human-facing name.
+  host_label: z.string().nullable(),
   description: z.string().nullable(),
   /** Immutable runtime-session identity selected when the Agent is created. */
   session_scope: AgentSessionScopeSchema,
