@@ -190,8 +190,9 @@ export type TaskAssigneeType = z.infer<typeof TaskAssigneeTypeSchema>;
  * `PARSED_EVENT_KINDS` (the driver's), and deliberately so: this one is keyed
  * on "what this runtime did or experienced during its run", whoever observed
  * it. Most rows are the driver's parsed output, but `parsed_event_dropped`
- * (daemon-observed wire loss) and `message_stale` (daemon-relayed backend
- * delivery verdict, #task:2099) are authored by the daemon and have no
+ * (daemon-observed wire loss), `message_stale` (daemon-relayed backend
+ * delivery verdict, #task:2099) and `message_received` (daemon-authored inbound
+ * delivery fact, #task:2146) are authored by the daemon and have no
  * `ParsedEvent` counterpart. Adding one here does NOT license adding it there
  * — a synthetic parsed event would claim the runtime said something it didn't.
  */
