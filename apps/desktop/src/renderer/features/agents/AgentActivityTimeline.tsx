@@ -426,10 +426,10 @@ function EventRow({
         title={
           <span className="text-text-primary">
             <span className="font-semibold">{p.verb}</span>
+            {completed ? <ToolOutcomeMark outcome={outcome ?? 'completed'} /> : null}
             {p.arg ? (
               <span className={cn('ml-1.5 font-mono', ACTIVITY_META)}>{p.arg}</span>
             ) : null}
-            {completed ? <ToolOutcomeMark outcome={outcome ?? 'completed'} /> : null}
           </span>
         }
         preview={p.detail ? <ToolDetailView detail={p.detail} /> : null}
@@ -520,12 +520,15 @@ function EventRow({
   } else if (kind === 'message_received') {
     // #task:2146: the runtime accepted an inbound delivery. Payload is just the
     // accepted count (no body/ids — the timeline records that input arrived, not
-    // what it said). A single message is the common case; pluralise only when a
-    // batch settled at once.
+    // what it said). One canonical label; the count is a dim suffix only when a
+    // batch of more than one settled at once, never a second phrasing.
     const count = typeof payload?.['count'] === 'number' ? (payload['count'] as number) : 1;
     title = (
       <span className="font-semibold text-text-secondary">
-        {count > 1 ? `${count} messages received` : 'Message received'}
+        Message received
+        {count > 1 ? (
+          <span className={cn('ml-1.5 font-normal tabular-nums', ACTIVITY_META)}>×{count}</span>
+        ) : null}
       </span>
     );
   } else {
