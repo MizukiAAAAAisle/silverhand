@@ -11,13 +11,14 @@
 //    conversation;
 //  - P1 custody applies to the task routes: a stale agent-slot bearer is 401.
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { buildTestApp, conversationSlotAuth, http, type TestApp } from '../utils/app.js';
 import {
   agentSlotAuth,
   canonicalTasksPath,
   insertAgentScopedAgent,
 } from '../utils/agent-scope.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
 
 interface Board {
@@ -389,5 +390,344 @@ describe('P0-g B4 — the union orders by creation instant, not by local numbers
     expect(union.tasks[0].id).toBe(fresh.id);
     const ids = union.tasks.map((row: any) => row.id);
     expect(ids.indexOf(fresh.id)).toBeLessThan(ids.indexOf(oldest.id));
+  });
+});
+
+// #task:2150 — atomic `create --target <stream> --claim` from an AGENT-SLOT.
+//
+// The defect: the `cross_conversation_claim` guard keyed off the AUTH
+// principal's nullable `conversationId`, which is `null` for EVERY agent slot
+// (an agent-scoped runtime has no origin stream). So `--claim` from an
+// agent-scoped runtime was ALWAYS misjudged as a cross-conversation dispatch
+// and refused, even against a stream the agent is a party to. The fix keys the
+// guard on the RUNTIME actor's scope (the same `crossConversation` predicate the
+// service uses): the "cross" bit is DEFINED ONLY for `runtimeScope ===
+// 'conversation'` (anchor vs destination); an agent slot has no anchor, so it
+// falls through to the normal capability/participation gate.
+//
+// The authority the atomic path spends is exactly the UNION of the two-step
+// "create (create_tasks) → by-id claim (write_tasks ∧ participation)" — never
+// wider (Cindy's falsifier). Workspace boards gate create_tasks + write_tasks;
+// a DirectPair board has no capability table, so participation IS the whole
+// authority (the by-id claim reuses the same participation gate).
+describe('agent-slot atomic create --claim: explicit target, null anchor is NOT cross (#task:2150)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  /** System events on a conversation, via the repo face (no native SQL, so no
+   *  db-boundary ledger row). The zero-write instrument for a refused create. */
+  const systemEvents = (conversationId: string) =>
+    t!.persistence.repos.messages
+      .listForConversation(conversationId)
+      .filter(m => m.from_kind === 'system');
+
+  async function twinOnBoard(): Promise<{
+    seedAgent: string;
+    twin: string;
+    w1: Board;
+    auth: { authorization: string };
+  }> {
+    const h = http(t!);
+    const seed = (await (
+      await h.post('/api/agents', { name: 'seed', runtime: 'claude' })
+    ).json()) as any;
+    const seedAgent = seed.agent.id as string;
+    const twin = insertAgentScopedAgent(t!, seedAgent, 'twin-agent-scoped');
+    const w1 = await board(t!, 'w-one', [seedAgent, twin]);
+    return { seedAgent, twin, w1, auth: agentSlotAuth(t!, twin) };
+  }
+
+  const readDetailById = async (
+    twin: string,
+    frameConv: string,
+    taskId: string,
+    auth: { authorization: string },
+  ): Promise<any> => {
+    const res = await http(t!).get(
+      canonicalTasksPath(twin, frameConv, `/detail?task_id=${taskId}`),
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    return ((await res.json()) as any).task;
+  };
+
+  it('claims atomically on a workspace board it is a member of (in_progress, assignee=self, one create event that says "and claimed it")', async () => {
+    t = buildTestApp();
+    const { twin, w1, auth } = await twinOnBoard();
+    const h = http(t);
+    const before = systemEvents(w1.channelId).length;
+
+    const res = await h.post(
+      `/internal/agents/${twin}/tasks/create`,
+      { target: `#conv:${w1.channelId}`, claim: true, tasks: [{ title: 'file-and-own' }] },
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.tasks).toHaveLength(1);
+
+    const detail = await readDetailById(twin, w1.channelId, body.tasks[0].id, auth);
+    expect(detail.status).toBe('in_progress');
+    expect(detail.assignee).toMatchObject({ type: 'agent', id: twin });
+
+    // Exactly ONE system event, and it is the claimed-variant narration — never
+    // "from another conversation" (the null-anchor false positive this fixes).
+    const added = systemEvents(w1.channelId).slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0]!.content).toMatch(
+      new RegExp(` created task #${body.tasks[0].task_number} "file-and-own" and claimed it$`),
+    );
+    expect(added[0]!.content.includes('from another conversation')).toBe(false);
+  });
+
+  it('claims atomically on a DirectPair it is an endpoint of — participation is the whole authority (no workspace capability)', async () => {
+    t = buildTestApp();
+    const { twin, auth } = await twinOnBoard();
+    const h = http(t);
+    // A pair with no workspace, no roster, no capability rows; the twin is an
+    // ENDPOINT, which is the entire authority the by-id claim would also spend.
+    const pair = new ConversationRepo(t.ctx.db).getOrCreateDirectPair(
+      { kind: 'agent', id: twin },
+      { kind: 'human', id: 'local' },
+      Date.now(),
+    ).conversation;
+    const before = systemEvents(pair.id).length;
+
+    const res = await h.post(
+      `/internal/agents/${twin}/tasks/create`,
+      { target: `#conv:${pair.id}`, claim: true, tasks: [{ title: 'dm-own' }] },
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.tasks).toHaveLength(1);
+
+    const detail = await readDetailById(twin, pair.id, body.tasks[0].id, auth);
+    expect(detail.status).toBe('in_progress');
+    expect(detail.assignee).toMatchObject({ type: 'agent', id: twin });
+    const added = systemEvents(pair.id).slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0]!.content).toMatch(/ and claimed it$/);
+  });
+
+  it('ATOMIC ZERO-WRITE: missing write_tasks on the destination is capability_denied write_tasks, and NOTHING is written', async () => {
+    t = buildTestApp();
+    const { twin, w1, auth } = await twinOnBoard();
+    const h = http(t);
+    // create_tasks held, write_tasks revoked: the create half is authorized but
+    // the self-claim is not, so the WHOLE atomic op must roll back.
+    new AgentCapabilityRepo(t.ctx.db).replaceSet(
+      w1.workspaceId,
+      twin,
+      AGENT_CAPABILITIES.filter(cap => cap !== 'write_tasks'),
+    );
+    const before = systemEvents(w1.channelId).length;
+
+    const res = await h.post(
+      `/internal/agents/${twin}/tasks/create`,
+      { target: `#conv:${w1.channelId}`, claim: true, tasks: [{ title: 'claim-blocked' }] },
+      { headers: auth },
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()) as any).toMatchObject({
+      code: 'capability_denied',
+      capability: 'write_tasks',
+    });
+    // Zero event AND zero task row (the gate runs before createTasks).
+    expect(systemEvents(w1.channelId).length - before).toBe(0);
+    const union = (await (
+      await h.get(canonicalTasksPath(twin, w1.channelId, ''), { headers: auth })
+    ).json()) as any;
+    expect(union.tasks.some((x: any) => x.title === 'claim-blocked')).toBe(false);
+  });
+
+  it('create authority is STILL required (not wider): missing create_tasks is capability_denied create_tasks with zero write', async () => {
+    t = buildTestApp();
+    const { twin, w1, auth } = await twinOnBoard();
+    const h = http(t);
+    new AgentCapabilityRepo(t.ctx.db).replaceSet(
+      w1.workspaceId,
+      twin,
+      AGENT_CAPABILITIES.filter(cap => cap !== 'create_tasks'),
+    );
+    const before = systemEvents(w1.channelId).length;
+
+    const res = await h.post(
+      `/internal/agents/${twin}/tasks/create`,
+      { target: `#conv:${w1.channelId}`, claim: true, tasks: [{ title: 'no-create' }] },
+      { headers: auth },
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()) as any).toMatchObject({
+      code: 'capability_denied',
+      capability: 'create_tasks',
+    });
+    expect(systemEvents(w1.channelId).length - before).toBe(0);
+  });
+
+  it('SCOPE DISCRIMINATOR: a conversation slot on a NON-anchor stream is STILL cross_conversation_claim — the fix reads runtime scope, not a nullable anchor', async () => {
+    t = buildTestApp();
+    const { seedAgent, twin, w1, auth } = await twinOnBoard();
+    const h = http(t);
+    // Second channel in the SAME workspace; the seed agent is a member of both,
+    // so participation resolves — the ONLY thing that refuses the claim is the
+    // conversation-slot anchor mismatch.
+    const chB = (await (
+      await h.post(`/api/workspaces/${w1.workspaceId}/channels`, {
+        title: 'channel-b',
+        member_agent_ids: [seedAgent, twin],
+      })
+    ).json()) as any;
+    const convB = chB.channel.id;
+
+    // (a) conversation slot anchored to w1.channel, targeting convB with --claim:
+    // a genuine cross-anchor dispatch → refused, zero write. This is the branch
+    // the fix must PRESERVE.
+    const beforeB = systemEvents(convB).length;
+    const seedAnchor = conversationSlotAuth(t, w1.channelId, seedAgent);
+    const crossRes = await h.post(
+      `/internal/agents/${seedAgent}/tasks/create`,
+      { target: `#conv:${convB}`, claim: true, tasks: [{ title: 'seed-cross' }] },
+      { headers: seedAnchor },
+    );
+    expect(crossRes.status).toBe(200);
+    expect((await crossRes.json()) as any).toEqual({ error: 'cross_conversation_claim' });
+    expect(systemEvents(convB).length - beforeB).toBe(0);
+
+    // (b) the AGENT slot, same explicit convB target with --claim: NOT cross
+    // (no anchor to differ from) → atomic claim succeeds. Same destination, same
+    // capabilities, opposite verdict — driven purely by runtime scope.
+    const agentRes = await h.post(
+      `/internal/agents/${twin}/tasks/create`,
+      { target: `#conv:${convB}`, claim: true, tasks: [{ title: 'twin-here' }] },
+      { headers: auth },
+    );
+    expect(agentRes.status).toBe(200);
+    const twinTask = (await agentRes.json()) as any;
+    expect(twinTask.tasks).toHaveLength(1);
+    const detail = await readDetailById(twin, convB, twinTask.tasks[0].id, auth);
+    expect(detail.status).toBe('in_progress');
+    expect(detail.assignee).toMatchObject({ type: 'agent', id: twin });
+  });
+
+  it('a conversation slot on its OWN anchor still claims atomically (no regression)', async () => {
+    t = buildTestApp();
+    const { seedAgent, w1 } = await twinOnBoard();
+    const h = http(t);
+    const anchor = conversationSlotAuth(t, w1.channelId, seedAgent);
+    const res = await h.post(
+      `/internal/agents/${seedAgent}/tasks/create`,
+      { target: `#conv:${w1.channelId}`, claim: true, tasks: [{ title: 'seed-own-anchor' }] },
+      { headers: anchor },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.tasks).toHaveLength(1);
+    const detail = await readDetailById(seedAgent, w1.channelId, body.tasks[0].id, anchor);
+    expect(detail.status).toBe('in_progress');
+    expect(detail.assignee).toMatchObject({ type: 'agent', id: seedAgent });
+  });
+
+  // The falsifier Cindy locked: the atomic path must ADMIT the self-claim on
+  // exactly the same (principal, destination) authority as the two-step
+  // "create → by-id claim", never a wider one. Equivalence is on the ADMIT
+  // RESULT (was the claim allowed?), not on the error taxonomy — the by-id
+  // agent-slot lane deliberately folds a capability miss into the
+  // indistinguishable `task_not_found` (anti-oracle, §4.5), while the create
+  // route, whose caller named the destination, answers a typed capability_denied.
+  describe('differential: atomic create --claim ≡ create + by-id claim on the admit result', () => {
+    it('ALLOW (full caps): both paths land an in_progress task assigned to self', async () => {
+      t = buildTestApp();
+      const { twin, w1, auth } = await twinOnBoard();
+      const h = http(t);
+
+      // Two-step: create unclaimed, then by-id claim.
+      const twoStepCreate = (await (
+        await h.post(
+          `/internal/agents/${twin}/tasks/create`,
+          { target: `#conv:${w1.channelId}`, tasks: [{ title: 'two-step' }] },
+          { headers: auth },
+        )
+      ).json()) as any;
+      const twoStepClaim = (await (
+        await h.post(
+          canonicalTasksPath(twin, w1.channelId, '/claim'),
+          { task_ids: [twoStepCreate.tasks[0].id] },
+          { headers: auth },
+        )
+      ).json()) as any;
+      expect(twoStepClaim.results[0]).toMatchObject({ success: true });
+      const twoStepDetail = await readDetailById(twin, w1.channelId, twoStepCreate.tasks[0].id, auth);
+
+      // Atomic: create --claim.
+      const atomicRes = await h.post(
+        `/internal/agents/${twin}/tasks/create`,
+        { target: `#conv:${w1.channelId}`, claim: true, tasks: [{ title: 'atomic' }] },
+        { headers: auth },
+      );
+      expect(atomicRes.status).toBe(200);
+      const atomic = (await atomicRes.json()) as any;
+      const atomicDetail = await readDetailById(twin, w1.channelId, atomic.tasks[0].id, auth);
+
+      // Same terminal admission: in_progress, self-assigned, in both paths.
+      expect(atomicDetail.status).toBe(twoStepDetail.status);
+      expect(atomicDetail.status).toBe('in_progress');
+      expect(atomicDetail.assignee).toMatchObject({ type: 'agent', id: twin });
+      expect(twoStepDetail.assignee).toMatchObject({ type: 'agent', id: twin });
+    });
+
+    it('DENY (no write_tasks): neither path leaves the task self-claimed; the atomic path additionally writes zero', async () => {
+      t = buildTestApp();
+      const { twin, w1, auth } = await twinOnBoard();
+      const h = http(t);
+      new AgentCapabilityRepo(t.ctx.db).replaceSet(
+        w1.workspaceId,
+        twin,
+        AGENT_CAPABILITIES.filter(cap => cap !== 'write_tasks'),
+      );
+
+      // Two-step: create (create_tasks held) SUCCEEDS unclaimed; by-id claim is
+      // REFUSED (folded to the indistinguishable task_not_found), so the task
+      // stays todo / unassigned.
+      const twoStepCreate = (await (
+        await h.post(
+          `/internal/agents/${twin}/tasks/create`,
+          { target: `#conv:${w1.channelId}`, tasks: [{ title: 'two-step-deny' }] },
+          { headers: auth },
+        )
+      ).json()) as any;
+      expect(twoStepCreate.tasks).toHaveLength(1);
+      const twoStepClaim = (await (
+        await h.post(
+          canonicalTasksPath(twin, w1.channelId, '/claim'),
+          { task_ids: [twoStepCreate.tasks[0].id] },
+          { headers: auth },
+        )
+      ).json()) as any;
+      expect(twoStepClaim.results[0].success).toBe(false);
+      const twoStepDetail = await readDetailById(twin, w1.channelId, twoStepCreate.tasks[0].id, auth);
+      expect(twoStepDetail.status).toBe('todo');
+      expect(twoStepDetail.assignee).toBeNull();
+
+      // Atomic: create --claim is REFUSED and the create rolls back — no task.
+      const before = systemEvents(w1.channelId).length;
+      const atomicRes = await h.post(
+        `/internal/agents/${twin}/tasks/create`,
+        { target: `#conv:${w1.channelId}`, claim: true, tasks: [{ title: 'atomic-deny' }] },
+        { headers: auth },
+      );
+      expect(atomicRes.status).toBe(403);
+      expect(systemEvents(w1.channelId).length - before).toBe(0);
+      const union = (await (
+        await h.get(canonicalTasksPath(twin, w1.channelId, ''), { headers: auth })
+      ).json()) as any;
+      expect(union.tasks.some((x: any) => x.title === 'atomic-deny')).toBe(false);
+
+      // Equivalence: on the same (principal, destination, caps), the self-claim
+      // is admitted in NEITHER path.
+    });
   });
 });

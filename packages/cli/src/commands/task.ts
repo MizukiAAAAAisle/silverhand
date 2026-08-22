@@ -556,10 +556,14 @@ owns it, so hand off to it (or reopen it) rather than re-creating.
 --claim (optional) atomically self-claims the created task (lands in_progress
 + assigned to you) instead of leaving it unassigned todo. Requires the
 write_tasks capability in addition to create_tasks. \`task claim\` only claims
-tasks that already exist; this is the one-step create-and-claim. It applies to
-the stream you are working in only — a cross-conversation create is a DISPATCH
-that files the task UNCLAIMED so a member of the destination picks it up, so the
-combination fails with \`cross_conversation_claim\` (exit 1) and writes no task.
+tasks that already exist; this is the one-step create-and-claim. Whether it is
+allowed depends on your runtime scope: a session anchored to ONE conversation may
+create-and-claim only on that stream — addressing any OTHER conversation with
+--claim is a DISPATCH that files the task UNCLAIMED so a member of the destination
+picks it up, so the combination fails with \`cross_conversation_claim\` (exit 1)
+and writes no task; omit --claim there. A session NOT bound to a single
+conversation (an agent-scoped runtime) has no anchor for a destination to be
+"other" than, so --claim create-and-claims on any stream it may write to.
 
 Pre-flight failures (exit 1):
   --target not supplied → target_required (with \`correct_target\` when you were
