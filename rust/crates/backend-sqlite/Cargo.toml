@@ -1,0 +1,14 @@
+[package]
+name = "silverhand-backend-sqlite"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+silverhand-backend-core.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
