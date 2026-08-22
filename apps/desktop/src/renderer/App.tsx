@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Power, XCircle } from 'lucide-react';
+import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail, deriveNavRailDots } from '@/components/layout/NavRail';
 import { ComputersPanel } from '@/components/layout/ComputersPanel';
@@ -176,6 +176,7 @@ import {
   type DirectPairAuthority,
 } from '@/lib/chat-place-restore';
 import { jumpBasePath, resolveJumpNav, resolveJumpRoute } from '@/lib/message-jump-nav';
+import { toasterTypedIcons } from '@/lib/toast-icons';
 export {
   LAST_CHANNEL_KEY,
   clearPlaceMemory,
@@ -2872,17 +2873,14 @@ function RegisteredAppShell({
         * border / radius onto our tokens (forza6 gets the ink frame). No
         * `richColors` — that paints the whole toast in sonner's own hue
         * palette; instead the surface stays neutral and the type icon carries
-        * the semantic, matching AppStatusBanner. Type icons come from our
-        * lucide set (circle-wrapped success/error) tinted by our status
-        * tokens, so they read as one family with the rest of the app. */}
+        * the semantic, matching AppStatusBanner. Icons come from the shared
+        * lib/toast-icons authority; only sonner's typed levels have map slots
+        * here — neutral `toast()` calls pass their own icon from the same
+        * table. */}
       <Toaster
         position="top-right"
         theme={toasterTheme}
-        icons={{
-          success: <CheckCircle2 className="size-5 text-[var(--success)]" />,
-          error: <XCircle className="size-5 text-[var(--error)]" />,
-          warning: <AlertTriangle className="size-5 text-[var(--warning)]" />,
-        }}
+        icons={toasterTypedIcons}
         offset={TOAST_OFFSET}
         mobileOffset={TOAST_MOBILE_OFFSET}
       />

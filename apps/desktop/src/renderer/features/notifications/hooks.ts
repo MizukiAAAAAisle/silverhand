@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { toastIcon } from '@/lib/toast-icons';
 import {
   type MarkNotificationsReadInput,
   type NotificationDto,
@@ -268,7 +269,9 @@ export function useNotificationToasts(
       if (isAgentFailure) {
         toast.error(label, toastOptions);
       } else {
-        toast(label, toastOptions);
+        // Neutral notifications carry the shared "notification" icon so "new
+        // activity" reads at a glance; agent failures stay on the error level.
+        toast(label, { ...toastOptions, icon: toastIcon('notification') });
       }
 
       // System notification — main process suppresses ordinary alerts when an

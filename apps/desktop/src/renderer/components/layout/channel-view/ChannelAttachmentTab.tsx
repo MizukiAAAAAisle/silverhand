@@ -5,6 +5,7 @@ import { cn } from '@/lib/cn';
 import { fetchAttachmentBytes } from '@/lib/api';
 import { useAttachmentBlobToken } from '@/lib/attachment-blob-cache';
 import { attachmentPreviewKind } from '@/lib/attachment-preview';
+import { toastIcon } from '@/lib/toast-icons';
 import { Markdown } from '@/components/chat/Markdown';
 import { AttachmentHtmlPreview } from '@/components/chat/AttachmentHtmlPreview';
 import { openAttachmentExternally } from '@/components/chat/open-attachment';
@@ -72,7 +73,8 @@ export function ChannelAttachmentTab({
           revision > shown.revision;
         shownRef.current = { attachmentId, revision };
         setState({ status: 'ready', text, contentType: fetchedType });
-        if (isRevisionBump) toast('Attachment auto-updated');
+        if (isRevisionBump)
+          toast('Attachment auto-updated', { icon: toastIcon('attachment') });
       })
       .catch(err => {
         if (cancelled) return;
