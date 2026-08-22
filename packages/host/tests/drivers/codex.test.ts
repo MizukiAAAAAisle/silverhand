@@ -759,7 +759,7 @@ describe('CodexDriver.parseLine event mapping', () => {
       }),
     );
     expect(completed).toEqual([
-      { kind: 'tool_output', name: 'mcp_chat_send_message' },
+      { kind: 'tool_output', name: 'mcp_chat_send_message', outcome: 'completed' },
     ]);
   });
 
@@ -782,7 +782,7 @@ describe('CodexDriver.parseLine event mapping', () => {
         params: { item: { type: 'commandExecution', command: 'ls -al' } },
       }),
     );
-    expect(end).toEqual([{ kind: 'tool_output', name: 'shell' }]);
+    expect(end).toEqual([{ kind: 'tool_output', name: 'shell', outcome: 'completed' }]);
   });
 
   it('emits compaction lifecycle events', () => {
@@ -846,7 +846,7 @@ describe('CodexDriver.parseLine event mapping', () => {
       }),
     );
     expect(start).toEqual([
-      { kind: 'tool_call', name: 'web_search', input: { query: 'silverhand' } },
+      { kind: 'tool_call', name: 'web_search', input: { query: 'silverhand' }, toolCallId: 'ws-1' },
     ]);
 
     const end = driver.parseLine(
@@ -856,7 +856,7 @@ describe('CodexDriver.parseLine event mapping', () => {
         params: { item: { type: 'webSearch', id: 'ws-1' } },
       }),
     );
-    expect(end).toEqual([{ kind: 'tool_output', name: 'web_search' }]);
+    expect(end).toEqual([{ kind: 'tool_output', name: 'web_search', toolCallId: 'ws-1', outcome: 'completed' }]);
   });
 
   it('emits one tool_output per fileChange entry on completion', () => {
@@ -878,8 +878,8 @@ describe('CodexDriver.parseLine event mapping', () => {
       }),
     );
     expect(start).toEqual([
-      { kind: 'tool_call', name: 'file_change', input: { path: 'a.ts', kind: 'modify' } },
-      { kind: 'tool_call', name: 'file_change', input: { path: 'b.ts', kind: 'create' } },
+      { kind: 'tool_call', name: 'file_change', input: { path: 'a.ts', kind: 'modify' }, toolCallId: 'fc-1' },
+      { kind: 'tool_call', name: 'file_change', input: { path: 'b.ts', kind: 'create' }, toolCallId: 'fc-1' },
     ]);
 
     const end = driver.parseLine(
@@ -890,8 +890,8 @@ describe('CodexDriver.parseLine event mapping', () => {
       }),
     );
     expect(end).toEqual([
-      { kind: 'tool_output', name: 'file_change' },
-      { kind: 'tool_output', name: 'file_change' },
+      { kind: 'tool_output', name: 'file_change', toolCallId: 'fc-1', outcome: 'completed' },
+      { kind: 'tool_output', name: 'file_change', toolCallId: 'fc-1', outcome: 'completed' },
     ]);
   });
 

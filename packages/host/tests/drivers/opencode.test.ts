@@ -450,7 +450,7 @@ describe('OpenCodeDriver ACP event mapping', () => {
           },
         }),
       ),
-    ).toEqual([{ kind: 'tool_output', toolCallId: 'tool_1' }]);
+    ).toEqual([{ kind: 'tool_output', toolCallId: 'tool_1', outcome: 'success' }]);
   });
 
   it('refines a tool call with the params that arrive in tool_call_update, without re-announcing the call (#task:2101)', () => {
@@ -517,7 +517,7 @@ describe('OpenCodeDriver ACP event mapping', () => {
         toolCallId: 'tool_1',
         input: { cwd: '/tmp/agent', command: 'silverhand message send --anyway' },
       },
-      { kind: 'tool_output', toolCallId: 'tool_1' },
+      { kind: 'tool_output', toolCallId: 'tool_1', outcome: 'success' },
     ]);
   });
 
