@@ -5,5 +5,6 @@
 //! It has no Axum, SQLx, SQLite, HTTP, or wire-DTO dependency. Persistence and
 //! wire adapters live in sibling crates and project from application facts.
 
+pub mod access;
 pub mod foundation_message;
 pub mod persistence;
