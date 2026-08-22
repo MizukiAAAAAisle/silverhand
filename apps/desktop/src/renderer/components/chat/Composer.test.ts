@@ -20,6 +20,7 @@ import {
   buildShorthandResolver,
   buildViewerShorthandResolver,
   canResolveShorthandNow,
+  channelSourceStatusOf,
   detectTrigger,
   filterChannels,
   filterMentionPeople,
@@ -30,6 +31,7 @@ import {
   selectViewerMentionCandidates,
   viewerChannelPickerResult,
   type ChannelSlice,
+  type ChannelSourceStatus,
   type HumanMentionCandidate,
 } from './Composer';
 
@@ -904,76 +906,117 @@ describe('filterViewerChannels', () => {
   });
 });
 
+describe('channelSourceStatusOf — one query status projected to the tri-state', () => {
+  // error and pending are DISTINCT settlement outcomes: an errored workspace is
+  // terminal, a pending one still resolves. Folding them would let a 5xx read as
+  // perpetual loading.
+  it('success ⇒ complete', () => {
+    expect(channelSourceStatusOf('success')).toBe('complete');
+  });
+  it('pending ⇒ loading', () => {
+    expect(channelSourceStatusOf('pending')).toBe('loading');
+  });
+  it('error ⇒ partial_error', () => {
+    expect(channelSourceStatusOf('error')).toBe('partial_error');
+  });
+});
+
 describe('viewerChannelPickerResult — the fan-out settle fact reaches the picker page', () => {
-  // The completeness signal must be CONSUMED, not computed and dropped:
-  // `sourceKnown` is projected onto `complete`, which the picker turns into its
-  // incomplete/loading marker — a partial fan-out can never read as the whole set.
+  // The settledness signal must be CONSUMED, not computed and dropped, and all
+  // THREE outcomes must survive: the picker turns `status` into its distinct
+  // loading / partial_error markers. error DOMINATES mixed — an unavailable
+  // workspace is terminal, so it wins over a still-pending sibling.
   const names = new Map([['w-1', 'silverhand']]);
   const success = (data: ChannelListItem[]): ChannelSlice => ({ status: 'success', data });
 
-  it('one ERROR slice ⇒ complete:false while the settled slice still shows', () => {
+  it('one ERROR slice ⇒ partial_error while the settled slice still shows', () => {
     const slices: ChannelSlice[] = [
       success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
       { status: 'error' },
     ];
-    const r = viewerChannelPickerResult(slices, true, names, '');
+    const r = viewerChannelPickerResult(slices, 'success', names, '');
     expect(r.items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual(['c1']);
-    expect(r.complete).toBe(false);
+    expect(r.status).toBe('partial_error');
   });
 
-  it('a still-PENDING slice ⇒ complete:false', () => {
+  it('a still-PENDING slice, no error ⇒ loading', () => {
     const slices: ChannelSlice[] = [
       success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
       { status: 'pending' },
     ];
-    expect(viewerChannelPickerResult(slices, true, names, '').complete).toBe(false);
+    expect(viewerChannelPickerResult(slices, 'success', names, '').status).toBe('loading');
   });
 
-  it('every slice settled ⇒ complete:true', () => {
+  it('error + pending mixed ⇒ partial_error (error dominates)', () => {
+    const slices: ChannelSlice[] = [{ status: 'error' }, { status: 'pending' }];
+    expect(viewerChannelPickerResult(slices, 'success', names, '').status).toBe('partial_error');
+  });
+
+  it('every slice settled AND the workspace list settled ⇒ complete', () => {
     const slices: ChannelSlice[] = [
       success([viewerChannel({ id: 'c1', title: 'general', is_member: true })]),
     ];
-    expect(viewerChannelPickerResult(slices, true, names, '').complete).toBe(true);
+    expect(viewerChannelPickerResult(slices, 'success', names, '').status).toBe('complete');
+  });
+
+  it('the workspace list itself pending ⇒ loading even with settled slices', () => {
+    const slices: ChannelSlice[] = [success([])];
+    expect(viewerChannelPickerResult(slices, 'pending', names, '').status).toBe('loading');
+  });
+
+  it('the workspace list itself errored ⇒ partial_error', () => {
+    const slices: ChannelSlice[] = [success([])];
+    expect(viewerChannelPickerResult(slices, 'error', names, '').status).toBe('partial_error');
   });
 });
 
-describe('selectPickerView — the render seam that consumes completeness', () => {
-  // The production picker memo IS this function. It proves the `#` completeness fact
-  // survives into `incomplete` (the loading marker), and that `@` never carries it.
-  const channelResult = (complete: boolean) => ({ items: [], hiddenCount: 3, complete });
+describe('selectPickerView — the render seam that consumes settledness', () => {
+  // The production picker memo IS this function. It proves the `#` tri-state fact
+  // survives into `channelStatus` (the loading / partial_error markers), and that
+  // `@` is always presented whole.
+  const channelResult = (status: ChannelSourceStatus) => ({ items: [], hiddenCount: 3, status });
   const mention = { select: () => ({ items: [], hiddenCount: 0 }) };
 
-  it('# with an incomplete source ⇒ incomplete:true, page passed through untouched', () => {
+  it('# loading source ⇒ channelStatus loading, page passed through untouched', () => {
     const view = selectPickerView(
       { kind: '#', query: '' },
       mention,
-      { select: () => channelResult(false) },
+      { select: () => channelResult('loading') },
     );
-    expect(view.incomplete).toBe(true);
+    expect(view.channelStatus).toBe('loading');
     expect(view.hiddenCount).toBe(3); // the source's page is carried, not recomputed
   });
 
-  it('# with a complete source ⇒ incomplete:false', () => {
+  it('# partial_error source ⇒ channelStatus partial_error (never folded to loading)', () => {
     const view = selectPickerView(
       { kind: '#', query: '' },
       mention,
-      { select: () => channelResult(true) },
+      { select: () => channelResult('partial_error') },
     );
-    expect(view.incomplete).toBe(false);
+    expect(view.channelStatus).toBe('partial_error');
   });
 
-  it('@ never carries completeness — always presented whole', () => {
+  it('# complete source ⇒ channelStatus complete', () => {
+    const view = selectPickerView(
+      { kind: '#', query: '' },
+      mention,
+      { select: () => channelResult('complete') },
+    );
+    expect(view.channelStatus).toBe('complete');
+  });
+
+  it('@ never carries settledness — always presented whole', () => {
     const view = selectPickerView(
       { kind: '@', query: '' },
       { select: () => ({ items: [], hiddenCount: 0 }) },
-      { select: () => channelResult(false) },
+      { select: () => channelResult('partial_error') },
     );
-    expect(view.incomplete).toBe(false);
+    expect(view.channelStatus).toBe('complete');
   });
 
   it('no trigger ⇒ empty and complete', () => {
-    const view = selectPickerView(null, mention, { select: () => channelResult(false) });
-    expect(view).toEqual({ items: [], hiddenCount: 0, incomplete: false });
+    const view = selectPickerView(null, mention, { select: () => channelResult('partial_error') });
+    expect(view).toEqual({ items: [], hiddenCount: 0, channelStatus: 'complete' });
   });
 });
 
