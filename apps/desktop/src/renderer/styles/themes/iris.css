@@ -66,7 +66,10 @@
      它是 pane 级底色；需要凹一档的地方（task 列）由文件末尾的 scoped 规则
      显式给 `--bg-elevated`，不靠把 `--bg-primary` 整体压暗。 */
   --bg-base: #FFFFFF;
-  --activity-params-bg: var(--bg-base);
+  /* Activity params recess: a faint neutral ink wash over the `--bg-base` pane
+     (see forza6). `--bg-surface` here is a warm beige that read as too saturated
+     for a quiet recess; a black alpha stays un-tinted on the white pane. */
+  --activity-params-bg: oklab(0 0 0 / 0.05);
   --bg-primary: #FFFFFF;
   --bg-chat: #FFFFFF;
   --bg-channels-sidebar: #FFFFFF;
