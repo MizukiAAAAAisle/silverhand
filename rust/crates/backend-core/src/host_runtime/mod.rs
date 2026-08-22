@@ -117,6 +117,24 @@ impl NewLongLivedCredential {
 /// fn requires_display<T: std::fmt::Display>() {}
 /// requires_display::<ConnectToken>();
 /// ```
+///
+/// ```compile_fail
+/// use silverhand_backend_core::host_runtime::ConnectToken;
+/// fn requires_equality<T: PartialEq>() {}
+/// requires_equality::<ConnectToken>();
+/// ```
+///
+/// ```compile_fail
+/// use silverhand_backend_core::host_runtime::ConnectToken;
+/// fn requires_deref<T: std::ops::Deref<Target = str>>() {}
+/// requires_deref::<ConnectToken>();
+/// ```
+///
+/// ```compile_fail
+/// use silverhand_backend_core::host_runtime::ConnectToken;
+/// fn requires_as_ref<T: AsRef<str>>() {}
+/// requires_as_ref::<ConnectToken>();
+/// ```
 pub struct ConnectToken(String);
 
 impl ConnectToken {
