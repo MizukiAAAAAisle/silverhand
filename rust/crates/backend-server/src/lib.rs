@@ -1,3 +1,6 @@
 #![forbid(unsafe_code)]
-//! HTTP, WebSocket and wire projection scaffold. Server behavior lands after
-//! the workspace checkpoint is available to the parallel crate lanes.
+//! HTTP, WebSocket and wire projection boundary.
+
+mod error;
+pub mod http;
+pub mod wire;

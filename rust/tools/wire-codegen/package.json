@@ -1,0 +1,18 @@
+{
+  "name": "silverhand-rust-wire-codegen",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "build": "tsc -p ./tsconfig.json",
+    "generate:zod": "ts-to-zod --all",
+    "verify": "NODE_PATH=./node_modules node ./dist/rust/tools/wire-codegen/verify.js"
+  },
+  "dependencies": {
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "ts-to-zod": "3.15.0",
+    "typescript": "5.9.2"
+  }
+}
