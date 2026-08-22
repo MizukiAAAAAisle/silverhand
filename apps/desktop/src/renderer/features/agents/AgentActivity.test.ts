@@ -194,6 +194,25 @@ describe('presentToolCall', () => {
     ).not.toBe('Bash');
   });
 
+  it('message send surfaces its --target as the operand, never the body', () => {
+    // Quoted target after the label: `Message send → <target>`.
+    const quoted = presentToolCall('Bash', {
+      command: "silverhand message send --target '#silverhand/ui polish'",
+    });
+    expect(quoted.arg).toBe('→ #silverhand/ui polish');
+    // `--target=value` form.
+    expect(
+      presentToolCall('Bash', { command: 'silverhand message send --target=dm:@shiki' }).arg,
+    ).toBe('→ dm:@shiki');
+    // The heredoc/STDIN body is never mixed into the summary — only the target.
+    const withBody = presentToolCall('Bash', {
+      command: "silverhand message send --target '#conv:abc' <<'EOF'\nhello --target sneaky\nEOF",
+    });
+    expect(withBody.arg).toBe('→ #conv:abc');
+    // No target → the label stands alone, no fabricated arrow.
+    expect(presentToolCall('Bash', { command: 'silverhand message send' }).arg).toBeNull();
+  });
+
   it('task actions surface task id + status change; never fabricate an id', () => {
     const claim = presentToolCall('Bash', { command: 'silverhand task claim --task-number 9' });
     expect(claim.verb).not.toBe('Bash');

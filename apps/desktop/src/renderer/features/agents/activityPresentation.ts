@@ -263,6 +263,14 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
     if (num && status) arg = `#${num} → ${status}`;
     else if (num) arg = `#${num}`;
     else if (status) arg = `→ ${status}`;
+  } else if (noun === 'message' && verbTok === 'send') {
+    // A send's destination is its one scannable operand — surface the `--target`
+    // value after the label so the row reads `Message send → <target>`. The body
+    // (heredoc / STDIN) is deliberately omitted: the summary is where it went,
+    // not what it said. `--target` is quote- or bare-valued; take the first one.
+    const m = /--target[=\s]+(?:'([^']*)'|"([^"]*)"|(\S+))/.exec(args);
+    const target = m?.[1] ?? m?.[2] ?? m?.[3] ?? null;
+    if (target) arg = `→ ${target}`;
   }
   return { verb: label, arg, detail: null };
 }
