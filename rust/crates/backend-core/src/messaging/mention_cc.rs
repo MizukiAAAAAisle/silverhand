@@ -12,7 +12,7 @@
 
 use super::{
     AgentId, ConversationId, FromKind, MessageId, MessageSeq, ParticipantHandle, PrincipalKind,
-    UserId, format_reference_token,
+    UserId, addressing::format_reference_token,
 };
 
 /// The subtype a stored copy carries, so a reader can recognise one without
