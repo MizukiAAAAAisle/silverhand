@@ -3,4 +3,5 @@
 
 mod error;
 pub mod http;
+pub mod messaging;
 pub mod wire;
