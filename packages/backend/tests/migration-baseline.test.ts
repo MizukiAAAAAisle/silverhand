@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -32,7 +33,8 @@ import { runMigrations } from '../src/db.js';
  *
  * The one-time "old chain v1..v44 == baseline" proof is NOT here; it ran in the
  * compaction PR (migration-baseline-gen.test.ts) against the still-present chain
- * and is preserved in git history. All DBs are `:memory:` (shiki gate §6).
+ * and is preserved in git history. Every DB is a fresh file under the OS temp
+ * root and is removed after the assertion.
  *
  * Both stages drive the REAL migration runner (runMigrations, the production
  * path in packages/backend/src/db.ts) — not a bespoke replay — so the guard
@@ -44,6 +46,30 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FX = join(here, 'migration-baseline');
 const V44_ORACLE = join(FX, 'schema-baseline-v44.normalized.txt');
 const CURRENT_ORACLE = join(FX, 'schema-current.normalized.txt');
+const CURRENT_EXECUTABLE = join(FX, 'schema-current.sql');
+
+function withFreshDb<T>(run: (db: Database.Database) => T): T {
+  const directory = mkdtempSync(join(tmpdir(), 'silverhand-schema-'));
+  const db = new Database(join(directory, 'schema.sqlite'));
+  db.pragma('foreign_keys = ON');
+  try {
+    return run(db);
+  } finally {
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function dumpExecutableSchema(db: Database.Database): string {
+  const rows = db
+    .prepare<[], { sql: string }>(
+      `SELECT sql FROM sqlite_master
+       WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name != '_migrations'
+       ORDER BY rowid`,
+    )
+    .all();
+  return rows.map(row => `${row.sql.trim()};`).join('\n\n') + '\n';
+}
 
 /** Order-independent, whitespace-collapsed schema fingerprint. Must match the
  *  generator's normalizeSchema (migration-baseline-gen.test.ts) byte-for-byte. */
@@ -73,8 +99,7 @@ describe('baseline compaction drift guard (#task:1213)', () => {
   });
 
   it('(a) applying only the baseline reproduces the frozen v44 schema', () => {
-    const db = new Database(':memory:');
-    try {
+    withFreshDb(db => {
       // Run JUST the baseline through the real runner on a fresh DB (isEmpty
       // bypass → applies; writes the _migrations row at 44).
       const result = runMigrations(db, {
@@ -84,14 +109,11 @@ describe('baseline compaction drift guard (#task:1213)', () => {
       });
       expect(result.appliedSteps).toEqual([BASELINE_MIGRATION_STEP]);
       expect(normalizeSchema(db)).toBe(readFileSync(V44_ORACLE, 'utf8'));
-    } finally {
-      db.close();
-    }
+    });
   });
 
   it('(b) applying baseline + retained increments reproduces current schema', () => {
-    const db = new Database(':memory:');
-    try {
+    withFreshDb(db => {
       // The default plan (baseline + v45..) through the real runner.
       const result = runMigrations(db, {
         expectedStep: CURRENT_MIGRATION_STEP,
@@ -99,13 +121,21 @@ describe('baseline compaction drift guard (#task:1213)', () => {
       });
       expect(result.appliedSteps).toEqual(migrations.map(m => m.version));
       const got = normalizeSchema(db);
+      const executable = dumpExecutableSchema(db);
       if (process.env.UPDATE_SCHEMA_SNAPSHOT === '1') {
         writeFileSync(CURRENT_ORACLE, got);
+        writeFileSync(CURRENT_EXECUTABLE, executable);
       }
       expect(got).toBe(readFileSync(CURRENT_ORACLE, 'utf8'));
+      expect(executable).toBe(readFileSync(CURRENT_EXECUTABLE, 'utf8'));
       expect(CURRENT_MIGRATION_STEP).toBe(migrations[migrations.length - 1]!.version);
-    } finally {
-      db.close();
-    }
+    });
+  });
+
+  it('(c) executable current snapshot reproduces the current oracle', () => {
+    withFreshDb(db => {
+      db.exec(readFileSync(CURRENT_EXECUTABLE, 'utf8'));
+      expect(normalizeSchema(db)).toBe(readFileSync(CURRENT_ORACLE, 'utf8'));
+    });
   });
 });

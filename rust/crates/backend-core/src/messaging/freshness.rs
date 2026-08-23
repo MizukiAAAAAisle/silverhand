@@ -5,7 +5,7 @@
 //! has no runtime and therefore no consumption position to be behind, so a human
 //! send never meets this guard.
 
-use super::{AgentId, EntropyUnavailable, SendActor};
+use super::{AgentId, EnvironmentUnavailable, SendActor, SendEntropy};
 
 /// The delivery scope a runtime's freshness is judged in. It is the agent's own
 /// declared session scope, not a property of the send.
@@ -65,9 +65,9 @@ pub enum FreshnessGuardInvariant {
 pub struct StaleEventId(String);
 
 impl StaleEventId {
-    pub fn mint() -> Result<Self, EntropyUnavailable> {
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
         let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|_| EntropyUnavailable)?;
+        entropy.fill(&mut bytes)?;
         // Version 4, variant 1: the shape consumers already parse.
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -90,7 +90,17 @@ impl StaleEventId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging::UserId;
+    use crate::messaging::{EnvironmentUnavailable, UserId};
+
+    /// Entropy with no randomness in it, so the identity can be asserted exactly.
+    struct FixedEntropy(&'static [u8; 16]);
+
+    impl SendEntropy for FixedEntropy {
+        fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+            buffer.copy_from_slice(self.0);
+            Ok(())
+        }
+    }
 
     fn agent() -> AgentId {
         AgentId::parse("agent-1").unwrap()
@@ -128,18 +138,17 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_event_id_is_a_distinct_version_4_identity() {
-        let first = StaleEventId::mint().unwrap();
-        let second = StaleEventId::mint().unwrap();
+    fn a_stale_event_id_stamps_the_version_and_variant_consumers_parse() {
+        let ascending = StaleEventId::mint(&FixedEntropy(&[
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]))
+        .unwrap();
+        let ones = StaleEventId::mint(&FixedEntropy(&[0xff; 16])).unwrap();
 
-        assert_ne!(first, second);
-        assert_eq!(first.as_str().len(), 36);
-        let groups: Vec<usize> = first.as_str().split('-').map(str::len).collect();
-        assert_eq!(groups, vec![8, 4, 4, 4, 12]);
-        assert_eq!(first.as_str().as_bytes()[14], b'4');
-        assert!(matches!(
-            first.as_str().as_bytes()[19],
-            b'8' | b'9' | b'a' | b'b'
-        ));
+        // Byte 6 keeps its low nibble under a forced version 4; byte 8 keeps its
+        // low six bits under a forced variant 1.
+        assert_eq!(ascending.as_str(), "00010203-0405-4607-8809-0a0b0c0d0e0f");
+        assert_eq!(ones.as_str(), "ffffffff-ffff-4fff-bfff-ffffffffffff");
     }
 }

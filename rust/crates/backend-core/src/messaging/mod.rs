@@ -1,32 +1,58 @@
 //! Messaging application boundary: the real create-message contract.
 //!
-//! Driver-free. Wire projection and persistence live in sibling crates and both
-//! project from the facts defined here.
+//! Driver-free and transport-free. Persistence and wire projection live in
+//! sibling crates; both project from the facts defined here, and neither's
+//! vocabulary — statement text, status codes, wire codes, operator instructions —
+//! appears in this module.
 
 pub mod attachments;
+pub mod environment;
 pub mod freshness;
+pub mod mention_cc;
+pub mod post_commit;
 
-use std::future::Future;
-
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use std::{collections::HashSet, error::Error, future::Future, ops::Range};
 
 use crate::persistence::PersistenceFailure;
 
-/// UTF-8 bytes. Rust's `str::len()` is already a byte count, so the "bytes, not
-/// UTF-16 code units" distinction cannot be lost here.
+/// The content bound is a UTF-8 byte count. Rust's `str::len()` is already a byte
+/// count, so the "bytes, not UTF-16 code units" distinction cannot be lost here.
 pub const MAX_MESSAGE_CONTENT_BYTES: usize = 64 * 1024;
-pub const MAX_MESSAGE_CONTENT_LABEL: &str = "64KiB";
-/// Envelope bound for a send request: worst-case JSON escaping of a full-size
-/// body plus headroom. Distinct from the content cap and reported separately.
-pub const MESSAGE_SEND_MAX_BODY_BYTES: usize = 6 * 64 * 1024 + 128 * 1024;
-pub const MAX_MESSAGE_ATTACHMENTS: usize = 20;
 
-pub fn content_byte_length(content: &str) -> usize {
-    content.len()
+/// Message content that has been shown to satisfy the size invariant.
+///
+/// The invariant travels with the value rather than with a caller's discipline:
+/// the only way to obtain one is to pass the check, so no adapter — including a
+/// future one — can hand oversized content to the write unit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageContent(String);
+
+impl MessageContent {
+    pub fn parse(raw: impl Into<String>) -> Result<Self, ContentTooLong> {
+        let raw = raw.into();
+        if raw.len() > MAX_MESSAGE_CONTENT_BYTES {
+            return Err(ContentTooLong {
+                actual_bytes: raw.len(),
+                max_bytes: MAX_MESSAGE_CONTENT_BYTES,
+            });
+        }
+        Ok(Self(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn byte_length(&self) -> usize {
+        self.0.len()
+    }
 }
 
-pub fn content_exceeds_limit(content: &str) -> bool {
-    content.len() > MAX_MESSAGE_CONTENT_BYTES
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("message content is {actual_bytes} bytes, above the limit of {max_bytes}")]
+pub struct ContentTooLong {
+    pub actual_bytes: usize,
+    pub max_bytes: usize,
 }
 
 /// A message identity as the application handles it: opaque, and never parsed for
@@ -56,10 +82,21 @@ pub struct UserId(String);
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AttachmentId(String);
 
+/// A workspace, as Messaging needs to name one. Its own type rather than a borrowed
+/// one from whoever owns workspaces: this module only ever carries the coordinate.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct WorkspaceId(String);
+
+/// A notification is not a message. They happen to share an identity form, and
+/// giving them one type is how a notification eventually gets passed to something
+/// that expects a message.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct NotificationId(String);
+
 macro_rules! opaque_id {
     ($name:ident) => {
         impl $name {
-            /// Rejects only emptiness. An identity also arrives from the wire,
+            /// Rejects only emptiness. An identity also arrives from outside,
             /// where it is a coordinate rather than a claim, so validating its
             /// shape here would refuse ids this system itself once minted.
             pub fn parse(raw: impl Into<String>) -> Result<Self, EmptyIdentifier> {
@@ -87,53 +124,73 @@ opaque_id!(ThreadRootId);
 opaque_id!(AgentId);
 opaque_id!(UserId);
 opaque_id!(AttachmentId);
+opaque_id!(WorkspaceId);
+opaque_id!(NotificationId);
 
 #[derive(Debug, thiserror::Error)]
 #[error("identifier must not be empty")]
 pub struct EmptyIdentifier;
-
-#[derive(Debug, thiserror::Error)]
-#[error("system entropy is unavailable")]
-pub struct EntropyUnavailable;
 
 /// Bytes of entropy behind a minted message id. Twelve encode to exactly sixteen
 /// base64url characters with no padding, which is the identity clients already
 /// hold.
 const MESSAGE_ID_ENTROPY_BYTES: usize = 12;
 
+/// Mints an opaque identity in the form this system publishes. The format is owned
+/// here rather than by whichever store writes the row, and the entropy is a
+/// capability the caller provides: reaching for it implicitly would hide a failure
+/// that has to stay reportable.
+fn mint_identity(entropy: &impl SendEntropy) -> Result<String, EnvironmentUnavailable> {
+    let mut bytes = [0u8; MESSAGE_ID_ENTROPY_BYTES];
+    entropy.fill(&mut bytes)?;
+    Ok(environment::base64url(&bytes))
+}
+
 impl MessageId {
-    /// Mints a new identity. The format is part of what this system publishes, so
-    /// it is owned here rather than by whichever store happens to write the row.
-    pub fn mint() -> Result<Self, EntropyUnavailable> {
-        let mut bytes = [0u8; MESSAGE_ID_ENTROPY_BYTES];
-        getrandom::fill(&mut bytes).map_err(|_| EntropyUnavailable)?;
-        Ok(Self(URL_SAFE_NO_PAD.encode(bytes)))
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
+    }
+}
+
+impl ConversationId {
+    /// A conversation minted by the system — the direct line a mention copy travels
+    /// on — carries the same identity form as every other.
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
+    }
+}
+
+impl NotificationId {
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
     }
 }
 
 impl MessageSeq {
-    /// The store is the only origin: it advances the conversation's counter and
-    /// hands back what it reserved.
-    pub fn reserved(value: i64) -> Self {
-        Self(value)
-    }
-
-    /// The wire carries a JSON number, so decoding validates rather than casts.
-    pub fn decode(value: i64) -> Result<Self, InvalidSeq> {
-        if value < 0 {
-            return Err(InvalidSeq);
-        }
-        Ok(Self(value))
-    }
-
     pub fn get(self) -> i64 {
         self.0
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("message seq must be a non-negative integer")]
-pub struct InvalidSeq;
+/// The only way to obtain an ordinal, whichever direction it came from. A negative
+/// ordinal has no meaning in either, so there is no unchecked constructor for a
+/// caller — including a store reading its own column — to prefer.
+impl TryFrom<i64> for MessageSeq {
+    type Error = InvalidSeq;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if value < 0 {
+            return Err(InvalidSeq { value });
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("message ordinal {value} is negative")]
+pub struct InvalidSeq {
+    pub value: i64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FromKind {
@@ -159,11 +216,219 @@ impl SendActor {
     }
 }
 
-/// Which principal kind an endpoint of a direct pair names.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EndpointKind {
+/// Randomness, as a capability rather than an ambient fact of the process. A
+/// failure keeps its cause: "no identity could be minted" is only actionable with
+/// the reason attached.
+pub trait SendEntropy {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable>;
+}
+
+/// The moment a send happened, likewise a capability. The unit reads it once and
+/// reports the same value it stored.
+pub trait SendClock {
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable>;
+}
+
+/// The environment could not answer. Not a refusal: the caller did nothing wrong,
+/// and nothing about the request would change the outcome.
+#[derive(Debug, thiserror::Error)]
+#[error("the environment this send depends on could not answer")]
+pub struct EnvironmentUnavailable {
+    #[source]
+    source: Box<dyn Error + Send + Sync + 'static>,
+}
+
+impl EnvironmentUnavailable {
+    pub fn from_source<E>(source: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        Self {
+            source: Box::new(source),
+        }
+    }
+}
+
+/// Which namespace names a principal. One vocabulary, because "which table
+/// answers for this name" is the same question whether it is asked of a direct
+/// pair's endpoint or of something a message addressed.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum PrincipalKind {
     Human,
     Agent,
+}
+
+/// Something a message addressed. Its fields are sealed because the value is
+/// EVIDENCE about a body: it is obtainable only by deriving it from the content
+/// that addressed them, so no caller can hand the write unit a name the message
+/// never wrote. The handle is still resolved inside the write unit — a name is a
+/// coordinate, and which principal it denotes can change before the commit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageReference {
+    kind: PrincipalKind,
+    handle: ParticipantHandle,
+}
+
+impl MessageReference {
+    pub fn kind(&self) -> PrincipalKind {
+        self.kind
+    }
+
+    pub fn handle(&self) -> &ParticipantHandle {
+        &self.handle
+    }
+}
+
+/// The destination form a reference takes in a body: `silverhand://agent/Alice`.
+const REFERENCE_PREFIX: &str = "silverhand://";
+/// A handle is at most this long wherever it is stored, so a longer one cannot be
+/// a name this system holds.
+const HANDLE_MAX_LENGTH: usize = 64;
+
+/// A participant name, in the grammar every stored name obeys.
+///
+/// It exists as a type because a handle is interpolated into server-authored prose
+/// that addresses people: raw text there could close a destination, open another
+/// path segment, or start a new line. Anything outside the grammar is not a name
+/// this system holds, so it is refused rather than escaped.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ParticipantHandle(String);
+
+impl ParticipantHandle {
+    pub fn parse(raw: impl Into<String>) -> Result<Self, InvalidHandle> {
+        let raw = raw.into();
+        if raw.is_empty() || raw.len() > HANDLE_MAX_LENGTH {
+            return Err(InvalidHandle);
+        }
+        let mut characters = raw.chars();
+        let first = characters.next().ok_or(InvalidHandle)?;
+        if !first.is_ascii_alphabetic() {
+            return Err(InvalidHandle);
+        }
+        if !characters.all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        }) {
+            return Err(InvalidHandle);
+        }
+        Ok(Self(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("handle is outside the grammar every stored name obeys")]
+pub struct InvalidHandle;
+
+/// Reads one link destination. Nothing else is a reference: not a different
+/// scheme, not an extra path segment, not a query, not a handle outside the stored
+/// name grammar. Fail-closed, because the alternative is addressing someone the
+/// author did not name.
+fn parse_reference_destination(destination: &str) -> Option<MessageReference> {
+    let rest = destination.strip_prefix(REFERENCE_PREFIX)?;
+    let (kind, handle) = rest.split_once('/')?;
+    let kind = match kind {
+        "agent" => PrincipalKind::Agent,
+        "human" => PrincipalKind::Human,
+        _ => return None,
+    };
+    Some(MessageReference {
+        kind,
+        handle: ParticipantHandle::parse(handle).ok()?,
+    })
+}
+
+/// The canonical prose form of a reference: `<silverhand://agent/Alice>`.
+///
+/// The brackets are what make a destination a destination — a bare one is plain
+/// text — so every producer of server-authored prose writes this form. Not public:
+/// its only consumers are the projections in this module, and a handle it can be
+/// given has already been shown to be a name.
+fn format_reference_token(kind: PrincipalKind, handle: &ParticipantHandle) -> String {
+    let kind = match kind {
+        PrincipalKind::Agent => "agent",
+        PrincipalKind::Human => "human",
+    };
+    format!("<{REFERENCE_PREFIX}{kind}/{}>", handle.as_str())
+}
+
+/// Which positions in a body can address anyone.
+///
+/// The rule is Markdown structure — an autolink in prose, never quoted syntax and
+/// never someone else's quoted words — so it is supplied rather than decided here.
+/// What is NOT supplied is identity: the derivation reads the bytes at the spans
+/// this returns, so a position rule that lies can narrow or widen WHERE a body
+/// addresses from, and can never introduce a name the body does not contain.
+pub trait ReferencePositions {
+    /// Byte ranges of the candidate autolinks, in source order, brackets included.
+    fn autolink_spans(&self, content: &MessageContent) -> Vec<Range<usize>>;
+}
+
+/// Everyone one message addressed: deduplicated, in first-occurrence order.
+///
+/// There is no way to build one except from a body — not even an empty one. A
+/// second source of this value, however harmless it looks, would be a way to
+/// answer "who does this message address" without reading the message.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AddressedPrincipals(Vec<MessageReference>);
+
+impl AddressedPrincipals {
+    fn derive(content: &MessageContent, positions: &impl ReferencePositions) -> Self {
+        let body = content.as_str();
+        let mut addressed = Vec::new();
+        let mut seen = HashSet::new();
+
+        // The position rule answers WHERE, as a set. Order is part of the answer to
+        // WHO — it decides which occurrence of a repeated name is the first — so it
+        // is established here from the body's own offsets rather than inherited
+        // from whatever order a traversal happened to produce.
+        let mut spans = positions.autolink_spans(content);
+        spans.sort_by_key(|span| (span.start, span.end));
+
+        for span in spans {
+            // A span that is not a whole autolink of THIS body addresses nobody.
+            let Some(candidate) = body.get(span) else {
+                continue;
+            };
+            let Some(destination) = candidate
+                .strip_prefix('<')
+                .and_then(|inner| inner.strip_suffix('>'))
+            else {
+                continue;
+            };
+            let Some(reference) = parse_reference_destination(destination) else {
+                continue;
+            };
+            if seen.insert((reference.kind, reference.handle.clone())) {
+                addressed.push(reference);
+            }
+        }
+        Self(addressed)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &MessageReference> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Why a principal follows a reply cluster. Recorded because the reason outlives
+/// the event: a follower added by a mention is not the same fact as one who
+/// replied.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreadFollowerSource {
+    Reply,
+    TargetAuthor,
+    Mention,
 }
 
 /// One side of a direct pair. `deleted_at_ms` is the pair's own record of a
@@ -171,7 +436,7 @@ pub enum EndpointKind {
 /// when.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationEndpoint {
-    pub kind: EndpointKind,
+    pub kind: PrincipalKind,
     pub id: String,
     pub deleted_at_ms: Option<i64>,
 }
@@ -196,13 +461,14 @@ pub struct ConversationFacts {
     pub is_closed: bool,
     pub is_archived: bool,
     /// Present only for a direct pair. The endpoints themselves, not a verdict
-    /// about them: a store that answered "read-only" would be a second authority
-    /// free to drift from this one.
+    /// about them: a verdict from the store would be a second authority, free to
+    /// drift from the one that answers the same question elsewhere.
     pub direct_pair: Option<DirectPairEndpoints>,
 }
 
-/// Why a write was refused. Each refusal carries the wire code it is identified
-/// by; choosing a status from it is the transport adapter's business.
+/// Why a write was refused, as the business reason and nothing else. How a reason
+/// is reported — status, code, wording, what an operator should do next — belongs
+/// to whichever boundary is speaking.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ConversationRefusal {
     #[error("conversation not found")]
@@ -215,17 +481,6 @@ pub enum ConversationRefusal {
     EndpointGone,
 }
 
-impl ConversationRefusal {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::NotFound => "conversation_not_found",
-            Self::Closed => "conversation_closed",
-            Self::Archived => "conversation_archived",
-            Self::EndpointGone => "conversation_endpoint_gone",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ActorRefusal {
     #[error("agent not found")]
@@ -236,25 +491,16 @@ pub enum ActorRefusal {
     UserNotParticipant,
 }
 
-impl ActorRefusal {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::AgentNotFound => "agent_not_found",
-            Self::AgentNotParticipant => "agent_not_participant_of_conversation",
-            Self::UserNotParticipant => "user_not_participant_of_conversation",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("target message not found in target conversation")]
 pub struct ReplyTargetRefusal;
 
-impl ReplyTargetRefusal {
-    pub fn code(&self) -> &'static str {
-        "reply_target_not_found"
-    }
-}
+/// The named root is not a reply cluster of the target conversation. Unknown, from
+/// another conversation, and "a reply, so not a root" are one answer: a sender
+/// naming a cluster it cannot use learns nothing about what exists.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("no reply cluster of this conversation is named by that root")]
+pub struct ThreadRootRefusal;
 
 /// An attachment reference the store would not accept. "Unknown" and "belongs to
 /// another conversation" are deliberately one answer, so a reference cannot be
@@ -268,13 +514,6 @@ pub enum AttachmentRefusal {
 }
 
 impl AttachmentRefusal {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::OutsideChannel { .. } => "attachment_outside_channel",
-            Self::LabelKindMismatch { .. } => "attachment_label_kind_mismatch",
-        }
-    }
-
     pub fn attachment_id(&self) -> &AttachmentId {
         match self {
             Self::OutsideChannel { attachment_id } | Self::LabelKindMismatch { attachment_id } => {
@@ -288,22 +527,15 @@ impl AttachmentRefusal {
 /// carries no message body, no ordinal and no count, because a stale answer must
 /// not become a side channel for content the caller has not been delivered.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[error(
-    "message is stale: this runtime has undelivered input it must consume before sending (drain it, or resend with --anyway)"
-)]
+#[error("this runtime has undelivered input it must consume before sending")]
 pub struct StaleRefusal {
     pub stale_event_id: freshness::StaleEventId,
     pub target_conversation_id: ConversationId,
 }
 
-impl StaleRefusal {
-    pub fn code(&self) -> &'static str {
-        "message_stale"
-    }
-}
-
-/// Everything that can stop a send. Concrete per family: a caller can act on the
-/// distinction, and no status code appears at this layer.
+/// Everything that can stop a send, concrete per family so a caller can act on the
+/// distinction. The last three are this system's own failures rather than answers
+/// about the request.
 #[derive(Debug, thiserror::Error)]
 pub enum SendMessageError {
     #[error(transparent)]
@@ -313,56 +545,171 @@ pub enum SendMessageError {
     #[error(transparent)]
     ReplyTarget(#[from] ReplyTargetRefusal),
     #[error(transparent)]
+    ThreadRoot(#[from] ThreadRootRefusal),
+    #[error(transparent)]
     Attachment(#[from] AttachmentRefusal),
     #[error(transparent)]
     Stale(#[from] StaleRefusal),
     #[error(transparent)]
     Invariant(#[from] freshness::FreshnessGuardInvariant),
     #[error(transparent)]
+    Environment(#[from] EnvironmentUnavailable),
+    #[error(transparent)]
     Persistence(#[from] PersistenceFailure),
-}
-
-impl SendMessageError {
-    /// The wire code identifying this refusal, or `None` when the send failed for
-    /// a reason the domain has no answer for: an infrastructure failure and a
-    /// violated invariant are both this system's fault, not a caller's, and
-    /// naming them would invite a caller to handle them.
-    pub fn code(&self) -> Option<&'static str> {
-        match self {
-            Self::Conversation(refusal) => Some(refusal.code()),
-            Self::Actor(refusal) => Some(refusal.code()),
-            Self::ReplyTarget(refusal) => Some(refusal.code()),
-            Self::Attachment(refusal) => Some(refusal.code()),
-            Self::Stale(refusal) => Some(refusal.code()),
-            Self::Invariant(_) | Self::Persistence(_) => None,
-        }
-    }
 }
 
 /// Where a send lands within its conversation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SendDestination {
     MainLine,
-    /// A reply cluster named directly, as an address already resolved against the
-    /// target conversation.
+    /// A reply cluster named by its root. The name is checked inside the atomic
+    /// unit: a resolved address is a coordinate, not a capability, so carrying it
+    /// here grants nothing.
     Thread(ThreadRootId),
-    /// A reply to one message. The cluster follows from that message, so it is
-    /// resolved inside the atomic unit.
+    /// A reply to one message. The cluster follows from that message.
     Reply(MessageId),
 }
 
-/// One create-message request, as the application states it.
+/// What a boundary holds once it has validated a request: everything a send needs
+/// except what can only be derived from the body.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SendMessage {
+pub struct SendMessageDraft {
     /// The conversation the sender is bound to. It keys freshness — the sender's
     /// own field of view — and is not necessarily where the message lands.
     pub source_conversation: ConversationId,
     pub target_conversation: ConversationId,
     pub actor: SendActor,
-    pub content: String,
+    pub content: MessageContent,
     pub destination: SendDestination,
     pub attachment_refs: Vec<attachments::AttachmentRef>,
     pub freshness_bypass: bool,
+}
+
+/// Which addressed agents this author may open a direct line to.
+///
+/// Sealed for the same reason the addressed set is: it is a VERDICT, and a caller
+/// that could assemble one would be granting itself the right to open a line and
+/// deliver a copy through it. The only way to obtain one is [`SendMessage::prepare`],
+/// which asks a named authority about this author and these handles.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectLineGrants(HashSet<AgentId>);
+
+impl DirectLineGrants {
+    pub fn contains(&self, agent: &AgentId) -> bool {
+        self.0.contains(agent)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Who may open a direct line to whom. A capability boundary owned elsewhere: the
+/// question is about a person and the agents their message named, and answering it
+/// reads authorization state, which the send's own transaction deliberately cannot
+/// do.
+pub trait DirectLineAuthority {
+    /// The addressed agents this author may open a direct line to, as ids the
+    /// authority has itself gated. Asked once per send, before any transaction.
+    fn direct_lines(
+        &self,
+        author: &UserId,
+        addressed: &AddressedPrincipals,
+    ) -> Result<Vec<AgentId>, PersistenceFailure>;
+}
+
+/// One create-message request, prepared: every field has satisfied its own
+/// invariant, and what the body addresses has been derived FROM that body.
+///
+/// The fields are sealed together on purpose. A struct whose content and whose
+/// addressed set could be set independently would let the two disagree — a body
+/// saying one thing while the send delivers to someone else — so the only way to
+/// obtain this value is [`SendMessage::prepare`], which derives one from the
+/// other. Deriving happens here, before any transaction: a 64KiB body must not be
+/// parsed while the writer is held, and authorization must not be asked from
+/// inside it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SendMessage {
+    source_conversation: ConversationId,
+    target_conversation: ConversationId,
+    actor: SendActor,
+    content: MessageContent,
+    destination: SendDestination,
+    attachment_refs: Vec<attachments::AttachmentRef>,
+    addressed: AddressedPrincipals,
+    direct_lines: DirectLineGrants,
+    freshness_bypass: bool,
+}
+
+impl SendMessage {
+    /// Derives what the body addresses, then asks the authority which of those the
+    /// author may open a line to. An agent author asks nothing: a direct line is a
+    /// person's to open, so the grants are empty by construction rather than by a
+    /// caller's say-so.
+    pub fn prepare(
+        draft: SendMessageDraft,
+        positions: &impl ReferencePositions,
+        authority: &impl DirectLineAuthority,
+    ) -> Result<Self, PersistenceFailure> {
+        let addressed = AddressedPrincipals::derive(&draft.content, positions);
+        let direct_lines = match &draft.actor {
+            SendActor::User(author) => DirectLineGrants(
+                authority
+                    .direct_lines(author, &addressed)?
+                    .into_iter()
+                    .collect(),
+            ),
+            SendActor::Agent(_) => DirectLineGrants(HashSet::new()),
+        };
+
+        Ok(Self {
+            source_conversation: draft.source_conversation,
+            target_conversation: draft.target_conversation,
+            actor: draft.actor,
+            content: draft.content,
+            destination: draft.destination,
+            attachment_refs: draft.attachment_refs,
+            addressed,
+            direct_lines,
+            freshness_bypass: draft.freshness_bypass,
+        })
+    }
+
+    pub fn source_conversation(&self) -> &ConversationId {
+        &self.source_conversation
+    }
+
+    pub fn target_conversation(&self) -> &ConversationId {
+        &self.target_conversation
+    }
+
+    pub fn actor(&self) -> &SendActor {
+        &self.actor
+    }
+
+    pub fn content(&self) -> &MessageContent {
+        &self.content
+    }
+
+    pub fn destination(&self) -> &SendDestination {
+        &self.destination
+    }
+
+    pub fn attachment_refs(&self) -> &[attachments::AttachmentRef] {
+        &self.attachment_refs
+    }
+
+    pub fn addressed(&self) -> &AddressedPrincipals {
+        &self.addressed
+    }
+
+    pub fn direct_lines(&self) -> &DirectLineGrants {
+        &self.direct_lines
+    }
+
+    pub fn freshness_bypass(&self) -> bool {
+        self.freshness_bypass
+    }
 }
 
 /// The single business fact of one committed send. Both the acknowledgement and
@@ -370,13 +717,57 @@ pub struct SendMessage {
 /// disagree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageCreatedFact {
-    pub message: CreatedMessage,
-    /// Present only for a reply: absolute counts computed inside the atomic unit
-    /// so they already include the message being reported.
-    pub projections: Option<ThreadProjections>,
+    message: CreatedMessage,
+    thread: Option<ThreadReplyFact>,
+    post_commit: post_commit::PostCommitPlan,
+    freshness_bypassed: bool,
+    mention_copies: Vec<mention_cc::MentionCopyOutcome>,
+}
+
+impl MessageCreatedFact {
+    /// Assembled by the unit of work that committed the send.
+    ///
+    /// A trust seam, stated rather than pretended away: this factory is public, so
+    /// every crate that can call it is inside the same trusted boundary — a fact can
+    /// be fabricated by anyone with that reach. What is ruled out is different and
+    /// narrower: a fact that has been returned cannot be replaced or modified, because
+    /// every field is read-only from here on.
+    pub fn committed(
+        message: CreatedMessage,
+        thread: Option<ThreadReplyFact>,
+        post_commit: post_commit::PostCommitPlan,
+        freshness_bypassed: bool,
+        mention_copies: Vec<mention_cc::MentionCopyOutcome>,
+    ) -> Self {
+        Self {
+            message,
+            thread,
+            post_commit,
+            freshness_bypassed,
+            mention_copies,
+        }
+    }
+
+    pub fn message(&self) -> &CreatedMessage {
+        &self.message
+    }
+
+    /// Present only for a reply.
+    pub fn thread(&self) -> Option<&ThreadReplyFact> {
+        self.thread.as_ref()
+    }
+
     /// The guard was skipped at the sender's request. Carried for the post-commit
     /// record, not for the reply to the caller.
-    pub freshness_bypassed: bool,
+    pub fn freshness_bypassed(&self) -> bool {
+        self.freshness_bypassed
+    }
+
+    /// What became of each agent this message addressed that could not read it.
+    /// Empty when the send addressed nobody outside its own conversation.
+    pub fn mention_copies(&self) -> &[mention_cc::MentionCopyOutcome] {
+        &self.mention_copies
+    }
 }
 
 /// The author as the message will always report them, even after the principal is
@@ -396,19 +787,137 @@ pub struct CreatedMessage {
     pub from_agent_id: Option<AgentId>,
     pub from_user_id: Option<UserId>,
     pub author: Option<MessageAuthor>,
-    pub content: String,
+    pub content: MessageContent,
     pub attachments: Vec<attachments::AttachmentSnapshot>,
     pub seq: MessageSeq,
     pub created_at_ms: i64,
     pub thread_root_id: Option<ThreadRootId>,
 }
 
-/// Reply-cluster absolutes. Viewer-invariant: they describe the cluster, not one
-/// reader's view of it.
+/// What a reply changed about its cluster: the absolute count of what participants
+/// said there, computed inside the atomic unit so it already includes this reply.
+///
+/// Not the whole of what a reply publishes — the cluster's list entry is a second
+/// projection and is not part of this fact yet.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ThreadProjections {
+pub struct ThreadReplyFact {
     pub thread_root_id: ThreadRootId,
     pub reply_count: i64,
+}
+
+/// One committed main-line send and the plan that belongs to it.
+///
+/// A borrowed view, and the only way to hold a main-line plan: its fields are
+/// private and it has no constructor, so a caller cannot assemble one, and the only
+/// source is [`MessageCreatedFact::main_line`] — which answers `None` for a reply.
+/// That is what makes "announce a reply as if it were a main-line send" something
+/// nobody can write rather than something a runtime check has to catch.
+#[derive(Clone, Copy, Debug)]
+pub struct MainCommittedSend<'fact> {
+    message: &'fact CreatedMessage,
+    mentions: Option<&'fact post_commit::MentionIntent>,
+    delivery: &'fact post_commit::MainDeliveryPlan,
+}
+
+impl<'fact> MainCommittedSend<'fact> {
+    pub fn message(&self) -> &'fact CreatedMessage {
+        self.message
+    }
+
+    /// What this send said about naming people. Path-independent: a person is named
+    /// by the body, not by where the message landed.
+    pub fn mentions(&self) -> Option<&'fact post_commit::MentionIntent> {
+        self.mentions
+    }
+
+    pub fn delivery(&self) -> &'fact post_commit::MainDeliveryPlan {
+        self.delivery
+    }
+}
+
+/// The same shape for a reply, carrying the cluster's own plan. Distinct from
+/// [`MainCommittedSend`] by type, so neither path's announcer accepts the other's.
+#[derive(Clone, Copy, Debug)]
+pub struct ReplyCommittedSend<'fact> {
+    message: &'fact CreatedMessage,
+    projection: &'fact ThreadReplyFact,
+    mentions: Option<&'fact post_commit::MentionIntent>,
+    audience: &'fact post_commit::ReplyAudience,
+}
+
+impl<'fact> ReplyCommittedSend<'fact> {
+    pub fn message(&self) -> &'fact CreatedMessage {
+        self.message
+    }
+
+    pub fn projection(&self) -> &'fact ThreadReplyFact {
+        self.projection
+    }
+
+    /// The same path-independent fact the main line carries: naming someone does not
+    /// depend on whether the message was a reply.
+    pub fn mentions(&self) -> Option<&'fact post_commit::MentionIntent> {
+        self.mentions
+    }
+
+    pub fn audience(&self) -> &'fact post_commit::ReplyAudience {
+        self.audience
+    }
+}
+
+impl MessageCreatedFact {
+    /// This send as a main-line one, or nothing if it was a reply.
+    ///
+    /// `None` is a question's answer, not an outcome: there is no announcer that
+    /// takes a fact, so a caller holding `None` has nothing to call rather than
+    /// something to skip.
+    ///
+    /// A view cannot be assembled by hand:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::MainCommittedSend;
+    ///
+    /// let view = MainCommittedSend {
+    ///     message: todo!(),
+    ///     mentions: todo!(),
+    ///     delivery: todo!(),
+    /// };
+    /// ```
+    ///
+    /// Nor can a fact that already exists be given a different plan:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::{MessageCreatedFact, post_commit::PostCommitPlan};
+    ///
+    /// fn replace(fact: &mut MessageCreatedFact, plan: PostCommitPlan) {
+    ///     fact.post_commit = plan;
+    /// }
+    /// ```
+    pub fn main_line(&self) -> Option<MainCommittedSend<'_>> {
+        match self.post_commit.delivery() {
+            post_commit::DeliveryPlan::MainLine(delivery) => Some(MainCommittedSend {
+                message: &self.message,
+                mentions: self.post_commit.mentions(),
+                delivery,
+            }),
+            post_commit::DeliveryPlan::ReplyCluster(_) => None,
+        }
+    }
+
+    /// This send as a reply, or nothing if it was a main-line one.
+    pub fn reply_cluster(&self) -> Option<ReplyCommittedSend<'_>> {
+        match (self.post_commit.delivery(), &self.thread) {
+            (post_commit::DeliveryPlan::ReplyCluster(audience), Some(projection)) => {
+                Some(ReplyCommittedSend {
+                    message: &self.message,
+                    projection,
+                    mentions: self.post_commit.mentions(),
+                    audience,
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The write unit. One call is one atomic outcome: either the fact below exists
@@ -534,9 +1043,28 @@ pub async fn assert_post_authority(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{
+        collections::HashSet,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use super::*;
+
+    /// Entropy with no randomness in it, so an encoding can be asserted exactly.
+    struct FixedEntropy(&'static [u8]);
+
+    impl SendEntropy for FixedEntropy {
+        fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+            buffer.copy_from_slice(&self.0[..buffer.len()]);
+            Ok(())
+        }
+    }
+
+    /// Chosen so the two characters that distinguish base64url from base64 both
+    /// appear: a standard encoder would answer `+/+/ABCDEFGHIJKL` here.
+    const URL_SAFE_PROBE: &[u8] = &[
+        0xfb, 0xff, 0xbf, 0x00, 0x10, 0x83, 0x10, 0x51, 0x87, 0x20, 0x92, 0x8b,
+    ];
 
     fn conversation() -> ConversationId {
         ConversationId::parse("conv-1").unwrap()
@@ -557,8 +1085,8 @@ mod tests {
             endpoint: &ConversationEndpoint,
         ) -> Result<bool, PersistenceFailure> {
             Ok(match endpoint.kind {
-                EndpointKind::Agent => self.known_agents.contains(&endpoint.id),
-                EndpointKind::Human => self.known_users.contains(&endpoint.id),
+                PrincipalKind::Agent => self.known_agents.contains(&endpoint.id),
+                PrincipalKind::Human => self.known_users.contains(&endpoint.id),
             })
         }
     }
@@ -604,12 +1132,12 @@ mod tests {
     fn live_pair() -> DirectPairEndpoints {
         DirectPairEndpoints {
             a: ConversationEndpoint {
-                kind: EndpointKind::Agent,
+                kind: PrincipalKind::Agent,
                 id: "agent-1".to_owned(),
                 deleted_at_ms: None,
             },
             b: ConversationEndpoint {
-                kind: EndpointKind::Human,
+                kind: PrincipalKind::Human,
                 id: "user-1".to_owned(),
                 deleted_at_ms: None,
             },
@@ -630,35 +1158,143 @@ mod tests {
         SendActor::Agent(AgentId::parse("agent-1").unwrap())
     }
 
-    #[test]
-    fn the_content_cap_counts_utf8_bytes() {
-        let three_byte_chars = "汉".repeat(MAX_MESSAGE_CONTENT_BYTES / 3);
+    fn draft(content: MessageContent) -> SendMessageDraft {
+        SendMessageDraft {
+            source_conversation: conversation(),
+            target_conversation: conversation(),
+            actor: agent(),
+            content,
+            destination: SendDestination::MainLine,
+            attachment_refs: Vec::new(),
+            freshness_bypass: false,
+        }
+    }
 
-        assert_eq!(content_byte_length("汉"), 3);
-        assert!(!content_exceeds_limit(&three_byte_chars));
-        assert!(content_exceeds_limit(
-            &"汉".repeat(MAX_MESSAGE_CONTENT_BYTES)
-        ));
-        assert!(!content_exceeds_limit(
-            &"a".repeat(MAX_MESSAGE_CONTENT_BYTES)
-        ));
-        assert!(content_exceeds_limit(
-            &"a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1)
-        ));
+    /// An authority that grants every agent the body addressed, so tests that are
+    /// not about authorization do not have to model it.
+    struct GrantsEveryAddressedAgent;
+
+    impl DirectLineAuthority for GrantsEveryAddressedAgent {
+        fn direct_lines(
+            &self,
+            _author: &UserId,
+            addressed: &AddressedPrincipals,
+        ) -> Result<Vec<AgentId>, PersistenceFailure> {
+            Ok(addressed
+                .iter()
+                .filter(|reference| reference.kind() == PrincipalKind::Agent)
+                .map(|reference| AgentId::parse(reference.handle().as_str()).unwrap())
+                .collect())
+        }
+    }
+
+    /// A stand-in position rule: every `<…>` run, wherever it sits. The product
+    /// rule is Markdown structure — an autolink in prose, never quoted syntax —
+    /// and lives outside this crate; this one exists to exercise the half that IS
+    /// decided here, which is identity.
+    struct EveryBracketedRun;
+
+    impl ReferencePositions for EveryBracketedRun {
+        fn autolink_spans(&self, content: &MessageContent) -> Vec<Range<usize>> {
+            let body = content.as_str();
+            let mut spans = Vec::new();
+            let mut cursor = 0;
+            while let Some(open) = body[cursor..].find('<') {
+                let open = cursor + open;
+                let Some(close) = body[open..].find('>') else {
+                    break;
+                };
+                let close = open + close;
+                spans.push(open..close + 1);
+                cursor = close + 1;
+            }
+            spans
+        }
+    }
+
+    /// A position rule that points wherever it likes, to show what a lying one can
+    /// and cannot do.
+    struct SpansOf(Vec<Range<usize>>);
+
+    impl ReferencePositions for SpansOf {
+        fn autolink_spans(&self, _content: &MessageContent) -> Vec<Range<usize>> {
+            self.0.clone()
+        }
+    }
+
+    fn addressed_of(
+        body: &str,
+        positions: &impl ReferencePositions,
+    ) -> Vec<(PrincipalKind, String)> {
+        let content = MessageContent::parse(body).unwrap();
+        SendMessage::prepare(draft(content), positions, &GrantsEveryAddressedAgent)
+            .unwrap()
+            .addressed()
+            .iter()
+            .map(|reference| (reference.kind(), reference.handle().as_str().to_owned()))
+            .collect()
+    }
+
+    /// A unit of work that records whether it was ever asked to write.
+    #[derive(Default)]
+    struct CountingUnitOfWork {
+        calls: AtomicUsize,
+    }
+
+    impl SendMessageUnitOfWork for CountingUnitOfWork {
+        async fn send_message(
+            &self,
+            _command: SendMessage,
+        ) -> Result<MessageCreatedFact, SendMessageError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ConversationRefusal::NotFound.into())
+        }
     }
 
     #[test]
-    fn the_envelope_bound_is_separate_from_the_content_cap() {
-        assert_eq!(MAX_MESSAGE_CONTENT_BYTES, 65_536);
-        assert_eq!(MESSAGE_SEND_MAX_BODY_BYTES, 524_288);
+    fn the_content_bound_counts_utf8_bytes() {
+        let full = "汉".repeat(MAX_MESSAGE_CONTENT_BYTES / 3);
+
+        assert_eq!(MessageContent::parse("汉").unwrap().byte_length(), 3);
+        assert!(MessageContent::parse(&full).is_ok());
+        assert!(MessageContent::parse("a".repeat(MAX_MESSAGE_CONTENT_BYTES)).is_ok());
+        // Three bytes per character but one UTF-16 code unit: counting the wrong
+        // unit would admit three times the intended size.
+        let over = MessageContent::parse("汉".repeat(MAX_MESSAGE_CONTENT_BYTES)).unwrap_err();
+        assert_eq!(over.actual_bytes, MAX_MESSAGE_CONTENT_BYTES * 3);
+        assert_eq!(over.max_bytes, MAX_MESSAGE_CONTENT_BYTES);
+        assert!(MessageContent::parse("a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1)).is_err());
+    }
+
+    /// The counter-example for the size invariant: an oversized send cannot be
+    /// expressed, so no caller can carry one to the write unit.
+    #[tokio::test]
+    async fn oversized_content_never_reaches_the_write_unit() {
+        let unit = CountingUnitOfWork::default();
+        let oversized = "a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1);
+
+        if let Ok(content) = MessageContent::parse(&oversized) {
+            let _ = unit
+                .send_message(
+                    SendMessage::prepare(
+                        draft(content),
+                        &EveryBracketedRun,
+                        &GrantsEveryAddressedAgent,
+                    )
+                    .unwrap(),
+                )
+                .await;
+        }
+
+        assert_eq!(unit.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
-    fn an_ordinal_is_reserved_by_the_store_and_validated_from_the_wire() {
-        assert_eq!(MessageSeq::reserved(7).get(), 7);
-        assert_eq!(MessageSeq::decode(0).unwrap().get(), 0);
-        assert!(MessageSeq::decode(-1).is_err());
-        assert!(MessageSeq::reserved(2) > MessageSeq::reserved(1));
+    fn an_ordinal_has_no_unchecked_constructor() {
+        assert_eq!(MessageSeq::try_from(7).unwrap().get(), 7);
+        assert_eq!(MessageSeq::try_from(0).unwrap().get(), 0);
+        assert_eq!(MessageSeq::try_from(-1).unwrap_err().value, -1);
+        assert!(MessageSeq::try_from(2).unwrap() > MessageSeq::try_from(1).unwrap());
     }
 
     #[test]
@@ -671,22 +1307,42 @@ mod tests {
         assert_eq!(ConversationId::parse("x").unwrap().as_str(), "x");
     }
 
-    /// The published identity: sixteen base64url characters, unpadded, distinct
-    /// per mint.
+    /// The published identity: twelve bytes as sixteen base64url characters with
+    /// no padding. Asserted against known entropy, so the encoding itself is
+    /// pinned rather than sampled.
     #[test]
-    fn a_minted_message_id_has_the_shape_clients_already_hold() {
-        let first = MessageId::mint().unwrap();
-        let second = MessageId::mint().unwrap();
+    fn a_minted_message_id_encodes_its_entropy_the_way_clients_read_it() {
+        let from_probe = MessageId::mint(&FixedEntropy(URL_SAFE_PROBE)).unwrap();
+        let from_ascending =
+            MessageId::mint(&FixedEntropy(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])).unwrap();
 
-        assert_ne!(first, second);
-        assert_eq!(first.as_str().len(), 16);
-        assert!(
-            first
-                .as_str()
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
-            "minted id left the base64url alphabet: {}",
-            first.as_str()
+        assert_eq!(from_probe.as_str(), "-_-_ABCDEFGHIJKL");
+        assert_eq!(from_ascending.as_str(), "AAECAwQFBgcICQoL");
+        assert_eq!(from_probe.as_str().len(), 16);
+        assert!(!from_probe.as_str().contains('='));
+    }
+
+    /// Entropy is a capability, so its failure is reportable with the reason
+    /// intact rather than collapsing into "could not mint".
+    #[test]
+    fn a_failing_entropy_source_keeps_its_cause() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("entropy device is offline")]
+        struct Offline;
+
+        struct Broken;
+
+        impl SendEntropy for Broken {
+            fn fill(&self, _buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+                Err(EnvironmentUnavailable::from_source(Offline))
+            }
+        }
+
+        let failure = MessageId::mint(&Broken).unwrap_err();
+
+        assert_eq!(
+            failure.source().unwrap().to_string(),
+            "entropy device is offline"
         );
     }
 
@@ -706,7 +1362,10 @@ mod tests {
 
         // The actor is not a participant either; the lifecycle answer wins so a
         // closed conversation does not report who may write to it.
-        assert_eq!(error.code(), Some("conversation_closed"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::Closed)
+        ));
     }
 
     #[tokio::test]
@@ -723,7 +1382,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_archived"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::Archived)
+        ));
     }
 
     #[tokio::test]
@@ -734,7 +1396,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_not_found"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::NotFound)
+        ));
     }
 
     #[tokio::test]
@@ -749,20 +1414,18 @@ mod tests {
             ..FakeReads::default()
         };
 
-        assert_eq!(
+        assert!(matches!(
             assert_post_authority(&mut unknown, &conversation(), &agent())
                 .await
-                .unwrap_err()
-                .code(),
-            Some("agent_not_found")
-        );
-        assert_eq!(
+                .unwrap_err(),
+            SendMessageError::Actor(ActorRefusal::AgentNotFound)
+        ));
+        assert!(matches!(
             assert_post_authority(&mut known_but_outside, &conversation(), &agent())
                 .await
-                .unwrap_err()
-                .code(),
-            Some("agent_not_participant_of_conversation")
-        );
+                .unwrap_err(),
+            SendMessageError::Actor(ActorRefusal::AgentNotParticipant)
+        ));
     }
 
     #[tokio::test]
@@ -780,7 +1443,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(error.code(), Some("user_not_participant_of_conversation"));
+        assert!(matches!(
+            error,
+            SendMessageError::Actor(ActorRefusal::UserNotParticipant)
+        ));
     }
 
     #[tokio::test]
@@ -799,7 +1465,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_endpoint_gone"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::EndpointGone)
+        ));
     }
 
     /// A pair can outlive its peer's row without ever being stamped, so absence
@@ -819,7 +1488,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.code(), Some("conversation_endpoint_gone"));
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::EndpointGone)
+        ));
     }
 
     #[tokio::test]
@@ -850,36 +1522,27 @@ mod tests {
         assert_eq!(facts.id, conversation());
     }
 
+    /// Infrastructure failure keeps its cause and stays distinguishable from a
+    /// refusal: nothing about the request would have changed the outcome.
     #[test]
-    fn an_infrastructure_failure_publishes_no_domain_code() {
+    fn an_infrastructure_failure_is_not_a_refusal() {
         #[derive(Debug, thiserror::Error)]
         #[error("driver refused the statement")]
         struct Driver;
 
         let error = SendMessageError::from(PersistenceFailure::from_source(Driver));
 
-        assert_eq!(error.code(), None);
-    }
-
-    /// An undeterminable freshness scope is this system's fault, so it carries no
-    /// code a caller could branch on.
-    #[test]
-    fn a_violated_invariant_publishes_no_domain_code() {
-        let error = SendMessageError::from(freshness::FreshnessGuardInvariant::AgentAbsent {
-            agent: AgentId::parse("agent-1").unwrap(),
-        });
-
-        assert_eq!(error.code(), None);
+        assert!(matches!(error, SendMessageError::Persistence(_)));
     }
 
     #[test]
     fn a_stale_refusal_carries_signal_metadata_only() {
         let refusal = StaleRefusal {
-            stale_event_id: freshness::StaleEventId::mint().unwrap(),
+            stale_event_id: freshness::StaleEventId::mint(&FixedEntropy(&[0u8; 16])).unwrap(),
             target_conversation_id: conversation(),
         };
 
-        assert_eq!(refusal.code(), "message_stale");
+        assert_eq!(refusal.target_conversation_id, conversation());
         assert!(refusal.to_string().contains("undelivered input"));
     }
 
@@ -889,7 +1552,127 @@ mod tests {
             attachment_id: AttachmentId::parse("att-1").unwrap(),
         };
 
-        assert_eq!(refusal.code(), "attachment_outside_channel");
         assert_eq!(refusal.attachment_id().as_str(), "att-1");
+    }
+
+    /// The counter-example B1 asks for: a body that addresses nobody cannot be
+    /// prepared into a command that addresses someone, whatever the position rule
+    /// claims — identity is read from the body's own bytes.
+    #[test]
+    fn a_body_that_names_nobody_addresses_nobody() {
+        let body = "hello, nothing to see here";
+        let every_span = (0..body.len()).map(|start| start..body.len()).collect();
+
+        assert!(addressed_of(body, &SpansOf(every_span)).is_empty());
+        assert!(addressed_of(body, &EveryBracketedRun).is_empty());
+    }
+
+    /// A span that is not a whole bracketed destination of this body addresses
+    /// nobody either: the derivation checks the bytes it was pointed at.
+    #[test]
+    fn a_span_that_is_not_a_destination_addresses_nobody() {
+        let body = "see <silverhand://agent/Alice> for details";
+        let inner = body.find("silverhand").unwrap();
+        let partial = std::iter::once(inner..inner + 4).collect();
+        let out_of_range = std::iter::once(body.len()..body.len() + 40).collect();
+
+        assert!(addressed_of(body, &SpansOf(partial)).is_empty());
+        assert!(addressed_of(body, &SpansOf(out_of_range)).is_empty());
+    }
+
+    #[test]
+    fn a_destination_is_read_as_kind_and_handle() {
+        let addressed = addressed_of(
+            "<silverhand://agent/Alice> and <silverhand://human/shiki>",
+            &EveryBracketedRun,
+        );
+
+        assert_eq!(
+            addressed,
+            vec![
+                (PrincipalKind::Agent, "Alice".to_owned()),
+                (PrincipalKind::Human, "shiki".to_owned()),
+            ]
+        );
+    }
+
+    /// Deduplicated, in first-occurrence order, and the two kinds are different
+    /// principals even under one name.
+    #[test]
+    fn repeats_collapse_and_the_first_position_decides_the_order() {
+        let addressed = addressed_of(
+            "<silverhand://human/shiki> <silverhand://agent/Alice> <silverhand://human/shiki> \
+             <silverhand://agent/shiki>",
+            &EveryBracketedRun,
+        );
+
+        assert_eq!(
+            addressed,
+            vec![
+                (PrincipalKind::Human, "shiki".to_owned()),
+                (PrincipalKind::Agent, "Alice".to_owned()),
+                (PrincipalKind::Agent, "shiki".to_owned()),
+            ]
+        );
+    }
+
+    /// The body decides the order, not the rule that reported the positions: a rule
+    /// whose traversal runs backwards still yields first-occurrence order, so a
+    /// change of traversal cannot quietly reorder who a message addressed.
+    #[test]
+    fn the_body_decides_the_order_not_the_position_rule() {
+        let body = "<silverhand://agent/Alice> then <silverhand://human/shiki> then \
+                    <silverhand://agent/Alice>";
+        let content = MessageContent::parse(body).unwrap();
+        let mut reported = EveryBracketedRun.autolink_spans(&content);
+        reported.reverse();
+
+        assert_eq!(
+            addressed_of(body, &SpansOf(reported)),
+            vec![
+                (PrincipalKind::Agent, "Alice".to_owned()),
+                (PrincipalKind::Human, "shiki".to_owned()),
+            ]
+        );
+    }
+
+    /// A span that runs backwards, or that cuts a character in half, is inert: the
+    /// derivation reads what is there or nothing at all.
+    #[test]
+    fn a_backwards_or_mid_character_span_addresses_nobody() {
+        let body = "汉<silverhand://agent/Alice>";
+        let mid_character = std::iter::once(1..body.len()).collect();
+        let backwards = std::iter::once(body.len()..0).collect();
+
+        assert!(addressed_of(body, &SpansOf(mid_character)).is_empty());
+        assert!(addressed_of(body, &SpansOf(backwards)).is_empty());
+        // The same body, read from its real positions, does address someone.
+        assert_eq!(addressed_of(body, &EveryBracketedRun).len(), 1);
+    }
+
+    /// Everything that is not exactly a reference destination addresses nobody.
+    #[test]
+    fn a_destination_outside_the_grammar_addresses_nobody() {
+        for body in [
+            "<SILVERHAND://agent/Alice>",
+            "<silverhand://Agent/Alice>",
+            "<silverhand://agent/Alice/extra>",
+            "<silverhand://agent/Alice?x=1>",
+            "<silverhand://agent/>",
+            "<silverhand://agent/1Alice>",
+            "<silverhand://agent/Alice.Bob>",
+            "<silverhand://team/Alice>",
+            "<https://example.com/agent/Alice>",
+        ] {
+            assert!(
+                addressed_of(body, &EveryBracketedRun).is_empty(),
+                "{body} addressed someone"
+            );
+        }
+
+        let too_long = format!("<silverhand://agent/a{}>", "b".repeat(64));
+        assert!(addressed_of(&too_long, &EveryBracketedRun).is_empty());
+        let longest_allowed = format!("<silverhand://agent/a{}>", "b".repeat(63));
+        assert_eq!(addressed_of(&longest_allowed, &EveryBracketedRun).len(), 1);
     }
 }

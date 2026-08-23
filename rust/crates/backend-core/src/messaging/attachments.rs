@@ -234,7 +234,7 @@ mod tests {
                 .unwrap_err();
 
         assert_eq!(unknown, outside);
-        assert_eq!(unknown.code(), "attachment_outside_channel");
+        assert!(matches!(unknown, AttachmentRefusal::OutsideChannel { .. }));
         assert_eq!(unknown.attachment_id().as_str(), "att-1");
     }
 
@@ -255,7 +255,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(mismatch.code(), "attachment_label_kind_mismatch");
+        assert!(matches!(
+            mismatch,
+            AttachmentRefusal::LabelKindMismatch { .. }
+        ));
         assert_eq!(
             accepted[0].label.unwrap(),
             AttachmentLabel::parse("File #2").unwrap()
@@ -273,7 +276,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(refusal.code(), "attachment_label_kind_mismatch");
+        assert!(matches!(
+            refusal,
+            AttachmentRefusal::LabelKindMismatch { .. }
+        ));
     }
 
     #[test]
@@ -290,7 +296,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(refusal.code(), "attachment_label_kind_mismatch");
+        // The label mismatch is reported even though a later reference names
+        // nothing at all: resolution stops at the first failure.
+        assert!(matches!(
+            refusal,
+            AttachmentRefusal::LabelKindMismatch { .. }
+        ));
     }
 
     #[test]
