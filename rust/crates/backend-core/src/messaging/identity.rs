@@ -4,14 +4,11 @@
 //! afterwards. The ordinal is the one value with a domain rule of its own, and it
 //! has no unchecked constructor in either direction.
 //!
-//! The host capabilities a mint depends on live here too, because the identity
-//! format is defined in terms of them: randomness and the clock are capabilities the
-//! caller provides rather than ambient facts of the process, so their failure stays
-//! reportable.
+//! Minting CONSUMES a host capability and does not own one: [`super::environment`]
+//! declares the narrow ports and their failure, and what belongs here is the
+//! identity format those ports are spent on.
 
-use std::error::Error;
-
-use super::environment;
+use super::environment::{self, EnvironmentUnavailable, SendEntropy};
 
 /// A message identity as the application handles it: opaque, and never parsed for
 /// meaning once minted.
@@ -150,41 +147,10 @@ pub struct InvalidSeq {
     pub value: i64,
 }
 
-/// Randomness, as a capability rather than an ambient fact of the process. A
-/// failure keeps its cause: "no identity could be minted" is only actionable with
-/// the reason attached.
-pub trait SendEntropy {
-    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable>;
-}
-
-/// The moment a send happened, likewise a capability. The unit reads it once and
-/// reports the same value it stored.
-pub trait SendClock {
-    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable>;
-}
-
-/// The environment could not answer. Not a refusal: the caller did nothing wrong,
-/// and nothing about the request would change the outcome.
-#[derive(Debug, thiserror::Error)]
-#[error("the environment this send depends on could not answer")]
-pub struct EnvironmentUnavailable {
-    #[source]
-    source: Box<dyn Error + Send + Sync + 'static>,
-}
-
-impl EnvironmentUnavailable {
-    pub fn from_source<E>(source: E) -> Self
-    where
-        E: Error + Send + Sync + 'static,
-    {
-        Self {
-            source: Box::new(source),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     /// Entropy with no randomness in it, so an encoding can be asserted exactly.

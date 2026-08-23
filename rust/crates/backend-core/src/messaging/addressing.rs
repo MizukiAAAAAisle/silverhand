@@ -5,19 +5,14 @@
 //! read from the bytes at those positions against the destination grammar below. A
 //! supplied position rule can narrow or widen the positions and can never introduce
 //! a name the body does not contain.
+//!
+//! The principal vocabulary it reads INTO — the two kinds and the stored name
+//! grammar — belongs to [`super::principal`]: this module owns how a body produces
+//! references, not what a principal is.
 
 use std::{collections::HashSet, ops::Range};
 
-use super::MessageContent;
-
-/// Which namespace names a principal. One vocabulary, because "which table
-/// answers for this name" is the same question whether it is asked of a direct
-/// pair's endpoint or of something a message addressed.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum PrincipalKind {
-    Human,
-    Agent,
-}
+use super::{MessageContent, ParticipantHandle, PrincipalKind};
 
 /// Something a message addressed. Its fields are sealed because the value is
 /// EVIDENCE about a body: it is obtainable only by deriving it from the content
@@ -42,47 +37,6 @@ impl MessageReference {
 
 /// The destination form a reference takes in a body: `silverhand://agent/Alice`.
 const REFERENCE_PREFIX: &str = "silverhand://";
-/// A handle is at most this long wherever it is stored, so a longer one cannot be
-/// a name this system holds.
-const HANDLE_MAX_LENGTH: usize = 64;
-
-/// A participant name, in the grammar every stored name obeys.
-///
-/// It exists as a type because a handle is interpolated into server-authored prose
-/// that addresses people: raw text there could close a destination, open another
-/// path segment, or start a new line. Anything outside the grammar is not a name
-/// this system holds, so it is refused rather than escaped.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ParticipantHandle(String);
-
-impl ParticipantHandle {
-    pub fn parse(raw: impl Into<String>) -> Result<Self, InvalidHandle> {
-        let raw = raw.into();
-        if raw.is_empty() || raw.len() > HANDLE_MAX_LENGTH {
-            return Err(InvalidHandle);
-        }
-        let mut characters = raw.chars();
-        let first = characters.next().ok_or(InvalidHandle)?;
-        if !first.is_ascii_alphabetic() {
-            return Err(InvalidHandle);
-        }
-        if !characters.all(|character| {
-            character.is_ascii_alphanumeric() || character == '_' || character == '-'
-        }) {
-            return Err(InvalidHandle);
-        }
-        Ok(Self(raw))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("handle is outside the grammar every stored name obeys")]
-pub struct InvalidHandle;
-
 /// Reads one link destination. Nothing else is a reference: not a different
 /// scheme, not an extra path segment, not a query, not a handle outside the stored
 /// name grammar. Fail-closed, because the alternative is addressing someone the
