@@ -16,6 +16,7 @@
 //! are what stop a Rust-only snapshot from hiding in that field.
 
 use std::{
+    convert::Infallible,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -30,18 +31,14 @@ use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     messaging::{
-        AddressedPrincipals, ConversationRefusal, DirectLineAuthority, SendDestination,
-        SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
+        AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
+        ConversationRefusal, DirectLineAuthority, DirectPairAllocation, ResolvedStream,
+        SendCapability, SendDestination, SendMessage, SendMessageError, SendMessageOutcome,
+        SendMessageUnitOfWork, TargetAddress,
     },
     runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
-use silverhand_backend_server::messaging::{
-    adapters::{
-        AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, ResolvedStream,
-        SendCapability, TargetAddress,
-    },
-    router::{SendState, send_router},
-};
+use silverhand_backend_server::messaging::router::{SendState, send_router};
 use tower::ServiceExt;
 
 const CONVERSATION: &str = "conv-1";
@@ -103,12 +100,14 @@ impl SendMessageUnitOfWork for RecordingUnit {
 struct OpenChannel;
 
 impl ChannelAccess for OpenChannel {
-    fn may_post(
+    type Error = Infallible;
+
+    async fn may_post(
         &self,
         _channel: &ConversationId,
         _author: &UserId,
-    ) -> Result<(), ChannelAccessRefusal> {
-        Ok(())
+    ) -> Result<Result<(), ChannelAccessRefusal>, Self::Error> {
+        Ok(Ok(()))
     }
 }
 
@@ -118,31 +117,40 @@ impl ChannelAccess for OpenChannel {
 struct RecordingAddress(Arc<Mutex<Option<String>>>);
 
 impl TargetAddress for RecordingAddress {
-    fn resolve(&self, _agent: &AgentId, target: &str) -> Result<ResolvedStream, AddressRefusal> {
+    type Error = Infallible;
+
+    async fn resolve(
+        &self,
+        _agent: &AgentId,
+        target: &str,
+        _allocation: DirectPairAllocation,
+    ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
         *self.0.lock().unwrap() = Some(target.to_owned());
-        Ok(ResolvedStream {
+        Ok(Ok(ResolvedStream {
             conversation: ConversationId::parse(CONVERSATION).unwrap(),
             thread_root: None,
-        })
+        }))
     }
 }
 
 struct GrantsSend;
 
 impl SendCapability for GrantsSend {
-    fn may_send_messages(
+    type Error = Infallible;
+
+    async fn may_send_messages(
         &self,
         _agent: &AgentId,
         _conversation: &ConversationId,
-    ) -> Result<(), CapabilityDenied> {
-        Ok(())
+    ) -> Result<Result<(), CapabilityDenied>, Self::Error> {
+        Ok(Ok(()))
     }
 }
 
 struct GrantsNothing;
 
 impl DirectLineAuthority for GrantsNothing {
-    fn direct_lines(
+    async fn direct_lines(
         &self,
         _author: &UserId,
         _addressed: &AddressedPrincipals,

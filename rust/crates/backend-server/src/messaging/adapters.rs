@@ -16,10 +16,12 @@
 //! test rather than the happy paths.
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    identity::{ConversationId, UserId},
     messaging::{
-        DirectLineAuthority, ReferencePositions, SendActor, SendDestination, SendMessageError,
-        SendMessageOutcome, SendMessageUnitOfWork, ThreadRootId,
+        AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority,
+        DirectPairAllocation, ReferencePositions, ResolvedStream, SendActor, SendCapability,
+        SendDestination, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
+        TargetAddress,
     },
     runtime_credential::RuntimePrincipal,
 };
@@ -40,75 +42,6 @@ pub(crate) struct SendPorts<'ports, P, A, U> {
     pub positions: &'ports P,
     pub authority: &'ports A,
     pub unit_of_work: &'ports U,
-}
-
-/// Why the human door refused before it read anything. Its own vocabulary: a channel
-/// is "not found" and a person is "forbidden", which is what that door answers with.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ChannelAccessRefusal {
-    NotFound,
-    Forbidden,
-}
-
-/// Whether this person may post to THIS channel — a predicate, and deliberately nothing
-/// more.
-///
-/// It answers ABOUT a coordinate it is given and cannot answer WITH one. An earlier
-/// version returned a `ConversationId` that the door then used as both source and target:
-/// nothing in that signature required the answer to be the channel it was asked about, so
-/// an implementation slip or a later adapter drift could authorize against one
-/// conversation and write the message into another (@Cindy, review of `7b9297f0`). A doc
-/// saying "return it unchanged" is no fix — it is a restatement of the hole. The human
-/// door's send coordinate is the path's, full stop.
-///
-/// [`TargetAccess`] is deliberately different: an absolute address is not a coordinate
-/// yet when it arrives, so resolving one IS that port's job.
-pub trait ChannelAccess {
-    fn may_post(
-        &self,
-        channel: &ConversationId,
-        author: &UserId,
-    ) -> Result<(), ChannelAccessRefusal>;
-}
-
-/// WHY an address was refused, and only that: the four answers the resolver owns.
-///
-/// It has no arm for the credential's reach or its grants, because it cannot see either. A
-/// port that could answer all three would let an implementation pick any of them for any
-/// reason, and the three are decided by different authorities in a fixed order.
-///
-/// THREE STATUS FAMILIES across the agent door's answers, and the split is deliberate. 400
-/// for the two that are judgements about the TOKEN, which say nothing about what exists. 404
-/// for the two that are about existence — and that is exactly where unknown and unauthorized
-/// COLLAPSE, because a separate 403 would let one address get a different number from another
-/// and turn this door into an existence oracle. 403 is reserved for the two facts that are
-/// about the CREDENTIAL, which live below.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AddressRefusal {
-    /// The string is not an address.
-    Malformed,
-    /// A direct message addressed at its own author: an inbox is not a write destination.
-    SelfPair,
-    /// Names no stream this caller can use. Unknown and unauthorized are ONE answer here.
-    Unresolved,
-    /// Names a reply cluster that is not of that conversation.
-    ThreadNotInTarget,
-}
-
-/// Where an address landed. A stream, not a conversation: an absolute address may name
-/// a reply cluster, and dropping that half would deliver every addressed reply onto the
-/// main line instead.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedStream {
-    pub conversation: ConversationId,
-    pub thread_root: Option<ThreadRootId>,
-}
-
-/// Which stream an address names, asked AFTER admission. Resolution also proves the agent
-/// participates: an address that names a stream this agent is not in is `Unresolved`, which is
-/// why nothing below has to re-ask about participation.
-pub trait TargetAddress {
-    fn resolve(&self, agent: &AgentId, target: &str) -> Result<ResolvedStream, AddressRefusal>;
 }
 
 /// The address named a stream this agent is in, and this door still acts only where the
@@ -147,24 +80,6 @@ pub(crate) fn reach(
     }
 }
 
-/// The credential lacks the grant this door asks for.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CapabilityDenied;
-
-/// Whether this agent holds the grant a SEND needs, in the target's placement.
-///
-/// NAMED FOR THE GRANT, deliberately. A port that took a capability, or answered with the one
-/// it happened to check, would be a second authority for "which grant does a send need" — and
-/// the wire already names that bucket to the caller, so the two could disagree about what a
-/// human has to change. The one name lives at the door that renders it.
-pub trait SendCapability {
-    fn may_send_messages(
-        &self,
-        agent: &AgentId,
-        conversation: &ConversationId,
-    ) -> Result<(), CapabilityDenied>;
-}
-
 /// Why the HUMAN door refused. Its own type rather than a shared one: a refusal a door
 /// cannot produce has no business being representable in its answer, and a shared enum
 /// would put an unanswerable arm in each door's wire mapping — a branch no test can
@@ -175,6 +90,7 @@ pub trait SendCapability {
 #[derive(Debug)]
 pub(crate) enum HumanRefusal {
     Access(ChannelAccessRefusal),
+    Authority(crate::error::BoundaryFailure),
     Payload(PayloadRefusal),
     Send(SendMessageError),
 }
@@ -187,6 +103,7 @@ pub(crate) enum AgentRefusal {
     Address(AddressRefusal),
     OutOfSessionScope,
     CapabilityDenied,
+    Authority(crate::error::BoundaryFailure),
     Send(SendMessageError),
 }
 
@@ -209,6 +126,8 @@ where
 {
     access
         .may_post(channel, author)
+        .await
+        .map_err(|source| HumanRefusal::Authority(crate::error::BoundaryFailure::new(source)))?
         .map_err(HumanRefusal::Access)?;
 
     let request = validate_human_payload(raw_body).map_err(HumanRefusal::Payload)?;
@@ -277,14 +196,22 @@ where
 {
     let request = validate_agent_payload(raw_body).map_err(AgentRefusal::Payload)?;
 
+    let allocation = match credential {
+        RuntimePrincipal::AgentSlot { .. } => DirectPairAllocation::Permitted,
+        RuntimePrincipal::ConversationSlot { .. } => DirectPairAllocation::Forbidden,
+    };
     let stream = address
-        .resolve(credential.agent(), request.target())
+        .resolve(credential.agent(), request.target(), allocation)
+        .await
+        .map_err(|source| AgentRefusal::Authority(crate::error::BoundaryFailure::new(source)))?
         .map_err(AgentRefusal::Address)?;
 
     reach(credential, &stream).map_err(|OutOfSessionScope| AgentRefusal::OutOfSessionScope)?;
 
     capability
         .may_send_messages(credential.agent(), &stream.conversation)
+        .await
+        .map_err(|source| AgentRefusal::Authority(crate::error::BoundaryFailure::new(source)))?
         .map_err(|CapabilityDenied| AgentRefusal::CapabilityDenied)?;
 
     let destination = match stream.thread_root {
@@ -312,9 +239,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        convert::Infallible,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use silverhand_backend_core::messaging::{
@@ -322,7 +252,8 @@ mod tests {
     };
     use silverhand_backend_core::persistence::PersistenceFailure;
     use silverhand_backend_core::{
-        identity::DaemonInstanceId,
+        identity::{AgentId, DaemonInstanceId},
+        messaging::ThreadRootId,
         runtime_credential::{RuntimeCustody, RuntimeGeneration},
     };
 
@@ -396,7 +327,7 @@ mod tests {
     struct GrantsNothing;
 
     impl DirectLineAuthority for GrantsNothing {
-        fn direct_lines(
+        async fn direct_lines(
             &self,
             _author: &UserId,
             _addressed: &AddressedPrincipals,
@@ -411,13 +342,15 @@ mod tests {
     struct Channel(Result<(), ChannelAccessRefusal>);
 
     impl ChannelAccess for Channel {
-        fn may_post(
+        type Error = Infallible;
+
+        async fn may_post(
             &self,
             _channel: &ConversationId,
             _author: &UserId,
-        ) -> Result<(), ChannelAccessRefusal> {
+        ) -> Result<Result<(), ChannelAccessRefusal>, Self::Error> {
             let _would_rather_answer_with = elsewhere();
-            self.0.clone()
+            Ok(self.0)
         }
     }
 
@@ -446,12 +379,15 @@ mod tests {
     }
 
     impl TargetAddress for Address {
-        fn resolve(
+        type Error = Infallible;
+
+        async fn resolve(
             &self,
             _agent: &AgentId,
             _target: &str,
-        ) -> Result<ResolvedStream, AddressRefusal> {
-            self.0.clone()
+            _allocation: DirectPairAllocation,
+        ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
+            Ok(self.0.clone())
         }
     }
 
@@ -460,12 +396,14 @@ mod tests {
     struct Grant(Result<(), CapabilityDenied>);
 
     impl SendCapability for Grant {
-        fn may_send_messages(
+        type Error = Infallible;
+
+        async fn may_send_messages(
             &self,
             _agent: &AgentId,
             _conversation: &ConversationId,
-        ) -> Result<(), CapabilityDenied> {
-            self.0
+        ) -> Result<Result<(), CapabilityDenied>, Self::Error> {
+            Ok(self.0)
         }
     }
 
@@ -555,7 +493,7 @@ mod tests {
                 &conversation(),
                 &user(),
                 malformed(),
-                &Channel(Err(refusal.clone())),
+                &Channel(Err(refusal)),
                 ports(&unit),
             )
             .await;

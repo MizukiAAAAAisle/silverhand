@@ -92,7 +92,7 @@ where
     };
 
     let source_conversation = draft.source_conversation.clone();
-    let command = SendMessage::prepare(draft, positions, authority)?;
+    let command = SendMessage::prepare(draft, positions, authority).await?;
     let outcome = unit_of_work.send_message(command).await?;
     report_unresolved_references(&source_conversation, &outcome);
     Ok(outcome)
@@ -227,7 +227,7 @@ mod tests {
     struct GrantsNothing;
 
     impl DirectLineAuthority for GrantsNothing {
-        fn direct_lines(
+        async fn direct_lines(
             &self,
             _author: &UserId,
             _addressed: &AddressedPrincipals,

@@ -45,7 +45,9 @@ use sqlx::{
 use thiserror::Error;
 
 mod author;
+mod authorities;
 use author::{AuthorEvidence, resolve_authors};
+pub use authorities::{SqliteTargetAddress, TargetAddressStoreError};
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;
@@ -287,6 +289,7 @@ const ENDPOINT_KIND_HUMAN: &str = "human";
 const ENDPOINT_KIND_AGENT: &str = "agent";
 
 /// The host capabilities this store uses unless a caller injects others.
+#[derive(Clone, Copy)]
 pub struct HostEnvironment;
 
 impl SendClock for HostEnvironment {
@@ -310,6 +313,7 @@ fn unix_ms_since_epoch(moment: SystemTime) -> Result<i64, EnvironmentUnavailable
     i64::try_from(since_epoch.as_millis()).map_err(EnvironmentUnavailable::from_source)
 }
 
+#[derive(Clone)]
 pub struct MessagingStore<E = HostEnvironment> {
     pool: SqlitePool,
     environment: E,
@@ -367,6 +371,12 @@ impl MessagingStore<HostEnvironment> {
 }
 
 impl<E> MessagingStore<E> {
+    pub fn target_address<O>(&self, opened: O) -> SqliteTargetAddress<E, O>
+    where
+        E: Clone,
+    {
+        SqliteTargetAddress::new(self.clone(), opened)
+    }
     /// Opens an existing product database with injected host capabilities. A
     /// missing file is a failure rather than an empty database.
     pub async fn open_with(

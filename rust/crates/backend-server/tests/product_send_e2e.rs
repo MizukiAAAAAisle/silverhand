@@ -32,6 +32,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
+use std::convert::Infallible;
+
 use axum::{
     Router,
     body::Body,
@@ -42,20 +44,17 @@ use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     messaging::{
-        ActiveAuthor, AddressedPrincipals, DirectLineAuthority, MessageAuthor, PrincipalKind,
-        SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadRootId,
+        ActiveAuthor, AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess,
+        ChannelAccessRefusal, DirectLineAuthority, DirectPairAllocation, DirectPairOpenedFact,
+        DirectPairOpenedPort, MessageAuthor, PrincipalKind, ResolvedStream, SendCapability,
+        SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
+        ThreadRootId,
     },
     runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
-use silverhand_backend_server::messaging::{
-    adapters::{
-        AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, ResolvedStream,
-        SendCapability, TargetAddress,
-    },
-    router::{SendState, send_router},
-};
+use silverhand_backend_server::messaging::router::{SendState, send_router};
 use silverhand_backend_sqlite::messaging::MessagingStore;
-use sqlx::SqliteConnection;
+use sqlx::{Connection, SqliteConnection};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -84,7 +83,7 @@ const ATTACHMENT_ID: &str = "att-1";
 /// this one starts from. Both files answer to the checked-in schema, which is the only authority
 /// here; a schema change breaks each of them on its own terms.
 async fn seed_minimal_scenario(db: &mut SqliteConnection) {
-    let statements: [(&str, Vec<&str>); 10] = [
+    let statements: [(&str, Vec<&str>); 12] = [
         (
             "INSERT INTO hosts (id, name, kind, created_at) VALUES (?, 'host', 'local', 0)",
             vec![HOST_ID],
@@ -112,7 +111,7 @@ async fn seed_minimal_scenario(db: &mut SqliteConnection) {
         (
             "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
              title_key, status, created_at, updated_at) \
-             VALUES (?, ?, 'workspace', 'open', 'Channel', 'general', 'open', 0, 0)",
+             VALUES (?, ?, 'workspace', 'open', 'General', 'general', 'open', 0, 0)",
             vec![CHANNEL_ID, WORKSPACE_ID],
         ),
         (
@@ -124,6 +123,15 @@ async fn seed_minimal_scenario(db: &mut SqliteConnection) {
             "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
              VALUES (?, ?, 0)",
             vec![CHANNEL_ID, AGENT_ID],
+        ),
+        (
+            "INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES (?, ?, 0)",
+            vec![WORKSPACE_ID, AGENT_ID],
+        ),
+        (
+            "INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability) \
+             VALUES (?, ?, 'send_messages')",
+            vec![WORKSPACE_ID, AGENT_ID],
         ),
         // In the workspace, deliberately NOT in the conversation: a mention is the only way it
         // could be reached.
@@ -172,12 +180,14 @@ async fn seed_minimal_scenario(db: &mut SqliteConnection) {
 struct OpenChannel;
 
 impl ChannelAccess for OpenChannel {
-    fn may_post(
+    type Error = Infallible;
+
+    async fn may_post(
         &self,
         _channel: &ConversationId,
         _author: &UserId,
-    ) -> Result<(), ChannelAccessRefusal> {
-        Ok(())
+    ) -> Result<Result<(), ChannelAccessRefusal>, Self::Error> {
+        Ok(Ok(()))
     }
 }
 
@@ -191,25 +201,59 @@ impl ChannelAccess for OpenChannel {
 struct ResolvesToChannel;
 
 impl TargetAddress for ResolvesToChannel {
-    fn resolve(&self, _agent: &AgentId, target: &str) -> Result<ResolvedStream, AddressRefusal> {
-        Ok(ResolvedStream {
+    type Error = Infallible;
+
+    async fn resolve(
+        &self,
+        _agent: &AgentId,
+        target: &str,
+        _allocation: DirectPairAllocation,
+    ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
+        Ok(Ok(ResolvedStream {
             conversation: ConversationId::parse(CHANNEL_ID).unwrap(),
             thread_root: target
                 .split_once("/thread:")
                 .map(|(_, root)| ThreadRootId::parse(root).expect("a legal root id")),
-        })
+        }))
     }
 }
 
 struct GrantsSend;
 
 impl SendCapability for GrantsSend {
-    fn may_send_messages(
+    type Error = Infallible;
+
+    async fn may_send_messages(
         &self,
         _agent: &AgentId,
         _conversation: &ConversationId,
-    ) -> Result<(), CapabilityDenied> {
+    ) -> Result<Result<(), CapabilityDenied>, Self::Error> {
+        Ok(Ok(()))
+    }
+}
+
+struct NoOpened;
+
+impl DirectPairOpenedPort for NoOpened {
+    type Error = Infallible;
+
+    async fn direct_pair_opened(&self, _fact: &DirectPairOpenedFact) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+struct CountingUnit<U> {
+    inner: U,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl<U: SendMessageUnitOfWork + Sync> SendMessageUnitOfWork for CountingUnit<U> {
+    async fn send_message(
+        &self,
+        command: SendMessage,
+    ) -> Result<SendMessageOutcome, SendMessageError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.send_message(command).await
     }
 }
 
@@ -219,7 +263,7 @@ impl SendCapability for GrantsSend {
 struct DirectLines(bool);
 
 impl DirectLineAuthority for DirectLines {
-    fn direct_lines(
+    async fn direct_lines(
         &self,
         _author: &UserId,
         addressed: &AddressedPrincipals,
@@ -406,6 +450,182 @@ fn keys(body: &Value) -> Vec<String> {
         .collect::<Vec<_>>();
     keys.sort();
     keys
+}
+
+#[tokio::test]
+async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
+    let sink = operator_log();
+    let cases: &[(&str, &[&str], bool, &str)] = &[
+        (
+            "human-access-driver",
+            &["DROP TABLE conversation_users"],
+            true,
+            "no such table: conversation_users",
+        ),
+        (
+            "target-participation-driver",
+            &["DROP TABLE conversation_agents"],
+            false,
+            "no such table: conversation_agents",
+        ),
+        (
+            "capability-driver",
+            &["DROP TABLE workspace_agent_capabilities"],
+            false,
+            "no such table: workspace_agent_capabilities",
+        ),
+        (
+            "malformed-placement",
+            &[
+                "PRAGMA ignore_check_constraints = ON",
+                "DROP TRIGGER conversations_placement_immutable",
+                "DROP TRIGGER trg_conversations_endpoints_immutable",
+                "UPDATE conversations SET placement_kind = 'broken' WHERE id = 'channel-1'",
+            ],
+            false,
+            "conversations.placement_kind",
+        ),
+        (
+            "half-pair",
+            &[
+                "PRAGMA ignore_check_constraints = ON",
+                "DROP TRIGGER conversations_placement_immutable",
+                "DROP TRIGGER trg_conversations_endpoints_immutable",
+                "UPDATE conversations SET placement_kind = 'direct_pair', \
+                 endpoint_a_kind = 'agent', endpoint_a_id = 'agent-1', endpoint_b_kind = NULL, \
+                 endpoint_b_id = NULL, title_key = 'general', roster_policy = 'fixed' \
+                 WHERE id = 'channel-1'",
+            ],
+            false,
+            "conversations.placement",
+        ),
+    ];
+    for (name, mutations, human, expected_cause) in cases {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(format!("{name}.sqlite"));
+        let store = opened(&path).await;
+        let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        for mutation in *mutations {
+            sqlx::query(*mutation).execute(&mut db).await.unwrap();
+        }
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let app = send_router(SendState {
+            channel_access: store.clone(),
+            target_address: store.target_address(NoOpened),
+            capability: store.clone(),
+            authority: store.clone(),
+            unit_of_work: CountingUnit {
+                inner: store,
+                calls: calls.clone(),
+            },
+        });
+        let before = sink.events().len();
+        let request = if *human {
+            human_send("never committed")
+        } else {
+            authenticated_agent("never committed", "#Space/General".to_owned())
+        };
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{name}"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"Internal Server Error", "{name}");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the product unit must not start after {name}"
+        );
+        let errors: Vec<Value> = sink
+            .events()
+            .into_iter()
+            .skip(before)
+            .filter(|event| event["level"] == "ERROR")
+            .collect();
+        assert_eq!(errors.len(), 1, "{name}");
+        let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+        assert!(
+            chain.contains("pre-send authority failed"),
+            "{name}: {chain}"
+        );
+        assert!(chain.contains(expected_cause), "{name}: {chain}");
+        assert!(!chain.contains("never committed"), "{name}: {chain}");
+    }
+}
+
+#[tokio::test]
+async fn real_authority_refusals_keep_their_public_shape_and_never_enter_the_uow() {
+    let cases = [
+        (
+            "human-membership",
+            "DELETE FROM conversation_users WHERE conversation_id = 'channel-1' AND user_id = 'user-1'",
+            true,
+            StatusCode::FORBIDDEN,
+            serde_json::json!({ "error": "forbidden" }),
+        ),
+        (
+            "agent-participation",
+            "DELETE FROM conversation_agents WHERE conversation_id = 'channel-1' AND agent_id = 'agent-1'",
+            false,
+            StatusCode::NOT_FOUND,
+            serde_json::json!({
+                "error": "target names no stream you can use",
+                "code": "target_unresolved",
+            }),
+        ),
+        (
+            "agent-capability",
+            "DELETE FROM workspace_agent_capabilities WHERE workspace_id = 'workspace-1' AND agent_id = 'agent-1'",
+            false,
+            StatusCode::FORBIDDEN,
+            serde_json::json!({
+                "code": "capability_denied",
+                "capability": "send_messages",
+                "message": "missing 'send_messages' capability in this workspace",
+                "details": { "capability": "send_messages" },
+            }),
+        ),
+    ];
+    for (name, mutation, human, expected_status, expected_body) in cases {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(format!("{name}.sqlite"));
+        let store = opened(&path).await;
+        let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        sqlx::query(mutation).execute(&mut db).await.unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let app = send_router(SendState {
+            channel_access: store.clone(),
+            target_address: store.target_address(NoOpened),
+            capability: store.clone(),
+            authority: store.clone(),
+            unit_of_work: CountingUnit {
+                inner: store,
+                calls: calls.clone(),
+            },
+        });
+        let request = if human {
+            human_send("not committed")
+        } else {
+            authenticated_agent("not committed", "#Space/General".to_owned())
+        };
+        let (status, body) = answered(app, request).await;
+        assert_eq!(status, expected_status, "{name}");
+        assert_eq!(body, expected_body, "{name}");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the product unit must not start after {name}"
+        );
+    }
 }
 
 /// A committed send answers with its whole acknowledgement, and the fields a just-inserted

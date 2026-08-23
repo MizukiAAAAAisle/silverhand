@@ -143,13 +143,17 @@ mod tests {
         AgentId, ConversationId, SendActor, SendDestination, SendMessage, SendMessageDraft, UserId,
     };
     use crate::persistence::PersistenceFailure;
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
 
     /// An authority that grants every agent the body addressed, so tests that are
     /// not about authorization do not have to model it.
     struct GrantsEveryAddressedAgent;
 
     impl crate::messaging::DirectLineAuthority for GrantsEveryAddressedAgent {
-        fn direct_lines(
+        async fn direct_lines(
             &self,
             _author: &UserId,
             addressed: &AddressedPrincipals,
@@ -190,6 +194,15 @@ mod tests {
     /// and cannot do.
     struct SpansOf(Vec<Range<usize>>);
 
+    fn ready<F: Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut context = Context::from_waker(Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => output,
+            Poll::Pending => panic!("the driver-free authority unexpectedly suspended"),
+        }
+    }
+
     impl ReferencePositions for SpansOf {
         fn autolink_spans(&self, _content: &MessageContent) -> Vec<Range<usize>> {
             self.0.clone()
@@ -219,12 +232,16 @@ mod tests {
         positions: &impl ReferencePositions,
     ) -> Vec<(PrincipalKind, String)> {
         let content = MessageContent::parse(body).unwrap();
-        SendMessage::prepare(draft(content), positions, &GrantsEveryAddressedAgent)
-            .unwrap()
-            .addressed()
-            .iter()
-            .map(|reference| (reference.kind(), reference.handle().as_str().to_owned()))
-            .collect()
+        ready(SendMessage::prepare(
+            draft(content),
+            positions,
+            &GrantsEveryAddressedAgent,
+        ))
+        .unwrap()
+        .addressed()
+        .iter()
+        .map(|reference| (reference.kind(), reference.handle().as_str().to_owned()))
+        .collect()
     }
 
     /// The counter-example B1 asks for: a body that addresses nobody cannot be

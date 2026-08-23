@@ -1295,17 +1295,26 @@ async fn send_json(socket: &mut WebSocket, frame: &impl Serialize) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        convert::Infallible,
+        future::Future,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll, Waker},
+    };
 
     use futures_util::{SinkExt, StreamExt};
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
         identity::AgentId,
         messaging::{
-            AddressedPrincipals, DirectLineAuthority, DirectPairOpenedPort, DirectPairParticipants,
-            EnvironmentUnavailable, MessageContent, OpenDirectPairError, PrincipalKind,
-            ReferencePositions, SendActor, SendDestination, SendEntropy, SendMessage,
-            SendMessageDraft, SendMessageUnitOfWork,
+            AddressedPrincipals, CapabilityDenied, DirectLineAuthority, DirectPairOpenedPort,
+            DirectPairParticipants, EnvironmentUnavailable, MessageContent, OpenDirectPairError,
+            PrincipalKind, ReferencePositions, SendActor, SendCapability, SendDestination,
+            SendEntropy, SendMessage, SendMessageDraft, SendMessageError, SendMessageOutcome,
+            SendMessageUnitOfWork,
             mention_cc::CommittedMentionCopy,
             post_commit::{
                 CopyNotification, EffectStep, MentionSkipRecord, MessagePublication,
@@ -1313,6 +1322,7 @@ mod tests {
             },
         },
         persistence::PersistenceFailure,
+        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
         scope_event::AuthorizeEventScope,
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
@@ -1322,6 +1332,7 @@ mod tests {
         connect_async,
         tungstenite::{Message as ClientMessage, client::IntoClientRequest},
     };
+    use tower::ServiceExt;
 
     use super::*;
 
@@ -1352,6 +1363,15 @@ mod tests {
 
     struct OneReference;
 
+    fn ready<F: Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut context = Context::from_waker(Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => output,
+            Poll::Pending => panic!("the driver-free authority unexpectedly suspended"),
+        }
+    }
+
     impl ReferencePositions for OneReference {
         fn autolink_spans(&self, content: &MessageContent) -> Vec<std::ops::Range<usize>> {
             let start = content.as_str().find('<').unwrap();
@@ -1363,7 +1383,7 @@ mod tests {
     struct GrantsAgent;
 
     impl DirectLineAuthority for GrantsAgent {
-        fn direct_lines(
+        async fn direct_lines(
             &self,
             _author: &UserId,
             addressed: &AddressedPrincipals,
@@ -1376,7 +1396,7 @@ mod tests {
     }
 
     fn mention_command() -> SendMessage {
-        SendMessage::prepare(
+        ready(SendMessage::prepare(
             SendMessageDraft {
                 source_conversation: ConversationId::parse("conversation-1").unwrap(),
                 target_conversation: ConversationId::parse("conversation-1").unwrap(),
@@ -1388,7 +1408,7 @@ mod tests {
             },
             &OneReference,
             &GrantsAgent,
-        )
+        ))
         .unwrap()
     }
 
@@ -1548,6 +1568,87 @@ mod tests {
         .fetch_one(&mut db)
         .await
         .unwrap()
+    }
+
+    struct DenySend;
+
+    impl SendCapability for DenySend {
+        type Error = Infallible;
+
+        async fn may_send_messages(
+            &self,
+            _agent: &AgentId,
+            _conversation: &ConversationId,
+        ) -> Result<Result<(), CapabilityDenied>, Self::Error> {
+            Ok(Err(CapabilityDenied))
+        }
+    }
+
+    struct CountedStore {
+        inner: MessagingStore,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl SendMessageUnitOfWork for CountedStore {
+        async fn send_message(
+            &self,
+            command: SendMessage,
+        ) -> Result<SendMessageOutcome, SendMessageError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.send_message(command).await
+        }
+    }
+
+    #[tokio::test]
+    async fn real_resolver_announces_before_capability_refusal_and_never_enters_the_uow() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open(&path).await.unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = crate::messaging::router::send_router(crate::messaging::router::SendState {
+            channel_access: store.clone(),
+            target_address: store.target_address(hub.clone()),
+            capability: DenySend,
+            authority: store.clone(),
+            unit_of_work: CountedStore {
+                inner: store,
+                calls: calls.clone(),
+            },
+        })
+        .layer(axum::Extension(RuntimePrincipal::AgentSlot {
+            agent: agent(),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                silverhand_backend_core::identity::DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        }));
+
+        let response = app
+            .oneshot(
+                axum::http::Request::post("/internal/agents/agent-1/send-message")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({"content":"hello", "target":"dm:@user"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(direct_pair_count(&path).await, 1);
+
+        let resumed = hub
+            .resume(
+                &EventScope::Viewer(user()),
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(events) = resumed.replay else {
+            panic!("the insert-winner announcement must be replayable")
+        };
+        assert_eq!(events.len(), 1);
     }
 
     fn conversation() -> ConversationId {

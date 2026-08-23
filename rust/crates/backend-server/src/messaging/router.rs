@@ -34,17 +34,17 @@ use axum::{
 };
 use silverhand_backend_core::{
     identity::{ConversationId, UserId},
-    messaging::{DirectLineAuthority, SendMessageOutcome, SendMessageUnitOfWork},
+    messaging::{
+        AddressRefusal, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority, SendCapability,
+        SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
+    },
     runtime_credential::RuntimePrincipal,
 };
 use std::sync::Arc;
 
 use super::{
     ack::send_ack,
-    adapters::{
-        AddressRefusal, AgentRefusal, ChannelAccess, ChannelAccessRefusal, HumanRefusal,
-        SendCapability, SendPorts, TargetAddress, agent_send, human_send,
-    },
+    adapters::{AgentRefusal, HumanRefusal, SendPorts, agent_send, human_send},
     admission::PayloadRefusal,
     agent_output::agent_send_output,
     envelope::fence_message_send_body,
@@ -291,6 +291,14 @@ fn internal(body: &'static str) -> Response {
         .into_response()
 }
 
+fn authority_failure(cause: &crate::error::BoundaryFailure) -> Response {
+    tracing::error!(
+        error_chain = %crate::error::describe(cause),
+        "message-send pre-send authority failed"
+    );
+    internal("Internal Server Error")
+}
+
 /// Each door maps ITS OWN reasons to its own words, and that mapping is the only thing
 /// allowed to differ — which is why it lives at the route, not in the door. Neither
 /// function has an arm for a reason its door cannot produce, because neither refusal
@@ -303,6 +311,7 @@ fn human_wire(refusal: HumanRefusal) -> Response {
         HumanRefusal::Access(ChannelAccessRefusal::Forbidden) => {
             gate_refusal(StatusCode::FORBIDDEN, "forbidden")
         }
+        HumanRefusal::Authority(cause) => authority_failure(&cause),
         HumanRefusal::Payload(PayloadRefusal::Shape(issues)) => {
             invalid_input(issues).into_response()
         }
@@ -332,6 +341,7 @@ fn agent_wire(refusal: AgentRefusal) -> Response {
         // 403 degrades to `forbidden` — and it reads the bucket to tell the agent what a human
         // has to grant.
         AgentRefusal::CapabilityDenied => capability_denied(),
+        AgentRefusal::Authority(cause) => authority_failure(&cause),
         AgentRefusal::Send(cause) => refused_send(&cause),
     }
 }

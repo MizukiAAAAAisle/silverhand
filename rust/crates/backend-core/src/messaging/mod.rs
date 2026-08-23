@@ -64,6 +64,7 @@ mod command;
 mod direct_pair;
 mod fact;
 mod identity;
+mod pre_send;
 mod principal;
 
 pub(crate) use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
@@ -104,5 +105,9 @@ pub use freshness::StaleRefusal;
 pub use identity::{
     AttachmentId, EmptyIdentifier, InvalidSeq, MessageId, MessageSeq, NotificationId, ThreadRootId,
     mint_conversation_id,
+};
+pub use pre_send::{
+    AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DirectPairAllocation,
+    ResolvedStream, SendCapability, TargetAddress,
 };
 pub use principal::{InvalidHandle, ParticipantHandle, PrincipalKind};
