@@ -79,8 +79,8 @@ pub use command::{
 };
 pub use environment::{EnvironmentUnavailable, SendClock, SendEntropy};
 pub use fact::{
-    CreatedMessage, FromKind, MainCommittedSend, MessageAuthor, MessageCreatedFact,
-    ReplyCommittedSend, ThreadFollowerSource, ThreadReplyFact,
+    CommittedMessageView, CreatedMessage, FromKind, MainCommittedSend, MessageAuthor,
+    MessageCreatedFact, ReplyCommittedSend, ThreadFollowerSource, ThreadReplyFact,
 };
 pub use freshness::StaleRefusal;
 pub use identity::{

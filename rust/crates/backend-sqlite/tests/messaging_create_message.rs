@@ -9,10 +9,11 @@ use silverhand_backend_core::messaging::mention_cc::{
     CommittedMentionCopy, MentionCopyOutcome, MentionCopySource, render_copy_body,
 };
 use silverhand_backend_core::messaging::post_commit::{
-    CommittedMentionRow, CopyNotification, DirectLineInvalidation, EffectFailure, EffectStep,
-    IdleStart, MainDelivery, MainEffects, MainPublication, MentionSkipRecord, MessagePublication,
-    RuntimeDelivery, RuntimeStart, SendEffects, SkippedMention, UnreadPublication,
-    ViewerNotification, announce_main_send, announce_send,
+    CommittedMentionRow, CommittedMessagePublication, CopyNotification, DirectLineInvalidation,
+    EffectFailure, EffectStep, IdleStart, MainDelivery, MainEffects, MentionSkipRecord,
+    MessagePublication, ReplyDelivery, ReplyEffects, RuntimeDelivery, RuntimeStart, SendEffects,
+    SkippedMention, UnreadPublication, ViewerNotification, announce_main_send, announce_reply_send,
+    announce_send,
 };
 use silverhand_backend_core::messaging::{
     ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
@@ -646,10 +647,10 @@ async fn a_reply_reports_an_absolute_count_that_excludes_system_copies() {
         .await
         .unwrap();
 
-    assert_eq!(first.thread().unwrap().reply_count, 1);
+    assert_eq!(first.thread().unwrap().reply_count(), 1);
     let thread = second.thread().unwrap();
-    assert_eq!(thread.reply_count, 2);
-    assert_eq!(thread.thread_root_id.as_str(), root_id);
+    assert_eq!(thread.reply_count(), 2);
+    assert_eq!(thread.thread_root_id().as_str(), root_id);
 }
 
 /// A reply to a message of another conversation is refused as if the message did
@@ -748,7 +749,7 @@ async fn a_send_into_a_named_cluster_joins_that_cluster() {
         fact.message().thread_root_id.as_ref().unwrap().as_str(),
         root_id
     );
-    assert_eq!(fact.thread().unwrap().reply_count, 1);
+    assert_eq!(fact.thread().unwrap().reply_count(), 1);
     assert_eq!(
         fixture.stream_head(CHANNEL_ID, Some(&root_id)).await,
         Some(2)
@@ -2755,12 +2756,12 @@ impl MainRecorder {
     }
 }
 
-impl MainPublication for MainRecorder {
+impl CommittedMessagePublication for MainRecorder {
     async fn publish_message(
         &self,
-        message: &silverhand_backend_core::messaging::CreatedMessage,
+        committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
     ) -> Result<(), EffectFailure> {
-        self.note(format!("published:{}", message.id.as_str()));
+        self.note(format!("published:{}", committed.message().id.as_str()));
         Ok(())
     }
 }
@@ -2787,6 +2788,17 @@ impl MainDelivery for MainRecorder {
         _message: &silverhand_backend_core::messaging::CreatedMessage,
     ) -> Result<(), EffectFailure> {
         self.note(format!("delivered:{}", recipient.as_str()));
+        Ok(())
+    }
+}
+
+impl ReplyDelivery for MainRecorder {
+    async fn deliver_to(
+        &self,
+        recipient: &AgentId,
+        _message: &silverhand_backend_core::messaging::CreatedMessage,
+    ) -> Result<(), EffectFailure> {
+        self.note(format!("reply-delivered:{}", recipient.as_str()));
         Ok(())
     }
 }
@@ -2824,7 +2836,76 @@ async fn announce_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
     .await
 }
 
-/// The record writes what a reader can act on: the source coordinates in BOTH
+/// Runs a committed reply's aftermath with the real record adapter, recording
+/// everything else. The delivery capability is [`ReplyDelivery`], not
+/// [`MainDelivery`]: the reply reaches the cluster's followers.
+async fn announce_reply_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
+    fact: &silverhand_backend_core::messaging::MessageCreatedFact,
+    store: &MessagingStore<E>,
+    recorder: &MainRecorder,
+) -> silverhand_backend_core::messaging::post_commit::EffectReport {
+    announce_reply_send(
+        fact.reply_cluster()
+            .expect("a reply carries a cluster plan"),
+        ReplyEffects {
+            publication: recorder,
+            mentions: store,
+            viewers: recorder,
+            unread: recorder,
+            delivery: recorder,
+        },
+    )
+    .await
+}
+
+/// A committed reply's aftermath, driven from the real fact: the frame is published,
+/// unread is republished, and the reply is delivered to the cluster's real
+/// followers minus its sender — and to nobody by the main-line fan-out, with no
+/// idle start. The audience here is the root's author, whom the replying user does
+/// not exclude.
+#[tokio::test]
+async fn a_committed_reply_is_delivered_to_its_cluster_and_never_starts_the_room() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    // A reply that names nobody, so the mention prefix is empty and the aftermath is
+    // exactly publish -> unread -> follower delivery.
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+    let message = reply.message().id.as_str();
+
+    let recorder = MainRecorder::default();
+    let report = announce_reply_with_real_record(&reply, &store, &recorder).await;
+
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            format!("published:{message}"),
+            format!("unread:{CHANNEL_ID}"),
+            format!("reply-delivered:{AGENT_ID}"),
+        ],
+        "a reply's aftermath was not publish -> unread -> follower delivery"
+    );
+    // The two seams that separate a reply from a main-line send: no main-line
+    // fan-out, and no idle start.
+    let calls = recorder.calls();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("delivered:")),
+        "a reply used the main-line fan-out: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("started:")),
+        "a reply started the room: {calls:?}"
+    );
+}
 /// coordinate triples, and the payload the Activity surface renders. Only the rows
 /// that were written are published, so the two people named produce exactly two
 /// notifications and exactly two viewer frames.

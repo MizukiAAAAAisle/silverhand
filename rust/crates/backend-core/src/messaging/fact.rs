@@ -118,12 +118,82 @@ pub struct CreatedMessage {
 /// What a reply changed about its cluster: the absolute count of what participants
 /// said there, computed inside the atomic unit so it already includes this reply.
 ///
-/// Not the whole of what a reply publishes — the cluster's list entry is a second
-/// projection and is not part of this fact yet.
+/// Private fields with a public [`committed`](ThreadReplyFact::committed) seam and
+/// read-only accessors: the unit of work that computed the projection inside the
+/// atomic unit is the only thing that assembles one, and nothing downstream can
+/// fabricate or mutate it. The cluster's list entry is a second projection of this
+/// same fact; it is not modelled here yet, pending the shared author contract it
+/// depends on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThreadReplyFact {
-    pub thread_root_id: ThreadRootId,
-    pub reply_count: i64,
+    thread_root_id: ThreadRootId,
+    reply_count: i64,
+}
+
+impl ThreadReplyFact {
+    /// Assembled by the unit of work that committed the reply, from the facts it
+    /// read inside the same atomic unit.
+    ///
+    /// A caller outside this crate cannot assemble one field by field:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::ThreadReplyFact;
+    ///
+    /// let fact = ThreadReplyFact {
+    ///     thread_root_id: todo!(),
+    ///     reply_count: 1,
+    /// };
+    /// ```
+    ///
+    /// nor mutate one that already exists:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::ThreadReplyFact;
+    ///
+    /// fn tamper(fact: &mut ThreadReplyFact) {
+    ///     fact.reply_count = 0;
+    /// }
+    /// ```
+    pub fn committed(thread_root_id: ThreadRootId, reply_count: i64) -> Self {
+        Self {
+            thread_root_id,
+            reply_count,
+        }
+    }
+
+    pub fn thread_root_id(&self) -> &ThreadRootId {
+        &self.thread_root_id
+    }
+
+    pub fn reply_count(&self) -> i64 {
+        self.reply_count
+    }
+}
+
+/// The published payload of one committed send: the message itself, and — only for
+/// a reply — the cluster projections that ride the same frame.
+///
+/// Path-neutral by construction. A main-line send carries no projections, a reply
+/// carries its own, and both can obtain a view only from the fact ([`MainCommittedSend::published`]
+/// / [`ReplyCommittedSend::published`]): the fields are private and there is no
+/// public constructor, so nobody outside can fabricate one or fake a main-line send
+/// that carries reply projections. The acknowledgement projects from this same
+/// value, which is why the published frame and the ACK cannot disagree.
+#[derive(Clone, Copy, Debug)]
+pub struct CommittedMessageView<'fact> {
+    message: &'fact CreatedMessage,
+    reply_projection: Option<&'fact ThreadReplyFact>,
+}
+
+impl<'fact> CommittedMessageView<'fact> {
+    pub fn message(&self) -> &'fact CreatedMessage {
+        self.message
+    }
+
+    /// The cluster projections carried on a reply's frame; absent on the main line.
+    pub fn reply_projection(&self) -> Option<&'fact ThreadReplyFact> {
+        self.reply_projection
+    }
 }
 
 /// One committed main-line send and the plan that belongs to it.
@@ -154,6 +224,15 @@ impl<'fact> MainCommittedSend<'fact> {
     pub fn delivery(&self) -> &'fact post_commit::MainDeliveryPlan {
         self.delivery
     }
+
+    /// The published payload: the message alone — a main-line send carries no
+    /// cluster projections.
+    pub fn published(&self) -> CommittedMessageView<'fact> {
+        CommittedMessageView {
+            message: self.message,
+            reply_projection: None,
+        }
+    }
 }
 
 /// The same shape for a reply, carrying the cluster's own plan. Distinct from
@@ -183,6 +262,15 @@ impl<'fact> ReplyCommittedSend<'fact> {
 
     pub fn audience(&self) -> &'fact post_commit::ReplyAudience {
         self.audience
+    }
+
+    /// The published payload: the message together with the cluster projections that
+    /// ride the same frame.
+    pub fn published(&self) -> CommittedMessageView<'fact> {
+        CommittedMessageView {
+            message: self.message,
+            reply_projection: Some(self.projection),
+        }
     }
 }
 

@@ -563,12 +563,12 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 // following a conversation whose beginning it cannot see.
                 self.apply_cluster_follow_effects(&facts.id, root, &command, seq, created_at_ms)
                     .await?;
-                Some(ThreadReplyFact {
-                    thread_root_id: root.clone(),
+                Some(ThreadReplyFact::committed(
+                    root.clone(),
                     // Counted after the insert, so the reported total already
                     // includes this reply and is never a value from the future.
-                    reply_count: self.count_thread_replies(&facts.id, root).await?,
-                })
+                    self.count_thread_replies(&facts.id, root).await?,
+                ))
             }
         };
 

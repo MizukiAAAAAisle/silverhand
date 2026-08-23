@@ -12,8 +12,9 @@
 use std::{error::Error, future::Future};
 
 use super::{
-    AgentId, ConversationId, CreatedMessage, MainCommittedSend, MessageCreatedFact, MessageId,
-    NotificationId, ParticipantHandle, UserId, WorkspaceId,
+    AgentId, CommittedMessageView, ConversationId, CreatedMessage, MainCommittedSend,
+    MessageCreatedFact, MessageId, NotificationId, ParticipantHandle, ReplyCommittedSend, UserId,
+    WorkspaceId,
     mention_cc::{CommittedMentionCopy, MentionCopyOutcome, MentionCopySkip},
 };
 
@@ -317,6 +318,11 @@ pub enum EffectStep {
     MainDelivered,
     /// Only for recipients that are not already running.
     IdleStarted,
+    /// One follower of a reply's cluster is owed the reply. Distinct from
+    /// [`MainDelivered`](EffectStep::MainDelivered): a reply is delivered to the
+    /// cluster's followers, never the conversation's participants, and no idle start
+    /// follows it — a reply wakes its followers, it does not start the room.
+    ReplyDelivered,
 }
 
 /// A copy landed on a direct line, so the AUTHOR's view of their lines is out of
@@ -405,10 +411,15 @@ pub trait ViewerNotification {
 }
 
 /// The message, published to the conversation it landed in.
-pub trait MainPublication {
+///
+/// Path-neutral: a reply carries its cluster projections on the same frame and a
+/// main-line send carries none, but both hand the adapter the same
+/// [`CommittedMessageView`] — there is one published frame, not one per path. The
+/// acknowledgement projects from that same view.
+pub trait CommittedMessagePublication {
     fn publish_message(
         &self,
-        message: &CreatedMessage,
+        committed: CommittedMessageView<'_>,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -424,6 +435,19 @@ pub trait UnreadPublication {
 /// The message is owed to one recipient. Per recipient, from the plan, so an
 /// adapter has nobody to look up and no policy left to re-decide.
 pub trait MainDelivery {
+    fn deliver_to(
+        &self,
+        recipient: &AgentId,
+        message: &CreatedMessage,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// The reply is owed to one follower of its cluster. A separate capability from
+/// [`MainDelivery`], because the plan is a different one: the recipients are the
+/// cluster's followers, and every one of them is woken (a turn), not the
+/// conversation's participants served by the main-line fan-out. Per recipient, from
+/// the audience, so an adapter has nobody to look up and no policy left to re-decide.
+pub trait ReplyDelivery {
     fn deliver_to(
         &self,
         recipient: &AgentId,
@@ -627,7 +651,7 @@ pub async fn announce_main_send<P, R, V, U, D, S>(
     ports: MainEffects<'_, P, R, V, U, D, S>,
 ) -> EffectReport
 where
-    P: MainPublication,
+    P: CommittedMessagePublication,
     R: MentionedViewerRecord,
     V: ViewerNotification,
     U: UnreadPublication,
@@ -644,7 +668,7 @@ where
         &mut report,
         &id,
         EffectStep::MessagePublished,
-        ports.publication.publish_message(message),
+        ports.publication.publish_message(send.published()),
     )
     .await;
 
@@ -698,6 +722,113 @@ where
             &id,
             EffectStep::IdleStarted,
             ports.idle.start_if_idle(recipient, &conversation),
+        )
+        .await;
+    }
+    report
+}
+
+/// The capabilities a reply's aftermath needs.
+///
+/// The same shape as [`MainEffects`] up to one difference that is the whole point:
+/// there is no idle start. A reply's end is its followers being woken, never the
+/// conversation being started; and delivery is [`ReplyDelivery`], not
+/// [`MainDelivery`], because the plan is the cluster's followers rather than the
+/// conversation's participants.
+pub struct ReplyEffects<'ports, P, R, V, U, D> {
+    pub publication: &'ports P,
+    pub mentions: &'ports R,
+    pub viewers: &'ports V,
+    pub unread: &'ports U,
+    pub delivery: &'ports D,
+}
+
+/// Tells the world about a committed reply.
+///
+/// It takes the reply view, not the fact, so there is no way to hand it a main-line
+/// send:
+///
+/// ```compile_fail
+/// use silverhand_backend_core::messaging::{MessageCreatedFact, post_commit};
+///
+/// fn announce(fact: &MessageCreatedFact, ports: post_commit::ReplyEffects<'_, (), (), (), (), ()>) {
+///     let main = fact.main_line().expect("a main-line send");
+///     let _ = post_commit::announce_reply_send(main, ports);
+/// }
+/// ```
+///
+/// The one load-bearing ordering is shared with the main line: a named person's
+/// durable mention row is written before unread is published, because the badge's
+/// directed count reads that row. What differs is the end: delivery reaches the
+/// cluster's followers and stops — no main-line fan-out, and no idle start. Each
+/// attempt is isolated per named viewer and per recipient.
+pub async fn announce_reply_send<P, R, V, U, D>(
+    send: ReplyCommittedSend<'_>,
+    ports: ReplyEffects<'_, P, R, V, U, D>,
+) -> EffectReport
+where
+    P: CommittedMessagePublication,
+    R: MentionedViewerRecord,
+    V: ViewerNotification,
+    U: UnreadPublication,
+    D: ReplyDelivery,
+{
+    let mut report = EffectReport::default();
+    let message = send.message();
+    let id = message.id.clone();
+    let conversation = message.conversation_id.clone();
+
+    attempt(
+        &mut report,
+        &id,
+        EffectStep::MessagePublished,
+        ports.publication.publish_message(send.published()),
+    )
+    .await;
+
+    if let Some(intent) = send.mentions() {
+        report
+            .attempted
+            .push((id.clone(), EffectStep::MentionedViewerRecorded));
+        match ports.mentions.record_mentioned_viewers(intent).await {
+            // Only rows that were written are published, and one person's publication
+            // failing does not reach the next person's.
+            Ok(rows) => {
+                for row in &rows {
+                    attempt(
+                        &mut report,
+                        &id,
+                        EffectStep::ViewerNotified,
+                        ports.viewers.notify_viewer(row),
+                    )
+                    .await;
+                }
+            }
+            Err(failure) => {
+                report
+                    .failed
+                    .push((id.clone(), EffectStep::MentionedViewerRecorded, failure));
+            }
+        }
+    }
+
+    attempt(
+        &mut report,
+        &id,
+        EffectStep::UnreadPublished,
+        ports.unread.publish_unread(&conversation),
+    )
+    .await;
+
+    // The reply's own plan: the cluster's followers, each woken. No main-line
+    // fan-out and no idle start follow — that divergence is why this is not
+    // `announce_main_send`.
+    for recipient in send.audience().recipients() {
+        attempt(
+            &mut report,
+            &id,
+            EffectStep::ReplyDelivered,
+            ports.delivery.deliver_to(recipient, message),
         )
         .await;
     }
@@ -1123,9 +1254,15 @@ mod tests {
         }
     }
 
-    impl MainPublication for Recorder {
-        async fn publish_message(&self, message: &CreatedMessage) -> Result<(), EffectFailure> {
-            self.answer(message.id.as_str(), EffectStep::MessagePublished)
+    impl CommittedMessagePublication for Recorder {
+        async fn publish_message(
+            &self,
+            committed: CommittedMessageView<'_>,
+        ) -> Result<(), EffectFailure> {
+            self.answer(
+                committed.message().id.as_str(),
+                EffectStep::MessagePublished,
+            )
         }
     }
 
@@ -1202,6 +1339,19 @@ mod tests {
         }
     }
 
+    impl ReplyDelivery for Recorder {
+        async fn deliver_to(
+            &self,
+            recipient: &AgentId,
+            message: &CreatedMessage,
+        ) -> Result<(), EffectFailure> {
+            self.answer(
+                &format!("{}|{}", recipient.as_str(), message.id.as_str()),
+                EffectStep::ReplyDelivered,
+            )
+        }
+    }
+
     fn default_recorder() -> Recorder {
         Recorder::entitling(&["viewer-1", "viewer-2"])
     }
@@ -1216,6 +1366,43 @@ mod tests {
             unread: recorder,
             delivery: recorder,
             idle: recorder,
+        }
+    }
+
+    fn reply_ports(
+        recorder: &Recorder,
+    ) -> ReplyEffects<'_, Recorder, Recorder, Recorder, Recorder, Recorder> {
+        ReplyEffects {
+            publication: recorder,
+            mentions: recorder,
+            viewers: recorder,
+            unread: recorder,
+            delivery: recorder,
+        }
+    }
+
+    /// A committed reply: a cluster projection, a follower audience, and — for the
+    /// mention prefix — an optional intent. Its message is the same `source-message`
+    /// the main-line helpers use, so the two announcers can be compared on one id.
+    fn reply_fact(followers: &[&str], viewers: &[&str]) -> MessageCreatedFact {
+        let followers: Vec<AgentId> = followers
+            .iter()
+            .map(|id| AgentId::parse(*id).unwrap())
+            .collect();
+        MessageCreatedFact {
+            thread: Some(crate::messaging::ThreadReplyFact::committed(
+                crate::messaging::ThreadRootId::parse("root-1").unwrap(),
+                2,
+            )),
+            post_commit: PostCommitPlan::committed(
+                if viewers.is_empty() {
+                    None
+                } else {
+                    Some(intent_for(viewers))
+                },
+                DeliveryPlan::ReplyCluster(ReplyAudience::committed(followers)),
+            ),
+            ..fact(Vec::new())
         }
     }
 
@@ -1383,10 +1570,10 @@ mod tests {
         let participants = ["agent-1", "agent-2"];
         let main = fact_with(Vec::new(), main_plan(&[], &participants));
         let reply = MessageCreatedFact {
-            thread: Some(crate::messaging::ThreadReplyFact {
-                thread_root_id: crate::messaging::ThreadRootId::parse("root-1").unwrap(),
-                reply_count: 1,
-            }),
+            thread: Some(crate::messaging::ThreadReplyFact::committed(
+                crate::messaging::ThreadRootId::parse("root-1").unwrap(),
+                1,
+            )),
             post_commit: PostCommitPlan::committed(
                 None,
                 // Only one participant follows the cluster.
@@ -1418,6 +1605,113 @@ mod tests {
             ]
         );
         assert_ne!(main_recipients, reply_audience);
+    }
+
+    /// The reply's own order: publish (the frame carries its cluster projections),
+    /// the shared mention prefix, unread, and then delivery to the cluster's
+    /// followers. It ends there — the two places it diverges from the main line are
+    /// that there is no main-line fan-out and no idle start.
+    #[tokio::test]
+    async fn a_reply_is_announced_in_its_own_order() {
+        let recorder = default_recorder();
+        let committed = reply_fact(&["agent-2"], &["viewer-1"]);
+
+        let report = announce_reply_send(
+            committed.reply_cluster().expect("a reply"),
+            reply_ports(&recorder),
+        )
+        .await;
+
+        let id = MessageId::parse("source-message").unwrap();
+        assert_eq!(
+            report.steps_for(&id),
+            vec![
+                EffectStep::MessagePublished,
+                EffectStep::MentionedViewerRecorded,
+                EffectStep::ViewerNotified,
+                EffectStep::UnreadPublished,
+                EffectStep::ReplyDelivered,
+            ]
+        );
+        assert!(
+            !report
+                .steps_for(&id)
+                .iter()
+                .any(|step| matches!(step, EffectStep::MainDelivered | EffectStep::IdleStarted)),
+            "a reply used the main-line fan-out or started the room: {:?}",
+            report.steps_for(&id)
+        );
+        assert!(report.failed.is_empty());
+    }
+
+    /// The one load-bearing order — the mention row before unread — holds under any
+    /// single failure, and that failure isolates: the reply is still delivered to
+    /// its follower, and the room is still never started.
+    #[tokio::test]
+    async fn a_replys_load_bearing_order_holds_and_a_failure_isolates() {
+        for failing in [
+            EffectStep::MessagePublished,
+            EffectStep::MentionedViewerRecorded,
+            EffectStep::ViewerNotified,
+            EffectStep::UnreadPublished,
+            EffectStep::ReplyDelivered,
+        ] {
+            let recorder = Recorder::failing(&[failing]);
+            let committed = reply_fact(&["agent-2"], &["viewer-1"]);
+
+            let report = announce_reply_send(
+                committed.reply_cluster().expect("a reply"),
+                reply_ports(&recorder),
+            )
+            .await;
+
+            let steps = report.steps_for(&MessageId::parse("source-message").unwrap());
+            let recorded = steps
+                .iter()
+                .position(|step| *step == EffectStep::MentionedViewerRecorded);
+            let unread = steps
+                .iter()
+                .position(|step| *step == EffectStep::UnreadPublished);
+            assert!(
+                recorded < unread,
+                "{failing:?} disturbed the one order that carries weight: {steps:?}"
+            );
+            assert!(
+                steps.contains(&EffectStep::ReplyDelivered),
+                "{failing:?} truncated the reply's delivery: {steps:?}"
+            );
+            assert!(
+                !steps.contains(&EffectStep::IdleStarted),
+                "{failing:?} started the room a reply must never start: {steps:?}"
+            );
+            assert_eq!(report.failed_steps(), vec![failing]);
+        }
+    }
+
+    /// Every follower in the audience is owed the reply, each on its own attempt.
+    #[tokio::test]
+    async fn a_reply_reaches_every_follower_in_its_audience() {
+        let recorder = default_recorder();
+        let committed = reply_fact(&["agent-2", "agent-3"], &[]);
+
+        let report = announce_reply_send(
+            committed.reply_cluster().expect("a reply"),
+            reply_ports(&recorder),
+        )
+        .await;
+
+        let id = MessageId::parse("source-message").unwrap();
+        let delivered = report
+            .steps_for(&id)
+            .into_iter()
+            .filter(|step| *step == EffectStep::ReplyDelivered)
+            .count();
+        assert_eq!(delivered, 2, "one attempt was owed per follower");
+        assert!(
+            !report.steps_for(&id).contains(&EffectStep::IdleStarted),
+            "a reply started the room"
+        );
+        assert!(report.failed.is_empty());
     }
 
     /// The store mints the row's identity and changes nothing else: what the
