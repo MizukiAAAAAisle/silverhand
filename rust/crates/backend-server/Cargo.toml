@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+pulldown-cmark.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 silverhand-backend-core.workspace = true
