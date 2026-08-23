@@ -10,7 +10,9 @@
 //! type reaches the application or the wire.
 
 use std::{
+    convert::Infallible,
     path::Path,
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -19,16 +21,17 @@ use std::collections::HashSet;
 use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
-    CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads, EnvironmentUnavailable, FromKind,
-    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageReference, MessageSeq,
-    NotificationId, ParticipantHandle, PostAuthorityReads, PrincipalKind, ReplyTargetRefusal,
-    SendActor, SendClock, SendDestination, SendEntropy, SendMessage, SendMessageError,
-    SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource, ThreadListEntry,
-    ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
+    CreatedMessage, DirectPairEndpoints, DirectPairMint, DirectPairMinted, DirectPairOpenedPort,
+    DirectPairParticipants, EndpointPrincipalReads, EnvironmentUnavailable, FromKind, InvalidSeq,
+    MessageAuthor, MessageCreatedFact, MessageId, MessageReference, MessageSeq, NotificationId,
+    OpenDirectPairError, ParticipantHandle, PostAuthorityReads, PrincipalIdentity, PrincipalKind,
+    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
+    SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
+    ThreadListEntry, ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
-    mint_conversation_id,
+    mint_conversation_id, open_direct_pair,
     post_commit::{
         CommittedMentionRow, DeliveryPlan, EffectFailure, MainDeliveryPlan, MentionIntent,
         MentionedViewerRecord, PostCommitPlan, ReplyAudience,
@@ -423,6 +426,81 @@ impl<E> MessagingStore<E> {
     }
 }
 
+impl<E: SendEntropy + Send + Sync> MessagingStore<E> {
+    pub async fn open_direct_pair<O>(
+        &self,
+        opened: &O,
+        participants: DirectPairParticipants,
+        now_unix_ms: i64,
+    ) -> Result<ConversationId, OpenDirectPairError<PersistenceFailure, O::Error>>
+    where
+        O: DirectPairOpenedPort,
+    {
+        let mut mint = AutocommitDirectPairMint { store: self };
+        open_direct_pair(&mut mint, opened, participants, now_unix_ms).await
+    }
+}
+
+struct AutocommitDirectPairMint<'store, E> {
+    store: &'store MessagingStore<E>,
+}
+
+impl<E: SendEntropy + Send + Sync> DirectPairMint for AutocommitDirectPairMint<'_, E> {
+    type Error = PersistenceFailure;
+
+    async fn mint_direct_pair(
+        &mut self,
+        participants: &DirectPairParticipants,
+        now_unix_ms: i64,
+    ) -> Result<DirectPairMinted, Self::Error> {
+        let minted = mint_conversation_id(&self.store.environment).map_err(|source| {
+            PersistenceFailure::from_source(MessagingStoreError::Environment(source))
+        })?;
+        let first = participants.first();
+        let second = participants.second();
+        let created = sqlx::query(OPEN_DIRECT_PAIR)
+            .bind(minted.as_str())
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .bind(now_unix_ms)
+            .bind(now_unix_ms)
+            .execute(&self.store.pool)
+            .await
+            .map_err(driver)?
+            .rows_affected()
+            == 1;
+
+        let conversation: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .fetch_optional(&self.store.pool)
+            .await
+            .map_err(driver)?;
+        let conversation = conversation.ok_or_else(|| {
+            PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity {
+                field: "conversations.direct_pair",
+            })
+        })?;
+        let conversation = ConversationId::parse(conversation).map_err(|_| {
+            PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity {
+                field: "conversations.id",
+            })
+        })?;
+        Ok(DirectPairMinted::committed(conversation, created))
+    }
+}
+
+fn principal_kind(principal: &PrincipalIdentity) -> &'static str {
+    match principal.kind() {
+        PrincipalKind::Agent => ENDPOINT_KIND_AGENT,
+        PrincipalKind::Human => ENDPOINT_KIND_HUMAN,
+    }
+}
+
 /// Projects the cluster's list entry from the committed rows visible on `conn`.
 ///
 /// It reads the authoritative `(reply_count, last_reply_*)` aggregate the badge uses
@@ -541,6 +619,7 @@ impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
         let mut scope = TxScope {
             tx: self.begin_root_write().await.map_err(driver)?,
             entropy: &self.environment,
+            opened_direct_pairs: Vec::new(),
         };
         match scope.write(command, message_id, created_at_ms).await {
             Ok(outcome) => {
@@ -668,6 +747,84 @@ impl<E: SendClock + SendEntropy + Send + Sync> SendMessageUnitOfWork for Messagi
 struct TxScope<'connection, 'entropy, E> {
     tx: Transaction<'connection, Sqlite>,
     entropy: &'entropy E,
+    opened_direct_pairs: Vec<silverhand_backend_core::messaging::DirectPairOpenedFact>,
+}
+
+#[derive(Default)]
+struct RecordedDirectPairOpens(
+    Mutex<Vec<silverhand_backend_core::messaging::DirectPairOpenedFact>>,
+);
+
+impl RecordedDirectPairOpens {
+    fn into_facts(self) -> Vec<silverhand_backend_core::messaging::DirectPairOpenedFact> {
+        self.0.into_inner().expect("direct-pair recorder poisoned")
+    }
+}
+
+impl DirectPairOpenedPort for RecordedDirectPairOpens {
+    type Error = Infallible;
+
+    async fn direct_pair_opened(
+        &self,
+        fact: &silverhand_backend_core::messaging::DirectPairOpenedFact,
+    ) -> Result<(), Self::Error> {
+        self.0
+            .lock()
+            .expect("direct-pair recorder poisoned")
+            .push(fact.clone());
+        Ok(())
+    }
+}
+
+struct TransactionDirectPairMint<'scope, 'connection, 'entropy, E> {
+    scope: &'scope mut TxScope<'connection, 'entropy, E>,
+}
+
+impl<E: SendEntropy + Send + Sync> DirectPairMint for TransactionDirectPairMint<'_, '_, '_, E> {
+    type Error = SendMessageError;
+
+    async fn mint_direct_pair(
+        &mut self,
+        participants: &DirectPairParticipants,
+        now_unix_ms: i64,
+    ) -> Result<DirectPairMinted, Self::Error> {
+        let minted = mint_conversation_id(self.scope.entropy)?;
+        let first = participants.first();
+        let second = participants.second();
+        let created = sqlx::query(OPEN_DIRECT_PAIR)
+            .bind(minted.as_str())
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .bind(now_unix_ms)
+            .bind(now_unix_ms)
+            .execute(&mut *self.scope.tx)
+            .await
+            .map_err(driver)?
+            .rows_affected()
+            == 1;
+
+        let conversation: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .fetch_optional(&mut *self.scope.tx)
+            .await
+            .map_err(driver)?;
+        let conversation = conversation.ok_or_else(|| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.direct_pair",
+            })
+        })?;
+        let conversation = ConversationId::parse(conversation).map_err(|_| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.id",
+            })
+        })?;
+        Ok(DirectPairMinted::committed(conversation, created))
+    }
 }
 
 impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
@@ -1267,12 +1424,14 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         message: &CreatedMessage,
     ) -> Result<PostCommitPlan, SendMessageError> {
         let mentions = self.mention_intent(target, command, message).await?;
+        let opened_direct_pairs = std::mem::take(&mut self.opened_direct_pairs);
 
         if let Some(root) = &message.thread_root_id {
             let audience = self.cluster_audience(root, command.actor()).await?;
             return Ok(PostCommitPlan::committed(
                 mentions,
                 DeliveryPlan::ReplyCluster(ReplyAudience::committed(audience)),
+                opened_direct_pairs,
             ));
         }
 
@@ -1314,6 +1473,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         Ok(PostCommitPlan::committed(
             mentions,
             DeliveryPlan::MainLine(MainDeliveryPlan::committed(recipients, start_eligible)),
+            opened_direct_pairs,
         ))
     }
 
@@ -1427,47 +1587,24 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         agent: &AgentId,
         created_at_ms: i64,
     ) -> Result<ConversationId, SendMessageError> {
-        let human = (ENDPOINT_KIND_HUMAN, author.as_str());
-        let machine = (ENDPOINT_KIND_AGENT, agent.as_str());
-        let (first, second) = if machine <= human {
-            (machine, human)
-        } else {
-            (human, machine)
+        let participants = DirectPairParticipants::between(
+            PrincipalIdentity::Human(author.clone()),
+            PrincipalIdentity::Agent(agent.clone()),
+        )
+        .expect("a human and an agent are distinct principals");
+        let opened = RecordedDirectPairOpens::default();
+        let result = {
+            let mut mint = TransactionDirectPairMint { scope: self };
+            open_direct_pair(&mut mint, &opened, participants, created_at_ms).await
         };
-
-        let minted = mint_conversation_id(self.entropy)?;
-        sqlx::query(OPEN_DIRECT_PAIR)
-            .bind(minted.as_str())
-            .bind(first.0)
-            .bind(first.1)
-            .bind(second.0)
-            .bind(second.1)
-            .bind(created_at_ms)
-            .bind(created_at_ms)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(driver)?;
-
-        // Absent only if the statement above neither wrote the row nor conflicted
-        // with it, which the conflict target rules out.
-        let existing: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
-            .bind(first.0)
-            .bind(first.1)
-            .bind(second.0)
-            .bind(second.1)
-            .fetch_optional(&mut *self.tx)
-            .await
-            .map_err(driver)?;
-        let existing = existing.ok_or_else(|| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.direct_pair",
-            })
-        })?;
-        ConversationId::parse(existing).map_err(|_| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.id",
-            })
-        })
+        match result {
+            Ok(conversation) => {
+                self.opened_direct_pairs.extend(opened.into_facts());
+                Ok(conversation)
+            }
+            Err(OpenDirectPairError::Mint(error)) => Err(error),
+            Err(OpenDirectPairError::Announcement(never)) => match never {},
+        }
     }
 
     /// Writes the copy into the line: the same three facts a send writes anywhere —

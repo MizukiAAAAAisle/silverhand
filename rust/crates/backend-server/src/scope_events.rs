@@ -27,6 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use silverhand_backend_core::{
     auth::{AuthenticateHumanSession, SessionBearer},
     identity::{ConversationId, UserId, WorkspaceId},
+    messaging::{DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity},
     scope_event::{AuthorizeEventScope, EventScope},
 };
 use tokio::{
@@ -36,6 +37,10 @@ use tokio::{
 };
 
 include!(concat!(env!("OUT_DIR"), "/backend_admission.rs"));
+
+#[cfg(test)]
+#[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
+mod current_schema;
 
 const MAX_INBOUND_BYTES: usize = 64 * 1024;
 const REPLAY_CAPACITY: usize = 200;
@@ -392,6 +397,20 @@ impl ScopeEventHub {
         Ok(scopes
             .get(scope)
             .map_or(TransportSeq::ZERO, |state| state.seq))
+    }
+}
+
+impl DirectPairOpenedPort for ScopeEventHub {
+    type Error = ScopeEventHubError;
+
+    async fn direct_pair_opened(&self, fact: &DirectPairOpenedFact) -> Result<(), Self::Error> {
+        for participant in fact.participants().both() {
+            let PrincipalIdentity::Human(viewer) = participant else {
+                continue;
+            };
+            self.publish_direct_pairs_changed(viewer, fact.conversation())?;
+        }
+        Ok(())
     }
 }
 
@@ -1262,12 +1281,22 @@ async fn send_json(socket: &mut WebSocket, frame: &impl Serialize) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures_util::{SinkExt, StreamExt};
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
+        identity::AgentId,
+        messaging::{
+            DirectPairOpenedPort, DirectPairParticipants, EnvironmentUnavailable,
+            OpenDirectPairError, SendEntropy,
+        },
         persistence::PersistenceFailure,
         scope_event::AuthorizeEventScope,
     };
+    use silverhand_backend_sqlite::messaging::MessagingStore;
+    use sqlx::{Connection, SqliteConnection};
+    use tokio::sync::Barrier;
     use tokio_tungstenite::{
         connect_async,
         tungstenite::{Message as ClientMessage, client::IntoClientRequest},
@@ -1277,6 +1306,94 @@ mod tests {
 
     fn user() -> UserId {
         UserId::parse("user-1").unwrap()
+    }
+
+    fn agent() -> AgentId {
+        AgentId::parse("agent-1").unwrap()
+    }
+
+    fn pair_participants() -> DirectPairParticipants {
+        DirectPairParticipants::between(
+            PrincipalIdentity::Human(user()),
+            PrincipalIdentity::Agent(agent()),
+        )
+        .unwrap()
+    }
+
+    struct FixedEntropy(u8);
+
+    impl SendEntropy for FixedEntropy {
+        fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+            buffer.fill(self.0);
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("announcement unavailable")]
+    struct AnnouncementUnavailable;
+
+    struct FailingOpened;
+
+    impl DirectPairOpenedPort for FailingOpened {
+        type Error = AnnouncementUnavailable;
+
+        async fn direct_pair_opened(
+            &self,
+            _fact: &DirectPairOpenedFact,
+        ) -> Result<(), Self::Error> {
+            Err(AnnouncementUnavailable)
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("capability denied")]
+    struct LaterCapabilityDenied;
+
+    fn reject_later_product_action(_pair: &ConversationId) -> Result<(), LaterCapabilityDenied> {
+        Err(LaterCapabilityDenied)
+    }
+
+    async fn direct_pair_database() -> (tempfile::TempDir, std::path::PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("direct-pair.sqlite");
+        let mut db = current_schema::create_current_schema(&path).await;
+        sqlx::query(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) \
+             VALUES ('user-1', 'user', 'User', 1, 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at) \
+             VALUES ('host-1', 'host', 'local', 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+             display_name, created_by_user_id) VALUES \
+             ('agent-1', 'agent', 'claude', 'host-1', 1, 1, 'Agent', 'user-1')",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        (directory, path)
+    }
+
+    async fn direct_pair_count(path: &std::path::Path) -> i64 {
+        let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM conversations WHERE placement_kind = 'direct_pair'",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap()
     }
 
     fn conversation() -> ConversationId {
@@ -1333,6 +1450,121 @@ mod tests {
             hub.publish_direct_pairs_changed(&user(), &conversation()),
             Err(ScopeEventHubError::SequenceExhausted)
         ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_pair_mints_publish_only_the_insert_winner() {
+        let (_directory, path) = direct_pair_database().await;
+        let first = MessagingStore::open_with(&path, FixedEntropy(1))
+            .await
+            .unwrap();
+        let second = MessagingStore::open_with(&path, FixedEntropy(2))
+            .await
+            .unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let barrier = Arc::new(Barrier::new(3));
+
+        let first_task = tokio::spawn({
+            let barrier = Arc::clone(&barrier);
+            let hub = hub.clone();
+            async move {
+                barrier.wait().await;
+                first
+                    .open_direct_pair(&hub, pair_participants(), 10)
+                    .await
+                    .unwrap()
+            }
+        });
+        let second_task = tokio::spawn({
+            let barrier = Arc::clone(&barrier);
+            let hub = hub.clone();
+            async move {
+                barrier.wait().await;
+                second
+                    .open_direct_pair(&hub, pair_participants(), 11)
+                    .await
+                    .unwrap()
+            }
+        });
+        barrier.wait().await;
+
+        let first_pair = first_task.await.unwrap();
+        let second_pair = second_task.await.unwrap();
+        assert_eq!(first_pair, second_pair);
+        assert_eq!(direct_pair_count(&path).await, 1);
+
+        let resumed = hub
+            .resume(
+                &EventScope::Viewer(user()),
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(events) = resumed.replay else {
+            panic!("the insert winner must be replayable")
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].event,
+            ProductEvent::DirectPairsChanged {
+                conversation_id: first_pair.as_str().to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn announcement_failure_does_not_rollback_the_autocommitted_pair() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open_with(&path, FixedEntropy(3))
+            .await
+            .unwrap();
+
+        let error = store
+            .open_direct_pair(&FailingOpened, pair_participants(), 10)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, OpenDirectPairError::Announcement(_)));
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            "announcement unavailable"
+        );
+        assert_eq!(direct_pair_count(&path).await, 1);
+    }
+
+    #[tokio::test]
+    async fn later_product_refusal_neither_compensates_nor_reannounces_the_pair() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open_with(&path, FixedEntropy(4))
+            .await
+            .unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+
+        let pair = store
+            .open_direct_pair(&hub, pair_participants(), 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            reject_later_product_action(&pair).unwrap_err().to_string(),
+            "capability denied"
+        );
+
+        let existing = store
+            .open_direct_pair(&hub, pair_participants(), 11)
+            .await
+            .unwrap();
+        assert_eq!(existing, pair);
+        assert_eq!(direct_pair_count(&path).await, 1);
+        let resumed = hub
+            .resume(
+                &EventScope::Viewer(user()),
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(events) = resumed.replay else {
+            panic!("the original announcement must remain replayable")
+        };
+        assert_eq!(events.len(), 1);
     }
 
     #[tokio::test]

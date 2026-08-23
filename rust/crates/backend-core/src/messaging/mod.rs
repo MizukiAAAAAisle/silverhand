@@ -61,6 +61,7 @@ mod addressing;
 mod author;
 mod authority;
 mod command;
+mod direct_pair;
 mod fact;
 mod identity;
 mod principal;
@@ -88,6 +89,10 @@ pub use command::{
     ContentTooLong, DirectLineAuthority, DirectLineGrants, MAX_MESSAGE_CONTENT_BYTES,
     MessageContent, SendActor, SendDestination, SendMessage, SendMessageDraft, SendMessageError,
     SendMessageUnitOfWork,
+};
+pub use direct_pair::{
+    DirectPairMint, DirectPairMinted, DirectPairOpenedFact, DirectPairOpenedPort,
+    DirectPairParticipants, OpenDirectPairError, SameDirectPairParticipant, open_direct_pair,
 };
 pub use environment::{EnvironmentUnavailable, SendClock, SendEntropy};
 pub use fact::{
