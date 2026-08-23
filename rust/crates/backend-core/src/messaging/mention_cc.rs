@@ -11,8 +11,8 @@
 //! are encoded for storage belongs to whatever writes the row.
 
 use super::{
-    AgentId, ConversationId, MessageId, ParticipantHandle, PrincipalKind, UserId,
-    format_reference_token,
+    AgentId, ConversationId, FromKind, MessageId, MessageSeq, ParticipantHandle, PrincipalKind,
+    UserId, format_reference_token,
 };
 
 /// The subtype a stored copy carries, so a reader can recognise one without
@@ -31,10 +31,7 @@ pub enum MentionCopyOutcome {
     Copied {
         handle: ParticipantHandle,
         agent: AgentId,
-        /// The direct line the copy travelled on, minted with it when it did not
-        /// already exist.
-        conversation: ConversationId,
-        message: MessageId,
+        copy: CommittedMentionCopy,
     },
     Skipped {
         handle: ParticipantHandle,
@@ -59,20 +56,41 @@ pub enum MentionCopySkip {
     NoDirectLine,
 }
 
+/// One committed copy, as the business fact it is.
+///
+/// Everything a later reader or a published event needs is here, because it was
+/// here when the row was written: reading the row back or rendering the body a
+/// second time would make the acknowledgement and the event two projections of two
+/// different things, which is the disagreement this shape exists to prevent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedMentionCopy {
+    pub id: MessageId,
+    /// The direct line the copy travelled on, minted with it when it did not
+    /// already exist.
+    pub conversation_id: ConversationId,
+    pub from_kind: FromKind,
+    pub content: String,
+    pub metadata: MentionCopyMetadata,
+    pub seq: MessageSeq,
+    pub created_at_ms: i64,
+    /// The message this is a copy of. The two are never independent facts.
+    pub cc_source_message_id: MessageId,
+}
+
 /// The stored facts a copy carries besides its body, so a reader can render a card
 /// without fetching a conversation it may not be allowed to see. Encoding is the
 /// store's business; these are the facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MentionCopyMetadata<'facts> {
+pub struct MentionCopyMetadata {
     pub subtype: &'static str,
-    pub source_workspace_id: &'facts str,
-    pub source_workspace_name: &'facts str,
-    pub source_conversation_id: &'facts ConversationId,
-    pub source_conversation_title: &'facts str,
-    pub source_message_id: &'facts MessageId,
-    pub source_from_kind: &'static str,
-    pub source_from_user_id: &'facts UserId,
-    pub source_message_content: &'facts str,
+    pub source_workspace_id: String,
+    pub source_workspace_name: String,
+    pub source_conversation_id: ConversationId,
+    pub source_conversation_title: String,
+    pub source_message_id: MessageId,
+    pub source_from_kind: FromKind,
+    pub source_from_user_id: UserId,
+    pub source_message_content: String,
 }
 
 /// What the author's own notification carries about the mention.

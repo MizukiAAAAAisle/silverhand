@@ -177,6 +177,7 @@ const COUNT_THREAD_REPLIES: &str = "SELECT count(*) FROM messages WHERE conversa
 
 const FROM_KIND_USER: &str = "user";
 const FROM_KIND_AGENT: &str = "agent";
+const FROM_KIND_SYSTEM: &str = "system";
 const PRINCIPAL_KIND_HUMAN: &str = "human";
 const PRINCIPAL_KIND_AGENT: &str = "agent";
 const FOLLOWER_SOURCE_REPLY: &str = "reply";
@@ -802,50 +803,32 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 continue;
             }
 
+            let place = MentionCopyPlace {
+                workspace_id: &workspace_id,
+                workspace_name: &workspace_name,
+                source: source.clone(),
+                source_title: &source_title,
+            };
             let line = self.open_direct_pair(author, &agent, created_at_ms).await?;
             let copy = self
-                .write_mention_copy(
-                    &line,
-                    &handle,
-                    &MentionCopyPlace {
-                        workspace_id: &workspace_id,
-                        workspace_name: &workspace_name,
-                        source: source.clone(),
-                        source_title: &source_title,
-                    },
-                    message,
-                    author,
-                    created_at_ms,
-                )
+                .write_mention_copy(&line, &handle, &place, message, author, created_at_ms)
                 .await?;
 
             self.ensure_delivery(
                 &line,
                 &agent,
-                copy.as_str(),
+                copy.id.as_str(),
                 DELIVERY_KIND_TURN,
                 created_at_ms,
             )
             .await?;
-            self.notify_author_of_copy(
-                author,
-                &agent,
-                &MentionCopyPlace {
-                    workspace_id: &workspace_id,
-                    workspace_name: &workspace_name,
-                    source: source.clone(),
-                    source_title: &source_title,
-                },
-                message,
-                created_at_ms,
-            )
-            .await?;
+            self.notify_author_of_copy(author, &agent, &place, message, created_at_ms)
+                .await?;
 
             outcomes.push(MentionCopyOutcome::Copied {
                 handle,
                 agent,
-                conversation: line,
-                message: copy,
+                copy,
             });
         }
         Ok(outcomes)
@@ -959,40 +942,49 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         message: &CreatedMessage,
         author: &UserId,
         created_at_ms: i64,
-    ) -> Result<MessageId, SendMessageError> {
+    ) -> Result<mention_cc::CommittedMentionCopy, SendMessageError> {
         let seq = self.reserve_next_seq(line).await?;
-        let id = MessageId::mint(self.entropy)?;
-        let body = mention_cc::render_copy_body(&mention_cc::MentionCopySource {
-            recipient_handle: recipient,
-            source_workspace_name: place.workspace_name,
-            source_conversation_title: place.source_title,
-            source_content: message.content.as_str(),
-        });
-        let metadata = mention_copy_metadata(&mention_cc::MentionCopyMetadata {
-            subtype: mention_cc::MENTION_COPY_SUBTYPE,
-            source_workspace_id: place.workspace_id,
-            source_workspace_name: place.workspace_name,
-            source_conversation_id: &place.source,
-            source_conversation_title: place.source_title,
-            source_message_id: &message.id,
-            source_from_kind: FROM_KIND_USER,
-            source_from_user_id: author,
-            source_message_content: message.content.as_str(),
-        })?;
+        let copy = mention_cc::CommittedMentionCopy {
+            id: MessageId::mint(self.entropy)?,
+            conversation_id: line.clone(),
+            from_kind: messaging::FromKind::System,
+            content: mention_cc::render_copy_body(&mention_cc::MentionCopySource {
+                recipient_handle: recipient,
+                source_workspace_name: place.workspace_name,
+                source_conversation_title: place.source_title,
+                source_content: message.content.as_str(),
+            }),
+            metadata: mention_cc::MentionCopyMetadata {
+                subtype: mention_cc::MENTION_COPY_SUBTYPE,
+                source_workspace_id: place.workspace_id.to_owned(),
+                source_workspace_name: place.workspace_name.to_owned(),
+                source_conversation_id: place.source.clone(),
+                source_conversation_title: place.source_title.to_owned(),
+                source_message_id: message.id.clone(),
+                source_from_kind: messaging::FromKind::User,
+                source_from_user_id: author.clone(),
+                source_message_content: message.content.as_str().to_owned(),
+            },
+            seq,
+            created_at_ms,
+            cc_source_message_id: message.id.clone(),
+        };
 
+        // The row is written FROM the fact, so what was committed and what is
+        // reported are the same value rather than two renderings of one intent.
         sqlx::query(INSERT_MENTION_COPY)
-            .bind(id.as_str())
-            .bind(line.as_str())
-            .bind(body)
-            .bind(metadata)
-            .bind(seq.get())
-            .bind(created_at_ms)
-            .bind(message.id.as_str())
+            .bind(copy.id.as_str())
+            .bind(copy.conversation_id.as_str())
+            .bind(&copy.content)
+            .bind(mention_copy_metadata(&copy.metadata)?)
+            .bind(copy.seq.get())
+            .bind(copy.created_at_ms)
+            .bind(copy.cc_source_message_id.as_str())
             .execute(&mut *self.tx)
             .await
             .map_err(driver)?;
-        self.bump_stream_head(line, None, seq).await?;
-        Ok(id)
+        self.bump_stream_head(line, None, copy.seq).await?;
+        Ok(copy)
     }
 
     async fn notify_author_of_copy(
@@ -1342,8 +1334,16 @@ struct MentionCopyPlace<'facts> {
     source_title: &'facts str,
 }
 
+fn from_kind_column(kind: messaging::FromKind) -> &'static str {
+    match kind {
+        messaging::FromKind::User => FROM_KIND_USER,
+        messaging::FromKind::Agent => FROM_KIND_AGENT,
+        messaging::FromKind::System => FROM_KIND_SYSTEM,
+    }
+}
+
 fn mention_copy_metadata(
-    metadata: &mention_cc::MentionCopyMetadata<'_>,
+    metadata: &mention_cc::MentionCopyMetadata,
 ) -> Result<String, SendMessageError> {
     serde_json::to_string(&serde_json::json!({
         "subtype": metadata.subtype,
@@ -1352,7 +1352,7 @@ fn mention_copy_metadata(
         "source_conversation_id": metadata.source_conversation_id.as_str(),
         "source_conversation_title": metadata.source_conversation_title,
         "source_message_id": metadata.source_message_id.as_str(),
-        "source_from_kind": metadata.source_from_kind,
+        "source_from_kind": from_kind_column(metadata.source_from_kind),
         "source_from_user_id": metadata.source_from_user_id.as_str(),
         "source_message_content": metadata.source_message_content,
     }))

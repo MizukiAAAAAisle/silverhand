@@ -10,11 +10,11 @@ use silverhand_backend_core::messaging::mention_cc::{
 };
 use silverhand_backend_core::messaging::{
     ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
-    DirectLineAuthority, EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent,
-    MessageId, MessageSeq, PrincipalKind, ReferencePositions, ReplyTargetRefusal, SendActor,
-    SendClock, SendDestination, SendEntropy, SendMessage, SendMessageDraft, SendMessageError,
-    SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId, attachments::AttachmentRef,
-    environment::OsEntropy,
+    DirectLineAuthority, EnvironmentUnavailable, FromKind, MAX_MESSAGE_CONTENT_BYTES,
+    MessageContent, MessageId, MessageSeq, PrincipalKind, ReferencePositions, ReplyTargetRefusal,
+    SendActor, SendClock, SendDestination, SendEntropy, SendMessage, SendMessageDraft,
+    SendMessageError, SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId,
+    attachments::AttachmentRef, environment::OsEntropy,
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_sqlite::messaging::MessagingStore;
@@ -1841,9 +1841,10 @@ impl Fixture {
         .collect()
     }
 
-    async fn notifications(&mut self) -> Vec<(String, String, String, String, String, String)> {
+    async fn notification_rows(&mut self) -> Vec<serde_json::Value> {
         sqlx::query(
-            "SELECT kind, user_id, agent_id, conversation_id, message_id, payload FROM \
+            "SELECT kind, user_id, agent_id, workspace_id, conversation_id, message_id, \
+             source_workspace_id, source_conversation_id, source_message_id, payload FROM \
              notifications ORDER BY rowid",
         )
         .fetch_all(&mut self.db)
@@ -1851,14 +1852,21 @@ impl Fixture {
         .unwrap()
         .into_iter()
         .map(|row| {
-            (
-                row.get::<String, _>("kind"),
-                row.get::<String, _>("user_id"),
-                row.get::<String, _>("agent_id"),
-                row.get::<String, _>("conversation_id"),
-                row.get::<String, _>("message_id"),
-                row.get::<String, _>("payload"),
-            )
+            serde_json::json!({
+                "kind": row.get::<String, _>("kind"),
+                "user_id": row.get::<String, _>("user_id"),
+                "agent_id": row.get::<String, _>("agent_id"),
+                "workspace_id": row.get::<String, _>("workspace_id"),
+                "conversation_id": row.get::<String, _>("conversation_id"),
+                "message_id": row.get::<String, _>("message_id"),
+                "source_workspace_id": row.get::<String, _>("source_workspace_id"),
+                "source_conversation_id": row.get::<String, _>("source_conversation_id"),
+                "source_message_id": row.get::<String, _>("source_message_id"),
+                "payload": serde_json::from_str::<serde_json::Value>(
+                    &row.get::<String, _>("payload"),
+                )
+                .unwrap(),
+            })
         })
         .collect()
     }
@@ -1922,12 +1930,22 @@ async fn a_mention_of_a_non_member_is_copied_onto_a_direct_line() {
             source_content: fact.message.content.as_str(),
         })
     );
-    let metadata: serde_json::Value =
-        serde_json::from_str(&copy.get::<String, _>("metadata")).unwrap();
-    assert_eq!(metadata["subtype"], "mention_cc");
-    assert_eq!(metadata["source_conversation_id"], CHANNEL_ID);
-    assert_eq!(metadata["source_message_id"], fact.message.id.as_str());
-    assert_eq!(metadata["source_from_user_id"], USER_ID);
+    // The whole stored object, so a missing or extra fact fails rather than passing
+    // whatever the spot checks did not look at.
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&copy.get::<String, _>("metadata")).unwrap(),
+        serde_json::json!({
+            "subtype": "mention_cc",
+            "source_workspace_id": WORKSPACE_ID,
+            "source_workspace_name": "Space",
+            "source_conversation_id": CHANNEL_ID,
+            "source_conversation_title": "Channel",
+            "source_message_id": fact.message.id.as_str(),
+            "source_from_kind": "user",
+            "source_from_user_id": USER_ID,
+            "source_message_content": fact.message.content.as_str(),
+        })
+    );
 
     // The line carries the copy the way any conversation carries a message.
     assert_eq!(fixture.latest_seq(&line).await, 1);
@@ -1939,24 +1957,49 @@ async fn a_mention_of_a_non_member_is_copied_onto_a_direct_line() {
         vec![(copy.get::<String, _>("id"), "turn".to_owned())]
     );
 
-    // The author's own record points at the message THEY can read.
-    let notifications = fixture.notifications().await;
-    assert_eq!(notifications.len(), 1);
-    let (kind, user, agent, conversation, message, payload) =
-        notifications.into_iter().next().unwrap();
-    assert_eq!(kind, "mention_external");
-    assert_eq!(user, USER_ID);
-    assert_eq!(agent, OUTSIDER_AGENT_ID);
-    assert_eq!(conversation, CHANNEL_ID);
-    assert_eq!(message, fact.message.id.as_str());
-    let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    // The author's own record points at the message THEY can read — every
+    // coordinate is the source's, and the payload carries exactly three facts.
     assert_eq!(
-        payload["mention_excerpt"],
-        "<silverhand://agent/outsider> please look"
+        fixture.notification_rows().await,
+        vec![serde_json::json!({
+            "kind": "mention_external",
+            "user_id": USER_ID,
+            "agent_id": OUTSIDER_AGENT_ID,
+            "workspace_id": WORKSPACE_ID,
+            "conversation_id": CHANNEL_ID,
+            "message_id": fact.message.id.as_str(),
+            "source_workspace_id": WORKSPACE_ID,
+            "source_conversation_id": CHANNEL_ID,
+            "source_message_id": fact.message.id.as_str(),
+            "payload": {
+                "source_workspace_name": "Space",
+                "source_conversation_title": "Channel",
+                "mention_excerpt": "<silverhand://agent/outsider> please look",
+            },
+        })]
     );
-    assert_eq!(payload["source_workspace_name"], "Space");
 
-    assert_eq!(skip_reasons(&fact), vec!["copied:outsider".to_owned()]);
+    // The reported fact IS what was committed: no reread, no second rendering.
+    let MentionCopyOutcome::Copied {
+        handle,
+        agent,
+        copy: committed,
+    } = &fact.mention_copies[0]
+    else {
+        panic!("expected a copy, got {:?}", fact.mention_copies);
+    };
+    assert_eq!(handle.as_str(), "outsider");
+    assert_eq!(agent.as_str(), OUTSIDER_AGENT_ID);
+    assert_eq!(committed.id.as_str(), copy.get::<String, _>("id"));
+    assert_eq!(committed.conversation_id.as_str(), line);
+    assert_eq!(committed.from_kind, FromKind::System);
+    assert_eq!(committed.content, copy.get::<String, _>("content"));
+    assert_eq!(committed.seq, MessageSeq::try_from(1).unwrap());
+    assert_eq!(committed.created_at_ms, fact.message.created_at_ms);
+    assert_eq!(committed.cc_source_message_id, fact.message.id);
+    assert_eq!(committed.metadata.source_workspace_name, "Space");
+    assert_eq!(committed.metadata.source_conversation_title, "Channel");
+    assert_eq!(committed.metadata.source_from_kind, FromKind::User);
 }
 
 #[tokio::test]
@@ -1979,13 +2022,19 @@ async fn a_second_mention_travels_on_the_same_line() {
         .await
         .unwrap();
 
-    assert_eq!(fixture.direct_pairs().await.len(), 1);
-    assert_eq!(
-        fixture
-            .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
-            .await,
-        2
-    );
+    let pairs = fixture.direct_pairs().await;
+    assert_eq!(pairs.len(), 1);
+    let line = pairs.into_iter().next().unwrap().0;
+    // Reusing the line still writes all three facts of a send into it.
+    let seqs: Vec<i64> = sqlx::query_scalar(
+        "SELECT seq FROM messages WHERE cc_source_message_id IS NOT NULL ORDER BY seq",
+    )
+    .fetch_all(&mut fixture.db)
+    .await
+    .unwrap();
+    assert_eq!(seqs, vec![1, 2]);
+    assert_eq!(fixture.latest_seq(&line).await, 2);
+    assert_eq!(fixture.stream_head(&line, None).await, Some(2));
     assert_eq!(fixture.queued_for(OUTSIDER_AGENT_ID).await.len(), 2);
 }
 
@@ -2151,6 +2200,6 @@ async fn a_failed_notification_rolls_back_the_whole_send() {
             .await,
         0
     );
-    assert_eq!(fixture.notifications().await, vec![]);
+    assert!(fixture.notification_rows().await.is_empty());
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
 }
