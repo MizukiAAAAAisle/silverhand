@@ -741,7 +741,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 PrincipalKind::Human => SELECT_USER_ID_BY_NAME,
             };
             let resolved: Option<String> = sqlx::query_scalar(statement)
-                .bind(reference.handle())
+                .bind(reference.handle().as_str())
                 .fetch_optional(&mut *self.tx)
                 .await
                 .map_err(driver)?;

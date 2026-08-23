@@ -234,7 +234,7 @@ pub enum PrincipalKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageReference {
     kind: PrincipalKind,
-    handle: String,
+    handle: ParticipantHandle,
 }
 
 impl MessageReference {
@@ -242,7 +242,7 @@ impl MessageReference {
         self.kind
     }
 
-    pub fn handle(&self) -> &str {
+    pub fn handle(&self) -> &ParticipantHandle {
         &self.handle
     }
 }
@@ -252,6 +252,43 @@ const REFERENCE_PREFIX: &str = "silverhand://";
 /// A handle is at most this long wherever it is stored, so a longer one cannot be
 /// a name this system holds.
 const HANDLE_MAX_LENGTH: usize = 64;
+
+/// A participant name, in the grammar every stored name obeys.
+///
+/// It exists as a type because a handle is interpolated into server-authored prose
+/// that addresses people: raw text there could close a destination, open another
+/// path segment, or start a new line. Anything outside the grammar is not a name
+/// this system holds, so it is refused rather than escaped.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ParticipantHandle(String);
+
+impl ParticipantHandle {
+    pub fn parse(raw: impl Into<String>) -> Result<Self, InvalidHandle> {
+        let raw = raw.into();
+        if raw.is_empty() || raw.len() > HANDLE_MAX_LENGTH {
+            return Err(InvalidHandle);
+        }
+        let mut characters = raw.chars();
+        let first = characters.next().ok_or(InvalidHandle)?;
+        if !first.is_ascii_alphabetic() {
+            return Err(InvalidHandle);
+        }
+        if !characters.all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        }) {
+            return Err(InvalidHandle);
+        }
+        Ok(Self(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("handle is outside the grammar every stored name obeys")]
+pub struct InvalidHandle;
 
 /// Reads one link destination. Nothing else is a reference: not a different
 /// scheme, not an extra path segment, not a query, not a handle outside the stored
@@ -265,35 +302,24 @@ fn parse_reference_destination(destination: &str) -> Option<MessageReference> {
         "human" => PrincipalKind::Human,
         _ => return None,
     };
-    if handle.is_empty() || handle.len() > HANDLE_MAX_LENGTH {
-        return None;
-    }
-    let mut characters = handle.chars();
-    let first = characters.next()?;
-    if !first.is_ascii_alphabetic() {
-        return None;
-    }
-    if !characters
-        .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
-    {
-        return None;
-    }
     Some(MessageReference {
         kind,
-        handle: handle.to_owned(),
+        handle: ParticipantHandle::parse(handle).ok()?,
     })
 }
 
 /// The canonical prose form of a reference: `<silverhand://agent/Alice>`.
 ///
 /// The brackets are what make a destination a destination — a bare one is plain
-/// text — so every producer of server-authored prose writes this form.
-pub fn format_reference_token(kind: PrincipalKind, handle: &str) -> String {
+/// text — so every producer of server-authored prose writes this form. Not public:
+/// its only consumers are the projections in this module, and a handle it can be
+/// given has already been shown to be a name.
+fn format_reference_token(kind: PrincipalKind, handle: &ParticipantHandle) -> String {
     let kind = match kind {
         PrincipalKind::Agent => "agent",
         PrincipalKind::Human => "human",
     };
-    format!("<{REFERENCE_PREFIX}{kind}/{handle}>")
+    format!("<{REFERENCE_PREFIX}{kind}/{}>", handle.as_str())
 }
 
 /// Which positions in a body can address anyone.
@@ -970,7 +996,7 @@ mod tests {
             Ok(addressed
                 .iter()
                 .filter(|reference| reference.kind() == PrincipalKind::Agent)
-                .map(|reference| AgentId::parse(reference.handle()).unwrap())
+                .map(|reference| AgentId::parse(reference.handle().as_str()).unwrap())
                 .collect())
         }
     }
@@ -1018,7 +1044,7 @@ mod tests {
             .unwrap()
             .addressed()
             .iter()
-            .map(|reference| (reference.kind(), reference.handle().to_owned()))
+            .map(|reference| (reference.kind(), reference.handle().as_str().to_owned()))
             .collect()
     }
 

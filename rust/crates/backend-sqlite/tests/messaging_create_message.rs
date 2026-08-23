@@ -355,7 +355,7 @@ impl DirectLineAuthority for GrantsEveryAddressedAgent {
         Ok(addressed
             .iter()
             .filter(|reference| reference.kind() == PrincipalKind::Agent)
-            .filter_map(|reference| AgentId::parse(reference.handle()).ok())
+            .filter_map(|reference| AgentId::parse(reference.handle().as_str()).ok())
             .collect())
     }
 }
