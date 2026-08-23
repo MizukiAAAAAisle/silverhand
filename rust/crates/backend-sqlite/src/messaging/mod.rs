@@ -9,17 +9,20 @@
 //! driver errors. The port returns application facts and refusals, so no driver
 //! type reaches the application or the wire.
 
-use std::{path::Path, time::Duration};
+use std::{
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use silverhand_backend_core::messaging::{
     self, ConversationEndpoint, ConversationFacts, ConversationId, ConversationRefusal,
-    CreatedMessage, DirectPairEndpoints, EndpointKind, EndpointPrincipalReads, InvalidSeq,
-    MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, PostAuthorityReads,
-    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
-    SendMessageError, SendMessageUnitOfWork, ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
-    UserId,
+    CreatedMessage, DirectPairEndpoints, EndpointKind, EndpointPrincipalReads,
+    EnvironmentUnavailable, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq,
+    PostAuthorityReads, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
+    SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadReplyFact, ThreadRootId,
+    ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
-    environment::{OsEntropy, SystemClock},
+    environment::OsEntropy,
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
@@ -104,15 +107,24 @@ const ENDPOINT_KIND_AGENT: &str = "agent";
 pub struct HostEnvironment;
 
 impl SendClock for HostEnvironment {
-    fn now_unix_ms(&self) -> Result<i64, messaging::EnvironmentUnavailable> {
-        SystemClock.now_unix_ms()
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable> {
+        unix_ms_since_epoch(SystemTime::now())
     }
 }
 
 impl SendEntropy for HostEnvironment {
-    fn fill(&self, buffer: &mut [u8]) -> Result<(), messaging::EnvironmentUnavailable> {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
         OsEntropy.fill(buffer)
     }
+}
+
+/// The conversion the clock performs, separated from reading the clock so the unit
+/// it answers in can be asserted without depending on what time it is.
+fn unix_ms_since_epoch(moment: SystemTime) -> Result<i64, EnvironmentUnavailable> {
+    let since_epoch = moment
+        .duration_since(UNIX_EPOCH)
+        .map_err(EnvironmentUnavailable::from_source)?;
+    i64::try_from(since_epoch.as_millis()).map_err(EnvironmentUnavailable::from_source)
 }
 
 pub struct MessagingStore<E = HostEnvironment> {
@@ -136,6 +148,10 @@ pub enum MessagingStoreError {
     /// schema's own constraints, so there is no participation question to answer.
     #[error("conversation row contradicts the placement constraints of its schema")]
     MalformedPlacement,
+    /// A stored column that should name something names nothing. Unrelated to
+    /// placement, and named apart from it so a reader is not misdirected.
+    #[error("stored column {field} does not name a usable identity")]
+    MalformedIdentity { field: &'static str },
 }
 
 fn infrastructure(error: MessagingStoreError) -> SendMessageError {
@@ -337,7 +353,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                     .ok_or(ReplyTargetRefusal)?;
                 let root = row.thread_root_id.unwrap_or(row.id);
                 Ok(Some(ThreadRootId::parse(root).map_err(|_| {
-                    infrastructure(MessagingStoreError::MalformedPlacement)
+                    infrastructure(MessagingStoreError::MalformedIdentity {
+                        field: "messages.id",
+                    })
                 })?))
             }
         }
@@ -388,7 +406,11 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 channel_id: ConversationId::parse(
                     row.try_get::<String, _>("channel_id").map_err(driver)?,
                 )
-                .map_err(|_| infrastructure(MessagingStoreError::MalformedPlacement))?,
+                .map_err(|_| {
+                    infrastructure(MessagingStoreError::MalformedIdentity {
+                        field: "attachments.channel_id",
+                    })
+                })?,
                 filename: row.try_get("filename").map_err(driver)?,
                 size: row.try_get("size").map_err(driver)?,
                 content_type: row.try_get("content_type").map_err(driver)?,
@@ -792,6 +814,27 @@ mod tests {
             .unwrap()
             .close()
             .await;
+    }
+
+    /// The clock's unit, asserted as a conversion: a wall-clock reading would make
+    /// the assertion depend on the machine's time rather than on this code.
+    #[test]
+    fn the_host_clock_answers_in_unix_milliseconds() {
+        let one_and_a_half_seconds = UNIX_EPOCH + Duration::from_millis(1_500);
+
+        assert_eq!(unix_ms_since_epoch(UNIX_EPOCH).unwrap(), 0);
+        assert_eq!(unix_ms_since_epoch(one_and_a_half_seconds).unwrap(), 1_500);
+    }
+
+    /// A moment this system cannot express as a Unix millisecond is reported
+    /// rather than truncated into a plausible one.
+    #[test]
+    fn a_moment_outside_the_supported_range_is_refused() {
+        let before_epoch = UNIX_EPOCH - Duration::from_millis(1);
+        let far_future = UNIX_EPOCH + Duration::from_secs(1 << 60);
+
+        assert!(unix_ms_since_epoch(before_epoch).is_err());
+        assert!(unix_ms_since_epoch(far_future).is_err());
     }
 
     #[tokio::test]

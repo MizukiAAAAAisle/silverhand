@@ -13,7 +13,11 @@ use silverhand_backend_core::messaging::{
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Row, SqliteConnection};
-use std::{error::Error, path::PathBuf};
+use std::{
+    error::Error,
+    path::PathBuf,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use tempfile::TempDir;
 
 #[path = "support/current_schema_snapshot.rs"]
@@ -1099,4 +1103,59 @@ async fn an_entropy_source_that_cannot_answer_writes_nothing_and_keeps_its_reaso
     );
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+}
+
+/// Entropy that answers a fixed number of times and then withdraws. The stale
+/// refusal mints its own identity INSIDE the transaction, so this is the second
+/// call, and its failure has to leave the reserved writer with nothing written.
+struct EntropyExhaustedAfter {
+    answers: AtomicUsize,
+}
+
+impl SendClock for EntropyExhaustedAfter {
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable> {
+        Ok(1)
+    }
+}
+
+impl SendEntropy for EntropyExhaustedAfter {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+        if self.answers.fetch_sub(1, Ordering::SeqCst) == 0 {
+            return Err(EnvironmentUnavailable::from_source(Withdrawn));
+        }
+        OsEntropy.fill(buffer)
+    }
+}
+
+#[tokio::test]
+async fn entropy_withdrawn_inside_the_unit_rolls_back_with_nothing_written() {
+    let mut fixture = Fixture::new().await;
+    let seeded = fixture.store().await;
+    let existing = seeded
+        .send_message(send(user_actor(), CHANNEL_ID, "read me first"))
+        .await
+        .unwrap();
+    fixture
+        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message.id.as_str(), None)
+        .await;
+    let store = fixture
+        .store_with(EntropyExhaustedAfter {
+            answers: AtomicUsize::new(1),
+        })
+        .await;
+
+    // The send is stale, so the unit reaches for a second identity — and this host
+    // has none left.
+    let error = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "talking over it"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Environment(_)));
+    assert_eq!(
+        root_cause(&error),
+        "the host capability was withdrawn for this test"
+    );
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
 }

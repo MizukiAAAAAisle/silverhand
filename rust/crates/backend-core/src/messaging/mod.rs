@@ -553,7 +553,23 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use super::{environment::OsEntropy, *};
+    use super::*;
+
+    /// Entropy with no randomness in it, so an encoding can be asserted exactly.
+    struct FixedEntropy(&'static [u8]);
+
+    impl SendEntropy for FixedEntropy {
+        fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+            buffer.copy_from_slice(&self.0[..buffer.len()]);
+            Ok(())
+        }
+    }
+
+    /// Chosen so the two characters that distinguish base64url from base64 both
+    /// appear: a standard encoder would answer `+/+/ABCDEFGHIJKL` here.
+    const URL_SAFE_PROBE: &[u8] = &[
+        0xfb, 0xff, 0xbf, 0x00, 0x10, 0x83, 0x10, 0x51, 0x87, 0x20, 0x92, 0x8b,
+    ];
 
     fn conversation() -> ConversationId {
         ConversationId::parse("conv-1").unwrap()
@@ -720,23 +736,19 @@ mod tests {
         assert_eq!(ConversationId::parse("x").unwrap().as_str(), "x");
     }
 
-    /// The published identity: sixteen base64url characters, unpadded, distinct
-    /// per mint.
+    /// The published identity: twelve bytes as sixteen base64url characters with
+    /// no padding. Asserted against known entropy, so the encoding itself is
+    /// pinned rather than sampled.
     #[test]
-    fn a_minted_message_id_has_the_shape_clients_already_hold() {
-        let first = MessageId::mint(&OsEntropy).unwrap();
-        let second = MessageId::mint(&OsEntropy).unwrap();
+    fn a_minted_message_id_encodes_its_entropy_the_way_clients_read_it() {
+        let from_probe = MessageId::mint(&FixedEntropy(URL_SAFE_PROBE)).unwrap();
+        let from_ascending =
+            MessageId::mint(&FixedEntropy(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])).unwrap();
 
-        assert_ne!(first, second);
-        assert_eq!(first.as_str().len(), 16);
-        assert!(
-            first
-                .as_str()
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
-            "minted id left the base64url alphabet: {}",
-            first.as_str()
-        );
+        assert_eq!(from_probe.as_str(), "-_-_ABCDEFGHIJKL");
+        assert_eq!(from_ascending.as_str(), "AAECAwQFBgcICQoL");
+        assert_eq!(from_probe.as_str().len(), 16);
+        assert!(!from_probe.as_str().contains('='));
     }
 
     /// Entropy is a capability, so its failure is reportable with the reason
@@ -955,7 +967,7 @@ mod tests {
     #[test]
     fn a_stale_refusal_carries_signal_metadata_only() {
         let refusal = StaleRefusal {
-            stale_event_id: freshness::StaleEventId::mint(&OsEntropy).unwrap(),
+            stale_event_id: freshness::StaleEventId::mint(&FixedEntropy(&[0u8; 16])).unwrap(),
             target_conversation_id: conversation(),
         };
 
