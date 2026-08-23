@@ -4,6 +4,10 @@
 //! artifact under the system temp root; no live database is opened, and the store
 //! under test provisions nothing.
 
+use silverhand_backend_core::messaging::ParticipantHandle;
+use silverhand_backend_core::messaging::mention_cc::{
+    MentionCopyOutcome, MentionCopySource, render_copy_body,
+};
 use silverhand_backend_core::messaging::{
     ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
     DirectLineAuthority, EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent,
@@ -358,6 +362,46 @@ impl DirectLineAuthority for GrantsEveryAddressedAgent {
             .filter_map(|reference| AgentId::parse(reference.handle().as_str()).ok())
             .collect())
     }
+}
+
+/// An authority that grants the lines it was told to grant, mapping each handle to
+/// the id it really names. A test about the copy path has to model this correctly:
+/// the grant is about an id, and the handle is resolved again inside the unit.
+struct Grants(Vec<(&'static str, &'static str)>);
+
+impl DirectLineAuthority for Grants {
+    fn direct_lines(
+        &self,
+        _author: &UserId,
+        addressed: &AddressedPrincipals,
+    ) -> Result<Vec<AgentId>, PersistenceFailure> {
+        Ok(addressed
+            .iter()
+            .filter(|reference| reference.kind() == PrincipalKind::Agent)
+            .filter_map(|reference| {
+                self.0
+                    .iter()
+                    .find(|(handle, _)| *handle == reference.handle().as_str())
+                    .map(|(_, id)| AgentId::parse(*id).unwrap())
+            })
+            .collect())
+    }
+}
+
+fn prepared_with(draft: SendMessageDraft, authority: &impl DirectLineAuthority) -> SendMessage {
+    SendMessage::prepare(draft, &EveryBracketedRun, authority).unwrap()
+}
+
+fn mentioning_outsider(conversation: &str) -> SendMessageDraft {
+    draft(
+        user_actor(),
+        conversation,
+        "<silverhand://agent/outsider> please look",
+    )
+}
+
+fn grants_outsider() -> Grants {
+    Grants(vec![("outsider", OUTSIDER_AGENT_ID)])
 }
 
 fn prepared(draft: SendMessageDraft) -> SendMessage {
@@ -1775,4 +1819,338 @@ async fn the_audience_and_the_write_gate_agree_on_a_direct_pair() {
         vec![AGENT_ID.to_owned()],
         "a planted follower entered a pair it is not an endpoint of"
     );
+}
+
+impl Fixture {
+    async fn direct_pairs(&mut self) -> Vec<(String, String, String)> {
+        sqlx::query(
+            "SELECT id, endpoint_a_id, endpoint_b_id FROM conversations WHERE placement_kind = \
+             'direct_pair' AND id != 'pair-1' ORDER BY id",
+        )
+        .fetch_all(&mut self.db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("id"),
+                row.get::<String, _>("endpoint_a_id"),
+                row.get::<String, _>("endpoint_b_id"),
+            )
+        })
+        .collect()
+    }
+
+    async fn notifications(&mut self) -> Vec<(String, String, String, String, String, String)> {
+        sqlx::query(
+            "SELECT kind, user_id, agent_id, conversation_id, message_id, payload FROM \
+             notifications ORDER BY rowid",
+        )
+        .fetch_all(&mut self.db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("kind"),
+                row.get::<String, _>("user_id"),
+                row.get::<String, _>("agent_id"),
+                row.get::<String, _>("conversation_id"),
+                row.get::<String, _>("message_id"),
+                row.get::<String, _>("payload"),
+            )
+        })
+        .collect()
+    }
+}
+
+fn skip_reasons(fact: &silverhand_backend_core::messaging::MessageCreatedFact) -> Vec<String> {
+    fact.mention_copies
+        .iter()
+        .map(|outcome| match outcome {
+            MentionCopyOutcome::Copied { handle, .. } => format!("copied:{}", handle.as_str()),
+            MentionCopyOutcome::Skipped { handle, reason, .. } => {
+                format!("{reason:?}:{}", handle.as_str())
+            }
+        })
+        .collect()
+}
+
+/// A mention of someone who cannot read the conversation lands as a copy on the
+/// direct line between them and the author — minted with the copy — and the four
+/// facts commit together.
+#[tokio::test]
+async fn a_mention_of_a_non_member_is_copied_onto_a_direct_line() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    let fact = store
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap();
+
+    let pairs = fixture.direct_pairs().await;
+    assert_eq!(pairs.len(), 1, "the copy did not mint one line: {pairs:?}");
+    let (line, endpoint_a, endpoint_b) = pairs.into_iter().next().unwrap();
+    // Canonical order: `agent` sorts before `human`.
+    assert_eq!(endpoint_a, OUTSIDER_AGENT_ID);
+    assert_eq!(endpoint_b, USER_ID);
+
+    let copy = sqlx::query(
+        "SELECT id, conversation_id, from_kind, content, metadata, seq, cc_source_message_id FROM \
+         messages WHERE cc_source_message_id IS NOT NULL",
+    )
+    .fetch_one(&mut fixture.db)
+    .await
+    .unwrap();
+    assert_eq!(copy.get::<String, _>("conversation_id"), line);
+    assert_eq!(copy.get::<String, _>("from_kind"), "system");
+    assert_eq!(copy.get::<i64, _>("seq"), 1);
+    assert_eq!(
+        copy.get::<String, _>("cc_source_message_id"),
+        fact.message.id.as_str()
+    );
+    assert_eq!(
+        copy.get::<String, _>("content"),
+        render_copy_body(&MentionCopySource {
+            recipient_handle: &ParticipantHandle::parse("outsider").unwrap(),
+            source_workspace_name: "Space",
+            source_conversation_title: "Channel",
+            source_content: fact.message.content.as_str(),
+        })
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_str(&copy.get::<String, _>("metadata")).unwrap();
+    assert_eq!(metadata["subtype"], "mention_cc");
+    assert_eq!(metadata["source_conversation_id"], CHANNEL_ID);
+    assert_eq!(metadata["source_message_id"], fact.message.id.as_str());
+    assert_eq!(metadata["source_from_user_id"], USER_ID);
+
+    // The line carries the copy the way any conversation carries a message.
+    assert_eq!(fixture.latest_seq(&line).await, 1);
+    assert_eq!(fixture.stream_head(&line, None).await, Some(1));
+
+    // The durable half of delivery, and it is a turn rather than context.
+    assert_eq!(
+        fixture.queued_for(OUTSIDER_AGENT_ID).await,
+        vec![(copy.get::<String, _>("id"), "turn".to_owned())]
+    );
+
+    // The author's own record points at the message THEY can read.
+    let notifications = fixture.notifications().await;
+    assert_eq!(notifications.len(), 1);
+    let (kind, user, agent, conversation, message, payload) =
+        notifications.into_iter().next().unwrap();
+    assert_eq!(kind, "mention_external");
+    assert_eq!(user, USER_ID);
+    assert_eq!(agent, OUTSIDER_AGENT_ID);
+    assert_eq!(conversation, CHANNEL_ID);
+    assert_eq!(message, fact.message.id.as_str());
+    let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(
+        payload["mention_excerpt"],
+        "<silverhand://agent/outsider> please look"
+    );
+    assert_eq!(payload["source_workspace_name"], "Space");
+
+    assert_eq!(skip_reasons(&fact), vec!["copied:outsider".to_owned()]);
+}
+
+#[tokio::test]
+async fn a_second_mention_travels_on_the_same_line() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    store
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap();
+    store
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(fixture.direct_pairs().await.len(), 1);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
+            .await,
+        2
+    );
+    assert_eq!(fixture.queued_for(OUTSIDER_AGENT_ID).await.len(), 2);
+}
+
+/// Each reason is decided in an order where the next question only makes sense once
+/// the previous is answered, and each is reported per handle.
+#[tokio::test]
+async fn a_copy_that_does_not_happen_says_why() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    // A member already received the original.
+    let member = store
+        .send_message(prepared_with(
+            draft(user_actor(), CHANNEL_ID, &addressing_broad("hello")),
+            &Grants(vec![("broad", BROAD_AGENT_ID)]),
+        ))
+        .await
+        .unwrap();
+    // Nobody by that name.
+    let unknown = store
+        .send_message(prepared_with(
+            draft(user_actor(), CHANNEL_ID, "<silverhand://agent/ghost> hello"),
+            &Grants(vec![]),
+        ))
+        .await
+        .unwrap();
+    // The same agent named twice is one addressee, so it is copied once.
+    let twice = store
+        .send_message(prepared_with(
+            draft(
+                user_actor(),
+                CHANNEL_ID,
+                "<silverhand://agent/outsider> and <silverhand://agent/outsider> again",
+            ),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap();
+    // No line the author may open.
+    let ungranted = store
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            &Grants(vec![]),
+        ))
+        .await
+        .unwrap();
+    // A direct line has no workspace to name a copy after.
+    let from_a_line = store
+        .send_message(prepared_with(
+            mentioning_outsider(PAIR_ID),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        skip_reasons(&member),
+        vec!["AlreadyMember:broad".to_owned()]
+    );
+    assert_eq!(
+        skip_reasons(&unknown),
+        vec!["UnknownHandle:ghost".to_owned()]
+    );
+    assert_eq!(skip_reasons(&twice), vec!["copied:outsider".to_owned()]);
+    assert_eq!(
+        skip_reasons(&ungranted),
+        vec!["NoDirectLine:outsider".to_owned()]
+    );
+    assert_eq!(
+        skip_reasons(&from_a_line),
+        vec!["SourceNotWorkspacePlaced:outsider".to_owned()]
+    );
+    // Exactly one copy happened across all five sends.
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
+            .await,
+        1
+    );
+}
+
+/// The grant is about an id; the handle is resolved again inside the unit. If the
+/// name now points somewhere else, the verdict does not follow it.
+#[tokio::test]
+async fn a_grant_for_another_id_does_not_travel_with_the_handle() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    let fact = store
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            // Granted for the agent that is a channel member, not for the one this
+            // handle names.
+            &Grants(vec![("outsider", BROAD_AGENT_ID)]),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        skip_reasons(&fact),
+        vec!["NoDirectLine:outsider".to_owned()]
+    );
+    assert_eq!(fixture.direct_pairs().await, vec![]);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
+            .await,
+        0
+    );
+}
+
+/// An agent's mention carries no copy: the promise a copy keeps is a person's.
+#[tokio::test]
+async fn an_agents_mention_copies_nothing() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    let fact = store
+        .send_message(prepared_with(
+            draft(
+                agent_actor(),
+                CHANNEL_ID,
+                "<silverhand://agent/outsider> look",
+            ),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap();
+
+    assert!(fact.mention_copies.is_empty());
+    assert_eq!(fixture.direct_pairs().await, vec![]);
+}
+
+/// The copy's four writes belong to the send's transaction: fail the last of them
+/// and the line, the copy, the delivery row, the notification AND the message that
+/// caused them are all absent.
+#[tokio::test]
+async fn a_failed_notification_rolls_back_the_whole_send() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    fixture
+        .execute(
+            "CREATE TRIGGER reject_test_notification BEFORE INSERT ON notifications BEGIN SELECT \
+             RAISE(ABORT, 'forced notification failure'); END",
+        )
+        .await;
+
+    let error = store
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Persistence(_)));
+    assert!(root_cause(&error).contains("forced notification failure"));
+    assert_eq!(fixture.direct_pairs().await, vec![]);
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM conversation_inboxes")
+            .await,
+        0
+    );
+    assert_eq!(fixture.notifications().await, vec![]);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
 }

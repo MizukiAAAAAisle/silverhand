@@ -10,7 +10,10 @@
 //! Everything here is a pure function of facts the caller read. How the results
 //! are encoded for storage belongs to whatever writes the row.
 
-use super::{ParticipantHandle, PrincipalKind, format_reference_token};
+use super::{
+    AgentId, ConversationId, MessageId, ParticipantHandle, PrincipalKind, UserId,
+    format_reference_token,
+};
 
 /// The subtype a stored copy carries, so a reader can recognise one without
 /// parsing its prose.
@@ -19,6 +22,80 @@ pub const MENTION_COPY_SUBTYPE: &str = "mention_cc";
 /// How much of the original a notification repeats. Long enough to recognise the
 /// message, short enough not to become a second copy of it.
 pub const MENTION_EXCERPT_LIMIT: usize = 160;
+
+/// What became of one addressed agent. Reported per handle, because the reason a
+/// copy did not happen is what a later reader needs — "nothing was copied" alone
+/// cannot distinguish a member from a stranger.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MentionCopyOutcome {
+    Copied {
+        handle: ParticipantHandle,
+        agent: AgentId,
+        /// The direct line the copy travelled on, minted with it when it did not
+        /// already exist.
+        conversation: ConversationId,
+        message: MessageId,
+    },
+    Skipped {
+        handle: ParticipantHandle,
+        reason: MentionCopySkip,
+        /// Present once the handle has been resolved, so a reader can tell which
+        /// agent was passed over.
+        agent: Option<AgentId>,
+    },
+}
+
+/// Why an addressed agent received no copy. In the order the reasons are decided:
+/// each one answers a question the next has no meaning without.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MentionCopySkip {
+    /// A copy is named after the workspace it came from, and a direct line has no
+    /// workspace to be named after.
+    SourceNotWorkspacePlaced,
+    UnknownHandle,
+    /// Already a participant of the source, so it already received the original.
+    AlreadyMember,
+    /// The author may not open a direct line to this agent.
+    NoDirectLine,
+}
+
+/// The stored facts a copy carries besides its body, so a reader can render a card
+/// without fetching a conversation it may not be allowed to see. Encoding is the
+/// store's business; these are the facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MentionCopyMetadata<'facts> {
+    pub subtype: &'static str,
+    pub source_workspace_id: &'facts str,
+    pub source_workspace_name: &'facts str,
+    pub source_conversation_id: &'facts ConversationId,
+    pub source_conversation_title: &'facts str,
+    pub source_message_id: &'facts MessageId,
+    pub source_from_kind: &'static str,
+    pub source_from_user_id: &'facts UserId,
+    pub source_message_content: &'facts str,
+}
+
+/// What the author's own notification carries about the mention.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MentionNotificationPayload<'facts> {
+    pub source_workspace_name: &'facts str,
+    pub source_conversation_title: &'facts str,
+    pub mention_excerpt: String,
+}
+
+impl<'facts> MentionNotificationPayload<'facts> {
+    pub fn of(
+        source_workspace_name: &'facts str,
+        source_conversation_title: &'facts str,
+        source_content: &str,
+    ) -> Self {
+        Self {
+            source_workspace_name,
+            source_conversation_title,
+            mention_excerpt: mention_excerpt(source_content),
+        }
+    }
+}
 
 /// The facts a copy is rendered from, all read inside the sending transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

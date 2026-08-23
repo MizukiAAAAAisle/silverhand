@@ -17,13 +17,14 @@ use std::{
 use silverhand_backend_core::messaging::{
     self, ConversationEndpoint, ConversationFacts, ConversationId, ConversationRefusal,
     CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads, EnvironmentUnavailable,
-    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, PostAuthorityReads,
-    PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
-    SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource, ThreadReplyFact,
-    ThreadRootId, ThreadRootRefusal, UserId,
+    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, ParticipantHandle,
+    PostAuthorityReads, PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination,
+    SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource,
+    ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     environment::OsEntropy,
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
+    mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
@@ -63,6 +64,34 @@ const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id
 const SELECT_MESSAGE_IN_CONVERSATION: &str = "SELECT id, thread_root_id, from_kind, \
      from_agent_id, from_user_id FROM messages WHERE conversation_id = ? AND id = ?";
 const SELECT_AGENT_ID_BY_NAME: &str = "SELECT id FROM agents WHERE name = ?";
+const SELECT_CONVERSATION_PLACE: &str =
+    "SELECT workspace_id, title FROM conversations WHERE id = ?";
+const SELECT_WORKSPACE_NAME: &str = "SELECT name FROM workspaces WHERE id = ?";
+
+/// A direct line is got-or-created: the conflict target is the partial unique index
+/// over the endpoint columns, so two sends racing to mention the same agent end up
+/// on one line rather than two.
+const OPEN_DIRECT_PAIR: &str = "INSERT INTO conversations (id, workspace_id, placement_kind, \
+     roster_policy, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, title, status, \
+     visibility, created_at, updated_at) VALUES (?, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?, '', \
+     'idle', 'private', ?, ?) ON CONFLICT (endpoint_a_kind, endpoint_a_id, endpoint_b_kind, \
+     endpoint_b_id) WHERE placement_kind = 'direct_pair' DO NOTHING";
+const SELECT_DIRECT_PAIR: &str = "SELECT id FROM conversations WHERE placement_kind = \
+     'direct_pair' AND endpoint_a_kind = ? AND endpoint_a_id = ? AND endpoint_b_kind = ? AND \
+     endpoint_b_id = ?";
+
+/// The copy is authored by the system: it is not the mentioning person speaking on
+/// the line, and it names the message it came from so the two can never be
+/// mistaken for independent facts.
+const INSERT_MENTION_COPY: &str = "INSERT INTO messages (id, conversation_id, from_kind, content, \
+     metadata, seq, created_at, cc_source_message_id) VALUES (?, ?, 'system', ?, ?, ?, ?, ?)";
+/// The author's own record that the mention left their conversation. Its
+/// coordinates are the SOURCE's, because the reader is the author and their read
+/// path is the message they can see — never the recipient's copy, which they cannot.
+const INSERT_MENTION_NOTIFICATION: &str = "INSERT INTO notifications (id, kind, user_id, agent_id, \
+     workspace_id, conversation_id, message_id, source_workspace_id, source_conversation_id, \
+     source_message_id, payload, created_at) VALUES (?, 'mention_external', ?, ?, ?, ?, ?, ?, ?, \
+     ?, ?, ?)";
 const SELECT_USER_ID_BY_NAME: &str = "SELECT id FROM users WHERE name = ?";
 
 /// Following is idempotent: a principal already following a cluster is not
@@ -156,6 +185,8 @@ const FOLLOWER_SOURCE_MENTION: &str = "mention";
 /// Historical context a follower is catching up on, as opposed to a message that
 /// arrived while it was already following.
 const DELIVERY_KIND_OBSERVE: &str = "observe";
+/// A message that arrived for someone now: it is owed an answer, not context.
+const DELIVERY_KIND_TURN: &str = "turn";
 const PLACEMENT_DIRECT_PAIR: &str = "direct_pair";
 const ENDPOINT_KIND_HUMAN: &str = "human";
 const ENDPOINT_KIND_AGENT: &str = "agent";
@@ -381,10 +412,15 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             }
         };
 
+        let mention_copies = self
+            .apply_mention_copies(&command, &facts.id, &message, created_at_ms)
+            .await?;
+
         Ok(MessageCreatedFact {
             message,
             thread,
             freshness_bypassed,
+            mention_copies,
         })
     }
 
@@ -686,6 +722,312 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         Ok(())
     }
 
+    /// Copies this message to each agent it addressed that cannot read the
+    /// conversation it was written in, onto the direct line between them and the
+    /// author — minting that line if it does not exist yet.
+    ///
+    /// The copy, its delivery row and the author's notification commit with the
+    /// message that caused them: a copy that could be lost while the mention stands
+    /// would leave the author believing they had reached someone they had not.
+    ///
+    /// Only a person's mention carries this promise. An agent's does not, so its
+    /// send addresses no copies at all.
+    async fn apply_mention_copies(
+        &mut self,
+        command: &SendMessage,
+        source: &ConversationId,
+        message: &CreatedMessage,
+        created_at_ms: i64,
+    ) -> Result<Vec<MentionCopyOutcome>, SendMessageError> {
+        let SendActor::User(author) = command.actor() else {
+            return Ok(Vec::new());
+        };
+        let addressed: Vec<ParticipantHandle> = command
+            .addressed()
+            .iter()
+            .filter(|reference| reference.kind() == PrincipalKind::Agent)
+            .map(|reference| reference.handle().clone())
+            .collect();
+        if addressed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // A copy is named after where it came from, and a direct line has no
+        // workspace to be named after.
+        let (workspace_id, source_title) = self.conversation_place(source).await?;
+        let Some(workspace_id) = workspace_id else {
+            return Ok(addressed
+                .into_iter()
+                .map(|handle| MentionCopyOutcome::Skipped {
+                    handle,
+                    reason: MentionCopySkip::SourceNotWorkspacePlaced,
+                    agent: None,
+                })
+                .collect());
+        };
+        let workspace_name = self.workspace_name(&workspace_id).await?;
+
+        // No "already copied" arm: the addressed set is deduplicated where it is
+        // derived, and one handle names one agent, so a second copy to the same
+        // agent has no way to be asked for.
+        let mut outcomes = Vec::with_capacity(addressed.len());
+        for handle in addressed {
+            let Some(agent) = self.agent_by_name(&handle).await? else {
+                outcomes.push(MentionCopyOutcome::Skipped {
+                    handle,
+                    reason: MentionCopySkip::UnknownHandle,
+                    agent: None,
+                });
+                continue;
+            };
+            // Already a participant: it received the original, and a copy would be
+            // the same message twice.
+            if self.is_agent_participant(source, &agent).await? {
+                outcomes.push(MentionCopyOutcome::Skipped {
+                    handle,
+                    reason: MentionCopySkip::AlreadyMember,
+                    agent: Some(agent),
+                });
+                continue;
+            }
+            // The handle was resolved to an id HERE, inside the unit, and the
+            // verdict was computed before it: a name that now points at a different
+            // agent than it did then is not granted, and the copy does not happen.
+            if !command.direct_lines().contains(&agent) {
+                outcomes.push(MentionCopyOutcome::Skipped {
+                    handle,
+                    reason: MentionCopySkip::NoDirectLine,
+                    agent: Some(agent),
+                });
+                continue;
+            }
+
+            let line = self.open_direct_pair(author, &agent, created_at_ms).await?;
+            let copy = self
+                .write_mention_copy(
+                    &line,
+                    &handle,
+                    &MentionCopyPlace {
+                        workspace_id: &workspace_id,
+                        workspace_name: &workspace_name,
+                        source: source.clone(),
+                        source_title: &source_title,
+                    },
+                    message,
+                    author,
+                    created_at_ms,
+                )
+                .await?;
+
+            self.ensure_delivery(
+                &line,
+                &agent,
+                copy.as_str(),
+                DELIVERY_KIND_TURN,
+                created_at_ms,
+            )
+            .await?;
+            self.notify_author_of_copy(
+                author,
+                &agent,
+                &MentionCopyPlace {
+                    workspace_id: &workspace_id,
+                    workspace_name: &workspace_name,
+                    source: source.clone(),
+                    source_title: &source_title,
+                },
+                message,
+                created_at_ms,
+            )
+            .await?;
+
+            outcomes.push(MentionCopyOutcome::Copied {
+                handle,
+                agent,
+                conversation: line,
+                message: copy,
+            });
+        }
+        Ok(outcomes)
+    }
+
+    async fn conversation_place(
+        &mut self,
+        conversation: &ConversationId,
+    ) -> Result<(Option<String>, String), SendMessageError> {
+        let row = sqlx::query(SELECT_CONVERSATION_PLACE)
+            .bind(conversation.as_str())
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        Ok((
+            row.try_get("workspace_id").map_err(driver)?,
+            row.try_get("title").map_err(driver)?,
+        ))
+    }
+
+    async fn workspace_name(&mut self, workspace: &str) -> Result<String, SendMessageError> {
+        let name: Option<String> = sqlx::query_scalar(SELECT_WORKSPACE_NAME)
+            .bind(workspace)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        name.ok_or_else(|| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.workspace_id",
+            })
+        })
+    }
+
+    async fn agent_by_name(
+        &mut self,
+        handle: &ParticipantHandle,
+    ) -> Result<Option<messaging::AgentId>, SendMessageError> {
+        let found: Option<String> = sqlx::query_scalar(SELECT_AGENT_ID_BY_NAME)
+            .bind(handle.as_str())
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        match found {
+            None => Ok(None),
+            Some(id) => Ok(Some(messaging::AgentId::parse(id).map_err(|_| {
+                infrastructure(MessagingStoreError::MalformedIdentity { field: "agents.id" })
+            })?)),
+        }
+    }
+
+    /// Gets or creates the line between two principals. The endpoints are stored in
+    /// one canonical order so the pair has a single identity whichever side is
+    /// asking; the order is the database's own, which in Rust is just how strings
+    /// compare.
+    async fn open_direct_pair(
+        &mut self,
+        author: &UserId,
+        agent: &messaging::AgentId,
+        created_at_ms: i64,
+    ) -> Result<ConversationId, SendMessageError> {
+        let human = (ENDPOINT_KIND_HUMAN, author.as_str());
+        let machine = (ENDPOINT_KIND_AGENT, agent.as_str());
+        let (first, second) = if machine <= human {
+            (machine, human)
+        } else {
+            (human, machine)
+        };
+
+        let minted = ConversationId::mint(self.entropy)?;
+        sqlx::query(OPEN_DIRECT_PAIR)
+            .bind(minted.as_str())
+            .bind(first.0)
+            .bind(first.1)
+            .bind(second.0)
+            .bind(second.1)
+            .bind(created_at_ms)
+            .bind(created_at_ms)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+
+        // Absent only if the statement above neither wrote the row nor conflicted
+        // with it, which the conflict target rules out.
+        let existing: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
+            .bind(first.0)
+            .bind(first.1)
+            .bind(second.0)
+            .bind(second.1)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        let existing = existing.ok_or_else(|| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.direct_pair",
+            })
+        })?;
+        ConversationId::parse(existing).map_err(|_| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.id",
+            })
+        })
+    }
+
+    /// Writes the copy into the line: the same three facts a send writes anywhere —
+    /// the conversation's ordinal, the message, the stream head.
+    async fn write_mention_copy(
+        &mut self,
+        line: &ConversationId,
+        recipient: &ParticipantHandle,
+        place: &MentionCopyPlace<'_>,
+        message: &CreatedMessage,
+        author: &UserId,
+        created_at_ms: i64,
+    ) -> Result<MessageId, SendMessageError> {
+        let seq = self.reserve_next_seq(line).await?;
+        let id = MessageId::mint(self.entropy)?;
+        let body = mention_cc::render_copy_body(&mention_cc::MentionCopySource {
+            recipient_handle: recipient,
+            source_workspace_name: place.workspace_name,
+            source_conversation_title: place.source_title,
+            source_content: message.content.as_str(),
+        });
+        let metadata = mention_copy_metadata(&mention_cc::MentionCopyMetadata {
+            subtype: mention_cc::MENTION_COPY_SUBTYPE,
+            source_workspace_id: place.workspace_id,
+            source_workspace_name: place.workspace_name,
+            source_conversation_id: &place.source,
+            source_conversation_title: place.source_title,
+            source_message_id: &message.id,
+            source_from_kind: FROM_KIND_USER,
+            source_from_user_id: author,
+            source_message_content: message.content.as_str(),
+        })?;
+
+        sqlx::query(INSERT_MENTION_COPY)
+            .bind(id.as_str())
+            .bind(line.as_str())
+            .bind(body)
+            .bind(metadata)
+            .bind(seq.get())
+            .bind(created_at_ms)
+            .bind(message.id.as_str())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        self.bump_stream_head(line, None, seq).await?;
+        Ok(id)
+    }
+
+    async fn notify_author_of_copy(
+        &mut self,
+        author: &UserId,
+        agent: &messaging::AgentId,
+        place: &MentionCopyPlace<'_>,
+        message: &CreatedMessage,
+        created_at_ms: i64,
+    ) -> Result<(), SendMessageError> {
+        let payload = mention_cc::MentionNotificationPayload::of(
+            place.workspace_name,
+            place.source_title,
+            message.content.as_str(),
+        );
+        let id = MessageId::mint(self.entropy)?;
+
+        sqlx::query(INSERT_MENTION_NOTIFICATION)
+            .bind(id.as_str())
+            .bind(author.as_str())
+            .bind(agent.as_str())
+            .bind(place.workspace_id)
+            .bind(place.source.as_str())
+            .bind(message.id.as_str())
+            .bind(place.workspace_id)
+            .bind(place.source.as_str())
+            .bind(message.id.as_str())
+            .bind(mention_notification_payload(&payload)?)
+            .bind(created_at_ms)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        Ok(())
+    }
+
     /// Records who follows this cluster now, and catches up whoever is new to it.
     ///
     /// Three sources, in this order: the sender, the root's author, and every
@@ -856,8 +1198,14 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         if let Some(root_row) = root_row
             && !root_row.authored_by(agent)
         {
-            self.ensure_delivery(conversation, agent, &root_row.id, queued_at_ms)
-                .await?;
+            self.ensure_delivery(
+                conversation,
+                agent,
+                &root_row.id,
+                DELIVERY_KIND_OBSERVE,
+                queued_at_ms,
+            )
+            .await?;
         }
 
         let history = sqlx::query(SELECT_CLUSTER_HISTORY)
@@ -878,8 +1226,14 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             if earlier.authored_by(agent) {
                 continue;
             }
-            self.ensure_delivery(conversation, agent, &earlier.id, queued_at_ms)
-                .await?;
+            self.ensure_delivery(
+                conversation,
+                agent,
+                &earlier.id,
+                DELIVERY_KIND_OBSERVE,
+                queued_at_ms,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -889,13 +1243,14 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         conversation: &ConversationId,
         agent: &messaging::AgentId,
         message_id: &str,
+        delivery_kind: &'static str,
         queued_at_ms: i64,
     ) -> Result<(), SendMessageError> {
         sqlx::query(ENSURE_INBOX_DELIVERY)
             .bind(conversation.as_str())
             .bind(agent.as_str())
             .bind(message_id)
-            .bind(DELIVERY_KIND_OBSERVE)
+            .bind(delivery_kind)
             .bind(queued_at_ms)
             .execute(&mut *self.tx)
             .await
@@ -976,6 +1331,43 @@ fn actor_of(kind: PrincipalKind, id: String) -> Result<SendActor, SendMessageErr
         }
         PrincipalKind::Human => SendActor::User(UserId::parse(id).map_err(|_| malformed())?),
     })
+}
+
+/// Where a copy came from, carried together because every write of a copy needs all
+/// of it.
+struct MentionCopyPlace<'facts> {
+    workspace_id: &'facts str,
+    workspace_name: &'facts str,
+    source: ConversationId,
+    source_title: &'facts str,
+}
+
+fn mention_copy_metadata(
+    metadata: &mention_cc::MentionCopyMetadata<'_>,
+) -> Result<String, SendMessageError> {
+    serde_json::to_string(&serde_json::json!({
+        "subtype": metadata.subtype,
+        "source_workspace_id": metadata.source_workspace_id,
+        "source_workspace_name": metadata.source_workspace_name,
+        "source_conversation_id": metadata.source_conversation_id.as_str(),
+        "source_conversation_title": metadata.source_conversation_title,
+        "source_message_id": metadata.source_message_id.as_str(),
+        "source_from_kind": metadata.source_from_kind,
+        "source_from_user_id": metadata.source_from_user_id.as_str(),
+        "source_message_content": metadata.source_message_content,
+    }))
+    .map_err(|error| infrastructure(MessagingStoreError::Serialization(error)))
+}
+
+fn mention_notification_payload(
+    payload: &mention_cc::MentionNotificationPayload<'_>,
+) -> Result<String, SendMessageError> {
+    serde_json::to_string(&serde_json::json!({
+        "source_workspace_name": payload.source_workspace_name,
+        "source_conversation_title": payload.source_conversation_title,
+        "mention_excerpt": payload.mention_excerpt,
+    }))
+    .map_err(|error| infrastructure(MessagingStoreError::Serialization(error)))
 }
 
 struct MessageRow {

@@ -122,15 +122,27 @@ pub struct EmptyIdentifier;
 /// hold.
 const MESSAGE_ID_ENTROPY_BYTES: usize = 12;
 
+/// Mints an opaque identity in the form this system publishes. The format is owned
+/// here rather than by whichever store writes the row, and the entropy is a
+/// capability the caller provides: reaching for it implicitly would hide a failure
+/// that has to stay reportable.
+fn mint_identity(entropy: &impl SendEntropy) -> Result<String, EnvironmentUnavailable> {
+    let mut bytes = [0u8; MESSAGE_ID_ENTROPY_BYTES];
+    entropy.fill(&mut bytes)?;
+    Ok(environment::base64url(&bytes))
+}
+
 impl MessageId {
-    /// Mints a new identity from supplied entropy. The format is part of what this
-    /// system publishes, so it is owned here rather than by whichever store writes
-    /// the row; the entropy is a capability the caller provides, because reaching
-    /// for it implicitly would hide a failure that has to stay reportable.
     pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
-        let mut bytes = [0u8; MESSAGE_ID_ENTROPY_BYTES];
-        entropy.fill(&mut bytes)?;
-        Ok(Self(environment::base64url(&bytes)))
+        Ok(Self(mint_identity(entropy)?))
+    }
+}
+
+impl ConversationId {
+    /// A conversation minted by the system — the direct line a mention copy travels
+    /// on — carries the same identity form as every other.
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
     }
 }
 
@@ -691,6 +703,9 @@ pub struct MessageCreatedFact {
     /// The guard was skipped at the sender's request. Carried for the post-commit
     /// record, not for the reply to the caller.
     pub freshness_bypassed: bool,
+    /// What became of each agent this message addressed that could not read it.
+    /// Empty when the send addressed nobody outside its own conversation.
+    pub mention_copies: Vec<mention_cc::MentionCopyOutcome>,
 }
 
 /// The author as the message will always report them, even after the principal is
