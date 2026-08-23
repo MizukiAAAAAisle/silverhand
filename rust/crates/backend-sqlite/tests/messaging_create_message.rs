@@ -1575,22 +1575,8 @@ async fn the_audience_is_the_cluster_followers_minus_the_sender() {
         .await
         .unwrap();
 
-    let after_human: Vec<&str> = by_human
-        .thread
-        .as_ref()
-        .unwrap()
-        .audience
-        .iter()
-        .map(AgentId::as_str)
-        .collect();
-    let after_agent: Vec<&str> = by_agent
-        .thread
-        .as_ref()
-        .unwrap()
-        .audience
-        .iter()
-        .map(AgentId::as_str)
-        .collect();
+    let after_human: Vec<&str> = reply_audience(&by_human);
+    let after_agent: Vec<&str> = reply_audience(&by_agent);
 
     // A person is not in an agent audience, so nothing is excluded for their send.
     assert_eq!(after_human, vec![AGENT_ID, BROAD_AGENT_ID]);
@@ -1672,14 +1658,7 @@ async fn a_plain_handle_in_prose_addresses_nobody() {
             .iter()
             .any(|(_, id, _)| id == BROAD_AGENT_ID)
     );
-    let audience: Vec<&str> = fact
-        .thread
-        .as_ref()
-        .unwrap()
-        .audience
-        .iter()
-        .map(AgentId::as_str)
-        .collect();
+    let audience: Vec<&str> = reply_audience(&fact);
     assert_eq!(audience, vec![AGENT_ID]);
 }
 
@@ -1698,17 +1677,29 @@ async fn plant_follower(fixture: &mut Fixture, root: &str, conversation: &str, a
     .unwrap();
 }
 
+/// The cluster audience of a reply, read through the view that only a reply has.
+fn reply_audience(fact: &silverhand_backend_core::messaging::MessageCreatedFact) -> Vec<&str> {
+    fact.reply_cluster()
+        .expect("a reply carries a cluster plan")
+        .plan()
+        .audience
+        .iter()
+        .map(AgentId::as_str)
+        .collect()
+}
+
 async fn audience_of_next_reply(
     store: &MessagingStore,
     conversation: &str,
     root: &str,
 ) -> Vec<String> {
-    store
+    let fact = store
         .send_message(reply_to(user_actor(), conversation, "and again", root))
         .await
-        .unwrap()
-        .thread
-        .unwrap()
+        .unwrap();
+    fact.reply_cluster()
+        .expect("a reply carries a cluster plan")
+        .plan()
         .audience
         .iter()
         .map(|agent| agent.as_str().to_owned())
@@ -2328,4 +2319,100 @@ async fn every_effect_failing_leaves_the_committed_facts_in_place() {
         .await
         .unwrap();
     assert_eq!(next.message.seq, MessageSeq::try_from(2).unwrap());
+}
+
+/// The plan is the send's own answer to "who does this reach, and who did it name",
+/// enumerated inside the unit. An adapter that announces it needs no lookup: every
+/// recipient and every mention draft is already here.
+#[tokio::test]
+async fn a_main_send_plans_who_it_reaches_and_who_it_named() {
+    let fixture = Fixture::new().await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(
+            agent_actor(),
+            CHANNEL_ID,
+            "<silverhand://human/human> take a look",
+        ))
+        .await
+        .unwrap();
+
+    let plan = fact
+        .main_line()
+        .expect("a main-line send carries a main-line plan")
+        .plan();
+    // The sender is not among the recipients, and a non-participant never was.
+    assert_eq!(
+        plan.delivery_recipients
+            .iter()
+            .map(AgentId::as_str)
+            .collect::<Vec<_>>(),
+        vec![BROAD_AGENT_ID]
+    );
+    assert_eq!(plan.start_eligible, plan.delivery_recipients);
+
+    assert_eq!(plan.mentioned_viewers.len(), 1);
+    let draft = &plan.mentioned_viewers[0];
+    assert_eq!(draft.viewer.as_str(), USER_ID);
+    assert_eq!(draft.mentioned_handle.as_str(), "human");
+    assert_eq!(draft.source_conversation.as_str(), CHANNEL_ID);
+    assert_eq!(draft.source_conversation_title, "Channel");
+    assert_eq!(draft.source_message, fact.message.id);
+    let workspace = draft.source_workspace.as_ref().expect("a workspace");
+    assert_eq!(workspace.id, WORKSPACE_ID);
+    assert_eq!(workspace.name, "Space");
+    assert_eq!(draft.excerpt, "<silverhand://human/human> take a look");
+    assert_eq!(draft.created_at_ms, fact.message.created_at_ms);
+}
+
+/// A person who cannot read the conversation was not mentioned in it, and naming
+/// yourself is not a mention.
+#[tokio::test]
+async fn a_mention_plan_names_only_readers_other_than_the_author() {
+    let mut fixture = Fixture::new().await;
+
+    let by_the_named_person = fixture
+        .store()
+        .await
+        .send_message(send(
+            user_actor(),
+            CHANNEL_ID,
+            "<silverhand://human/human> talking to myself",
+        ))
+        .await
+        .unwrap();
+    fixture
+        .execute("DELETE FROM conversation_users WHERE conversation_id = 'conv-1'")
+        .await;
+    let after_removal = fixture
+        .store()
+        .await
+        .send_message(send(
+            agent_actor(),
+            CHANNEL_ID,
+            "<silverhand://human/human> are you there",
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        by_the_named_person
+            .main_line()
+            .unwrap()
+            .plan()
+            .mentioned_viewers
+            .is_empty(),
+        "the author was planned a record of naming themselves"
+    );
+    assert!(
+        after_removal
+            .main_line()
+            .unwrap()
+            .plan()
+            .mentioned_viewers
+            .is_empty(),
+        "a person who cannot read the conversation was planned a record"
+    );
 }

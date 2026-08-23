@@ -25,6 +25,9 @@ use silverhand_backend_core::messaging::{
     environment::OsEntropy,
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
+    post_commit::{
+        MainSendPlan, MentionRowDraft, PostCommitPlan, ReplyDeliveryPlan, WorkspaceCoordinate,
+    },
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
@@ -67,6 +70,14 @@ const SELECT_AGENT_ID_BY_NAME: &str = "SELECT id FROM agents WHERE name = ?";
 const SELECT_CONVERSATION_PLACE: &str =
     "SELECT workspace_id, title FROM conversations WHERE id = ?";
 const SELECT_WORKSPACE_NAME: &str = "SELECT name FROM workspaces WHERE id = ?";
+/// The conversation's agent participants, as the placement names them, conjoined
+/// with a live principal row: a delivery row for an agent that no longer exists
+/// cannot be written at all. Ordered so the plan does not depend on scan order.
+const SELECT_PARTICIPANT_AGENTS: &str = "SELECT a.id FROM conversations c JOIN agents a ON \
+     ((c.placement_kind = 'workspace' AND EXISTS (SELECT 1 FROM conversation_agents ca WHERE \
+     ca.conversation_id = c.id AND ca.agent_id = a.id)) OR (c.placement_kind = 'direct_pair' AND \
+     ((c.endpoint_a_kind = 'agent' AND c.endpoint_a_id = a.id) OR (c.endpoint_b_kind = 'agent' AND \
+     c.endpoint_b_id = a.id)))) WHERE c.id = ? ORDER BY a.id ASC";
 
 /// A direct line is got-or-created: the conflict target is the partial unique index
 /// over the endpoint columns, so two sends racing to mention the same agent end up
@@ -408,7 +419,6 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                     // Counted after the insert, so the reported total already
                     // includes this reply and is never a value from the future.
                     reply_count: self.count_thread_replies(&facts.id, root).await?,
-                    audience: self.cluster_audience(root, command.actor()).await?,
                 })
             }
         };
@@ -416,10 +426,16 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         let mention_copies = self
             .apply_mention_copies(&command, &facts.id, &message, created_at_ms)
             .await?;
+        // Planned last, so the enumeration sees every row this unit wrote — a
+        // follower this very reply created is part of who it is for.
+        let post_commit = self
+            .plan_post_commit(&facts.id, &command, &message, created_at_ms)
+            .await?;
 
         Ok(MessageCreatedFact {
             message,
             thread,
+            post_commit,
             freshness_bypassed,
             mention_copies,
         })
@@ -832,6 +848,119 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             });
         }
         Ok(outcomes)
+    }
+
+    /// Decides what this send owes the world, from the same snapshot it was written
+    /// in. Which plan it is follows from where the message landed: a reply reaches
+    /// its cluster's followers, a main-line message reaches the conversation's
+    /// participants, and those are not the same set.
+    async fn plan_post_commit(
+        &mut self,
+        conversation: &ConversationId,
+        command: &SendMessage,
+        message: &CreatedMessage,
+        created_at_ms: i64,
+    ) -> Result<PostCommitPlan, SendMessageError> {
+        if let Some(root) = &message.thread_root_id {
+            return Ok(PostCommitPlan::ReplyCluster(ReplyDeliveryPlan {
+                audience: self.cluster_audience(root, command.actor()).await?,
+            }));
+        }
+
+        let sender = match command.actor() {
+            SendActor::Agent(agent) => Some(agent.as_str().to_owned()),
+            SendActor::User(_) => None,
+        };
+        let recipients: Vec<String> = sqlx::query_scalar(SELECT_PARTICIPANT_AGENTS)
+            .bind(conversation.as_str())
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        let recipients: Vec<messaging::AgentId> = recipients
+            .into_iter()
+            .filter(|candidate| sender.as_deref() != Some(candidate.as_str()))
+            .map(|candidate| {
+                messaging::AgentId::parse(candidate).map_err(|_| {
+                    infrastructure(MessagingStoreError::MalformedIdentity { field: "agents.id" })
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(PostCommitPlan::MainLine(MainSendPlan {
+            // Every recipient is a candidate for being started; whether one is idle
+            // is not a fact a transaction can hold.
+            start_eligible: recipients.clone(),
+            delivery_recipients: recipients,
+            mentioned_viewers: self
+                .mentioned_viewer_drafts(conversation, command, message, created_at_ms)
+                .await?,
+        }))
+    }
+
+    /// One draft per person the body named who can read this conversation. The author
+    /// is not among them: being told you named someone is not a mention.
+    async fn mentioned_viewer_drafts(
+        &mut self,
+        conversation: &ConversationId,
+        command: &SendMessage,
+        message: &CreatedMessage,
+        created_at_ms: i64,
+    ) -> Result<Vec<MentionRowDraft>, SendMessageError> {
+        let addressed: Vec<ParticipantHandle> = command
+            .addressed()
+            .iter()
+            .filter(|reference| reference.kind() == PrincipalKind::Human)
+            .map(|reference| reference.handle().clone())
+            .collect();
+        if addressed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let (workspace_id, title) = self.conversation_place(conversation).await?;
+        let source_workspace = match workspace_id {
+            None => None,
+            Some(id) => {
+                let name = self.workspace_name(&id).await?;
+                Some(WorkspaceCoordinate { id, name })
+            }
+        };
+        let excerpt = mention_cc::mention_excerpt(message.content.as_str());
+        let author = match command.actor() {
+            SendActor::User(author) => Some(author.as_str().to_owned()),
+            SendActor::Agent(_) => None,
+        };
+
+        let mut drafts = Vec::with_capacity(addressed.len());
+        for handle in addressed {
+            let viewer: Option<String> = sqlx::query_scalar(SELECT_USER_ID_BY_NAME)
+                .bind(handle.as_str())
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(driver)?;
+            let Some(viewer) = viewer else { continue };
+            if author.as_deref() == Some(viewer.as_str()) {
+                continue;
+            }
+            let viewer = UserId::parse(viewer).map_err(|_| {
+                infrastructure(MessagingStoreError::MalformedIdentity { field: "users.id" })
+            })?;
+            // A person who cannot read this conversation was not mentioned in it.
+            if !self.is_user_participant(conversation, &viewer).await? {
+                continue;
+            }
+
+            drafts.push(MentionRowDraft {
+                viewer,
+                mentioned_handle: handle,
+                source_conversation: conversation.clone(),
+                source_conversation_title: title.clone(),
+                source_message: message.id.clone(),
+                source_workspace: source_workspace.clone(),
+                excerpt: excerpt.clone(),
+                created_at_ms,
+            });
+        }
+        Ok(drafts)
     }
 
     async fn conversation_place(

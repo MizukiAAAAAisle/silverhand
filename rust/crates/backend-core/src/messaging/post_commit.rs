@@ -12,9 +12,77 @@
 use std::{error::Error, future::Future};
 
 use super::{
-    AgentId, ConversationId, MessageCreatedFact, MessageId, ParticipantHandle, UserId,
+    AgentId, ConversationId, CreatedMessage, MainCommittedSend, MessageCreatedFact, MessageId,
+    ParticipantHandle, UserId,
     mention_cc::{CommittedMentionCopy, MentionCopyOutcome, MentionCopySkip},
 };
+
+/// What a committed send owes the world, as the path it took decides it.
+///
+/// Two variants with different payloads, and a fact carries exactly one: a
+/// main-line send reaches the conversation's participants, a reply reaches the
+/// cluster's followers, and those are different questions with different answers.
+/// Keeping them apart by type is what stops one path's announcer from executing the
+/// other's plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PostCommitPlan {
+    MainLine(MainSendPlan),
+    ReplyCluster(ReplyDeliveryPlan),
+}
+
+/// A main-line send's aftermath, enumerated inside the unit from the same snapshot
+/// the write used.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MainSendPlan {
+    /// The conversation's agent participants, minus the sender: nobody is delivered
+    /// their own message.
+    pub delivery_recipients: Vec<AgentId>,
+    /// Which of those may be started if nothing is running for them. Whether one IS
+    /// idle is a volatile fact and is not decided here — a transaction cannot know
+    /// it, and freezing a guess would make the plan lie by the time it is used.
+    pub start_eligible: Vec<AgentId>,
+    /// One draft per person the body named who can read this conversation. Complete,
+    /// because the writer of the row should have nothing left to derive.
+    pub mentioned_viewers: Vec<MentionRowDraft>,
+}
+
+/// A reply's aftermath. Its audience is follower-gated, which is why it cannot be
+/// the participant enumeration above.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReplyDeliveryPlan {
+    pub audience: Vec<AgentId>,
+}
+
+/// Everything the durable record of "this person was named" needs, projected from
+/// the send that named them. The row's own id is the store's to mint; every other
+/// field is decided here, so the write cannot re-derive or re-parse anything.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MentionRowDraft {
+    pub viewer: UserId,
+    pub mentioned_handle: ParticipantHandle,
+    pub source_conversation: ConversationId,
+    pub source_conversation_title: String,
+    pub source_message: MessageId,
+    /// Absent for a conversation that has no workspace, which a direct line does
+    /// not.
+    pub source_workspace: Option<WorkspaceCoordinate>,
+    pub excerpt: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceCoordinate {
+    pub id: String,
+    pub name: String,
+}
+
+/// The row that now exists, as the store wrote it: the draft plus the identity it
+/// minted. Returned so the publication below has nothing to look up.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedMentionRow {
+    pub id: MessageId,
+    pub draft: MentionRowDraft,
+}
 
 /// One attempt failed. The cause is kept, because "telling someone failed" is only
 /// actionable with the reason attached.
@@ -125,29 +193,22 @@ pub trait RuntimeDelivery {
 /// committed may be undone for it, and no later attempt may be skipped because of
 /// it.
 pub trait MentionedViewerRecord {
+    /// Mints the row's identity, encodes the draft and inserts it — and nothing
+    /// else. Every semantic field arrives in the draft, so there is nothing here to
+    /// re-derive and no content to parse a second time.
     fn record_mentioned_viewer(
         &self,
-        viewer: &UserId,
-        message: &MessageId,
-        conversation: &ConversationId,
-    ) -> impl Future<Output = Result<CommittedViewerMention, EffectFailure>> + Send;
+        draft: &MentionRowDraft,
+    ) -> impl Future<Output = Result<CommittedMentionRow, EffectFailure>> + Send;
 }
 
-/// One recorded mention, as the row that now exists. Returned rather than implied,
-/// because the publication below can fail while this row remains: a capability that
-/// answered only "did both halves work" would lose that state.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommittedViewerMention {
-    pub viewer: UserId,
-    pub message: MessageId,
-    pub conversation: ConversationId,
-}
-
-/// Tells the named person's client that the row above exists.
+/// Tells the named person's client that the row above exists. It takes the committed
+/// row, because "the row is there but nobody was told" is a state that has to be
+/// expressible: a capability answering only "did both halves work" would lose it.
 pub trait ViewerNotification {
     fn notify_viewer(
         &self,
-        mention: &CommittedViewerMention,
+        mention: &CommittedMentionRow,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -155,7 +216,7 @@ pub trait ViewerNotification {
 pub trait MainPublication {
     fn publish_message(
         &self,
-        fact: &MessageCreatedFact,
+        message: &CreatedMessage,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -168,11 +229,13 @@ pub trait UnreadPublication {
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
-/// The message is owed to the conversation's agent participants.
+/// The message is owed to one recipient. Per recipient, from the plan, so an
+/// adapter has nobody to look up and no policy left to re-decide.
 pub trait MainDelivery {
-    fn deliver_to_participants(
+    fn deliver_to(
         &self,
-        fact: &MessageCreatedFact,
+        recipient: &AgentId,
+        message: &CreatedMessage,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -180,9 +243,12 @@ pub trait MainDelivery {
 /// on it: an idle runtime is started because nobody is there to receive, not in
 /// order to receive.
 pub trait IdleStart {
-    fn start_idle_recipients(
+    /// Asked of one eligible recipient. Whether it is idle is decided HERE, at the
+    /// moment of asking, because it is a volatile fact.
+    fn start_if_idle(
         &self,
-        fact: &MessageCreatedFact,
+        recipient: &AgentId,
+        conversation: &ConversationId,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -347,15 +413,25 @@ pub struct MainEffects<'ports, P, R, V, U, D, S> {
 
 /// Tells the world about a committed main-line send.
 ///
+/// It takes the view, not the fact, so there is no way to hand it a reply:
+///
+/// ```compile_fail
+/// use silverhand_backend_core::messaging::{MessageCreatedFact, post_commit};
+///
+/// fn announce(fact: &MessageCreatedFact, ports: post_commit::MainEffects<'_, (), (), (), (), (), ()>) {
+///     let reply = fact.reply_cluster().expect("a reply");
+///     let _ = post_commit::announce_main_send(reply, ports);
+/// }
+/// ```
+///
 /// The order is load-bearing in one place and one place only: a named person's
 /// durable mention row is written before unread state is published, because the
 /// badge's directed count READS that row — publishing first sends a value that
 /// predates the mention, and the client does not ask again. Everything else is
-/// ordered for readability, and each attempt is isolated: per named viewer, so one
-/// person's failure does not cost another theirs.
+/// ordered for readability, and each attempt is isolated: per named viewer and per
+/// recipient, so one person's failure does not cost another theirs.
 pub async fn announce_main_send<P, R, V, U, D, S>(
-    fact: &MessageCreatedFact,
-    mentioned_viewers: &[UserId],
+    send: MainCommittedSend<'_>,
     ports: MainEffects<'_, P, R, V, U, D, S>,
 ) -> EffectReport
 where
@@ -367,34 +443,32 @@ where
     S: IdleStart,
 {
     let mut report = EffectReport::default();
-    let id = fact.message.id.clone();
-    let conversation = fact.message.conversation_id.clone();
+    let message = send.message();
+    let plan = send.plan();
+    let id = message.id.clone();
+    let conversation = message.conversation_id.clone();
 
     attempt(
         &mut report,
         &id,
         EffectStep::MessagePublished,
-        ports.publication.publish_message(fact),
+        ports.publication.publish_message(message),
     )
     .await;
 
-    for viewer in mentioned_viewers {
+    for draft in &plan.mentioned_viewers {
         report
             .attempted
             .push((id.clone(), EffectStep::MentionedViewerRecorded));
-        match ports
-            .mentions
-            .record_mentioned_viewer(viewer, &id, &conversation)
-            .await
-        {
-            // The row exists whatever the publication does next, and the failure of
-            // one named person's record does not reach the next person's.
-            Ok(mention) => {
+        match ports.mentions.record_mentioned_viewer(draft).await {
+            // The row exists whatever the publication does next, and one named
+            // person's failure does not reach the next person's.
+            Ok(row) => {
                 attempt(
                     &mut report,
                     &id,
                     EffectStep::ViewerNotified,
-                    ports.viewers.notify_viewer(&mention),
+                    ports.viewers.notify_viewer(&row),
                 )
                 .await;
             }
@@ -413,20 +487,26 @@ where
         ports.unread.publish_unread(&conversation),
     )
     .await;
-    attempt(
-        &mut report,
-        &id,
-        EffectStep::MainDelivered,
-        ports.delivery.deliver_to_participants(fact),
-    )
-    .await;
-    attempt(
-        &mut report,
-        &id,
-        EffectStep::IdleStarted,
-        ports.idle.start_idle_recipients(fact),
-    )
-    .await;
+    for recipient in &plan.delivery_recipients {
+        attempt(
+            &mut report,
+            &id,
+            EffectStep::MainDelivered,
+            ports.delivery.deliver_to(recipient, message),
+        )
+        .await;
+    }
+    // After delivery, and only for those the plan allows: a runtime is started
+    // because nobody was there to receive, not in order to receive.
+    for recipient in &plan.start_eligible {
+        attempt(
+            &mut report,
+            &id,
+            EffectStep::IdleStarted,
+            ports.idle.start_if_idle(recipient, &conversation),
+        )
+        .await;
+    }
     report
 }
 
@@ -596,6 +676,43 @@ mod tests {
         }
     }
 
+    fn draft_for(viewer: &str) -> MentionRowDraft {
+        MentionRowDraft {
+            viewer: UserId::parse(viewer).unwrap(),
+            mentioned_handle: ParticipantHandle::parse("Viewer").unwrap(),
+            source_conversation: ConversationId::parse("conv-1").unwrap(),
+            source_conversation_title: "Channel".to_owned(),
+            source_message: MessageId::parse("source-message").unwrap(),
+            source_workspace: Some(WorkspaceCoordinate {
+                id: "ws-1".to_owned(),
+                name: "Space".to_owned(),
+            }),
+            excerpt: "ping".to_owned(),
+            created_at_ms: 7,
+        }
+    }
+
+    fn main_plan(viewers: &[&str], recipients: &[&str]) -> PostCommitPlan {
+        PostCommitPlan::MainLine(MainSendPlan {
+            delivery_recipients: recipients
+                .iter()
+                .map(|id| AgentId::parse(*id).unwrap())
+                .collect(),
+            start_eligible: recipients
+                .iter()
+                .map(|id| AgentId::parse(*id).unwrap())
+                .collect(),
+            mentioned_viewers: viewers.iter().map(|viewer| draft_for(viewer)).collect(),
+        })
+    }
+
+    fn fact_with(outcomes: Vec<MentionCopyOutcome>, plan: PostCommitPlan) -> MessageCreatedFact {
+        MessageCreatedFact {
+            post_commit: plan,
+            ..fact(outcomes)
+        }
+    }
+
     fn fact(outcomes: Vec<MentionCopyOutcome>) -> MessageCreatedFact {
         MessageCreatedFact {
             message: CreatedMessage {
@@ -612,6 +729,7 @@ mod tests {
                 thread_root_id: None,
             },
             thread: None,
+            post_commit: PostCommitPlan::MainLine(MainSendPlan::default()),
             freshness_bypassed: false,
             mention_copies: outcomes,
         }
@@ -795,37 +913,40 @@ mod tests {
     }
 
     impl MainPublication for Recorder {
-        async fn publish_message(&self, fact: &MessageCreatedFact) -> Result<(), EffectFailure> {
-            self.answer(fact.message.id.as_str(), EffectStep::MessagePublished)
+        async fn publish_message(&self, message: &CreatedMessage) -> Result<(), EffectFailure> {
+            self.answer(message.id.as_str(), EffectStep::MessagePublished)
         }
     }
 
     impl MentionedViewerRecord for Recorder {
         async fn record_mentioned_viewer(
             &self,
-            viewer: &UserId,
-            message: &MessageId,
-            conversation: &ConversationId,
-        ) -> Result<CommittedViewerMention, EffectFailure> {
+            draft: &MentionRowDraft,
+        ) -> Result<CommittedMentionRow, EffectFailure> {
             self.answer(
-                &format!("{}|{}", viewer.as_str(), message.as_str()),
+                &format!(
+                    "{}|{}",
+                    draft.viewer.as_str(),
+                    draft.source_message.as_str()
+                ),
                 EffectStep::MentionedViewerRecorded,
             )?;
-            Ok(CommittedViewerMention {
-                viewer: viewer.clone(),
-                message: message.clone(),
-                conversation: conversation.clone(),
+            // What a store does: mint the identity, keep every other field as given.
+            Ok(CommittedMentionRow {
+                id: MessageId::parse(format!("row-{}", draft.viewer.as_str())).unwrap(),
+                draft: draft.clone(),
             })
         }
     }
 
     impl ViewerNotification for Recorder {
-        async fn notify_viewer(
-            &self,
-            mention: &CommittedViewerMention,
-        ) -> Result<(), EffectFailure> {
+        async fn notify_viewer(&self, mention: &CommittedMentionRow) -> Result<(), EffectFailure> {
             self.answer(
-                &format!("{}|{}", mention.viewer.as_str(), mention.message.as_str()),
+                &format!(
+                    "{}|{}",
+                    mention.draft.viewer.as_str(),
+                    mention.draft.source_message.as_str()
+                ),
                 EffectStep::ViewerNotified,
             )
         }
@@ -838,20 +959,28 @@ mod tests {
     }
 
     impl MainDelivery for Recorder {
-        async fn deliver_to_participants(
+        async fn deliver_to(
             &self,
-            fact: &MessageCreatedFact,
+            recipient: &AgentId,
+            message: &CreatedMessage,
         ) -> Result<(), EffectFailure> {
-            self.answer(fact.message.id.as_str(), EffectStep::MainDelivered)
+            self.answer(
+                &format!("{}|{}", recipient.as_str(), message.id.as_str()),
+                EffectStep::MainDelivered,
+            )
         }
     }
 
     impl IdleStart for Recorder {
-        async fn start_idle_recipients(
+        async fn start_if_idle(
             &self,
-            fact: &MessageCreatedFact,
+            recipient: &AgentId,
+            conversation: &ConversationId,
         ) -> Result<(), EffectFailure> {
-            self.answer(fact.message.id.as_str(), EffectStep::IdleStarted)
+            self.answer(
+                &format!("{}|{}", recipient.as_str(), conversation.as_str()),
+                EffectStep::IdleStarted,
+            )
         }
     }
 
@@ -868,13 +997,6 @@ mod tests {
         }
     }
 
-    fn viewers(names: &[&str]) -> Vec<UserId> {
-        names
-            .iter()
-            .map(|name| UserId::parse(*name).unwrap())
-            .collect()
-    }
-
     /// The main line's own order, ending in delivery and THEN the conditional start
     /// of whoever was idle — delivery does not wait on a runtime, and a runtime is
     /// started because nobody was there to receive.
@@ -882,9 +1004,10 @@ mod tests {
     async fn a_main_line_send_is_announced_in_its_own_order() {
         let recorder = Recorder::default();
 
+        let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &["agent-1"]));
+
         let report = announce_main_send(
-            &fact(Vec::new()),
-            &viewers(&["viewer-1"]),
+            committed.main_line().expect("a main-line send"),
             main_ports(&recorder),
         )
         .await;
@@ -917,9 +1040,9 @@ mod tests {
         ] {
             let recorder = Recorder::failing(&[failing]);
 
+            let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &["agent-1"]));
             let report = announce_main_send(
-                &fact(Vec::new()),
-                &viewers(&["viewer-1"]),
+                committed.main_line().expect("a main-line send"),
                 main_ports(&recorder),
             )
             .await;
@@ -950,9 +1073,10 @@ mod tests {
     async fn a_failed_record_leaves_nothing_to_notify_with() {
         let recorder = Recorder::failing(&[EffectStep::MentionedViewerRecorded]);
 
+        let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &["agent-1"]));
+
         let report = announce_main_send(
-            &fact(Vec::new()),
-            &viewers(&["viewer-1"]),
+            committed.main_line().expect("a main-line send"),
             main_ports(&recorder),
         )
         .await;
@@ -971,9 +1095,13 @@ mod tests {
     async fn one_viewers_failure_does_not_cost_another_theirs() {
         let recorder = Recorder::failing(&[EffectStep::ViewerNotified]);
 
+        let committed = fact_with(
+            Vec::new(),
+            main_plan(&["viewer-1", "viewer-2"], &["agent-1"]),
+        );
+
         announce_main_send(
-            &fact(Vec::new()),
-            &viewers(&["viewer-1", "viewer-2"]),
+            committed.main_line().expect("a main-line send"),
             main_ports(&recorder),
         )
         .await;
@@ -988,5 +1116,59 @@ mod tests {
                 "{viewer} lost their own two steps"
             );
         }
+    }
+
+    /// The two paths answer different questions about the same conversation, so their
+    /// plans are different values — and a reply cannot be handed to the main-line
+    /// announcer, because the view it needs does not exist for one.
+    #[test]
+    fn a_reply_and_a_main_line_send_reach_different_recipients() {
+        let participants = ["agent-1", "agent-2"];
+        let main = fact_with(Vec::new(), main_plan(&[], &participants));
+        let reply = MessageCreatedFact {
+            thread: Some(crate::messaging::ThreadReplyFact {
+                thread_root_id: crate::messaging::ThreadRootId::parse("root-1").unwrap(),
+                reply_count: 1,
+            }),
+            post_commit: PostCommitPlan::ReplyCluster(ReplyDeliveryPlan {
+                // Only one participant follows the cluster.
+                audience: vec![AgentId::parse("agent-2").unwrap()],
+            }),
+            ..fact(Vec::new())
+        };
+
+        assert!(main.reply_cluster().is_none());
+        assert!(
+            reply.main_line().is_none(),
+            "a reply offered a main-line view"
+        );
+
+        let main_recipients = main.main_line().unwrap().plan().delivery_recipients.clone();
+        let reply_audience = reply.reply_cluster().unwrap().plan().audience.clone();
+        assert_eq!(
+            main_recipients,
+            vec![
+                AgentId::parse("agent-1").unwrap(),
+                AgentId::parse("agent-2").unwrap()
+            ]
+        );
+        assert_ne!(main_recipients, reply_audience);
+    }
+
+    /// The store mints the row's identity and changes nothing else: what the
+    /// publication receives is the draft it was given, field for field.
+    #[tokio::test]
+    async fn a_recorded_row_carries_the_draft_it_was_given() {
+        let recorder = Recorder::default();
+        let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &[]));
+        let draft = committed.main_line().unwrap().plan().mentioned_viewers[0].clone();
+
+        let row = recorder
+            .record_mentioned_viewer(&draft)
+            .await
+            .expect("the record was accepted");
+
+        assert_eq!(row.draft, draft);
+        assert!(!row.id.as_str().is_empty());
     }
 }

@@ -701,6 +701,10 @@ pub struct MessageCreatedFact {
     pub message: CreatedMessage,
     /// Present only for a reply.
     pub thread: Option<ThreadReplyFact>,
+    /// What this send owes the world afterwards, decided inside the unit because it
+    /// is read from the same snapshot the write used. Which path it took is part of
+    /// the plan's type, so the two paths' aftermaths cannot be confused.
+    pub post_commit: post_commit::PostCommitPlan,
     /// The guard was skipped at the sender's request. Carried for the post-commit
     /// record, not for the reply to the caller.
     pub freshness_bypassed: bool,
@@ -742,11 +746,94 @@ pub struct CreatedMessage {
 pub struct ThreadReplyFact {
     pub thread_root_id: ThreadRootId,
     pub reply_count: i64,
-    /// The cluster's follower agents that still participate, minus the sender.
-    /// Enumerated inside the unit because the answer must include the followers
-    /// this very reply created; what is done with it happens after the commit and
-    /// is no part of this fact.
-    pub audience: Vec<AgentId>,
+}
+
+/// One committed main-line send and the plan that belongs to it.
+///
+/// A borrowed view, and the only way to hold a main-line plan: its fields are
+/// private and it has no constructor, so a caller cannot assemble one, and the only
+/// source is [`MessageCreatedFact::main_line`] — which answers `None` for a reply.
+/// That is what makes "announce a reply as if it were a main-line send" something
+/// nobody can write rather than something a runtime check has to catch.
+#[derive(Clone, Copy, Debug)]
+pub struct MainCommittedSend<'fact> {
+    message: &'fact CreatedMessage,
+    plan: &'fact post_commit::MainSendPlan,
+}
+
+impl<'fact> MainCommittedSend<'fact> {
+    pub fn message(&self) -> &'fact CreatedMessage {
+        self.message
+    }
+
+    pub fn plan(&self) -> &'fact post_commit::MainSendPlan {
+        self.plan
+    }
+}
+
+/// The same shape for a reply, carrying the cluster's own plan. Distinct from
+/// [`MainCommittedSend`] by type, so neither path's announcer accepts the other's.
+#[derive(Clone, Copy, Debug)]
+pub struct ReplyCommittedSend<'fact> {
+    message: &'fact CreatedMessage,
+    projection: &'fact ThreadReplyFact,
+    plan: &'fact post_commit::ReplyDeliveryPlan,
+}
+
+impl<'fact> ReplyCommittedSend<'fact> {
+    pub fn message(&self) -> &'fact CreatedMessage {
+        self.message
+    }
+
+    pub fn projection(&self) -> &'fact ThreadReplyFact {
+        self.projection
+    }
+
+    pub fn plan(&self) -> &'fact post_commit::ReplyDeliveryPlan {
+        self.plan
+    }
+}
+
+impl MessageCreatedFact {
+    /// This send as a main-line one, or nothing if it was a reply.
+    ///
+    /// `None` is a question's answer, not an outcome: there is no announcer that
+    /// takes a fact, so a caller holding `None` has nothing to call rather than
+    /// something to skip.
+    ///
+    /// A view cannot be assembled by hand:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::MainCommittedSend;
+    ///
+    /// let view = MainCommittedSend {
+    ///     message: todo!(),
+    ///     plan: todo!(),
+    /// };
+    /// ```
+    pub fn main_line(&self) -> Option<MainCommittedSend<'_>> {
+        match &self.post_commit {
+            post_commit::PostCommitPlan::MainLine(plan) => Some(MainCommittedSend {
+                message: &self.message,
+                plan,
+            }),
+            post_commit::PostCommitPlan::ReplyCluster(_) => None,
+        }
+    }
+
+    /// This send as a reply, or nothing if it was a main-line one.
+    pub fn reply_cluster(&self) -> Option<ReplyCommittedSend<'_>> {
+        match (&self.post_commit, &self.thread) {
+            (post_commit::PostCommitPlan::ReplyCluster(plan), Some(projection)) => {
+                Some(ReplyCommittedSend {
+                    message: &self.message,
+                    projection,
+                    plan,
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The write unit. One call is one atomic outcome: either the fact below exists
