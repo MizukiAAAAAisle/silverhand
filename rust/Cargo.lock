@@ -1221,7 +1221,6 @@ name = "silverhand-backend-core"
 version = "0.1.0"
 dependencies = [
  "base64",
- "getrandom 0.4.3",
  "sha2 0.11.0",
  "thiserror",
  "tokio",
@@ -1254,6 +1253,7 @@ dependencies = [
 name = "silverhand-backend-sqlite"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "serde",
  "serde_json",
  "silverhand-backend-core",

@@ -22,7 +22,6 @@ use silverhand_backend_core::messaging::{
     SendDestination, SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork,
     ThreadFollowerSource, ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
-    environment::OsEntropy,
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
     post_commit::{
@@ -264,7 +263,7 @@ impl SendClock for HostEnvironment {
 
 impl SendEntropy for HostEnvironment {
     fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
-        OsEntropy.fill(buffer)
+        getrandom::fill(buffer).map_err(EnvironmentUnavailable::from_source)
     }
 }
 
@@ -1881,6 +1880,16 @@ mod tests {
 
         assert_eq!(unix_ms_since_epoch(UNIX_EPOCH).unwrap(), 0);
         assert_eq!(unix_ms_since_epoch(one_and_a_half_seconds).unwrap(), 1_500);
+    }
+
+    /// The host randomness is exercised for reachability only, alongside the host
+    /// clock it shares an adapter with. What it produces is not asserted: any claim
+    /// about the bytes would be a claim about chance.
+    #[test]
+    fn the_host_entropy_answers() {
+        let mut buffer = [0u8; 32];
+
+        assert!(HostEnvironment.fill(&mut buffer).is_ok());
     }
 
     /// A moment this system cannot express as a Unix millisecond is reported
