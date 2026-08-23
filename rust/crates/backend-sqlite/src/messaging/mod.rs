@@ -25,10 +25,7 @@ use silverhand_backend_core::messaging::{
     environment::OsEntropy,
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
-    post_commit::{
-        DeliveryPlan, MainDeliveryPlan, MentionRowDraft, PostCommitPlan, ReplyAudience,
-        WorkspaceCoordinate,
-    },
+    post_commit::{DeliveryPlan, MainDeliveryPlan, MentionIntent, PostCommitPlan, ReplyAudience},
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
@@ -864,9 +861,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         command: &SendMessage,
         message: &CreatedMessage,
     ) -> Result<PostCommitPlan, SendMessageError> {
-        let mentions = self
-            .mentioned_viewer_drafts(target, command, message)
-            .await?;
+        let mentions = self.mention_intent(target, command, message).await?;
 
         if let Some(root) = &message.thread_root_id {
             let audience = self.cluster_audience(root, command.actor()).await?;
@@ -917,78 +912,56 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         ))
     }
 
-    /// One draft per person the body named who can read this conversation.
+    /// What this send says about naming people, if it named anyone inside a workspace.
     ///
-    /// Only inside a workspace: a record of being named is navigated to by workspace
-    /// and conversation, and a direct line has no workspace to navigate from — a row
-    /// written for one would be unreachable. The author is not among them either:
-    /// being told you named someone is not a mention.
-    async fn mentioned_viewer_drafts(
+    /// Only the facts of the send: the handles the body named, where it happened, who
+    /// wrote it, and what it said. Who is entitled to be told is NOT decided here —
+    /// that is a fact of the moment the record is written, and deciding it now would
+    /// both freeze an entitlement that can be revoked in between and drag its reads
+    /// into this transaction, where a failed lookup for a notification would roll back
+    /// a message that was otherwise complete.
+    ///
+    /// Nothing is recorded outside a workspace: a mention record is navigated to by
+    /// workspace and conversation, and a direct line has no workspace to reach it from.
+    async fn mention_intent(
         &mut self,
         conversation: &ConversationId,
         command: &SendMessage,
         message: &CreatedMessage,
-    ) -> Result<Vec<MentionRowDraft>, SendMessageError> {
-        let addressed: Vec<ParticipantHandle> = command
+    ) -> Result<Option<MentionIntent>, SendMessageError> {
+        let handles: Vec<ParticipantHandle> = command
             .addressed()
             .iter()
             .filter(|reference| reference.kind() == PrincipalKind::Human)
             .map(|reference| reference.handle().clone())
             .collect();
-        if addressed.is_empty() {
-            return Ok(Vec::new());
+        if handles.is_empty() {
+            return Ok(None);
         }
 
         let (workspace_id, title) = self.conversation_place(conversation).await?;
         let Some(workspace_id) = workspace_id else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
-        let workspace = WorkspaceCoordinate::committed(
-            messaging::WorkspaceId::parse(workspace_id.clone()).map_err(|_| {
-                infrastructure(MessagingStoreError::MalformedIdentity {
-                    field: "conversations.workspace_id",
-                })
-            })?,
-            self.workspace_name(&workspace_id).await?,
-        );
-        let excerpt = mention_cc::mention_excerpt(message.content.as_str());
-        let trigger_name = trigger_name_of(message);
-        let author = match command.actor() {
-            SendActor::User(author) => Some(author.as_str().to_owned()),
-            SendActor::Agent(_) => None,
-        };
+        let workspace = messaging::WorkspaceId::parse(workspace_id).map_err(|_| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.workspace_id",
+            })
+        })?;
 
-        let mut drafts = Vec::with_capacity(addressed.len());
-        for handle in addressed {
-            let viewer: Option<String> = sqlx::query_scalar(SELECT_USER_ID_BY_NAME)
-                .bind(handle.as_str())
-                .fetch_optional(&mut *self.tx)
-                .await
-                .map_err(driver)?;
-            let Some(viewer) = viewer else { continue };
-            if author.as_deref() == Some(viewer.as_str()) {
-                continue;
-            }
-            let viewer = UserId::parse(viewer).map_err(|_| {
-                infrastructure(MessagingStoreError::MalformedIdentity { field: "users.id" })
-            })?;
-            // A person who cannot read this conversation was not mentioned in it.
-            if !self.is_user_participant(conversation, &viewer).await? {
-                continue;
-            }
-
-            drafts.push(MentionRowDraft::committed(
-                viewer,
-                handle,
-                trigger_name.clone(),
-                workspace.clone(),
-                conversation.clone(),
-                title.clone(),
-                message.id.clone(),
-                excerpt.clone(),
-            ));
-        }
-        Ok(drafts)
+        Ok(Some(MentionIntent::committed(
+            handles,
+            match command.actor() {
+                SendActor::User(author) => Some(author.clone()),
+                SendActor::Agent(_) => None,
+            },
+            trigger_name_of(message),
+            workspace,
+            conversation.clone(),
+            title,
+            message.id.clone(),
+            mention_cc::mention_excerpt(message.content.as_str()),
+        )))
     }
 
     async fn conversation_place(

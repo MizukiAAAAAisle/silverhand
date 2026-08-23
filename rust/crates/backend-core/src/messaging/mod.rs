@@ -727,11 +727,11 @@ pub struct MessageCreatedFact {
 impl MessageCreatedFact {
     /// Assembled by the unit of work that committed the send, and by nothing else.
     ///
-    /// This is a trust seam, stated rather than pretended away: the store lives in
-    /// another crate, so the constructor is reachable by code with the store's own
-    /// privileges. What it does rule out is the caller of the port — an application
-    /// or request handler that received a fact cannot replace what the send decided,
-    /// because every field is read-only from here on.
+    /// A trust seam, stated rather than pretended away: this factory is public, so
+    /// every crate that can call it is inside the same trusted boundary — a fact can
+    /// be fabricated by anyone with that reach. What is ruled out is different and
+    /// narrower: a fact that has been returned cannot be replaced or modified, because
+    /// every field is read-only from here on.
     pub fn committed(
         message: CreatedMessage,
         thread: Option<ThreadReplyFact>,
@@ -815,7 +815,7 @@ pub struct ThreadReplyFact {
 #[derive(Clone, Copy, Debug)]
 pub struct MainCommittedSend<'fact> {
     message: &'fact CreatedMessage,
-    mentions: &'fact [post_commit::MentionRowDraft],
+    mentions: Option<&'fact post_commit::MentionIntent>,
     delivery: &'fact post_commit::MainDeliveryPlan,
 }
 
@@ -824,9 +824,9 @@ impl<'fact> MainCommittedSend<'fact> {
         self.message
     }
 
-    /// Who this send named. Path-independent: a person is named by the body, not by
-    /// where the message landed.
-    pub fn mentions(&self) -> &'fact [post_commit::MentionRowDraft] {
+    /// What this send said about naming people. Path-independent: a person is named
+    /// by the body, not by where the message landed.
+    pub fn mentions(&self) -> Option<&'fact post_commit::MentionIntent> {
         self.mentions
     }
 
@@ -841,7 +841,7 @@ impl<'fact> MainCommittedSend<'fact> {
 pub struct ReplyCommittedSend<'fact> {
     message: &'fact CreatedMessage,
     projection: &'fact ThreadReplyFact,
-    mentions: &'fact [post_commit::MentionRowDraft],
+    mentions: Option<&'fact post_commit::MentionIntent>,
     audience: &'fact post_commit::ReplyAudience,
 }
 
@@ -854,9 +854,9 @@ impl<'fact> ReplyCommittedSend<'fact> {
         self.projection
     }
 
-    /// The same path-independent set the main line carries: naming someone does not
+    /// The same path-independent fact the main line carries: naming someone does not
     /// depend on whether the message was a reply.
-    pub fn mentions(&self) -> &'fact [post_commit::MentionRowDraft] {
+    pub fn mentions(&self) -> Option<&'fact post_commit::MentionIntent> {
         self.mentions
     }
 

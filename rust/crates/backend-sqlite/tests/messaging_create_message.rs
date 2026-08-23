@@ -2374,23 +2374,30 @@ async fn a_main_send_plans_who_it_reaches_and_who_it_named() {
     // would be started is the one already running to write this.
     assert!(plan.start_eligible().is_empty());
 
-    assert_eq!(view.mentions().len(), 1);
-    let draft = &view.mentions()[0];
-    assert_eq!(draft.viewer().as_str(), USER_ID);
-    assert_eq!(draft.mentioned_name().as_str(), "human");
-    assert_eq!(draft.trigger_name(), "Lio");
-    assert_eq!(draft.source_conversation().as_str(), CHANNEL_ID);
-    assert_eq!(draft.source_conversation_title(), "Channel");
-    assert_eq!(draft.source_message(), &fact.message().id);
-    assert_eq!(draft.source_workspace().id().as_str(), WORKSPACE_ID);
-    assert_eq!(draft.source_workspace().name(), "Space");
-    assert_eq!(draft.excerpt(), "<silverhand://human/human> take a look");
+    // The intent carries what the SEND knows: the names the body used and where it
+    // happened. Who may be told is decided when the record is written, not here.
+    let intent = view.mentions().expect("the body named someone");
+    assert_eq!(
+        intent
+            .handles()
+            .iter()
+            .map(ParticipantHandle::as_str)
+            .collect::<Vec<_>>(),
+        vec!["human"]
+    );
+    assert_eq!(intent.author(), None, "an agent send has no human author");
+    assert_eq!(intent.trigger_name(), "Lio");
+    assert_eq!(intent.source_conversation().as_str(), CHANNEL_ID);
+    assert_eq!(intent.source_conversation_title(), "Channel");
+    assert_eq!(intent.source_message(), &fact.message().id);
+    assert_eq!(intent.source_workspace().as_str(), WORKSPACE_ID);
+    assert_eq!(intent.excerpt(), "<silverhand://human/human> take a look");
 }
 
 /// A person who cannot read the conversation was not mentioned in it, and naming
 /// yourself is not a mention.
 #[tokio::test]
-async fn a_mention_plan_names_only_readers_other_than_the_author() {
+async fn a_mention_intent_says_who_wrote_it_so_the_writer_can_exclude_them() {
     let mut fixture = Fixture::new().await;
 
     let by_the_named_person = fixture
@@ -2417,17 +2424,27 @@ async fn a_mention_plan_names_only_readers_other_than_the_author() {
         .await
         .unwrap();
 
-    assert!(
+    // Both sends named someone, so both carry an intent: who is entitled to a record
+    // is not this layer's answer. What the intent does say is who wrote it, which is
+    // how the writer excludes an author who named themselves.
+    assert_eq!(
         by_the_named_person
             .main_line()
             .unwrap()
             .mentions()
-            .is_empty(),
-        "the author was planned a record of naming themselves"
+            .expect("the body named someone")
+            .author()
+            .map(UserId::as_str),
+        Some(USER_ID)
     );
-    assert!(
-        after_removal.main_line().unwrap().mentions().is_empty(),
-        "a person who cannot read the conversation was planned a record"
+    assert_eq!(
+        after_removal
+            .main_line()
+            .unwrap()
+            .mentions()
+            .expect("the body named someone")
+            .author(),
+        None
     );
 }
 
@@ -2518,8 +2535,15 @@ async fn a_reply_names_people_and_still_delivers_to_its_cluster() {
 
     assert!(reply.main_line().is_none());
     let view = reply.reply_cluster().expect("a reply carries its cluster");
-    assert_eq!(view.mentions().len(), 1);
-    assert_eq!(view.mentions()[0].viewer().as_str(), USER_ID);
+    assert_eq!(
+        view.mentions()
+            .expect("the reply named someone")
+            .handles()
+            .iter()
+            .map(ParticipantHandle::as_str)
+            .collect::<Vec<_>>(),
+        vec!["human"]
+    );
     // Follower-gated, not the participant enumeration: the cluster's only follower is
     // the author of both messages, who is excluded as the sender — while the channel
     // still has another participant that a main-line send would have reached.
@@ -2566,7 +2590,7 @@ async fn naming_someone_in_a_direct_line_records_nothing() {
         fact.main_line()
             .expect("a main-line send")
             .mentions()
-            .is_empty(),
+            .is_none(),
         "a direct line produced a mention record no reader could reach"
     );
 }
@@ -2610,7 +2634,10 @@ async fn the_trigger_name_falls_back_through_what_the_sender_has() {
         .unwrap();
 
     let trigger = |fact: &silverhand_backend_core::messaging::MessageCreatedFact| {
-        fact.main_line().unwrap().mentions()[0]
+        fact.main_line()
+            .unwrap()
+            .mentions()
+            .expect("the body named someone")
             .trigger_name()
             .to_owned()
     };

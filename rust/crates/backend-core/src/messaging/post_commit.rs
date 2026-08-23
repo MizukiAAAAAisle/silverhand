@@ -26,31 +26,32 @@ use super::{
 /// announcer from executing the other's plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PostCommitPlan {
-    mentions: Vec<MentionRowDraft>,
+    mentions: Option<MentionIntent>,
     delivery: DeliveryPlan,
 }
 
 impl PostCommitPlan {
-    /// Assembled by the unit of work that committed the send. A trust seam, like the
-    /// fact that carries it: the caller of the port cannot reach it, and the store
-    /// can, because the store is what decided these facts inside the transaction.
-    pub fn committed(mentions: Vec<MentionRowDraft>, delivery: DeliveryPlan) -> Self {
+    /// Assembled by the unit of work that committed the send. A trust seam, stated
+    /// plainly: this factory is public, so every crate that can call it is inside the
+    /// same trusted boundary. What it does guarantee is that a fact already returned
+    /// cannot be replaced or modified — not that one cannot be fabricated.
+    pub fn committed(mentions: Option<MentionIntent>, delivery: DeliveryPlan) -> Self {
         Self { mentions, delivery }
     }
 
-    /// One draft per person this body named who can read the conversation.
-    ///
-    /// Read-only, so a caller cannot add a name the send did not — nor take one away:
+    /// What this send says about naming people, when it named anyone inside a
+    /// workspace. Read-only, so a caller cannot add a name the send did not — nor
+    /// take one away:
     ///
     /// ```compile_fail
-    /// use silverhand_backend_core::messaging::post_commit::PostCommitPlan;
+    /// use silverhand_backend_core::messaging::post_commit::{MentionIntent, PostCommitPlan};
     ///
-    /// fn tamper(plan: &PostCommitPlan) {
-    ///     plan.mentions().push(todo!());
+    /// fn tamper(plan: &PostCommitPlan, other: MentionIntent) {
+    ///     *plan.mentions().unwrap() = other;
     /// }
     /// ```
-    pub fn mentions(&self) -> &[MentionRowDraft] {
-        &self.mentions
+    pub fn mentions(&self) -> Option<&MentionIntent> {
+        self.mentions.as_ref()
     }
 
     pub fn delivery(&self) -> &DeliveryPlan {
@@ -132,40 +133,43 @@ impl ReplyAudience {
     }
 }
 
-/// Everything the durable record of "this person was named" needs, projected from
-/// the send that named them.
+/// What a send says about naming people, and nothing about who is entitled to know.
 ///
-/// It carries no timestamp and no identity: the row is written after the send, in a
-/// transaction of its own, so when it happened and what it is called are the writing
-/// adapter's own facts and are reported back on [`CommittedMentionRow`]. A draft that
-/// claimed a timestamp would be naming a moment that had not arrived.
+/// It carries the handles the BODY named and the coordinates of the message that
+/// named them — facts of the send, settled when it committed. It deliberately does
+/// NOT carry viewers: whether a person may see this conversation is a fact of the
+/// moment the record is written, not of the moment the message was. Freezing it here
+/// would let someone removed between the two still receive a directed notification
+/// carrying the message's excerpt, and would also drag the reads it takes into the
+/// send's own transaction, where a failed lookup for a non-essential notification
+/// would roll back a message that was otherwise complete.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MentionRowDraft {
-    viewer: UserId,
-    mentioned_name: ParticipantHandle,
+pub struct MentionIntent {
+    handles: Vec<ParticipantHandle>,
+    author: Option<UserId>,
     trigger_name: String,
-    source_workspace: WorkspaceCoordinate,
+    source_workspace: WorkspaceId,
     source_conversation: ConversationId,
     source_conversation_title: String,
     source_message: MessageId,
     excerpt: String,
 }
 
-impl MentionRowDraft {
+impl MentionIntent {
     #[allow(clippy::too_many_arguments)]
     pub fn committed(
-        viewer: UserId,
-        mentioned_name: ParticipantHandle,
+        handles: Vec<ParticipantHandle>,
+        author: Option<UserId>,
         trigger_name: String,
-        source_workspace: WorkspaceCoordinate,
+        source_workspace: WorkspaceId,
         source_conversation: ConversationId,
         source_conversation_title: String,
         source_message: MessageId,
         excerpt: String,
     ) -> Self {
         Self {
-            viewer,
-            mentioned_name,
+            handles,
+            author,
             trigger_name,
             source_workspace,
             source_conversation,
@@ -175,12 +179,15 @@ impl MentionRowDraft {
         }
     }
 
-    pub fn viewer(&self) -> &UserId {
-        &self.viewer
+    /// The human handles the body named, deduplicated where they were derived.
+    pub fn handles(&self) -> &[ParticipantHandle] {
+        &self.handles
     }
 
-    pub fn mentioned_name(&self) -> &ParticipantHandle {
-        &self.mentioned_name
+    /// Who sent the message, when a person did. The writer excludes them: being told
+    /// you named someone is not a mention.
+    pub fn author(&self) -> Option<&UserId> {
+        self.author.as_ref()
     }
 
     /// Who named them, as a reader will see it: the sender's display name, or their
@@ -189,7 +196,7 @@ impl MentionRowDraft {
         &self.trigger_name
     }
 
-    pub fn source_workspace(&self) -> &WorkspaceCoordinate {
+    pub fn source_workspace(&self) -> &WorkspaceId {
         &self.source_workspace
     }
 
@@ -210,38 +217,17 @@ impl MentionRowDraft {
     }
 }
 
-/// A mention record only exists inside a workspace: it is navigated to by workspace
-/// and conversation, and a direct line has no workspace to navigate from. So the
-/// coordinate is required rather than optional — a draft without one would describe
-/// a row a reader could not reach.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkspaceCoordinate {
-    id: WorkspaceId,
-    name: String,
-}
-
-impl WorkspaceCoordinate {
-    pub fn committed(id: WorkspaceId, name: String) -> Self {
-        Self { id, name }
-    }
-
-    pub fn id(&self) -> &WorkspaceId {
-        &self.id
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-/// The row that now exists: the draft it was written from, plus the identity and the
-/// moment the writing adapter supplied. Returned so the publication that follows has
-/// nothing to look up.
+/// One row that now exists: who it is for, what it says, and the identity and moment
+/// the writing adapter supplied. Returned so the publication that follows has nothing
+/// to look up — and only rows that were actually written are returned, so a person
+/// who lost access before the write is told nothing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedMentionRow {
     pub id: NotificationId,
     pub created_at_ms: i64,
-    pub draft: MentionRowDraft,
+    pub viewer: UserId,
+    pub mentioned_name: ParticipantHandle,
+    pub intent: MentionIntent,
 }
 
 /// One attempt failed. The cause is kept, because "telling someone failed" is only
@@ -353,13 +339,17 @@ pub trait RuntimeDelivery {
 /// committed may be undone for it, and no later attempt may be skipped because of
 /// it.
 pub trait MentionedViewerRecord {
-    /// Mints the row's identity, encodes the draft and inserts it — and nothing
-    /// else. Every semantic field arrives in the draft, so there is nothing here to
-    /// re-derive and no content to parse a second time.
-    fn record_mentioned_viewer(
+    /// Resolves the intent's handles against the CURRENT state — who those names
+    /// belong to now, and who may read that conversation now — excludes the author,
+    /// and writes a row for each remaining reader in a transaction of its own.
+    ///
+    /// Entitlement is decided here rather than carried in, so someone removed between
+    /// the commit and this write receives nothing. Returns the rows that were actually
+    /// written, which may be none.
+    fn record_mentioned_viewers(
         &self,
-        draft: &MentionRowDraft,
-    ) -> impl Future<Output = Result<CommittedMentionRow, EffectFailure>> + Send;
+        intent: &MentionIntent,
+    ) -> impl Future<Output = Result<Vec<CommittedMentionRow>, EffectFailure>> + Send;
 }
 
 /// Tells the named person's client that the row above exists. It takes the committed
@@ -616,21 +606,23 @@ where
     )
     .await;
 
-    for draft in send.mentions() {
+    if let Some(intent) = send.mentions() {
         report
             .attempted
             .push((id.clone(), EffectStep::MentionedViewerRecorded));
-        match ports.mentions.record_mentioned_viewer(draft).await {
-            // The row exists whatever the publication does next, and one named
-            // person's failure does not reach the next person's.
-            Ok(row) => {
-                attempt(
-                    &mut report,
-                    &id,
-                    EffectStep::ViewerNotified,
-                    ports.viewers.notify_viewer(&row),
-                )
-                .await;
+        match ports.mentions.record_mentioned_viewers(intent).await {
+            // Only rows that were written are published, and one person's publication
+            // failing does not reach the next person's.
+            Ok(rows) => {
+                for row in &rows {
+                    attempt(
+                        &mut report,
+                        &id,
+                        EffectStep::ViewerNotified,
+                        ports.viewers.notify_viewer(row),
+                    )
+                    .await;
+                }
             }
             Err(failure) => {
                 report
@@ -704,6 +696,9 @@ mod tests {
     struct Recorder {
         calls: Mutex<Vec<(String, EffectStep)>>,
         failing: HashSet<EffectStep>,
+        /// Which named handles the store still finds entitled when it writes. Empty
+        /// means everyone lost access between the commit and the write.
+        entitled: HashSet<String>,
     }
 
     impl Recorder {
@@ -711,6 +706,15 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 failing: steps.iter().copied().collect(),
+                entitled: HashSet::from(["viewer-1".to_owned(), "viewer-2".to_owned()]),
+            }
+        }
+
+        fn entitling(handles: &[&str]) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                failing: HashSet::new(),
+                entitled: handles.iter().map(|handle| (*handle).to_owned()).collect(),
             }
         }
 
@@ -836,12 +840,15 @@ mod tests {
         }
     }
 
-    fn draft_for(viewer: &str) -> MentionRowDraft {
-        MentionRowDraft::committed(
-            UserId::parse(viewer).unwrap(),
-            ParticipantHandle::parse("Viewer").unwrap(),
+    fn intent_for(handles: &[&str]) -> MentionIntent {
+        MentionIntent::committed(
+            handles
+                .iter()
+                .map(|handle| ParticipantHandle::parse(*handle).unwrap())
+                .collect(),
+            Some(UserId::parse("author-1").unwrap()),
             "Sender".to_owned(),
-            WorkspaceCoordinate::committed(WorkspaceId::parse("ws-1").unwrap(), "Space".to_owned()),
+            WorkspaceId::parse("ws-1").unwrap(),
             ConversationId::parse("conv-1").unwrap(),
             "Channel".to_owned(),
             MessageId::parse("source-message").unwrap(),
@@ -855,7 +862,11 @@ mod tests {
             .map(|id| AgentId::parse(*id).unwrap())
             .collect();
         PostCommitPlan::committed(
-            viewers.iter().map(|viewer| draft_for(viewer)).collect(),
+            if viewers.is_empty() {
+                None
+            } else {
+                Some(intent_for(viewers))
+            },
             DeliveryPlan::MainLine(MainDeliveryPlan::committed(recipients.clone(), recipients)),
         )
     }
@@ -885,7 +896,7 @@ mod tests {
             created_message(),
             None,
             PostCommitPlan::committed(
-                Vec::new(),
+                None,
                 DeliveryPlan::MainLine(MainDeliveryPlan::committed(Vec::new(), Vec::new())),
             ),
             false,
@@ -911,7 +922,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_copy_is_announced_in_order() {
-        let recorder = Recorder::default();
+        let recorder = default_recorder();
 
         let report = announce_send(
             &fact(vec![copied("copy-1", "line-1", "agent-1", "Alice")]),
@@ -1077,25 +1088,28 @@ mod tests {
     }
 
     impl MentionedViewerRecord for Recorder {
-        async fn record_mentioned_viewer(
+        async fn record_mentioned_viewers(
             &self,
-            draft: &MentionRowDraft,
-        ) -> Result<CommittedMentionRow, EffectFailure> {
+            intent: &MentionIntent,
+        ) -> Result<Vec<CommittedMentionRow>, EffectFailure> {
             self.answer(
-                &format!(
-                    "{}|{}",
-                    draft.viewer().as_str(),
-                    draft.source_message().as_str()
-                ),
+                intent.source_message().as_str(),
                 EffectStep::MentionedViewerRecorded,
             )?;
-            // What a store does: mint the identity, stamp the moment, and keep every
-            // other field exactly as it was given.
-            Ok(CommittedMentionRow {
-                id: NotificationId::parse(format!("row-{}", draft.viewer().as_str())).unwrap(),
-                created_at_ms: 11,
-                draft: draft.clone(),
-            })
+            // What a store does: decide entitlement NOW, then mint an identity and
+            // stamp a moment per row it wrote. `entitled` stands in for that decision.
+            Ok(intent
+                .handles()
+                .iter()
+                .filter(|handle| self.entitled.contains(handle.as_str()))
+                .map(|handle| CommittedMentionRow {
+                    id: NotificationId::parse(format!("row-{}", handle.as_str())).unwrap(),
+                    created_at_ms: 11,
+                    viewer: UserId::parse(format!("user-{}", handle.as_str())).unwrap(),
+                    mentioned_name: handle.clone(),
+                    intent: intent.clone(),
+                })
+                .collect())
         }
     }
 
@@ -1104,8 +1118,8 @@ mod tests {
             self.answer(
                 &format!(
                     "{}|{}",
-                    mention.draft.viewer().as_str(),
-                    mention.draft.source_message().as_str()
+                    mention.viewer.as_str(),
+                    mention.intent.source_message().as_str()
                 ),
                 EffectStep::ViewerNotified,
             )
@@ -1144,6 +1158,10 @@ mod tests {
         }
     }
 
+    fn default_recorder() -> Recorder {
+        Recorder::entitling(&["viewer-1", "viewer-2"])
+    }
+
     fn main_ports(
         recorder: &Recorder,
     ) -> MainEffects<'_, Recorder, Recorder, Recorder, Recorder, Recorder, Recorder> {
@@ -1162,7 +1180,7 @@ mod tests {
     /// started because nobody was there to receive.
     #[tokio::test]
     async fn a_main_line_send_is_announced_in_its_own_order() {
-        let recorder = Recorder::default();
+        let recorder = default_recorder();
 
         let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &["agent-1"]));
 
@@ -1249,33 +1267,68 @@ mod tests {
         );
     }
 
-    /// One named person's failure is theirs alone: the next person's row is still
-    /// written and their client still told.
+    /// The record is one act — the store decides entitlement and writes what it may —
+    /// while telling each person is their own. One person's notification failing does
+    /// not cost another theirs.
     #[tokio::test]
-    async fn one_viewers_failure_does_not_cost_another_theirs() {
+    async fn one_persons_publication_failure_does_not_cost_another_theirs() {
         let recorder = Recorder::failing(&[EffectStep::ViewerNotified]);
-
         let committed = fact_with(
             Vec::new(),
             main_plan(&["viewer-1", "viewer-2"], &["agent-1"]),
         );
 
-        announce_main_send(
+        let report = announce_main_send(
             committed.main_line().expect("a main-line send"),
             main_ports(&recorder),
         )
         .await;
 
+        // Keyed by the message: the publication of the message itself, then one record
+        // for the whole send rather than one per name.
+        assert_eq!(
+            recorder.steps_of("source-message"),
+            vec![
+                EffectStep::MessagePublished,
+                EffectStep::MentionedViewerRecorded
+            ],
+            "the record is asked once for the whole send"
+        );
         for viewer in ["viewer-1", "viewer-2"] {
             assert_eq!(
-                recorder.steps_of(&format!("{viewer}|source-message")),
-                vec![
-                    EffectStep::MentionedViewerRecorded,
-                    EffectStep::ViewerNotified
-                ],
-                "{viewer} lost their own two steps"
+                recorder.steps_of(&format!("user-{viewer}|source-message")),
+                vec![EffectStep::ViewerNotified],
+                "{viewer} was not told separately"
             );
         }
+        assert_eq!(
+            report.failed_steps(),
+            vec![EffectStep::ViewerNotified, EffectStep::ViewerNotified]
+        );
+    }
+
+    /// Entitlement is decided when the record is written, not when the message was
+    /// sent. A person who lost access in between is told nothing — and the excerpt the
+    /// notification would have carried never reaches them.
+    #[tokio::test]
+    async fn someone_who_lost_access_after_the_commit_is_told_nothing() {
+        let recorder = Recorder::entitling(&[]);
+        let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &["agent-1"]));
+
+        let report = announce_main_send(
+            committed.main_line().expect("a main-line send"),
+            main_ports(&recorder),
+        )
+        .await;
+
+        assert!(recorder.called(EffectStep::MentionedViewerRecorded));
+        assert!(
+            !recorder.called(EffectStep::ViewerNotified),
+            "a person who is no longer a reader was told anyway"
+        );
+        // The rest of the aftermath is unaffected: nothing here was about them.
+        assert!(recorder.called(EffectStep::UnreadPublished));
+        assert!(report.failed.is_empty());
     }
 
     /// The two paths answer different questions about the same conversation, so their
@@ -1291,7 +1344,7 @@ mod tests {
                 reply_count: 1,
             }),
             post_commit: PostCommitPlan::committed(
-                Vec::new(),
+                None,
                 // Only one participant follows the cluster.
                 DeliveryPlan::ReplyCluster(ReplyAudience::committed(vec![
                     AgentId::parse("agent-2").unwrap(),
@@ -1327,16 +1380,26 @@ mod tests {
     /// publication receives is the draft it was given, field for field.
     #[tokio::test]
     async fn a_recorded_row_carries_the_draft_it_was_given() {
-        let recorder = Recorder::default();
+        let recorder = default_recorder();
         let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &[]));
-        let draft = committed.main_line().unwrap().mentions()[0].clone();
+        let intent = committed
+            .main_line()
+            .unwrap()
+            .mentions()
+            .expect("an intent")
+            .clone();
 
-        let row = recorder
-            .record_mentioned_viewer(&draft)
+        let rows = recorder
+            .record_mentioned_viewers(&intent)
             .await
             .expect("the record was accepted");
 
-        assert_eq!(row.draft, draft);
-        assert!(!row.id.as_str().is_empty());
+        // One row per name that is still entitled, and each carries the intent it was
+        // written from — the store adds an identity and a moment, nothing else.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].intent, intent);
+        assert_eq!(rows[0].mentioned_name.as_str(), "viewer-1");
+        assert!(!rows[0].id.as_str().is_empty());
+        assert_eq!(rows[0].created_at_ms, 11);
     }
 }
