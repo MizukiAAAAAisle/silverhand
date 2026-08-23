@@ -1667,10 +1667,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_transaction_record_reaches_the_same_production_viewer_sink_after_commit() {
+    async fn a_committed_mention_copy_publishes_once_through_the_production_viewer_sink() {
         let (_directory, path) = direct_pair_database().await;
         let store = MessagingStore::open(&path).await.unwrap();
         let outcome = store.send_message(mention_command()).await.unwrap();
+        assert!(matches!(
+            outcome.committed().mention_copies(),
+            [silverhand_backend_core::messaging::mention_cc::MentionCopyOutcome::Copied { .. }]
+        ));
         let hub = ScopeEventHub::test("epoch-1");
         let effects = OtherEffects::default();
 
@@ -1697,8 +1701,12 @@ mod tests {
             )
             .unwrap();
         let Replay::Events(events) = resumed.replay else {
-            panic!("the committed transaction record must reach viewer replay")
+            panic!("the committed mention copy must reach viewer replay")
         };
+        // This outcome contains both the committed copy and the transaction's
+        // opened-line coverage. Without announce_send's conversation dedupe the
+        // same viewer projector would append two events here. The independent
+        // no-copy fallback is an orchestration invariant tested in backend-core.
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events[0].event,
@@ -1707,7 +1715,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn viewer_sink_failure_keeps_its_chain_and_does_not_stop_later_effects() {
+    async fn mention_copy_sink_failure_keeps_its_chain_and_does_not_stop_later_effects() {
         let (_directory, path) = direct_pair_database().await;
         let store = MessagingStore::open(&path).await.unwrap();
         let outcome = store.send_message(mention_command()).await.unwrap();
