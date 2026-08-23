@@ -700,9 +700,16 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         current_seq: MessageSeq,
         followed_at_ms: i64,
     ) -> Result<(), SendMessageError> {
+        // The cluster's anchor is read once: every catch-up needs it, and one
+        // transaction is one snapshot.
+        let root_row = self
+            .message_in_conversation(conversation, root.as_str())
+            .await?;
+
         self.follow_actor(
             conversation,
             root,
+            root_row.as_ref(),
             command.actor(),
             ThreadFollowerSource::Reply,
             current_seq,
@@ -710,22 +717,19 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         )
         .await?;
 
-        if let Some(root_row) = self
-            .message_in_conversation(conversation, root.as_str())
-            .await?
+        if let Some(row) = &root_row
+            && let Some(author) = actor_of_row(row)?
         {
-            let author = actor_of_row(&root_row)?;
-            if let Some(author) = author {
-                self.follow_actor(
-                    conversation,
-                    root,
-                    &author,
-                    ThreadFollowerSource::TargetAuthor,
-                    current_seq,
-                    followed_at_ms,
-                )
-                .await?;
-            }
+            self.follow_actor(
+                conversation,
+                root,
+                root_row.as_ref(),
+                &author,
+                ThreadFollowerSource::TargetAuthor,
+                current_seq,
+                followed_at_ms,
+            )
+            .await?;
         }
 
         for reference in command.addressed().iter() {
@@ -747,6 +751,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             self.follow_actor(
                 conversation,
                 root,
+                root_row.as_ref(),
                 &addressed,
                 ThreadFollowerSource::Mention,
                 current_seq,
@@ -761,10 +766,12 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     /// questions: participation survives a departed principal on purpose so a
     /// survivor keeps reading, while a delivery row for a principal that no longer
     /// exists cannot be written at all.
+    #[allow(clippy::too_many_arguments)]
     async fn follow_actor(
         &mut self,
         conversation: &ConversationId,
         root: &ThreadRootId,
+        root_row: Option<&MessageRow>,
         actor: &SendActor,
         source: ThreadFollowerSource,
         current_seq: MessageSeq,
@@ -818,8 +825,15 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         if followed == 1
             && let SendActor::Agent(agent) = actor
         {
-            self.backfill_cluster_history(conversation, root, agent, current_seq, followed_at_ms)
-                .await?;
+            self.backfill_cluster_history(
+                conversation,
+                root_row,
+                root,
+                agent,
+                current_seq,
+                followed_at_ms,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -829,17 +843,17 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     /// mid-cluster must not land with a hole next to the newest replies — and the
     /// agent's own messages are skipped because it has already seen what it said.
     /// The current reply is not queued here; delivering it is a separate act.
+    #[allow(clippy::too_many_arguments)]
     async fn backfill_cluster_history(
         &mut self,
         conversation: &ConversationId,
+        root_row: Option<&MessageRow>,
         root: &ThreadRootId,
         agent: &messaging::AgentId,
         current_seq: MessageSeq,
         queued_at_ms: i64,
     ) -> Result<(), SendMessageError> {
-        if let Some(root_row) = self
-            .message_in_conversation(conversation, root.as_str())
-            .await?
+        if let Some(root_row) = root_row
             && !root_row.authored_by(agent)
         {
             self.ensure_delivery(conversation, agent, &root_row.id, queued_at_ms)

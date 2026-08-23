@@ -297,10 +297,10 @@ pub trait ReferencePositions {
 
 /// Everyone one message addressed: deduplicated, in first-occurrence order.
 ///
-/// There is no way to build one except from a body, which is what makes "who this
-/// message addresses" a property of the message rather than a claim of whoever
-/// submitted it.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// There is no way to build one except from a body — not even an empty one. A
+/// second source of this value, however harmless it looks, would be a way to
+/// answer "who does this message address" without reading the message.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AddressedPrincipals(Vec<MessageReference>);
 
 impl AddressedPrincipals {
@@ -309,7 +309,14 @@ impl AddressedPrincipals {
         let mut addressed = Vec::new();
         let mut seen = HashSet::new();
 
-        for span in positions.autolink_spans(content) {
+        // The position rule answers WHERE, as a set. Order is part of the answer to
+        // WHO — it decides which occurrence of a repeated name is the first — so it
+        // is established here from the body's own offsets rather than inherited
+        // from whatever order a traversal happened to produce.
+        let mut spans = positions.autolink_spans(content);
+        spans.sort_by_key(|span| (span.start, span.end));
+
+        for span in spans {
             // A span that is not a whole autolink of THIS body addresses nobody.
             let Some(candidate) = body.get(span) else {
                 continue;
@@ -1297,6 +1304,40 @@ mod tests {
                 (PrincipalKind::Agent, "shiki".to_owned()),
             ]
         );
+    }
+
+    /// The body decides the order, not the rule that reported the positions: a rule
+    /// whose traversal runs backwards still yields first-occurrence order, so a
+    /// change of traversal cannot quietly reorder who a message addressed.
+    #[test]
+    fn the_body_decides_the_order_not_the_position_rule() {
+        let body = "<silverhand://agent/Alice> then <silverhand://human/shiki> then \
+                    <silverhand://agent/Alice>";
+        let content = MessageContent::parse(body).unwrap();
+        let mut reported = EveryBracketedRun.autolink_spans(&content);
+        reported.reverse();
+
+        assert_eq!(
+            addressed_of(body, &SpansOf(reported)),
+            vec![
+                (PrincipalKind::Agent, "Alice".to_owned()),
+                (PrincipalKind::Human, "shiki".to_owned()),
+            ]
+        );
+    }
+
+    /// A span that runs backwards, or that cuts a character in half, is inert: the
+    /// derivation reads what is there or nothing at all.
+    #[test]
+    fn a_backwards_or_mid_character_span_addresses_nobody() {
+        let body = "汉<silverhand://agent/Alice>";
+        let mid_character = std::iter::once(1..body.len()).collect();
+        let backwards = std::iter::once(body.len()..0).collect();
+
+        assert!(addressed_of(body, &SpansOf(mid_character)).is_empty());
+        assert!(addressed_of(body, &SpansOf(backwards)).is_empty());
+        // The same body, read from its real positions, does address someone.
+        assert_eq!(addressed_of(body, &EveryBracketedRun).len(), 1);
     }
 
     /// Everything that is not exactly a reference destination addresses nobody.
