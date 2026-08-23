@@ -3521,6 +3521,78 @@ impl ReplyDelivery for ReplyEffectsRefused {
     }
 }
 
+/// A publication that records the list entry the frame carried — reply_count, replier
+/// labels, and the last-reply id — so a test can assert the value publication actually
+/// saw, rather than what the database says at announce time.
+#[derive(Default)]
+struct RecordingPublication {
+    observed: std::sync::Mutex<Option<(i64, Vec<String>, String)>>,
+}
+
+impl RecordingPublication {
+    fn observed(&self) -> (i64, Vec<String>, String) {
+        self.observed
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("publication was never called")
+    }
+}
+
+impl CommittedMessagePublication for RecordingPublication {
+    async fn publish_message(
+        &self,
+        committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
+    ) -> Result<(), EffectFailure> {
+        if let Some(fact) = committed.reply_projection() {
+            let entry = fact.list_entry();
+            *self.observed.lock().unwrap() = Some((
+                entry.reply_count(),
+                labels(entry),
+                entry.last_reply_message_id().as_str().to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The remaining reply effects, all accepting, so an announcement runs to completion
+/// and the recording publication above can be asserted.
+struct AcceptingReplyEffects;
+
+impl silverhand_backend_core::messaging::post_commit::MentionedViewerRecord
+    for AcceptingReplyEffects
+{
+    async fn record_mentioned_viewers(
+        &self,
+        _intent: &silverhand_backend_core::messaging::post_commit::MentionIntent,
+    ) -> Result<Vec<CommittedMentionRow>, EffectFailure> {
+        Ok(Vec::new())
+    }
+}
+
+impl ViewerNotification for AcceptingReplyEffects {
+    async fn notify_viewer(&self, _mention: &CommittedMentionRow) -> Result<(), EffectFailure> {
+        Ok(())
+    }
+}
+
+impl UnreadPublication for AcceptingReplyEffects {
+    async fn publish_unread(&self, _conversation: &ConversationId) -> Result<(), EffectFailure> {
+        Ok(())
+    }
+}
+
+impl ReplyDelivery for AcceptingReplyEffects {
+    async fn deliver_to(
+        &self,
+        _recipient: &AgentId,
+        _message: &silverhand_backend_core::messaging::CreatedMessage,
+    ) -> Result<(), EffectFailure> {
+        Ok(())
+    }
+}
+
 /// The entry previews the root and reports the authoritative non-system count. The
 /// preview is the raw root content (no trim, no ellipsis); the count and the
 /// `last_reply_*` pair exclude a system copy, matching the reply badge.
@@ -3779,10 +3851,10 @@ async fn an_unresolved_replier_is_dropped_from_the_shown_set_and_the_total() {
     assert_eq!(labels(&entry), vec!["human:user-1".to_owned()]);
 }
 
-/// Custody, the reply analog: a committed reply's list entry is a projection of
-/// durable state, so it survives the total failure of the announcement afterwards.
-/// Asserted on a fresh connection to the file — what was committed, not what the
-/// send happened to return.
+/// Custody, the reply analog: the list entry is projected inside the reply's own
+/// transaction and carried on the committed fact, so it is fixed at commit — the
+/// value publication borrows is asserted here directly — and the durable rows behind
+/// it survive the total failure of the announcement afterwards.
 #[tokio::test]
 async fn a_committed_reply_survives_total_effect_failure_including_its_list_entry() {
     let mut fixture = Fixture::new().await;
@@ -3798,6 +3870,28 @@ async fn a_committed_reply_survives_total_effect_failure_including_its_list_entr
         .await
         .unwrap();
     let reply_id = reply.message().id.as_str().to_owned();
+
+    // The entry rode back ON the committed fact — the same value the publication frame
+    // borrows through `reply_cluster().published()`. Asserted before the announcement,
+    // so this is the committed projection, not anything the aftermath produced.
+    let entry = reply
+        .thread()
+        .expect("a reply carries its cluster projection")
+        .list_entry();
+    assert_eq!(entry.reply_count(), 1);
+    assert_eq!(entry.last_reply_message_id().as_str(), reply_id);
+    assert_eq!(labels(entry), vec!["human:user-1".to_owned()]);
+    assert_eq!(
+        reply
+            .reply_cluster()
+            .expect("a reply carries a cluster plan")
+            .published()
+            .reply_projection()
+            .expect("a reply frame carries its projection")
+            .list_entry(),
+        entry,
+        "publication borrows the very entry the fact carries"
+    );
 
     // Every reply-publication effect fails; none of them may take the row back.
     let refused = ReplyEffectsRefused;
@@ -3819,8 +3913,8 @@ async fn a_committed_reply_survives_total_effect_failure_including_its_list_entr
         "the announcement's effects should have been attempted and failed"
     );
 
-    // Reopened: a new pool on the same file, so this is the committed state.
-    let reopened = fixture.store().await;
+    // Reopened: a new pool on the same file, so this is the committed state — the
+    // durable rows the entry was projected from all survived the failed announcement.
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 2);
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 2);
     assert_eq!(
@@ -3840,17 +3934,110 @@ async fn a_committed_reply_survives_total_effect_failure_including_its_list_entr
             ("human".to_owned(), USER_ID.to_owned(), "reply".to_owned()),
         ]
     );
+}
 
-    // And the list entry — the second projection of the same fact — reflects the
-    // committed reply: it counts it, points last-reply at it, and names the replier.
+/// The entry publication carries is the one committed WITH the reply, never a
+/// post-commit reread. After the send commits, a newer reply is written directly and
+/// the live author renamed; publication still sees the commit-time entry (count 1,
+/// the one replier, this reply as last), not the mutated cluster. Structurally,
+/// `publish_message` takes only a `CommittedMessageView` and no store handle, so a
+/// reread at publish time cannot be written — this pins that against regression.
+#[tokio::test]
+async fn the_published_entry_is_the_committed_one_not_a_post_commit_reread() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+    let reply_id = reply.message().id.as_str().to_owned();
+
+    // Change the cluster AFTER the commit: a newer participant reply from a second
+    // actor, and a rename of the first. A reread would now count two repliers, name
+    // both, and point last-reply at the newer row.
+    insert_reply_row(
+        &mut fixture.db,
+        "reply-newer00000",
+        &root_id,
+        7,
+        "agent",
+        Some(BROAD_AGENT_ID),
+        None,
+        Some(BROAD_AGENT_ID),
+        Some("broad"),
+        Some("Broad"),
+    )
+    .await;
+    sqlx::query("UPDATE users SET display_name = 'Renamed' WHERE id = ?")
+        .bind(USER_ID)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+
+    // Announce with a recording publication; the rest accept so it runs to completion.
+    let publication = RecordingPublication::default();
+    let accepting = AcceptingReplyEffects;
+    let report = announce_reply_send(
+        reply
+            .reply_cluster()
+            .expect("a reply carries a cluster plan"),
+        ReplyEffects {
+            publication: &publication,
+            mentions: &accepting,
+            viewers: &accepting,
+            unread: &accepting,
+            delivery: &accepting,
+        },
+    )
+    .await;
+    assert!(report.failed.is_empty(), "every accepting effect succeeds");
+
+    let (reply_count, replier_labels, last_reply_id) = publication.observed();
+    assert_eq!(reply_count, 1, "the committed count, not the reread's two");
+    assert_eq!(replier_labels, vec!["human:user-1".to_owned()]);
+    assert_eq!(
+        last_reply_id, reply_id,
+        "the committed last reply, not the newer row"
+    );
+}
+
+/// The in-transaction projection carried on the fact and the read-side cold projection
+/// are the same value for a settled cluster: both go through the one
+/// `project_list_entry`, so a client that places the thread from a cold read sees
+/// exactly what rode the reply's frame.
+#[tokio::test]
+async fn the_cold_read_matches_the_entry_committed_on_the_fact() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+    let committed = reply
+        .thread()
+        .expect("a reply carries its cluster projection")
+        .list_entry()
+        .clone();
+
     let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
     let root_ref = ThreadRootId::parse(&root_id).unwrap();
-    let entry = reopened
+    let cold = store
         .thread_list_entry_for_root(&conversation, &root_ref)
         .await
         .unwrap()
-        .expect("the committed reply left a placeable entry");
-    assert_eq!(entry.reply_count(), 1);
-    assert_eq!(entry.last_reply_message_id().as_str(), reply_id);
-    assert_eq!(labels(&entry), vec!["human:user-1".to_owned()]);
+        .expect("a settled cluster has a placeable entry");
+
+    assert_eq!(committed, cold);
 }

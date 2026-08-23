@@ -32,7 +32,7 @@ use silverhand_backend_core::messaging::{
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
-    Row, Sqlite, SqlitePool, Transaction,
+    Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use thiserror::Error;
@@ -232,11 +232,6 @@ const UPDATE_STREAM_HEAD: &str = "UPDATE conversation_stream_heads SET latest_se
 const INSERT_STREAM_HEAD: &str = "INSERT INTO conversation_stream_heads (conversation_id, \
      thread_root_id, latest_seq) VALUES (?, ?, ?)";
 
-/// System copies are excluded so a cluster's badge counts what participants said,
-/// and so a live count, a replay and a cold open agree.
-const COUNT_THREAD_REPLIES: &str = "SELECT count(*) FROM messages WHERE conversation_id = ? AND \
-     thread_root_id = ? AND from_kind != 'system'";
-
 /// The cluster's list entry: the root's provenance and preview columns, alongside
 /// the same authoritative `(reply_count, last_reply_*)` aggregate the badge uses
 /// (`from_kind != 'system'`). The `agg` subquery is empty when no participant has
@@ -343,6 +338,11 @@ pub enum MessagingStoreError {
     /// with the reason attached.
     #[error("a host capability this write depends on could not answer")]
     Environment(#[from] EnvironmentUnavailable),
+    /// A committed reply projected no cluster entry, though the reply it just wrote is
+    /// itself a non-system participant of the cluster and must be visible inside the
+    /// same transaction. Its absence is a broken invariant, not a caller's mistake.
+    #[error("a committed reply projected no cluster entry")]
+    MissingClusterProjection,
 }
 
 fn infrastructure(error: MessagingStoreError) -> SendMessageError {
@@ -399,108 +399,125 @@ impl<E> MessagingStore<E> {
         self.pool.begin_with(ROOT_WRITE_BEGIN).await
     }
 
-    /// The cluster's list entry — the viewer-invariant projection a reply publishes
-    /// so a client can place the thread without a refetch — or `None` when the root
-    /// has no non-system reply and there is nothing to place.
+    /// The cluster's list entry as a **read-side** projection over committed rows —
+    /// for a client placing a thread it has not observed the reply event for (a late
+    /// join, a refetch, a reconnect) — or `None` when the root has no non-system reply
+    /// and there is nothing to place.
     ///
-    /// It reads the same authoritative `(reply_count, last_reply_*)` a reply computes
-    /// inside its own atomic unit, so live, replay and cold-open agree. Every author —
-    /// the root's and each distinct replier's — is resolved through the adapter's one
-    /// author authority ([`resolve_authors`]) in a SINGLE batch, so a whole entry
-    /// costs the same two set-shaped author reads a page row does. A replier with no
-    /// stable identity (a legacy pre-snapshot deleted actor) renders nothing and does
-    /// not aggregate, so it is dropped from both the shown set and the total; a
-    /// deleted actor keeps its snapshot identity and counts. The two structural reads
-    /// share one transaction, so the count and the repliers cannot be read from
-    /// different snapshots.
+    /// This is NOT the authority for a reply's own frame: that entry is projected
+    /// inside the reply's atomic unit and carried on [`ThreadReplyFact`], so a rename
+    /// or a newer reply after the commit cannot change what was published. Both go
+    /// through the one [`project_list_entry`], so this cold read and the in-transaction
+    /// projection cannot diverge (proved by the differential gate).
     pub async fn thread_list_entry_for_root(
         &self,
         conversation: &ConversationId,
         root: &ThreadRootId,
     ) -> Result<Option<ThreadListEntry>, PersistenceFailure> {
         let mut tx = self.pool.begin().await.map_err(driver)?;
-
-        let Some(row) = sqlx::query(THREAD_LIST_ENTRY_FOR_ROOT)
-            .bind(conversation.as_str())
-            .bind(root.as_str())
-            .bind(conversation.as_str())
-            .bind(conversation.as_str())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(driver)?
-        else {
-            return Ok(None);
-        };
-
-        let root_message_id: String = row.try_get("root_message_id").map_err(driver)?;
-        let root_from_kind: String = row.try_get("root_from_kind").map_err(driver)?;
-        let root_content: String = row.try_get("root_content").map_err(driver)?;
-        let root_created_at: i64 = row.try_get("root_created_at").map_err(driver)?;
-        let root_seq_raw: i64 = row.try_get("root_seq").map_err(driver)?;
-        let reply_count: i64 = row.try_get("reply_count").map_err(driver)?;
-        let last_reply_message_id: String = row.try_get("last_reply_message_id").map_err(driver)?;
-        let last_reply_at: i64 = row.try_get("last_reply_at").map_err(driver)?;
-
-        // The root's author leads the batch; each distinct replier follows in
-        // most-recent-first order, so one resolver call answers the whole entry.
-        let mut evidence = vec![AuthorEvidence {
-            from_kind: from_kind_of(&root_from_kind)?,
-            from_agent_id: row.try_get("root_from_agent_id").map_err(driver)?,
-            from_user_id: row.try_get("root_from_user_id").map_err(driver)?,
-            author_id: row.try_get("root_author_id").map_err(driver)?,
-            author_name: row.try_get("root_author_name").map_err(driver)?,
-            author_display_name: row.try_get("root_author_display_name").map_err(driver)?,
-        }];
-
-        let replier_rows = sqlx::query(THREAD_REPLIERS_FOR_ROOT)
-            .bind(conversation.as_str())
-            .bind(root.as_str())
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(driver)?;
-        for replier in &replier_rows {
-            let from_kind: String = replier.try_get("from_kind").map_err(driver)?;
-            evidence.push(AuthorEvidence {
-                from_kind: from_kind_of(&from_kind)?,
-                from_agent_id: replier.try_get("from_agent_id").map_err(driver)?,
-                from_user_id: replier.try_get("from_user_id").map_err(driver)?,
-                author_id: replier.try_get("author_id").map_err(driver)?,
-                author_name: replier.try_get("author_name").map_err(driver)?,
-                author_display_name: replier.try_get("author_display_name").map_err(driver)?,
-            });
-        }
-
-        let mut resolved = resolve_authors(&mut tx, &evidence).await?.into_iter();
-        // A system root has no author; the resolver already answers `None` for it.
-        let root_author = resolved.next().flatten();
-
-        let mut repliers = Vec::new();
-        let mut replier_total: i64 = 0;
-        for author in resolved.flatten() {
-            if author.stable_identity().is_none() {
-                continue;
-            }
-            replier_total += 1;
-            if repliers.len() < 3 {
-                repliers.push(author);
-            }
-        }
-
-        Ok(Some(ThreadListEntry::committed(
-            MessageId::parse(root_message_id).map_err(|_| malformed("messages.id"))?,
-            root_author,
-            &root_content,
-            root_created_at,
-            MessageSeq::try_from(root_seq_raw).map_err(|error| {
-                PersistenceFailure::from_source(MessagingStoreError::Ordinal(error))
-            })?,
-            reply_count,
-            last_reply_at,
-            MessageId::parse(last_reply_message_id).map_err(|_| malformed("messages.id"))?,
-            repliers,
-            replier_total,
-        )))
+        project_list_entry(&mut tx, conversation, root).await
     }
+}
+
+/// Projects the cluster's list entry from the committed rows visible on `conn`.
+///
+/// It reads the authoritative `(reply_count, last_reply_*)` aggregate the badge uses
+/// and resolves every author — the root's and each distinct replier's — through the
+/// adapter's one author authority ([`resolve_authors`]) in a SINGLE batch, so a whole
+/// entry costs the same two set-shaped author reads a page row does. A replier with no
+/// stable identity (a legacy pre-snapshot deleted actor) renders nothing and does not
+/// aggregate, so it is dropped from both the shown set and the total; a deleted actor
+/// keeps its snapshot identity and counts. The two structural reads share `conn`, so
+/// the count and the repliers cannot be read from different snapshots.
+///
+/// Shared by the send unit of work (passing its own root transaction, so the entry it
+/// folds into the reply fact is the committed one) and the read-side consumer above
+/// (passing a fresh read transaction). One projection, so the two cannot disagree.
+async fn project_list_entry(
+    conn: &mut SqliteConnection,
+    conversation: &ConversationId,
+    root: &ThreadRootId,
+) -> Result<Option<ThreadListEntry>, PersistenceFailure> {
+    let Some(row) = sqlx::query(THREAD_LIST_ENTRY_FOR_ROOT)
+        .bind(conversation.as_str())
+        .bind(root.as_str())
+        .bind(conversation.as_str())
+        .bind(conversation.as_str())
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(driver)?
+    else {
+        return Ok(None);
+    };
+
+    let root_message_id: String = row.try_get("root_message_id").map_err(driver)?;
+    let root_from_kind: String = row.try_get("root_from_kind").map_err(driver)?;
+    let root_content: String = row.try_get("root_content").map_err(driver)?;
+    let root_created_at: i64 = row.try_get("root_created_at").map_err(driver)?;
+    let root_seq_raw: i64 = row.try_get("root_seq").map_err(driver)?;
+    let reply_count: i64 = row.try_get("reply_count").map_err(driver)?;
+    let last_reply_message_id: String = row.try_get("last_reply_message_id").map_err(driver)?;
+    let last_reply_at: i64 = row.try_get("last_reply_at").map_err(driver)?;
+
+    // The root's author leads the batch; each distinct replier follows in
+    // most-recent-first order, so one resolver call answers the whole entry.
+    let mut evidence = vec![AuthorEvidence {
+        from_kind: from_kind_of(&root_from_kind)?,
+        from_agent_id: row.try_get("root_from_agent_id").map_err(driver)?,
+        from_user_id: row.try_get("root_from_user_id").map_err(driver)?,
+        author_id: row.try_get("root_author_id").map_err(driver)?,
+        author_name: row.try_get("root_author_name").map_err(driver)?,
+        author_display_name: row.try_get("root_author_display_name").map_err(driver)?,
+    }];
+
+    let replier_rows = sqlx::query(THREAD_REPLIERS_FOR_ROOT)
+        .bind(conversation.as_str())
+        .bind(root.as_str())
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(driver)?;
+    for replier in &replier_rows {
+        let from_kind: String = replier.try_get("from_kind").map_err(driver)?;
+        evidence.push(AuthorEvidence {
+            from_kind: from_kind_of(&from_kind)?,
+            from_agent_id: replier.try_get("from_agent_id").map_err(driver)?,
+            from_user_id: replier.try_get("from_user_id").map_err(driver)?,
+            author_id: replier.try_get("author_id").map_err(driver)?,
+            author_name: replier.try_get("author_name").map_err(driver)?,
+            author_display_name: replier.try_get("author_display_name").map_err(driver)?,
+        });
+    }
+
+    let mut resolved = resolve_authors(&mut *conn, &evidence).await?.into_iter();
+    // A system root has no author; the resolver already answers `None` for it.
+    let root_author = resolved.next().flatten();
+
+    let mut repliers = Vec::new();
+    let mut replier_total: i64 = 0;
+    for author in resolved.flatten() {
+        if author.stable_identity().is_none() {
+            continue;
+        }
+        replier_total += 1;
+        if repliers.len() < 3 {
+            repliers.push(author);
+        }
+    }
+
+    Ok(Some(ThreadListEntry::committed(
+        MessageId::parse(root_message_id).map_err(|_| malformed("messages.id"))?,
+        root_author,
+        &root_content,
+        root_created_at,
+        MessageSeq::try_from(root_seq_raw).map_err(|error| {
+            PersistenceFailure::from_source(MessagingStoreError::Ordinal(error))
+        })?,
+        reply_count,
+        last_reply_at,
+        MessageId::parse(last_reply_message_id).map_err(|_| malformed("messages.id"))?,
+        repliers,
+        replier_total,
+    )))
 }
 
 impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
@@ -703,12 +720,16 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 // following a conversation whose beginning it cannot see.
                 self.apply_cluster_follow_effects(&facts.id, root, &command, seq, created_at_ms)
                     .await?;
-                Some(ThreadReplyFact::committed(
-                    root.clone(),
-                    // Counted after the insert, so the reported total already
-                    // includes this reply and is never a value from the future.
-                    self.count_thread_replies(&facts.id, root).await?,
-                ))
+                // The list entry is projected HERE, inside the same transaction that
+                // wrote this reply, so the value carried on the fact (and borrowed by
+                // publication and the ACK) is the committed one — not something a
+                // post-commit reread might find changed or be unable to answer. This
+                // reply is itself a non-system participant of the cluster, so the
+                // projection always finds it; an absent entry is a broken invariant.
+                let list_entry = project_list_entry(&mut self.tx, &facts.id, root)
+                    .await?
+                    .ok_or_else(|| infrastructure(MessagingStoreError::MissingClusterProjection))?;
+                Some(ThreadReplyFact::committed(root.clone(), list_entry))
             }
         };
 
@@ -1712,19 +1733,6 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 })
             })
             .collect()
-    }
-
-    async fn count_thread_replies(
-        &mut self,
-        conversation: &ConversationId,
-        root: &ThreadRootId,
-    ) -> Result<i64, SendMessageError> {
-        sqlx::query_scalar(COUNT_THREAD_REPLIES)
-            .bind(conversation.as_str())
-            .bind(root.as_str())
-            .fetch_one(&mut *self.tx)
-            .await
-            .map_err(|error| driver(error).into())
     }
 }
 

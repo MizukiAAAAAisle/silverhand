@@ -1098,6 +1098,26 @@ mod tests {
         )
     }
 
+    /// A committed reply projection for the order/routing tests: these care only that
+    /// the fact is a reply carrying *some* valid entry, so the entry is a minimal stub
+    /// whose only asserted field is `reply_count`.
+    fn reply_projection(root: &str, reply_count: i64) -> crate::messaging::ThreadReplyFact {
+        use crate::messaging::{MessageId, ThreadListEntry, ThreadRootId};
+        let entry = ThreadListEntry::committed(
+            MessageId::parse(root).unwrap(),
+            None,
+            "root body",
+            0,
+            MessageSeq::try_from(1).unwrap(),
+            reply_count,
+            0,
+            MessageId::parse("reply-1").unwrap(),
+            Vec::new(),
+            0,
+        );
+        crate::messaging::ThreadReplyFact::committed(ThreadRootId::parse(root).unwrap(), entry)
+    }
+
     fn copied(id: &str, line: &str, agent: &str, handle: &str) -> MentionCopyOutcome {
         MentionCopyOutcome::Copied {
             handle: ParticipantHandle::parse(handle).unwrap(),
@@ -1411,10 +1431,7 @@ mod tests {
             .map(|id| AgentId::parse(*id).unwrap())
             .collect();
         MessageCreatedFact {
-            thread: Some(crate::messaging::ThreadReplyFact::committed(
-                crate::messaging::ThreadRootId::parse("root-1").unwrap(),
-                2,
-            )),
+            thread: Some(reply_projection("root-1", 2)),
             post_commit: PostCommitPlan::committed(
                 if viewers.is_empty() {
                     None
@@ -1591,10 +1608,7 @@ mod tests {
         let participants = ["agent-1", "agent-2"];
         let main = fact_with(Vec::new(), main_plan(&[], &participants));
         let reply = MessageCreatedFact {
-            thread: Some(crate::messaging::ThreadReplyFact::committed(
-                crate::messaging::ThreadRootId::parse("root-1").unwrap(),
-                1,
-            )),
+            thread: Some(reply_projection("root-1", 1)),
             post_commit: PostCommitPlan::committed(
                 None,
                 // Only one participant follows the cluster.

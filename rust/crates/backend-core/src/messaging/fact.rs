@@ -106,24 +106,32 @@ pub struct CreatedMessage {
     pub thread_root_id: Option<ThreadRootId>,
 }
 
-/// What a reply changed about its cluster: the absolute count of what participants
-/// said there, computed inside the atomic unit so it already includes this reply.
+/// What a reply changed about its cluster, projected inside the atomic unit that
+/// committed it: the cluster's list entry, computed from the rows this reply just
+/// wrote so it already includes itself.
+///
+/// This is the one committed reply projection, and it carries [`ThreadListEntry`] by
+/// value rather than pointing at a query to run later. The publication frame and the
+/// acknowledgement both borrow this same value (see [`CommittedMessageView`]), and a
+/// cold read-side projection re-derives an equal entry from the same authoritative
+/// rows — but none of them re-reads to build *this* reply's frame, so a later rename,
+/// a newer reply, or a read failure cannot change or withhold what was published.
 ///
 /// Private fields with a public [`committed`](ThreadReplyFact::committed) seam and
 /// read-only accessors: the unit of work that computed the projection inside the
 /// atomic unit is the only thing that assembles one, and nothing downstream can
-/// fabricate or mutate it. The cluster's list entry is a second projection of this
-/// same fact, modelled by [`ThreadListEntry`] — it reads the same authoritative
-/// `(reply_count, last_reply_*)` shape, over the shared [`MessageAuthor`] contract.
+/// fabricate or mutate it. `reply_count` is not stored twice — it is read straight off
+/// the carried entry, so the ACK's count and the placed entry's count are one value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThreadReplyFact {
     thread_root_id: ThreadRootId,
-    reply_count: i64,
+    list_entry: ThreadListEntry,
 }
 
 impl ThreadReplyFact {
     /// Assembled by the unit of work that committed the reply, from the facts it
-    /// read inside the same atomic unit.
+    /// read inside the same atomic unit — including the [`ThreadListEntry`] it
+    /// projected there, so the entry the frame carries is the committed one.
     ///
     /// A caller outside this crate cannot assemble one field by field:
     ///
@@ -132,7 +140,7 @@ impl ThreadReplyFact {
     ///
     /// let fact = ThreadReplyFact {
     ///     thread_root_id: todo!(),
-    ///     reply_count: 1,
+    ///     list_entry: todo!(),
     /// };
     /// ```
     ///
@@ -142,13 +150,13 @@ impl ThreadReplyFact {
     /// use silverhand_backend_core::messaging::ThreadReplyFact;
     ///
     /// fn tamper(fact: &mut ThreadReplyFact) {
-    ///     fact.reply_count = 0;
+    ///     fact.list_entry = todo!();
     /// }
     /// ```
-    pub fn committed(thread_root_id: ThreadRootId, reply_count: i64) -> Self {
+    pub fn committed(thread_root_id: ThreadRootId, list_entry: ThreadListEntry) -> Self {
         Self {
             thread_root_id,
-            reply_count,
+            list_entry,
         }
     }
 
@@ -156,8 +164,17 @@ impl ThreadReplyFact {
         &self.thread_root_id
     }
 
+    /// The absolute count of participant replies in the cluster, already including
+    /// this reply. Read off the carried entry, so it can never disagree with the
+    /// placed entry's own count.
     pub fn reply_count(&self) -> i64 {
-        self.reply_count
+        self.list_entry.reply_count()
+    }
+
+    /// The cluster's list entry as projected inside this reply's atomic unit — the
+    /// value the publication frame and the acknowledgement both carry.
+    pub fn list_entry(&self) -> &ThreadListEntry {
+        &self.list_entry
     }
 }
 
@@ -196,13 +213,12 @@ pub fn thread_root_preview(content: &str) -> String {
     content[..end].to_owned()
 }
 
-/// One row of the thread list: the cluster as it is placed and previewed, without
-/// the per-viewer follow bit.
+/// The value [`ThreadReplyFact`] carries: the cluster as it is placed and previewed,
+/// without the per-viewer follow bit.
 ///
-/// The second projection of the same fact [`ThreadReplyFact`] records — it reads the
-/// authoritative `(reply_count, last_reply_*)` computed inside the reply's atomic
-/// unit, so the entry a reply produces already counts itself and can never show a
-/// future-seq value. `root_author` and every replier are the one shared
+/// Projected inside the reply's atomic unit from the authoritative
+/// `(reply_count, last_reply_*)` rows, so the entry a reply produces already counts
+/// itself and can never show a future-seq value. `root_author` and every replier are the one shared
 /// [`MessageAuthor`] contract, so a deleted actor keeps its send-time snapshot here
 /// exactly as it does on a message byline. The per-viewer `viewer_following` bit is
 /// deliberately absent: it is not a property of the cluster, and this value is the
