@@ -12,10 +12,13 @@
 //! stage takes the actor as data: it has no arm per principal, so there is no place
 //! for the two paths to drift.
 
-use silverhand_backend_core::messaging::{
-    AgentId, ConversationId, DirectLineAuthority, FromKind, MessageReference, PrincipalKind,
-    ReferencePositions, SendActor, SendDestination, SendMessage, SendMessageDraft,
-    SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, UserId,
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, UserId},
+    messaging::{
+        DirectLineAuthority, FromKind, MessageReference, PrincipalKind, ReferencePositions,
+        SendActor, SendDestination, SendMessage, SendMessageDraft, SendMessageError,
+        SendMessageOutcome, SendMessageUnitOfWork,
+    },
 };
 
 use super::admission::ValidatedSendPayload;
@@ -178,10 +181,11 @@ fn unresolved_tokens(references: &[MessageReference]) -> String {
 mod tests {
     use std::sync::Mutex;
 
-    use silverhand_backend_core::messaging::{
-        AddressedPrincipals, AgentId, MessageContent, UserId,
-    };
     use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::{
+        identity::{AgentId, UserId},
+        messaging::{AddressedPrincipals, MessageContent},
+    };
 
     use super::*;
     use crate::messaging::admission::validate_human_payload;

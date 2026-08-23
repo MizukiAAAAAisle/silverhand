@@ -6,7 +6,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::persistence::PersistenceFailure;
+use crate::{identity::UserId, persistence::PersistenceFailure};
 
 const HOST_ID_BYTES: usize = 12;
 const HOST_NAME_BYTES: usize = 4;
@@ -19,7 +19,7 @@ const HOST_NAME_ATTEMPTS: usize = 8;
 pub struct NewUserInviteHost {
     id: String,
     name: String,
-    user_id: String,
+    user_id: UserId,
     created_at: i64,
 }
 
@@ -30,7 +30,7 @@ impl NewUserInviteHost {
     pub fn name(&self) -> &str {
         &self.name
     }
-    pub fn user_id(&self) -> &str {
+    pub fn user_id(&self) -> &UserId {
         &self.user_id
     }
     pub fn created_at(&self) -> i64 {
@@ -43,7 +43,7 @@ impl NewUserInviteHost {
 pub struct CreatedUserInviteHost {
     id: String,
     name: String,
-    user_id: String,
+    user_id: UserId,
     created_at: i64,
 }
 
@@ -63,7 +63,7 @@ impl CreatedUserInviteHost {
     pub fn name(&self) -> &str {
         &self.name
     }
-    pub fn user_id(&self) -> &str {
+    pub fn user_id(&self) -> &UserId {
         &self.user_id
     }
     pub fn created_at(&self) -> i64 {
@@ -209,7 +209,7 @@ pub enum CredentialKind {
 pub struct CredentialAuthState {
     pub credential_id: String,
     pub host_id: String,
-    pub host_user_id: Option<String>,
+    pub host_user_id: Option<UserId>,
     pub kind: CredentialKind,
     pub expires_at: Option<i64>,
     pub consumed_at: Option<i64>,
@@ -238,7 +238,7 @@ pub enum HostTokenRejection {
 pub enum VerifyHostTokenFact {
     Accepted {
         host_id: String,
-        user_id: String,
+        user_id: UserId,
         credential_id: String,
     },
     Rejected(HostTokenRejection),
@@ -286,7 +286,7 @@ pub async fn verify_host_token<S: HostCredentialLookup>(
             HostTokenRejection::HostRevoked,
         ));
     }
-    let Some(user_id) = state.host_user_id.filter(|user_id| !user_id.is_empty()) else {
+    let Some(user_id) = state.host_user_id else {
         return Ok(VerifyHostTokenFact::Rejected(
             HostTokenRejection::HostUnbound,
         ));
@@ -331,7 +331,7 @@ where
         }
     }
 
-    pub async fn execute(&self, user_id: String) -> Result<HostInviteCreatedFact, HostInviteError> {
+    pub async fn execute(&self, user_id: UserId) -> Result<HostInviteCreatedFact, HostInviteError> {
         for _ in 0..HOST_NAME_ATTEMPTS {
             let host_id = self.random_base64url(HOST_ID_BYTES)?;
             let host_name = format!("computer-{}", self.random_hex(HOST_NAME_BYTES)?);
@@ -451,7 +451,7 @@ mod tests {
         AlwaysDuplicate,
     }
 
-    type RecordedWrite = (String, String, String, String, String, i64);
+    type RecordedWrite = (String, String, UserId, String, String, i64);
 
     #[derive(Clone)]
     struct RecordingStore {
@@ -537,6 +537,10 @@ mod tests {
         }
     }
 
+    fn user() -> UserId {
+        UserId::parse("user-1").unwrap()
+    }
+
     #[derive(Debug, Error)]
     #[error("clock unavailable")]
     struct ClockUnavailable;
@@ -554,14 +558,14 @@ mod tests {
     async fn creates_only_the_state_owned_by_a_fresh_user_invite() {
         let store = RecordingStore::new(StoreBehavior::Succeed);
         let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(60), FixedClock);
-        let fact = service.execute("user-1".into()).await.unwrap();
+        let fact = service.execute(user()).await.unwrap();
         let raw_token = fact.connect_token.reveal_once();
         let writes = store.writes.lock().unwrap();
         let (host_id, name, user_id, credential_id, token_hash, created_at) = &writes[0];
 
         assert_eq!(host_id, "AAECAwQFBgcICQoL");
         assert_eq!(name, "computer-0c0d0e0f");
-        assert_eq!(user_id, "user-1");
+        assert_eq!(user_id.as_str(), "user-1");
         assert_eq!(created_at, &1_700_000_000_123);
         assert_eq!(credential_id, "EBESExQVFhcYGRob");
         assert_eq!(fact.host.id(), host_id);
@@ -577,7 +581,7 @@ mod tests {
         let store = RecordingStore::new(StoreBehavior::Succeed);
         let service = CreateHostInvite::new(store.clone(), FailingEntropy, FixedClock);
         assert!(matches!(
-            service.execute("user-1".into()).await,
+            service.execute(user()).await,
             Err(HostInviteError::Entropy(_))
         ));
         assert_eq!(store.calls.load(Ordering::SeqCst), 0);
@@ -588,7 +592,7 @@ mod tests {
         let store = RecordingStore::new(StoreBehavior::Succeed);
         let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(60), FailingClock);
         assert!(matches!(
-            service.execute("user-1".into()).await,
+            service.execute(user()).await,
             Err(HostInviteError::Clock(error)) if error.to_string() == "clock unavailable"
         ));
         assert_eq!(store.calls.load(Ordering::SeqCst), 0);
@@ -598,7 +602,7 @@ mod tests {
     async fn retries_one_duplicate_name_then_succeeds() {
         let store = RecordingStore::new(StoreBehavior::DuplicateOnce);
         let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(120), FixedClock);
-        let fact = service.execute("user-1".into()).await.unwrap();
+        let fact = service.execute(user()).await.unwrap();
         assert_eq!(store.calls.load(Ordering::SeqCst), 2);
         assert_eq!(fact.host.name(), "computer-48494a4b");
     }
@@ -608,7 +612,7 @@ mod tests {
         let store = RecordingStore::new(StoreBehavior::AlwaysDuplicate);
         let service = CreateHostInvite::new(store.clone(), FixedEntropy::bytes(8 * 60), FixedClock);
         assert!(matches!(
-            service.execute("user-1".into()).await,
+            service.execute(user()).await,
             Err(HostInviteError::NameAllocation)
         ));
         assert_eq!(store.calls.load(Ordering::SeqCst), 8);

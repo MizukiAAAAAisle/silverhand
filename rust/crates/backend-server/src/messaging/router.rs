@@ -32,16 +32,18 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use silverhand_backend_core::messaging::{
-    ConversationId, DirectLineAuthority, SendMessageOutcome, SendMessageUnitOfWork, UserId,
+use silverhand_backend_core::{
+    identity::{ConversationId, UserId},
+    messaging::{DirectLineAuthority, SendMessageOutcome, SendMessageUnitOfWork},
+    runtime_credential::RuntimePrincipal,
 };
 use std::sync::Arc;
 
 use super::{
     ack::send_ack,
     adapters::{
-        AddressRefusal, AgentCredential, AgentRefusal, ChannelAccess, ChannelAccessRefusal,
-        HumanRefusal, SendCapability, SendPorts, TargetAddress, agent_send, human_send,
+        AddressRefusal, AgentRefusal, ChannelAccess, ChannelAccessRefusal, HumanRefusal,
+        SendCapability, SendPorts, TargetAddress, agent_send, human_send,
     },
     admission::PayloadRefusal,
     agent_output::agent_send_output,
@@ -53,12 +55,6 @@ use super::{
         invalid_input, missing_identifier,
     },
 };
-
-/// The authenticated human behind a request, injected upstream. Deliberately carries
-/// only the identity: anything else it might carry would be a fact this door should ask
-/// its own gates about.
-#[derive(Clone, Debug)]
-pub struct HumanPrincipal(pub UserId);
 
 /// Everything the doors need, supplied by whoever composes them.
 ///
@@ -114,7 +110,7 @@ where
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
     // The principal is read, never derived. Absent means the composition is wrong.
-    let Some(HumanPrincipal(author)) = request.extensions().get::<HumanPrincipal>().cloned() else {
+    let Some(author) = request.extensions().get::<UserId>().cloned() else {
         return composition_failure("human principal");
     };
     // The channel this send is for is the caller's own coordinate, checked by the gate
@@ -143,7 +139,6 @@ where
 }
 
 async fn agent_route<C, T, K, D, U>(
-    Path(aid): Path<String>,
     State(state): Shared<C, T, K, D, U>,
     request: Request,
 ) -> Response
@@ -154,14 +149,7 @@ where
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
-    // Presence only, and that is the whole of this parameter's role here. The path names
-    // the CREDENTIAL, which is whoever authenticates the request's business; where the
-    // words go is a required field of the body. Re-deriving either from this string
-    // would be a second answer to a question that already has one.
-    if aid.is_empty() {
-        return missing_identifier("agent id required").into_response();
-    }
-    let Some(credential) = request.extensions().get::<AgentCredential>().cloned() else {
+    let Some(credential) = request.extensions().get::<RuntimePrincipal>().cloned() else {
         return composition_failure("agent credential");
     };
     let body = collected(request).await;

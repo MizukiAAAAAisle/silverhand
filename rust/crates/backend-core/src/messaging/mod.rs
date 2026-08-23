@@ -65,6 +65,8 @@ mod fact;
 mod identity;
 mod principal;
 
+pub(crate) use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
+
 pub mod attachments;
 pub mod environment;
 pub mod freshness;
@@ -95,7 +97,7 @@ pub use fact::{
 };
 pub use freshness::StaleRefusal;
 pub use identity::{
-    AgentId, AttachmentId, ConversationId, EmptyIdentifier, InvalidSeq, MessageId, MessageSeq,
-    NotificationId, ThreadRootId, UserId, WorkspaceId,
+    AttachmentId, EmptyIdentifier, InvalidSeq, MessageId, MessageSeq, NotificationId, ThreadRootId,
+    mint_conversation_id,
 };
 pub use principal::{InvalidHandle, ParticipantHandle, PrincipalKind};

@@ -26,18 +26,21 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
-use silverhand_backend_core::messaging::{
-    AddressedPrincipals, AgentId, ConversationId, ConversationRefusal, DirectLineAuthority,
-    SendDestination, SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
-    UserId,
-};
 use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    messaging::{
+        AddressedPrincipals, ConversationRefusal, DirectLineAuthority, SendDestination,
+        SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
+    },
+    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
+};
 use silverhand_backend_server::messaging::{
     adapters::{
-        AddressRefusal, AgentCredential, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
-        ResolvedStream, SendCapability, TargetAddress,
+        AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, ResolvedStream,
+        SendCapability, TargetAddress,
     },
-    router::{HumanPrincipal, SendState, send_router},
+    router::{SendState, send_router},
 };
 use tower::ServiceExt;
 
@@ -193,12 +196,18 @@ fn request(case: &Value) -> Request<Body> {
         "human" => {
             request
                 .extensions_mut()
-                .insert(HumanPrincipal(UserId::parse(USER).unwrap()));
+                .insert(UserId::parse(USER).unwrap());
         }
         _ => {
-            request.extensions_mut().insert(AgentCredential::AgentSlot {
-                agent: AgentId::parse(AGENT).unwrap(),
-            });
+            request
+                .extensions_mut()
+                .insert(RuntimePrincipal::AgentSlot {
+                    agent: AgentId::parse(AGENT).unwrap(),
+                    custody: RuntimeCustody::new(
+                        RuntimeGeneration::new(1).unwrap(),
+                        DaemonInstanceId::parse("daemon-1").unwrap(),
+                    ),
+                });
         }
     }
     request

@@ -16,17 +16,19 @@ use std::{
 
 use std::collections::HashSet;
 
+use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::messaging::{
-    self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationId,
-    ConversationRefusal, CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads,
-    EnvironmentUnavailable, FromKind, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId,
-    MessageReference, MessageSeq, NotificationId, ParticipantHandle, PostAuthorityReads,
-    PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
-    SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
-    ThreadListEntry, ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
+    self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
+    CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads, EnvironmentUnavailable, FromKind,
+    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageReference, MessageSeq,
+    NotificationId, ParticipantHandle, PostAuthorityReads, PrincipalKind, ReplyTargetRefusal,
+    SendActor, SendClock, SendDestination, SendEntropy, SendMessage, SendMessageError,
+    SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource, ThreadListEntry,
+    ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
+    mint_conversation_id,
     post_commit::{
         CommittedMentionRow, DeliveryPlan, EffectFailure, MainDeliveryPlan, MentionIntent,
         MentionedViewerRecord, PostCommitPlan, ReplyAudience,
@@ -1294,11 +1296,11 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .fetch_all(&mut *self.tx)
             .await
             .map_err(driver)?;
-        let recipients: Vec<messaging::AgentId> = participants
+        let recipients: Vec<AgentId> = participants
             .into_iter()
             .filter(|candidate| excluded.as_deref() != Some(candidate.as_str()))
             .map(|candidate| {
-                messaging::AgentId::parse(candidate).map_err(|_| {
+                AgentId::parse(candidate).map_err(|_| {
                     infrastructure(MessagingStoreError::MalformedIdentity { field: "agents.id" })
                 })
             })
@@ -1346,7 +1348,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         let Some(workspace_id) = workspace_id else {
             return Ok(None);
         };
-        let workspace = messaging::WorkspaceId::parse(workspace_id).map_err(|_| {
+        let workspace = WorkspaceId::parse(workspace_id).map_err(|_| {
             infrastructure(MessagingStoreError::MalformedIdentity {
                 field: "conversations.workspace_id",
             })
@@ -1398,7 +1400,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn agent_by_name(
         &mut self,
         handle: &ParticipantHandle,
-    ) -> Result<Option<messaging::AgentId>, SendMessageError> {
+    ) -> Result<Option<AgentId>, SendMessageError> {
         let found: Option<String> = sqlx::query_scalar(SELECT_AGENT_ID_BY_NAME)
             .bind(handle.as_str())
             .fetch_optional(&mut *self.tx)
@@ -1406,7 +1408,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .map_err(driver)?;
         match found {
             None => Ok(None),
-            Some(id) => Ok(Some(messaging::AgentId::parse(id).map_err(|_| {
+            Some(id) => Ok(Some(AgentId::parse(id).map_err(|_| {
                 infrastructure(MessagingStoreError::MalformedIdentity { field: "agents.id" })
             })?)),
         }
@@ -1419,7 +1421,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn open_direct_pair(
         &mut self,
         author: &UserId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         created_at_ms: i64,
     ) -> Result<ConversationId, SendMessageError> {
         let human = (ENDPOINT_KIND_HUMAN, author.as_str());
@@ -1430,7 +1432,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             (human, machine)
         };
 
-        let minted = ConversationId::mint(self.entropy)?;
+        let minted = mint_conversation_id(self.entropy)?;
         sqlx::query(OPEN_DIRECT_PAIR)
             .bind(minted.as_str())
             .bind(first.0)
@@ -1525,7 +1527,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn notify_author_of_copy(
         &mut self,
         author: &UserId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         place: &MentionCopyPlace<'_>,
         message: &CreatedMessage,
         created_at_ms: i64,
@@ -1718,7 +1720,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         conversation: &ConversationId,
         root_row: Option<&MessageRow>,
         root: &ThreadRootId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         current_seq: MessageSeq,
         queued_at_ms: i64,
     ) -> Result<(), SendMessageError> {
@@ -1768,7 +1770,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn ensure_delivery(
         &mut self,
         conversation: &ConversationId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         message_id: &str,
         delivery_kind: &'static str,
         queued_at_ms: i64,
@@ -1793,7 +1795,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         &mut self,
         root: &ThreadRootId,
         actor: &SendActor,
-    ) -> Result<Vec<messaging::AgentId>, SendMessageError> {
+    ) -> Result<Vec<AgentId>, SendMessageError> {
         let rows: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_AUDIENCE)
             .bind(root.as_str())
             .fetch_all(&mut *self.tx)
@@ -1807,7 +1809,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         rows.into_iter()
             .filter(|candidate| sender != Some(candidate.as_str()))
             .map(|candidate| {
-                messaging::AgentId::parse(candidate).map_err(|_| {
+                AgentId::parse(candidate).map_err(|_| {
                     infrastructure(MessagingStoreError::MalformedIdentity {
                         field: "thread_followers.principal_id",
                     })
@@ -1840,9 +1842,7 @@ fn actor_of(kind: PrincipalKind, id: String) -> Result<SendActor, SendMessageErr
         })
     };
     Ok(match kind {
-        PrincipalKind::Agent => {
-            SendActor::Agent(messaging::AgentId::parse(id).map_err(|_| malformed())?)
-        }
+        PrincipalKind::Agent => SendActor::Agent(AgentId::parse(id).map_err(|_| malformed())?),
         PrincipalKind::Human => SendActor::User(UserId::parse(id).map_err(|_| malformed())?),
     })
 }
@@ -1956,7 +1956,7 @@ struct MessageRow {
 }
 
 impl MessageRow {
-    fn authored_by(&self, agent: &messaging::AgentId) -> bool {
+    fn authored_by(&self, agent: &AgentId) -> bool {
         self.from_kind == FROM_KIND_AGENT && self.from_agent_id.as_deref() == Some(agent.as_str())
     }
 }
@@ -2012,10 +2012,7 @@ impl<E: Send + Sync> PostAuthorityReads for TxScope<'_, '_, E> {
         }))
     }
 
-    async fn agent_exists(
-        &mut self,
-        agent: &messaging::AgentId,
-    ) -> Result<bool, PersistenceFailure> {
+    async fn agent_exists(&mut self, agent: &AgentId) -> Result<bool, PersistenceFailure> {
         let found: Option<i64> = sqlx::query_scalar(SELECT_AGENT_EXISTS)
             .bind(agent.as_str())
             .fetch_optional(&mut *self.tx)
@@ -2027,7 +2024,7 @@ impl<E: Send + Sync> PostAuthorityReads for TxScope<'_, '_, E> {
     async fn is_agent_participant(
         &mut self,
         conversation: &ConversationId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
     ) -> Result<bool, PersistenceFailure> {
         let found: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
             .bind(conversation.as_str())
@@ -2154,10 +2151,6 @@ fn metadata_json(attachments: &[AttachmentSnapshot]) -> Result<Option<String>, S
 }
 
 #[cfg(test)]
-#[path = "../../tests/support/current_schema_snapshot.rs"]
-mod current_schema;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::Connection;
@@ -2214,7 +2207,7 @@ mod tests {
     async fn the_audience_read_is_bounded_by_the_cluster_not_the_installation() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("plan.sqlite");
-        let mut connection = super::current_schema::create_current_schema(&path).await;
+        let mut connection = crate::current_schema::create_current_schema(&path).await;
 
         let plan: Vec<String> = sqlx::query(EXPLAIN_CLUSTER_AUDIENCE)
             .bind("root-1")
@@ -2257,7 +2250,7 @@ mod tests {
     async fn the_entitlement_decision_cannot_be_taken_without_the_writer() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("entitlement-writer.sqlite");
-        current_schema::create_current_schema(&path)
+        crate::current_schema::create_current_schema(&path)
             .await
             .close()
             .await
@@ -2277,7 +2270,7 @@ mod tests {
                 vec![ParticipantHandle::parse("nobody").unwrap()],
                 None,
                 "Lio".into(),
-                messaging::WorkspaceId::parse("ws-1").unwrap(),
+                WorkspaceId::parse("ws-1").unwrap(),
                 ConversationId::parse("conv-1").unwrap(),
                 "Channel".into(),
                 MessageId::parse("message-1").unwrap(),
@@ -2311,7 +2304,7 @@ mod tests {
     async fn the_entitlement_read_is_bounded_by_the_named_set_not_the_installation() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("entitlement-plan.sqlite");
-        let mut connection = super::current_schema::create_current_schema(&path).await;
+        let mut connection = crate::current_schema::create_current_schema(&path).await;
 
         let plan: Vec<String> = sqlx::query(EXPLAIN_ENTITLED_VIEWERS)
             .bind(r#"["human"]"#)
@@ -2359,7 +2352,7 @@ mod tests {
     async fn the_batch_author_lookups_are_bounded_by_the_requested_ids() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("author-plan.sqlite");
-        let mut connection = super::current_schema::create_current_schema(&path).await;
+        let mut connection = crate::current_schema::create_current_schema(&path).await;
 
         let agents_plan: Vec<String> = sqlx::query(author::EXPLAIN_LIVE_AGENTS)
             .bind(r#"["agent-1","agent-2"]"#)
@@ -2417,7 +2410,7 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mixed-batch.sqlite");
-        let mut db = super::current_schema::create_current_schema(&path).await;
+        let mut db = crate::current_schema::create_current_schema(&path).await;
 
         for statement in [
             "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
@@ -2537,7 +2530,7 @@ mod tests {
     async fn one_broken_runtime_fails_the_whole_batch_with_its_source() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("broken-runtime-batch.sqlite");
-        let mut db = super::current_schema::create_current_schema(&path).await;
+        let mut db = crate::current_schema::create_current_schema(&path).await;
 
         for statement in [
             "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
@@ -2592,7 +2585,7 @@ mod tests {
     async fn the_two_participation_texts_agree_when_a_follower_no_longer_exists() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("liveness.sqlite");
-        let mut db = super::current_schema::create_current_schema(&path).await;
+        let mut db = crate::current_schema::create_current_schema(&path).await;
 
         for statement in [
             "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",

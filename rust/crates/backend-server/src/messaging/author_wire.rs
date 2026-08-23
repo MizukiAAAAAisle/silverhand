@@ -94,8 +94,9 @@ pub(crate) fn author_dto(author: &MessageAuthor) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::messaging::{
-        AgentId, AvatarRevision, MessageAuthor, PrincipalIdentity, RuntimeKind, UserId,
+    use silverhand_backend_core::{
+        identity::{AgentId, UserId},
+        messaging::{AvatarRevision, MessageAuthor, PrincipalIdentity, RuntimeKind},
     };
 
     use super::*;

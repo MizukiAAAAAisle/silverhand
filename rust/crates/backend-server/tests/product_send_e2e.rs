@@ -38,18 +38,21 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::Value;
-use silverhand_backend_core::messaging::{
-    ActiveAuthor, AddressedPrincipals, AgentId, ConversationId, DirectLineAuthority, MessageAuthor,
-    PrincipalKind, SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
-    ThreadRootId, UserId,
-};
 use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    messaging::{
+        ActiveAuthor, AddressedPrincipals, DirectLineAuthority, MessageAuthor, PrincipalKind,
+        SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadRootId,
+    },
+    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
+};
 use silverhand_backend_server::messaging::{
     adapters::{
-        AddressRefusal, AgentCredential, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
-        ResolvedStream, SendCapability, TargetAddress,
+        AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, ResolvedStream,
+        SendCapability, TargetAddress,
     },
-    router::{HumanPrincipal, SendState, send_router},
+    router::{SendState, send_router},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::SqliteConnection;
@@ -286,7 +289,7 @@ fn authenticated_human(body: Value) -> Request<Body> {
         .unwrap();
     request
         .extensions_mut()
-        .insert(HumanPrincipal(UserId::parse(USER_ID).unwrap()));
+        .insert(UserId::parse(USER_ID).unwrap());
     request
 }
 
@@ -307,9 +310,15 @@ fn authenticated_agent(content: &str, target: String) -> Request<Body> {
             serde_json::json!({ "content": content, "target": target }).to_string(),
         ))
         .unwrap();
-    request.extensions_mut().insert(AgentCredential::AgentSlot {
-        agent: AgentId::parse(AGENT_ID).unwrap(),
-    });
+    request
+        .extensions_mut()
+        .insert(RuntimePrincipal::AgentSlot {
+            agent: AgentId::parse(AGENT_ID).unwrap(),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        });
     request
 }
 
@@ -621,7 +630,7 @@ async fn the_stored_metadata_mirrors_the_typed_attachments() {
         .unwrap();
     request
         .extensions_mut()
-        .insert(HumanPrincipal(UserId::parse(USER_ID).unwrap()));
+        .insert(UserId::parse(USER_ID).unwrap());
 
     let (status, body) = answered(router, request).await;
 

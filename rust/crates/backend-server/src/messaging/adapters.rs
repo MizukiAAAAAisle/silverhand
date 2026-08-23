@@ -15,9 +15,13 @@
 //! gate its own door asks first — which is why the cross cases below are the real
 //! test rather than the happy paths.
 
-use silverhand_backend_core::messaging::{
-    AgentId, ConversationId, DirectLineAuthority, ReferencePositions, SendActor, SendDestination,
-    SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadRootId, UserId,
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, UserId},
+    messaging::{
+        DirectLineAuthority, ReferencePositions, SendActor, SendDestination, SendMessageError,
+        SendMessageOutcome, SendMessageUnitOfWork, ThreadRootId,
+    },
+    runtime_credential::RuntimePrincipal,
 };
 
 use super::{
@@ -107,37 +111,6 @@ pub trait TargetAddress {
     fn resolve(&self, agent: &AgentId, target: &str) -> Result<ResolvedStream, AddressRefusal>;
 }
 
-/// The authenticated agent behind a request, injected upstream.
-///
-/// TWO VARIANTS, because the reference has two and they REACH differently. A slot anchored to
-/// one conversation may act only there; an unanchored one may act in any stream the agent
-/// participates in. An earlier version of this type carried `{agent, source}` for both, which
-/// forced an anchor onto a credential that has none and left reach undecidable — the door
-/// could only guess, and guessing either way is a wrong answer for half the callers
-/// (@Cindy, review of `601a0ce5`).
-///
-/// The source is part of the CREDENTIAL and is never inferred: not from the address, not from
-/// a default. It decides REACH and nothing else — in particular it is not where the message
-/// lands, which is the resolved target.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AgentCredential {
-    /// Anchored: this session speaks in one conversation.
-    ConversationSlot {
-        agent: AgentId,
-        source: ConversationId,
-    },
-    /// Unanchored: this session speaks wherever the agent participates.
-    AgentSlot { agent: AgentId },
-}
-
-impl AgentCredential {
-    pub fn agent(&self) -> &AgentId {
-        match self {
-            Self::ConversationSlot { agent, .. } | Self::AgentSlot { agent } => agent,
-        }
-    }
-}
-
 /// The address named a stream this agent is in, and this door still acts only where the
 /// session is anchored.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,17 +133,17 @@ pub struct OutOfSessionScope;
 /// It leaks nothing: reach is only asked once resolution has proven participation, so every
 /// refusal here is about a stream the caller can already enumerate.
 pub(crate) fn reach(
-    credential: &AgentCredential,
+    credential: &RuntimePrincipal,
     stream: &ResolvedStream,
 ) -> Result<(), OutOfSessionScope> {
     match credential {
         // Unanchored, and participation was the resolver's answer, so there is nothing left to
         // judge.
-        AgentCredential::AgentSlot { .. } => Ok(()),
-        AgentCredential::ConversationSlot { source, .. } if *source == stream.conversation => {
+        RuntimePrincipal::AgentSlot { .. } => Ok(()),
+        RuntimePrincipal::ConversationSlot { source, .. } if *source == stream.conversation => {
             Ok(())
         }
-        AgentCredential::ConversationSlot { .. } => Err(OutOfSessionScope),
+        RuntimePrincipal::ConversationSlot { .. } => Err(OutOfSessionScope),
     }
 }
 
@@ -289,7 +262,7 @@ where
 /// ambient source to fall back on. Passing the credential's conversation as the send's source
 /// would have aimed every unanchored send at a stream nobody named.
 pub(crate) async fn agent_send<A, C, P, D, U>(
-    credential: &AgentCredential,
+    credential: &RuntimePrincipal,
     raw_body: Option<serde_json::Value>,
     address: &A,
     capability: &C,
@@ -348,6 +321,10 @@ mod tests {
         AddressedPrincipals, ConversationRefusal, MessageContent, MessageId, SendMessage,
     };
     use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::{
+        identity::DaemonInstanceId,
+        runtime_credential::{RuntimeCustody, RuntimeGeneration},
+    };
 
     use super::*;
     use crate::messaging::admission::{IssuePathSegment, ShapeIssue};
@@ -493,15 +470,26 @@ mod tests {
     }
 
     /// An unanchored credential reaches wherever the resolver says the agent participates.
-    fn agent_slot() -> AgentCredential {
-        AgentCredential::AgentSlot { agent: agent() }
+    fn custody() -> RuntimeCustody {
+        RuntimeCustody::new(
+            RuntimeGeneration::new(1).unwrap(),
+            DaemonInstanceId::parse("daemon-1").unwrap(),
+        )
+    }
+
+    fn agent_slot() -> RuntimePrincipal {
+        RuntimePrincipal::AgentSlot {
+            agent: agent(),
+            custody: custody(),
+        }
     }
 
     /// An anchored one may act only in the conversation it names.
-    fn anchored_to(source: ConversationId) -> AgentCredential {
-        AgentCredential::ConversationSlot {
+    fn anchored_to(source: ConversationId) -> RuntimePrincipal {
+        RuntimePrincipal::ConversationSlot {
             agent: agent(),
             source,
+            custody: custody(),
         }
     }
 

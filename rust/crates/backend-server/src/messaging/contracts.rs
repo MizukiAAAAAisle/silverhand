@@ -10,11 +10,14 @@
 //! what a send would act on — position rule, destination grammar, deduplication and order
 //! together.
 
-use silverhand_backend_core::messaging::{
-    AddressedPrincipals, AgentId, ConversationId, DirectLineAuthority, MessageContent,
-    PrincipalKind, SendActor, SendDestination, SendMessage, SendMessageDraft, UserId,
-};
 use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, UserId},
+    messaging::{
+        AddressedPrincipals, DirectLineAuthority, MessageContent, PrincipalKind, SendActor,
+        SendDestination, SendMessage, SendMessageDraft,
+    },
+};
 
 use super::references::MarkdownReferencePositions;
 

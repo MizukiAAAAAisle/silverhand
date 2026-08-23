@@ -9,6 +9,7 @@
 //! identity format those ports are spent on.
 
 use super::environment::{self, EnvironmentUnavailable, SendEntropy};
+use crate::identity::ConversationId;
 
 /// A message identity as the application handles it: opaque, and never parsed for
 /// meaning once minted.
@@ -20,27 +21,13 @@ pub struct MessageId(String);
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MessageSeq(i64);
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ConversationId(String);
-
 /// The root of a reply cluster. Its only roles are the message row's own column
 /// and the stream-head key; it takes no part in ordinal assignment.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ThreadRootId(String);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct AgentId(String);
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct UserId(String);
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AttachmentId(String);
-
-/// A workspace, as Messaging needs to name one. Its own type rather than a borrowed
-/// one from whoever owns workspaces: this module only ever carries the coordinate.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct WorkspaceId(String);
 
 /// A notification is not a message. They happen to share an identity form, and
 /// giving them one type is how a notification eventually gets passed to something
@@ -74,12 +61,8 @@ macro_rules! opaque_id {
 }
 
 opaque_id!(MessageId);
-opaque_id!(ConversationId);
 opaque_id!(ThreadRootId);
-opaque_id!(AgentId);
-opaque_id!(UserId);
 opaque_id!(AttachmentId);
-opaque_id!(WorkspaceId);
 opaque_id!(NotificationId);
 
 #[derive(Debug, thiserror::Error)]
@@ -107,12 +90,11 @@ impl MessageId {
     }
 }
 
-impl ConversationId {
-    /// A conversation minted by the system — the direct line a mention copy travels
-    /// on — carries the same identity form as every other.
-    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
-        Ok(Self(mint_identity(entropy)?))
-    }
+/// Mints the one core conversation identity in the form Messaging publishes.
+pub fn mint_conversation_id(
+    entropy: &impl SendEntropy,
+) -> Result<ConversationId, EnvironmentUnavailable> {
+    ConversationId::parse(mint_identity(entropy)?).map_err(EnvironmentUnavailable::from_source)
 }
 
 impl NotificationId {

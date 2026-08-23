@@ -34,19 +34,22 @@ use axum::{
 };
 use futures_util::stream;
 use serde_json::Value;
-use silverhand_backend_core::messaging::{
-    AddressedPrincipals, AgentId, ConversationId, ConversationRefusal, DirectLineAuthority,
-    PrincipalKind, SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
-    UserId,
-};
 use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    messaging::{
+        AddressedPrincipals, ConversationRefusal, DirectLineAuthority, PrincipalKind, SendMessage,
+        SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
+    },
+    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
+};
 use silverhand_backend_server::messaging::{
     MESSAGE_SEND_MAX_BODY_BYTES,
     adapters::{
-        AddressRefusal, AgentCredential, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
-        ResolvedStream, SendCapability, TargetAddress,
+        AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, ResolvedStream,
+        SendCapability, TargetAddress,
     },
-    router::{HumanPrincipal, SendState, send_router},
+    router::{SendState, send_router},
 };
 use tower::ServiceExt;
 
@@ -260,7 +263,7 @@ fn human_request(path: &str, body: Body) -> Request<Body> {
     let mut request = Request::post(path).body(body).unwrap();
     request
         .extensions_mut()
-        .insert(HumanPrincipal(UserId::parse("user-1").unwrap()));
+        .insert(UserId::parse("user-1").unwrap());
     request
 }
 
@@ -268,9 +271,15 @@ fn agent_request(path: &str, body: Body) -> Request<Body> {
     let mut request = Request::post(path).body(body).unwrap();
     // Unanchored by default: reach is then the resolver's answer alone, so a cell about
     // something else is not silently also a reach cell.
-    request.extensions_mut().insert(AgentCredential::AgentSlot {
-        agent: AgentId::parse("agent-1").unwrap(),
-    });
+    request
+        .extensions_mut()
+        .insert(RuntimePrincipal::AgentSlot {
+            agent: AgentId::parse("agent-1").unwrap(),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        });
     request
 }
 
@@ -303,9 +312,13 @@ fn anchored_request(source: ConversationId) -> Request<Body> {
         .unwrap();
     request
         .extensions_mut()
-        .insert(AgentCredential::ConversationSlot {
+        .insert(RuntimePrincipal::ConversationSlot {
             agent: AgentId::parse("agent-1").unwrap(),
             source,
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
         });
     request
 }
@@ -423,10 +436,11 @@ async fn the_envelope_bound_admits_its_own_size_and_nothing_over() {
     );
 }
 
-/// Once the envelope is admitted, a missing path parameter is answered before the body
-/// is read at all — and each door names its own coordinate.
+/// Once the envelope is admitted, the human door parses its conversation coordinate
+/// before reading the body. The agent coordinate belongs to runtime authentication and
+/// is exercised with that middleware in the served-app composition.
 #[tokio::test]
-async fn a_missing_identifier_answers_before_the_body_is_parsed() {
+async fn a_missing_human_identifier_answers_before_the_body_is_parsed() {
     let unit = CountingUnitOfWork::default();
     // The body is malformed too. If parsing came first this would be `invalid input`;
     // the identifier wins.
@@ -439,14 +453,6 @@ async fn a_missing_identifier_answers_before_the_body_is_parsed() {
     .await;
     assert_eq!(human_status, StatusCode::BAD_REQUEST);
     assert!(human_body.contains("channel id required"), "{human_body}");
-
-    let (agent_status, agent_body) = answered(
-        open(unit.clone()),
-        agent_request(AGENT_PATH_WITHOUT_ID, unparseable()),
-    )
-    .await;
-    assert_eq!(agent_status, StatusCode::BAD_REQUEST);
-    assert!(agent_body.contains("agent id required"), "{agent_body}");
 
     assert_eq!(unit.calls(), 0);
 }

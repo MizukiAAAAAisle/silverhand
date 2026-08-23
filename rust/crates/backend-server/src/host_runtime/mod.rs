@@ -1,10 +1,10 @@
-use std::{collections::HashSet, future::Future, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    extract::{Extension, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -17,6 +17,7 @@ use silverhand_backend_core::{
         Clock, CreateHostInvite, CreatedUserInviteHost, EntropySource, HostInviteError,
         HostInviteUnitOfWork,
     },
+    identity::UserId,
     persistence::PersistenceFailure,
 };
 
@@ -25,37 +26,27 @@ use crate::error;
 pub const HOSTS_PATH: &str = "/api/hosts";
 pub const DEFAULT_DAEMON_NPM_SPEC: &str = "@silverhand-ai/daemon@latest";
 
-pub trait SessionUserResolver: Clone + Send + Sync + 'static {
-    fn resolve_session_user(
-        &self,
-        bearer_token: String,
-    ) -> impl Future<Output = Result<Option<String>, PersistenceFailure>> + Send;
-}
-
-struct StateInner<U, R, C, A> {
+struct StateInner<U, R, C> {
     create_host_invite: CreateHostInvite<U, R, C>,
-    sessions: A,
     daemon_npm_spec: String,
 }
 
-struct HostRuntimeState<U, R, C, A>(Arc<StateInner<U, R, C, A>>);
+struct HostRuntimeState<U, R, C>(Arc<StateInner<U, R, C>>);
 
-impl<U, R, C, A> Clone for HostRuntimeState<U, R, C, A> {
+impl<U, R, C> Clone for HostRuntimeState<U, R, C> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-pub fn router<U, R, C, A>(
+pub fn router<U, R, C>(
     create_host_invite: CreateHostInvite<U, R, C>,
-    sessions: A,
     daemon_npm_spec: Option<String>,
 ) -> Router
 where
     U: HostInviteUnitOfWork,
     R: EntropySource + 'static,
     C: Clock + 'static,
-    A: SessionUserResolver,
 {
     let daemon_npm_spec = daemon_npm_spec
         .map(|value| value.trim().to_owned())
@@ -63,32 +54,26 @@ where
         .unwrap_or_else(|| DEFAULT_DAEMON_NPM_SPEC.to_owned());
     let state = HostRuntimeState(Arc::new(StateInner {
         create_host_invite,
-        sessions,
         daemon_npm_spec,
     }));
     Router::new()
-        .route(HOSTS_PATH, post(create_host::<U, R, C, A>))
+        .route(HOSTS_PATH, post(create_host::<U, R, C>))
         .with_state(state)
 }
 
-async fn create_host<U, R, C, A>(
-    State(state): State<HostRuntimeState<U, R, C, A>>,
-    headers: HeaderMap,
+async fn create_host<U, R, C>(
+    State(state): State<HostRuntimeState<U, R, C>>,
+    principal: Option<Extension<UserId>>,
     body: Bytes,
 ) -> Response
 where
     U: HostInviteUnitOfWork,
     R: EntropySource + 'static,
     C: Clock + 'static,
-    A: SessionUserResolver,
 {
-    let Some(token) = bearer_token(&headers) else {
-        return session_required();
-    };
-    let user_id = match state.0.sessions.resolve_session_user(token).await {
-        Ok(Some(user_id)) => user_id,
-        Ok(None) => return session_required(),
-        Err(error) => return BoundaryError::from(error).into_response(),
+    let Some(Extension(user_id)) = principal else {
+        tracing::error!("host invite route reached without its human principal fact");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
     };
 
     if let Some(response) = validate_empty_object(&body) {
@@ -107,20 +92,6 @@ where
         }
         Err(error) => BoundaryError::from(error).into_response(),
     }
-}
-
-fn bearer_token(headers: &HeaderMap) -> Option<String> {
-    let header = headers
-        .get(axum::http::header::AUTHORIZATION)?
-        .to_str()
-        .ok()?;
-    let split = header.find(char::is_whitespace)?;
-    let (scheme, rest) = header.split_at(split);
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    let token = rest.trim();
-    (!token.is_empty()).then(|| token.to_owned())
 }
 
 fn validate_empty_object(body: &[u8]) -> Option<Response> {
@@ -260,16 +231,6 @@ fn js_array_index(key: &str) -> Option<u32> {
     (index != u32::MAX && index.to_string() == key).then_some(index)
 }
 
-fn session_required() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(SessionRequiredResponse {
-            error: "unauthorized",
-        }),
-    )
-        .into_response()
-}
-
 fn invalid_input(issues: Vec<ZodIssue>) -> Response {
     (
         StatusCode::BAD_REQUEST,
@@ -279,11 +240,6 @@ fn invalid_input(issues: Vec<ZodIssue>) -> Response {
         }),
     )
         .into_response()
-}
-
-#[derive(Serialize)]
-struct SessionRequiredResponse {
-    error: &'static str,
 }
 
 #[derive(Serialize)]
@@ -351,7 +307,7 @@ impl From<CreatedUserInviteHost> for HostDto {
             provisioning_source: "user_invite",
             status: "pending",
             placeable: false,
-            creator_user_id: host.user_id().to_owned(),
+            creator_user_id: host.user_id().as_str().to_owned(),
             display_label: None,
         }
     }
@@ -517,57 +473,13 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy, Default)]
-    enum SessionBehavior {
-        #[default]
-        Resolve,
-        Fail,
+    fn test_router(store: CountingStore) -> Router {
+        test_router_with_spec(store, None)
     }
 
-    #[derive(Clone, Default)]
-    struct Sessions {
-        behavior: SessionBehavior,
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl Sessions {
-        fn failing() -> Self {
-            Self {
-                behavior: SessionBehavior::Fail,
-                ..Self::default()
-            }
-        }
-    }
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("session storage unavailable")]
-    struct SessionStorageUnavailable;
-
-    impl SessionUserResolver for Sessions {
-        async fn resolve_session_user(
-            &self,
-            bearer_token: String,
-        ) -> Result<Option<String>, PersistenceFailure> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            if matches!(self.behavior, SessionBehavior::Fail) {
-                return Err(PersistenceFailure::from_source(SessionStorageUnavailable));
-            }
-            Ok((bearer_token == "session-ok").then(|| "user-1".to_owned()))
-        }
-    }
-
-    fn test_router(store: CountingStore, sessions: Sessions) -> Router {
-        test_router_with_spec(store, sessions, None)
-    }
-
-    fn test_router_with_spec(
-        store: CountingStore,
-        sessions: Sessions,
-        daemon_npm_spec: Option<String>,
-    ) -> Router {
+    fn test_router_with_spec(store: CountingStore, daemon_npm_spec: Option<String>) -> Router {
         router(
             CreateHostInvite::new(store, FixedEntropy::sequence(), FixedClock),
-            sessions,
             daemon_npm_spec,
         )
     }
@@ -586,20 +498,17 @@ mod tests {
         body
     }
 
-    async fn response(
-        app: Router,
-        authorization: Option<&str>,
-        body: &str,
-    ) -> (StatusCode, String) {
+    fn user() -> UserId {
+        UserId::parse("user-1").unwrap()
+    }
+
+    async fn response(app: Router, principal: Option<UserId>, body: &str) -> (StatusCode, String) {
         let mut request = Request::post(HOSTS_PATH)
             .header("content-type", "application/json")
             .body(Body::from(body.to_owned()))
             .unwrap();
-        if let Some(authorization) = authorization {
-            request.headers_mut().insert(
-                axum::http::header::AUTHORIZATION,
-                authorization.parse().unwrap(),
-            );
+        if let Some(principal) = principal {
+            request.extensions_mut().insert(principal);
         }
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
@@ -610,13 +519,7 @@ mod tests {
     #[tokio::test]
     async fn projects_the_create_host_response_with_json_semantic_parity() {
         let store = CountingStore::default();
-        let sessions = Sessions::default();
-        let (status, body) = response(
-            test_router(store.clone(), sessions),
-            Some("Bearer session-ok"),
-            "{}",
-        )
-        .await;
+        let (status, body) = response(test_router(store.clone()), Some(user()), "{}").await;
 
         assert_eq!(status, StatusCode::OK);
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -635,33 +538,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_and_invalid_sessions_match_the_ts_contract_before_the_uow() {
-        for authorization in [None, Some("Bearer invalid")] {
-            let store = CountingStore::default();
-            let sessions = Sessions::default();
-            let (status, body) =
-                response(test_router(store.clone(), sessions), authorization, "{}").await;
-            assert_eq!(status, StatusCode::UNAUTHORIZED);
-            assert_eq!(body, "{\"error\":\"unauthorized\"}");
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
-                parity_fixture()[if authorization.is_none() {
-                    "missing_session"
-                } else {
-                    "invalid_session"
-                }]["body"]
-            );
-            assert_eq!(store.calls.load(Ordering::SeqCst), 0);
-        }
+    async fn a_missing_principal_fails_closed_before_the_uow() {
+        let store = CountingStore::default();
+        let (status, body) = response(test_router(store.clone()), None, "{}").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, "Internal Server Error");
+        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn strict_unknown_fields_preserve_zod_input_order_before_the_uow() {
         let store = CountingStore::default();
-        let sessions = Sessions::default();
         let (status, body) = response(
-            test_router(store.clone(), sessions),
-            Some("Bearer session-ok"),
+            test_router(store.clone()),
+            Some(user()),
             "{\"zeta\":true,\"alpha\":true}",
         )
         .await;
@@ -682,12 +572,7 @@ mod tests {
         for entry in parity_fixture()["raw_unknown_fields"].as_array().unwrap() {
             let store = CountingStore::default();
             let raw_body = entry["raw_body"].as_str().unwrap();
-            let (status, body) = response(
-                test_router(store.clone(), Sessions::default()),
-                Some("Bearer session-ok"),
-                raw_body,
-            )
-            .await;
+            let (status, body) = response(test_router(store.clone()), Some(user()), raw_body).await;
             assert_eq!(status.as_u16(), entry["status"].as_u64().unwrap() as u16);
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&body).unwrap(),
@@ -702,12 +587,8 @@ mod tests {
         for entry in parity_fixture()["invalid_shapes"].as_array().unwrap() {
             let store = CountingStore::default();
             let raw_body = serde_json::to_string(&entry["request"]).unwrap();
-            let (status, body) = response(
-                test_router(store.clone(), Sessions::default()),
-                Some("Bearer session-ok"),
-                &raw_body,
-            )
-            .await;
+            let (status, body) =
+                response(test_router(store.clone()), Some(user()), &raw_body).await;
             assert_eq!(status.as_u16(), entry["status"].as_u64().unwrap() as u16);
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&body).unwrap(),
@@ -720,13 +601,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_json_keeps_the_ts_empty_object_fallback() {
         let store = CountingStore::default();
-        let sessions = Sessions::default();
-        let (status, _) = response(
-            test_router(store.clone(), sessions),
-            Some("Bearer session-ok"),
-            "not-json",
-        )
-        .await;
+        let (status, _) = response(test_router(store.clone()), Some(user()), "not-json").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(store.calls.load(Ordering::SeqCst), 1);
     }
@@ -734,14 +609,12 @@ mod tests {
     #[tokio::test]
     async fn trims_a_configured_daemon_package_spec() {
         let store = CountingStore::default();
-        let sessions = Sessions::default();
         let (status, body) = response(
             test_router_with_spec(
                 store,
-                sessions,
                 Some("  file:/repo/packages/silverhand-daemon  ".into()),
             ),
-            Some("Bearer session-ok"),
+            Some(user()),
             "{}",
         )
         .await;
@@ -755,8 +628,8 @@ mod tests {
     #[tokio::test]
     async fn one_duplicate_name_retries_then_returns_success() {
         let store = CountingStore::with_behavior(StoreBehavior::DuplicateOnce);
-        let app = test_router(store.clone(), Sessions::default());
-        let (status, _) = response(app, Some("Bearer session-ok"), "{}").await;
+        let app = test_router(store.clone());
+        let (status, _) = response(app, Some(user()), "{}").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(store.calls.load(Ordering::SeqCst), 2);
     }
@@ -766,7 +639,6 @@ mod tests {
         let store = CountingStore::default();
         let app = router(
             CreateHostInvite::new(store.clone(), FailingEntropy, FixedClock),
-            Sessions::default(),
             None,
         );
         assert_safe_failure(app, &store, 0, "entropy unavailable").await;
@@ -777,27 +649,15 @@ mod tests {
         let store = CountingStore::default();
         let app = router(
             CreateHostInvite::new(store.clone(), FixedEntropy::sequence(), FailingClock),
-            Sessions::default(),
             None,
         );
         assert_safe_failure(app, &store, 0, "clock unavailable").await;
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn session_storage_failure_is_one_safe_refusal_before_the_uow() {
-        let store = CountingStore::default();
-        let app = router(
-            CreateHostInvite::new(store.clone(), FixedEntropy::sequence(), FixedClock),
-            Sessions::failing(),
-            None,
-        );
-        assert_safe_failure(app, &store, 0, "session storage unavailable").await;
-    }
-
-    #[tokio::test(flavor = "current_thread")]
     async fn name_exhaustion_is_one_safe_boundary_refusal_after_eight_attempts() {
         let store = CountingStore::with_behavior(StoreBehavior::AlwaysDuplicate);
-        let app = test_router(store.clone(), Sessions::default());
+        let app = test_router(store.clone());
         assert_safe_failure(app, &store, 8, "unable to allocate a unique host name").await;
     }
 
@@ -815,7 +675,7 @@ mod tests {
             .with_writer(logs.clone())
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
-        let (status, body) = response(app, Some("Bearer session-ok"), "{}").await;
+        let (status, body) = response(app, Some(user()), "{}").await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body, "Internal Server Error");
         assert_eq!(store.calls.load(Ordering::SeqCst), expected_calls);

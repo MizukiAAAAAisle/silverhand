@@ -23,11 +23,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use silverhand_backend_core::messaging::{
-    AgentId, AvatarRevision, FromKind, MessageAuthor, PrincipalIdentity, PrincipalKind,
-    RuntimeKind, UserId,
-};
 use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::{
+    identity::{AgentId, UserId},
+    messaging::{
+        AvatarRevision, FromKind, MessageAuthor, PrincipalIdentity, PrincipalKind, RuntimeKind,
+    },
+};
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 
 use super::{MessagingStoreError, driver};
