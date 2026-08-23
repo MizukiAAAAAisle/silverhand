@@ -107,7 +107,8 @@ pub use identity::{
     mint_conversation_id,
 };
 pub use pre_send::{
-    AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DirectPairAllocation,
-    ResolvedStream, SendCapability, TargetAddress,
+    AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DeliveryIntent,
+    DirectPairAllocation, ResolvedStream, SendCapability, TargetAddress,
+    TargetAddressOperatorReason, TargetAddressRefusalPort, TargetAddressRefusalReport,
 };
 pub use principal::{InvalidHandle, ParticipantHandle, PrincipalKind};

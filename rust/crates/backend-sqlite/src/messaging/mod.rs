@@ -371,11 +371,11 @@ impl MessagingStore<HostEnvironment> {
 }
 
 impl<E> MessagingStore<E> {
-    pub fn target_address<O>(&self, opened: O) -> SqliteTargetAddress<E, O>
+    pub fn target_address<O, R>(&self, opened: O, refusals: R) -> SqliteTargetAddress<E, O, R>
     where
         E: Clone,
     {
-        SqliteTargetAddress::new(self.clone(), opened)
+        SqliteTargetAddress::new(self.clone(), opened, refusals)
     }
     /// Opens an existing product database with injected host capabilities. A
     /// missing file is a failure rather than an empty database.

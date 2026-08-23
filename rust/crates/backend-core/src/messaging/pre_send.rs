@@ -39,6 +39,113 @@ pub enum AddressRefusal {
     ThreadNotInTarget,
 }
 
+/// The private branch behind an actor-facing target refusal.
+///
+/// These values belong to the operator record, never to the HTTP response. Keeping
+/// them on the required observation port rather than on [`AddressRefusal`] makes
+/// unknown and unauthorized targets indistinguishable to the caller by type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TargetAddressOperatorReason {
+    Grammar,
+    ConversationNotFound,
+    WorkspaceNotFound,
+    WorkspaceAmbiguous,
+    TitleNotFound,
+    NotParticipant,
+    UnknownHandle,
+    DirectPairNotFound,
+    SelfPair,
+    ThreadRootNotFound,
+    ThreadRootNotARoot,
+}
+
+impl TargetAddressOperatorReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grammar => "grammar",
+            Self::ConversationNotFound => "conversation_not_found",
+            Self::WorkspaceNotFound => "workspace_not_found",
+            Self::WorkspaceAmbiguous => "workspace_ambiguous",
+            Self::TitleNotFound => "title_not_found",
+            Self::NotParticipant => "not_participant",
+            Self::UnknownHandle => "unknown_handle",
+            Self::DirectPairNotFound => "direct_pair_not_found",
+            Self::SelfPair => "self_pair",
+            Self::ThreadRootNotFound => "thread_root_not_found",
+            Self::ThreadRootNotARoot => "thread_root_not_a_root",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeliveryIntent {
+    Write,
+}
+
+/// One operator-only account of a refused target resolution.
+///
+/// Deliberately not `Debug`: the raw address is needed by the observation
+/// capability but must not become printable by accident. A production observer
+/// can hash it before logging, while a deterministic test observer can inspect it.
+pub struct TargetAddressRefusalReport {
+    refusal: AddressRefusal,
+    reason: TargetAddressOperatorReason,
+    address: String,
+    principal: AgentId,
+    intent: DeliveryIntent,
+}
+
+impl TargetAddressRefusalReport {
+    pub fn new(
+        refusal: AddressRefusal,
+        reason: TargetAddressOperatorReason,
+        address: impl Into<String>,
+        principal: AgentId,
+        intent: DeliveryIntent,
+    ) -> Self {
+        Self {
+            refusal,
+            reason,
+            address: address.into(),
+            principal,
+            intent,
+        }
+    }
+
+    pub fn refusal(&self) -> AddressRefusal {
+        self.refusal
+    }
+
+    pub fn reason(&self) -> TargetAddressOperatorReason {
+        self.reason
+    }
+
+    pub fn address(&self) -> &str {
+        &self.address
+    }
+
+    pub fn principal(&self) -> &AgentId {
+        &self.principal
+    }
+
+    pub fn intent(&self) -> DeliveryIntent {
+        self.intent
+    }
+}
+
+/// Required operator-only exit for target refusals.
+///
+/// A sink failure is an authority failure: silently returning the collapsed
+/// actor answer would discard the only record explaining which branch fired.
+pub trait TargetAddressRefusalPort {
+    type Error: Error + Send + Sync + 'static;
+
+    fn refused(
+        &self,
+        report: &TargetAddressRefusalReport,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedStream {
     pub conversation: ConversationId,

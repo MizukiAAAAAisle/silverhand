@@ -40,6 +40,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
@@ -48,11 +49,14 @@ use silverhand_backend_core::{
         ChannelAccessRefusal, DirectLineAuthority, DirectPairAllocation, DirectPairOpenedFact,
         DirectPairOpenedPort, MessageAuthor, PrincipalKind, ResolvedStream, SendCapability,
         SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
-        ThreadRootId,
+        TargetAddressRefusalPort, TargetAddressRefusalReport, ThreadRootId,
     },
     runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
-use silverhand_backend_server::messaging::router::{SendState, send_router};
+use silverhand_backend_server::messaging::{
+    TargetAddressRefusalLog,
+    router::{SendState, send_router},
+};
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, SqliteConnection};
 use tempfile::tempdir;
@@ -62,7 +66,7 @@ const HOST_ID: &str = "host-1";
 const USER_ID: &str = "user-1";
 const AGENT_ID: &str = "agent-1";
 const WORKSPACE_ID: &str = "workspace-1";
-const CHANNEL_ID: &str = "channel-1";
+const CHANNEL_ID: &str = "conv000000000001";
 /// An agent of the workspace with NO roster row for the target conversation, so its reachability
 /// turns entirely on whether a mention could be copied to it.
 const OUTSIDE_AGENT_ID: &str = "agent-2";
@@ -239,6 +243,20 @@ impl DirectPairOpenedPort for NoOpened {
 
     async fn direct_pair_opened(&self, _fact: &DirectPairOpenedFact) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("operator refusal sink unavailable")]
+struct RefusalSinkUnavailable;
+
+struct FailingRefusalSink;
+
+impl TargetAddressRefusalPort for FailingRefusalSink {
+    type Error = RefusalSinkUnavailable;
+
+    async fn refused(&self, _report: &TargetAddressRefusalReport) -> Result<(), Self::Error> {
+        Err(RefusalSinkUnavailable)
     }
 }
 
@@ -439,6 +457,15 @@ async fn observed(router: Router, request: Request<Body>) -> (StatusCode, Value,
     (status, body, warnings)
 }
 
+fn target_address_hash(address: &str) -> String {
+    let digest = Sha256::digest(address.as_bytes());
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("sha256:{suffix}")
+}
+
 /// A response's top-level members, sorted — the shape of a contract rather than a probe of one
 /// field, so a key that appears or vanishes cannot go unnoticed.
 fn keys(body: &Value) -> Vec<String> {
@@ -455,24 +482,27 @@ fn keys(body: &Value) -> Vec<String> {
 #[tokio::test]
 async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
     let sink = operator_log();
-    let cases: &[(&str, &[&str], bool, &str)] = &[
+    let cases: &[(&str, &[&str], bool, &str, &str)] = &[
         (
             "human-access-driver",
             &["DROP TABLE conversation_users"],
             true,
             "no such table: conversation_users",
+            "#Space/General",
         ),
         (
             "target-participation-driver",
             &["DROP TABLE conversation_agents"],
             false,
             "no such table: conversation_agents",
+            "#Space/General",
         ),
         (
             "capability-driver",
             &["DROP TABLE workspace_agent_capabilities"],
             false,
             "no such table: workspace_agent_capabilities",
+            "#Space/General",
         ),
         (
             "malformed-placement",
@@ -480,10 +510,11 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
                 "PRAGMA ignore_check_constraints = ON",
                 "DROP TRIGGER conversations_placement_immutable",
                 "DROP TRIGGER trg_conversations_endpoints_immutable",
-                "UPDATE conversations SET placement_kind = 'broken' WHERE id = 'channel-1'",
+                "UPDATE conversations SET placement_kind = 'broken' WHERE id = 'conv000000000001'",
             ],
             false,
             "conversations.placement_kind",
+            "#Space/General",
         ),
         (
             "half-pair",
@@ -494,13 +525,40 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
                 "UPDATE conversations SET placement_kind = 'direct_pair', \
                  endpoint_a_kind = 'agent', endpoint_a_id = 'agent-1', endpoint_b_kind = NULL, \
                  endpoint_b_id = NULL, title_key = 'general', roster_policy = 'fixed' \
-                 WHERE id = 'channel-1'",
+                 WHERE id = 'conv000000000001'",
             ],
             false,
             "conversations.placement",
+            "#Space/General",
+        ),
+        (
+            "named-non-addressable-id",
+            &[
+                "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, \
+                 title, title_key, status, visibility, created_at, updated_at) VALUES \
+                 ('bad/id', 'workspace-1', 'workspace', 'open', 'Broken', 'broken', 'open', \
+                 'private', 0, 0)",
+                "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
+                 VALUES ('bad/id', 'agent-1', 0)",
+            ],
+            false,
+            "conversations.id",
+            "#Space/Broken",
+        ),
+        (
+            "direct-pair-non-addressable-id",
+            &[
+                "INSERT INTO conversations (id, placement_kind, roster_policy, endpoint_a_kind, \
+                 endpoint_a_id, endpoint_b_kind, endpoint_b_id, title, status, visibility, \
+                 created_at, updated_at) VALUES ('bad/id', 'direct_pair', 'fixed', 'agent', \
+                 'agent-1', 'agent', 'agent-2', '', 'idle', 'private', 0, 0)",
+            ],
+            false,
+            "conversations.id",
+            "dm:@outside",
         ),
     ];
-    for (name, mutations, human, expected_cause) in cases {
+    for (name, mutations, human, expected_cause, target) in cases {
         let directory = tempdir().unwrap();
         let path = directory.path().join(format!("{name}.sqlite"));
         let store = opened(&path).await;
@@ -514,7 +572,7 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let app = send_router(SendState {
             channel_access: store.clone(),
-            target_address: store.target_address(NoOpened),
+            target_address: store.target_address(NoOpened, TargetAddressRefusalLog),
             capability: store.clone(),
             authority: store.clone(),
             unit_of_work: CountingUnit {
@@ -526,7 +584,7 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
         let request = if *human {
             human_send("never committed")
         } else {
-            authenticated_agent("never committed", "#Space/General".to_owned())
+            authenticated_agent("never committed", (*target).to_owned())
         };
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(
@@ -547,7 +605,12 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
             .events()
             .into_iter()
             .skip(before)
-            .filter(|event| event["level"] == "ERROR")
+            .filter(|event| {
+                event["level"] == "ERROR"
+                    && event["fields"]["error_chain"]
+                        .as_str()
+                        .is_some_and(|chain| chain.contains(expected_cause))
+            })
             .collect();
         assert_eq!(errors.len(), 1, "{name}");
         let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
@@ -561,18 +624,161 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
 }
 
 #[tokio::test]
+async fn collapsed_target_refusals_keep_distinct_operator_reasons() {
+    let sink = operator_log();
+    let cases: &[(&str, &[&str], &str, &str)] = &[
+        ("unknown", &[], "dm:@missing", "unknown_handle"),
+        (
+            "not-participant",
+            &[
+                "DELETE FROM conversation_agents WHERE conversation_id = 'conv000000000001' AND agent_id = 'agent-1'",
+            ],
+            "#Space/General",
+            "not_participant",
+        ),
+        (
+            "ambiguous-workspace",
+            &[
+                "DROP INDEX idx_workspaces_name_key",
+                "INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+                 VALUES ('workspace-2', 'Space', 'space', 'user-1', 0, 0)",
+            ],
+            "#Space/General",
+            "workspace_ambiguous",
+        ),
+    ];
+    let mut actor_answers = Vec::new();
+    for (name, mutations, target, expected_reason) in cases {
+        let directory = tempdir().unwrap();
+        let path = directory
+            .path()
+            .join(format!("target-refusal-{name}.sqlite"));
+        let store = opened(&path).await;
+        let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        for mutation in *mutations {
+            sqlx::query(*mutation).execute(&mut db).await.unwrap();
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let app = send_router(SendState {
+            channel_access: store.clone(),
+            target_address: store.target_address(NoOpened, TargetAddressRefusalLog),
+            capability: store.clone(),
+            authority: store.clone(),
+            unit_of_work: CountingUnit {
+                inner: store,
+                calls: calls.clone(),
+            },
+        });
+
+        let before = sink.events().len();
+        let (status, body) = answered(
+            app,
+            authenticated_agent("not committed", (*target).to_owned()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{name}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        actor_answers.push(body);
+
+        let reports: Vec<Value> = sink
+            .events()
+            .into_iter()
+            .skip(before)
+            .filter(|event| {
+                event["fields"]["delivery_target_event"] == "refused"
+                    && event["fields"]["address_hash"] == target_address_hash(target)
+            })
+            .collect();
+        assert_eq!(reports.len(), 1, "{name}: {reports:?}");
+        let fields = &reports[0]["fields"];
+        assert_eq!(fields["code"], "target_unresolved", "{name}");
+        assert_eq!(fields["operator_reason"], *expected_reason, "{name}");
+        assert_eq!(fields["intent"], "write", "{name}");
+        assert_eq!(fields["principal_id"], AGENT_ID, "{name}");
+        assert!(fields["address_hash"].as_str().is_some(), "{name}");
+        assert!(fields.get("address").is_none(), "{name}");
+    }
+    assert!(actor_answers.windows(2).all(|pair| pair[0] == pair[1]));
+    assert_eq!(
+        actor_answers[0],
+        serde_json::json!({
+            "error": "target names no stream you can use",
+            "code": "target_unresolved",
+        })
+    );
+}
+
+#[tokio::test]
+async fn refusal_observer_failure_is_one_safe_500_before_the_uow() {
+    let sink = operator_log();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("target-refusal-sink.sqlite");
+    let store = opened(&path).await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let app = send_router(SendState {
+        channel_access: store.clone(),
+        target_address: store.target_address(NoOpened, FailingRefusalSink),
+        capability: store.clone(),
+        authority: store.clone(),
+        unit_of_work: CountingUnit {
+            inner: store,
+            calls: calls.clone(),
+        },
+    });
+
+    let before = sink.events().len();
+    let response = app
+        .oneshot(authenticated_agent(
+            "not committed",
+            "not-an-address".to_owned(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"Internal Server Error");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let errors: Vec<Value> = sink
+        .events()
+        .into_iter()
+        .skip(before)
+        .filter(|event| {
+            event["level"] == "ERROR"
+                && event["fields"]["error_chain"]
+                    .as_str()
+                    .is_some_and(|chain| chain.contains("operator refusal sink unavailable"))
+        })
+        .collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+    assert!(
+        chain.contains("target refusal observation failed"),
+        "{chain}"
+    );
+    assert!(
+        chain.contains("operator refusal sink unavailable"),
+        "{chain}"
+    );
+    assert!(!chain.contains("not-an-address"), "{chain}");
+}
+
+#[tokio::test]
 async fn real_authority_refusals_keep_their_public_shape_and_never_enter_the_uow() {
     let cases = [
         (
             "human-membership",
-            "DELETE FROM conversation_users WHERE conversation_id = 'channel-1' AND user_id = 'user-1'",
+            "DELETE FROM conversation_users WHERE conversation_id = 'conv000000000001' AND user_id = 'user-1'",
             true,
             StatusCode::FORBIDDEN,
             serde_json::json!({ "error": "forbidden" }),
         ),
         (
             "agent-participation",
-            "DELETE FROM conversation_agents WHERE conversation_id = 'channel-1' AND agent_id = 'agent-1'",
+            "DELETE FROM conversation_agents WHERE conversation_id = 'conv000000000001' AND agent_id = 'agent-1'",
             false,
             StatusCode::NOT_FOUND,
             serde_json::json!({
@@ -604,7 +810,7 @@ async fn real_authority_refusals_keep_their_public_shape_and_never_enter_the_uow
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let app = send_router(SendState {
             channel_access: store.clone(),
-            target_address: store.target_address(NoOpened),
+            target_address: store.target_address(NoOpened, TargetAddressRefusalLog),
             capability: store.clone(),
             authority: store.clone(),
             unit_of_work: CountingUnit {

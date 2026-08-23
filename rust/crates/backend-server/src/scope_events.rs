@@ -1599,20 +1599,19 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn real_resolver_announces_before_capability_refusal_and_never_enters_the_uow() {
-        let (_directory, path) = direct_pair_database().await;
-        let store = MessagingStore::open(&path).await.unwrap();
-        let hub = ScopeEventHub::test("epoch-1");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let app = crate::messaging::router::send_router(crate::messaging::router::SendState {
+    fn direct_pair_router(
+        store: MessagingStore,
+        hub: ScopeEventHub,
+        calls: Arc<AtomicUsize>,
+    ) -> axum::Router {
+        crate::messaging::router::send_router(crate::messaging::router::SendState {
             channel_access: store.clone(),
-            target_address: store.target_address(hub.clone()),
+            target_address: store.target_address(hub, crate::messaging::TargetAddressRefusalLog),
             capability: DenySend,
             authority: store.clone(),
             unit_of_work: CountedStore {
                 inner: store,
-                calls: calls.clone(),
+                calls,
             },
         })
         .layer(axum::Extension(RuntimePrincipal::AgentSlot {
@@ -1621,23 +1620,19 @@ mod tests {
                 RuntimeGeneration::new(1).unwrap(),
                 silverhand_backend_core::identity::DaemonInstanceId::parse("daemon-1").unwrap(),
             ),
-        }));
+        }))
+    }
 
-        let response = app
-            .oneshot(
-                axum::http::Request::post("/internal/agents/agent-1/send-message")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from(
-                        serde_json::json!({"content":"hello", "target":"dm:@user"}).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(direct_pair_count(&path).await, 1);
+    fn agent_target_request(target: &str) -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::post("/internal/agents/agent-1/send-message")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({"content":"hello", "target":target}).to_string(),
+            ))
+            .unwrap()
+    }
 
+    fn viewer_replay_len(hub: &ScopeEventHub) -> usize {
         let resumed = hub
             .resume(
                 &EventScope::Viewer(user()),
@@ -1646,9 +1641,87 @@ mod tests {
             )
             .unwrap();
         let Replay::Events(events) = resumed.replay else {
-            panic!("the insert-winner announcement must be replayable")
+            panic!("the viewer replay must fit in the retained window")
         };
-        assert_eq!(events.len(), 1);
+        events.len()
+    }
+
+    #[tokio::test]
+    async fn real_resolver_announces_before_capability_refusal_and_never_enters_the_uow() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open(&path).await.unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = direct_pair_router(store, hub.clone(), calls.clone());
+
+        let response = app.oneshot(agent_target_request("dm:@user")).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(direct_pair_count(&path).await, 1);
+
+        assert_eq!(viewer_replay_len(&hub), 1);
+    }
+
+    #[tokio::test]
+    async fn a_thread_suffix_never_creates_a_missing_pair_but_checks_an_existing_pair() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open(&path).await.unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = direct_pair_router(store, hub.clone(), calls.clone());
+        let missing_root = "root000000000099";
+
+        let missing_pair = app
+            .clone()
+            .oneshot(agent_target_request(&format!(
+                "dm:@user/thread:{missing_root}"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(missing_pair.status(), axum::http::StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(missing_pair.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "error": "target names no stream you can use",
+                "code": "target_unresolved",
+            })
+        );
+        assert_eq!(direct_pair_count(&path).await, 0);
+        assert_eq!(viewer_replay_len(&hub), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let created = app
+            .clone()
+            .oneshot(agent_target_request("dm:@user"))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(direct_pair_count(&path).await, 1);
+        assert_eq!(viewer_replay_len(&hub), 1);
+
+        let existing_pair = app
+            .oneshot(agent_target_request(&format!(
+                "dm:@user/thread:{missing_root}"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(existing_pair.status(), axum::http::StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(existing_pair.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "error": "target names no reply cluster of that conversation",
+                "code": "thread_not_in_target",
+            })
+        );
+        assert_eq!(direct_pair_count(&path).await, 1);
+        assert_eq!(viewer_replay_len(&hub), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     fn conversation() -> ConversationId {

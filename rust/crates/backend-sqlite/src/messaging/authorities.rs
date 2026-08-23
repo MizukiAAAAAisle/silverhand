@@ -4,9 +4,11 @@ use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
-        DirectLineAuthority, DirectPairAllocation, DirectPairOpenedPort, DirectPairParticipants,
-        OpenDirectPairError, PrincipalIdentity, PrincipalKind, ResolvedStream, SendCapability,
-        SendClock, SendEntropy, TargetAddress, ThreadRootId,
+        DeliveryIntent, DirectLineAuthority, DirectPairAllocation, DirectPairOpenedPort,
+        DirectPairParticipants, OpenDirectPairError, PrincipalIdentity, PrincipalKind,
+        ResolvedStream, SendCapability, SendClock, SendEntropy, TargetAddress,
+        TargetAddressOperatorReason, TargetAddressRefusalPort, TargetAddressRefusalReport,
+        ThreadRootId,
     },
     persistence::PersistenceFailure,
 };
@@ -27,9 +29,10 @@ mod name_charset {
 }
 
 #[derive(Debug, Error)]
-pub enum TargetAddressStoreError<O>
+pub enum TargetAddressStoreError<O, R>
 where
     O: Error + Send + Sync + 'static,
+    R: Error + Send + Sync + 'static,
 {
     #[error("target lookup failed")]
     Persistence(#[source] PersistenceFailure),
@@ -37,6 +40,8 @@ where
     Clock(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
     #[error("direct-pair open failed")]
     Open(#[source] OpenDirectPairError<PersistenceFailure, O>),
+    #[error("target refusal observation failed")]
+    Observation(#[source] R),
 }
 
 fn corrupt(field: &'static str) -> PersistenceFailure {
@@ -44,14 +49,30 @@ fn corrupt(field: &'static str) -> PersistenceFailure {
 }
 
 #[derive(Clone)]
-pub struct SqliteTargetAddress<E, O> {
+pub struct SqliteTargetAddress<E, O, R> {
     store: MessagingStore<E>,
     opened: O,
+    refusals: R,
 }
 
-impl<E, O> SqliteTargetAddress<E, O> {
-    pub(super) fn new(store: MessagingStore<E>, opened: O) -> Self {
-        Self { store, opened }
+impl<E, O, R> SqliteTargetAddress<E, O, R> {
+    pub(super) fn new(store: MessagingStore<E>, opened: O, refusals: R) -> Self {
+        Self {
+            store,
+            opened,
+            refusals,
+        }
+    }
+}
+
+struct RejectedTarget {
+    refusal: AddressRefusal,
+    reason: TargetAddressOperatorReason,
+}
+
+impl RejectedTarget {
+    const fn new(refusal: AddressRefusal, reason: TargetAddressOperatorReason) -> Self {
+        Self { refusal, reason }
     }
 }
 
@@ -119,7 +140,7 @@ impl<E> MessagingStore<E> {
         &self,
         conversation: ConversationId,
         thread: Option<String>,
-    ) -> Result<Result<ResolvedStream, AddressRefusal>, PersistenceFailure> {
+    ) -> Result<Result<ResolvedStream, RejectedTarget>, PersistenceFailure> {
         let Some(thread) = thread else {
             return Ok(Ok(ResolvedStream {
                 conversation,
@@ -134,8 +155,20 @@ impl<E> MessagingStore<E> {
         .fetch_optional(&self.pool)
         .await
         .map_err(driver)?;
-        if !matches!(row, Some(None)) {
-            return Ok(Err(AddressRefusal::ThreadNotInTarget));
+        match row {
+            None => {
+                return Ok(Err(RejectedTarget::new(
+                    AddressRefusal::ThreadNotInTarget,
+                    TargetAddressOperatorReason::ThreadRootNotFound,
+                )));
+            }
+            Some(Some(_)) => {
+                return Ok(Err(RejectedTarget::new(
+                    AddressRefusal::ThreadNotInTarget,
+                    TargetAddressOperatorReason::ThreadRootNotARoot,
+                )));
+            }
+            Some(None) => {}
         }
         let root = ThreadRootId::parse(thread).map_err(|_| corrupt("messages.id"))?;
         Ok(Ok(ResolvedStream {
@@ -293,21 +326,24 @@ where
     }
 }
 
-impl<E, O> TargetAddress for SqliteTargetAddress<E, O>
+impl<E, O, R> SqliteTargetAddress<E, O, R>
 where
     E: SendClock + SendEntropy + Send + Sync,
     O: DirectPairOpenedPort + Send + Sync,
+    R: TargetAddressRefusalPort + Send + Sync,
 {
-    type Error = TargetAddressStoreError<O::Error>;
-
-    async fn resolve(
+    async fn resolve_unobserved(
         &self,
         agent: &AgentId,
         target: &str,
         allocation: DirectPairAllocation,
-    ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
+    ) -> Result<Result<ResolvedStream, RejectedTarget>, TargetAddressStoreError<O::Error, R::Error>>
+    {
         let Some(parsed) = parse_target(target) else {
-            return Ok(Err(AddressRefusal::Malformed));
+            return Ok(Err(RejectedTarget::new(
+                AddressRefusal::Malformed,
+                TargetAddressOperatorReason::Grammar,
+            )));
         };
         let (conversation, thread) = match parsed {
             ParsedTarget::Conversation { id, thread } => {
@@ -320,7 +356,10 @@ where
                     .await
                     .map_err(TargetAddressStoreError::Persistence)?
                 else {
-                    return Ok(Err(AddressRefusal::Unresolved));
+                    return Ok(Err(RejectedTarget::new(
+                        AddressRefusal::Unresolved,
+                        TargetAddressOperatorReason::ConversationNotFound,
+                    )));
                 };
                 if !self
                     .store
@@ -328,7 +367,10 @@ where
                     .await
                     .map_err(TargetAddressStoreError::Persistence)?
                 {
-                    return Ok(Err(AddressRefusal::Unresolved));
+                    return Ok(Err(RejectedTarget::new(
+                        AddressRefusal::Unresolved,
+                        TargetAddressOperatorReason::NotParticipant,
+                    )));
                 }
                 (id, thread)
             }
@@ -337,18 +379,47 @@ where
                 title_key,
                 thread,
             } => {
-                let rows: Vec<String> = sqlx::query_scalar(
-                    "SELECT c.id FROM workspaces w JOIN conversations c ON c.workspace_id = w.id \
-                     WHERE w.owner_agent_id IS NULL AND w.name_key = ? AND c.title_key = ? LIMIT 2",
+                let roots: Vec<String> = sqlx::query_scalar(
+                    "SELECT id FROM workspaces WHERE owner_agent_id IS NULL AND name_key = ? LIMIT 2",
                 )
                 .bind(workspace_key)
+                .fetch_all(&self.store.pool)
+                .await
+                .map_err(driver)
+                .map_err(TargetAddressStoreError::Persistence)?;
+                let workspace = match roots.as_slice() {
+                    [] => {
+                        return Ok(Err(RejectedTarget::new(
+                            AddressRefusal::Unresolved,
+                            TargetAddressOperatorReason::WorkspaceNotFound,
+                        )));
+                    }
+                    [raw] => WorkspaceId::parse(raw.clone()).map_err(|_| {
+                        TargetAddressStoreError::Persistence(corrupt("workspaces.id"))
+                    })?,
+                    _ => {
+                        return Ok(Err(RejectedTarget::new(
+                            AddressRefusal::Unresolved,
+                            TargetAddressOperatorReason::WorkspaceAmbiguous,
+                        )));
+                    }
+                };
+                let rows: Vec<String> = sqlx::query_scalar(
+                    "SELECT id FROM conversations WHERE workspace_id = ? AND title_key = ? LIMIT 2",
+                )
+                .bind(workspace.as_str())
                 .bind(title_key)
                 .fetch_all(&self.store.pool)
                 .await
                 .map_err(driver)
                 .map_err(TargetAddressStoreError::Persistence)?;
                 let raw = match rows.as_slice() {
-                    [] => return Ok(Err(AddressRefusal::Unresolved)),
+                    [] => {
+                        return Ok(Err(RejectedTarget::new(
+                            AddressRefusal::Unresolved,
+                            TargetAddressOperatorReason::TitleNotFound,
+                        )));
+                    }
                     [raw] => raw.clone(),
                     _ => {
                         return Err(TargetAddressStoreError::Persistence(corrupt(
@@ -356,9 +427,8 @@ where
                         )));
                     }
                 };
-                let id = ConversationId::parse(raw).map_err(|_| {
-                    TargetAddressStoreError::Persistence(corrupt("conversations.id"))
-                })?;
+                let id = addressable_conversation(raw, "conversations.id")
+                    .map_err(TargetAddressStoreError::Persistence)?;
                 let place = self
                     .store
                     .authority_conversation(&id)
@@ -373,7 +443,10 @@ where
                     .await
                     .map_err(TargetAddressStoreError::Persistence)?
                 {
-                    return Ok(Err(AddressRefusal::Unresolved));
+                    return Ok(Err(RejectedTarget::new(
+                        AddressRefusal::Unresolved,
+                        TargetAddressOperatorReason::NotParticipant,
+                    )));
                 }
                 (id, thread)
             }
@@ -408,11 +481,19 @@ where
                             TargetAddressStoreError::Persistence(corrupt("users.id"))
                         })?)
                     }
-                    (None, None) => return Ok(Err(AddressRefusal::Unresolved)),
+                    (None, None) => {
+                        return Ok(Err(RejectedTarget::new(
+                            AddressRefusal::Unresolved,
+                            TargetAddressOperatorReason::UnknownHandle,
+                        )));
+                    }
                 };
                 let me = PrincipalIdentity::Agent(agent.clone());
                 if other == me {
-                    return Ok(Err(AddressRefusal::SelfPair));
+                    return Ok(Err(RejectedTarget::new(
+                        AddressRefusal::SelfPair,
+                        TargetAddressOperatorReason::SelfPair,
+                    )));
                 }
                 let participants = DirectPairParticipants::between(me, other).map_err(|_| {
                     TargetAddressStoreError::Persistence(corrupt("direct_pair.participants"))
@@ -426,24 +507,27 @@ where
                     .await
                     .map_err(driver)
                     .map_err(TargetAddressStoreError::Persistence)?;
-                let id = match (existing, allocation) {
-                    (Some(raw), _) => ConversationId::parse(raw).map_err(|_| {
-                        TargetAddressStoreError::Persistence(corrupt("conversations.id"))
-                    })?,
-                    (None, DirectPairAllocation::Forbidden) => {
-                        return Ok(Err(AddressRefusal::Unresolved));
+                let id = match existing {
+                    Some(raw) => addressable_conversation(raw, "conversations.id")
+                        .map_err(TargetAddressStoreError::Persistence)?,
+                    None if thread.is_some() || allocation == DirectPairAllocation::Forbidden => {
+                        return Ok(Err(RejectedTarget::new(
+                            AddressRefusal::Unresolved,
+                            TargetAddressOperatorReason::DirectPairNotFound,
+                        )));
                     }
-                    (None, DirectPairAllocation::Permitted) => {
-                        let now = self
-                            .store
-                            .environment
-                            .now_unix_ms()
-                            .map_err(TargetAddressStoreError::Clock)?;
-                        self.store
-                            .open_direct_pair(&self.opened, participants, now)
-                            .await
-                            .map_err(TargetAddressStoreError::Open)?
-                    }
+                    None => self
+                        .store
+                        .open_direct_pair(
+                            &self.opened,
+                            participants,
+                            self.store
+                                .environment
+                                .now_unix_ms()
+                                .map_err(TargetAddressStoreError::Clock)?,
+                        )
+                        .await
+                        .map_err(TargetAddressStoreError::Open)?,
                 };
                 (id, thread)
             }
@@ -452,6 +536,39 @@ where
             .resolve_thread(conversation, thread)
             .await
             .map_err(TargetAddressStoreError::Persistence)
+    }
+}
+
+impl<E, O, R> TargetAddress for SqliteTargetAddress<E, O, R>
+where
+    E: SendClock + SendEntropy + Send + Sync,
+    O: DirectPairOpenedPort + Send + Sync,
+    R: TargetAddressRefusalPort + Send + Sync,
+{
+    type Error = TargetAddressStoreError<O::Error, R::Error>;
+
+    async fn resolve(
+        &self,
+        agent: &AgentId,
+        target: &str,
+        allocation: DirectPairAllocation,
+    ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
+        match self.resolve_unobserved(agent, target, allocation).await? {
+            Ok(stream) => Ok(Ok(stream)),
+            Err(rejected) => {
+                self.refusals
+                    .refused(&TargetAddressRefusalReport::new(
+                        rejected.refusal,
+                        rejected.reason,
+                        target,
+                        agent.clone(),
+                        DeliveryIntent::Write,
+                    ))
+                    .await
+                    .map_err(TargetAddressStoreError::Observation)?;
+                Ok(Err(rejected.refusal))
+            }
+        }
     }
 }
 
@@ -525,14 +642,11 @@ async fn principal_exists(
     principal: &PrincipalIdentity,
 ) -> Result<bool, PersistenceFailure> {
     let found: Option<i64> = match principal.kind() {
-        PrincipalKind::Agent => sqlx::query_scalar(
-            "SELECT 1 FROM agents WHERE id = ? AND materialization_status = 'active' \
-             AND deletion_started_at IS NULL",
-        )
-        .bind(principal.as_str())
-        .fetch_optional(pool)
-        .await
-        .map_err(driver)?,
+        PrincipalKind::Agent => sqlx::query_scalar("SELECT 1 FROM agents WHERE id = ?")
+            .bind(principal.as_str())
+            .fetch_optional(pool)
+            .await
+            .map_err(driver)?,
         PrincipalKind::Human => sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?")
             .bind(principal.as_str())
             .fetch_optional(pool)
@@ -540,6 +654,16 @@ async fn principal_exists(
             .map_err(driver)?,
     };
     Ok(found.is_some())
+}
+
+fn addressable_conversation(
+    raw: String,
+    field: &'static str,
+) -> Result<ConversationId, PersistenceFailure> {
+    if !address_id(&raw) {
+        return Err(corrupt(field));
+    }
+    ConversationId::parse(raw).map_err(|_| corrupt(field))
 }
 
 enum ParsedTarget {

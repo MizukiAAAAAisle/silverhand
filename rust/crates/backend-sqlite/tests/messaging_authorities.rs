@@ -3,16 +3,20 @@ use std::{
     error::Error,
     ops::Range,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId},
     messaging::{
-        AddressRefusal, ChannelAccess, ChannelAccessRefusal, DirectPairAllocation,
-        DirectPairOpenedFact, DirectPairOpenedPort, MessageContent, ReferencePositions, SendActor,
-        SendCapability, SendDestination, SendMessage, SendMessageDraft, SendMessageUnitOfWork,
-        TargetAddress,
+        AddressRefusal, ChannelAccess, ChannelAccessRefusal, DeliveryIntent, DirectPairAllocation,
+        DirectPairOpenedFact, DirectPairOpenedPort, EnvironmentUnavailable, MessageContent,
+        ReferencePositions, SendActor, SendCapability, SendClock, SendDestination, SendEntropy,
+        SendMessage, SendMessageDraft, SendMessageUnitOfWork, TargetAddress,
+        TargetAddressOperatorReason, TargetAddressRefusalPort, TargetAddressRefusalReport,
     },
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
@@ -53,6 +57,33 @@ impl Fixture {
     async fn store(&self) -> MessagingStore {
         MessagingStore::open(&self.path).await.unwrap()
     }
+
+    async fn store_with<E>(&self, environment: E) -> MessagingStore<E> {
+        MessagingStore::open_with(&self.path, environment)
+            .await
+            .unwrap()
+    }
+}
+
+#[derive(Clone, Default)]
+struct CountingEnvironment {
+    clock_calls: Arc<AtomicUsize>,
+    entropy_calls: Arc<AtomicUsize>,
+}
+
+impl SendClock for CountingEnvironment {
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable> {
+        self.clock_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(1)
+    }
+}
+
+impl SendEntropy for CountingEnvironment {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+        self.entropy_calls.fetch_add(1, Ordering::SeqCst);
+        buffer.fill(7);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -63,6 +94,33 @@ impl DirectPairOpenedPort for Opened {
 
     async fn direct_pair_opened(&self, fact: &DirectPairOpenedFact) -> Result<(), Self::Error> {
         self.0.lock().unwrap().push(fact.clone());
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RefusalRecord {
+    refusal: AddressRefusal,
+    reason: TargetAddressOperatorReason,
+    address: String,
+    principal: String,
+    intent: DeliveryIntent,
+}
+
+#[derive(Clone, Default)]
+struct Refusals(Arc<Mutex<Vec<RefusalRecord>>>);
+
+impl TargetAddressRefusalPort for Refusals {
+    type Error = Infallible;
+
+    async fn refused(&self, report: &TargetAddressRefusalReport) -> Result<(), Self::Error> {
+        self.0.lock().unwrap().push(RefusalRecord {
+            refusal: report.refusal(),
+            reason: report.reason(),
+            address: report.address().to_owned(),
+            principal: report.principal().as_str().to_owned(),
+            intent: report.intent(),
+        });
         Ok(())
     }
 }
@@ -174,7 +232,8 @@ async fn target_resolution_covers_all_grammar_arms_and_required_pair_announcemen
     let mut fixture = Fixture::new().await;
     let store = fixture.store().await;
     let opened = Opened::default();
-    let target = store.target_address(opened.clone());
+    let refusals = Refusals::default();
+    let target = store.target_address(opened.clone(), refusals.clone());
 
     let by_id = target
         .resolve(
@@ -243,6 +302,198 @@ async fn target_resolution_covers_all_grammar_arms_and_required_pair_announcemen
             .unwrap(),
         Err(AddressRefusal::Malformed)
     );
+    assert_eq!(
+        *refusals.0.lock().unwrap(),
+        [
+            RefusalRecord {
+                refusal: AddressRefusal::Unresolved,
+                reason: TargetAddressOperatorReason::DirectPairNotFound,
+                address: "dm:@hidden".to_owned(),
+                principal: AGENT.to_owned(),
+                intent: DeliveryIntent::Write,
+            },
+            RefusalRecord {
+                refusal: AddressRefusal::Malformed,
+                reason: TargetAddressOperatorReason::Grammar,
+                address: "not-an-address".to_owned(),
+                principal: AGENT.to_owned(),
+                intent: DeliveryIntent::Write,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_thread_suffix_cannot_create_a_missing_direct_pair() {
+    let mut fixture = Fixture::new().await;
+    let environment = CountingEnvironment::default();
+    let store = fixture.store_with(environment.clone()).await;
+    let opened = Opened::default();
+    let refusals = Refusals::default();
+    let target = store.target_address(opened.clone(), refusals.clone());
+    let address = "dm:@peer/thread:root000000000099";
+
+    assert_eq!(
+        target
+            .resolve(&agent(), address, DirectPairAllocation::Permitted)
+            .await
+            .unwrap(),
+        Err(AddressRefusal::Unresolved)
+    );
+    assert_eq!(environment.clock_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(environment.entropy_calls.load(Ordering::SeqCst), 0);
+    assert!(opened.0.lock().unwrap().is_empty());
+    let pair_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM conversations WHERE placement_kind = 'direct_pair'",
+    )
+    .fetch_one(&mut fixture.db)
+    .await
+    .unwrap();
+    assert_eq!(pair_count, 0);
+    assert_eq!(
+        *refusals.0.lock().unwrap(),
+        [RefusalRecord {
+            refusal: AddressRefusal::Unresolved,
+            reason: TargetAddressOperatorReason::DirectPairNotFound,
+            address: address.to_owned(),
+            principal: AGENT.to_owned(),
+            intent: DeliveryIntent::Write,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn an_existing_direct_pair_still_validates_its_thread_root() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let opened = Opened::default();
+    let refusals = Refusals::default();
+    let target = store.target_address(opened.clone(), refusals.clone());
+
+    target
+        .resolve(&agent(), "dm:@peer", DirectPairAllocation::Permitted)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        target
+            .resolve(
+                &agent(),
+                "dm:@peer/thread:root000000000099",
+                DirectPairAllocation::Permitted,
+            )
+            .await
+            .unwrap(),
+        Err(AddressRefusal::ThreadNotInTarget)
+    );
+    assert_eq!(opened.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        refusals.0.lock().unwrap()[0].reason,
+        TargetAddressOperatorReason::ThreadRootNotFound
+    );
+}
+
+#[tokio::test]
+async fn named_resolution_refuses_an_ambiguous_root_before_looking_at_titles() {
+    let mut fixture = Fixture::new().await;
+    sqlx::query("DROP INDEX idx_workspaces_name_key")
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+         VALUES ('workspace-2', 'Product Space', 'product space', ?, 0, 0)",
+    )
+    .bind(USER)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    let store = fixture.store().await;
+    let refusals = Refusals::default();
+    let target = store.target_address(Opened::default(), refusals.clone());
+
+    assert_eq!(
+        target
+            .resolve(
+                &agent(),
+                "#Product%20Space/General%20Chat",
+                DirectPairAllocation::Permitted,
+            )
+            .await
+            .unwrap(),
+        Err(AddressRefusal::Unresolved)
+    );
+    assert_eq!(
+        refusals.0.lock().unwrap()[0].reason,
+        TargetAddressOperatorReason::WorkspaceAmbiguous
+    );
+}
+
+#[tokio::test]
+async fn store_derived_conversation_ids_must_be_addressable() {
+    let mut named = Fixture::new().await;
+    sqlx::query(
+        "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
+         title_key, status, visibility, created_at, updated_at) VALUES \
+         ('bad/id', ?, 'workspace', 'open', 'Broken', 'broken', 'open', 'private', 0, 0)",
+    )
+    .bind(WORKSPACE)
+    .execute(&mut named.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
+         VALUES ('bad/id', ?, 0)",
+    )
+    .bind(AGENT)
+    .execute(&mut named.db)
+    .await
+    .unwrap();
+    let target = named
+        .store()
+        .await
+        .target_address(Opened::default(), Refusals::default());
+    let error = target
+        .resolve(
+            &agent(),
+            "#Product%20Space/Broken",
+            DirectPairAllocation::Permitted,
+        )
+        .await
+        .unwrap_err();
+    assert!(format_source_chain(&error).contains("conversations.id"));
+
+    let mut pair = Fixture::new().await;
+    sqlx::query(
+        "INSERT INTO conversations (id, placement_kind, roster_policy, endpoint_a_kind, \
+         endpoint_a_id, endpoint_b_kind, endpoint_b_id, title, status, visibility, created_at, \
+         updated_at) VALUES ('bad/id', 'direct_pair', 'fixed', 'agent', ?, 'agent', ?, '', \
+         'idle', 'private', 0, 0)",
+    )
+    .bind(AGENT)
+    .bind(PEER)
+    .execute(&mut pair.db)
+    .await
+    .unwrap();
+    let target = pair
+        .store()
+        .await
+        .target_address(Opened::default(), Refusals::default());
+    let error = target
+        .resolve(&agent(), "dm:@peer", DirectPairAllocation::Permitted)
+        .await
+        .unwrap_err();
+    assert!(format_source_chain(&error).contains("conversations.id"));
+}
+
+fn format_source_chain(error: &(dyn Error + 'static)) -> String {
+    let mut chain = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(next) = source {
+        chain.push(next.to_string());
+        source = next.source();
+    }
+    chain.join(": ")
 }
 
 #[tokio::test]
@@ -396,6 +647,75 @@ async fn persisted_placement_corruption_is_never_a_capability_denial() {
             .unwrap_err();
         assert!(error.source().is_some());
     }
+}
+
+#[tokio::test]
+async fn a_deleting_but_present_direct_pair_endpoint_remains_addressable_until_delete() {
+    struct NoReferences;
+    impl ReferencePositions for NoReferences {
+        fn autolink_spans(&self, _content: &MessageContent) -> Vec<Range<usize>> {
+            Vec::new()
+        }
+    }
+
+    const PAIR: &str = "pair000000000001";
+    let mut fixture = Fixture::new().await;
+    sqlx::query(
+        "INSERT INTO conversations (id, placement_kind, roster_policy, endpoint_a_kind, \
+         endpoint_a_id, endpoint_b_kind, endpoint_b_id, title, status, visibility, created_at, \
+         updated_at) VALUES (?, 'direct_pair', 'fixed', 'agent', ?, 'human', ?, '', 'idle', \
+         'private', 0, 0)",
+    )
+    .bind(PAIR)
+    .bind(PEER)
+    .bind(USER)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE agents SET deletion_started_at = 1 WHERE id = ?")
+        .bind(PEER)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    let store = fixture.store().await;
+    let pair = ConversationId::parse(PAIR).unwrap();
+
+    assert_eq!(store.may_post(&pair, &user()).await.unwrap(), Ok(()));
+    let command = SendMessage::prepare(
+        SendMessageDraft {
+            source_conversation: pair.clone(),
+            target_conversation: pair.clone(),
+            actor: SendActor::User(user()),
+            content: MessageContent::parse("delete is not complete").unwrap(),
+            destination: SendDestination::MainLine,
+            attachment_refs: Vec::new(),
+            freshness_bypass: false,
+        },
+        &NoReferences,
+        &store,
+    )
+    .await
+    .unwrap();
+    store.send_message(command).await.unwrap();
+    let written: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM messages WHERE conversation_id = ? AND content = ?",
+    )
+    .bind(PAIR)
+    .bind("delete is not complete")
+    .fetch_one(&mut fixture.db)
+    .await
+    .unwrap();
+    assert_eq!(written, 1);
+
+    sqlx::query("DELETE FROM agents WHERE id = ?")
+        .bind(PEER)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.may_post(&pair, &user()).await.unwrap(),
+        Err(ChannelAccessRefusal::Forbidden)
+    );
 }
 
 #[tokio::test]
