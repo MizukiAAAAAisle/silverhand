@@ -8,16 +8,20 @@
 //! `author_name` / `author_display_name`, which survive the delete). That
 //! knowledge belongs to the adapter that reads those columns, so it lives here.
 //!
-//! [`resolve_author`] is a pure function of already-read columns, not a query.
-//! Every consumer in this adapter — the write path's point read today, a batch
-//! reader tomorrow — resolves through it, so there is one discrimination rule
-//! rather than one per call site. The FK being non-null is itself the proof the
-//! actor still exists (referential integrity forbids a dangling FK), so it, not a
-//! separate existence probe, tells `active` from `deleted`. It never fabricates
-//! `deleted` from a still-intact FK, and never from a nulled FK without a
-//! surviving snapshot; both of those fail closed to `unresolved`.
+//! [`resolve_authors`] is the adapter's one author authority: it takes a batch of
+//! author rows and returns the authors they report, owning the read (at most one
+//! set-shaped query per principal table) and the discrimination together, so a
+//! list read and the write-path point read (its one-element case) share one
+//! authority rather than each re-assembling the steps. The pure per-row rule
+//! [`resolve_author`] and the batched read [`load_live_actors`] are private parts
+//! of that authority, not a toolkit a caller composes. The FK being non-null is
+//! itself the proof the actor still exists (referential integrity forbids a
+//! dangling FK), so it, not a separate existence probe, tells `active` from
+//! `deleted`. It never fabricates `deleted` from a still-intact FK, and never from
+//! a nulled FK without a surviving snapshot; both of those fail closed to
+//! `unresolved`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use silverhand_backend_core::messaging::{
     AgentId, AvatarRevision, FromKind, MessageAuthor, PrincipalIdentity, PrincipalKind,
@@ -44,21 +48,24 @@ pub(super) struct AuthorEvidence {
 /// The current actor row, supplied only when the provenance FK still resolves.
 /// `runtime` is the stored spelling for an agent, and `None` for a human row
 /// (users carry no runtime column) or an agent whose column is somehow NULL.
-pub(super) struct LiveActor {
-    pub name: String,
-    pub display_name: String,
-    pub avatar_storage_key: Option<String>,
-    pub updated_at: i64,
-    pub runtime: Option<String>,
+/// Private: it is an internal step of [`resolve_authors`], never handed out.
+struct LiveActor {
+    name: String,
+    display_name: String,
+    avatar_storage_key: Option<String>,
+    updated_at: i64,
+    runtime: Option<String>,
 }
 
-/// Discriminate one row into the author it reports, or `None` for a system send.
+/// Discriminate one already-read row into the author it reports, or `None` for a
+/// system send. The pure heart of [`resolve_authors`], and private to it: a caller
+/// gets the authority, not this rule plus a separate read to wire together.
 ///
 /// `Err` is reserved for a broken database the store itself must own: a snapshot
 /// id that names nothing, or a stored runtime outside the closed set. Neither is a
 /// caller's mistake, so both surface as a [`PersistenceFailure`] carrying what
 /// broke rather than a silently defaulted value.
-pub(super) fn resolve_author(
+fn resolve_author(
     evidence: &AuthorEvidence,
     live: Option<&LiveActor>,
 ) -> Result<Option<MessageAuthor>, PersistenceFailure> {
@@ -223,12 +230,11 @@ pub(super) const EXPLAIN_LIVE_AGENTS: &str = concat!("EXPLAIN QUERY PLAN ", live
 #[cfg(test)]
 pub(super) const EXPLAIN_LIVE_USERS: &str = concat!("EXPLAIN QUERY PLAN ", live_users_sql!());
 
-/// The current rows for a batch of author FKs, one map per principal table. A
-/// point read is the one-element case of the same lookup, so both the write
-/// path (a single actor) and a list read (a whole page at once) resolve through
-/// [`load_live_actors`] rather than each growing its own query.
+/// The current rows for a batch of author FKs, one map per principal table.
+/// Private to this module: it is a step inside [`resolve_authors`], never a part
+/// a caller composes with the discriminator itself.
 #[derive(Default)]
-pub(super) struct LiveActors {
+struct LiveActors {
     agents: HashMap<String, LiveActor>,
     users: HashMap<String, LiveActor>,
 }
@@ -237,7 +243,7 @@ impl LiveActors {
     /// The current row for one principal, or `None` when the FK named a row this
     /// batch did not find — the "no live row" the resolver reads as deleted (with
     /// a snapshot) or unresolved (without one).
-    pub(super) fn get(&self, kind: PrincipalKind, id: &str) -> Option<&LiveActor> {
+    fn get(&self, kind: PrincipalKind, id: &str) -> Option<&LiveActor> {
         match kind {
             PrincipalKind::Agent => self.agents.get(id),
             PrincipalKind::Human => self.users.get(id),
@@ -249,7 +255,7 @@ impl LiveActors {
 /// one per table, and none for a table whose id set is empty. The set is the
 /// bound: `json_each` over the requested ids drives each join, so the cost tracks
 /// the ids asked for, not the installation, and there is never one query per row.
-pub(super) async fn load_live_actors(
+async fn load_live_actors(
     conn: &mut SqliteConnection,
     agent_ids: &[&str],
     user_ids: &[&str],
@@ -303,6 +309,66 @@ fn live_actor(row: &SqliteRow, is_agent: bool) -> Result<LiveActor, PersistenceF
 fn ids_json(ids: &[&str]) -> Result<String, PersistenceFailure> {
     serde_json::to_string(ids)
         .map_err(|error| PersistenceFailure::from_source(MessagingStoreError::Serialization(error)))
+}
+
+/// The live-row lookup key for one row's author evidence: the principal kind and
+/// the still-intact FK to fetch. `None` for a system author (no principal) or a
+/// nulled FK (the actor is gone, so the row resolves from its snapshot rather
+/// than a live read), so such a row contributes nothing to the batched reads.
+fn live_key(evidence: &AuthorEvidence) -> Option<(PrincipalKind, &str)> {
+    let kind = match evidence.from_kind {
+        FromKind::System => return None,
+        FromKind::Agent => PrincipalKind::Agent,
+        FromKind::User => PrincipalKind::Human,
+    };
+    let fk = match kind {
+        PrincipalKind::Agent => evidence.from_agent_id.as_deref(),
+        PrincipalKind::Human => evidence.from_user_id.as_deref(),
+    }?;
+    Some((kind, fk))
+}
+
+/// Resolve a batch of author rows into the authors they report, in input order.
+///
+/// This is the adapter's ONE author authority — the whole orchestration a list
+/// read needs, not a set of parts a caller assembles. It collects the intact FKs
+/// this batch names, DEDUPED per principal table, issues at most one set-shaped
+/// live read per table through [`load_live_actors`] (none for a table nothing in
+/// the batch names), and resolves every input through the single pure
+/// discriminator [`resolve_author`]. A point read is the one-element case, so the
+/// write path and a list read share this authority rather than each re-deriving
+/// "collect FKs → read → match rows → discriminate" and risking a missed id, a
+/// per-row query, or a bypassed discriminator.
+///
+/// `Err` fails the WHOLE batch — a single broken row (a stored runtime outside the
+/// set, a snapshot id that names nothing, a driver fault) is a persistence
+/// invariant the store owns, so there is no partial result and the source chain is
+/// preserved.
+pub(super) async fn resolve_authors(
+    conn: &mut SqliteConnection,
+    evidence: &[AuthorEvidence],
+) -> Result<Vec<Option<MessageAuthor>>, PersistenceFailure> {
+    let mut agent_ids: Vec<&str> = Vec::new();
+    let mut user_ids: Vec<&str> = Vec::new();
+    let mut seen_agents: HashSet<&str> = HashSet::new();
+    let mut seen_users: HashSet<&str> = HashSet::new();
+    for row in evidence {
+        match live_key(row) {
+            Some((PrincipalKind::Agent, id)) if seen_agents.insert(id) => agent_ids.push(id),
+            Some((PrincipalKind::Human, id)) if seen_users.insert(id) => user_ids.push(id),
+            _ => {}
+        }
+    }
+
+    let live = load_live_actors(conn, &agent_ids, &user_ids).await?;
+
+    evidence
+        .iter()
+        .map(|row| {
+            let actor = live_key(row).and_then(|(kind, id)| live.get(kind, id));
+            resolve_author(row, actor)
+        })
+        .collect()
 }
 
 #[cfg(test)]

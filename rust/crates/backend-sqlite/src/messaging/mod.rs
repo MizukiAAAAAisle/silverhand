@@ -38,7 +38,7 @@ use sqlx::{
 use thiserror::Error;
 
 mod author;
-use author::{AuthorEvidence, load_live_actors, resolve_author};
+use author::{AuthorEvidence, resolve_authors};
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;
@@ -779,42 +779,40 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .map_err(|error| infrastructure(MessagingStoreError::Ordinal(error)))
     }
 
-    /// The author the message reports, read live and resolved through the adapter's
-    /// one discrimination rule ([`resolve_author`]). The current row comes from the
-    /// shared batch loader as its one-element case — the same authority a list read
-    /// uses for a whole page — so there is no second query shape for a point read. At
-    /// send the actor is current, so this resolves to an active author; its snapshot
-    /// columns are then copied onto the row so the message keeps naming its author
-    /// after a rename or a delete.
+    /// The author the message reports, resolved through the adapter's one author
+    /// authority ([`resolve_authors`]) as a ONE-ELEMENT batch — the same authority a
+    /// list read uses for a whole page, so a point read invents no second read or
+    /// discrimination path of its own. At send the actor is current, so this resolves
+    /// to an active author; its snapshot columns are then copied onto the row so the
+    /// message keeps naming its author after a rename or a delete.
     async fn author_snapshot(
         &mut self,
         actor: &SendActor,
     ) -> Result<Option<MessageAuthor>, SendMessageError> {
-        let (kind, id) = match actor {
-            SendActor::Agent(agent) => (PrincipalKind::Agent, agent.as_str()),
-            SendActor::User(user) => (PrincipalKind::Human, user.as_str()),
-        };
-        // A one-element set: the write path asks the batch loader for exactly this
-        // actor, so the point read and a list read share one query shape.
-        let live = match kind {
-            PrincipalKind::Agent => load_live_actors(&mut self.tx, &[id], &[]).await,
-            PrincipalKind::Human => load_live_actors(&mut self.tx, &[], &[id]).await,
-        }
-        .map_err(SendMessageError::from)?;
-        let evidence = AuthorEvidence {
-            from_kind: match kind {
-                PrincipalKind::Agent => FromKind::Agent,
-                PrincipalKind::Human => FromKind::User,
+        let evidence = match actor {
+            SendActor::Agent(agent) => AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: Some(agent.as_str().to_owned()),
+                from_user_id: None,
+                // Not yet deleted: the snapshot columns are what this send is about
+                // to write, so resolution reads the live row, not them.
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
             },
-            from_agent_id: matches!(kind, PrincipalKind::Agent).then(|| id.to_owned()),
-            from_user_id: matches!(kind, PrincipalKind::Human).then(|| id.to_owned()),
-            // Not yet deleted: the snapshot columns are what this send is about to
-            // write, so resolution reads the live row, not them.
-            author_id: None,
-            author_name: None,
-            author_display_name: None,
+            SendActor::User(user) => AuthorEvidence {
+                from_kind: FromKind::User,
+                from_agent_id: None,
+                from_user_id: Some(user.as_str().to_owned()),
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
         };
-        resolve_author(&evidence, live.get(kind, id)).map_err(SendMessageError::from)
+        let mut resolved = resolve_authors(&mut self.tx, std::slice::from_ref(&evidence))
+            .await
+            .map_err(SendMessageError::from)?;
+        Ok(resolved.pop().flatten())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2166,14 +2164,15 @@ mod tests {
         }
     }
 
-    /// A mixed page resolves every arm through the shared loader: the live agents
-    /// and human come from TWO set-shaped reads — one per table, both returning
-    /// their whole set at once — and the deleted and unresolved authors from their
-    /// own rows with no read, because a nulled FK asks the loader for nothing. That
-    /// two agents resolve from a single agents load is the no-N+1 proof: a page's
-    /// live actors cost two lookups, not one per row.
+    /// A mixed page resolves every arm through the ONE author authority in a single
+    /// call, in input order: the live agents and human come from the two set-shaped
+    /// reads that authority runs (one per table), and the deleted and unresolved rows
+    /// from their own evidence with no read, because a nulled FK asks for nothing.
+    /// Two agents resolving from one call is the no-N+1 shape — the batch's live
+    /// actors cost one read per table, whatever the page size — and the caller never
+    /// touches the loader or the discriminator directly, only `resolve_authors`.
     #[tokio::test]
-    async fn a_mixed_page_resolves_every_arm_from_two_set_shaped_lookups() {
+    async fn a_mixed_page_resolves_every_arm_through_one_batch_authority() {
         use silverhand_backend_core::messaging::{PrincipalIdentity, RuntimeKind};
 
         let directory = tempfile::tempdir().unwrap();
@@ -2195,13 +2194,7 @@ mod tests {
             sqlx::query(statement).execute(&mut db).await.unwrap();
         }
 
-        // The whole page's live actors in two loads: both agents and the human asked
-        // for as sets, never one query per row.
-        let live = load_live_actors(&mut db, &["agent-1", "agent-2"], &["user-1"])
-            .await
-            .unwrap();
-
-        let agent_evidence = |fk: &str| AuthorEvidence {
+        let agent_fk = |fk: &str| AuthorEvidence {
             from_kind: FromKind::Agent,
             from_agent_id: Some(fk.to_owned()),
             from_user_id: None,
@@ -2210,98 +2203,142 @@ mod tests {
             author_display_name: None,
         };
 
-        // Live agent: its current row, with its runtime, from the batch.
-        let one = resolve_author(
-            &agent_evidence("agent-1"),
-            live.get(PrincipalKind::Agent, "agent-1"),
-        )
-        .unwrap()
-        .expect("an agent send names an author");
-        match one {
+        // One call, five rows, mixed arms — the order the batch is asked in is the
+        // order it answers in.
+        let evidence = vec![
+            agent_fk("agent-1"),
+            AuthorEvidence {
+                from_kind: FromKind::User,
+                from_agent_id: None,
+                from_user_id: Some("user-1".to_owned()),
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+            // Deleted: FK nulled by the delete, its send-time snapshot surviving.
+            AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: None,
+                from_user_id: None,
+                author_id: Some("agent-gone".to_owned()),
+                author_name: Some("gone".to_owned()),
+                author_display_name: Some("Gone".to_owned()),
+            },
+            // Unresolved: FK nulled and no snapshot ever recorded.
+            AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: None,
+                from_user_id: None,
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+            agent_fk("agent-2"),
+        ];
+
+        let resolved = resolve_authors(&mut db, &evidence).await.unwrap();
+        assert_eq!(resolved.len(), 5, "one answer per input row, in order");
+
+        // [0] live agent with its runtime.
+        match resolved[0].as_ref().expect("an agent send names an author") {
             MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
                 assert_eq!(agent.name(), "lio");
                 assert_eq!(agent.display_name(), "Lio");
                 assert_eq!(agent.runtime(), RuntimeKind::Claude);
                 assert_eq!(agent.avatar(), None);
             }
-            other => panic!("expected a live agent, got {other:?}"),
+            other => panic!("expected a live agent at [0], got {other:?}"),
         }
 
-        // The second agent resolves from that SAME agents load — the no-N+1 proof.
-        let two = resolve_author(
-            &agent_evidence("agent-2"),
-            live.get(PrincipalKind::Agent, "agent-2"),
-        )
-        .unwrap()
-        .expect("an agent send names an author");
-        match two {
-            MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
-                assert_eq!(agent.name(), "cin");
-                assert_eq!(agent.runtime(), RuntimeKind::Codex);
-            }
-            other => panic!("expected a live agent, got {other:?}"),
-        }
-
-        // Live human: no runtime, and an avatar revision from the row's updated_at.
-        let human_evidence = AuthorEvidence {
-            from_kind: FromKind::User,
-            from_agent_id: None,
-            from_user_id: Some("user-1".to_owned()),
-            author_id: None,
-            author_name: None,
-            author_display_name: None,
-        };
-        let human = resolve_author(&human_evidence, live.get(PrincipalKind::Human, "user-1"))
-            .unwrap()
-            .expect("a human send names an author");
-        match human {
+        // [1] live human: no runtime, an avatar revision from the row's updated_at.
+        match resolved[1].as_ref().expect("a human send names an author") {
             MessageAuthor::Active(ActiveAuthor::Human(person)) => {
                 assert_eq!(person.name(), "human");
                 assert_eq!(person.avatar().map(|a| a.cache_buster()), Some(7));
             }
-            other => panic!("expected a live human, got {other:?}"),
+            other => panic!("expected a live human at [1], got {other:?}"),
         }
 
-        // Deleted: FK nulled by the delete, but the send-time snapshot survives — no
-        // live row was requested for it, so it resolves without a read.
-        let deleted_evidence = AuthorEvidence {
-            from_kind: FromKind::Agent,
-            from_agent_id: None,
-            from_user_id: None,
-            author_id: Some("agent-gone".to_owned()),
-            author_name: Some("gone".to_owned()),
-            author_display_name: Some("Gone".to_owned()),
-        };
-        let deleted = resolve_author(
-            &deleted_evidence,
-            live.get(PrincipalKind::Agent, "agent-gone"),
-        )
-        .unwrap()
-        .expect("a deleted author is still named by its snapshot");
-        match deleted {
+        // [2] deleted: named by its snapshot, no live row requested for it.
+        match resolved[2]
+            .as_ref()
+            .expect("a deleted author is named by its snapshot")
+        {
             MessageAuthor::Deleted(author) => {
                 assert_eq!(author.display_name(), "Gone");
                 assert!(matches!(author.identity(), PrincipalIdentity::Agent(_)));
             }
-            other => panic!("expected a deleted author, got {other:?}"),
+            other => panic!("expected a deleted author at [2], got {other:?}"),
         }
 
-        // Unresolved: FK nulled and no snapshot ever recorded — named by nothing.
-        let unresolved_evidence = AuthorEvidence {
-            from_kind: FromKind::Agent,
-            from_agent_id: None,
-            from_user_id: None,
-            author_id: None,
-            author_name: None,
-            author_display_name: None,
-        };
-        let unresolved = resolve_author(
-            &unresolved_evidence,
-            live.get(PrincipalKind::Agent, "nobody"),
-        )
-        .unwrap()
-        .expect("an unresolved author still reports its kind");
-        assert!(matches!(unresolved, MessageAuthor::Unresolved(_)));
+        // [3] unresolved: named by nothing.
+        assert!(matches!(
+            resolved[3]
+                .as_ref()
+                .expect("an unresolved author still reports its kind"),
+            MessageAuthor::Unresolved(_)
+        ));
+
+        // [4] the second live agent, resolved from the SAME agents read as [0].
+        match resolved[4].as_ref().expect("an agent send names an author") {
+            MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
+                assert_eq!(agent.name(), "cin");
+                assert_eq!(agent.runtime(), RuntimeKind::Codex);
+            }
+            other => panic!("expected a live agent at [4], got {other:?}"),
+        }
+    }
+
+    /// A single broken row fails the WHOLE batch — there is no partial page of
+    /// authors, and the fault the store owns (a stored runtime outside the closed
+    /// set) survives as the error's source. The valid rows around it do not soften
+    /// the invariant into a per-row skip.
+    #[tokio::test]
+    async fn one_broken_runtime_fails_the_whole_batch_with_its_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("broken-runtime-batch.sqlite");
+        let mut db = super::current_schema::create_current_schema(&path).await;
+
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
+             'human', 'Human', 0, 0)",
+            // A stored runtime the domain does not accept — the DB has no CHECK on the
+            // value, so this is exactly the data-invariant fault the store must own.
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-bad', 'bad', 'aider', 'host-1', 0, 0, 'Bad', \
+             'user-1')",
+        ] {
+            sqlx::query(statement).execute(&mut db).await.unwrap();
+        }
+
+        let evidence = vec![
+            AuthorEvidence {
+                from_kind: FromKind::User,
+                from_agent_id: None,
+                from_user_id: Some("user-1".to_owned()),
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+            AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: Some("agent-bad".to_owned()),
+                from_user_id: None,
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+        ];
+
+        let failure = resolve_authors(&mut db, &evidence).await.unwrap_err();
+        let source = std::error::Error::source(&failure)
+            .and_then(|error| error.downcast_ref::<MessagingStoreError>())
+            .expect("the persistence failure carries the store error as its source");
+        assert!(
+            matches!(source, MessagingStoreError::MalformedRuntime { value } if value == "aider"),
+            "the broken runtime value was not preserved through the batch failure: {source:?}"
+        );
     }
 
     /// The one cell the send path cannot reach: a follower row that names an agent
