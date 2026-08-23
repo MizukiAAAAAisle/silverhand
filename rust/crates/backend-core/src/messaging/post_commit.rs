@@ -49,6 +49,18 @@ pub enum EffectStep {
     CopyDelivered,
     /// An addressed agent that received no copy, and why.
     SkipRecorded,
+    /// The message itself, published to the conversation it landed in.
+    MessagePublished,
+    /// The durable record that a person was named. A write of its own, in its own
+    /// transaction, after the send has already committed.
+    MentionedViewerRecorded,
+    ViewerNotified,
+    /// What every reader's unread state now is. It READS the record above, so it
+    /// runs after that write has been attempted.
+    UnreadPublished,
+    MainDelivered,
+    /// Only for recipients that are not already running.
+    IdleStarted,
 }
 
 /// A copy landed on a direct line, so the AUTHOR's view of their lines is out of
@@ -102,6 +114,75 @@ pub trait RuntimeDelivery {
         &self,
         agent: &AgentId,
         copy: &CommittedMentionCopy,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// The durable record that a person was named in a message they can see.
+///
+/// This is a WRITE, after the send committed and in a transaction of its own, so it
+/// has its own custody: if it fails the message stands and stays published, and the
+/// named person simply has no directed item in their badge. Nothing already
+/// committed may be undone for it, and no later attempt may be skipped because of
+/// it.
+pub trait MentionedViewerRecord {
+    fn record_mentioned_viewer(
+        &self,
+        viewer: &UserId,
+        message: &MessageId,
+        conversation: &ConversationId,
+    ) -> impl Future<Output = Result<CommittedViewerMention, EffectFailure>> + Send;
+}
+
+/// One recorded mention, as the row that now exists. Returned rather than implied,
+/// because the publication below can fail while this row remains: a capability that
+/// answered only "did both halves work" would lose that state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedViewerMention {
+    pub viewer: UserId,
+    pub message: MessageId,
+    pub conversation: ConversationId,
+}
+
+/// Tells the named person's client that the row above exists.
+pub trait ViewerNotification {
+    fn notify_viewer(
+        &self,
+        mention: &CommittedViewerMention,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// The message, published to the conversation it landed in.
+pub trait MainPublication {
+    fn publish_message(
+        &self,
+        fact: &MessageCreatedFact,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// Everyone's unread state after this message. It reads the mention rows, which is
+/// why it cannot run before they are written.
+pub trait UnreadPublication {
+    fn publish_unread(
+        &self,
+        conversation: &ConversationId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// The message is owed to the conversation's agent participants.
+pub trait MainDelivery {
+    fn deliver_to_participants(
+        &self,
+        fact: &MessageCreatedFact,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// A recipient that is not running is started afterwards. Delivery does not depend
+/// on it: an idle runtime is started because nobody is there to receive, not in
+/// order to receive.
+pub trait IdleStart {
+    fn start_idle_recipients(
+        &self,
+        fact: &MessageCreatedFact,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -251,6 +332,101 @@ where
             }
         }
     }
+    report
+}
+
+/// The capabilities a main-line send's aftermath needs.
+pub struct MainEffects<'ports, P, R, V, U, D, S> {
+    pub publication: &'ports P,
+    pub mentions: &'ports R,
+    pub viewers: &'ports V,
+    pub unread: &'ports U,
+    pub delivery: &'ports D,
+    pub idle: &'ports S,
+}
+
+/// Tells the world about a committed main-line send.
+///
+/// The order is load-bearing in one place and one place only: a named person's
+/// durable mention row is written before unread state is published, because the
+/// badge's directed count READS that row — publishing first sends a value that
+/// predates the mention, and the client does not ask again. Everything else is
+/// ordered for readability, and each attempt is isolated: per named viewer, so one
+/// person's failure does not cost another theirs.
+pub async fn announce_main_send<P, R, V, U, D, S>(
+    fact: &MessageCreatedFact,
+    mentioned_viewers: &[UserId],
+    ports: MainEffects<'_, P, R, V, U, D, S>,
+) -> EffectReport
+where
+    P: MainPublication,
+    R: MentionedViewerRecord,
+    V: ViewerNotification,
+    U: UnreadPublication,
+    D: MainDelivery,
+    S: IdleStart,
+{
+    let mut report = EffectReport::default();
+    let id = fact.message.id.clone();
+    let conversation = fact.message.conversation_id.clone();
+
+    attempt(
+        &mut report,
+        &id,
+        EffectStep::MessagePublished,
+        ports.publication.publish_message(fact),
+    )
+    .await;
+
+    for viewer in mentioned_viewers {
+        report
+            .attempted
+            .push((id.clone(), EffectStep::MentionedViewerRecorded));
+        match ports
+            .mentions
+            .record_mentioned_viewer(viewer, &id, &conversation)
+            .await
+        {
+            // The row exists whatever the publication does next, and the failure of
+            // one named person's record does not reach the next person's.
+            Ok(mention) => {
+                attempt(
+                    &mut report,
+                    &id,
+                    EffectStep::ViewerNotified,
+                    ports.viewers.notify_viewer(&mention),
+                )
+                .await;
+            }
+            Err(failure) => {
+                report
+                    .failed
+                    .push((id.clone(), EffectStep::MentionedViewerRecorded, failure));
+            }
+        }
+    }
+
+    attempt(
+        &mut report,
+        &id,
+        EffectStep::UnreadPublished,
+        ports.unread.publish_unread(&conversation),
+    )
+    .await;
+    attempt(
+        &mut report,
+        &id,
+        EffectStep::MainDelivered,
+        ports.delivery.deliver_to_participants(fact),
+    )
+    .await;
+    attempt(
+        &mut report,
+        &id,
+        EffectStep::IdleStarted,
+        ports.idle.start_idle_recipients(fact),
+    )
+    .await;
     report
 }
 
@@ -614,6 +790,202 @@ mod tests {
             assert_eq!(
                 recorder.steps_of(&format!("{line}|{agent}")),
                 vec![EffectStep::RuntimeStarted]
+            );
+        }
+    }
+
+    impl MainPublication for Recorder {
+        async fn publish_message(&self, fact: &MessageCreatedFact) -> Result<(), EffectFailure> {
+            self.answer(fact.message.id.as_str(), EffectStep::MessagePublished)
+        }
+    }
+
+    impl MentionedViewerRecord for Recorder {
+        async fn record_mentioned_viewer(
+            &self,
+            viewer: &UserId,
+            message: &MessageId,
+            conversation: &ConversationId,
+        ) -> Result<CommittedViewerMention, EffectFailure> {
+            self.answer(
+                &format!("{}|{}", viewer.as_str(), message.as_str()),
+                EffectStep::MentionedViewerRecorded,
+            )?;
+            Ok(CommittedViewerMention {
+                viewer: viewer.clone(),
+                message: message.clone(),
+                conversation: conversation.clone(),
+            })
+        }
+    }
+
+    impl ViewerNotification for Recorder {
+        async fn notify_viewer(
+            &self,
+            mention: &CommittedViewerMention,
+        ) -> Result<(), EffectFailure> {
+            self.answer(
+                &format!("{}|{}", mention.viewer.as_str(), mention.message.as_str()),
+                EffectStep::ViewerNotified,
+            )
+        }
+    }
+
+    impl UnreadPublication for Recorder {
+        async fn publish_unread(&self, conversation: &ConversationId) -> Result<(), EffectFailure> {
+            self.answer(conversation.as_str(), EffectStep::UnreadPublished)
+        }
+    }
+
+    impl MainDelivery for Recorder {
+        async fn deliver_to_participants(
+            &self,
+            fact: &MessageCreatedFact,
+        ) -> Result<(), EffectFailure> {
+            self.answer(fact.message.id.as_str(), EffectStep::MainDelivered)
+        }
+    }
+
+    impl IdleStart for Recorder {
+        async fn start_idle_recipients(
+            &self,
+            fact: &MessageCreatedFact,
+        ) -> Result<(), EffectFailure> {
+            self.answer(fact.message.id.as_str(), EffectStep::IdleStarted)
+        }
+    }
+
+    fn main_ports(
+        recorder: &Recorder,
+    ) -> MainEffects<'_, Recorder, Recorder, Recorder, Recorder, Recorder, Recorder> {
+        MainEffects {
+            publication: recorder,
+            mentions: recorder,
+            viewers: recorder,
+            unread: recorder,
+            delivery: recorder,
+            idle: recorder,
+        }
+    }
+
+    fn viewers(names: &[&str]) -> Vec<UserId> {
+        names
+            .iter()
+            .map(|name| UserId::parse(*name).unwrap())
+            .collect()
+    }
+
+    /// The main line's own order, ending in delivery and THEN the conditional start
+    /// of whoever was idle — delivery does not wait on a runtime, and a runtime is
+    /// started because nobody was there to receive.
+    #[tokio::test]
+    async fn a_main_line_send_is_announced_in_its_own_order() {
+        let recorder = Recorder::default();
+
+        let report = announce_main_send(
+            &fact(Vec::new()),
+            &viewers(&["viewer-1"]),
+            main_ports(&recorder),
+        )
+        .await;
+
+        assert_eq!(
+            report.steps_for(&MessageId::parse("source-message").unwrap()),
+            vec![
+                EffectStep::MessagePublished,
+                EffectStep::MentionedViewerRecorded,
+                EffectStep::ViewerNotified,
+                EffectStep::UnreadPublished,
+                EffectStep::MainDelivered,
+                EffectStep::IdleStarted,
+            ]
+        );
+        assert!(report.failed.is_empty());
+    }
+
+    /// The row is written before unread is published, because the badge's directed
+    /// count reads it. Anything after a failure still runs.
+    #[tokio::test]
+    async fn unread_is_published_after_the_mention_row_is_attempted() {
+        for failing in [
+            EffectStep::MessagePublished,
+            EffectStep::MentionedViewerRecorded,
+            EffectStep::ViewerNotified,
+            EffectStep::UnreadPublished,
+            EffectStep::MainDelivered,
+            EffectStep::IdleStarted,
+        ] {
+            let recorder = Recorder::failing(&[failing]);
+
+            let report = announce_main_send(
+                &fact(Vec::new()),
+                &viewers(&["viewer-1"]),
+                main_ports(&recorder),
+            )
+            .await;
+
+            let steps = report.steps_for(&MessageId::parse("source-message").unwrap());
+            let recorded = steps
+                .iter()
+                .position(|step| *step == EffectStep::MentionedViewerRecorded);
+            let unread = steps
+                .iter()
+                .position(|step| *step == EffectStep::UnreadPublished);
+            assert!(
+                recorded < unread,
+                "{failing:?} disturbed the one order that carries weight: {steps:?}"
+            );
+            assert!(
+                steps.contains(&EffectStep::MainDelivered)
+                    && steps.contains(&EffectStep::IdleStarted),
+                "{failing:?} truncated the announcement: {steps:?}"
+            );
+            assert_eq!(report.failed_steps(), vec![failing]);
+        }
+    }
+
+    /// A record that fails has no fact to publish — there is no value to pass — and
+    /// the person's notification is simply not attempted. Everything else still is.
+    #[tokio::test]
+    async fn a_failed_record_leaves_nothing_to_notify_with() {
+        let recorder = Recorder::failing(&[EffectStep::MentionedViewerRecorded]);
+
+        let report = announce_main_send(
+            &fact(Vec::new()),
+            &viewers(&["viewer-1"]),
+            main_ports(&recorder),
+        )
+        .await;
+
+        assert!(!recorder.called(EffectStep::ViewerNotified));
+        assert!(recorder.called(EffectStep::UnreadPublished));
+        assert_eq!(
+            report.failed_steps(),
+            vec![EffectStep::MentionedViewerRecorded]
+        );
+    }
+
+    /// One named person's failure is theirs alone: the next person's row is still
+    /// written and their client still told.
+    #[tokio::test]
+    async fn one_viewers_failure_does_not_cost_another_theirs() {
+        let recorder = Recorder::failing(&[EffectStep::ViewerNotified]);
+
+        announce_main_send(
+            &fact(Vec::new()),
+            &viewers(&["viewer-1", "viewer-2"]),
+            main_ports(&recorder),
+        )
+        .await;
+
+        for viewer in ["viewer-1", "viewer-2"] {
+            assert_eq!(
+                recorder.steps_of(&format!("{viewer}|source-message")),
+                vec![
+                    EffectStep::MentionedViewerRecorded,
+                    EffectStep::ViewerNotified
+                ],
+                "{viewer} lost their own two steps"
             );
         }
     }
