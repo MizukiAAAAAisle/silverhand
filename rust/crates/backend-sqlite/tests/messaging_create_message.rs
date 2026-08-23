@@ -2222,8 +2222,8 @@ struct EverythingFails;
 impl DirectLineInvalidation for EverythingFails {
     async fn direct_lines_changed(
         &self,
+        _author: &UserId,
         _line: &ConversationId,
-        _agent: &AgentId,
     ) -> Result<(), EffectFailure> {
         Err(EffectFailure::from_source(EffectRefused))
     }
@@ -2247,7 +2247,11 @@ impl CopyNotification for EverythingFails {
 }
 
 impl RuntimeStart for EverythingFails {
-    async fn start(&self, _agent: &AgentId) -> Result<(), EffectFailure> {
+    async fn start(
+        &self,
+        _conversation: &ConversationId,
+        _agent: &AgentId,
+    ) -> Result<(), EffectFailure> {
         Err(EffectFailure::from_source(EffectRefused))
     }
 }

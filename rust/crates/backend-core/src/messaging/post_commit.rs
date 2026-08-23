@@ -39,9 +39,9 @@ impl EffectFailure {
 /// The attempts a committed send makes, in the order they are made.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum EffectStep {
-    /// The list of direct lines changed shape, so a reader's view of it is stale.
-    /// First, because a copy that arrives on a line nobody knows exists cannot be
-    /// read.
+    /// The author's view of their direct lines is stale — a line may be new, and an
+    /// existing one has a new preview and a new position. First, because a copy
+    /// nobody can see the line for cannot be read.
     DirectLineInvalidation,
     CopyPublished,
     AuthorNotified,
@@ -51,13 +51,17 @@ pub enum EffectStep {
     SkipRecorded,
 }
 
-/// A direct line came into existence, so anything showing the set of lines is out
-/// of date.
+/// A copy landed on a direct line, so the AUTHOR's view of their lines is out of
+/// date: the line may be new, and even an old one now has a different preview and a
+/// different place in the list.
+///
+/// The audience is the author, not the recipient: an agent is not a viewer of the
+/// list, so passing it here would leave an adapter unable to address anyone.
 pub trait DirectLineInvalidation {
     fn direct_lines_changed(
         &self,
+        author: &UserId,
         line: &ConversationId,
-        agent: &AgentId,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -79,9 +83,15 @@ pub trait CopyNotification {
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
-/// The recipient may not be running.
+/// The recipient may not be running. A runtime is located by the conversation it
+/// serves as well as by the agent, because a conversation-scoped one cannot be
+/// found by agent alone.
 pub trait RuntimeStart {
-    fn start(&self, agent: &AgentId) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+    fn start(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
 /// The recipient is owed this message now. Independent of starting it: delivery
@@ -188,7 +198,7 @@ where
                     EffectStep::DirectLineInvalidation,
                     ports
                         .direct_lines
-                        .direct_lines_changed(&copy.conversation_id, agent),
+                        .direct_lines_changed(&author, &copy.conversation_id),
                 )
                 .await;
                 attempt(
@@ -209,7 +219,7 @@ where
                     &mut report,
                     &id,
                     EffectStep::RuntimeStarted,
-                    ports.start.start(agent),
+                    ports.start.start(&copy.conversation_id, agent),
                 )
                 .await;
                 attempt(
@@ -318,10 +328,13 @@ mod tests {
     impl DirectLineInvalidation for Recorder {
         async fn direct_lines_changed(
             &self,
+            author: &UserId,
             line: &ConversationId,
-            _agent: &AgentId,
         ) -> Result<(), EffectFailure> {
-            self.answer(line.as_str(), EffectStep::DirectLineInvalidation)
+            self.answer(
+                &format!("{}|{}", author.as_str(), line.as_str()),
+                EffectStep::DirectLineInvalidation,
+            )
         }
     }
 
@@ -343,8 +356,15 @@ mod tests {
     }
 
     impl RuntimeStart for Recorder {
-        async fn start(&self, agent: &AgentId) -> Result<(), EffectFailure> {
-            self.answer(agent.as_str(), EffectStep::RuntimeStarted)
+        async fn start(
+            &self,
+            conversation: &ConversationId,
+            agent: &AgentId,
+        ) -> Result<(), EffectFailure> {
+            self.answer(
+                &format!("{}|{}", conversation.as_str(), agent.as_str()),
+                EffectStep::RuntimeStarted,
+            )
         }
     }
 
@@ -476,6 +496,26 @@ mod tests {
         }
     }
 
+    /// A failure is only actionable with its reason, so the cause survives the
+    /// boundary rather than being flattened into "an effect failed".
+    #[tokio::test]
+    async fn a_failure_keeps_the_cause_it_was_given() {
+        let recorder = Recorder::failing(&[EffectStep::CopyPublished]);
+
+        let report = announce_send(
+            &fact(vec![copied("copy-1", "line-1", "agent-1", "Alice")]),
+            ports(&recorder),
+        )
+        .await;
+
+        let (_, step, failure) = &report.failed[0];
+        assert_eq!(*step, EffectStep::CopyPublished);
+        assert_eq!(
+            std::error::Error::source(failure).unwrap().to_string(),
+            "this effect was told to fail"
+        );
+    }
+
     /// The one that used to be described as a dependency: a recipient that could not
     /// be started is still owed the message, and delivery enqueues on its own.
     #[tokio::test]
@@ -561,14 +601,20 @@ mod tests {
                 "copy {id} lost its order"
             );
         }
+        // Both arguments of each call are pinned: the author's view is invalidated
+        // for the line the copy landed on, and the runtime is located by that same
+        // line together with the agent.
         for line in ["line-1", "line-2"] {
             assert_eq!(
-                recorder.steps_of(line),
+                recorder.steps_of(&format!("user-1|{line}")),
                 vec![EffectStep::DirectLineInvalidation]
             );
         }
-        for agent in ["agent-1", "agent-2"] {
-            assert_eq!(recorder.steps_of(agent), vec![EffectStep::RuntimeStarted]);
+        for (line, agent) in [("line-1", "agent-1"), ("line-2", "agent-2")] {
+            assert_eq!(
+                recorder.steps_of(&format!("{line}|{agent}")),
+                vec![EffectStep::RuntimeStarted]
+            );
         }
     }
 }
