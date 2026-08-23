@@ -627,23 +627,36 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
 async fn collapsed_target_refusals_keep_distinct_operator_reasons() {
     let sink = operator_log();
     let cases: &[(&str, &[&str], &str, &str)] = &[
-        ("unknown", &[], "dm:@missing", "unknown_handle"),
+        (
+            "unknown",
+            &[],
+            "dm:@missing-collapsed-target",
+            "unknown_handle",
+        ),
         (
             "not-participant",
             &[
+                "UPDATE workspaces SET name = 'RefusalOnly', name_key = 'refusalonly' \
+                 WHERE id = 'workspace-1'",
+                "UPDATE conversations SET title = 'PrivateOnly', title_key = 'privateonly' \
+                 WHERE id = 'conv000000000001'",
                 "DELETE FROM conversation_agents WHERE conversation_id = 'conv000000000001' AND agent_id = 'agent-1'",
             ],
-            "#Space/General",
+            "#RefusalOnly/PrivateOnly",
             "not_participant",
         ),
         (
             "ambiguous-workspace",
             &[
+                "UPDATE workspaces SET name = 'AmbiguousOnly', name_key = 'ambiguousonly' \
+                 WHERE id = 'workspace-1'",
+                "UPDATE conversations SET title = 'OnlyHere', title_key = 'onlyhere' \
+                 WHERE id = 'conv000000000001'",
                 "DROP INDEX idx_workspaces_name_key",
                 "INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
-                 VALUES ('workspace-2', 'Space', 'space', 'user-1', 0, 0)",
+                 VALUES ('workspace-2', 'AmbiguousOnly', 'ambiguousonly', 'user-1', 0, 0)",
             ],
-            "#Space/General",
+            "#AmbiguousOnly/OnlyHere",
             "workspace_ambiguous",
         ),
     ];
