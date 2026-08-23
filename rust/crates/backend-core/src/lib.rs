@@ -9,3 +9,4 @@ pub mod auth;
 pub mod foundation_message;
 pub mod identity;
 pub mod persistence;
+pub mod runtime_credential;

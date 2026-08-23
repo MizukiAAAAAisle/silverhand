@@ -1,13 +1,13 @@
 use axum::{
     Json, Router,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
 };
 use silverhand_backend_core::auth::{AuthenticateHumanSession, SessionBearer};
 
-use crate::error;
+use crate::{bearer::strict_bearer_credential, error};
 
 pub trait HumanSessionRejection: Clone + Send + Sync + 'static {
     fn unauthorized_response(&self) -> Response;
@@ -80,21 +80,12 @@ where
 }
 
 fn bearer_from_headers(headers: &HeaderMap) -> Option<SessionBearer> {
-    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    parse_bearer(header)
-}
-
-fn parse_bearer(header: &str) -> Option<SessionBearer> {
-    let split = header.find(char::is_whitespace)?;
-    let (scheme, credential) = header.split_at(split);
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    SessionBearer::parse(credential)
+    SessionBearer::parse(strict_bearer_credential(headers)?.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::http::header::AUTHORIZATION;
     use serde::Deserialize;
 
     use super::*;
@@ -114,7 +105,11 @@ mod tests {
             let actual = case
                 .header
                 .as_deref()
-                .and_then(parse_bearer)
+                .and_then(|header| {
+                    let mut headers = HeaderMap::new();
+                    headers.insert(AUTHORIZATION, header.parse().ok()?);
+                    bearer_from_headers(&headers)
+                })
                 .map(|token| format!("{token:?}"));
             let expected = case
                 .rust_extracted_token
