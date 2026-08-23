@@ -27,7 +27,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use silverhand_backend_core::{
     auth::{AuthenticateHumanSession, SessionBearer},
     identity::{ConversationId, UserId, WorkspaceId},
-    messaging::{DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity},
+    messaging::{
+        DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
+        post_commit::{DirectLineInvalidation, EffectFailure},
+    },
     scope_event::{AuthorizeEventScope, EventScope},
 };
 use tokio::{
@@ -411,6 +414,17 @@ impl DirectPairOpenedPort for ScopeEventHub {
             self.publish_direct_pairs_changed(viewer, fact.conversation())?;
         }
         Ok(())
+    }
+}
+
+impl DirectLineInvalidation for ScopeEventHub {
+    async fn direct_lines_changed(
+        &self,
+        viewer: &UserId,
+        line: &ConversationId,
+    ) -> Result<(), EffectFailure> {
+        self.publish_direct_pairs_changed(viewer, line)
+            .map_err(EffectFailure::from_source)
     }
 }
 
@@ -1281,15 +1295,22 @@ async fn send_json(socket: &mut WebSocket, frame: &impl Serialize) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use futures_util::{SinkExt, StreamExt};
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
         identity::AgentId,
         messaging::{
-            DirectPairOpenedPort, DirectPairParticipants, EnvironmentUnavailable,
-            OpenDirectPairError, SendEntropy,
+            AddressedPrincipals, DirectLineAuthority, DirectPairOpenedPort, DirectPairParticipants,
+            EnvironmentUnavailable, MessageContent, OpenDirectPairError, PrincipalKind,
+            ReferencePositions, SendActor, SendDestination, SendEntropy, SendMessage,
+            SendMessageDraft, SendMessageUnitOfWork,
+            mention_cc::CommittedMentionCopy,
+            post_commit::{
+                CopyNotification, EffectStep, MentionSkipRecord, MessagePublication,
+                RuntimeDelivery, RuntimeStart, SendEffects, SkippedMention, announce_send,
+            },
         },
         persistence::PersistenceFailure,
         scope_event::AuthorizeEventScope,
@@ -1325,6 +1346,109 @@ mod tests {
     impl SendEntropy for FixedEntropy {
         fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
             buffer.fill(self.0);
+            Ok(())
+        }
+    }
+
+    struct OneReference;
+
+    impl ReferencePositions for OneReference {
+        fn autolink_spans(&self, content: &MessageContent) -> Vec<std::ops::Range<usize>> {
+            let start = content.as_str().find('<').unwrap();
+            let end = content.as_str()[start..].find('>').unwrap() + start + 1;
+            std::iter::once(start..end).collect()
+        }
+    }
+
+    struct GrantsAgent;
+
+    impl DirectLineAuthority for GrantsAgent {
+        fn direct_lines(
+            &self,
+            _author: &UserId,
+            addressed: &AddressedPrincipals,
+        ) -> Result<Vec<AgentId>, PersistenceFailure> {
+            assert!(addressed.iter().any(|reference| {
+                reference.kind() == PrincipalKind::Agent && reference.handle().as_str() == "agent"
+            }));
+            Ok(vec![agent()])
+        }
+    }
+
+    fn mention_command() -> SendMessage {
+        SendMessage::prepare(
+            SendMessageDraft {
+                source_conversation: ConversationId::parse("conversation-1").unwrap(),
+                target_conversation: ConversationId::parse("conversation-1").unwrap(),
+                actor: SendActor::User(user()),
+                content: MessageContent::parse("<silverhand://agent/agent> ping").unwrap(),
+                destination: SendDestination::MainLine,
+                attachment_refs: Vec::new(),
+                freshness_bypass: false,
+            },
+            &OneReference,
+            &GrantsAgent,
+        )
+        .unwrap()
+    }
+
+    #[derive(Default)]
+    struct OtherEffects(Mutex<Vec<EffectStep>>);
+
+    impl OtherEffects {
+        fn record(&self, step: EffectStep) {
+            self.0.lock().unwrap().push(step);
+        }
+
+        fn calls(&self) -> Vec<EffectStep> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    impl MessagePublication for OtherEffects {
+        async fn publish_copy(&self, _copy: &CommittedMentionCopy) -> Result<(), EffectFailure> {
+            self.record(EffectStep::CopyPublished);
+            Ok(())
+        }
+    }
+
+    impl CopyNotification for OtherEffects {
+        async fn notify_author(
+            &self,
+            _author: &UserId,
+            _agent: &AgentId,
+            _copy: &CommittedMentionCopy,
+        ) -> Result<(), EffectFailure> {
+            self.record(EffectStep::AuthorNotified);
+            Ok(())
+        }
+    }
+
+    impl RuntimeStart for OtherEffects {
+        async fn start(
+            &self,
+            _conversation: &ConversationId,
+            _agent: &AgentId,
+        ) -> Result<(), EffectFailure> {
+            self.record(EffectStep::RuntimeStarted);
+            Ok(())
+        }
+    }
+
+    impl RuntimeDelivery for OtherEffects {
+        async fn deliver(
+            &self,
+            _agent: &AgentId,
+            _copy: &CommittedMentionCopy,
+        ) -> Result<(), EffectFailure> {
+            self.record(EffectStep::CopyDelivered);
+            Ok(())
+        }
+    }
+
+    impl MentionSkipRecord for OtherEffects {
+        async fn record_skip(&self, _skipped: &SkippedMention<'_>) -> Result<(), EffectFailure> {
+            self.record(EffectStep::SkipRecorded);
             Ok(())
         }
     }
@@ -1376,6 +1500,36 @@ mod tests {
             "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
              display_name, created_by_user_id) VALUES \
              ('agent-1', 'agent', 'claude', 'host-1', 1, 1, 'Agent', 'user-1')",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+             VALUES ('workspace-1', 'Space', 'space', 'user-1', 1, 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) \
+             VALUES ('workspace-1', 'user-1', 1, 'owner')",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
+             title_key, status, visibility, created_at, updated_at) VALUES \
+             ('conversation-1', 'workspace-1', 'workspace', 'open', 'Channel', 'channel', 'open', \
+             'private', 1, 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversation_users (conversation_id, user_id, joined_at) \
+             VALUES ('conversation-1', 'user-1', 1)",
         )
         .execute(&mut db)
         .await
@@ -1510,6 +1664,94 @@ mod tests {
                 conversation_id: first_pair.as_str().to_owned(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn a_transaction_record_reaches_the_same_production_viewer_sink_after_commit() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open(&path).await.unwrap();
+        let outcome = store.send_message(mention_command()).await.unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let effects = OtherEffects::default();
+
+        let report = announce_send(
+            outcome.committed(),
+            SendEffects {
+                direct_lines: &hub,
+                publication: &effects,
+                notification: &effects,
+                start: &effects,
+                delivery: &effects,
+                skips: &effects,
+            },
+        )
+        .await;
+
+        assert!(report.failed.is_empty());
+        assert_eq!(direct_pair_count(&path).await, 1);
+        let resumed = hub
+            .resume(
+                &EventScope::Viewer(user()),
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(events) = resumed.replay else {
+            panic!("the committed transaction record must reach viewer replay")
+        };
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].event,
+            ProductEvent::DirectPairsChanged { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn viewer_sink_failure_keeps_its_chain_and_does_not_stop_later_effects() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open(&path).await.unwrap();
+        let outcome = store.send_message(mention_command()).await.unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let registry = Arc::clone(&hub.scopes);
+        let _ = std::thread::spawn(move || {
+            let _guard = registry.lock().unwrap();
+            panic!("poison the test registry");
+        })
+        .join();
+        let effects = OtherEffects::default();
+
+        let report = announce_send(
+            outcome.committed(),
+            SendEffects {
+                direct_lines: &hub,
+                publication: &effects,
+                notification: &effects,
+                start: &effects,
+                delivery: &effects,
+                skips: &effects,
+            },
+        )
+        .await;
+
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(
+            report.failed_steps(),
+            vec![EffectStep::DirectLineInvalidation]
+        );
+        assert_eq!(
+            report.failed[0].2.source().unwrap().to_string(),
+            "scope event registry lock was poisoned"
+        );
+        assert_eq!(
+            effects.calls(),
+            vec![
+                EffectStep::CopyPublished,
+                EffectStep::AuthorNotified,
+                EffectStep::RuntimeStarted,
+                EffectStep::CopyDelivered,
+            ]
+        );
+        assert_eq!(direct_pair_count(&path).await, 1);
     }
 
     #[tokio::test]
