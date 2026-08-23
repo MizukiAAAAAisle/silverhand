@@ -1,0 +1,126 @@
+use axum::{
+    Json, Router,
+    extract::{Request, State},
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+};
+use silverhand_backend_core::auth::{AuthenticateHumanSession, SessionBearer};
+
+use crate::error;
+
+pub trait HumanSessionRejection: Clone + Send + Sync + 'static {
+    fn unauthorized_response(&self) -> Response;
+}
+
+/// The public API's existing unauthenticated response.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PublicJsonUnauthorized;
+
+impl HumanSessionRejection for PublicJsonUnauthorized {
+    fn unauthorized_response(&self) -> Response {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "unauthorized" })),
+        )
+            .into_response()
+    }
+}
+
+#[derive(Clone)]
+struct HumanSessionState<A, R> {
+    authority: A,
+    rejection: R,
+}
+
+/// Adds human-session authentication to an already constructed product router.
+/// Successful requests carry the sole core-wide
+/// [`UserId`](silverhand_backend_core::identity::UserId) in their extensions;
+/// handlers never receive a bearer or a storage row.
+pub fn require_human_session<A, R>(router: Router, authority: A, rejection: R) -> Router
+where
+    A: AuthenticateHumanSession,
+    R: HumanSessionRejection,
+{
+    router.layer(middleware::from_fn_with_state(
+        HumanSessionState {
+            authority,
+            rejection,
+        },
+        authenticate::<A, R>,
+    ))
+}
+
+async fn authenticate<A, R>(
+    State(state): State<HumanSessionState<A, R>>,
+    mut request: Request,
+    next: Next,
+) -> Response
+where
+    A: AuthenticateHumanSession,
+    R: HumanSessionRejection,
+{
+    let Some(bearer) = bearer_from_headers(request.headers()) else {
+        return state.rejection.unauthorized_response();
+    };
+    match state.authority.authenticate_session(bearer).await {
+        Ok(Some(user_id)) => {
+            request.extensions_mut().insert(user_id);
+            next.run(request).await
+        }
+        Ok(None) => state.rejection.unauthorized_response(),
+        Err(cause) => {
+            tracing::error!(
+                error_chain = %error::describe(&cause),
+                "human session authentication failed"
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+        }
+    }
+}
+
+fn bearer_from_headers(headers: &HeaderMap) -> Option<SessionBearer> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    parse_bearer(header)
+}
+
+fn parse_bearer(header: &str) -> Option<SessionBearer> {
+    let split = header.find(char::is_whitespace)?;
+    let (scheme, credential) = header.split_at(split);
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    SessionBearer::parse(credential)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct BearerCase {
+        name: String,
+        header: Option<String>,
+        rust_extracted_token: Option<String>,
+    }
+
+    #[test]
+    fn bearer_grammar_matches_the_deliberate_fixture() {
+        let cases: Vec<BearerCase> =
+            serde_json::from_str(include_str!("auth/fixtures/public_bearer_grammar.json")).unwrap();
+        for case in cases {
+            let actual = case
+                .header
+                .as_deref()
+                .and_then(parse_bearer)
+                .map(|token| format!("{token:?}"));
+            let expected = case
+                .rust_extracted_token
+                .as_ref()
+                .map(|_| "SessionBearer([REDACTED])".to_owned());
+            assert_eq!(actual, expected, "{}", case.name);
+        }
+    }
+}
