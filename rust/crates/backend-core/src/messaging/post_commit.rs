@@ -13,74 +13,234 @@ use std::{error::Error, future::Future};
 
 use super::{
     AgentId, ConversationId, CreatedMessage, MainCommittedSend, MessageCreatedFact, MessageId,
-    ParticipantHandle, UserId,
+    NotificationId, ParticipantHandle, UserId, WorkspaceId,
     mention_cc::{CommittedMentionCopy, MentionCopyOutcome, MentionCopySkip},
 };
 
-/// What a committed send owes the world, as the path it took decides it.
+/// What a committed send owes the world.
 ///
-/// Two variants with different payloads, and a fact carries exactly one: a
-/// main-line send reaches the conversation's participants, a reply reaches the
-/// cluster's followers, and those are different questions with different answers.
-/// Keeping them apart by type is what stops one path's announcer from executing the
-/// other's plan.
+/// Two layers, because the facts have two shapes. Naming someone does not depend on
+/// where the message landed, so mentions are common. Who receives the message does:
+/// a main-line send reaches the conversation's participants, a reply reaches the
+/// cluster's followers. Keeping those apart by type is what stops one path's
+/// announcer from executing the other's plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PostCommitPlan {
-    MainLine(MainSendPlan),
-    ReplyCluster(ReplyDeliveryPlan),
+pub struct PostCommitPlan {
+    mentions: Vec<MentionRowDraft>,
+    delivery: DeliveryPlan,
 }
 
-/// A main-line send's aftermath, enumerated inside the unit from the same snapshot
-/// the write used.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct MainSendPlan {
-    /// The conversation's agent participants, minus the sender: nobody is delivered
-    /// their own message.
-    pub delivery_recipients: Vec<AgentId>,
-    /// Which of those may be started if nothing is running for them. Whether one IS
-    /// idle is a volatile fact and is not decided here — a transaction cannot know
-    /// it, and freezing a guess would make the plan lie by the time it is used.
-    pub start_eligible: Vec<AgentId>,
-    /// One draft per person the body named who can read this conversation. Complete,
-    /// because the writer of the row should have nothing left to derive.
-    pub mentioned_viewers: Vec<MentionRowDraft>,
+impl PostCommitPlan {
+    /// Assembled by the unit of work that committed the send. A trust seam, like the
+    /// fact that carries it: the caller of the port cannot reach it, and the store
+    /// can, because the store is what decided these facts inside the transaction.
+    pub fn committed(mentions: Vec<MentionRowDraft>, delivery: DeliveryPlan) -> Self {
+        Self { mentions, delivery }
+    }
+
+    /// One draft per person this body named who can read the conversation.
+    ///
+    /// Read-only, so a caller cannot add a name the send did not — nor take one away:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::post_commit::PostCommitPlan;
+    ///
+    /// fn tamper(plan: &PostCommitPlan) {
+    ///     plan.mentions().push(todo!());
+    /// }
+    /// ```
+    pub fn mentions(&self) -> &[MentionRowDraft] {
+        &self.mentions
+    }
+
+    pub fn delivery(&self) -> &DeliveryPlan {
+        &self.delivery
+    }
 }
 
-/// A reply's aftermath. Its audience is follower-gated, which is why it cannot be
-/// the participant enumeration above.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ReplyDeliveryPlan {
-    pub audience: Vec<AgentId>,
+/// Who receives the message, by the path it took.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeliveryPlan {
+    MainLine(MainDeliveryPlan),
+    ReplyCluster(ReplyAudience),
+}
+
+/// A main-line send's recipients, and which of them this send is allowed to start.
+///
+/// The two lists differ, and not by accident. An agent writing into its own
+/// conversation is not delivered its own message and starts nobody: the runtime it
+/// would start is the one already running to write. An agent writing into ANOTHER
+/// conversation is a different case — the target's own session is a recipient there,
+/// and idle recipients are started. A person's send excludes nobody and starts
+/// whoever is idle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MainDeliveryPlan {
+    recipients: Vec<AgentId>,
+    start_eligible: Vec<AgentId>,
+}
+
+impl MainDeliveryPlan {
+    pub fn committed(recipients: Vec<AgentId>, start_eligible: Vec<AgentId>) -> Self {
+        Self {
+            recipients,
+            start_eligible,
+        }
+    }
+
+    /// Who the message is owed to. Read-only for the same reason as the mentions: a
+    /// recipient list a caller could edit would be a recipient list the send did not
+    /// decide.
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::post_commit::MainDeliveryPlan;
+    ///
+    /// fn tamper(plan: &MainDeliveryPlan) {
+    ///     plan.recipients().push(todo!());
+    /// }
+    /// ```
+    pub fn recipients(&self) -> &[AgentId] {
+        &self.recipients
+    }
+
+    /// Which recipients this send may start if nothing is running for them. Whether
+    /// one IS idle is volatile and is not decided here.
+    pub fn start_eligible(&self) -> &[AgentId] {
+        &self.start_eligible
+    }
+}
+
+/// A reply's audience: the cluster's follower agents that still participate, minus
+/// the sender.
+///
+/// Named for what it is rather than "the reply's delivery plan", because it carries
+/// no delivery kind. Every recipient of a current reply is owed a turn — the kind is
+/// the reply announcer's fixed contract, not something an adapter should have to
+/// infer — while `observe` belongs to historical catch-up, which is written inside
+/// the transaction and is no part of this.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplyAudience {
+    recipients: Vec<AgentId>,
+}
+
+impl ReplyAudience {
+    pub fn committed(recipients: Vec<AgentId>) -> Self {
+        Self { recipients }
+    }
+
+    pub fn recipients(&self) -> &[AgentId] {
+        &self.recipients
+    }
 }
 
 /// Everything the durable record of "this person was named" needs, projected from
-/// the send that named them. The row's own id is the store's to mint; every other
-/// field is decided here, so the write cannot re-derive or re-parse anything.
+/// the send that named them.
+///
+/// It carries no timestamp and no identity: the row is written after the send, in a
+/// transaction of its own, so when it happened and what it is called are the writing
+/// adapter's own facts and are reported back on [`CommittedMentionRow`]. A draft that
+/// claimed a timestamp would be naming a moment that had not arrived.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MentionRowDraft {
-    pub viewer: UserId,
-    pub mentioned_handle: ParticipantHandle,
-    pub source_conversation: ConversationId,
-    pub source_conversation_title: String,
-    pub source_message: MessageId,
-    /// Absent for a conversation that has no workspace, which a direct line does
-    /// not.
-    pub source_workspace: Option<WorkspaceCoordinate>,
-    pub excerpt: String,
-    pub created_at_ms: i64,
+    viewer: UserId,
+    mentioned_name: ParticipantHandle,
+    trigger_name: String,
+    source_workspace: WorkspaceCoordinate,
+    source_conversation: ConversationId,
+    source_conversation_title: String,
+    source_message: MessageId,
+    excerpt: String,
 }
 
+impl MentionRowDraft {
+    #[allow(clippy::too_many_arguments)]
+    pub fn committed(
+        viewer: UserId,
+        mentioned_name: ParticipantHandle,
+        trigger_name: String,
+        source_workspace: WorkspaceCoordinate,
+        source_conversation: ConversationId,
+        source_conversation_title: String,
+        source_message: MessageId,
+        excerpt: String,
+    ) -> Self {
+        Self {
+            viewer,
+            mentioned_name,
+            trigger_name,
+            source_workspace,
+            source_conversation,
+            source_conversation_title,
+            source_message,
+            excerpt,
+        }
+    }
+
+    pub fn viewer(&self) -> &UserId {
+        &self.viewer
+    }
+
+    pub fn mentioned_name(&self) -> &ParticipantHandle {
+        &self.mentioned_name
+    }
+
+    /// Who named them, as a reader will see it: the sender's display name, or their
+    /// name, or their id — whichever is the first that says something.
+    pub fn trigger_name(&self) -> &str {
+        &self.trigger_name
+    }
+
+    pub fn source_workspace(&self) -> &WorkspaceCoordinate {
+        &self.source_workspace
+    }
+
+    pub fn source_conversation(&self) -> &ConversationId {
+        &self.source_conversation
+    }
+
+    pub fn source_conversation_title(&self) -> &str {
+        &self.source_conversation_title
+    }
+
+    pub fn source_message(&self) -> &MessageId {
+        &self.source_message
+    }
+
+    pub fn excerpt(&self) -> &str {
+        &self.excerpt
+    }
+}
+
+/// A mention record only exists inside a workspace: it is navigated to by workspace
+/// and conversation, and a direct line has no workspace to navigate from. So the
+/// coordinate is required rather than optional — a draft without one would describe
+/// a row a reader could not reach.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceCoordinate {
-    pub id: String,
-    pub name: String,
+    id: WorkspaceId,
+    name: String,
 }
 
-/// The row that now exists, as the store wrote it: the draft plus the identity it
-/// minted. Returned so the publication below has nothing to look up.
+impl WorkspaceCoordinate {
+    pub fn committed(id: WorkspaceId, name: String) -> Self {
+        Self { id, name }
+    }
+
+    pub fn id(&self) -> &WorkspaceId {
+        &self.id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// The row that now exists: the draft it was written from, plus the identity and the
+/// moment the writing adapter supplied. Returned so the publication that follows has
+/// nothing to look up.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedMentionRow {
-    pub id: MessageId,
+    pub id: NotificationId,
+    pub created_at_ms: i64,
     pub draft: MentionRowDraft,
 }
 
@@ -444,7 +604,7 @@ where
 {
     let mut report = EffectReport::default();
     let message = send.message();
-    let plan = send.plan();
+    let delivery = send.delivery();
     let id = message.id.clone();
     let conversation = message.conversation_id.clone();
 
@@ -456,7 +616,7 @@ where
     )
     .await;
 
-    for draft in &plan.mentioned_viewers {
+    for draft in send.mentions() {
         report
             .attempted
             .push((id.clone(), EffectStep::MentionedViewerRecorded));
@@ -487,7 +647,7 @@ where
         ports.unread.publish_unread(&conversation),
     )
     .await;
-    for recipient in &plan.delivery_recipients {
+    for recipient in delivery.recipients() {
         attempt(
             &mut report,
             &id,
@@ -498,7 +658,7 @@ where
     }
     // After delivery, and only for those the plan allows: a runtime is started
     // because nobody was there to receive, not in order to receive.
-    for recipient in &plan.start_eligible {
+    for recipient in delivery.start_eligible() {
         attempt(
             &mut report,
             &id,
@@ -677,62 +837,60 @@ mod tests {
     }
 
     fn draft_for(viewer: &str) -> MentionRowDraft {
-        MentionRowDraft {
-            viewer: UserId::parse(viewer).unwrap(),
-            mentioned_handle: ParticipantHandle::parse("Viewer").unwrap(),
-            source_conversation: ConversationId::parse("conv-1").unwrap(),
-            source_conversation_title: "Channel".to_owned(),
-            source_message: MessageId::parse("source-message").unwrap(),
-            source_workspace: Some(WorkspaceCoordinate {
-                id: "ws-1".to_owned(),
-                name: "Space".to_owned(),
-            }),
-            excerpt: "ping".to_owned(),
-            created_at_ms: 7,
-        }
+        MentionRowDraft::committed(
+            UserId::parse(viewer).unwrap(),
+            ParticipantHandle::parse("Viewer").unwrap(),
+            "Sender".to_owned(),
+            WorkspaceCoordinate::committed(WorkspaceId::parse("ws-1").unwrap(), "Space".to_owned()),
+            ConversationId::parse("conv-1").unwrap(),
+            "Channel".to_owned(),
+            MessageId::parse("source-message").unwrap(),
+            "ping".to_owned(),
+        )
     }
 
     fn main_plan(viewers: &[&str], recipients: &[&str]) -> PostCommitPlan {
-        PostCommitPlan::MainLine(MainSendPlan {
-            delivery_recipients: recipients
-                .iter()
-                .map(|id| AgentId::parse(*id).unwrap())
-                .collect(),
-            start_eligible: recipients
-                .iter()
-                .map(|id| AgentId::parse(*id).unwrap())
-                .collect(),
-            mentioned_viewers: viewers.iter().map(|viewer| draft_for(viewer)).collect(),
-        })
+        let recipients: Vec<AgentId> = recipients
+            .iter()
+            .map(|id| AgentId::parse(*id).unwrap())
+            .collect();
+        PostCommitPlan::committed(
+            viewers.iter().map(|viewer| draft_for(viewer)).collect(),
+            DeliveryPlan::MainLine(MainDeliveryPlan::committed(recipients.clone(), recipients)),
+        )
     }
 
     fn fact_with(outcomes: Vec<MentionCopyOutcome>, plan: PostCommitPlan) -> MessageCreatedFact {
-        MessageCreatedFact {
-            post_commit: plan,
-            ..fact(outcomes)
+        MessageCreatedFact::committed(created_message(), None, plan, false, outcomes)
+    }
+
+    fn created_message() -> CreatedMessage {
+        CreatedMessage {
+            id: MessageId::parse("source-message").unwrap(),
+            conversation_id: ConversationId::parse("conv-1").unwrap(),
+            from_kind: FromKind::User,
+            from_agent_id: None,
+            from_user_id: Some(UserId::parse("user-1").unwrap()),
+            author: None,
+            content: MessageContent::parse("ping").unwrap(),
+            attachments: Vec::new(),
+            seq: MessageSeq::try_from(1).unwrap(),
+            created_at_ms: 7,
+            thread_root_id: None,
         }
     }
 
     fn fact(outcomes: Vec<MentionCopyOutcome>) -> MessageCreatedFact {
-        MessageCreatedFact {
-            message: CreatedMessage {
-                id: MessageId::parse("source-message").unwrap(),
-                conversation_id: ConversationId::parse("conv-1").unwrap(),
-                from_kind: FromKind::User,
-                from_agent_id: None,
-                from_user_id: Some(UserId::parse("user-1").unwrap()),
-                author: None,
-                content: MessageContent::parse("ping").unwrap(),
-                attachments: Vec::new(),
-                seq: MessageSeq::try_from(1).unwrap(),
-                created_at_ms: 7,
-                thread_root_id: None,
-            },
-            thread: None,
-            post_commit: PostCommitPlan::MainLine(MainSendPlan::default()),
-            freshness_bypassed: false,
-            mention_copies: outcomes,
-        }
+        MessageCreatedFact::committed(
+            created_message(),
+            None,
+            PostCommitPlan::committed(
+                Vec::new(),
+                DeliveryPlan::MainLine(MainDeliveryPlan::committed(Vec::new(), Vec::new())),
+            ),
+            false,
+            outcomes,
+        )
     }
 
     fn copied(id: &str, line: &str, agent: &str, handle: &str) -> MentionCopyOutcome {
@@ -926,14 +1084,16 @@ mod tests {
             self.answer(
                 &format!(
                     "{}|{}",
-                    draft.viewer.as_str(),
-                    draft.source_message.as_str()
+                    draft.viewer().as_str(),
+                    draft.source_message().as_str()
                 ),
                 EffectStep::MentionedViewerRecorded,
             )?;
-            // What a store does: mint the identity, keep every other field as given.
+            // What a store does: mint the identity, stamp the moment, and keep every
+            // other field exactly as it was given.
             Ok(CommittedMentionRow {
-                id: MessageId::parse(format!("row-{}", draft.viewer.as_str())).unwrap(),
+                id: NotificationId::parse(format!("row-{}", draft.viewer().as_str())).unwrap(),
+                created_at_ms: 11,
                 draft: draft.clone(),
             })
         }
@@ -944,8 +1104,8 @@ mod tests {
             self.answer(
                 &format!(
                     "{}|{}",
-                    mention.draft.viewer.as_str(),
-                    mention.draft.source_message.as_str()
+                    mention.draft.viewer().as_str(),
+                    mention.draft.source_message().as_str()
                 ),
                 EffectStep::ViewerNotified,
             )
@@ -1130,10 +1290,13 @@ mod tests {
                 thread_root_id: crate::messaging::ThreadRootId::parse("root-1").unwrap(),
                 reply_count: 1,
             }),
-            post_commit: PostCommitPlan::ReplyCluster(ReplyDeliveryPlan {
+            post_commit: PostCommitPlan::committed(
+                Vec::new(),
                 // Only one participant follows the cluster.
-                audience: vec![AgentId::parse("agent-2").unwrap()],
-            }),
+                DeliveryPlan::ReplyCluster(ReplyAudience::committed(vec![
+                    AgentId::parse("agent-2").unwrap(),
+                ])),
+            ),
             ..fact(Vec::new())
         };
 
@@ -1143,8 +1306,13 @@ mod tests {
             "a reply offered a main-line view"
         );
 
-        let main_recipients = main.main_line().unwrap().plan().delivery_recipients.clone();
-        let reply_audience = reply.reply_cluster().unwrap().plan().audience.clone();
+        let main_recipients = main.main_line().unwrap().delivery().recipients().to_vec();
+        let reply_audience = reply
+            .reply_cluster()
+            .unwrap()
+            .audience()
+            .recipients()
+            .to_vec();
         assert_eq!(
             main_recipients,
             vec![
@@ -1161,7 +1329,7 @@ mod tests {
     async fn a_recorded_row_carries_the_draft_it_was_given() {
         let recorder = Recorder::default();
         let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &[]));
-        let draft = committed.main_line().unwrap().plan().mentioned_viewers[0].clone();
+        let draft = committed.main_line().unwrap().mentions()[0].clone();
 
         let row = recorder
             .record_mentioned_viewer(&draft)

@@ -26,7 +26,8 @@ use silverhand_backend_core::messaging::{
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
     post_commit::{
-        MainSendPlan, MentionRowDraft, PostCommitPlan, ReplyDeliveryPlan, WorkspaceCoordinate,
+        DeliveryPlan, MainDeliveryPlan, MentionRowDraft, PostCommitPlan, ReplyAudience,
+        WorkspaceCoordinate,
     },
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
@@ -429,16 +430,16 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         // Planned last, so the enumeration sees every row this unit wrote — a
         // follower this very reply created is part of who it is for.
         let post_commit = self
-            .plan_post_commit(&facts.id, &command, &message, created_at_ms)
+            .plan_post_commit(command.source_conversation(), &facts.id, &command, &message)
             .await?;
 
-        Ok(MessageCreatedFact {
+        Ok(MessageCreatedFact::committed(
             message,
             thread,
             post_commit,
             freshness_bypassed,
             mention_copies,
-        })
+        ))
     }
 
     /// Resolves the cluster this send belongs to, checking the caller's name for it
@@ -851,60 +852,82 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     }
 
     /// Decides what this send owes the world, from the same snapshot it was written
-    /// in. Which plan it is follows from where the message landed: a reply reaches
-    /// its cluster's followers, a main-line message reaches the conversation's
-    /// participants, and those are not the same set.
+    /// in.
+    ///
+    /// Two layers: who was named is a fact of the body and does not depend on the
+    /// path, while who receives the message does — a reply reaches its cluster's
+    /// followers, a main-line message reaches the conversation's participants.
     async fn plan_post_commit(
         &mut self,
-        conversation: &ConversationId,
+        source: &ConversationId,
+        target: &ConversationId,
         command: &SendMessage,
         message: &CreatedMessage,
-        created_at_ms: i64,
     ) -> Result<PostCommitPlan, SendMessageError> {
+        let mentions = self
+            .mentioned_viewer_drafts(target, command, message)
+            .await?;
+
         if let Some(root) = &message.thread_root_id {
-            return Ok(PostCommitPlan::ReplyCluster(ReplyDeliveryPlan {
-                audience: self.cluster_audience(root, command.actor()).await?,
-            }));
+            let audience = self.cluster_audience(root, command.actor()).await?;
+            return Ok(PostCommitPlan::committed(
+                mentions,
+                DeliveryPlan::ReplyCluster(ReplyAudience::committed(audience)),
+            ));
         }
 
-        let sender = match command.actor() {
-            SendActor::Agent(agent) => Some(agent.as_str().to_owned()),
-            SendActor::User(_) => None,
+        // Three cases, and they differ in both answers. An agent writing into its own
+        // conversation is not delivered its own message, and starts nobody: the
+        // runtime that would be started is the one already running to write this. An
+        // agent writing into ANOTHER conversation is not the same actor there — that
+        // conversation's own session is a recipient, and idle recipients are started.
+        // A person's send excludes nobody and starts whoever is idle.
+        let writes_elsewhere = source != target;
+        let (excluded, starts) = match command.actor() {
+            SendActor::Agent(agent) if !writes_elsewhere => {
+                (Some(agent.as_str().to_owned()), false)
+            }
+            SendActor::Agent(_) => (None, true),
+            SendActor::User(_) => (None, true),
         };
-        let recipients: Vec<String> = sqlx::query_scalar(SELECT_PARTICIPANT_AGENTS)
-            .bind(conversation.as_str())
+
+        let participants: Vec<String> = sqlx::query_scalar(SELECT_PARTICIPANT_AGENTS)
+            .bind(target.as_str())
             .fetch_all(&mut *self.tx)
             .await
             .map_err(driver)?;
-        let recipients: Vec<messaging::AgentId> = recipients
+        let recipients: Vec<messaging::AgentId> = participants
             .into_iter()
-            .filter(|candidate| sender.as_deref() != Some(candidate.as_str()))
+            .filter(|candidate| excluded.as_deref() != Some(candidate.as_str()))
             .map(|candidate| {
                 messaging::AgentId::parse(candidate).map_err(|_| {
                     infrastructure(MessagingStoreError::MalformedIdentity { field: "agents.id" })
                 })
             })
             .collect::<Result<_, _>>()?;
+        let start_eligible = if starts {
+            recipients.clone()
+        } else {
+            Vec::new()
+        };
 
-        Ok(PostCommitPlan::MainLine(MainSendPlan {
-            // Every recipient is a candidate for being started; whether one is idle
-            // is not a fact a transaction can hold.
-            start_eligible: recipients.clone(),
-            delivery_recipients: recipients,
-            mentioned_viewers: self
-                .mentioned_viewer_drafts(conversation, command, message, created_at_ms)
-                .await?,
-        }))
+        Ok(PostCommitPlan::committed(
+            mentions,
+            DeliveryPlan::MainLine(MainDeliveryPlan::committed(recipients, start_eligible)),
+        ))
     }
 
-    /// One draft per person the body named who can read this conversation. The author
-    /// is not among them: being told you named someone is not a mention.
+    /// One draft per person the body named who can read this conversation.
+    ///
+    /// Only inside a workspace: a record of being named is navigated to by workspace
+    /// and conversation, and a direct line has no workspace to navigate from — a row
+    /// written for one would be unreachable. The author is not among them either:
+    /// being told you named someone is not a mention.
     async fn mentioned_viewer_drafts(
         &mut self,
         conversation: &ConversationId,
         command: &SendMessage,
         message: &CreatedMessage,
-        created_at_ms: i64,
     ) -> Result<Vec<MentionRowDraft>, SendMessageError> {
         let addressed: Vec<ParticipantHandle> = command
             .addressed()
@@ -917,14 +940,19 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         }
 
         let (workspace_id, title) = self.conversation_place(conversation).await?;
-        let source_workspace = match workspace_id {
-            None => None,
-            Some(id) => {
-                let name = self.workspace_name(&id).await?;
-                Some(WorkspaceCoordinate { id, name })
-            }
+        let Some(workspace_id) = workspace_id else {
+            return Ok(Vec::new());
         };
+        let workspace = WorkspaceCoordinate::committed(
+            messaging::WorkspaceId::parse(workspace_id.clone()).map_err(|_| {
+                infrastructure(MessagingStoreError::MalformedIdentity {
+                    field: "conversations.workspace_id",
+                })
+            })?,
+            self.workspace_name(&workspace_id).await?,
+        );
         let excerpt = mention_cc::mention_excerpt(message.content.as_str());
+        let trigger_name = trigger_name_of(message);
         let author = match command.actor() {
             SendActor::User(author) => Some(author.as_str().to_owned()),
             SendActor::Agent(_) => None,
@@ -949,16 +977,16 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 continue;
             }
 
-            drafts.push(MentionRowDraft {
+            drafts.push(MentionRowDraft::committed(
                 viewer,
-                mentioned_handle: handle,
-                source_conversation: conversation.clone(),
-                source_conversation_title: title.clone(),
-                source_message: message.id.clone(),
-                source_workspace: source_workspace.clone(),
-                excerpt: excerpt.clone(),
-                created_at_ms,
-            });
+                handle,
+                trigger_name.clone(),
+                workspace.clone(),
+                conversation.clone(),
+                title.clone(),
+                message.id.clone(),
+                excerpt.clone(),
+            ));
         }
         Ok(drafts)
     }
@@ -1499,6 +1527,25 @@ fn mention_notification_payload(
         "mention_excerpt": payload.mention_excerpt,
     }))
     .map_err(|error| infrastructure(MessagingStoreError::Serialization(error)))
+}
+
+/// Who named someone, as a reader will see it. The sender's own snapshot, taken
+/// inside the transaction: display name if it says anything, then name, then the id —
+/// an id is not friendly, but it is never absent.
+fn trigger_name_of(message: &CreatedMessage) -> String {
+    match &message.author {
+        None => String::new(),
+        Some(author) => {
+            let display = author.display_name.as_deref().unwrap_or("").trim();
+            if !display.is_empty() {
+                return display.to_owned();
+            }
+            if !author.name.trim().is_empty() {
+                return author.name.clone();
+            }
+            author.id.clone()
+        }
+    }
 }
 
 struct MessageRow {

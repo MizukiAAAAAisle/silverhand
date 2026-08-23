@@ -82,6 +82,17 @@ pub struct UserId(String);
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AttachmentId(String);
 
+/// A workspace, as Messaging needs to name one. Its own type rather than a borrowed
+/// one from whoever owns workspaces: this module only ever carries the coordinate.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct WorkspaceId(String);
+
+/// A notification is not a message. They happen to share an identity form, and
+/// giving them one type is how a notification eventually gets passed to something
+/// that expects a message.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct NotificationId(String);
+
 macro_rules! opaque_id {
     ($name:ident) => {
         impl $name {
@@ -113,6 +124,8 @@ opaque_id!(ThreadRootId);
 opaque_id!(AgentId);
 opaque_id!(UserId);
 opaque_id!(AttachmentId);
+opaque_id!(WorkspaceId);
+opaque_id!(NotificationId);
 
 #[derive(Debug, thiserror::Error)]
 #[error("identifier must not be empty")]
@@ -142,6 +155,12 @@ impl MessageId {
 impl ConversationId {
     /// A conversation minted by the system — the direct line a mention copy travels
     /// on — carries the same identity form as every other.
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
+    }
+}
+
+impl NotificationId {
     pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
         Ok(Self(mint_identity(entropy)?))
     }
@@ -698,19 +717,57 @@ impl SendMessage {
 /// disagree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageCreatedFact {
-    pub message: CreatedMessage,
+    message: CreatedMessage,
+    thread: Option<ThreadReplyFact>,
+    post_commit: post_commit::PostCommitPlan,
+    freshness_bypassed: bool,
+    mention_copies: Vec<mention_cc::MentionCopyOutcome>,
+}
+
+impl MessageCreatedFact {
+    /// Assembled by the unit of work that committed the send, and by nothing else.
+    ///
+    /// This is a trust seam, stated rather than pretended away: the store lives in
+    /// another crate, so the constructor is reachable by code with the store's own
+    /// privileges. What it does rule out is the caller of the port — an application
+    /// or request handler that received a fact cannot replace what the send decided,
+    /// because every field is read-only from here on.
+    pub fn committed(
+        message: CreatedMessage,
+        thread: Option<ThreadReplyFact>,
+        post_commit: post_commit::PostCommitPlan,
+        freshness_bypassed: bool,
+        mention_copies: Vec<mention_cc::MentionCopyOutcome>,
+    ) -> Self {
+        Self {
+            message,
+            thread,
+            post_commit,
+            freshness_bypassed,
+            mention_copies,
+        }
+    }
+
+    pub fn message(&self) -> &CreatedMessage {
+        &self.message
+    }
+
     /// Present only for a reply.
-    pub thread: Option<ThreadReplyFact>,
-    /// What this send owes the world afterwards, decided inside the unit because it
-    /// is read from the same snapshot the write used. Which path it took is part of
-    /// the plan's type, so the two paths' aftermaths cannot be confused.
-    pub post_commit: post_commit::PostCommitPlan,
+    pub fn thread(&self) -> Option<&ThreadReplyFact> {
+        self.thread.as_ref()
+    }
+
     /// The guard was skipped at the sender's request. Carried for the post-commit
     /// record, not for the reply to the caller.
-    pub freshness_bypassed: bool,
+    pub fn freshness_bypassed(&self) -> bool {
+        self.freshness_bypassed
+    }
+
     /// What became of each agent this message addressed that could not read it.
     /// Empty when the send addressed nobody outside its own conversation.
-    pub mention_copies: Vec<mention_cc::MentionCopyOutcome>,
+    pub fn mention_copies(&self) -> &[mention_cc::MentionCopyOutcome] {
+        &self.mention_copies
+    }
 }
 
 /// The author as the message will always report them, even after the principal is
@@ -758,7 +815,8 @@ pub struct ThreadReplyFact {
 #[derive(Clone, Copy, Debug)]
 pub struct MainCommittedSend<'fact> {
     message: &'fact CreatedMessage,
-    plan: &'fact post_commit::MainSendPlan,
+    mentions: &'fact [post_commit::MentionRowDraft],
+    delivery: &'fact post_commit::MainDeliveryPlan,
 }
 
 impl<'fact> MainCommittedSend<'fact> {
@@ -766,8 +824,14 @@ impl<'fact> MainCommittedSend<'fact> {
         self.message
     }
 
-    pub fn plan(&self) -> &'fact post_commit::MainSendPlan {
-        self.plan
+    /// Who this send named. Path-independent: a person is named by the body, not by
+    /// where the message landed.
+    pub fn mentions(&self) -> &'fact [post_commit::MentionRowDraft] {
+        self.mentions
+    }
+
+    pub fn delivery(&self) -> &'fact post_commit::MainDeliveryPlan {
+        self.delivery
     }
 }
 
@@ -777,7 +841,8 @@ impl<'fact> MainCommittedSend<'fact> {
 pub struct ReplyCommittedSend<'fact> {
     message: &'fact CreatedMessage,
     projection: &'fact ThreadReplyFact,
-    plan: &'fact post_commit::ReplyDeliveryPlan,
+    mentions: &'fact [post_commit::MentionRowDraft],
+    audience: &'fact post_commit::ReplyAudience,
 }
 
 impl<'fact> ReplyCommittedSend<'fact> {
@@ -789,8 +854,14 @@ impl<'fact> ReplyCommittedSend<'fact> {
         self.projection
     }
 
-    pub fn plan(&self) -> &'fact post_commit::ReplyDeliveryPlan {
-        self.plan
+    /// The same path-independent set the main line carries: naming someone does not
+    /// depend on whether the message was a reply.
+    pub fn mentions(&self) -> &'fact [post_commit::MentionRowDraft] {
+        self.mentions
+    }
+
+    pub fn audience(&self) -> &'fact post_commit::ReplyAudience {
+        self.audience
     }
 }
 
@@ -808,27 +879,40 @@ impl MessageCreatedFact {
     ///
     /// let view = MainCommittedSend {
     ///     message: todo!(),
-    ///     plan: todo!(),
+    ///     mentions: todo!(),
+    ///     delivery: todo!(),
     /// };
     /// ```
+    ///
+    /// Nor can a fact that already exists be given a different plan:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::{MessageCreatedFact, post_commit::PostCommitPlan};
+    ///
+    /// fn replace(fact: &mut MessageCreatedFact, plan: PostCommitPlan) {
+    ///     fact.post_commit = plan;
+    /// }
+    /// ```
     pub fn main_line(&self) -> Option<MainCommittedSend<'_>> {
-        match &self.post_commit {
-            post_commit::PostCommitPlan::MainLine(plan) => Some(MainCommittedSend {
+        match self.post_commit.delivery() {
+            post_commit::DeliveryPlan::MainLine(delivery) => Some(MainCommittedSend {
                 message: &self.message,
-                plan,
+                mentions: self.post_commit.mentions(),
+                delivery,
             }),
-            post_commit::PostCommitPlan::ReplyCluster(_) => None,
+            post_commit::DeliveryPlan::ReplyCluster(_) => None,
         }
     }
 
     /// This send as a reply, or nothing if it was a main-line one.
     pub fn reply_cluster(&self) -> Option<ReplyCommittedSend<'_>> {
-        match (&self.post_commit, &self.thread) {
-            (post_commit::PostCommitPlan::ReplyCluster(plan), Some(projection)) => {
+        match (self.post_commit.delivery(), &self.thread) {
+            (post_commit::DeliveryPlan::ReplyCluster(audience), Some(projection)) => {
                 Some(ReplyCommittedSend {
                     message: &self.message,
                     projection,
-                    plan,
+                    mentions: self.post_commit.mentions(),
+                    audience,
                 })
             }
             _ => None,
