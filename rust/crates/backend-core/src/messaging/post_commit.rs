@@ -1059,7 +1059,7 @@ mod tests {
             content: "copied".to_owned(),
             metadata: MentionCopyMetadata {
                 subtype: MENTION_COPY_SUBTYPE,
-                source_workspace_id: "ws-1".to_owned(),
+                source_workspace_id: WorkspaceId::parse("ws-1").unwrap(),
                 source_workspace_name: "Space".to_owned(),
                 source_conversation_id: ConversationId::parse("conv-1").unwrap(),
                 source_conversation_title: "Channel".to_owned(),

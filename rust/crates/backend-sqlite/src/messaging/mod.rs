@@ -1348,12 +1348,6 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         let Some(workspace_id) = workspace_id else {
             return Ok(None);
         };
-        let workspace = WorkspaceId::parse(workspace_id).map_err(|_| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.workspace_id",
-            })
-        })?;
-
         Ok(Some(MentionIntent::committed(
             handles,
             match command.actor() {
@@ -1361,7 +1355,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 SendActor::Agent(_) => None,
             },
             trigger_name_of(message),
-            workspace,
+            workspace_id,
             conversation.clone(),
             title,
             message.id.clone(),
@@ -1372,21 +1366,30 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn conversation_place(
         &mut self,
         conversation: &ConversationId,
-    ) -> Result<(Option<String>, String), SendMessageError> {
+    ) -> Result<(Option<WorkspaceId>, String), SendMessageError> {
         let row = sqlx::query(SELECT_CONVERSATION_PLACE)
             .bind(conversation.as_str())
             .fetch_one(&mut *self.tx)
             .await
             .map_err(driver)?;
-        Ok((
-            row.try_get("workspace_id").map_err(driver)?,
-            row.try_get("title").map_err(driver)?,
-        ))
+        let workspace_id: Option<String> = row.try_get("workspace_id").map_err(driver)?;
+        let workspace_id = workspace_id
+            .map(WorkspaceId::parse)
+            .transpose()
+            .map_err(|_| {
+                infrastructure(MessagingStoreError::MalformedIdentity {
+                    field: "conversations.workspace_id",
+                })
+            })?;
+        Ok((workspace_id, row.try_get("title").map_err(driver)?))
     }
 
-    async fn workspace_name(&mut self, workspace: &str) -> Result<String, SendMessageError> {
+    async fn workspace_name(
+        &mut self,
+        workspace: &WorkspaceId,
+    ) -> Result<String, SendMessageError> {
         let name: Option<String> = sqlx::query_scalar(SELECT_WORKSPACE_NAME)
-            .bind(workspace)
+            .bind(workspace.as_str())
             .fetch_optional(&mut *self.tx)
             .await
             .map_err(driver)?;
@@ -1491,7 +1494,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             }),
             metadata: mention_cc::MentionCopyMetadata {
                 subtype: mention_cc::MENTION_COPY_SUBTYPE,
-                source_workspace_id: place.workspace_id.to_owned(),
+                source_workspace_id: place.workspace_id.clone(),
                 source_workspace_name: place.workspace_name.to_owned(),
                 source_conversation_id: place.source.clone(),
                 source_conversation_title: place.source_title.to_owned(),
@@ -1543,10 +1546,10 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .bind(id.as_str())
             .bind(author.as_str())
             .bind(agent.as_str())
-            .bind(place.workspace_id)
+            .bind(place.workspace_id.as_str())
             .bind(place.source.as_str())
             .bind(message.id.as_str())
-            .bind(place.workspace_id)
+            .bind(place.workspace_id.as_str())
             .bind(place.source.as_str())
             .bind(message.id.as_str())
             .bind(mention_notification_payload(&payload)?)
@@ -1664,8 +1667,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             SendActor::Agent(agent) => self.agent_exists(agent).await?,
             SendActor::User(user) => {
                 self.endpoint_principal_exists(&ConversationEndpoint {
-                    kind: PrincipalKind::Human,
-                    id: user.as_str().to_owned(),
+                    principal: messaging::PrincipalIdentity::Human(user.clone()),
                     deleted_at_ms: None,
                 })
                 .await?
@@ -1850,7 +1852,7 @@ fn actor_of(kind: PrincipalKind, id: String) -> Result<SendActor, SendMessageErr
 /// Where a copy came from, carried together because every write of a copy needs all
 /// of it.
 struct MentionCopyPlace<'facts> {
-    workspace_id: &'facts str,
+    workspace_id: &'facts WorkspaceId,
     workspace_name: &'facts str,
     source: ConversationId,
     source_title: &'facts str,
@@ -1887,7 +1889,7 @@ fn mention_copy_metadata(
 ) -> Result<String, SendMessageError> {
     serde_json::to_string(&serde_json::json!({
         "subtype": metadata.subtype,
-        "source_workspace_id": metadata.source_workspace_id,
+        "source_workspace_id": metadata.source_workspace_id.as_str(),
         "source_workspace_name": metadata.source_workspace_name,
         "source_conversation_id": metadata.source_conversation_id.as_str(),
         "source_conversation_title": metadata.source_conversation_title,
@@ -1966,12 +1968,12 @@ impl<E: Send + Sync> EndpointPrincipalReads for TxScope<'_, '_, E> {
         &mut self,
         endpoint: &ConversationEndpoint,
     ) -> Result<bool, PersistenceFailure> {
-        let statement = match endpoint.kind {
-            PrincipalKind::Agent => SELECT_AGENT_EXISTS,
-            PrincipalKind::Human => SELECT_USER_EXISTS,
+        let statement = match &endpoint.principal {
+            messaging::PrincipalIdentity::Agent(_) => SELECT_AGENT_EXISTS,
+            messaging::PrincipalIdentity::Human(_) => SELECT_USER_EXISTS,
         };
         let found: Option<i64> = sqlx::query_scalar(statement)
-            .bind(endpoint.id.as_str())
+            .bind(endpoint.principal.as_str())
             .fetch_optional(&mut *self.tx)
             .await
             .map_err(driver)?;
@@ -2075,14 +2077,17 @@ fn endpoint_from_row(
     let deleted_at_ms: Option<i64> = row.try_get(deleted_column).map_err(driver)?;
     let (kind, id) = kind.zip(id).ok_or_else(malformed)?;
 
-    let kind = match kind.as_str() {
-        ENDPOINT_KIND_HUMAN => PrincipalKind::Human,
-        ENDPOINT_KIND_AGENT => PrincipalKind::Agent,
+    let principal = match kind.as_str() {
+        ENDPOINT_KIND_HUMAN => {
+            messaging::PrincipalIdentity::Human(UserId::parse(id).map_err(|_| malformed())?)
+        }
+        ENDPOINT_KIND_AGENT => {
+            messaging::PrincipalIdentity::Agent(AgentId::parse(id).map_err(|_| malformed())?)
+        }
         _ => return Err(malformed()),
     };
     Ok(ConversationEndpoint {
-        kind,
-        id,
+        principal,
         deleted_at_ms,
     })
 }
