@@ -664,47 +664,17 @@ where
     let id = message.id.clone();
     let conversation = message.conversation_id.clone();
 
-    attempt(
+    announce_publication_prefix(
         &mut report,
-        &id,
-        EffectStep::MessagePublished,
-        ports.publication.publish_message(send.published()),
+        send.published(),
+        send.mentions(),
+        ports.publication,
+        ports.mentions,
+        ports.viewers,
+        ports.unread,
     )
     .await;
 
-    if let Some(intent) = send.mentions() {
-        report
-            .attempted
-            .push((id.clone(), EffectStep::MentionedViewerRecorded));
-        match ports.mentions.record_mentioned_viewers(intent).await {
-            // Only rows that were written are published, and one person's publication
-            // failing does not reach the next person's.
-            Ok(rows) => {
-                for row in &rows {
-                    attempt(
-                        &mut report,
-                        &id,
-                        EffectStep::ViewerNotified,
-                        ports.viewers.notify_viewer(row),
-                    )
-                    .await;
-                }
-            }
-            Err(failure) => {
-                report
-                    .failed
-                    .push((id.clone(), EffectStep::MentionedViewerRecorded, failure));
-            }
-        }
-    }
-
-    attempt(
-        &mut report,
-        &id,
-        EffectStep::UnreadPublished,
-        ports.unread.publish_unread(&conversation),
-    )
-    .await;
     for recipient in delivery.recipients() {
         attempt(
             &mut report,
@@ -776,47 +746,15 @@ where
     let mut report = EffectReport::default();
     let message = send.message();
     let id = message.id.clone();
-    let conversation = message.conversation_id.clone();
 
-    attempt(
+    announce_publication_prefix(
         &mut report,
-        &id,
-        EffectStep::MessagePublished,
-        ports.publication.publish_message(send.published()),
-    )
-    .await;
-
-    if let Some(intent) = send.mentions() {
-        report
-            .attempted
-            .push((id.clone(), EffectStep::MentionedViewerRecorded));
-        match ports.mentions.record_mentioned_viewers(intent).await {
-            // Only rows that were written are published, and one person's publication
-            // failing does not reach the next person's.
-            Ok(rows) => {
-                for row in &rows {
-                    attempt(
-                        &mut report,
-                        &id,
-                        EffectStep::ViewerNotified,
-                        ports.viewers.notify_viewer(row),
-                    )
-                    .await;
-                }
-            }
-            Err(failure) => {
-                report
-                    .failed
-                    .push((id.clone(), EffectStep::MentionedViewerRecorded, failure));
-            }
-        }
-    }
-
-    attempt(
-        &mut report,
-        &id,
-        EffectStep::UnreadPublished,
-        ports.unread.publish_unread(&conversation),
+        send.published(),
+        send.mentions(),
+        ports.publication,
+        ports.mentions,
+        ports.viewers,
+        ports.unread,
     )
     .await;
 
@@ -833,6 +771,75 @@ where
         .await;
     }
     report
+}
+
+/// The publication prefix both paths share, verbatim: publish the message, then —
+/// for a named send — write each durable mention row before notifying its viewer,
+/// then publish unread. It is one helper rather than two copies because the order is
+/// load-bearing and identical: a named person's row is written before unread is
+/// published, since the badge's directed count reads that row. Neither public
+/// announcer may drift from the other on this prefix; each only appends its own
+/// delivery after it. This is deliberately not a wide effects service locator — it
+/// owns exactly the shared prefix and nothing path-specific.
+async fn announce_publication_prefix<P, R, V, U>(
+    report: &mut EffectReport,
+    published: CommittedMessageView<'_>,
+    mentions: Option<&MentionIntent>,
+    publication: &P,
+    mention_record: &R,
+    viewers: &V,
+    unread: &U,
+) where
+    P: CommittedMessagePublication,
+    R: MentionedViewerRecord,
+    V: ViewerNotification,
+    U: UnreadPublication,
+{
+    let message = published.message();
+    let id = message.id.clone();
+    let conversation = message.conversation_id.clone();
+
+    attempt(
+        report,
+        &id,
+        EffectStep::MessagePublished,
+        publication.publish_message(published),
+    )
+    .await;
+
+    if let Some(intent) = mentions {
+        report
+            .attempted
+            .push((id.clone(), EffectStep::MentionedViewerRecorded));
+        match mention_record.record_mentioned_viewers(intent).await {
+            // Only rows that were written are published, and one person's publication
+            // failing does not reach the next person's.
+            Ok(rows) => {
+                for row in &rows {
+                    attempt(
+                        report,
+                        &id,
+                        EffectStep::ViewerNotified,
+                        viewers.notify_viewer(row),
+                    )
+                    .await;
+                }
+            }
+            Err(failure) => {
+                report
+                    .failed
+                    .push((id.clone(), EffectStep::MentionedViewerRecorded, failure));
+            }
+        }
+    }
+
+    attempt(
+        report,
+        &id,
+        EffectStep::UnreadPublished,
+        unread.publish_unread(&conversation),
+    )
+    .await;
 }
 
 async fn attempt(
@@ -869,6 +876,10 @@ mod tests {
     struct Recorder {
         calls: Mutex<Vec<(String, EffectStep)>>,
         failing: HashSet<EffectStep>,
+        /// Individual call keys that fail, whatever their step. Lets a test fail one
+        /// recipient's delivery while its neighbour's still succeeds — the falsifier
+        /// for per-recipient (not merely per-step) isolation.
+        failing_keys: HashSet<String>,
         /// Which named handles the store still finds entitled when it writes. Empty
         /// means everyone lost access between the commit and the write.
         entitled: HashSet<String>,
@@ -879,6 +890,7 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 failing: steps.iter().copied().collect(),
+                failing_keys: HashSet::new(),
                 entitled: HashSet::from(["viewer-1".to_owned(), "viewer-2".to_owned()]),
             }
         }
@@ -887,13 +899,22 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 failing: HashSet::new(),
+                failing_keys: HashSet::new(),
                 entitled: handles.iter().map(|handle| (*handle).to_owned()).collect(),
             }
         }
 
+        /// The recorder from [`entitling`](Recorder::entitling) with everyone
+        /// entitled, but one specific call key told to fail.
+        fn failing_one_key(key: &str) -> Self {
+            let mut recorder = Self::entitling(&["viewer-1", "viewer-2"]);
+            recorder.failing_keys.insert(key.to_owned());
+            recorder
+        }
+
         fn answer(&self, id: &str, step: EffectStep) -> Result<(), EffectFailure> {
             self.calls.lock().unwrap().push((id.to_owned(), step));
-            if self.failing.contains(&step) {
+            if self.failing.contains(&step) || self.failing_keys.contains(id) {
                 return Err(EffectFailure::from_source(Told));
             }
             Ok(())
@@ -1712,6 +1733,115 @@ mod tests {
             "a reply started the room"
         );
         assert!(report.failed.is_empty());
+    }
+
+    /// Per-recipient, not merely per-step, isolation: one follower's delivery fails
+    /// and the OTHER follower is still attempted and still succeeds. A single batched
+    /// `deliver_to(&[recipients])` would fail both together — the loop that gives each
+    /// recipient its own attempt is what this pins.
+    #[tokio::test]
+    async fn one_followers_delivery_failure_does_not_cost_another_theirs() {
+        // Only agent-2's delivery key is told to fail; agent-3's is untouched.
+        let recorder = Recorder::failing_one_key("agent-2|source-message");
+        let committed = reply_fact(&["agent-2", "agent-3"], &[]);
+
+        let report = announce_reply_send(
+            committed.reply_cluster().expect("a reply"),
+            reply_ports(&recorder),
+        )
+        .await;
+
+        let id = MessageId::parse("source-message").unwrap();
+        // Both followers were attempted — the failing one did not truncate the loop.
+        let delivered = report
+            .steps_for(&id)
+            .into_iter()
+            .filter(|step| *step == EffectStep::ReplyDelivered)
+            .count();
+        assert_eq!(
+            delivered, 2,
+            "the failing follower cost the other its attempt"
+        );
+        // Exactly one delivery failed — agent-2's — and agent-3's succeeded.
+        assert_eq!(report.failed_steps(), vec![EffectStep::ReplyDelivered]);
+        let (failed_key, _, _) = report
+            .failed
+            .iter()
+            .find(|(_, step, _)| *step == EffectStep::ReplyDelivered)
+            .map(|(id, step, failure)| (id.as_str().to_owned(), step, failure))
+            .expect("the failed delivery");
+        assert_eq!(
+            failed_key, "source-message",
+            "the failure is recorded against the reply message"
+        );
+        assert!(recorder.calls.lock().unwrap().contains(&(
+            "agent-3|source-message".to_owned(),
+            EffectStep::ReplyDelivered
+        )));
+    }
+
+    /// The reply analog of the main line's all-at-once grid: every reply port fails
+    /// simultaneously and the flow is still not truncated, the two forbidden steps
+    /// never appear, and the send stays a fact. The one legitimately unreached step is
+    /// `ViewerNotified`: a record that failed produced no row to notify with (the same
+    /// invariant `a_failed_record_leaves_nothing_to_notify_with` pins on the main line).
+    #[tokio::test]
+    async fn every_reply_effect_failing_at_once_still_leaves_it_a_fact() {
+        let recorder = Recorder::failing(&[
+            EffectStep::MessagePublished,
+            EffectStep::MentionedViewerRecorded,
+            EffectStep::ViewerNotified,
+            EffectStep::UnreadPublished,
+            EffectStep::ReplyDelivered,
+        ]);
+        let committed = reply_fact(&["agent-2"], &["viewer-1"]);
+
+        let report = announce_reply_send(
+            committed.reply_cluster().expect("a reply"),
+            reply_ports(&recorder),
+        )
+        .await;
+
+        let id = MessageId::parse("source-message").unwrap();
+        let steps = report.steps_for(&id);
+        // Every independent step was still attempted despite its predecessor failing.
+        for step in [
+            EffectStep::MessagePublished,
+            EffectStep::MentionedViewerRecorded,
+            EffectStep::UnreadPublished,
+            EffectStep::ReplyDelivered,
+        ] {
+            assert!(steps.contains(&step), "{step:?} was truncated: {steps:?}");
+        }
+        // The one unreached step, and why: the failed record left no row to notify.
+        assert!(
+            !recorder.called(EffectStep::ViewerNotified),
+            "a failed record still produced a notification"
+        );
+        // Neither forbidden step ever appears on a reply, even under total failure.
+        assert!(
+            !steps
+                .iter()
+                .any(|step| matches!(step, EffectStep::MainDelivered | EffectStep::IdleStarted)),
+            "a reply fanned out or started the room under failure: {steps:?}"
+        );
+        // Every attempted step failed — none silently succeeded.
+        assert_eq!(
+            report.failed_steps(),
+            vec![
+                EffectStep::MessagePublished,
+                EffectStep::MentionedViewerRecorded,
+                EffectStep::UnreadPublished,
+                EffectStep::ReplyDelivered,
+            ]
+        );
+        // The fact is an argument, not an outcome: total effect failure does not
+        // reverse the committed reply.
+        assert_eq!(committed.message.id.as_str(), "source-message");
+        assert!(
+            committed.thread.is_some(),
+            "the reply stopped being a reply"
+        );
     }
 
     /// The store mints the row's identity and changes nothing else: what the
