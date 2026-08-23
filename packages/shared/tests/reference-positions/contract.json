@@ -1,0 +1,120 @@
+{
+  "addressed": [
+    {
+      "name": "an autolink in prose addresses its subject",
+      "content": "hello <silverhand://agent/Alice> there",
+      "expected": [{ "kind": "agent", "handle": "Alice" }]
+    },
+    {
+      "name": "a label-carrying link addresses nobody",
+      "content": "[Alice](silverhand://agent/Alice)",
+      "expected": []
+    },
+    {
+      "name": "a reference link addresses nobody",
+      "content": "[Alice][a]\n\n[a]: silverhand://agent/Alice",
+      "expected": []
+    },
+    {
+      "name": "a code span is quoted syntax",
+      "content": "`<silverhand://agent/Alice>`",
+      "expected": []
+    },
+    {
+      "name": "a fenced code block is quoted syntax",
+      "content": "```\n<silverhand://agent/Alice>\n```",
+      "expected": []
+    },
+    {
+      "name": "an indented code block is quoted syntax",
+      "content": "    <silverhand://agent/Alice>",
+      "expected": []
+    },
+    {
+      "name": "a blockquote is someone else's words",
+      "content": "> <silverhand://agent/Alice>",
+      "expected": []
+    },
+    {
+      "name": "a blockquote nested in a list is still quoted",
+      "content": "- > <silverhand://agent/Alice>",
+      "expected": []
+    },
+    {
+      "name": "prose beside a blockquote still addresses",
+      "content": "> quoting <silverhand://human/shiki>\n\nand <silverhand://agent/Alice>",
+      "expected": [{ "kind": "agent", "handle": "Alice" }]
+    },
+    {
+      "name": "a list item is prose",
+      "content": "- <silverhand://agent/Alice>",
+      "expected": [{ "kind": "agent", "handle": "Alice" }]
+    },
+    {
+      "name": "duplicates keep their first occurrence",
+      "content": "<silverhand://human/shiki> <silverhand://agent/Alice> <silverhand://human/shiki>",
+      "expected": [
+        { "kind": "human", "handle": "shiki" },
+        { "kind": "agent", "handle": "Alice" }
+      ]
+    },
+    {
+      "name": "order follows the body across blocks",
+      "content": "second paragraph names <silverhand://agent/Alice>\n\nthen <silverhand://human/shiki>",
+      "expected": [
+        { "kind": "agent", "handle": "Alice" },
+        { "kind": "human", "handle": "shiki" }
+      ]
+    },
+    {
+      "name": "a leading byte order mark is dropped and the prose still addresses",
+      "content": "\ufeff<silverhand://agent/Alice>",
+      "expected": [{ "kind": "agent", "handle": "Alice" }]
+    },
+    {
+      "name": "a leading byte order mark before four spaces leaves an indented code block",
+      "content": "\ufeff    <silverhand://agent/Alice>",
+      "expected": []
+    },
+    {
+      "name": "a second byte order mark survives and opens the line as prose",
+      "content": "\ufeff\ufeff    <silverhand://agent/Alice>",
+      "expected": [{ "kind": "agent", "handle": "Alice" }]
+    },
+    {
+      "name": "a byte order mark that is not leading shifts nothing",
+      "content": "a\ufeff <silverhand://agent/Alice>",
+      "expected": [{ "kind": "agent", "handle": "Alice" }]
+    },
+    {
+      "name": "multibyte prose before an autolink does not move it",
+      "content": "héllo — <silverhand://agent/Alice>",
+      "expected": [{ "kind": "agent", "handle": "Alice" }]
+    },
+    {
+      "name": "an uppercase scheme addresses nobody",
+      "content": "<SILVERHAND://agent/Alice>",
+      "expected": []
+    },
+    {
+      "name": "a trailing path segment addresses nobody",
+      "content": "<silverhand://agent/Alice/extra>",
+      "expected": []
+    },
+    {
+      "name": "a query addresses nobody",
+      "content": "<silverhand://agent/Alice?x=1>",
+      "expected": []
+    },
+    {
+      "name": "an email autolink is not a reference",
+      "content": "<alice@example.com>",
+      "expected": []
+    },
+    {
+      "name": "a body with no reference-shaped text addresses nobody",
+      "content": "just words",
+      "expected": []
+    }
+  ]
+}

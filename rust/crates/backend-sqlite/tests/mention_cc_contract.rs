@@ -69,10 +69,14 @@ fn the_copy_body_matches_the_shared_contract() {
     }
 }
 
-/// The other side asks the real Markdown extractor what each rendered body
-/// addresses; this side cannot yet (its position rule is still owed, R6). What it
-/// can hold up meanwhile is the structural half of the same claim: every line that
-/// names anyone other than the recipient is inside the quote.
+/// The SHAPE of the same claim, asked of the artifact itself: every line that names
+/// anyone other than the recipient is inside the quote.
+///
+/// Complementary to, not a substitute for, the derivation gate — `backend-server`
+/// asks the real position rule what each rendered body addresses, and the other side
+/// asks its extractor. This one needs no parser, so it stays here with the renderer
+/// it is about: a wrap that leaked a line out of the quote would fail here even if
+/// the leaked line happened to address nobody.
 #[test]
 fn no_line_of_the_original_escapes_the_quote() {
     let contract = contract();

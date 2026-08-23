@@ -7,6 +7,12 @@
 //! public contracts, and reusing one type for both would turn the proving surface's
 //! vocabulary into a product-facing shape — so nothing here touches `crate::wire`.
 //!
+//!
+//! WHAT IT NO LONGER OWNS: the shape itself. Deciding what a request IS belongs
+//! to [`super::admission`], the one authority for it; this module only renders the
+//! refusals that decision produces. Two definitions of an issue would let the two
+//! doors describe one rule differently.
+//!
 //! The two doors differ in wording where the reference implementation differs, and
 //! that is a contract rather than an accident: the agent door tells a runtime what to
 //! do instead (send an attachment), because a runtime can act on that; the human door
@@ -16,6 +22,8 @@
 
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
+
+use super::admission::ShapeIssue;
 use silverhand_backend_core::messaging::MAX_MESSAGE_CONTENT_BYTES;
 
 /// The content cap as a reader sees it named. The bytes are the authority; this is
@@ -92,15 +100,9 @@ pub fn human_content_too_large(actual_bytes: usize) -> impl IntoResponse {
     )
 }
 
-/// One thing wrong with the request's shape, in the privacy-safe form the reference
-/// reports: what kind of problem, and where — never the value that caused it.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ShapeIssue {
-    pub code: String,
-    pub path: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// A response, so it serializes and is never parsed: the issues it carries name their
+/// codes and paths with borrowed statics, which have nothing to deserialize into.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct InvalidInput {
     pub error: String,
     pub issues: Vec<ShapeIssue>,
@@ -130,70 +132,4 @@ pub fn missing_identifier(message: &str) -> impl IntoResponse {
             error: message.to_owned(),
         }),
     )
-}
-
-/// The fields the shape door reads. Extra members are accepted and ignored here —
-/// the reference's schemas admit the fields of later gates, and refusing them would
-/// make this door stricter than the contract.
-#[derive(Clone, Debug, Deserialize)]
-pub struct SendMessageBody {
-    pub content: Option<serde_json::Value>,
-}
-
-/// A request whose shape is settled: the content is a string, and it is within the
-/// UTF-8 cap. Nothing about the product has been decided.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AcceptedShape {
-    content: String,
-}
-
-impl AcceptedShape {
-    pub fn content(&self) -> &str {
-        &self.content
-    }
-}
-
-/// Why a body's shape was refused, kept apart from its rendering so the two doors
-/// can word the size refusal differently while agreeing about what went wrong.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ShapeRefusal {
-    Invalid(Vec<ShapeIssue>),
-    ContentTooLarge { actual_bytes: usize },
-}
-
-/// The shape gate, in the reference's order: what the body IS, and only then how big
-/// its content is.
-///
-/// The order is observable and therefore a contract: a request that is both
-/// malformed and oversized is answered as malformed, because "this is not a send"
-/// precedes "this send is too big".
-pub fn accept_shape(body: Option<SendMessageBody>) -> Result<AcceptedShape, ShapeRefusal> {
-    let Some(body) = body else {
-        // An unparseable body is the same answer as a body missing everything: the
-        // reference substitutes an empty object and lets the schema speak.
-        return Err(ShapeRefusal::Invalid(vec![ShapeIssue {
-            code: "invalid_type".to_owned(),
-            path: vec!["content".to_owned()],
-        }]));
-    };
-
-    let content = match body.content {
-        Some(serde_json::Value::String(content)) => content,
-        Some(_) | None => {
-            return Err(ShapeRefusal::Invalid(vec![ShapeIssue {
-                code: "invalid_type".to_owned(),
-                path: vec!["content".to_owned()],
-            }]));
-        }
-    };
-
-    // UTF-8 bytes, which is what `str::len` already counts — the "bytes, not UTF-16
-    // code units" distinction cannot be lost here the way it can in a language whose
-    // strings are counted in code units.
-    let actual_bytes = content.len();
-    if actual_bytes > MAX_MESSAGE_CONTENT_BYTES {
-        return Err(ShapeRefusal::ContentTooLarge { actual_bytes });
-    }
-
-    Ok(AcceptedShape { content })
 }
