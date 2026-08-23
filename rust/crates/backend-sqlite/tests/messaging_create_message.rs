@@ -9,18 +9,20 @@ use silverhand_backend_core::messaging::mention_cc::{
     CommittedMentionCopy, MentionCopyOutcome, MentionCopySource, render_copy_body,
 };
 use silverhand_backend_core::messaging::post_commit::{
-    CommittedMentionRow, CopyNotification, DirectLineInvalidation, EffectFailure, EffectStep,
-    IdleStart, MainDelivery, MainEffects, MainPublication, MentionSkipRecord, MessagePublication,
-    RuntimeDelivery, RuntimeStart, SendEffects, SkippedMention, UnreadPublication,
-    ViewerNotification, announce_main_send, announce_send,
+    CommittedMentionRow, CommittedMessagePublication, CopyNotification, DirectLineInvalidation,
+    EffectFailure, EffectStep, IdleStart, MainDelivery, MainEffects, MentionSkipRecord,
+    MessagePublication, ReplyDelivery, ReplyEffects, RuntimeDelivery, RuntimeStart, SendEffects,
+    SkippedMention, UnreadPublication, ViewerNotification, announce_main_send, announce_reply_send,
+    announce_send,
 };
 use silverhand_backend_core::messaging::{
-    ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
-    DirectLineAuthority, EnvironmentUnavailable, FromKind, MAX_MESSAGE_CONTENT_BYTES,
-    MessageContent, MessageId, MessageSeq, PrincipalKind, ReferencePositions, ReplyTargetRefusal,
-    SendActor, SendClock, SendDestination, SendEntropy, SendMessage, SendMessageDraft,
-    SendMessageError, SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId,
-    attachments::AttachmentRef,
+    ActiveAuthor, ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId,
+    ConversationRefusal, DirectLineAuthority, EnvironmentUnavailable, FromKind,
+    MAX_MESSAGE_CONTENT_BYTES, MessageAuthor, MessageContent, MessageId, MessageSeq, PrincipalKind,
+    ReferencePositions, ReplyTargetRefusal, RuntimeKind, SendActor, SendClock, SendDestination,
+    SendEntropy, SendMessage, SendMessageDraft, SendMessageError, SendMessageUnitOfWork,
+    THREAD_PREVIEW_MAX_UTF16, ThreadListEntry, ThreadRootId, ThreadRootRefusal, UserId,
+    attachments::AttachmentRef, thread_root_preview,
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_sqlite::messaging::{HostEnvironment, MessagingStore};
@@ -540,6 +542,82 @@ async fn the_committed_row_reports_the_same_facts_the_caller_was_given() {
     assert_eq!(fact.message().id.as_str().len(), 16);
 }
 
+/// The returned author is the sender resolved live: an agent reports its current
+/// name, display and runtime. Unlike the send-time snapshot columns, this arm would
+/// track a later rename or new avatar, because the intact FK resolves the live row.
+#[tokio::test]
+async fn the_returned_author_of_an_agent_send_is_the_live_agent_with_its_runtime() {
+    let fixture = Fixture::new().await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "hello"))
+        .await
+        .unwrap();
+
+    let Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) = fact.message().author.as_ref()
+    else {
+        panic!("expected an active agent author");
+    };
+    assert_eq!(agent.id().as_str(), AGENT_ID);
+    assert_eq!(agent.name(), "lio");
+    assert_eq!(agent.display_name(), "Lio");
+    assert_eq!(agent.runtime(), RuntimeKind::Claude);
+    // The seed agent carries no avatar storage key, so there is no revision.
+    assert_eq!(agent.avatar(), None);
+}
+
+/// A human send resolves to an active human with no runtime — a human has none, so
+/// the arm does not carry one at all.
+#[tokio::test]
+async fn the_returned_author_of_a_human_send_is_the_live_human_without_a_runtime() {
+    let fixture = Fixture::new().await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(user_actor(), CHANNEL_ID, "hi"))
+        .await
+        .unwrap();
+
+    let Some(MessageAuthor::Active(ActiveAuthor::Human(human))) = fact.message().author.as_ref()
+    else {
+        panic!("expected an active human author");
+    };
+    assert_eq!(human.id().as_str(), USER_ID);
+    assert_eq!(human.name(), "human");
+    assert_eq!(human.display_name(), "Human");
+    assert_eq!(human.avatar(), None);
+}
+
+/// A stored avatar key resolves to a revision the wire busts its cache on. The
+/// revision is the row's live `updated_at`, so it tracks the current avatar rather
+/// than any value fixed at send.
+#[tokio::test]
+async fn the_returned_author_carries_the_avatar_revision_of_a_live_actor() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute(
+            "UPDATE agents SET avatar_storage_key = 'k', avatar_content_type = 'image/png', \
+             updated_at = 999 WHERE id = 'agent-1'",
+        )
+        .await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "hello"))
+        .await
+        .unwrap();
+
+    let Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) = fact.message().author.as_ref()
+    else {
+        panic!("expected an active agent author");
+    };
+    assert_eq!(agent.avatar().map(|a| a.cache_buster()), Some(999));
+}
+
 #[tokio::test]
 async fn ordinals_are_conversation_global_and_a_thread_keeps_its_own_head() {
     let mut fixture = Fixture::new().await;
@@ -646,10 +724,10 @@ async fn a_reply_reports_an_absolute_count_that_excludes_system_copies() {
         .await
         .unwrap();
 
-    assert_eq!(first.thread().unwrap().reply_count, 1);
+    assert_eq!(first.thread().unwrap().reply_count(), 1);
     let thread = second.thread().unwrap();
-    assert_eq!(thread.reply_count, 2);
-    assert_eq!(thread.thread_root_id.as_str(), root_id);
+    assert_eq!(thread.reply_count(), 2);
+    assert_eq!(thread.thread_root_id().as_str(), root_id);
 }
 
 /// A reply to a message of another conversation is refused as if the message did
@@ -748,7 +826,7 @@ async fn a_send_into_a_named_cluster_joins_that_cluster() {
         fact.message().thread_root_id.as_ref().unwrap().as_str(),
         root_id
     );
-    assert_eq!(fact.thread().unwrap().reply_count, 1);
+    assert_eq!(fact.thread().unwrap().reply_count(), 1);
     assert_eq!(
         fixture.stream_head(CHANNEL_ID, Some(&root_id)).await,
         Some(2)
@@ -2755,12 +2833,12 @@ impl MainRecorder {
     }
 }
 
-impl MainPublication for MainRecorder {
+impl CommittedMessagePublication for MainRecorder {
     async fn publish_message(
         &self,
-        message: &silverhand_backend_core::messaging::CreatedMessage,
+        committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
     ) -> Result<(), EffectFailure> {
-        self.note(format!("published:{}", message.id.as_str()));
+        self.note(format!("published:{}", committed.message().id.as_str()));
         Ok(())
     }
 }
@@ -2787,6 +2865,17 @@ impl MainDelivery for MainRecorder {
         _message: &silverhand_backend_core::messaging::CreatedMessage,
     ) -> Result<(), EffectFailure> {
         self.note(format!("delivered:{}", recipient.as_str()));
+        Ok(())
+    }
+}
+
+impl ReplyDelivery for MainRecorder {
+    async fn deliver_to(
+        &self,
+        recipient: &AgentId,
+        _message: &silverhand_backend_core::messaging::CreatedMessage,
+    ) -> Result<(), EffectFailure> {
+        self.note(format!("reply-delivered:{}", recipient.as_str()));
         Ok(())
     }
 }
@@ -2824,7 +2913,76 @@ async fn announce_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
     .await
 }
 
-/// The record writes what a reader can act on: the source coordinates in BOTH
+/// Runs a committed reply's aftermath with the real record adapter, recording
+/// everything else. The delivery capability is [`ReplyDelivery`], not
+/// [`MainDelivery`]: the reply reaches the cluster's followers.
+async fn announce_reply_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
+    fact: &silverhand_backend_core::messaging::MessageCreatedFact,
+    store: &MessagingStore<E>,
+    recorder: &MainRecorder,
+) -> silverhand_backend_core::messaging::post_commit::EffectReport {
+    announce_reply_send(
+        fact.reply_cluster()
+            .expect("a reply carries a cluster plan"),
+        ReplyEffects {
+            publication: recorder,
+            mentions: store,
+            viewers: recorder,
+            unread: recorder,
+            delivery: recorder,
+        },
+    )
+    .await
+}
+
+/// A committed reply's aftermath, driven from the real fact: the frame is published,
+/// unread is republished, and the reply is delivered to the cluster's real
+/// followers minus its sender — and to nobody by the main-line fan-out, with no
+/// idle start. The audience here is the root's author, whom the replying user does
+/// not exclude.
+#[tokio::test]
+async fn a_committed_reply_is_delivered_to_its_cluster_and_never_starts_the_room() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    // A reply that names nobody, so the mention prefix is empty and the aftermath is
+    // exactly publish -> unread -> follower delivery.
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+    let message = reply.message().id.as_str();
+
+    let recorder = MainRecorder::default();
+    let report = announce_reply_with_real_record(&reply, &store, &recorder).await;
+
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            format!("published:{message}"),
+            format!("unread:{CHANNEL_ID}"),
+            format!("reply-delivered:{AGENT_ID}"),
+        ],
+        "a reply's aftermath was not publish -> unread -> follower delivery"
+    );
+    // The two seams that separate a reply from a main-line send: no main-line
+    // fan-out, and no idle start.
+    let calls = recorder.calls();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("delivered:")),
+        "a reply used the main-line fan-out: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("started:")),
+        "a reply started the room: {calls:?}"
+    );
+}
 /// coordinate triples, and the payload the Activity surface renders. Only the rows
 /// that were written are published, so the two people named produce exactly two
 /// notifications and exactly two viewer frames.
@@ -3247,4 +3405,709 @@ async fn naming_an_agent_produces_no_viewer_record_even_beside_a_human() {
             .collect::<Vec<_>>(),
         vec![USER_ID]
     );
+}
+
+// ---------------------------------------------------------------------------
+// Thread list entry: the cluster's second projection of the reply fact.
+// ---------------------------------------------------------------------------
+
+/// A send actor for the second channel agent, whom `agent_actor` is not.
+fn broad_actor() -> SendActor {
+    SendActor::Agent(AgentId::parse(BROAD_AGENT_ID).unwrap())
+}
+
+/// Inserts a reply row directly, so a projection test can pose an exact set of
+/// repliers — identities, snapshots, ordinal order — the real send path cannot
+/// reach inside one conversation (a legacy row whose snapshot was never written, a
+/// fourth distinct identity beyond this channel's roster). `created_at` tracks `seq`
+/// so the row's recency is unambiguous.
+#[allow(clippy::too_many_arguments)]
+async fn insert_reply_row(
+    db: &mut SqliteConnection,
+    id: &str,
+    root: &str,
+    seq: i64,
+    from_kind: &str,
+    from_agent_id: Option<&str>,
+    from_user_id: Option<&str>,
+    author_id: Option<&str>,
+    author_name: Option<&str>,
+    author_display_name: Option<&str>,
+) {
+    sqlx::query(
+        "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, from_user_id, \
+         content, seq, created_at, thread_root_id, author_id, author_name, author_display_name) \
+         VALUES (?, ?, ?, ?, ?, 'reply', ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(CHANNEL_ID)
+    .bind(from_kind)
+    .bind(from_agent_id)
+    .bind(from_user_id)
+    .bind(seq)
+    .bind(seq)
+    .bind(root)
+    .bind(author_id)
+    .bind(author_name)
+    .bind(author_display_name)
+    .execute(db)
+    .await
+    .unwrap();
+}
+
+/// A stable label for a resolved author, so a test can assert who a replier is and
+/// in what order without reaching through each arm inline.
+fn replier_label(author: &MessageAuthor) -> String {
+    match author {
+        MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
+            format!("agent:{}", agent.id().as_str())
+        }
+        MessageAuthor::Active(ActiveAuthor::Human(human)) => {
+            format!("human:{}", human.id().as_str())
+        }
+        MessageAuthor::Deleted(deleted) => format!("deleted:{}", deleted.name()),
+        MessageAuthor::Unresolved(_) => "unresolved".to_owned(),
+    }
+}
+
+fn labels(entry: &ThreadListEntry) -> Vec<String> {
+    entry.repliers().iter().map(replier_label).collect()
+}
+
+/// A replier's *current* display name as the projection resolved it. Distinct from
+/// [`replier_label`] (which is rename-invariant kind:id): this is the axis a
+/// post-commit rename would move, so a test can tell a frozen committed value from a
+/// live reread.
+fn replier_display(author: &MessageAuthor) -> String {
+    match author {
+        MessageAuthor::Active(ActiveAuthor::Agent(agent)) => agent.display_name().to_owned(),
+        MessageAuthor::Active(ActiveAuthor::Human(human)) => human.display_name().to_owned(),
+        MessageAuthor::Deleted(deleted) => deleted.name().to_owned(),
+        MessageAuthor::Unresolved(_) => "unresolved".to_owned(),
+    }
+}
+
+fn display_labels(entry: &ThreadListEntry) -> Vec<String> {
+    entry.repliers().iter().map(replier_display).collect()
+}
+
+/// Reply-publication ports that always fail: the analog of `EverythingFails` for the
+/// message-publication path, so a committed reply's aftermath can be driven to total
+/// failure and the durable half asserted afterwards.
+struct ReplyEffectsRefused;
+
+impl CommittedMessagePublication for ReplyEffectsRefused {
+    async fn publish_message(
+        &self,
+        _committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
+    ) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl silverhand_backend_core::messaging::post_commit::MentionedViewerRecord
+    for ReplyEffectsRefused
+{
+    async fn record_mentioned_viewers(
+        &self,
+        _intent: &silverhand_backend_core::messaging::post_commit::MentionIntent,
+    ) -> Result<Vec<CommittedMentionRow>, EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl ViewerNotification for ReplyEffectsRefused {
+    async fn notify_viewer(&self, _mention: &CommittedMentionRow) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl UnreadPublication for ReplyEffectsRefused {
+    async fn publish_unread(&self, _conversation: &ConversationId) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl ReplyDelivery for ReplyEffectsRefused {
+    async fn deliver_to(
+        &self,
+        _recipient: &AgentId,
+        _message: &silverhand_backend_core::messaging::CreatedMessage,
+    ) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+/// A publication that records the list entry the frame carried — reply_count, replier
+/// labels, their current display names, and the last-reply id — so a test can assert
+/// the value publication actually saw, rather than what the database says at announce
+/// time.
+#[derive(Default)]
+struct RecordingPublication {
+    observed: std::sync::Mutex<Option<ObservedEntry>>,
+}
+
+/// What the recording publication saw on the frame, on every axis a post-commit
+/// mutation could move: the count, the replier set (kind:id), their display names,
+/// and the last reply.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ObservedEntry {
+    reply_count: i64,
+    repliers: Vec<String>,
+    replier_names: Vec<String>,
+    last_reply_id: String,
+}
+
+impl RecordingPublication {
+    fn observed(&self) -> ObservedEntry {
+        self.observed
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("publication was never called")
+    }
+}
+
+impl CommittedMessagePublication for RecordingPublication {
+    async fn publish_message(
+        &self,
+        committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
+    ) -> Result<(), EffectFailure> {
+        if let Some(fact) = committed.reply_projection() {
+            let entry = fact.list_entry();
+            *self.observed.lock().unwrap() = Some(ObservedEntry {
+                reply_count: entry.reply_count(),
+                repliers: labels(entry),
+                replier_names: display_labels(entry),
+                last_reply_id: entry.last_reply_message_id().as_str().to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The remaining reply effects, all accepting, so an announcement runs to completion
+/// and the recording publication above can be asserted.
+struct AcceptingReplyEffects;
+
+impl silverhand_backend_core::messaging::post_commit::MentionedViewerRecord
+    for AcceptingReplyEffects
+{
+    async fn record_mentioned_viewers(
+        &self,
+        _intent: &silverhand_backend_core::messaging::post_commit::MentionIntent,
+    ) -> Result<Vec<CommittedMentionRow>, EffectFailure> {
+        Ok(Vec::new())
+    }
+}
+
+impl ViewerNotification for AcceptingReplyEffects {
+    async fn notify_viewer(&self, _mention: &CommittedMentionRow) -> Result<(), EffectFailure> {
+        Ok(())
+    }
+}
+
+impl UnreadPublication for AcceptingReplyEffects {
+    async fn publish_unread(&self, _conversation: &ConversationId) -> Result<(), EffectFailure> {
+        Ok(())
+    }
+}
+
+impl ReplyDelivery for AcceptingReplyEffects {
+    async fn deliver_to(
+        &self,
+        _recipient: &AgentId,
+        _message: &silverhand_backend_core::messaging::CreatedMessage,
+    ) -> Result<(), EffectFailure> {
+        Ok(())
+    }
+}
+
+/// The entry previews the root and reports the authoritative non-system count. The
+/// preview is the raw root content (no trim, no ellipsis); the count and the
+/// `last_reply_*` pair exclude a system copy, matching the reply badge.
+#[tokio::test]
+async fn the_entry_previews_the_root_and_counts_only_non_system_replies() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root_body = "  a spaced root that is not trimmed or normalized in its preview";
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, root_body))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "one", &root_id))
+        .await
+        .unwrap();
+    let reply_id = reply.message().id.as_str().to_owned();
+
+    // A system copy of the cluster: it is not something a participant said, so it
+    // moves neither the count nor the last-reply pointer.
+    sqlx::query(
+        "INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at, \
+         thread_root_id) VALUES ('sys-copy-000000', ?, 'system', 'copied', 98, 99, ?)",
+    )
+    .bind(CHANNEL_ID)
+    .bind(&root_id)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let entry = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .expect("a cluster with a non-system reply has an entry");
+
+    assert_eq!(entry.root_id().as_str(), root_id);
+    assert_eq!(entry.root_preview(), thread_root_preview(root_body));
+    assert_eq!(entry.root_preview(), root_body); // short enough to be returned whole
+    assert_eq!(entry.reply_count(), 1);
+    assert_eq!(entry.last_reply_message_id().as_str(), reply_id);
+    // The root's author is the live agent; a system copy never becomes the author.
+    assert_eq!(
+        entry.root_author().map(replier_label),
+        Some("agent:agent-1".to_owned())
+    );
+}
+
+/// A root whose only cluster rows are system copies has nothing a participant said,
+/// so there is nothing to place: the entry is absent.
+#[tokio::test]
+async fn a_cluster_with_no_participant_reply_has_no_entry() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    sqlx::query(
+        "INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at, \
+         thread_root_id) VALUES ('sys-copy-000000', ?, 'system', 'copied', 98, 99, ?)",
+    )
+    .bind(CHANNEL_ID)
+    .bind(&root_id)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    assert!(
+        store
+            .thread_list_entry_for_root(&conversation, &root_ref)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A preview whose astral scalar straddles the 160th UTF-16 unit stops at the scalar
+/// boundary before it: the entry never carries a lone surrogate, which UTF-8 cannot
+/// spell. Every scalar-aligned boundary is unaffected.
+#[tokio::test]
+async fn the_entry_preview_clamps_an_astral_scalar_at_the_utf16_boundary() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    // 159 ASCII fills to unit 159; the next scalar is 2 UTF-16 units, so a UTF-16
+    // slice(0,160) would keep a lone high surrogate. The clamp drops it whole.
+    let mut root_body = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1);
+    root_body.push('😀');
+    root_body.push_str(" trailing content past the limit");
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, &root_body))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+    store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "one", &root_id))
+        .await
+        .unwrap();
+
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let entry = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        entry.root_preview(),
+        "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1)
+    );
+}
+
+/// Repliers are distinct by their snapshot identity, ordered most-recent-first, and
+/// the shown set is capped at three while the total is not. One replier who spoke
+/// twice appears once, at its most recent position.
+#[tokio::test]
+async fn repliers_are_distinct_most_recent_first_and_capped_while_the_total_is_not() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    // seq 2..=5 through the real path: agent-1, user-1, agent-1 again, agent-2.
+    for actor in [agent_actor(), user_actor(), agent_actor(), broad_actor()] {
+        store
+            .send_message(reply_to(actor, CHANNEL_ID, "r", &root_id))
+            .await
+            .unwrap();
+    }
+    // A fourth distinct identity beyond this channel's roster, most recent of all.
+    insert_reply_row(
+        &mut fixture.db,
+        "reply-outsider0",
+        &root_id,
+        6,
+        "agent",
+        Some(OUTSIDER_AGENT_ID),
+        None,
+        Some(OUTSIDER_AGENT_ID),
+        Some("outsider"),
+        Some("Outsider"),
+    )
+    .await;
+
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let entry = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Four distinct identities (agent-1 deduped from two replies); shown set capped
+    // at three, most-recent-first; total uncapped.
+    assert_eq!(entry.reply_count(), 5);
+    assert_eq!(entry.replier_total(), 4);
+    assert_eq!(
+        labels(&entry),
+        vec![
+            "agent:agent-3".to_owned(),
+            "agent:agent-2".to_owned(),
+            "agent:agent-1".to_owned(),
+        ]
+    );
+}
+
+/// A replier deleted after speaking keeps its send-time snapshot identity, so it
+/// still renders and still counts — a hard delete nulls the live FK, not the byline.
+#[tokio::test]
+async fn a_deleted_replier_keeps_its_snapshot_and_still_counts() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+    store
+        .send_message(reply_to(broad_actor(), CHANNEL_ID, "from broad", &root_id))
+        .await
+        .unwrap();
+
+    // Delete the replying agent: ON DELETE SET NULL nulls its FK, its message keeps
+    // the snapshot columns written at send.
+    sqlx::query("DELETE FROM agents WHERE id = ?")
+        .bind(BROAD_AGENT_ID)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let entry = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.replier_total(), 1);
+    // `name()` reads the stored `author_name` snapshot ("broad"), not the display name.
+    assert_eq!(labels(&entry), vec!["deleted:broad".to_owned()]);
+}
+
+/// A legacy replier with no stable identity — its FK gone and its snapshot never
+/// written — renders nothing and does not aggregate, so it is dropped from BOTH the
+/// shown set and the total, leaving only the identifiable replier.
+#[tokio::test]
+async fn an_unresolved_replier_is_dropped_from_the_shown_set_and_the_total() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+    store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "identifiable", &root_id))
+        .await
+        .unwrap();
+
+    // A pre-snapshot deleted agent: no FK, no snapshot -> unresolved.
+    insert_reply_row(
+        &mut fixture.db,
+        "reply-legacy0000",
+        &root_id,
+        6,
+        "agent",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let entry = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    // The count still sees two cluster rows, but only one identifiable replier.
+    assert_eq!(entry.reply_count(), 2);
+    assert_eq!(entry.replier_total(), 1);
+    assert_eq!(labels(&entry), vec!["human:user-1".to_owned()]);
+}
+
+/// Custody, the reply analog: the list entry is projected inside the reply's own
+/// transaction and carried on the committed fact, so it is fixed at commit — the
+/// value publication borrows is asserted here directly — and the durable rows behind
+/// it survive the total failure of the announcement afterwards.
+#[tokio::test]
+async fn a_committed_reply_survives_total_effect_failure_including_its_list_entry() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+    let reply_id = reply.message().id.as_str().to_owned();
+
+    // The entry rode back ON the committed fact — the same value the publication frame
+    // borrows through `reply_cluster().published()`. Asserted before the announcement,
+    // so this is the committed projection, not anything the aftermath produced.
+    let entry = reply
+        .thread()
+        .expect("a reply carries its cluster projection")
+        .list_entry();
+    assert_eq!(entry.reply_count(), 1);
+    assert_eq!(entry.last_reply_message_id().as_str(), reply_id);
+    assert_eq!(labels(entry), vec!["human:user-1".to_owned()]);
+    assert_eq!(
+        reply
+            .reply_cluster()
+            .expect("a reply carries a cluster plan")
+            .published()
+            .reply_projection()
+            .expect("a reply frame carries its projection")
+            .list_entry(),
+        entry,
+        "publication borrows the very entry the fact carries"
+    );
+
+    // Every reply-publication effect fails; none of them may take the row back.
+    let refused = ReplyEffectsRefused;
+    let report = announce_reply_send(
+        reply
+            .reply_cluster()
+            .expect("a reply carries a cluster plan"),
+        ReplyEffects {
+            publication: &refused,
+            mentions: &refused,
+            viewers: &refused,
+            unread: &refused,
+            delivery: &refused,
+        },
+    )
+    .await;
+    assert!(
+        !report.failed.is_empty(),
+        "the announcement's effects should have been attempted and failed"
+    );
+
+    // Reopened: a new pool on the same file, so this is the committed state — the
+    // durable rows the entry was projected from all survived the failed announcement.
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 2);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 2);
+    assert_eq!(
+        fixture.stream_head(CHANNEL_ID, Some(&root_id)).await,
+        Some(2)
+    );
+    // The cluster followers are durable too: the root author follows the thread it
+    // opened ("target_author"), and this reply added its own sender ("reply").
+    assert_eq!(
+        fixture.followers(&root_id).await,
+        vec![
+            (
+                "agent".to_owned(),
+                AGENT_ID.to_owned(),
+                "target_author".to_owned()
+            ),
+            ("human".to_owned(), USER_ID.to_owned(), "reply".to_owned()),
+        ]
+    );
+}
+
+/// The entry publication carries is the one committed WITH the reply, never a
+/// post-commit reread. After the send commits, a newer reply is written directly and
+/// the live author renamed; a cold reread is first shown to observe all of that
+/// (count 2, the newer reply as last, both repliers, the renamed name), so the
+/// mutation is proven to reach the projection — then publication is asserted to still
+/// see the commit-time entry (count 1, the one replier, its committed name, this reply
+/// as last). Structurally, `publish_message` takes only a `CommittedMessageView` and
+/// no store handle, so a reread at publish time cannot be written — this pins that
+/// against regression.
+#[tokio::test]
+async fn the_published_entry_is_the_committed_one_not_a_post_commit_reread() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+    let reply_id = reply.message().id.as_str().to_owned();
+
+    // Change the cluster AFTER the commit: a newer participant reply from a second
+    // actor, and a rename of the first. A reread would now count two repliers, name
+    // both, and point last-reply at the newer row.
+    insert_reply_row(
+        &mut fixture.db,
+        "reply-newer00000",
+        &root_id,
+        7,
+        "agent",
+        Some(BROAD_AGENT_ID),
+        None,
+        Some(BROAD_AGENT_ID),
+        Some("broad"),
+        Some("Broad"),
+    )
+    .await;
+    sqlx::query("UPDATE users SET display_name = 'Renamed' WHERE id = ?")
+        .bind(USER_ID)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+
+    // The mutation is only a meaningful counterexample if a reread would actually
+    // observe it; prove that first, so "publication is still old" is a real contrast
+    // and not a query that silently missed the new row.
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let counterfactual = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .expect("the cluster still has an entry after the mutation");
+    assert_eq!(
+        counterfactual.reply_count(),
+        2,
+        "a reread now counts both replies"
+    );
+    assert_eq!(
+        counterfactual.last_reply_message_id().as_str(),
+        "reply-newer00000",
+        "a reread now points at the newer reply"
+    );
+    assert_eq!(
+        labels(&counterfactual),
+        vec!["agent:agent-2".to_owned(), "human:user-1".to_owned()],
+        "a reread now names both repliers, newest first"
+    );
+    assert_eq!(
+        display_labels(&counterfactual),
+        vec!["Broad".to_owned(), "Renamed".to_owned()],
+        "a reread reflects the live rename"
+    );
+
+    // Announce with a recording publication; the rest accept so it runs to completion.
+    let publication = RecordingPublication::default();
+    let accepting = AcceptingReplyEffects;
+    let report = announce_reply_send(
+        reply
+            .reply_cluster()
+            .expect("a reply carries a cluster plan"),
+        ReplyEffects {
+            publication: &publication,
+            mentions: &accepting,
+            viewers: &accepting,
+            unread: &accepting,
+            delivery: &accepting,
+        },
+    )
+    .await;
+    assert!(report.failed.is_empty(), "every accepting effect succeeds");
+
+    // Despite the reread above proving the cluster moved on every axis, publication
+    // carries the entry committed WITH the reply — count, replier set, live names, and
+    // last reply all frozen at commit time.
+    assert_eq!(
+        publication.observed(),
+        ObservedEntry {
+            reply_count: 1,
+            repliers: vec!["human:user-1".to_owned()],
+            replier_names: vec!["Human".to_owned()],
+            last_reply_id: reply_id.clone(),
+        },
+        "the frame carries the committed entry, not a post-commit reread"
+    );
+}
+
+/// The in-transaction projection carried on the fact and the read-side cold projection
+/// are the same value for a settled cluster: both go through the one
+/// `project_list_entry`, so a client that places the thread from a cold read sees
+/// exactly what rode the reply's frame.
+#[tokio::test]
+async fn the_cold_read_matches_the_entry_committed_on_the_fact() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message().id.as_str().to_owned();
+
+    let reply = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+    let committed = reply
+        .thread()
+        .expect("a reply carries its cluster projection")
+        .list_entry()
+        .clone();
+
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let cold = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .expect("a settled cluster has a placeable entry");
+
+    assert_eq!(committed, cold);
 }

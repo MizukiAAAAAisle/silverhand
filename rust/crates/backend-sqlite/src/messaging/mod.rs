@@ -15,12 +15,13 @@ use std::{
 };
 
 use silverhand_backend_core::messaging::{
-    self, ConversationEndpoint, ConversationFacts, ConversationId, ConversationRefusal,
-    CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads, EnvironmentUnavailable,
-    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, NotificationId,
-    ParticipantHandle, PostAuthorityReads, PrincipalKind, ReplyTargetRefusal, SendActor, SendClock,
-    SendDestination, SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork,
-    ThreadFollowerSource, ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
+    self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationId,
+    ConversationRefusal, CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads,
+    EnvironmentUnavailable, FromKind, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId,
+    MessageSeq, NotificationId, ParticipantHandle, PostAuthorityReads, PrincipalKind,
+    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
+    SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource, ThreadListEntry,
+    ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
@@ -31,10 +32,13 @@ use silverhand_backend_core::messaging::{
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
-    Row, Sqlite, SqlitePool, Transaction,
+    Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use thiserror::Error;
+
+mod author;
+use author::{AuthorEvidence, resolve_authors};
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;
@@ -215,8 +219,6 @@ const SELECT_UNDELIVERED_FOR_AGENT: &str = "SELECT 1 FROM conversation_inboxes W
 const RESERVE_NEXT_SEQ: &str =
     "UPDATE conversations SET latest_message_seq = latest_message_seq + 1 WHERE id = ?";
 const SELECT_LATEST_SEQ: &str = "SELECT latest_message_seq FROM conversations WHERE id = ?";
-const SELECT_AGENT_AUTHOR: &str = "SELECT name, display_name FROM agents WHERE id = ?";
-const SELECT_USER_AUTHOR: &str = "SELECT name, display_name FROM users WHERE id = ?";
 
 const INSERT_MESSAGE: &str = "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, \
      from_user_id, content, metadata, seq, created_at, thread_root_id, author_id, author_name, \
@@ -230,10 +232,35 @@ const UPDATE_STREAM_HEAD: &str = "UPDATE conversation_stream_heads SET latest_se
 const INSERT_STREAM_HEAD: &str = "INSERT INTO conversation_stream_heads (conversation_id, \
      thread_root_id, latest_seq) VALUES (?, ?, ?)";
 
-/// System copies are excluded so a cluster's badge counts what participants said,
-/// and so a live count, a replay and a cold open agree.
-const COUNT_THREAD_REPLIES: &str = "SELECT count(*) FROM messages WHERE conversation_id = ? AND \
-     thread_root_id = ? AND from_kind != 'system'";
+/// The cluster's list entry: the root's provenance and preview columns, alongside
+/// the same authoritative `(reply_count, last_reply_*)` aggregate the badge uses
+/// (`from_kind != 'system'`). The `agg` subquery is empty when no participant has
+/// replied, so the JOIN yields no row and the entry is absent — the projection
+/// never invents a placement for a cluster nobody has spoken in.
+const THREAD_LIST_ENTRY_FOR_ROOT: &str = "SELECT \
+     root.from_kind AS root_from_kind, root.from_agent_id AS root_from_agent_id, \
+     root.from_user_id AS root_from_user_id, root.author_id AS root_author_id, \
+     root.author_name AS root_author_name, root.author_display_name AS root_author_display_name, \
+     root.content AS root_content, root.created_at AS root_created_at, root.seq AS root_seq, \
+     agg.reply_count AS reply_count, lr.id AS last_reply_message_id, \
+     lr.created_at AS last_reply_at \
+     FROM (SELECT thread_root_id AS root_id, count(*) AS reply_count, max(seq) AS last_reply_seq \
+     FROM messages WHERE conversation_id = ? AND thread_root_id = ? AND from_kind != 'system' \
+     GROUP BY thread_root_id) agg \
+     JOIN messages lr ON lr.conversation_id = ? AND lr.thread_root_id = agg.root_id \
+     AND lr.seq = agg.last_reply_seq \
+     JOIN messages root ON root.id = agg.root_id AND root.conversation_id = ?";
+
+/// Distinct repliers of one cluster, most-recent-first. Grouping on the STABLE
+/// `(from_kind, author_id)` snapshot — not the live FK — is what keeps two
+/// hard-deleted repliers from collapsing into one NULL byline; the bare columns
+/// follow SQLite's documented rule of coming from the `max(seq)` row of each group,
+/// so an active replier resolves to its current identity and a deleted one to its
+/// most recent send-time snapshot. System copies are excluded, matching the count.
+const THREAD_REPLIERS_FOR_ROOT: &str = "SELECT from_kind, from_agent_id, from_user_id, author_id, \
+     author_name, author_display_name, max(seq) AS last_seq FROM messages WHERE \
+     conversation_id = ? AND thread_root_id = ? AND from_kind != 'system' \
+     GROUP BY from_kind, author_id ORDER BY last_seq DESC";
 
 const FROM_KIND_USER: &str = "user";
 const FROM_KIND_AGENT: &str = "agent";
@@ -301,11 +328,21 @@ pub enum MessagingStoreError {
     /// placement, and named apart from it so a reader is not misdirected.
     #[error("stored column {field} does not name a usable identity")]
     MalformedIdentity { field: &'static str },
+    /// A stored runtime spelling outside the closed set the domain accepts. The
+    /// column is the store's own, so a value it never writes is a broken database,
+    /// reported with the offending spelling rather than defaulted to a runtime.
+    #[error("stored runtime {value:?} is outside the set the domain accepts")]
+    MalformedRuntime { value: String },
     /// A host capability the write depends on could not answer. Kept as a source
     /// rather than a marker: "no identity could be minted" is only actionable
     /// with the reason attached.
     #[error("a host capability this write depends on could not answer")]
     Environment(#[from] EnvironmentUnavailable),
+    /// A committed reply projected no cluster entry, though the reply it just wrote is
+    /// itself a non-system participant of the cluster and must be visible inside the
+    /// same transaction. Its absence is a broken invariant, not a caller's mistake.
+    #[error("a committed reply projected no cluster entry")]
+    MissingClusterProjection,
 }
 
 fn infrastructure(error: MessagingStoreError) -> SendMessageError {
@@ -361,6 +398,125 @@ impl<E> MessagingStore<E> {
     async fn begin_root_write(&self) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
         self.pool.begin_with(ROOT_WRITE_BEGIN).await
     }
+
+    /// The cluster's list entry as a **read-side** projection over committed rows —
+    /// for a client placing a thread it has not observed the reply event for (a late
+    /// join, a refetch, a reconnect) — or `None` when the root has no non-system reply
+    /// and there is nothing to place.
+    ///
+    /// This is NOT the authority for a reply's own frame: that entry is projected
+    /// inside the reply's atomic unit and carried on [`ThreadReplyFact`], so a rename
+    /// or a newer reply after the commit cannot change what was published. Both go
+    /// through the one [`project_list_entry`], so this cold read and the in-transaction
+    /// projection cannot diverge (proved by the differential gate).
+    pub async fn thread_list_entry_for_root(
+        &self,
+        conversation: &ConversationId,
+        root: &ThreadRootId,
+    ) -> Result<Option<ThreadListEntry>, PersistenceFailure> {
+        let mut tx = self.pool.begin().await.map_err(driver)?;
+        project_list_entry(&mut tx, conversation, root).await
+    }
+}
+
+/// Projects the cluster's list entry from the committed rows visible on `conn`.
+///
+/// It reads the authoritative `(reply_count, last_reply_*)` aggregate the badge uses
+/// and resolves every author — the root's and each distinct replier's — through the
+/// adapter's one author authority ([`resolve_authors`]) in a SINGLE batch, so a whole
+/// entry costs the same two set-shaped author reads a page row does. A replier with no
+/// stable identity (a legacy pre-snapshot deleted actor) renders nothing and does not
+/// aggregate, so it is dropped from both the shown set and the total; a deleted actor
+/// keeps its snapshot identity and counts. The two structural reads share `conn`, so
+/// the count and the repliers cannot be read from different snapshots.
+///
+/// Shared by the send unit of work (passing its own root transaction, so the entry it
+/// folds into the reply fact is the committed one) and the read-side consumer above
+/// (passing a fresh read transaction). One projection, so the two cannot disagree.
+async fn project_list_entry(
+    conn: &mut SqliteConnection,
+    conversation: &ConversationId,
+    root: &ThreadRootId,
+) -> Result<Option<ThreadListEntry>, PersistenceFailure> {
+    let Some(row) = sqlx::query(THREAD_LIST_ENTRY_FOR_ROOT)
+        .bind(conversation.as_str())
+        .bind(root.as_str())
+        .bind(conversation.as_str())
+        .bind(conversation.as_str())
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(driver)?
+    else {
+        return Ok(None);
+    };
+
+    let root_from_kind: String = row.try_get("root_from_kind").map_err(driver)?;
+    let root_content: String = row.try_get("root_content").map_err(driver)?;
+    let root_created_at: i64 = row.try_get("root_created_at").map_err(driver)?;
+    let root_seq_raw: i64 = row.try_get("root_seq").map_err(driver)?;
+    let reply_count: i64 = row.try_get("reply_count").map_err(driver)?;
+    let last_reply_message_id: String = row.try_get("last_reply_message_id").map_err(driver)?;
+    let last_reply_at: i64 = row.try_get("last_reply_at").map_err(driver)?;
+
+    // The root's author leads the batch; each distinct replier follows in
+    // most-recent-first order, so one resolver call answers the whole entry.
+    let mut evidence = vec![AuthorEvidence {
+        from_kind: from_kind_of(&root_from_kind)?,
+        from_agent_id: row.try_get("root_from_agent_id").map_err(driver)?,
+        from_user_id: row.try_get("root_from_user_id").map_err(driver)?,
+        author_id: row.try_get("root_author_id").map_err(driver)?,
+        author_name: row.try_get("root_author_name").map_err(driver)?,
+        author_display_name: row.try_get("root_author_display_name").map_err(driver)?,
+    }];
+
+    let replier_rows = sqlx::query(THREAD_REPLIERS_FOR_ROOT)
+        .bind(conversation.as_str())
+        .bind(root.as_str())
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(driver)?;
+    for replier in &replier_rows {
+        let from_kind: String = replier.try_get("from_kind").map_err(driver)?;
+        evidence.push(AuthorEvidence {
+            from_kind: from_kind_of(&from_kind)?,
+            from_agent_id: replier.try_get("from_agent_id").map_err(driver)?,
+            from_user_id: replier.try_get("from_user_id").map_err(driver)?,
+            author_id: replier.try_get("author_id").map_err(driver)?,
+            author_name: replier.try_get("author_name").map_err(driver)?,
+            author_display_name: replier.try_get("author_display_name").map_err(driver)?,
+        });
+    }
+
+    let mut resolved = resolve_authors(&mut *conn, &evidence).await?.into_iter();
+    // A system root has no author; the resolver already answers `None` for it.
+    let root_author = resolved.next().flatten();
+
+    let mut repliers = Vec::new();
+    let mut replier_total: i64 = 0;
+    for author in resolved.flatten() {
+        if author.stable_identity().is_none() {
+            continue;
+        }
+        replier_total += 1;
+        if repliers.len() < 3 {
+            repliers.push(author);
+        }
+    }
+
+    Ok(Some(ThreadListEntry::committed(
+        root.clone(),
+        root_author,
+        &root_content,
+        root_created_at,
+        MessageSeq::try_from(root_seq_raw).map_err(|error| {
+            PersistenceFailure::from_source(MessagingStoreError::Ordinal(error))
+        })?,
+        reply_count,
+        last_reply_at,
+        MessageId::parse(last_reply_message_id).map_err(|_| malformed("messages.id"))?,
+        repliers,
+        replier_total,
+    )))
 }
 
 impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
@@ -563,12 +719,16 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 // following a conversation whose beginning it cannot see.
                 self.apply_cluster_follow_effects(&facts.id, root, &command, seq, created_at_ms)
                     .await?;
-                Some(ThreadReplyFact {
-                    thread_root_id: root.clone(),
-                    // Counted after the insert, so the reported total already
-                    // includes this reply and is never a value from the future.
-                    reply_count: self.count_thread_replies(&facts.id, root).await?,
-                })
+                // The list entry is projected HERE, inside the same transaction that
+                // wrote this reply, so the value carried on the fact (and borrowed by
+                // publication and the ACK) is the committed one — not something a
+                // post-commit reread might find changed or be unable to answer. This
+                // reply is itself a non-system participant of the cluster, so the
+                // projection always finds it; an absent entry is a broken invariant.
+                let list_entry = project_list_entry(&mut self.tx, &facts.id, root)
+                    .await?
+                    .ok_or_else(|| infrastructure(MessagingStoreError::MissingClusterProjection))?;
+                Some(ThreadReplyFact::committed(list_entry))
             }
         };
 
@@ -772,28 +932,40 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .map_err(|error| infrastructure(MessagingStoreError::Ordinal(error)))
     }
 
-    /// Read live and copied onto the row, so the message keeps reporting its
-    /// author after the principal is renamed or removed.
+    /// The author the message reports, resolved through the adapter's one author
+    /// authority ([`resolve_authors`]) as a ONE-ELEMENT batch — the same authority a
+    /// list read uses for a whole page, so a point read invents no second read or
+    /// discrimination path of its own. At send the actor is current, so this resolves
+    /// to an active author; its snapshot columns are then copied onto the row so the
+    /// message keeps naming its author after a rename or a delete.
     async fn author_snapshot(
         &mut self,
         actor: &SendActor,
     ) -> Result<Option<MessageAuthor>, SendMessageError> {
-        let (statement, id) = match actor {
-            SendActor::Agent(agent) => (SELECT_AGENT_AUTHOR, agent.as_str()),
-            SendActor::User(user) => (SELECT_USER_AUTHOR, user.as_str()),
+        let evidence = match actor {
+            SendActor::Agent(agent) => AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: Some(agent.as_str().to_owned()),
+                from_user_id: None,
+                // Not yet deleted: the snapshot columns are what this send is about
+                // to write, so resolution reads the live row, not them.
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+            SendActor::User(user) => AuthorEvidence {
+                from_kind: FromKind::User,
+                from_agent_id: None,
+                from_user_id: Some(user.as_str().to_owned()),
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
         };
-        let row = sqlx::query(statement)
-            .bind(id)
-            .fetch_optional(&mut *self.tx)
+        let mut resolved = resolve_authors(&mut self.tx, std::slice::from_ref(&evidence))
             .await
-            .map_err(driver)?;
-        let Some(row) = row else { return Ok(None) };
-
-        Ok(Some(MessageAuthor {
-            id: id.to_owned(),
-            name: row.try_get("name").map_err(driver)?,
-            display_name: row.try_get("display_name").map_err(driver)?,
-        }))
+            .map_err(SendMessageError::from)?;
+        Ok(resolved.pop().flatten())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -813,6 +985,8 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             SendActor::Agent(agent) => (FROM_KIND_AGENT, Some(agent.as_str()), None),
             SendActor::User(user) => (FROM_KIND_USER, None, Some(user.as_str())),
         };
+        let (author_id, author_name, author_display_name) =
+            author_snapshot_columns(author.as_ref());
 
         sqlx::query(INSERT_MESSAGE)
             .bind(id.as_str())
@@ -825,13 +999,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .bind(seq.get())
             .bind(created_at_ms)
             .bind(thread_root.as_ref().map(ThreadRootId::as_str))
-            .bind(author.as_ref().map(|author| author.id.as_str()))
-            .bind(author.as_ref().map(|author| author.name.as_str()))
-            .bind(
-                author
-                    .as_ref()
-                    .and_then(|author| author.display_name.as_deref()),
-            )
+            .bind(author_id)
+            .bind(author_name)
+            .bind(author_display_name)
             .bind(None::<&str>)
             .execute(&mut *self.tx)
             .await
@@ -1563,19 +1733,6 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             })
             .collect()
     }
-
-    async fn count_thread_replies(
-        &mut self,
-        conversation: &ConversationId,
-        root: &ThreadRootId,
-    ) -> Result<i64, SendMessageError> {
-        sqlx::query_scalar(COUNT_THREAD_REPLIES)
-            .bind(conversation.as_str())
-            .bind(root.as_str())
-            .fetch_one(&mut *self.tx)
-            .await
-            .map_err(|error| driver(error).into())
-    }
 }
 
 /// The principal a stored row names as its author, or nothing when the row was
@@ -1625,6 +1782,24 @@ fn from_kind_column(kind: messaging::FromKind) -> &'static str {
     }
 }
 
+/// The inverse of [`from_kind_column`], reading a stored provenance back. The column
+/// is this store's own closed set, so a spelling it never writes is a broken
+/// database rather than a caller's mistake.
+fn from_kind_of(stored: &str) -> Result<FromKind, PersistenceFailure> {
+    match stored {
+        FROM_KIND_USER => Ok(FromKind::User),
+        FROM_KIND_AGENT => Ok(FromKind::Agent),
+        FROM_KIND_SYSTEM => Ok(FromKind::System),
+        _ => Err(malformed("messages.from_kind")),
+    }
+}
+
+/// A stored column that should name something usable names nothing — a broken
+/// database the store owns, reported with the column that broke it.
+fn malformed(field: &'static str) -> PersistenceFailure {
+    PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity { field })
+}
+
 fn mention_copy_metadata(
     metadata: &mention_cc::MentionCopyMetadata,
 ) -> Result<String, SendMessageError> {
@@ -1655,21 +1830,39 @@ fn mention_notification_payload(
 
 /// Who named someone, as a reader will see it. The sender's own snapshot, taken
 /// inside the transaction: display name if it says anything, then name, then the id —
-/// an id is not friendly, but it is never absent.
+/// an id is not friendly, but it is never absent. An unresolved author names no one,
+/// so it contributes nothing, exactly as an absent author does.
 fn trigger_name_of(message: &CreatedMessage) -> String {
-    match &message.author {
-        None => String::new(),
-        Some(author) => {
-            let display = author.display_name.as_deref().unwrap_or("").trim();
-            if !display.is_empty() {
-                return display.to_owned();
-            }
-            if !author.name.trim().is_empty() {
-                return author.name.clone();
-            }
-            author.id.clone()
-        }
+    let Some(author) = &message.author else {
+        return String::new();
+    };
+    let (display, name, id): (&str, &str, Option<&str>) = match author {
+        MessageAuthor::Active(ActiveAuthor::Agent(agent)) => (
+            agent.display_name(),
+            agent.name(),
+            Some(agent.id().as_str()),
+        ),
+        MessageAuthor::Active(ActiveAuthor::Human(human)) => (
+            human.display_name(),
+            human.name(),
+            Some(human.id().as_str()),
+        ),
+        MessageAuthor::Deleted(deleted) => (
+            deleted.display_name(),
+            deleted.name(),
+            Some(deleted.identity().as_str()),
+        ),
+        MessageAuthor::Unresolved(_) => ("", "", None),
+    };
+    let display = display.trim();
+    if !display.is_empty() {
+        return display.to_owned();
     }
+    let name = name.trim();
+    if !name.is_empty() {
+        return name.to_owned();
+    }
+    id.unwrap_or("").to_owned()
 }
 
 struct MessageRow {
@@ -1829,6 +2022,35 @@ struct StoredAttachmentSnapshot<'a> {
 
 /// Attachments travel in the message's metadata column, so a message with none
 /// stores no metadata at all rather than an empty container.
+/// The send-time snapshot columns (`author_id`, `author_name`,
+/// `author_display_name`) for an author, as the total projection of the value onto
+/// what this schema stores. Active and deleted authors carry a named identity; a
+/// system send (`None`) and an unresolved author name no one, so all three columns
+/// are NULL. The write path only ever feeds an active author, but the projection is
+/// defined for every arm so it cannot silently mishandle one.
+fn author_snapshot_columns(
+    author: Option<&MessageAuthor>,
+) -> (Option<&str>, Option<&str>, Option<&str>) {
+    match author {
+        Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) => (
+            Some(agent.id().as_str()),
+            Some(agent.name()),
+            Some(agent.display_name()),
+        ),
+        Some(MessageAuthor::Active(ActiveAuthor::Human(human))) => (
+            Some(human.id().as_str()),
+            Some(human.name()),
+            Some(human.display_name()),
+        ),
+        Some(MessageAuthor::Deleted(deleted)) => (
+            Some(deleted.identity().as_str()),
+            Some(deleted.name()),
+            Some(deleted.display_name()),
+        ),
+        Some(MessageAuthor::Unresolved(_)) | None => (None, None, None),
+    }
+}
+
 fn metadata_json(attachments: &[AttachmentSnapshot]) -> Result<Option<String>, SendMessageError> {
     if attachments.is_empty() {
         return Ok(None);
@@ -2044,6 +2266,237 @@ mod tests {
                 "the plan scans a membership table instead of probing it: {plan:?}"
             );
         }
+    }
+
+    /// The batch author lookups must be bounded by the ids asked for, not by the
+    /// installation. Each is driven by `json_each` over the requested set and probes
+    /// its table's primary key, so a set of any size costs one indexed read per row
+    /// asked for — never a scan of `agents`/`users`. The write path's point read is
+    /// this same statement with a one-element set, so the bound holds there too.
+    #[tokio::test]
+    async fn the_batch_author_lookups_are_bounded_by_the_requested_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("author-plan.sqlite");
+        let mut connection = super::current_schema::create_current_schema(&path).await;
+
+        let agents_plan: Vec<String> = sqlx::query(author::EXPLAIN_LIVE_AGENTS)
+            .bind(r#"["agent-1","agent-2"]"#)
+            .fetch_all(&mut connection)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            agents_plan
+                .iter()
+                .any(|step| step.starts_with("SEARCH a") || step.starts_with("SEARCH agents")),
+            "an author agent id was not resolved through the agents primary key: {agents_plan:?}"
+        );
+        for step in &agents_plan {
+            assert!(
+                !step.starts_with("SCAN a") && !step.starts_with("SCAN agents"),
+                "the plan scans every agent in the installation: {agents_plan:?}"
+            );
+        }
+
+        let users_plan: Vec<String> = sqlx::query(author::EXPLAIN_LIVE_USERS)
+            .bind(r#"["user-1","user-2"]"#)
+            .fetch_all(&mut connection)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            users_plan
+                .iter()
+                .any(|step| step.starts_with("SEARCH u") || step.starts_with("SEARCH users")),
+            "an author user id was not resolved through the users primary key: {users_plan:?}"
+        );
+        for step in &users_plan {
+            assert!(
+                !step.starts_with("SCAN u") && !step.starts_with("SCAN users"),
+                "the plan scans every user in the installation: {users_plan:?}"
+            );
+        }
+    }
+
+    /// A mixed page resolves every arm through the ONE author authority in a single
+    /// call, in input order: the live agents and human come from the two set-shaped
+    /// reads that authority runs (one per table), and the deleted and unresolved rows
+    /// from their own evidence with no read, because a nulled FK asks for nothing.
+    /// Two agents resolving from one call is the no-N+1 shape — the batch's live
+    /// actors cost one read per table, whatever the page size — and the caller never
+    /// touches the loader or the discriminator directly, only `resolve_authors`.
+    #[tokio::test]
+    async fn a_mixed_page_resolves_every_arm_through_one_batch_authority() {
+        use silverhand_backend_core::messaging::{PrincipalIdentity, RuntimeKind};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mixed-batch.sqlite");
+        let mut db = super::current_schema::create_current_schema(&path).await;
+
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
+            "INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, \
+             created_at, updated_at) VALUES ('user-1', 'human', 'Human', 'avatars/u.png', \
+             'image/png', 0, 7)",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-1', 'lio', 'claude', 'host-1', 0, 0, 'Lio', \
+             'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-2', 'cin', 'codex', 'host-1', 0, 0, 'Cin', \
+             'user-1')",
+        ] {
+            sqlx::query(statement).execute(&mut db).await.unwrap();
+        }
+
+        let agent_fk = |fk: &str| AuthorEvidence {
+            from_kind: FromKind::Agent,
+            from_agent_id: Some(fk.to_owned()),
+            from_user_id: None,
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+        };
+
+        // One call, five rows, mixed arms — the order the batch is asked in is the
+        // order it answers in.
+        let evidence = vec![
+            agent_fk("agent-1"),
+            AuthorEvidence {
+                from_kind: FromKind::User,
+                from_agent_id: None,
+                from_user_id: Some("user-1".to_owned()),
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+            // Deleted: FK nulled by the delete, its send-time snapshot surviving.
+            AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: None,
+                from_user_id: None,
+                author_id: Some("agent-gone".to_owned()),
+                author_name: Some("gone".to_owned()),
+                author_display_name: Some("Gone".to_owned()),
+            },
+            // Unresolved: FK nulled and no snapshot ever recorded.
+            AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: None,
+                from_user_id: None,
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+            agent_fk("agent-2"),
+        ];
+
+        let resolved = resolve_authors(&mut db, &evidence).await.unwrap();
+        assert_eq!(resolved.len(), 5, "one answer per input row, in order");
+
+        // [0] live agent with its runtime.
+        match resolved[0].as_ref().expect("an agent send names an author") {
+            MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
+                assert_eq!(agent.name(), "lio");
+                assert_eq!(agent.display_name(), "Lio");
+                assert_eq!(agent.runtime(), RuntimeKind::Claude);
+                assert_eq!(agent.avatar(), None);
+            }
+            other => panic!("expected a live agent at [0], got {other:?}"),
+        }
+
+        // [1] live human: no runtime, an avatar revision from the row's updated_at.
+        match resolved[1].as_ref().expect("a human send names an author") {
+            MessageAuthor::Active(ActiveAuthor::Human(person)) => {
+                assert_eq!(person.name(), "human");
+                assert_eq!(person.avatar().map(|a| a.cache_buster()), Some(7));
+            }
+            other => panic!("expected a live human at [1], got {other:?}"),
+        }
+
+        // [2] deleted: named by its snapshot, no live row requested for it.
+        match resolved[2]
+            .as_ref()
+            .expect("a deleted author is named by its snapshot")
+        {
+            MessageAuthor::Deleted(author) => {
+                assert_eq!(author.display_name(), "Gone");
+                assert!(matches!(author.identity(), PrincipalIdentity::Agent(_)));
+            }
+            other => panic!("expected a deleted author at [2], got {other:?}"),
+        }
+
+        // [3] unresolved: named by nothing.
+        assert!(matches!(
+            resolved[3]
+                .as_ref()
+                .expect("an unresolved author still reports its kind"),
+            MessageAuthor::Unresolved(_)
+        ));
+
+        // [4] the second live agent, resolved from the SAME agents read as [0].
+        match resolved[4].as_ref().expect("an agent send names an author") {
+            MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
+                assert_eq!(agent.name(), "cin");
+                assert_eq!(agent.runtime(), RuntimeKind::Codex);
+            }
+            other => panic!("expected a live agent at [4], got {other:?}"),
+        }
+    }
+
+    /// A single broken row fails the WHOLE batch — there is no partial page of
+    /// authors, and the fault the store owns (a stored runtime outside the closed
+    /// set) survives as the error's source. The valid rows around it do not soften
+    /// the invariant into a per-row skip.
+    #[tokio::test]
+    async fn one_broken_runtime_fails_the_whole_batch_with_its_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("broken-runtime-batch.sqlite");
+        let mut db = super::current_schema::create_current_schema(&path).await;
+
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
+             'human', 'Human', 0, 0)",
+            // A stored runtime the domain does not accept — the DB has no CHECK on the
+            // value, so this is exactly the data-invariant fault the store must own.
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-bad', 'bad', 'aider', 'host-1', 0, 0, 'Bad', \
+             'user-1')",
+        ] {
+            sqlx::query(statement).execute(&mut db).await.unwrap();
+        }
+
+        let evidence = vec![
+            AuthorEvidence {
+                from_kind: FromKind::User,
+                from_agent_id: None,
+                from_user_id: Some("user-1".to_owned()),
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+            AuthorEvidence {
+                from_kind: FromKind::Agent,
+                from_agent_id: Some("agent-bad".to_owned()),
+                from_user_id: None,
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+            },
+        ];
+
+        let failure = resolve_authors(&mut db, &evidence).await.unwrap_err();
+        let source = std::error::Error::source(&failure)
+            .and_then(|error| error.downcast_ref::<MessagingStoreError>())
+            .expect("the persistence failure carries the store error as its source");
+        assert!(
+            matches!(source, MessagingStoreError::MalformedRuntime { value } if value == "aider"),
+            "the broken runtime value was not preserved through the batch failure: {source:?}"
+        );
     }
 
     /// The one cell the send path cannot reach: a follower row that names an agent
