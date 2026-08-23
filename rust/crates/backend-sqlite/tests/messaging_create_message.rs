@@ -5,12 +5,14 @@
 //! under test provisions nothing.
 
 use silverhand_backend_core::messaging::{
-    ActorRefusal, AgentId, AttachmentId, ConversationId, ConversationRefusal,
-    EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent, MessageId, MessageSeq,
-    ReferencePositions, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
-    SendMessage, SendMessageDraft, SendMessageError, SendMessageUnitOfWork, ThreadRootId,
-    ThreadRootRefusal, UserId, attachments::AttachmentRef, environment::OsEntropy,
+    ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
+    DirectLineAuthority, EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent,
+    MessageId, MessageSeq, PrincipalKind, ReferencePositions, ReplyTargetRefusal, SendActor,
+    SendClock, SendDestination, SendEntropy, SendMessage, SendMessageDraft, SendMessageError,
+    SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId, attachments::AttachmentRef,
+    environment::OsEntropy,
 };
+use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Row, SqliteConnection};
 use std::{
@@ -340,8 +342,26 @@ fn draft(actor: SendActor, conversation: &str, content: &str) -> SendMessageDraf
     }
 }
 
+/// An authority that grants a direct line to every agent the body addressed. Tests
+/// that are about the grant itself say so; the rest should not have to model it.
+struct GrantsEveryAddressedAgent;
+
+impl DirectLineAuthority for GrantsEveryAddressedAgent {
+    fn direct_lines(
+        &self,
+        _author: &UserId,
+        addressed: &AddressedPrincipals,
+    ) -> Result<Vec<AgentId>, PersistenceFailure> {
+        Ok(addressed
+            .iter()
+            .filter(|reference| reference.kind() == PrincipalKind::Agent)
+            .filter_map(|reference| AgentId::parse(reference.handle()).ok())
+            .collect())
+    }
+}
+
 fn prepared(draft: SendMessageDraft) -> SendMessage {
-    SendMessage::prepare(draft, &EveryBracketedRun)
+    SendMessage::prepare(draft, &EveryBracketedRun, &GrantsEveryAddressedAgent).unwrap()
 }
 
 fn send(actor: SendActor, conversation: &str, content: &str) -> SendMessage {

@@ -8,6 +8,7 @@
 pub mod attachments;
 pub mod environment;
 pub mod freshness;
+pub mod mention_cc;
 
 use std::{collections::HashSet, error::Error, future::Future, ops::Range};
 
@@ -283,6 +284,18 @@ fn parse_reference_destination(destination: &str) -> Option<MessageReference> {
     })
 }
 
+/// The canonical prose form of a reference: `<silverhand://agent/Alice>`.
+///
+/// The brackets are what make a destination a destination — a bare one is plain
+/// text — so every producer of server-authored prose writes this form.
+pub fn format_reference_token(kind: PrincipalKind, handle: &str) -> String {
+    let kind = match kind {
+        PrincipalKind::Agent => "agent",
+        PrincipalKind::Human => "human",
+    };
+    format!("<{REFERENCE_PREFIX}{kind}/{handle}>")
+}
+
 /// Which positions in a body can address anyone.
 ///
 /// The rule is Markdown structure — an autolink in prose, never quoted syntax and
@@ -514,6 +527,39 @@ pub struct SendMessageDraft {
     pub freshness_bypass: bool,
 }
 
+/// Which addressed agents this author may open a direct line to.
+///
+/// Sealed for the same reason the addressed set is: it is a VERDICT, and a caller
+/// that could assemble one would be granting itself the right to open a line and
+/// deliver a copy through it. The only way to obtain one is [`SendMessage::prepare`],
+/// which asks a named authority about this author and these handles.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectLineGrants(HashSet<AgentId>);
+
+impl DirectLineGrants {
+    pub fn contains(&self, agent: &AgentId) -> bool {
+        self.0.contains(agent)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Who may open a direct line to whom. A capability boundary owned elsewhere: the
+/// question is about a person and the agents their message named, and answering it
+/// reads authorization state, which the send's own transaction deliberately cannot
+/// do.
+pub trait DirectLineAuthority {
+    /// The addressed agents this author may open a direct line to, as ids the
+    /// authority has itself gated. Asked once per send, before any transaction.
+    fn direct_lines(
+        &self,
+        author: &UserId,
+        addressed: &AddressedPrincipals,
+    ) -> Result<Vec<AgentId>, PersistenceFailure>;
+}
+
 /// One create-message request, prepared: every field has satisfied its own
 /// invariant, and what the body addresses has been derived FROM that body.
 ///
@@ -522,7 +568,8 @@ pub struct SendMessageDraft {
 /// saying one thing while the send delivers to someone else — so the only way to
 /// obtain this value is [`SendMessage::prepare`], which derives one from the
 /// other. Deriving happens here, before any transaction: a 64KiB body must not be
-/// parsed while the writer is held.
+/// parsed while the writer is held, and authorization must not be asked from
+/// inside it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendMessage {
     source_conversation: ConversationId,
@@ -532,13 +579,32 @@ pub struct SendMessage {
     destination: SendDestination,
     attachment_refs: Vec<attachments::AttachmentRef>,
     addressed: AddressedPrincipals,
+    direct_lines: DirectLineGrants,
     freshness_bypass: bool,
 }
 
 impl SendMessage {
-    pub fn prepare(draft: SendMessageDraft, positions: &impl ReferencePositions) -> Self {
+    /// Derives what the body addresses, then asks the authority which of those the
+    /// author may open a line to. An agent author asks nothing: a direct line is a
+    /// person's to open, so the grants are empty by construction rather than by a
+    /// caller's say-so.
+    pub fn prepare(
+        draft: SendMessageDraft,
+        positions: &impl ReferencePositions,
+        authority: &impl DirectLineAuthority,
+    ) -> Result<Self, PersistenceFailure> {
         let addressed = AddressedPrincipals::derive(&draft.content, positions);
-        Self {
+        let direct_lines = match &draft.actor {
+            SendActor::User(author) => DirectLineGrants(
+                authority
+                    .direct_lines(author, &addressed)?
+                    .into_iter()
+                    .collect(),
+            ),
+            SendActor::Agent(_) => DirectLineGrants(HashSet::new()),
+        };
+
+        Ok(Self {
             source_conversation: draft.source_conversation,
             target_conversation: draft.target_conversation,
             actor: draft.actor,
@@ -546,8 +612,9 @@ impl SendMessage {
             destination: draft.destination,
             attachment_refs: draft.attachment_refs,
             addressed,
+            direct_lines,
             freshness_bypass: draft.freshness_bypass,
-        }
+        })
     }
 
     pub fn source_conversation(&self) -> &ConversationId {
@@ -576,6 +643,10 @@ impl SendMessage {
 
     pub fn addressed(&self) -> &AddressedPrincipals {
         &self.addressed
+    }
+
+    pub fn direct_lines(&self) -> &DirectLineGrants {
+        &self.direct_lines
     }
 
     pub fn freshness_bypass(&self) -> bool {
@@ -886,6 +957,24 @@ mod tests {
         }
     }
 
+    /// An authority that grants every agent the body addressed, so tests that are
+    /// not about authorization do not have to model it.
+    struct GrantsEveryAddressedAgent;
+
+    impl DirectLineAuthority for GrantsEveryAddressedAgent {
+        fn direct_lines(
+            &self,
+            _author: &UserId,
+            addressed: &AddressedPrincipals,
+        ) -> Result<Vec<AgentId>, PersistenceFailure> {
+            Ok(addressed
+                .iter()
+                .filter(|reference| reference.kind() == PrincipalKind::Agent)
+                .map(|reference| AgentId::parse(reference.handle()).unwrap())
+                .collect())
+        }
+    }
+
     /// A stand-in position rule: every `<…>` run, wherever it sits. The product
     /// rule is Markdown structure — an autolink in prose, never quoted syntax —
     /// and lives outside this crate; this one exists to exercise the half that IS
@@ -925,7 +1014,8 @@ mod tests {
         positions: &impl ReferencePositions,
     ) -> Vec<(PrincipalKind, String)> {
         let content = MessageContent::parse(body).unwrap();
-        SendMessage::prepare(draft(content), positions)
+        SendMessage::prepare(draft(content), positions, &GrantsEveryAddressedAgent)
+            .unwrap()
             .addressed()
             .iter()
             .map(|reference| (reference.kind(), reference.handle().to_owned()))
@@ -972,7 +1062,14 @@ mod tests {
 
         if let Ok(content) = MessageContent::parse(&oversized) {
             let _ = unit
-                .send_message(SendMessage::prepare(draft(content), &EveryBracketedRun))
+                .send_message(
+                    SendMessage::prepare(
+                        draft(content),
+                        &EveryBracketedRun,
+                        &GrantsEveryAddressedAgent,
+                    )
+                    .unwrap(),
+                )
                 .await;
         }
 
