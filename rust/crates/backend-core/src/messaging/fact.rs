@@ -113,8 +113,8 @@ pub struct CreatedMessage {
 /// read-only accessors: the unit of work that computed the projection inside the
 /// atomic unit is the only thing that assembles one, and nothing downstream can
 /// fabricate or mutate it. The cluster's list entry is a second projection of this
-/// same fact; it is not modelled here yet, pending the shared author contract it
-/// depends on.
+/// same fact, modelled by [`ThreadListEntry`] — it reads the same authoritative
+/// `(reply_count, last_reply_*)` shape, over the shared [`MessageAuthor`] contract.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThreadReplyFact {
     thread_root_id: ThreadRootId,
@@ -158,6 +158,166 @@ impl ThreadReplyFact {
 
     pub fn reply_count(&self) -> i64 {
         self.reply_count
+    }
+}
+
+/// The largest a thread's root preview may be, counted in UTF-16 code units.
+///
+/// This is the wire contract's unit, not Rust's: the published preview is measured
+/// the way the client that renders it measures a string, so a value that fits here
+/// fits there. See [`thread_root_preview`] for the one boundary case where the two
+/// string models cannot agree.
+pub const THREAD_PREVIEW_MAX_UTF16: usize = 160;
+
+/// The root preview a thread-list entry publishes: the root's content truncated to
+/// at most [`THREAD_PREVIEW_MAX_UTF16`] UTF-16 code units, with no trimming,
+/// normalization, or ellipsis — the raw prefix, exactly as the reader will measure
+/// it.
+///
+/// The one place the two string models diverge, stated rather than hidden: the wire
+/// counts UTF-16 code units and a client is free to cut an astral scalar in half,
+/// keeping a lone surrogate as its 160th unit. A Rust `String` is UTF-8 and cannot
+/// hold a lone surrogate, so when the limit would fall inside an astral scalar this
+/// stops at the scalar boundary before it (159 units) rather than emitting one that
+/// cannot be a `str`. Every boundary that lands between scalars is identical to a
+/// UTF-16 slice; only an astral scalar straddling the exact limit differs, by the
+/// one unit that has no UTF-8 spelling.
+pub fn thread_root_preview(content: &str) -> String {
+    let mut units = 0usize;
+    let mut end = content.len();
+    for (offset, ch) in content.char_indices() {
+        let width = ch.len_utf16();
+        if units + width > THREAD_PREVIEW_MAX_UTF16 {
+            end = offset;
+            break;
+        }
+        units += width;
+    }
+    content[..end].to_owned()
+}
+
+/// One row of the thread list: the cluster as it is placed and previewed, without
+/// the per-viewer follow bit.
+///
+/// The second projection of the same fact [`ThreadReplyFact`] records — it reads the
+/// authoritative `(reply_count, last_reply_*)` computed inside the reply's atomic
+/// unit, so the entry a reply produces already counts itself and can never show a
+/// future-seq value. `root_author` and every replier are the one shared
+/// [`MessageAuthor`] contract, so a deleted actor keeps its send-time snapshot here
+/// exactly as it does on a message byline. The per-viewer `viewer_following` bit is
+/// deliberately absent: it is not a property of the cluster, and this value is the
+/// viewer-invariant subset every recipient of the broadcast frame shares.
+///
+/// Private fields with a public [`committed`](ThreadListEntry::committed) seam and
+/// read-only accessors, for the same reason [`ThreadReplyFact`] has them: the adapter
+/// that read the projection inside the atomic unit is the only thing that assembles
+/// one, and the preview rule is enforced here — the seam takes raw content and
+/// applies [`thread_root_preview`], so no caller can publish an over-long or
+/// arbitrarily-truncated preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThreadListEntry {
+    root_message_id: MessageId,
+    root_author: Option<MessageAuthor>,
+    root_preview: String,
+    root_created_at_ms: i64,
+    root_seq: MessageSeq,
+    reply_count: i64,
+    last_reply_at_ms: i64,
+    last_reply_message_id: MessageId,
+    repliers: Vec<MessageAuthor>,
+    replier_total: i64,
+}
+
+impl ThreadListEntry {
+    /// Assembled by the adapter that projected the cluster inside the same atomic
+    /// unit as the reply. The preview is derived here from the raw root content, so
+    /// the [`THREAD_PREVIEW_MAX_UTF16`] rule cannot be bypassed or duplicated.
+    ///
+    /// A caller outside this crate cannot assemble one field by field:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::ThreadListEntry;
+    ///
+    /// let entry = ThreadListEntry {
+    ///     root_message_id: todo!(),
+    ///     replier_total: 0,
+    /// };
+    /// ```
+    ///
+    /// nor mutate one that already exists:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::ThreadListEntry;
+    ///
+    /// fn tamper(entry: &mut ThreadListEntry) {
+    ///     entry.replier_total = 0;
+    /// }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn committed(
+        root_message_id: MessageId,
+        root_author: Option<MessageAuthor>,
+        root_content: &str,
+        root_created_at_ms: i64,
+        root_seq: MessageSeq,
+        reply_count: i64,
+        last_reply_at_ms: i64,
+        last_reply_message_id: MessageId,
+        repliers: Vec<MessageAuthor>,
+        replier_total: i64,
+    ) -> Self {
+        Self {
+            root_message_id,
+            root_author,
+            root_preview: thread_root_preview(root_content),
+            root_created_at_ms,
+            root_seq,
+            reply_count,
+            last_reply_at_ms,
+            last_reply_message_id,
+            repliers,
+            replier_total,
+        }
+    }
+
+    pub fn root_message_id(&self) -> &MessageId {
+        &self.root_message_id
+    }
+
+    pub fn root_author(&self) -> Option<&MessageAuthor> {
+        self.root_author.as_ref()
+    }
+
+    pub fn root_preview(&self) -> &str {
+        &self.root_preview
+    }
+
+    pub fn root_created_at_ms(&self) -> i64 {
+        self.root_created_at_ms
+    }
+
+    pub fn root_seq(&self) -> MessageSeq {
+        self.root_seq
+    }
+
+    pub fn reply_count(&self) -> i64 {
+        self.reply_count
+    }
+
+    pub fn last_reply_at_ms(&self) -> i64 {
+        self.last_reply_at_ms
+    }
+
+    pub fn last_reply_message_id(&self) -> &MessageId {
+        &self.last_reply_message_id
+    }
+
+    pub fn repliers(&self) -> &[MessageAuthor] {
+        &self.repliers
+    }
+
+    pub fn replier_total(&self) -> i64 {
+        self.replier_total
     }
 }
 
@@ -317,5 +477,78 @@ impl MessageCreatedFact {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{THREAD_PREVIEW_MAX_UTF16, thread_root_preview};
+
+    /// UTF-16 length, the unit the wire contract measures a preview in.
+    fn utf16_len(s: &str) -> usize {
+        s.chars().map(char::len_utf16).sum()
+    }
+
+    #[test]
+    fn a_preview_shorter_than_the_limit_is_returned_whole() {
+        let content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1);
+        let preview = thread_root_preview(&content);
+        assert_eq!(preview, content);
+        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16 - 1);
+    }
+
+    #[test]
+    fn a_preview_exactly_at_the_limit_is_returned_whole() {
+        let content = "a".repeat(THREAD_PREVIEW_MAX_UTF16);
+        let preview = thread_root_preview(&content);
+        assert_eq!(preview, content);
+        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
+    }
+
+    #[test]
+    fn a_preview_one_past_the_limit_keeps_the_first_limit_units() {
+        let content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 + 1);
+        let preview = thread_root_preview(&content);
+        assert_eq!(preview, "a".repeat(THREAD_PREVIEW_MAX_UTF16));
+        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
+    }
+
+    #[test]
+    fn a_bmp_char_on_the_limit_boundary_is_kept_whole() {
+        // 159 ASCII + one 3-byte BMP scalar (1 UTF-16 unit) == exactly 160 units.
+        let mut content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1);
+        content.push('世');
+        let preview = thread_root_preview(&content);
+        assert_eq!(preview, content);
+        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
+    }
+
+    #[test]
+    fn an_astral_scalar_straddling_the_limit_stops_before_it() {
+        // 159 ASCII fills to unit 159; the next scalar '😀' is 2 UTF-16 units, so a
+        // UTF-16 slice(0,160) would cut it in half and keep a lone high surrogate.
+        // UTF-8 cannot spell that, so this stops at the scalar boundary: 159 units,
+        // the astral scalar dropped whole rather than split.
+        let mut content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1);
+        content.push('😀');
+        let preview = thread_root_preview(&content);
+        assert_eq!(preview, "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1));
+        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16 - 1);
+    }
+
+    #[test]
+    fn an_astral_scalar_fully_inside_the_limit_is_kept_whole() {
+        // 158 ASCII + '😀' (2 units) == exactly 160 units: fits, kept whole.
+        let mut content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 2);
+        content.push('😀');
+        let preview = thread_root_preview(&content);
+        assert_eq!(preview, content);
+        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
+    }
+
+    #[test]
+    fn the_preview_never_trims_or_normalizes_leading_whitespace() {
+        let content = "   spaced".to_owned();
+        assert_eq!(thread_root_preview(&content), content);
     }
 }

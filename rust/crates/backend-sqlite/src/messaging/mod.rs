@@ -20,8 +20,8 @@ use silverhand_backend_core::messaging::{
     EnvironmentUnavailable, FromKind, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId,
     MessageSeq, NotificationId, ParticipantHandle, PostAuthorityReads, PrincipalKind,
     ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
-    SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource, ThreadReplyFact, ThreadRootId,
-    ThreadRootRefusal, UserId,
+    SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource, ThreadListEntry,
+    ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
@@ -237,6 +237,36 @@ const INSERT_STREAM_HEAD: &str = "INSERT INTO conversation_stream_heads (convers
 const COUNT_THREAD_REPLIES: &str = "SELECT count(*) FROM messages WHERE conversation_id = ? AND \
      thread_root_id = ? AND from_kind != 'system'";
 
+/// The cluster's list entry: the root's provenance and preview columns, alongside
+/// the same authoritative `(reply_count, last_reply_*)` aggregate the badge uses
+/// (`from_kind != 'system'`). The `agg` subquery is empty when no participant has
+/// replied, so the JOIN yields no row and the entry is absent — the projection
+/// never invents a placement for a cluster nobody has spoken in.
+const THREAD_LIST_ENTRY_FOR_ROOT: &str = "SELECT root.id AS root_message_id, \
+     root.from_kind AS root_from_kind, root.from_agent_id AS root_from_agent_id, \
+     root.from_user_id AS root_from_user_id, root.author_id AS root_author_id, \
+     root.author_name AS root_author_name, root.author_display_name AS root_author_display_name, \
+     root.content AS root_content, root.created_at AS root_created_at, root.seq AS root_seq, \
+     agg.reply_count AS reply_count, lr.id AS last_reply_message_id, \
+     lr.created_at AS last_reply_at \
+     FROM (SELECT thread_root_id AS root_id, count(*) AS reply_count, max(seq) AS last_reply_seq \
+     FROM messages WHERE conversation_id = ? AND thread_root_id = ? AND from_kind != 'system' \
+     GROUP BY thread_root_id) agg \
+     JOIN messages lr ON lr.conversation_id = ? AND lr.thread_root_id = agg.root_id \
+     AND lr.seq = agg.last_reply_seq \
+     JOIN messages root ON root.id = agg.root_id AND root.conversation_id = ?";
+
+/// Distinct repliers of one cluster, most-recent-first. Grouping on the STABLE
+/// `(from_kind, author_id)` snapshot — not the live FK — is what keeps two
+/// hard-deleted repliers from collapsing into one NULL byline; the bare columns
+/// follow SQLite's documented rule of coming from the `max(seq)` row of each group,
+/// so an active replier resolves to its current identity and a deleted one to its
+/// most recent send-time snapshot. System copies are excluded, matching the count.
+const THREAD_REPLIERS_FOR_ROOT: &str = "SELECT from_kind, from_agent_id, from_user_id, author_id, \
+     author_name, author_display_name, max(seq) AS last_seq FROM messages WHERE \
+     conversation_id = ? AND thread_root_id = ? AND from_kind != 'system' \
+     GROUP BY from_kind, author_id ORDER BY last_seq DESC";
+
 const FROM_KIND_USER: &str = "user";
 const FROM_KIND_AGENT: &str = "agent";
 const FROM_KIND_SYSTEM: &str = "system";
@@ -367,6 +397,109 @@ impl<E> MessagingStore<E> {
     /// surfaces before any of the unit's reads are trusted.
     async fn begin_root_write(&self) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
         self.pool.begin_with(ROOT_WRITE_BEGIN).await
+    }
+
+    /// The cluster's list entry — the viewer-invariant projection a reply publishes
+    /// so a client can place the thread without a refetch — or `None` when the root
+    /// has no non-system reply and there is nothing to place.
+    ///
+    /// It reads the same authoritative `(reply_count, last_reply_*)` a reply computes
+    /// inside its own atomic unit, so live, replay and cold-open agree. Every author —
+    /// the root's and each distinct replier's — is resolved through the adapter's one
+    /// author authority ([`resolve_authors`]) in a SINGLE batch, so a whole entry
+    /// costs the same two set-shaped author reads a page row does. A replier with no
+    /// stable identity (a legacy pre-snapshot deleted actor) renders nothing and does
+    /// not aggregate, so it is dropped from both the shown set and the total; a
+    /// deleted actor keeps its snapshot identity and counts. The two structural reads
+    /// share one transaction, so the count and the repliers cannot be read from
+    /// different snapshots.
+    pub async fn thread_list_entry_for_root(
+        &self,
+        conversation: &ConversationId,
+        root: &ThreadRootId,
+    ) -> Result<Option<ThreadListEntry>, PersistenceFailure> {
+        let mut tx = self.pool.begin().await.map_err(driver)?;
+
+        let Some(row) = sqlx::query(THREAD_LIST_ENTRY_FOR_ROOT)
+            .bind(conversation.as_str())
+            .bind(root.as_str())
+            .bind(conversation.as_str())
+            .bind(conversation.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(driver)?
+        else {
+            return Ok(None);
+        };
+
+        let root_message_id: String = row.try_get("root_message_id").map_err(driver)?;
+        let root_from_kind: String = row.try_get("root_from_kind").map_err(driver)?;
+        let root_content: String = row.try_get("root_content").map_err(driver)?;
+        let root_created_at: i64 = row.try_get("root_created_at").map_err(driver)?;
+        let root_seq_raw: i64 = row.try_get("root_seq").map_err(driver)?;
+        let reply_count: i64 = row.try_get("reply_count").map_err(driver)?;
+        let last_reply_message_id: String = row.try_get("last_reply_message_id").map_err(driver)?;
+        let last_reply_at: i64 = row.try_get("last_reply_at").map_err(driver)?;
+
+        // The root's author leads the batch; each distinct replier follows in
+        // most-recent-first order, so one resolver call answers the whole entry.
+        let mut evidence = vec![AuthorEvidence {
+            from_kind: from_kind_of(&root_from_kind)?,
+            from_agent_id: row.try_get("root_from_agent_id").map_err(driver)?,
+            from_user_id: row.try_get("root_from_user_id").map_err(driver)?,
+            author_id: row.try_get("root_author_id").map_err(driver)?,
+            author_name: row.try_get("root_author_name").map_err(driver)?,
+            author_display_name: row.try_get("root_author_display_name").map_err(driver)?,
+        }];
+
+        let replier_rows = sqlx::query(THREAD_REPLIERS_FOR_ROOT)
+            .bind(conversation.as_str())
+            .bind(root.as_str())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(driver)?;
+        for replier in &replier_rows {
+            let from_kind: String = replier.try_get("from_kind").map_err(driver)?;
+            evidence.push(AuthorEvidence {
+                from_kind: from_kind_of(&from_kind)?,
+                from_agent_id: replier.try_get("from_agent_id").map_err(driver)?,
+                from_user_id: replier.try_get("from_user_id").map_err(driver)?,
+                author_id: replier.try_get("author_id").map_err(driver)?,
+                author_name: replier.try_get("author_name").map_err(driver)?,
+                author_display_name: replier.try_get("author_display_name").map_err(driver)?,
+            });
+        }
+
+        let mut resolved = resolve_authors(&mut tx, &evidence).await?.into_iter();
+        // A system root has no author; the resolver already answers `None` for it.
+        let root_author = resolved.next().flatten();
+
+        let mut repliers = Vec::new();
+        let mut replier_total: i64 = 0;
+        for author in resolved.flatten() {
+            if author.stable_identity().is_none() {
+                continue;
+            }
+            replier_total += 1;
+            if repliers.len() < 3 {
+                repliers.push(author);
+            }
+        }
+
+        Ok(Some(ThreadListEntry::committed(
+            MessageId::parse(root_message_id).map_err(|_| malformed("messages.id"))?,
+            root_author,
+            &root_content,
+            root_created_at,
+            MessageSeq::try_from(root_seq_raw).map_err(|error| {
+                PersistenceFailure::from_source(MessagingStoreError::Ordinal(error))
+            })?,
+            reply_count,
+            last_reply_at,
+            MessageId::parse(last_reply_message_id).map_err(|_| malformed("messages.id"))?,
+            repliers,
+            replier_total,
+        )))
     }
 }
 
@@ -1640,6 +1773,24 @@ fn from_kind_column(kind: messaging::FromKind) -> &'static str {
         messaging::FromKind::Agent => FROM_KIND_AGENT,
         messaging::FromKind::System => FROM_KIND_SYSTEM,
     }
+}
+
+/// The inverse of [`from_kind_column`], reading a stored provenance back. The column
+/// is this store's own closed set, so a spelling it never writes is a broken
+/// database rather than a caller's mistake.
+fn from_kind_of(stored: &str) -> Result<FromKind, PersistenceFailure> {
+    match stored {
+        FROM_KIND_USER => Ok(FromKind::User),
+        FROM_KIND_AGENT => Ok(FromKind::Agent),
+        FROM_KIND_SYSTEM => Ok(FromKind::System),
+        _ => Err(malformed("messages.from_kind")),
+    }
+}
+
+/// A stored column that should name something usable names nothing — a broken
+/// database the store owns, reported with the column that broke it.
+fn malformed(field: &'static str) -> PersistenceFailure {
+    PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity { field })
 }
 
 fn mention_copy_metadata(
