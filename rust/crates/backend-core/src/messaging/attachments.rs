@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use super::{AttachmentId, AttachmentRefusal, ConversationId};
+use super::{AttachmentId, ConversationId};
 
 /// The two kinds a label may claim. Derived from the content type, never from the
 /// filename.
@@ -107,6 +107,27 @@ pub struct AttachmentSnapshot {
     pub size: i64,
     pub content_type: String,
     pub label: Option<AttachmentLabel>,
+}
+
+/// An attachment reference the store would not accept. "Unknown" and "belongs to
+/// another conversation" are deliberately one answer, so a reference cannot be
+/// used to probe for existence.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum AttachmentRefusal {
+    #[error("attachment does not belong to this channel")]
+    OutsideChannel { attachment_id: AttachmentId },
+    #[error("attachment label kind does not match its content type")]
+    LabelKindMismatch { attachment_id: AttachmentId },
+}
+
+impl AttachmentRefusal {
+    pub fn attachment_id(&self) -> &AttachmentId {
+        match self {
+            Self::OutsideChannel { attachment_id } | Self::LabelKindMismatch { attachment_id } => {
+                attachment_id
+            }
+        }
+    }
 }
 
 /// Resolves every reference or refuses at the first one that fails.
@@ -319,5 +340,14 @@ mod tests {
         assert_eq!(snapshots[0], snapshots[1]);
         assert_eq!(snapshots[0].filename, "note.txt");
         assert_eq!(snapshots[0].size, 12);
+    }
+
+    #[test]
+    fn an_attachment_refusal_names_the_reference_it_rejected() {
+        let refusal = AttachmentRefusal::OutsideChannel {
+            attachment_id: AttachmentId::parse("att-1").unwrap(),
+        };
+
+        assert_eq!(refusal.attachment_id().as_str(), "att-1");
     }
 }

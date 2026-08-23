@@ -5,7 +5,7 @@
 //! has no runtime and therefore no consumption position to be behind, so a human
 //! send never meets this guard.
 
-use super::{AgentId, EnvironmentUnavailable, SendActor, SendEntropy};
+use super::{AgentId, ConversationId, EnvironmentUnavailable, SendActor, SendEntropy};
 
 /// The delivery scope a runtime's freshness is judged in. It is the agent's own
 /// declared session scope, not a property of the send.
@@ -87,10 +87,20 @@ impl StaleEventId {
     }
 }
 
+/// The runtime still owes itself input it has not consumed. Signal only: it
+/// carries no message body, no ordinal and no count, because a stale answer must
+/// not become a side channel for content the caller has not been delivered.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("this runtime has undelivered input it must consume before sending")]
+pub struct StaleRefusal {
+    pub stale_event_id: StaleEventId,
+    pub target_conversation_id: ConversationId,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging::{EnvironmentUnavailable, UserId};
+    use crate::messaging::{ConversationId, EnvironmentUnavailable, UserId};
 
     /// Entropy with no randomness in it, so the identity can be asserted exactly.
     struct FixedEntropy(&'static [u8; 16]);
@@ -150,5 +160,19 @@ mod tests {
         // low six bits under a forced variant 1.
         assert_eq!(ascending.as_str(), "00010203-0405-4607-8809-0a0b0c0d0e0f");
         assert_eq!(ones.as_str(), "ffffffff-ffff-4fff-bfff-ffffffffffff");
+    }
+
+    #[test]
+    fn a_stale_refusal_carries_signal_metadata_only() {
+        let refusal = StaleRefusal {
+            stale_event_id: StaleEventId::mint(&FixedEntropy(&[0u8; 16])).unwrap(),
+            target_conversation_id: ConversationId::parse("conv-1").unwrap(),
+        };
+
+        assert_eq!(
+            refusal.target_conversation_id,
+            ConversationId::parse("conv-1").unwrap()
+        );
+        assert!(refusal.to_string().contains("undelivered input"));
     }
 }
