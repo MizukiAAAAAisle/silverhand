@@ -266,6 +266,42 @@ mod ordering_tests {
         }
     }
 
+    /// A body that FAILS mid-read is this lane's own failure, not the caller's.
+    ///
+    /// Over real HTTP, through the real fence: no declared length, one good data
+    /// frame, then a named source error. It must not be answered as a size refusal
+    /// (413) nor as invalid input (400) — the caller never submitted a legal envelope
+    /// for a schema to reject — and the response must carry none of the cause.
+    #[tokio::test]
+    async fn a_body_that_breaks_mid_read_is_a_safe_failure_of_this_lane() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("upstream frame source vanished")]
+        struct FrameSourceGone;
+
+        let breaking = Body::from_stream(futures_util::stream::iter(vec![
+            Ok::<axum::body::Bytes, FrameSourceGone>(axum::body::Bytes::from_static(
+                b"{\"content\":\"hi\"}",
+            )),
+            Err(FrameSourceGone),
+        ]));
+
+        let (status, body) = send(
+            Request::post("/internal/agents/agent-1/send-message")
+                .body(breaking)
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_ne!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_ne!(status, StatusCode::BAD_REQUEST);
+        // Nothing about the cause, and nothing about the bytes that did arrive.
+        assert!(!body.contains("frame source"), "{body}");
+        assert!(!body.contains("content"), "{body}");
+        assert!(!body.contains("invalid input"), "{body}");
+        assert!(!body.contains("message-send bound"), "{body}");
+    }
+
     /// A body within both bounds reaches the next gate. Without this the refusals
     /// above could all be an accident of something else failing.
     #[tokio::test]
