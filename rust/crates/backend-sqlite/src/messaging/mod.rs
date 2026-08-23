@@ -84,7 +84,7 @@ const SELECT_DIRECT_PAIR: &str = "SELECT id FROM conversations WHERE placement_k
 /// the line, and it names the message it came from so the two can never be
 /// mistaken for independent facts.
 const INSERT_MENTION_COPY: &str = "INSERT INTO messages (id, conversation_id, from_kind, content, \
-     metadata, seq, created_at, cc_source_message_id) VALUES (?, ?, 'system', ?, ?, ?, ?, ?)";
+     metadata, seq, created_at, cc_source_message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 /// The author's own record that the mention left their conversation. Its
 /// coordinates are the SOURCE's, because the reader is the author and their read
 /// path is the message they can see — never the recipient's copy, which they cannot.
@@ -975,6 +975,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         sqlx::query(INSERT_MENTION_COPY)
             .bind(copy.id.as_str())
             .bind(copy.conversation_id.as_str())
+            .bind(from_kind_column(copy.from_kind))
             .bind(&copy.content)
             .bind(mention_copy_metadata(&copy.metadata)?)
             .bind(copy.seq.get())
@@ -983,7 +984,8 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .execute(&mut *self.tx)
             .await
             .map_err(driver)?;
-        self.bump_stream_head(line, None, copy.seq).await?;
+        self.bump_stream_head(&copy.conversation_id, None, copy.seq)
+            .await?;
         Ok(copy)
     }
 

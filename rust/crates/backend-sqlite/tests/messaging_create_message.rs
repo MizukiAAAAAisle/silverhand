@@ -1992,7 +1992,10 @@ async fn a_mention_of_a_non_member_is_copied_onto_a_direct_line() {
     assert_eq!(agent.as_str(), OUTSIDER_AGENT_ID);
     assert_eq!(committed.id.as_str(), copy.get::<String, _>("id"));
     assert_eq!(committed.conversation_id.as_str(), line);
+    // The stored column and the fact are the same authority: the row was written
+    // from the value, not from a constant that happens to agree with it.
     assert_eq!(committed.from_kind, FromKind::System);
+    assert_eq!(copy.get::<String, _>("from_kind"), "system");
     assert_eq!(committed.content, copy.get::<String, _>("content"));
     assert_eq!(committed.seq, MessageSeq::try_from(1).unwrap());
     assert_eq!(committed.created_at_ms, fact.message.created_at_ms);
