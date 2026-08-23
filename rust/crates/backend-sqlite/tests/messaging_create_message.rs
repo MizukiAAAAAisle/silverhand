@@ -16,12 +16,12 @@ use silverhand_backend_core::messaging::post_commit::{
     announce_send,
 };
 use silverhand_backend_core::messaging::{
-    ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
-    DirectLineAuthority, EnvironmentUnavailable, FromKind, MAX_MESSAGE_CONTENT_BYTES,
-    MessageContent, MessageId, MessageSeq, PrincipalKind, ReferencePositions, ReplyTargetRefusal,
-    SendActor, SendClock, SendDestination, SendEntropy, SendMessage, SendMessageDraft,
-    SendMessageError, SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId,
-    attachments::AttachmentRef,
+    ActiveAuthor, ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId,
+    ConversationRefusal, DirectLineAuthority, EnvironmentUnavailable, FromKind,
+    MAX_MESSAGE_CONTENT_BYTES, MessageAuthor, MessageContent, MessageId, MessageSeq, PrincipalKind,
+    ReferencePositions, ReplyTargetRefusal, RuntimeKind, SendActor, SendClock, SendDestination,
+    SendEntropy, SendMessage, SendMessageDraft, SendMessageError, SendMessageUnitOfWork,
+    ThreadRootId, ThreadRootRefusal, UserId, attachments::AttachmentRef,
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_sqlite::messaging::{HostEnvironment, MessagingStore};
@@ -539,6 +539,82 @@ async fn the_committed_row_reports_the_same_facts_the_caller_was_given() {
     // The identity the caller was handed is the identity that was stored.
     assert_eq!(row.get::<String, _>("id"), fact.message().id.as_str());
     assert_eq!(fact.message().id.as_str().len(), 16);
+}
+
+/// The returned author is the sender resolved live: an agent reports its current
+/// name, display and runtime. Unlike the send-time snapshot columns, this arm would
+/// track a later rename or new avatar, because the intact FK resolves the live row.
+#[tokio::test]
+async fn the_returned_author_of_an_agent_send_is_the_live_agent_with_its_runtime() {
+    let fixture = Fixture::new().await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "hello"))
+        .await
+        .unwrap();
+
+    let Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) = fact.message().author.as_ref()
+    else {
+        panic!("expected an active agent author");
+    };
+    assert_eq!(agent.id().as_str(), AGENT_ID);
+    assert_eq!(agent.name(), "lio");
+    assert_eq!(agent.display_name(), "Lio");
+    assert_eq!(agent.runtime(), RuntimeKind::Claude);
+    // The seed agent carries no avatar storage key, so there is no revision.
+    assert_eq!(agent.avatar(), None);
+}
+
+/// A human send resolves to an active human with no runtime — a human has none, so
+/// the arm does not carry one at all.
+#[tokio::test]
+async fn the_returned_author_of_a_human_send_is_the_live_human_without_a_runtime() {
+    let fixture = Fixture::new().await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(user_actor(), CHANNEL_ID, "hi"))
+        .await
+        .unwrap();
+
+    let Some(MessageAuthor::Active(ActiveAuthor::Human(human))) = fact.message().author.as_ref()
+    else {
+        panic!("expected an active human author");
+    };
+    assert_eq!(human.id().as_str(), USER_ID);
+    assert_eq!(human.name(), "human");
+    assert_eq!(human.display_name(), "Human");
+    assert_eq!(human.avatar(), None);
+}
+
+/// A stored avatar key resolves to a revision the wire busts its cache on. The
+/// revision is the row's live `updated_at`, so it tracks the current avatar rather
+/// than any value fixed at send.
+#[tokio::test]
+async fn the_returned_author_carries_the_avatar_revision_of_a_live_actor() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute(
+            "UPDATE agents SET avatar_storage_key = 'k', avatar_content_type = 'image/png', \
+             updated_at = 999 WHERE id = 'agent-1'",
+        )
+        .await;
+
+    let fact = fixture
+        .store()
+        .await
+        .send_message(send(agent_actor(), CHANNEL_ID, "hello"))
+        .await
+        .unwrap();
+
+    let Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) = fact.message().author.as_ref()
+    else {
+        panic!("expected an active agent author");
+    };
+    assert_eq!(agent.avatar().map(|a| a.cache_buster()), Some(999));
 }
 
 #[tokio::test]

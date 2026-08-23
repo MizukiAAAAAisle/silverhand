@@ -6,8 +6,8 @@
 //! its own type, and the only source of either is the fact itself.
 
 use super::{
-    AgentId, ConversationId, MessageContent, MessageId, MessageSeq, ThreadRootId, UserId,
-    attachments, mention_cc, post_commit,
+    AgentId, ConversationId, MessageAuthor, MessageContent, MessageId, MessageSeq, ThreadRootId,
+    UserId, attachments, mention_cc, post_commit,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,15 +89,6 @@ impl MessageCreatedFact {
     pub fn mention_copies(&self) -> &[mention_cc::MentionCopyOutcome] {
         &self.mention_copies
     }
-}
-
-/// The author as the message will always report them, even after the principal is
-/// gone. A snapshot, deliberately not a reference.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MessageAuthor {
-    pub id: String,
-    pub name: String,
-    pub display_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

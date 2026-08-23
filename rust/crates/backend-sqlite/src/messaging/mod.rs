@@ -15,12 +15,13 @@ use std::{
 };
 
 use silverhand_backend_core::messaging::{
-    self, ConversationEndpoint, ConversationFacts, ConversationId, ConversationRefusal,
-    CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads, EnvironmentUnavailable,
-    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, NotificationId,
-    ParticipantHandle, PostAuthorityReads, PrincipalKind, ReplyTargetRefusal, SendActor, SendClock,
-    SendDestination, SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork,
-    ThreadFollowerSource, ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
+    self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationId,
+    ConversationRefusal, CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads,
+    EnvironmentUnavailable, FromKind, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId,
+    MessageSeq, NotificationId, ParticipantHandle, PostAuthorityReads, PrincipalKind,
+    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
+    SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource, ThreadReplyFact, ThreadRootId,
+    ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
@@ -35,6 +36,9 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use thiserror::Error;
+
+mod author;
+use author::{AuthorEvidence, load_live_actors, resolve_author};
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;
@@ -215,8 +219,6 @@ const SELECT_UNDELIVERED_FOR_AGENT: &str = "SELECT 1 FROM conversation_inboxes W
 const RESERVE_NEXT_SEQ: &str =
     "UPDATE conversations SET latest_message_seq = latest_message_seq + 1 WHERE id = ?";
 const SELECT_LATEST_SEQ: &str = "SELECT latest_message_seq FROM conversations WHERE id = ?";
-const SELECT_AGENT_AUTHOR: &str = "SELECT name, display_name FROM agents WHERE id = ?";
-const SELECT_USER_AUTHOR: &str = "SELECT name, display_name FROM users WHERE id = ?";
 
 const INSERT_MESSAGE: &str = "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, \
      from_user_id, content, metadata, seq, created_at, thread_root_id, author_id, author_name, \
@@ -301,6 +303,11 @@ pub enum MessagingStoreError {
     /// placement, and named apart from it so a reader is not misdirected.
     #[error("stored column {field} does not name a usable identity")]
     MalformedIdentity { field: &'static str },
+    /// A stored runtime spelling outside the closed set the domain accepts. The
+    /// column is the store's own, so a value it never writes is a broken database,
+    /// reported with the offending spelling rather than defaulted to a runtime.
+    #[error("stored runtime {value:?} is outside the set the domain accepts")]
+    MalformedRuntime { value: String },
     /// A host capability the write depends on could not answer. Kept as a source
     /// rather than a marker: "no identity could be minted" is only actionable
     /// with the reason attached.
@@ -772,28 +779,42 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .map_err(|error| infrastructure(MessagingStoreError::Ordinal(error)))
     }
 
-    /// Read live and copied onto the row, so the message keeps reporting its
-    /// author after the principal is renamed or removed.
+    /// The author the message reports, read live and resolved through the adapter's
+    /// one discrimination rule ([`resolve_author`]). The current row comes from the
+    /// shared batch loader as its one-element case — the same authority a list read
+    /// uses for a whole page — so there is no second query shape for a point read. At
+    /// send the actor is current, so this resolves to an active author; its snapshot
+    /// columns are then copied onto the row so the message keeps naming its author
+    /// after a rename or a delete.
     async fn author_snapshot(
         &mut self,
         actor: &SendActor,
     ) -> Result<Option<MessageAuthor>, SendMessageError> {
-        let (statement, id) = match actor {
-            SendActor::Agent(agent) => (SELECT_AGENT_AUTHOR, agent.as_str()),
-            SendActor::User(user) => (SELECT_USER_AUTHOR, user.as_str()),
+        let (kind, id) = match actor {
+            SendActor::Agent(agent) => (PrincipalKind::Agent, agent.as_str()),
+            SendActor::User(user) => (PrincipalKind::Human, user.as_str()),
         };
-        let row = sqlx::query(statement)
-            .bind(id)
-            .fetch_optional(&mut *self.tx)
-            .await
-            .map_err(driver)?;
-        let Some(row) = row else { return Ok(None) };
-
-        Ok(Some(MessageAuthor {
-            id: id.to_owned(),
-            name: row.try_get("name").map_err(driver)?,
-            display_name: row.try_get("display_name").map_err(driver)?,
-        }))
+        // A one-element set: the write path asks the batch loader for exactly this
+        // actor, so the point read and a list read share one query shape.
+        let live = match kind {
+            PrincipalKind::Agent => load_live_actors(&mut self.tx, &[id], &[]).await,
+            PrincipalKind::Human => load_live_actors(&mut self.tx, &[], &[id]).await,
+        }
+        .map_err(SendMessageError::from)?;
+        let evidence = AuthorEvidence {
+            from_kind: match kind {
+                PrincipalKind::Agent => FromKind::Agent,
+                PrincipalKind::Human => FromKind::User,
+            },
+            from_agent_id: matches!(kind, PrincipalKind::Agent).then(|| id.to_owned()),
+            from_user_id: matches!(kind, PrincipalKind::Human).then(|| id.to_owned()),
+            // Not yet deleted: the snapshot columns are what this send is about to
+            // write, so resolution reads the live row, not them.
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+        };
+        resolve_author(&evidence, live.get(kind, id)).map_err(SendMessageError::from)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -813,6 +834,8 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             SendActor::Agent(agent) => (FROM_KIND_AGENT, Some(agent.as_str()), None),
             SendActor::User(user) => (FROM_KIND_USER, None, Some(user.as_str())),
         };
+        let (author_id, author_name, author_display_name) =
+            author_snapshot_columns(author.as_ref());
 
         sqlx::query(INSERT_MESSAGE)
             .bind(id.as_str())
@@ -825,13 +848,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .bind(seq.get())
             .bind(created_at_ms)
             .bind(thread_root.as_ref().map(ThreadRootId::as_str))
-            .bind(author.as_ref().map(|author| author.id.as_str()))
-            .bind(author.as_ref().map(|author| author.name.as_str()))
-            .bind(
-                author
-                    .as_ref()
-                    .and_then(|author| author.display_name.as_deref()),
-            )
+            .bind(author_id)
+            .bind(author_name)
+            .bind(author_display_name)
             .bind(None::<&str>)
             .execute(&mut *self.tx)
             .await
@@ -1655,21 +1674,39 @@ fn mention_notification_payload(
 
 /// Who named someone, as a reader will see it. The sender's own snapshot, taken
 /// inside the transaction: display name if it says anything, then name, then the id —
-/// an id is not friendly, but it is never absent.
+/// an id is not friendly, but it is never absent. An unresolved author names no one,
+/// so it contributes nothing, exactly as an absent author does.
 fn trigger_name_of(message: &CreatedMessage) -> String {
-    match &message.author {
-        None => String::new(),
-        Some(author) => {
-            let display = author.display_name.as_deref().unwrap_or("").trim();
-            if !display.is_empty() {
-                return display.to_owned();
-            }
-            if !author.name.trim().is_empty() {
-                return author.name.clone();
-            }
-            author.id.clone()
-        }
+    let Some(author) = &message.author else {
+        return String::new();
+    };
+    let (display, name, id): (&str, &str, Option<&str>) = match author {
+        MessageAuthor::Active(ActiveAuthor::Agent(agent)) => (
+            agent.display_name(),
+            agent.name(),
+            Some(agent.id().as_str()),
+        ),
+        MessageAuthor::Active(ActiveAuthor::Human(human)) => (
+            human.display_name(),
+            human.name(),
+            Some(human.id().as_str()),
+        ),
+        MessageAuthor::Deleted(deleted) => (
+            deleted.display_name(),
+            deleted.name(),
+            Some(deleted.identity().as_str()),
+        ),
+        MessageAuthor::Unresolved(_) => ("", "", None),
+    };
+    let display = display.trim();
+    if !display.is_empty() {
+        return display.to_owned();
     }
+    let name = name.trim();
+    if !name.is_empty() {
+        return name.to_owned();
+    }
+    id.unwrap_or("").to_owned()
 }
 
 struct MessageRow {
@@ -1829,6 +1866,35 @@ struct StoredAttachmentSnapshot<'a> {
 
 /// Attachments travel in the message's metadata column, so a message with none
 /// stores no metadata at all rather than an empty container.
+/// The send-time snapshot columns (`author_id`, `author_name`,
+/// `author_display_name`) for an author, as the total projection of the value onto
+/// what this schema stores. Active and deleted authors carry a named identity; a
+/// system send (`None`) and an unresolved author name no one, so all three columns
+/// are NULL. The write path only ever feeds an active author, but the projection is
+/// defined for every arm so it cannot silently mishandle one.
+fn author_snapshot_columns(
+    author: Option<&MessageAuthor>,
+) -> (Option<&str>, Option<&str>, Option<&str>) {
+    match author {
+        Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) => (
+            Some(agent.id().as_str()),
+            Some(agent.name()),
+            Some(agent.display_name()),
+        ),
+        Some(MessageAuthor::Active(ActiveAuthor::Human(human))) => (
+            Some(human.id().as_str()),
+            Some(human.name()),
+            Some(human.display_name()),
+        ),
+        Some(MessageAuthor::Deleted(deleted)) => (
+            Some(deleted.identity().as_str()),
+            Some(deleted.name()),
+            Some(deleted.display_name()),
+        ),
+        Some(MessageAuthor::Unresolved(_)) | None => (None, None, None),
+    }
+}
+
 fn metadata_json(attachments: &[AttachmentSnapshot]) -> Result<Option<String>, SendMessageError> {
     if attachments.is_empty() {
         return Ok(None);
@@ -2044,6 +2110,198 @@ mod tests {
                 "the plan scans a membership table instead of probing it: {plan:?}"
             );
         }
+    }
+
+    /// The batch author lookups must be bounded by the ids asked for, not by the
+    /// installation. Each is driven by `json_each` over the requested set and probes
+    /// its table's primary key, so a set of any size costs one indexed read per row
+    /// asked for — never a scan of `agents`/`users`. The write path's point read is
+    /// this same statement with a one-element set, so the bound holds there too.
+    #[tokio::test]
+    async fn the_batch_author_lookups_are_bounded_by_the_requested_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("author-plan.sqlite");
+        let mut connection = super::current_schema::create_current_schema(&path).await;
+
+        let agents_plan: Vec<String> = sqlx::query(author::EXPLAIN_LIVE_AGENTS)
+            .bind(r#"["agent-1","agent-2"]"#)
+            .fetch_all(&mut connection)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            agents_plan
+                .iter()
+                .any(|step| step.starts_with("SEARCH a") || step.starts_with("SEARCH agents")),
+            "an author agent id was not resolved through the agents primary key: {agents_plan:?}"
+        );
+        for step in &agents_plan {
+            assert!(
+                !step.starts_with("SCAN a") && !step.starts_with("SCAN agents"),
+                "the plan scans every agent in the installation: {agents_plan:?}"
+            );
+        }
+
+        let users_plan: Vec<String> = sqlx::query(author::EXPLAIN_LIVE_USERS)
+            .bind(r#"["user-1","user-2"]"#)
+            .fetch_all(&mut connection)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            users_plan
+                .iter()
+                .any(|step| step.starts_with("SEARCH u") || step.starts_with("SEARCH users")),
+            "an author user id was not resolved through the users primary key: {users_plan:?}"
+        );
+        for step in &users_plan {
+            assert!(
+                !step.starts_with("SCAN u") && !step.starts_with("SCAN users"),
+                "the plan scans every user in the installation: {users_plan:?}"
+            );
+        }
+    }
+
+    /// A mixed page resolves every arm through the shared loader: the live agents
+    /// and human come from TWO set-shaped reads — one per table, both returning
+    /// their whole set at once — and the deleted and unresolved authors from their
+    /// own rows with no read, because a nulled FK asks the loader for nothing. That
+    /// two agents resolve from a single agents load is the no-N+1 proof: a page's
+    /// live actors cost two lookups, not one per row.
+    #[tokio::test]
+    async fn a_mixed_page_resolves_every_arm_from_two_set_shaped_lookups() {
+        use silverhand_backend_core::messaging::{PrincipalIdentity, RuntimeKind};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mixed-batch.sqlite");
+        let mut db = super::current_schema::create_current_schema(&path).await;
+
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
+            "INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, \
+             created_at, updated_at) VALUES ('user-1', 'human', 'Human', 'avatars/u.png', \
+             'image/png', 0, 7)",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-1', 'lio', 'claude', 'host-1', 0, 0, 'Lio', \
+             'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-2', 'cin', 'codex', 'host-1', 0, 0, 'Cin', \
+             'user-1')",
+        ] {
+            sqlx::query(statement).execute(&mut db).await.unwrap();
+        }
+
+        // The whole page's live actors in two loads: both agents and the human asked
+        // for as sets, never one query per row.
+        let live = load_live_actors(&mut db, &["agent-1", "agent-2"], &["user-1"])
+            .await
+            .unwrap();
+
+        let agent_evidence = |fk: &str| AuthorEvidence {
+            from_kind: FromKind::Agent,
+            from_agent_id: Some(fk.to_owned()),
+            from_user_id: None,
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+        };
+
+        // Live agent: its current row, with its runtime, from the batch.
+        let one = resolve_author(
+            &agent_evidence("agent-1"),
+            live.get(PrincipalKind::Agent, "agent-1"),
+        )
+        .unwrap()
+        .expect("an agent send names an author");
+        match one {
+            MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
+                assert_eq!(agent.name(), "lio");
+                assert_eq!(agent.display_name(), "Lio");
+                assert_eq!(agent.runtime(), RuntimeKind::Claude);
+                assert_eq!(agent.avatar(), None);
+            }
+            other => panic!("expected a live agent, got {other:?}"),
+        }
+
+        // The second agent resolves from that SAME agents load — the no-N+1 proof.
+        let two = resolve_author(
+            &agent_evidence("agent-2"),
+            live.get(PrincipalKind::Agent, "agent-2"),
+        )
+        .unwrap()
+        .expect("an agent send names an author");
+        match two {
+            MessageAuthor::Active(ActiveAuthor::Agent(agent)) => {
+                assert_eq!(agent.name(), "cin");
+                assert_eq!(agent.runtime(), RuntimeKind::Codex);
+            }
+            other => panic!("expected a live agent, got {other:?}"),
+        }
+
+        // Live human: no runtime, and an avatar revision from the row's updated_at.
+        let human_evidence = AuthorEvidence {
+            from_kind: FromKind::User,
+            from_agent_id: None,
+            from_user_id: Some("user-1".to_owned()),
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+        };
+        let human = resolve_author(&human_evidence, live.get(PrincipalKind::Human, "user-1"))
+            .unwrap()
+            .expect("a human send names an author");
+        match human {
+            MessageAuthor::Active(ActiveAuthor::Human(person)) => {
+                assert_eq!(person.name(), "human");
+                assert_eq!(person.avatar().map(|a| a.cache_buster()), Some(7));
+            }
+            other => panic!("expected a live human, got {other:?}"),
+        }
+
+        // Deleted: FK nulled by the delete, but the send-time snapshot survives — no
+        // live row was requested for it, so it resolves without a read.
+        let deleted_evidence = AuthorEvidence {
+            from_kind: FromKind::Agent,
+            from_agent_id: None,
+            from_user_id: None,
+            author_id: Some("agent-gone".to_owned()),
+            author_name: Some("gone".to_owned()),
+            author_display_name: Some("Gone".to_owned()),
+        };
+        let deleted = resolve_author(
+            &deleted_evidence,
+            live.get(PrincipalKind::Agent, "agent-gone"),
+        )
+        .unwrap()
+        .expect("a deleted author is still named by its snapshot");
+        match deleted {
+            MessageAuthor::Deleted(author) => {
+                assert_eq!(author.display_name(), "Gone");
+                assert!(matches!(author.identity(), PrincipalIdentity::Agent(_)));
+            }
+            other => panic!("expected a deleted author, got {other:?}"),
+        }
+
+        // Unresolved: FK nulled and no snapshot ever recorded — named by nothing.
+        let unresolved_evidence = AuthorEvidence {
+            from_kind: FromKind::Agent,
+            from_agent_id: None,
+            from_user_id: None,
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+        };
+        let unresolved = resolve_author(
+            &unresolved_evidence,
+            live.get(PrincipalKind::Agent, "nobody"),
+        )
+        .unwrap()
+        .expect("an unresolved author still reports its kind");
+        assert!(matches!(unresolved, MessageAuthor::Unresolved(_)));
     }
 
     /// The one cell the send path cannot reach: a follower row that names an agent

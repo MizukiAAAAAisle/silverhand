@@ -17,8 +17,10 @@
 //!   unit.
 //! - `fact` — the single business fact of a committed send, and the typed views
 //!   each delivery path reads it through.
+//! - `author` — who a message reports as its author, as one discriminated value
+//!   (active / deleted / unresolved) every reader shares.
 //!
-//! **Those six are PRIVATE, and that is the point.** Where a type happens to live
+//! **Those seven are PRIVATE, and that is the point.** Where a type happens to live
 //! is this module's business to change, so nothing outside can import
 //! `messaging::command::…` and become coupled to a layout decision. Everything they
 //! define is reachable at its stable `messaging::X` name through the re-exports at
@@ -45,6 +47,9 @@
 //! ```compile_fail
 //! use silverhand_backend_core::messaging::fact::MessageCreatedFact;
 //! ```
+//! ```compile_fail
+//! use silverhand_backend_core::messaging::author::MessageAuthor;
+//! ```
 //!
 //! Public alongside them sit the concerns that own a rule end to end and are
 //! consumed by name from outside: [`attachments`], [`environment`], [`freshness`],
@@ -53,6 +58,7 @@
 //! `StaleRefusal` is in `freshness` rather than here.
 
 mod addressing;
+mod author;
 mod authority;
 mod command;
 mod fact;
@@ -67,6 +73,10 @@ pub mod post_commit;
 
 pub use addressing::{AddressedPrincipals, MessageReference, ReferencePositions};
 pub use attachments::AttachmentRefusal;
+pub use author::{
+    ActiveAgent, ActiveAuthor, ActiveHuman, AvatarRevision, DeletedAuthor, MessageAuthor,
+    PrincipalIdentity, RuntimeKind, UnresolvedAuthor,
+};
 pub use authority::{
     ActorRefusal, ConversationEndpoint, ConversationFacts, ConversationRefusal,
     DirectPairEndpoints, EndpointPrincipalReads, PostAuthorityReads, ReplyTargetRefusal,
@@ -79,8 +89,8 @@ pub use command::{
 };
 pub use environment::{EnvironmentUnavailable, SendClock, SendEntropy};
 pub use fact::{
-    CommittedMessageView, CreatedMessage, FromKind, MainCommittedSend, MessageAuthor,
-    MessageCreatedFact, ReplyCommittedSend, ThreadFollowerSource, ThreadReplyFact,
+    CommittedMessageView, CreatedMessage, FromKind, MainCommittedSend, MessageCreatedFact,
+    ReplyCommittedSend, ThreadFollowerSource, ThreadReplyFact,
 };
 pub use freshness::StaleRefusal;
 pub use identity::{
