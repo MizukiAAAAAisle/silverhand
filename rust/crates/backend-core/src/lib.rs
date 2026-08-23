@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod foundation_message;
+pub mod host_runtime;
 pub mod identity;
 pub mod persistence;
 pub mod runtime_credential;

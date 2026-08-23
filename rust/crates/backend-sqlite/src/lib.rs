@@ -24,6 +24,7 @@ use sqlx::{
 use thiserror::Error;
 
 pub mod auth;
+pub mod host_runtime;
 pub mod runtime_credential;
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
