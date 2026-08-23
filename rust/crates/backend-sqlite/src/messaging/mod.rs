@@ -16,11 +16,11 @@ use std::{
 
 use silverhand_backend_core::messaging::{
     self, ConversationEndpoint, ConversationFacts, ConversationId, ConversationRefusal,
-    CreatedMessage, DirectPairEndpoints, EndpointKind, EndpointPrincipalReads,
-    EnvironmentUnavailable, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq,
-    PostAuthorityReads, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
-    SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadReplyFact, ThreadRootId,
-    ThreadRootRefusal, UserId,
+    CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads, EnvironmentUnavailable,
+    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, PostAuthorityReads,
+    PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
+    SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource, ThreadReplyFact,
+    ThreadRootId, ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     environment::OsEntropy,
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
@@ -60,8 +60,32 @@ const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id
      'direct_pair' AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ?) OR \
      (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?))))";
 
-const SELECT_MESSAGE_IN_CONVERSATION: &str =
-    "SELECT id, thread_root_id FROM messages WHERE conversation_id = ? AND id = ?";
+const SELECT_MESSAGE_IN_CONVERSATION: &str = "SELECT id, thread_root_id, from_kind, \
+     from_agent_id, from_user_id FROM messages WHERE conversation_id = ? AND id = ?";
+const SELECT_AGENT_ID_BY_NAME: &str = "SELECT id FROM agents WHERE name = ?";
+const SELECT_USER_ID_BY_NAME: &str = "SELECT id FROM users WHERE name = ?";
+
+/// Following is idempotent: a principal already following a cluster is not
+/// followed again, and the insert reports which case happened so history is
+/// backfilled exactly once.
+const FOLLOW_CLUSTER: &str = "INSERT INTO thread_followers (thread_root_id, conversation_id, \
+     principal_kind, principal_id, followed_at, source) VALUES (?, ?, ?, ?, ?, ?) ON \
+     CONFLICT(thread_root_id, principal_kind, principal_id) DO NOTHING";
+/// The cluster's history as of this reply: every earlier message of the cluster,
+/// oldest first. The root is fetched separately because it is not one of its own
+/// replies.
+const SELECT_CLUSTER_HISTORY: &str = "SELECT id, from_kind, from_agent_id FROM messages WHERE \
+     conversation_id = ? AND thread_root_id = ? AND seq < ? ORDER BY seq ASC";
+/// Delivery rows are idempotent per (conversation, agent, message), so a
+/// re-followed cluster cannot queue the same message twice.
+const ENSURE_INBOX_DELIVERY: &str = "INSERT INTO conversation_inboxes (conversation_id, agent_id, \
+     message_id, delivered_at, delivery_kind, created_at) VALUES (?, ?, ?, NULL, ?, ?) ON \
+     CONFLICT(conversation_id, agent_id, message_id) DO NOTHING";
+/// Follower rows are not authority over who may read a cluster; they are candidates
+/// that participation and liveness still have to accept. Ordered so the answer does
+/// not depend on which rows happen to share a timestamp.
+const SELECT_CLUSTER_FOLLOWER_AGENTS: &str = "SELECT principal_id FROM thread_followers WHERE \
+     thread_root_id = ? AND principal_kind = 'agent' ORDER BY followed_at ASC, principal_id ASC";
 const SELECT_ATTACHMENT_SOURCE: &str =
     "SELECT id, channel_id, filename, size, content_type FROM attachments WHERE id = ?";
 const SELECT_AGENT_SESSION_SCOPE: &str = "SELECT session_scope FROM agents WHERE id = ?";
@@ -99,6 +123,14 @@ const COUNT_THREAD_REPLIES: &str = "SELECT count(*) FROM messages WHERE conversa
 
 const FROM_KIND_USER: &str = "user";
 const FROM_KIND_AGENT: &str = "agent";
+const PRINCIPAL_KIND_HUMAN: &str = "human";
+const PRINCIPAL_KIND_AGENT: &str = "agent";
+const FOLLOWER_SOURCE_REPLY: &str = "reply";
+const FOLLOWER_SOURCE_TARGET_AUTHOR: &str = "target_author";
+const FOLLOWER_SOURCE_MENTION: &str = "mention";
+/// Historical context a follower is catching up on, as opposed to a message that
+/// arrived while it was already following.
+const DELIVERY_KIND_OBSERVE: &str = "observe";
 const PLACEMENT_DIRECT_PAIR: &str = "direct_pair";
 const ENDPOINT_KIND_HUMAN: &str = "human";
 const ENDPOINT_KIND_AGENT: &str = "agent";
@@ -308,12 +340,22 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
 
         let thread = match &message.thread_root_id {
             None => None,
-            Some(root) => Some(ThreadReplyFact {
-                thread_root_id: root.clone(),
-                // Counted after the insert, so the reported total already
-                // includes this reply and is never a value from the future.
-                reply_count: self.count_thread_replies(&facts.id, root).await?,
-            }),
+            Some(root) => {
+                // A cluster's durable consequences belong to this transaction: a
+                // follower recorded without its catch-up would leave an agent
+                // following a conversation whose beginning it cannot see.
+                self.apply_cluster_follow_effects(&facts.id, root, &command, seq, created_at_ms)
+                    .await?;
+                Some(ThreadReplyFact {
+                    thread_root_id: root.clone(),
+                    // Counted after the insert, so the reported total already
+                    // includes this reply and is never a value from the future.
+                    reply_count: self.count_thread_replies(&facts.id, root).await?,
+                    audience: self
+                        .cluster_audience(&facts.id, root, &command.actor)
+                        .await?,
+                })
+            }
         };
 
         Ok(MessageCreatedFact {
@@ -377,6 +419,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         Ok(Some(MessageRow {
             id: row.try_get("id").map_err(driver)?,
             thread_root_id: row.try_get("thread_root_id").map_err(driver)?,
+            from_kind: row.try_get("from_kind").map_err(driver)?,
+            from_agent_id: row.try_get("from_agent_id").map_err(driver)?,
+            from_user_id: row.try_get("from_user_id").map_err(driver)?,
         }))
     }
 
@@ -617,6 +662,250 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         Ok(())
     }
 
+    /// Records who follows this cluster now, and catches up whoever is new to it.
+    ///
+    /// Three sources, in this order: the sender, the root's author, and every
+    /// principal the reply addressed. A reference widens the cluster's audience but
+    /// grants nothing — following is not a way into a conversation — so each
+    /// candidate still has to pass participation and liveness.
+    async fn apply_cluster_follow_effects(
+        &mut self,
+        conversation: &ConversationId,
+        root: &ThreadRootId,
+        command: &SendMessage,
+        current_seq: MessageSeq,
+        followed_at_ms: i64,
+    ) -> Result<(), SendMessageError> {
+        self.follow_actor(
+            conversation,
+            root,
+            &command.actor,
+            ThreadFollowerSource::Reply,
+            current_seq,
+            followed_at_ms,
+        )
+        .await?;
+
+        if let Some(root_row) = self
+            .message_in_conversation(conversation, root.as_str())
+            .await?
+        {
+            let author = actor_of_row(&root_row)?;
+            if let Some(author) = author {
+                self.follow_actor(
+                    conversation,
+                    root,
+                    &author,
+                    ThreadFollowerSource::TargetAuthor,
+                    current_seq,
+                    followed_at_ms,
+                )
+                .await?;
+            }
+        }
+
+        for reference in &command.references {
+            // The reference's own kind decides which namespace answers for the
+            // handle: a human reference must never resolve to an agent of the same
+            // name.
+            let statement = match reference.kind {
+                PrincipalKind::Agent => SELECT_AGENT_ID_BY_NAME,
+                PrincipalKind::Human => SELECT_USER_ID_BY_NAME,
+            };
+            let resolved: Option<String> = sqlx::query_scalar(statement)
+                .bind(&reference.handle)
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(driver)?;
+            let Some(resolved) = resolved else { continue };
+
+            let addressed = actor_of(reference.kind, resolved)?;
+            self.follow_actor(
+                conversation,
+                root,
+                &addressed,
+                ThreadFollowerSource::Mention,
+                current_seq,
+                followed_at_ms,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Participation and liveness are both required, and they are different
+    /// questions: participation survives a departed principal on purpose so a
+    /// survivor keeps reading, while a delivery row for a principal that no longer
+    /// exists cannot be written at all.
+    async fn follow_actor(
+        &mut self,
+        conversation: &ConversationId,
+        root: &ThreadRootId,
+        actor: &SendActor,
+        source: ThreadFollowerSource,
+        current_seq: MessageSeq,
+        followed_at_ms: i64,
+    ) -> Result<(), SendMessageError> {
+        let (kind, id) = match actor {
+            SendActor::Agent(agent) => (PRINCIPAL_KIND_AGENT, agent.as_str()),
+            SendActor::User(user) => (PRINCIPAL_KIND_HUMAN, user.as_str()),
+        };
+
+        let participates = match actor {
+            SendActor::Agent(agent) => self.is_agent_participant(conversation, agent).await?,
+            SendActor::User(user) => self.is_user_participant(conversation, user).await?,
+        };
+        if !participates {
+            return Ok(());
+        }
+        let alive = match actor {
+            SendActor::Agent(agent) => self.agent_exists(agent).await?,
+            SendActor::User(user) => {
+                self.endpoint_principal_exists(&ConversationEndpoint {
+                    kind: PrincipalKind::Human,
+                    id: user.as_str().to_owned(),
+                    deleted_at_ms: None,
+                })
+                .await?
+            }
+        };
+        if !alive {
+            return Ok(());
+        }
+
+        let followed = sqlx::query(FOLLOW_CLUSTER)
+            .bind(root.as_str())
+            .bind(conversation.as_str())
+            .bind(kind)
+            .bind(id)
+            .bind(followed_at_ms)
+            .bind(match source {
+                ThreadFollowerSource::Reply => FOLLOWER_SOURCE_REPLY,
+                ThreadFollowerSource::TargetAuthor => FOLLOWER_SOURCE_TARGET_AUTHOR,
+                ThreadFollowerSource::Mention => FOLLOWER_SOURCE_MENTION,
+            })
+            .execute(&mut *self.tx)
+            .await
+            .map_err(driver)?
+            .rows_affected();
+
+        // Only a NEW follower is caught up, and only an agent has anywhere to
+        // catch up into: a person reads a conversation, an agent is delivered one.
+        if followed == 1
+            && let SendActor::Agent(agent) = actor
+        {
+            self.backfill_cluster_history(conversation, root, agent, current_seq, followed_at_ms)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Queues the cluster as it stood before this reply: the root, which anchors it,
+    /// and every earlier message of it. Complete by design — a follower that joined
+    /// mid-cluster must not land with a hole next to the newest replies — and the
+    /// agent's own messages are skipped because it has already seen what it said.
+    /// The current reply is not queued here; delivering it is a separate act.
+    async fn backfill_cluster_history(
+        &mut self,
+        conversation: &ConversationId,
+        root: &ThreadRootId,
+        agent: &messaging::AgentId,
+        current_seq: MessageSeq,
+        queued_at_ms: i64,
+    ) -> Result<(), SendMessageError> {
+        if let Some(root_row) = self
+            .message_in_conversation(conversation, root.as_str())
+            .await?
+            && !root_row.authored_by(agent)
+        {
+            self.ensure_delivery(conversation, agent, &root_row.id, queued_at_ms)
+                .await?;
+        }
+
+        let history = sqlx::query(SELECT_CLUSTER_HISTORY)
+            .bind(conversation.as_str())
+            .bind(root.as_str())
+            .bind(current_seq.get())
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        for row in history {
+            let earlier = MessageRow {
+                id: row.try_get("id").map_err(driver)?,
+                thread_root_id: None,
+                from_kind: row.try_get("from_kind").map_err(driver)?,
+                from_agent_id: row.try_get("from_agent_id").map_err(driver)?,
+                from_user_id: None,
+            };
+            if earlier.authored_by(agent) {
+                continue;
+            }
+            self.ensure_delivery(conversation, agent, &earlier.id, queued_at_ms)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_delivery(
+        &mut self,
+        conversation: &ConversationId,
+        agent: &messaging::AgentId,
+        message_id: &str,
+        queued_at_ms: i64,
+    ) -> Result<(), SendMessageError> {
+        sqlx::query(ENSURE_INBOX_DELIVERY)
+            .bind(conversation.as_str())
+            .bind(agent.as_str())
+            .bind(message_id)
+            .bind(DELIVERY_KIND_OBSERVE)
+            .bind(queued_at_ms)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        Ok(())
+    }
+
+    /// Who this reply is for: the cluster's follower agents, narrowed by the same
+    /// participation and liveness questions the follow path asks, minus the sender —
+    /// nobody is delivered their own message. Read here because the answer must
+    /// include the followers this transaction just created.
+    async fn cluster_audience(
+        &mut self,
+        conversation: &ConversationId,
+        root: &ThreadRootId,
+        actor: &SendActor,
+    ) -> Result<Vec<messaging::AgentId>, SendMessageError> {
+        let rows: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_FOLLOWER_AGENTS)
+            .bind(root.as_str())
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+
+        let sender = match actor {
+            SendActor::Agent(agent) => Some(agent.clone()),
+            SendActor::User(_) => None,
+        };
+        let mut audience = Vec::with_capacity(rows.len());
+        for candidate in rows {
+            let candidate = messaging::AgentId::parse(candidate).map_err(|_| {
+                infrastructure(MessagingStoreError::MalformedIdentity {
+                    field: "thread_followers.principal_id",
+                })
+            })?;
+            if sender.as_ref() == Some(&candidate) {
+                continue;
+            }
+            if !self.agent_exists(&candidate).await? {
+                continue;
+            }
+            if !self.is_agent_participant(conversation, &candidate).await? {
+                continue;
+            }
+            audience.push(candidate);
+        }
+        Ok(audience)
+    }
+
     async fn count_thread_replies(
         &mut self,
         conversation: &ConversationId,
@@ -631,9 +920,48 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     }
 }
 
+/// The principal a stored row names as its author, or nothing when the row was
+/// written by the system or its author is no longer named on it.
+fn actor_of_row(row: &MessageRow) -> Result<Option<SendActor>, SendMessageError> {
+    match row.from_kind.as_str() {
+        FROM_KIND_AGENT => match &row.from_agent_id {
+            Some(agent) => Ok(Some(actor_of(PrincipalKind::Agent, agent.clone())?)),
+            None => Ok(None),
+        },
+        FROM_KIND_USER => match &row.from_user_id {
+            Some(user) => Ok(Some(actor_of(PrincipalKind::Human, user.clone())?)),
+            None => Ok(None),
+        },
+        _ => Ok(None),
+    }
+}
+
+fn actor_of(kind: PrincipalKind, id: String) -> Result<SendActor, SendMessageError> {
+    let malformed = || {
+        infrastructure(MessagingStoreError::MalformedIdentity {
+            field: "messages author",
+        })
+    };
+    Ok(match kind {
+        PrincipalKind::Agent => {
+            SendActor::Agent(messaging::AgentId::parse(id).map_err(|_| malformed())?)
+        }
+        PrincipalKind::Human => SendActor::User(UserId::parse(id).map_err(|_| malformed())?),
+    })
+}
+
 struct MessageRow {
     id: String,
     thread_root_id: Option<String>,
+    from_kind: String,
+    from_agent_id: Option<String>,
+    from_user_id: Option<String>,
+}
+
+impl MessageRow {
+    fn authored_by(&self, agent: &messaging::AgentId) -> bool {
+        self.from_kind == FROM_KIND_AGENT && self.from_agent_id.as_deref() == Some(agent.as_str())
+    }
 }
 
 impl<E: Send + Sync> EndpointPrincipalReads for TxScope<'_, '_, E> {
@@ -642,8 +970,8 @@ impl<E: Send + Sync> EndpointPrincipalReads for TxScope<'_, '_, E> {
         endpoint: &ConversationEndpoint,
     ) -> Result<bool, PersistenceFailure> {
         let statement = match endpoint.kind {
-            EndpointKind::Agent => SELECT_AGENT_EXISTS,
-            EndpointKind::Human => SELECT_USER_EXISTS,
+            PrincipalKind::Agent => SELECT_AGENT_EXISTS,
+            PrincipalKind::Human => SELECT_USER_EXISTS,
         };
         let found: Option<i64> = sqlx::query_scalar(statement)
             .bind(endpoint.id.as_str())
@@ -754,8 +1082,8 @@ fn endpoint_from_row(
     let (kind, id) = kind.zip(id).ok_or_else(malformed)?;
 
     let kind = match kind.as_str() {
-        ENDPOINT_KIND_HUMAN => EndpointKind::Human,
-        ENDPOINT_KIND_AGENT => EndpointKind::Agent,
+        ENDPOINT_KIND_HUMAN => PrincipalKind::Human,
+        ENDPOINT_KIND_AGENT => PrincipalKind::Agent,
         _ => return Err(malformed()),
     };
     Ok(ConversationEndpoint {

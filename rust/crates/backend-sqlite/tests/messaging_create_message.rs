@@ -6,10 +6,10 @@
 
 use silverhand_backend_core::messaging::{
     ActorRefusal, AgentId, AttachmentId, ConversationId, ConversationRefusal,
-    EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent, MessageId, MessageSeq,
-    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
-    SendMessageError, SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId,
-    attachments::AttachmentRef, environment::OsEntropy,
+    EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent, MessageId, MessageReference,
+    MessageSeq, PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination,
+    SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadRootId,
+    ThreadRootRefusal, UserId, attachments::AttachmentRef, environment::OsEntropy,
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Row, SqliteConnection};
@@ -29,6 +29,9 @@ const AGENT_ID: &str = "agent-1";
 /// A second runtime, declared at birth to judge freshness across every
 /// conversation. The scope is immutable, so the broad arm needs its own agent.
 const BROAD_AGENT_ID: &str = "agent-2";
+/// Known to the installation but a participant of nothing, so following it would
+/// have to be a way into a conversation.
+const OUTSIDER_AGENT_ID: &str = "agent-3";
 const WORKSPACE_ID: &str = "ws-1";
 const CHANNEL_ID: &str = "conv-1";
 const OTHER_CHANNEL_ID: &str = "conv-2";
@@ -94,6 +97,45 @@ impl Fixture {
         sqlx::query(sql).execute(&mut self.db).await.unwrap();
     }
 
+    async fn followers(&mut self, root: &str) -> Vec<(String, String, String)> {
+        sqlx::query(
+            "SELECT principal_kind, principal_id, source FROM thread_followers WHERE \
+             thread_root_id = ? ORDER BY principal_kind ASC, principal_id ASC",
+        )
+        .bind(root)
+        .fetch_all(&mut self.db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("principal_kind"),
+                row.get::<String, _>("principal_id"),
+                row.get::<String, _>("source"),
+            )
+        })
+        .collect()
+    }
+
+    async fn queued_for(&mut self, agent: &str) -> Vec<(String, String)> {
+        sqlx::query(
+            "SELECT message_id, delivery_kind FROM conversation_inboxes WHERE agent_id = ? ORDER \
+             BY id ASC",
+        )
+        .bind(agent)
+        .fetch_all(&mut self.db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("message_id"),
+                row.get::<String, _>("delivery_kind"),
+            )
+        })
+        .collect()
+    }
+
     async fn enqueue_inbox_row(
         &mut self,
         agent: &str,
@@ -147,6 +189,16 @@ async fn seed(db: &mut SqliteConnection) {
          'agent')",
     )
     .bind(BROAD_AGENT_ID)
+    .bind(HOST_ID)
+    .bind(USER_ID)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+         created_by_user_id) VALUES (?, 'outsider', 'claude', ?, 0, 0, 'Outsider', ?)",
+    )
+    .bind(OUTSIDER_AGENT_ID)
     .bind(HOST_ID)
     .bind(USER_ID)
     .execute(&mut *db)
@@ -260,7 +312,18 @@ fn send(actor: SendActor, conversation: &str, content: &str) -> SendMessage {
         content: MessageContent::parse(content).unwrap(),
         destination: SendDestination::MainLine,
         attachment_refs: Vec::new(),
+        references: Vec::new(),
         freshness_bypass: false,
+    }
+}
+
+fn addressing(kind: PrincipalKind, handle: &str, command: SendMessage) -> SendMessage {
+    SendMessage {
+        references: vec![MessageReference {
+            kind,
+            handle: handle.to_owned(),
+        }],
+        ..command
     }
 }
 
@@ -1109,7 +1172,8 @@ async fn an_entropy_source_that_cannot_answer_writes_nothing_and_keeps_its_reaso
 /// refusal mints its own identity INSIDE the transaction, so this is the second
 /// call, and its failure has to leave the reserved writer with nothing written.
 struct EntropyExhaustedAfter {
-    answers: AtomicUsize,
+    allowance: usize,
+    calls: AtomicUsize,
 }
 
 impl SendClock for EntropyExhaustedAfter {
@@ -1120,7 +1184,7 @@ impl SendClock for EntropyExhaustedAfter {
 
 impl SendEntropy for EntropyExhaustedAfter {
     fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
-        if self.answers.fetch_sub(1, Ordering::SeqCst) == 0 {
+        if self.calls.fetch_add(1, Ordering::SeqCst) >= self.allowance {
             return Err(EnvironmentUnavailable::from_source(Withdrawn));
         }
         OsEntropy.fill(buffer)
@@ -1140,7 +1204,8 @@ async fn entropy_withdrawn_inside_the_unit_rolls_back_with_nothing_written() {
         .await;
     let store = fixture
         .store_with(EntropyExhaustedAfter {
-            answers: AtomicUsize::new(1),
+            allowance: 1,
+            calls: AtomicUsize::new(0),
         })
         .await;
 
@@ -1158,4 +1223,313 @@ async fn entropy_withdrawn_inside_the_unit_rolls_back_with_nothing_written() {
     );
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
+}
+
+/// A reply's own author and the author of the cluster's root both follow it, and
+/// the reason each of them follows is recorded.
+#[tokio::test]
+async fn a_reply_records_its_author_and_the_root_author_as_followers() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "answering", &root_id))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fixture.followers(&root_id).await,
+        vec![
+            (
+                "agent".to_owned(),
+                AGENT_ID.to_owned(),
+                "target_author".to_owned()
+            ),
+            ("human".to_owned(), USER_ID.to_owned(), "reply".to_owned()),
+        ]
+    );
+    // A person reads a conversation; only an agent is delivered one, so becoming a
+    // human follower queues nothing.
+    assert!(fixture.queued_for(USER_ID).await.is_empty());
+}
+
+/// A newly followed agent is caught up on the cluster as it stood before this
+/// reply — the root plus every earlier message — and not on the reply that
+/// followed it, which is delivered separately.
+#[tokio::test]
+async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+    let earlier = store
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            "earlier reply",
+            &root_id,
+        ))
+        .await
+        .unwrap();
+
+    let mentioning = store
+        .send_message(addressing(
+            PrincipalKind::Agent,
+            "broad",
+            reply_to(agent_actor(), CHANNEL_ID, "broad, look", &root_id),
+        ))
+        .await
+        .unwrap();
+
+    assert!(fixture.followers(&root_id).await.contains(&(
+        "agent".to_owned(),
+        BROAD_AGENT_ID.to_owned(),
+        "mention".to_owned()
+    )));
+    assert_eq!(
+        fixture.queued_for(BROAD_AGENT_ID).await,
+        vec![
+            (root_id.clone(), "observe".to_owned()),
+            (earlier.message.id.as_str().to_owned(), "observe".to_owned()),
+        ],
+        "the catch-up did not cover exactly the cluster before this reply"
+    );
+    assert!(
+        !fixture
+            .queued_for(BROAD_AGENT_ID)
+            .await
+            .iter()
+            .any(|(id, _)| id == mentioning.message.id.as_str()),
+        "the reply that created the follower was queued as history too"
+    );
+}
+
+/// Following is idempotent, so a cluster's history is queued once however many
+/// times a follower is named again.
+#[tokio::test]
+async fn following_a_cluster_twice_queues_its_history_once() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    store
+        .send_message(addressing(
+            PrincipalKind::Agent,
+            "broad",
+            reply_to(user_actor(), CHANNEL_ID, "broad?", &root_id),
+        ))
+        .await
+        .unwrap();
+    let after_first = fixture.queued_for(BROAD_AGENT_ID).await;
+    store
+        .send_message(addressing(
+            PrincipalKind::Agent,
+            "broad",
+            reply_to(user_actor(), CHANNEL_ID, "broad, again", &root_id),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(after_first.len(), 1);
+    assert_eq!(fixture.queued_for(BROAD_AGENT_ID).await, after_first);
+}
+
+/// Following is not a way into a conversation: a reference to someone who does not
+/// participate widens nothing.
+#[tokio::test]
+async fn a_reference_to_a_non_participant_follows_nobody() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    store
+        .send_message(addressing(
+            PrincipalKind::Agent,
+            "outsider",
+            reply_to(user_actor(), CHANNEL_ID, "outsider, see this", &root_id),
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        !fixture
+            .followers(&root_id)
+            .await
+            .iter()
+            .any(|(_, id, _)| id == OUTSIDER_AGENT_ID)
+    );
+    assert!(fixture.queued_for(OUTSIDER_AGENT_ID).await.is_empty());
+}
+
+/// A reference states which namespace answers for its handle, so a human
+/// reference must not resolve to an agent that happens to share the name.
+#[tokio::test]
+async fn a_reference_resolves_only_in_the_namespace_its_kind_names() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    store
+        .send_message(addressing(
+            PrincipalKind::Human,
+            "broad",
+            reply_to(user_actor(), CHANNEL_ID, "a person named broad?", &root_id),
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        !fixture
+            .followers(&root_id)
+            .await
+            .iter()
+            .any(|(_, id, _)| id == BROAD_AGENT_ID),
+        "a human reference followed an agent of the same name"
+    );
+}
+
+/// The catch-up is about what a follower has not seen, so its own messages are not
+/// queued back to it.
+#[tokio::test]
+async fn the_catch_up_skips_the_new_followers_own_messages() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let broad = SendActor::Agent(AgentId::parse(BROAD_AGENT_ID).unwrap());
+    let root = store
+        .send_message(send(broad, CHANNEL_ID, "broad speaks first"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    // The reply makes the root's author a follower, and the only history there is
+    // belongs to that author.
+    store
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            "answering broad",
+            &root_id,
+        ))
+        .await
+        .unwrap();
+
+    assert!(fixture.followers(&root_id).await.contains(&(
+        "agent".to_owned(),
+        BROAD_AGENT_ID.to_owned(),
+        "target_author".to_owned()
+    )));
+    assert!(
+        fixture.queued_for(BROAD_AGENT_ID).await.is_empty(),
+        "an agent was queued its own message as catch-up"
+    );
+}
+
+/// Who the reply is for, read while the writer is held so it includes the
+/// followers this reply created — and never the sender.
+#[tokio::test]
+async fn the_audience_is_the_cluster_followers_minus_the_sender() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    let by_human = store
+        .send_message(addressing(
+            PrincipalKind::Agent,
+            "broad",
+            reply_to(user_actor(), CHANNEL_ID, "broad, and lio", &root_id),
+        ))
+        .await
+        .unwrap();
+    let by_agent = store
+        .send_message(reply_to(agent_actor(), CHANNEL_ID, "here", &root_id))
+        .await
+        .unwrap();
+
+    let after_human: Vec<&str> = by_human
+        .thread
+        .as_ref()
+        .unwrap()
+        .audience
+        .iter()
+        .map(AgentId::as_str)
+        .collect();
+    let after_agent: Vec<&str> = by_agent
+        .thread
+        .as_ref()
+        .unwrap()
+        .audience
+        .iter()
+        .map(AgentId::as_str)
+        .collect();
+
+    // A person is not in an agent audience, so nothing is excluded for their send.
+    assert_eq!(after_human, vec![AGENT_ID, BROAD_AGENT_ID]);
+    // The agent that sent this one is.
+    assert_eq!(after_agent, vec![BROAD_AGENT_ID]);
+    let _ = fixture.latest_seq(CHANNEL_ID).await;
+}
+
+/// A cluster's durable consequences share the reply's transaction: if the reply
+/// does not commit, nobody was left following a conversation they cannot see.
+#[tokio::test]
+async fn a_failed_reply_leaves_no_follower_and_no_queued_history() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+    // The catch-up is the last durable consequence of the reply, so failing it is
+    // how the shared transaction is put to the test.
+    fixture
+        .execute(
+            "CREATE TRIGGER reject_test_catch_up BEFORE INSERT ON conversation_inboxes BEGIN \
+             SELECT RAISE(ABORT, 'forced catch-up failure'); END",
+        )
+        .await;
+
+    let error = store
+        .send_message(addressing(
+            PrincipalKind::Agent,
+            "broad",
+            reply_to(user_actor(), CHANNEL_ID, "broad, look", &root_id),
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Persistence(_)));
+    assert_eq!(
+        fixture.followers(&root_id).await,
+        vec![],
+        "a follower survived a reply that never committed"
+    );
+    assert!(fixture.queued_for(BROAD_AGENT_ID).await.is_empty());
+    // The reply itself is gone with them, and so is the ordinal it took.
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
 }

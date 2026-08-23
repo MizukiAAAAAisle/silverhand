@@ -216,11 +216,32 @@ impl EnvironmentUnavailable {
     }
 }
 
-/// Which principal kind an endpoint of a direct pair names.
+/// Which namespace names a principal. One vocabulary, because "which table
+/// answers for this name" is the same question whether it is asked of a direct
+/// pair's endpoint or of something a message addressed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EndpointKind {
+pub enum PrincipalKind {
     Human,
     Agent,
+}
+
+/// Something a message addressed, as parsed from its content. The handle is
+/// resolved inside the write unit: a name is a coordinate, and which principal it
+/// denotes can change between the parse and the commit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageReference {
+    pub kind: PrincipalKind,
+    pub handle: String,
+}
+
+/// Why a principal follows a reply cluster. Recorded because the reason outlives
+/// the event: a follower added by a mention is not the same fact as one who
+/// replied.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreadFollowerSource {
+    Reply,
+    TargetAuthor,
+    Mention,
 }
 
 /// One side of a direct pair. `deleted_at_ms` is the pair's own record of a
@@ -228,7 +249,7 @@ pub enum EndpointKind {
 /// when.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationEndpoint {
-    pub kind: EndpointKind,
+    pub kind: PrincipalKind,
     pub id: String,
     pub deleted_at_ms: Option<i64>,
 }
@@ -374,6 +395,10 @@ pub struct SendMessage {
     pub content: MessageContent,
     pub destination: SendDestination,
     pub attachment_refs: Vec<attachments::AttachmentRef>,
+    /// What the content addressed, parsed once by the boundary that received it.
+    /// Not re-derived here: one send is one parse, and a 64KiB body must not be
+    /// parsed while the writer is held.
+    pub references: Vec<MessageReference>,
     pub freshness_bypass: bool,
 }
 
@@ -423,6 +448,11 @@ pub struct CreatedMessage {
 pub struct ThreadReplyFact {
     pub thread_root_id: ThreadRootId,
     pub reply_count: i64,
+    /// The cluster's follower agents that still participate, minus the sender.
+    /// Enumerated inside the unit because the answer must include the followers
+    /// this very reply created; what is done with it happens after the commit and
+    /// is no part of this fact.
+    pub audience: Vec<AgentId>,
 }
 
 /// The write unit. One call is one atomic outcome: either the fact below exists
@@ -590,8 +620,8 @@ mod tests {
             endpoint: &ConversationEndpoint,
         ) -> Result<bool, PersistenceFailure> {
             Ok(match endpoint.kind {
-                EndpointKind::Agent => self.known_agents.contains(&endpoint.id),
-                EndpointKind::Human => self.known_users.contains(&endpoint.id),
+                PrincipalKind::Agent => self.known_agents.contains(&endpoint.id),
+                PrincipalKind::Human => self.known_users.contains(&endpoint.id),
             })
         }
     }
@@ -637,12 +667,12 @@ mod tests {
     fn live_pair() -> DirectPairEndpoints {
         DirectPairEndpoints {
             a: ConversationEndpoint {
-                kind: EndpointKind::Agent,
+                kind: PrincipalKind::Agent,
                 id: "agent-1".to_owned(),
                 deleted_at_ms: None,
             },
             b: ConversationEndpoint {
-                kind: EndpointKind::Human,
+                kind: PrincipalKind::Human,
                 id: "user-1".to_owned(),
                 deleted_at_ms: None,
             },
@@ -710,6 +740,7 @@ mod tests {
                     content,
                     destination: SendDestination::MainLine,
                     attachment_refs: Vec::new(),
+                    references: Vec::new(),
                     freshness_bypass: false,
                 })
                 .await;
