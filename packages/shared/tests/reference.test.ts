@@ -314,3 +314,77 @@ describe('isAutolink — the shared syntax layer', () => {
     );
   });
 });
+
+/**
+ * A leading U+FEFF shifts every offset the parser reports, and this predicate is
+ * decided BY those offsets.
+ *
+ * `fromMarkdown` drops one leading BOM before parsing without adjusting its
+ * positions, so slicing the value the caller passed was one character out — for
+ * every link in the document, not only the first — and a body that began with a BOM
+ * addressed NOBODY. Fail-closed and completely silent: the author sees their own
+ * reference in the message and no signal that it named no one.
+ */
+describe('a body that begins with a BOM still addresses the people it names', () => {
+  const bom = '\ufeff';
+  const alice = { kind: 'agent', handle: 'Alice' } as const;
+
+  it('reads an autolink at the very start and one further in', () => {
+    // Both positions, because the shift applies document-wide rather than only to
+    // whatever sits against the prefix.
+    expect(extractMessageReferences(`${bom}<silverhand://agent/Alice>`)).toEqual([
+      alice,
+    ]);
+    expect(
+      extractMessageReferences(`${bom}hi <silverhand://agent/Alice>`),
+    ).toEqual([alice]);
+    expect(
+      extractMessageReferences(
+        `${bom}first line\n\nsecond <silverhand://agent/Alice> here`,
+      ),
+    ).toEqual([alice]);
+  });
+
+  it('reads every reference in the body, in the usual order', () => {
+    expect(
+      extractMessageReferences(
+        `${bom}<silverhand://human/shiki> and <silverhand://agent/Alice>`,
+      ),
+    ).toEqual([{ kind: 'human', handle: 'shiki' }, alice]);
+  });
+
+  it('reads through a repeated prefix, not just a single one', () => {
+    // The parser strips one BOM from whatever it is handed, so removing a single
+    // character would leave a value that still begins with one and shift every
+    // offset again. The whole leading run is the coordinate prefix.
+    for (const depth of [2, 3, 8]) {
+      const body = `${bom.repeat(depth)}<silverhand://agent/Alice>`;
+      expect(extractMessageReferences(body), `depth ${depth}`).toEqual([alice]);
+    }
+  });
+
+  it('keeps the position rules it always had', () => {
+    // The prefix is a coordinate origin, not a licence: quoting and code still
+    // address nobody, at the same positions as before.
+    for (const body of [
+      `${bom}\`<silverhand://agent/Alice>\``,
+      `${bom}> <silverhand://agent/Alice>`,
+      `${bom}[Alice](silverhand://agent/Alice)`,
+    ]) {
+      expect(extractMessageReferences(body), body).toEqual([]);
+    }
+  });
+
+  it('treats a BOM elsewhere as the content it already was', () => {
+    // Nothing shifted for these, so nothing needed fixing — and nothing may change.
+    expect(extractMessageReferences(`hi ${bom}<silverhand://agent/Alice>`)).toEqual(
+      [alice],
+    );
+    for (const invisible of ['\u200b', '\u00a0']) {
+      expect(
+        extractMessageReferences(`${invisible}<silverhand://agent/Alice>`),
+        JSON.stringify(invisible),
+      ).toEqual([alice]);
+    }
+  });
+});

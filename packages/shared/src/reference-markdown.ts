@@ -66,6 +66,43 @@ import {
  */
 
 /**
+ * The string this module's OFFSETS are relative to, and the prefix the parser
+ * dropped to get there.
+ *
+ * `fromMarkdown` removes a leading U+FEFF before parsing and does not adjust the
+ * positions it reports, so every node offset in the document is one short of the
+ * value that was handed in. Both consumers here index text BY those offsets — the
+ * autolink discriminator slices it, the shorthand scan tests containment against it
+ * — so handing them the original value made a BOM-prefixed body address nobody and
+ * made the composer silently drop its last `@handle`.
+ *
+ * THE WHOLE LEADING RUN, not one character, and the difference is not pedantic: the
+ * parser strips one BOM from WHATEVER STRING IT IS GIVEN. Removing a single one from
+ * `\uFEFF\uFEFF…` hands it a value that still begins with a BOM, it strips that one
+ * too, and the offsets are shifted by one all over again — the original bug, one
+ * character further in. What this function has to guarantee is the invariant the
+ * offsets depend on: **the body handed to the parser does not begin with a BOM.**
+ *
+ * LEADING ONLY, and U+FEFF only. A BOM anywhere else is content the parser counted
+ * and shifts nothing, so it is left exactly where it was written. This is not
+ * whitespace handling and not normalization — it is the coordinate origin, and
+ * widening it (a trim, a Unicode normalize, ZWSP/NBSP) would silently change which
+ * bytes a body is made of. Those characters keep their own meaning: they are text
+ * the parser sees.
+ *
+ * Callers that only read the body pass `body` and ignore `prefix`. The one caller
+ * that REWRITES splices `body` and puts `prefix` back verbatim, so no byte is lost
+ * and the stored value differs from the author's only where a handle was rewritten.
+ */
+function parserCoordinates(value: string): { prefix: string; body: string } {
+  let end = 0;
+  while (value.charCodeAt(end) === 0xfeff) end += 1;
+  return end === 0
+    ? { prefix: '', body: value }
+    : { prefix: value.slice(0, end), body: value.slice(end) };
+}
+
+/**
  * Node types whose subtree is not prose, and therefore cannot address anyone.
  *
  * - `code` / `inlineCode` — quoted syntax. A reference shown as an EXAMPLE (in
@@ -117,9 +154,10 @@ const NON_PROSE_TYPES: ReadonlySet<string> = new Set([
  * it renders as a chip and addresses nobody, permanently and by design.
  *
  * mdast does not record which syntax produced a `link`: `<url>` and `[url](url)`
- * yield field-identical nodes. So the discriminator is an exact slice of the
- * ORIGINAL source between the node's own offsets, compared against the
- * reconstructed autolink. Offsets, never `position.end.column` arithmetic —
+ * yield field-identical nodes. So the discriminator is an exact slice between the
+ * node's own offsets, compared against the reconstructed autolink — taken from the
+ * string the PARSER measured ({@link parserCoordinates}), which is not always the
+ * value the caller passed. Offsets, never `position.end.column` arithmetic —
  * a column is only equal to a byte count on the first line of a document, and
  * the interesting case is always mid-paragraph. The slice is sound because
  * `mdast-util-from-markdown` copies an autolink's destination verbatim into
@@ -136,10 +174,14 @@ const NON_PROSE_TYPES: ReadonlySet<string> = new Set([
  */
 export function extractMessageReferences(content: string): Reference[] {
   // No Markdown parse at all for the overwhelming majority of bodies. Sound
-  // because the parser's accepted set is prefixed by the literal this tests for.
+  // because the parser's accepted set is prefixed by the literal this tests for,
+  // and it reads the whole value because it needs no offsets.
   if (!mayContainReference(content)) return [];
 
-  const tree = fromMarkdown(content);
+  // One string for the parse AND for the slice below: they have to agree about
+  // where things are.
+  const { body } = parserCoordinates(content);
+  const tree = fromMarkdown(body);
 
   const out: Reference[] = [];
   const seen = new Set<string>();
@@ -155,7 +197,7 @@ export function extractMessageReferences(content: string): Reference[] {
       // Children are the label. In an autolink they are a copy of the
       // destination, and in every other link form they are exactly the part we
       // refuse to read — so identity comes from the destination or nowhere.
-      if (isAutolink(node, content)) {
+      if (isAutolink(node, body)) {
         const ref = parseReference(node.url);
         if (ref) {
           const key = `${ref.kind}/${ref.handle}`;
@@ -194,10 +236,18 @@ export type LinkSpan = {
 
 /**
  * Whether this `link` node was written as a CommonMark autolink, decided by
- * slicing the source it came from. A node without offsets or without a
+ * slicing the text it was parsed from. A node without offsets or without a
  * destination is refused rather than guessed at — `fromMarkdown` always positions
  * its nodes, so the absence would mean a synthetic tree, which is not a body
  * anyone sent.
+ *
+ * `source` MUST be the exact string that was handed to the parser. A parser that
+ * dropped a prefix (`fromMarkdown` drops one leading U+FEFF) reports offsets
+ * against what it KEPT, so passing the value before that step shifts every offset
+ * in the document and this returns `false` for autolinks that are perfectly well
+ * formed. Fail-closed, and silent: the caller sees a body that addresses nobody and
+ * renders no chip, with nothing to indicate why. See {@link parserCoordinates},
+ * which is how this module's own callers satisfy the requirement.
  *
  * SHARED BETWEEN THE TWO AXES, and only at this layer (@Cindy, #task:2001):
  * delivery and display both ask "was this written as `<dest>`?", so asking it
@@ -259,24 +309,29 @@ type ShorthandMatch = {
  * Every rewritable plain `@handle` occurrence in the body, in source order.
  *
  * Positions come from the mdast tree, but the MATCHING is done against the
- * original source, never against node values: a `text` node's `value` is decoded
+ * source text, never against node values: a `text` node's `value` is decoded
  * (`&commat;alice` arrives as `@alice`, a backslash escape is dropped), so
  * value offsets do not map back onto source offsets. Matching the source and
  * keeping only matches that fall inside an admitted `text` range gives both the
  * real document context for the boundary lookbehind and an exact splice range —
  * and it makes an entity-encoded `@` a non-match for free, which is correct:
  * `&commat;alice` is not the alias form.
+ *
+ * Takes the PARSER'S BODY ({@link parserCoordinates}), and the ranges it returns are
+ * relative to that same string: a caller that spliced the author's original value
+ * with these offsets would be one character out for every body the parser trimmed a
+ * prefix from.
  */
-function collectShorthandMatches(source: string): ShorthandMatch[] {
+function collectShorthandMatches(body: string): ShorthandMatch[] {
   // Fast path, mirroring `mayContainReference` on the delivery side but keyed on
   // the OTHER spelling: no `@` anywhere means nothing to rewrite, so an ordinary
   // message never pays for a Markdown parse on the send path.
-  if (!source.includes('@')) return [];
+  if (!body.includes('@')) return [];
 
   // Plain CommonMark, deliberately the same dialect (and the same call) as the
   // extractor above: the two must agree about block structure, and the extractor
   // is the one that decides delivery.
-  const tree = fromMarkdown(source);
+  const tree = fromMarkdown(body);
 
   // Admitted `text` ranges in document order. The walk is the extractor's —
   // iterative for the same reason, and pre-order so leaves come out ascending
@@ -304,7 +359,7 @@ function collectShorthandMatches(source: string): ShorthandMatch[] {
   const out: ShorthandMatch[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(source)) !== null) {
+  while ((match = re.exec(body)) !== null) {
     const start = match.index;
     const end = start + match[0].length;
     // Both sequences ascend, so the range pointer only ever moves forward. If it
@@ -313,7 +368,7 @@ function collectShorthandMatches(source: string): ShorthandMatch[] {
     while (cursor < ranges.length && ranges[cursor]![1] <= start) cursor += 1;
     const range = ranges[cursor];
     if (!range || start < range[0] || end > range[1]) continue;
-    if (isEscapedAt(source, start, range[0])) continue;
+    if (isEscapedAt(body, start, range[0])) continue;
     const handle = match[1]!;
     // The stored handle domain is grammar AND length; `PLAIN_MENTION_PATTERN`
     // carries only the grammar, so a 300-character run of legal characters would
@@ -375,7 +430,10 @@ function isEscapedAt(source: string, at: number, floor: number): boolean {
 export function findShorthandCandidates(source: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const match of collectShorthandMatches(source)) {
+  // Reports handles rather than positions, so the dropped prefix cannot reach the
+  // answer — but it has to agree with the rewrite about which occurrences EXIST,
+  // and that is a question about offsets.
+  for (const match of collectShorthandMatches(parserCoordinates(source).body)) {
     if (seen.has(match.handle)) continue;
     seen.add(match.handle);
     out.push(match.handle);
@@ -406,19 +464,25 @@ export function rewriteShorthandReferences(
   source: string,
   resolve: ShorthandResolver,
 ): string {
+  const { prefix, body } = parserCoordinates(source);
   const edits: Array<{ start: number; end: number; text: string }> = [];
-  for (const { start, end, handle } of collectShorthandMatches(source)) {
+  for (const { start, end, handle } of collectShorthandMatches(body)) {
     const kind = resolve(handle);
     if (!kind) continue;
     edits.push({ start, end, text: formatReferenceToken({ kind, handle }) });
   }
+  // The author's own value, not a reassembled copy of it: nothing was rewritten,
+  // so nothing about the bytes may change.
   if (edits.length === 0) return source;
 
-  // Right to left, so each splice leaves the earlier offsets valid.
-  let out = source;
+  // Right to left, so each splice leaves the earlier offsets valid. Applied to the
+  // string the offsets were measured against; the prefix the parser dropped goes
+  // back verbatim, so the result differs from the author's only where a handle was
+  // replaced.
+  let out = body;
   for (let i = edits.length - 1; i >= 0; i -= 1) {
     const edit = edits[i]!;
     out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
   }
-  return out;
+  return prefix + out;
 }

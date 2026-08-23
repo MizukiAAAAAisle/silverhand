@@ -266,3 +266,78 @@ describe('findShorthandCandidates', () => {
     expect(findShorthandCandidates('<silverhand://agent/Alice> ok')).toEqual([]);
   });
 });
+
+/**
+ * A leading U+FEFF is a coordinate prefix, not content the transform may lose.
+ *
+ * The parser drops one before parsing and does not adjust the positions it
+ * reports, so a rewrite that spliced the author's original value was one character
+ * out: the LAST shorthand in the body fell outside the (shifted) text range and was
+ * silently left as `@handle`. That is the exact failure this transform exists to
+ * remove — a chip renders, the author believes they addressed someone, and nobody is
+ * woken — so it is pinned on both faces and through the round-trip.
+ */
+describe('rewriteShorthandReferences — a body that begins with a BOM', () => {
+  const bom = '\ufeff';
+
+  it('finds and rewrites EVERY shorthand, including the last one', () => {
+    // Two handles, because the shift only dropped the occurrence nearest the end.
+    expect(findShorthandCandidates(`${bom}@Alice and @shiki`)).toEqual([
+      'Alice',
+      'shiki',
+    ]);
+    expect(rewriteShorthandReferences(`${bom}@Alice and @shiki`, roster)).toBe(
+      `${bom}<silverhand://agent/Alice> and <silverhand://human/shiki>`,
+    );
+  });
+
+  it('delivers to both people afterwards, by the real extractor', () => {
+    const stored = rewriteShorthandReferences(`${bom}@Alice and @shiki`, roster);
+    expect(extractMessageReferences(stored)).toEqual([
+      { kind: 'agent', handle: 'Alice' },
+      { kind: 'human', handle: 'shiki' },
+    ]);
+  });
+
+  it('preserves the leading BOM run byte for byte', () => {
+    const stored = rewriteShorthandReferences(`${bom}@Alice`, roster);
+    expect(stored.startsWith(bom)).toBe(true);
+    expect(stored.split(bom)).toHaveLength(2);
+    // A DOUBLED prefix still rewrites, and still comes back whole. The whole run
+    // has to leave the parser's input — it strips one BOM from whatever it is
+    // given, so leaving the second in place would shift every offset again — and
+    // re-prepending it verbatim is what keeps that invisible to the author.
+    expect(rewriteShorthandReferences(`${bom}${bom}@Alice and @shiki`, roster)).toBe(
+      `${bom}${bom}<silverhand://agent/Alice> and <silverhand://human/shiki>`,
+    );
+  });
+
+  it('returns the value the author wrote when nothing resolved', () => {
+    // Not a reassembled copy: no rewrite happened, so no byte may move.
+    const untouched = `${bom}@nobody at all`;
+    expect(rewriteShorthandReferences(untouched, roster)).toBe(untouched);
+  });
+
+  it('leaves a mid-body BOM alone, and the neighbouring shorthand rewritable', () => {
+    // Only a LEADING BOM is a coordinate prefix; anywhere else it is already text
+    // the parser counted, so nothing shifts and nothing is normalized away.
+    expect(rewriteShorthandReferences(`hi ${bom}@Alice`, roster)).toBe(
+      `hi ${bom}<silverhand://agent/Alice>`,
+    );
+  });
+
+  it('does not treat the other invisible characters as a prefix', () => {
+    // ZWSP and NBSP are content the parser sees, so they never shifted anything and
+    // their behaviour must not change: both keep their own boundary semantics.
+    for (const invisible of ['\u200b', '\u00a0']) {
+      expect(
+        rewriteShorthandReferences(`${invisible}@Alice`, roster),
+        JSON.stringify(invisible),
+      ).toBe(`${invisible}<silverhand://agent/Alice>`);
+      expect(
+        findShorthandCandidates(`${invisible}@Alice`),
+        JSON.stringify(invisible),
+      ).toEqual(['Alice']);
+    }
+  });
+});
