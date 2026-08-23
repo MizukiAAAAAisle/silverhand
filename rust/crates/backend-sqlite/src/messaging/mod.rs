@@ -17,15 +17,18 @@ use std::{
 use silverhand_backend_core::messaging::{
     self, ConversationEndpoint, ConversationFacts, ConversationId, ConversationRefusal,
     CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads, EnvironmentUnavailable,
-    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, ParticipantHandle,
-    PostAuthorityReads, PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination,
-    SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource,
-    ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
+    InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId, MessageSeq, NotificationId,
+    ParticipantHandle, PostAuthorityReads, PrincipalKind, ReplyTargetRefusal, SendActor, SendClock,
+    SendDestination, SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork,
+    ThreadFollowerSource, ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     environment::OsEntropy,
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
-    post_commit::{DeliveryPlan, MainDeliveryPlan, MentionIntent, PostCommitPlan, ReplyAudience},
+    post_commit::{
+        CommittedMentionRow, DeliveryPlan, EffectFailure, MainDeliveryPlan, MentionIntent,
+        MentionedViewerRecord, PostCommitPlan, ReplyAudience,
+    },
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
@@ -68,6 +71,55 @@ const SELECT_AGENT_ID_BY_NAME: &str = "SELECT id FROM agents WHERE name = ?";
 const SELECT_CONVERSATION_PLACE: &str =
     "SELECT workspace_id, title FROM conversations WHERE id = ?";
 const SELECT_WORKSPACE_NAME: &str = "SELECT name FROM workspaces WHERE id = ?";
+/// Who, among the names a body used, may read that conversation right now.
+///
+/// ONE set-shaped read bounded by the handles the message actually named. The
+/// adapter holds SQLite's single writer while it runs and a 64KiB body can name
+/// many people, so asking per handle would put an unbounded number of point
+/// queries under that reservation; `json_each` makes the named set the driver and
+/// `users` a unique-index probe per name.
+///
+/// The human rule is the same two facts as everywhere — the `conversation_users`
+/// seat AND workspace membership — conjoined on each candidate's own id. Both
+/// halves are load-bearing: a seat that outlived its membership is not a
+/// participant, so it must not be told.
+///
+/// NO PLACEMENT ARM, and its absence is a fact about the caller rather than a
+/// simplification: a mention intent carries a `WorkspaceId`, and one is minted
+/// only for a workspace-placed conversation (`mention_self` is workspace-only —
+/// in a direct pair the stream IS the mention). A rosterless placement reaching
+/// here would produce no seat rows and therefore no viewers, so the omission is
+/// fail-closed in both readings.
+///
+/// Membership is checked against the workspace the ROW WILL NAME — the intent's,
+/// bound here — not against whatever the conversation column says at record time.
+/// Otherwise the entitlement answered for one workspace and the coordinate written
+/// pointed at another.
+///
+/// The author is excluded in the statement, so a person who named themselves is
+/// never a candidate. Bound as a nullable id: an agent author excludes nobody,
+/// which is what `IS NOT NULL` gives for free.
+macro_rules! entitled_viewers_sql {
+    () => {
+        "SELECT u.id, u.name FROM json_each(?) named JOIN users u ON u.name = named.value WHERE \
+         u.id IS NOT ? AND EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = \
+         ? AND cu.user_id = u.id) AND EXISTS (SELECT 1 FROM workspace_users wu WHERE \
+         wu.workspace_id = ? AND wu.user_id = u.id) ORDER BY u.created_at ASC, u.id ASC"
+    };
+}
+
+const SELECT_ENTITLED_VIEWERS: &str = entitled_viewers_sql!();
+/// The same statement, asked about its own plan, so the bound cannot be asserted
+/// against a paraphrase.
+#[cfg(test)]
+const EXPLAIN_ENTITLED_VIEWERS: &str = concat!("EXPLAIN QUERY PLAN ", entitled_viewers_sql!());
+
+/// The durable record that a person was named in a conversation they can read. Its
+/// coordinates are the source's, because that is what the reader can open.
+const INSERT_MENTION_SELF: &str = "INSERT INTO notifications (id, kind, user_id, workspace_id, \
+     conversation_id, message_id, source_workspace_id, source_conversation_id, source_message_id, \
+     payload, created_at) VALUES (?, 'mention_self', ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
 /// The conversation's agent participants, as the placement names them, conjoined
 /// with a live principal row: a delivery row for an agent that no longer exists
 /// cannot be written at all. Ordered so the plan does not depend on scan order.
@@ -250,6 +302,11 @@ pub enum MessagingStoreError {
     /// placement, and named apart from it so a reader is not misdirected.
     #[error("stored column {field} does not name a usable identity")]
     MalformedIdentity { field: &'static str },
+    /// A host capability the write depends on could not answer. Kept as a source
+    /// rather than a marker: "no identity could be minted" is only actionable
+    /// with the reason attached.
+    #[error("a host capability this write depends on could not answer")]
+    Environment(#[from] EnvironmentUnavailable),
 }
 
 fn infrastructure(error: MessagingStoreError) -> SendMessageError {
@@ -338,6 +395,101 @@ impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
                 Err(refusal)
             }
         }
+    }
+}
+
+impl<E: SendClock + SendEntropy + Send + Sync> MentionedViewerRecord for MessagingStore<E> {
+    /// Writes the records this send owes the people it named — deciding, HERE, who
+    /// those names belong to and who may still read the conversation.
+    ///
+    /// One transaction of its own, taken after the send has committed: the entitlement
+    /// read and every insert share it, so the rows that exist are the rows the world
+    /// looked like when they were written. A person removed before this runs is not a
+    /// candidate; a person removed after it commits keeps a record of something they
+    /// could read at the time.
+    async fn record_mentioned_viewers(
+        &self,
+        intent: &MentionIntent,
+    ) -> Result<Vec<CommittedMentionRow>, EffectFailure> {
+        self.record_mentions_transaction(intent)
+            .await
+            .map_err(EffectFailure::from_source)
+    }
+}
+
+impl<E: SendClock + SendEntropy> MessagingStore<E> {
+    #[tracing::instrument(skip(self, intent), fields(
+        source_conversation = intent.source_conversation().as_str(),
+        named = intent.handles().len(),
+    ))]
+    async fn record_mentions_transaction(
+        &self,
+        intent: &MentionIntent,
+    ) -> Result<Vec<CommittedMentionRow>, MessagingStoreError> {
+        let named = serde_json::to_string(
+            &intent
+                .handles()
+                .iter()
+                .map(ParticipantHandle::as_str)
+                .collect::<Vec<_>>(),
+        )?;
+        let payload_of = |mentioned: &str| {
+            serde_json::to_string(&serde_json::json!({
+                "conversation_title": intent.source_conversation_title(),
+                "trigger_name": intent.trigger_name(),
+                "mentioned_name": mentioned,
+                "mention_excerpt": intent.excerpt(),
+            }))
+        };
+
+        let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
+        let entitled = sqlx::query(SELECT_ENTITLED_VIEWERS)
+            .bind(named)
+            .bind(intent.author().map(UserId::as_str))
+            .bind(intent.source_conversation().as_str())
+            .bind(intent.source_workspace().as_str())
+            .fetch_all(&mut *tx)
+            .await?;
+
+        let mut rows = Vec::with_capacity(entitled.len());
+        for row in entitled {
+            let viewer: String = row.try_get("id")?;
+            let mentioned: String = row.try_get("name")?;
+            let id = NotificationId::mint(&self.environment)?;
+            let created_at_ms = self.environment.now_unix_ms()?;
+
+            sqlx::query(INSERT_MENTION_SELF)
+                .bind(id.as_str())
+                .bind(&viewer)
+                .bind(intent.source_workspace().as_str())
+                .bind(intent.source_conversation().as_str())
+                .bind(intent.source_message().as_str())
+                .bind(intent.source_workspace().as_str())
+                .bind(intent.source_conversation().as_str())
+                .bind(intent.source_message().as_str())
+                .bind(payload_of(&mentioned)?)
+                .bind(created_at_ms)
+                .execute(&mut *tx)
+                .await?;
+
+            rows.push(CommittedMentionRow::committed(
+                id,
+                created_at_ms,
+                UserId::parse(viewer)
+                    .map_err(|_| MessagingStoreError::MalformedIdentity { field: "users.id" })?,
+                ParticipantHandle::parse(mentioned).map_err(|_| {
+                    MessagingStoreError::MalformedIdentity {
+                        field: "users.name",
+                    }
+                })?,
+                intent.clone(),
+            ));
+        }
+
+        // Nothing is reported until every row of this batch is durable: a partial
+        // report would tell some people about a record and leave others' behind.
+        tx.commit().await?;
+        Ok(rows)
     }
 }
 
@@ -1705,6 +1857,8 @@ mod current_schema;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Connection;
+    use std::time::Instant;
 
     /// Opening needs a database file but no product schema, so these two facts
     /// about the connection itself are checked without one.
@@ -1773,6 +1927,112 @@ mod tests {
             assert!(
                 !step.starts_with("SCAN tf"),
                 "the plan scans every follower row: {plan:?}"
+            );
+        }
+    }
+
+    /// The entitlement read and the inserts are ONE write transaction, and the proof
+    /// is that the read cannot happen without the writer.
+    ///
+    /// The batch chosen here would write NOTHING — it names somebody this database
+    /// has never heard of — so an adapter that read on a snapshot and only asked for
+    /// the writer when it had a row to insert would answer "nobody entitled" and
+    /// succeed. Refusing instead is what says the decision and the rows it justifies
+    /// share a transaction: nothing can be committed against a world that has moved
+    /// on since the question was asked.
+    #[tokio::test]
+    async fn the_entitlement_decision_cannot_be_taken_without_the_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("entitlement-writer.sqlite");
+        current_schema::create_current_schema(&path)
+            .await
+            .close()
+            .await
+            .unwrap();
+        let store = MessagingStore::open_with_busy_timeout(
+            &path,
+            HostEnvironment,
+            Duration::from_millis(25),
+        )
+        .await
+        .unwrap();
+
+        let held = store.pool.begin_with(ROOT_WRITE_BEGIN).await.unwrap();
+        let started = Instant::now();
+        let failure = store
+            .record_mentions_transaction(&MentionIntent::committed(
+                vec![ParticipantHandle::parse("nobody").unwrap()],
+                None,
+                "Lio".into(),
+                messaging::WorkspaceId::parse("ws-1").unwrap(),
+                ConversationId::parse("conv-1").unwrap(),
+                "Channel".into(),
+                MessageId::parse("message-1").unwrap(),
+                "named nobody".into(),
+            ))
+            .await
+            .unwrap_err();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "writer contention exceeded the controlled short timeout"
+        );
+        let MessagingStoreError::Sql(error) = &failure else {
+            panic!("expected a driver failure, got {failure:?}");
+        };
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(|it| it.code())
+                .as_deref(),
+            Some("5"), // SQLITE_BUSY
+        );
+        held.rollback().await.unwrap();
+    }
+
+    /// The entitlement read must stay bounded by the NAMES A BODY USED. It runs while
+    /// the adapter holds SQLite's single writer, so a plan that scanned `users` — or
+    /// either membership table — would make one mention cost the size of the
+    /// installation and hold the writer for it.
+    #[tokio::test]
+    async fn the_entitlement_read_is_bounded_by_the_named_set_not_the_installation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("entitlement-plan.sqlite");
+        let mut connection = super::current_schema::create_current_schema(&path).await;
+
+        let plan: Vec<String> = sqlx::query(EXPLAIN_ENTITLED_VIEWERS)
+            .bind(r#"["human"]"#)
+            .bind(Option::<&str>::None)
+            .bind("conv-1")
+            .bind("ws-1")
+            .fetch_all(&mut connection)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect();
+
+        // What has to hold is the COST, not one spelling of it: `users` is reached by
+        // NAME, so the read is bounded by the names the body used. Reaching it any
+        // other way makes one mention cost the installation — that is the shape the
+        // prohibitions below forbid, and it is what a correlated rewrite produces.
+        // The `ORDER BY` temp b-tree sorts that same bounded set rather than a table.
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH u") || step.starts_with("SEARCH users")),
+            "a named handle was not resolved through an index on `users`: {plan:?}"
+        );
+        for step in &plan {
+            assert!(
+                !step.starts_with("SCAN u") && !step.starts_with("SCAN users"),
+                "the plan scans every person in the installation: {plan:?}"
+            );
+            assert!(
+                !step.starts_with("SCAN cu")
+                    && !step.starts_with("SCAN conversation_users")
+                    && !step.starts_with("SCAN wu")
+                    && !step.starts_with("SCAN workspace_users"),
+                "the plan scans a membership table instead of probing it: {plan:?}"
             );
         }
     }

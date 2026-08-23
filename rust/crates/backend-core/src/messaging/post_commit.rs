@@ -223,11 +223,53 @@ impl MentionIntent {
 /// who lost access before the write is told nothing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedMentionRow {
-    pub id: NotificationId,
-    pub created_at_ms: i64,
-    pub viewer: UserId,
-    pub mentioned_name: ParticipantHandle,
-    pub intent: MentionIntent,
+    id: NotificationId,
+    created_at_ms: i64,
+    viewer: UserId,
+    mentioned_name: ParticipantHandle,
+    intent: MentionIntent,
+}
+
+impl CommittedMentionRow {
+    /// Reported by whichever store wrote the row. A trust seam on the same honest
+    /// terms as the fact's: the factory is public, so any crate that can reach it is
+    /// inside the same boundary; what is guaranteed is that a row handed to the
+    /// publication cannot be edited on the way there.
+    pub fn committed(
+        id: NotificationId,
+        created_at_ms: i64,
+        viewer: UserId,
+        mentioned_name: ParticipantHandle,
+        intent: MentionIntent,
+    ) -> Self {
+        Self {
+            id,
+            created_at_ms,
+            viewer,
+            mentioned_name,
+            intent,
+        }
+    }
+
+    pub fn id(&self) -> &NotificationId {
+        &self.id
+    }
+
+    pub fn created_at_ms(&self) -> i64 {
+        self.created_at_ms
+    }
+
+    pub fn viewer(&self) -> &UserId {
+        &self.viewer
+    }
+
+    pub fn mentioned_name(&self) -> &ParticipantHandle {
+        &self.mentioned_name
+    }
+
+    pub fn intent(&self) -> &MentionIntent {
+        &self.intent
+    }
 }
 
 /// One attempt failed. The cause is kept, because "telling someone failed" is only
@@ -1102,12 +1144,14 @@ mod tests {
                 .handles()
                 .iter()
                 .filter(|handle| self.entitled.contains(handle.as_str()))
-                .map(|handle| CommittedMentionRow {
-                    id: NotificationId::parse(format!("row-{}", handle.as_str())).unwrap(),
-                    created_at_ms: 11,
-                    viewer: UserId::parse(format!("user-{}", handle.as_str())).unwrap(),
-                    mentioned_name: handle.clone(),
-                    intent: intent.clone(),
+                .map(|handle| {
+                    CommittedMentionRow::committed(
+                        NotificationId::parse(format!("row-{}", handle.as_str())).unwrap(),
+                        11,
+                        UserId::parse(format!("user-{}", handle.as_str())).unwrap(),
+                        handle.clone(),
+                        intent.clone(),
+                    )
                 })
                 .collect())
         }
@@ -1118,8 +1162,8 @@ mod tests {
             self.answer(
                 &format!(
                     "{}|{}",
-                    mention.viewer.as_str(),
-                    mention.intent.source_message().as_str()
+                    mention.viewer().as_str(),
+                    mention.intent().source_message().as_str()
                 ),
                 EffectStep::ViewerNotified,
             )
@@ -1397,9 +1441,9 @@ mod tests {
         // One row per name that is still entitled, and each carries the intent it was
         // written from — the store adds an identity and a moment, nothing else.
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].intent, intent);
-        assert_eq!(rows[0].mentioned_name.as_str(), "viewer-1");
-        assert!(!rows[0].id.as_str().is_empty());
-        assert_eq!(rows[0].created_at_ms, 11);
+        assert_eq!(rows[0].intent(), &intent);
+        assert_eq!(rows[0].mentioned_name().as_str(), "viewer-1");
+        assert!(!rows[0].id().as_str().is_empty());
+        assert_eq!(rows[0].created_at_ms(), 11);
     }
 }

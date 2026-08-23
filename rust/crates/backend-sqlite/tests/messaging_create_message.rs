@@ -9,8 +9,10 @@ use silverhand_backend_core::messaging::mention_cc::{
     CommittedMentionCopy, MentionCopyOutcome, MentionCopySource, render_copy_body,
 };
 use silverhand_backend_core::messaging::post_commit::{
-    CopyNotification, DirectLineInvalidation, EffectFailure, MentionSkipRecord, MessagePublication,
-    RuntimeDelivery, RuntimeStart, SendEffects, SkippedMention, announce_send,
+    CommittedMentionRow, CopyNotification, DirectLineInvalidation, EffectFailure, EffectStep,
+    IdleStart, MainDelivery, MainEffects, MainPublication, MentionSkipRecord, MessagePublication,
+    RuntimeDelivery, RuntimeStart, SendEffects, SkippedMention, UnreadPublication,
+    ViewerNotification, announce_main_send, announce_send,
 };
 use silverhand_backend_core::messaging::{
     ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
@@ -1869,7 +1871,8 @@ impl Fixture {
             serde_json::json!({
                 "kind": row.get::<String, _>("kind"),
                 "user_id": row.get::<String, _>("user_id"),
-                "agent_id": row.get::<String, _>("agent_id"),
+                // NULL for a `mention_self` row: that kind names a person, not an agent.
+                "agent_id": row.get::<Option<String>, _>("agent_id"),
                 "workspace_id": row.get::<String, _>("workspace_id"),
                 "conversation_id": row.get::<String, _>("conversation_id"),
                 "message_id": row.get::<String, _>("message_id"),
@@ -2645,4 +2648,354 @@ async fn the_trigger_name_falls_back_through_what_the_sender_has() {
     assert_eq!(trigger(&with_name), "lio");
     // Whitespace says nothing either.
     assert_eq!(trigger(&with_blank_display), "lio");
+}
+
+/// A second person on the channel, so "no partial rows" is a claim with more than
+/// one row to be partial about.
+const SECOND_USER_ID: &str = "user-2";
+
+/// Both people the falsifiers below name, in the order the record writes them.
+async fn seed_second_viewer(fixture: &mut Fixture) {
+    fixture
+        .execute(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-2', \
+             'second', 'Second', 1, 1)",
+        )
+        .await;
+    fixture
+        .execute(
+            "INSERT INTO workspace_users (workspace_id, user_id, joined_at) VALUES ('ws-1', \
+             'user-2', 0)",
+        )
+        .await;
+    fixture
+        .execute(
+            "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES \
+             ('conv-1', 'user-2', 0)",
+        )
+        .await;
+}
+
+fn naming_both_people(conversation: &str) -> SendMessage {
+    send(
+        agent_actor(),
+        conversation,
+        "<silverhand://human/human> <silverhand://human/second> look at this",
+    )
+}
+
+/// The main-line ports, recording what was asked of them. Only the record port is
+/// real: these say whether an attempt happened at all, which is the half the
+/// database cannot answer.
+#[derive(Default)]
+struct MainRecorder {
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl MainRecorder {
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    fn note(&self, call: String) {
+        self.calls.lock().unwrap().push(call);
+    }
+}
+
+impl MainPublication for MainRecorder {
+    async fn publish_message(
+        &self,
+        message: &silverhand_backend_core::messaging::CreatedMessage,
+    ) -> Result<(), EffectFailure> {
+        self.note(format!("published:{}", message.id.as_str()));
+        Ok(())
+    }
+}
+
+impl ViewerNotification for MainRecorder {
+    async fn notify_viewer(&self, mention: &CommittedMentionRow) -> Result<(), EffectFailure> {
+        self.note(format!("notified:{}", mention.viewer().as_str()));
+        Ok(())
+    }
+}
+
+impl UnreadPublication for MainRecorder {
+    async fn publish_unread(&self, conversation: &ConversationId) -> Result<(), EffectFailure> {
+        self.note(format!("unread:{}", conversation.as_str()));
+        Ok(())
+    }
+}
+
+impl MainDelivery for MainRecorder {
+    async fn deliver_to(
+        &self,
+        recipient: &AgentId,
+        _message: &silverhand_backend_core::messaging::CreatedMessage,
+    ) -> Result<(), EffectFailure> {
+        self.note(format!("delivered:{}", recipient.as_str()));
+        Ok(())
+    }
+}
+
+impl IdleStart for MainRecorder {
+    async fn start_if_idle(
+        &self,
+        recipient: &AgentId,
+        _conversation: &ConversationId,
+    ) -> Result<(), EffectFailure> {
+        self.note(format!("started:{}", recipient.as_str()));
+        Ok(())
+    }
+}
+
+/// Runs a committed main-line send's aftermath with the real record adapter and
+/// recording everything else.
+async fn announce_with_real_record(
+    fact: &silverhand_backend_core::messaging::MessageCreatedFact,
+    store: &MessagingStore,
+    recorder: &MainRecorder,
+) -> silverhand_backend_core::messaging::post_commit::EffectReport {
+    announce_main_send(
+        fact.main_line()
+            .expect("a main-line send carries a main-line plan"),
+        MainEffects {
+            publication: recorder,
+            mentions: store,
+            viewers: recorder,
+            unread: recorder,
+            delivery: recorder,
+            idle: recorder,
+        },
+    )
+    .await
+}
+
+/// The record writes what a reader can act on: the source coordinates in BOTH
+/// coordinate triples, and the payload the Activity surface renders. Only the rows
+/// that were written are published, so the two people named produce exactly two
+/// notifications and exactly two viewer frames.
+#[tokio::test]
+async fn the_record_writes_a_row_per_entitled_viewer_and_publishes_only_those() {
+    let mut fixture = Fixture::new().await;
+    seed_second_viewer(&mut fixture).await;
+    let store = fixture.store().await;
+
+    let fact = store
+        .send_message(naming_both_people(CHANNEL_ID))
+        .await
+        .unwrap();
+    let recorder = MainRecorder::default();
+    let report = announce_with_real_record(&fact, &store, &recorder).await;
+
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    let message = fact.message().id.as_str();
+    assert_eq!(
+        fixture.notification_rows().await,
+        vec![
+            serde_json::json!({
+                "kind": "mention_self",
+                "user_id": USER_ID,
+                "agent_id": null,
+                "workspace_id": WORKSPACE_ID,
+                "conversation_id": CHANNEL_ID,
+                "message_id": message,
+                "source_workspace_id": WORKSPACE_ID,
+                "source_conversation_id": CHANNEL_ID,
+                "source_message_id": message,
+                "payload": {
+                    "conversation_title": "Channel",
+                    "trigger_name": "Lio",
+                    "mentioned_name": "human",
+                    "mention_excerpt": "<silverhand://human/human> <silverhand://human/second> \
+                                        look at this",
+                },
+            }),
+            serde_json::json!({
+                "kind": "mention_self",
+                "user_id": SECOND_USER_ID,
+                "agent_id": null,
+                "workspace_id": WORKSPACE_ID,
+                "conversation_id": CHANNEL_ID,
+                "message_id": message,
+                "source_workspace_id": WORKSPACE_ID,
+                "source_conversation_id": CHANNEL_ID,
+                "source_message_id": message,
+                "payload": {
+                    "conversation_title": "Channel",
+                    "trigger_name": "Lio",
+                    "mentioned_name": "second",
+                    "mention_excerpt": "<silverhand://human/human> <silverhand://human/second> \
+                                        look at this",
+                },
+            }),
+        ]
+    );
+    // The load-bearing order: each named person's row exists before unread state is
+    // published, because the badge's directed count reads those rows.
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            format!("published:{message}"),
+            format!("notified:{USER_ID}"),
+            format!("notified:{SECOND_USER_ID}"),
+            format!("unread:{CHANNEL_ID}"),
+            format!("delivered:{BROAD_AGENT_ID}"),
+        ]
+    );
+}
+
+/// Entitlement is decided WHEN THE RECORD IS WRITTEN, and it is two facts, not one.
+/// Revoke either half after the send has committed and the person named is told
+/// nothing — while the message that named them stays exactly as it was committed,
+/// and everyone's unread state is still published.
+#[tokio::test]
+async fn a_viewer_who_lost_either_half_of_their_access_is_told_nothing() {
+    for revocation in [
+        "DELETE FROM conversation_users WHERE conversation_id = 'conv-1' AND user_id = 'user-1'",
+        "DELETE FROM workspace_users WHERE workspace_id = 'ws-1' AND user_id = 'user-1'",
+    ] {
+        let mut fixture = Fixture::new().await;
+        let store = fixture.store().await;
+        let fact = store
+            .send_message(send(
+                agent_actor(),
+                CHANNEL_ID,
+                "<silverhand://human/human> still there?",
+            ))
+            .await
+            .unwrap();
+        // The send is durable and the intent already names them. What changes is
+        // whether they may still read the conversation it happened in.
+        fixture.execute(revocation).await;
+
+        let recorder = MainRecorder::default();
+        let report = announce_with_real_record(&fact, &store, &recorder).await;
+
+        // Nobody entitled is not a failure: the record was attempted and answered.
+        assert!(
+            report.failed.is_empty(),
+            "{revocation}: {:?}",
+            report.failed
+        );
+        assert!(
+            report
+                .attempted
+                .iter()
+                .any(|(_, step)| *step == EffectStep::MentionedViewerRecorded),
+            "{revocation}: the record was never attempted"
+        );
+        assert!(
+            fixture.notification_rows().await.is_empty(),
+            "{revocation}: a person who cannot read the conversation was told"
+        );
+        // No row, so no publication — and unread is still published for the rest.
+        let calls = recorder.calls();
+        assert!(
+            !calls.iter().any(|call| call.starts_with("notified:")),
+            "{revocation}: {calls:?}"
+        );
+        assert!(
+            calls.contains(&format!("unread:{CHANNEL_ID}")),
+            "{revocation}: {calls:?}"
+        );
+
+        // And the send itself is untouched by any of it.
+        assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
+        assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+        assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(1));
+    }
+}
+
+/// The batch is atomic and its failure is CUSTODY-NEUTRAL: fail the LAST insert and
+/// the first person's row goes too — the record either tells everyone it named or
+/// nobody — while the committed send keeps its row, its ordinal and its head, the
+/// cause survives, and the rest of the aftermath still runs.
+#[tokio::test]
+async fn a_failed_insert_leaves_no_partial_record_and_takes_no_send_back() {
+    let mut fixture = Fixture::new().await;
+    seed_second_viewer(&mut fixture).await;
+    let store = fixture.store().await;
+
+    let fact = store
+        .send_message(naming_both_people(CHANNEL_ID))
+        .await
+        .unwrap();
+    // Aborts the SECOND row of the batch, so the first one has already been written
+    // when the failure arrives.
+    fixture
+        .execute(
+            "CREATE TRIGGER reject_second_mention BEFORE INSERT ON notifications WHEN (SELECT \
+             count(*) FROM notifications) >= 1 BEGIN SELECT RAISE(ABORT, 'forced mention \
+             failure'); END",
+        )
+        .await;
+
+    let recorder = MainRecorder::default();
+    let report = announce_with_real_record(&fact, &store, &recorder).await;
+
+    let (_, step, failure) = report
+        .failed
+        .iter()
+        .find(|(_, step, _)| *step == EffectStep::MentionedViewerRecorded)
+        .expect("the record should have failed");
+    assert_eq!(*step, EffectStep::MentionedViewerRecorded);
+    assert!(root_cause(failure).contains("forced mention failure"));
+
+    assert!(
+        fixture.notification_rows().await.is_empty(),
+        "the first person's row outlived the batch it belonged to"
+    );
+    let calls = recorder.calls();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("notified:")),
+        "a row that does not exist was published: {calls:?}"
+    );
+    // The steps that do not depend on the record are still attempted.
+    assert!(calls.contains(&format!("unread:{CHANNEL_ID}")), "{calls:?}");
+    assert!(
+        calls.contains(&format!("delivered:{BROAD_AGENT_ID}")),
+        "{calls:?}"
+    );
+
+    // The send is a fact regardless: its row, its ordinal and its head all stand.
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+    assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(1));
+}
+
+/// Naming yourself is not a mention, and the exclusion is the AUTHOR's — so the
+/// other person named in the same body still gets theirs.
+#[tokio::test]
+async fn a_person_who_named_themselves_gets_no_record_but_their_reader_does() {
+    let mut fixture = Fixture::new().await;
+    seed_second_viewer(&mut fixture).await;
+    let store = fixture.store().await;
+
+    let fact = store
+        .send_message(send(
+            user_actor(),
+            CHANNEL_ID,
+            "<silverhand://human/human> <silverhand://human/second> me and you",
+        ))
+        .await
+        .unwrap();
+    let recorder = MainRecorder::default();
+    let report = announce_with_real_record(&fact, &store, &recorder).await;
+
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(
+        fixture
+            .notification_rows()
+            .await
+            .iter()
+            .map(|row| row["user_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        vec![SECOND_USER_ID]
+    );
+    assert!(
+        recorder
+            .calls()
+            .contains(&format!("notified:{SECOND_USER_ID}"))
+    );
+    assert!(!recorder.calls().contains(&format!("notified:{USER_ID}")));
 }

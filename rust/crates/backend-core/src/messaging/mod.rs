@@ -725,7 +725,7 @@ pub struct MessageCreatedFact {
 }
 
 impl MessageCreatedFact {
-    /// Assembled by the unit of work that committed the send, and by nothing else.
+    /// Assembled by the unit of work that committed the send.
     ///
     /// A trust seam, stated rather than pretended away: this factory is public, so
     /// every crate that can call it is inside the same trusted boundary — a fact can
