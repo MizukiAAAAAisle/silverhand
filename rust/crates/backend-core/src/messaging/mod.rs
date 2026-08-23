@@ -9,7 +9,7 @@ pub mod attachments;
 pub mod environment;
 pub mod freshness;
 
-use std::{error::Error, future::Future};
+use std::{collections::HashSet, error::Error, future::Future, ops::Range};
 
 use crate::persistence::PersistenceFailure;
 
@@ -219,19 +219,128 @@ impl EnvironmentUnavailable {
 /// Which namespace names a principal. One vocabulary, because "which table
 /// answers for this name" is the same question whether it is asked of a direct
 /// pair's endpoint or of something a message addressed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PrincipalKind {
     Human,
     Agent,
 }
 
-/// Something a message addressed, as parsed from its content. The handle is
-/// resolved inside the write unit: a name is a coordinate, and which principal it
-/// denotes can change between the parse and the commit.
+/// Something a message addressed. Its fields are sealed because the value is
+/// EVIDENCE about a body: it is obtainable only by deriving it from the content
+/// that addressed them, so no caller can hand the write unit a name the message
+/// never wrote. The handle is still resolved inside the write unit — a name is a
+/// coordinate, and which principal it denotes can change before the commit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageReference {
-    pub kind: PrincipalKind,
-    pub handle: String,
+    kind: PrincipalKind,
+    handle: String,
+}
+
+impl MessageReference {
+    pub fn kind(&self) -> PrincipalKind {
+        self.kind
+    }
+
+    pub fn handle(&self) -> &str {
+        &self.handle
+    }
+}
+
+/// The destination form a reference takes in a body: `silverhand://agent/Alice`.
+const REFERENCE_PREFIX: &str = "silverhand://";
+/// A handle is at most this long wherever it is stored, so a longer one cannot be
+/// a name this system holds.
+const HANDLE_MAX_LENGTH: usize = 64;
+
+/// Reads one link destination. Nothing else is a reference: not a different
+/// scheme, not an extra path segment, not a query, not a handle outside the stored
+/// name grammar. Fail-closed, because the alternative is addressing someone the
+/// author did not name.
+fn parse_reference_destination(destination: &str) -> Option<MessageReference> {
+    let rest = destination.strip_prefix(REFERENCE_PREFIX)?;
+    let (kind, handle) = rest.split_once('/')?;
+    let kind = match kind {
+        "agent" => PrincipalKind::Agent,
+        "human" => PrincipalKind::Human,
+        _ => return None,
+    };
+    if handle.is_empty() || handle.len() > HANDLE_MAX_LENGTH {
+        return None;
+    }
+    let mut characters = handle.chars();
+    let first = characters.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    if !characters
+        .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+    {
+        return None;
+    }
+    Some(MessageReference {
+        kind,
+        handle: handle.to_owned(),
+    })
+}
+
+/// Which positions in a body can address anyone.
+///
+/// The rule is Markdown structure — an autolink in prose, never quoted syntax and
+/// never someone else's quoted words — so it is supplied rather than decided here.
+/// What is NOT supplied is identity: the derivation reads the bytes at the spans
+/// this returns, so a position rule that lies can narrow or widen WHERE a body
+/// addresses from, and can never introduce a name the body does not contain.
+pub trait ReferencePositions {
+    /// Byte ranges of the candidate autolinks, in source order, brackets included.
+    fn autolink_spans(&self, content: &MessageContent) -> Vec<Range<usize>>;
+}
+
+/// Everyone one message addressed: deduplicated, in first-occurrence order.
+///
+/// There is no way to build one except from a body, which is what makes "who this
+/// message addresses" a property of the message rather than a claim of whoever
+/// submitted it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AddressedPrincipals(Vec<MessageReference>);
+
+impl AddressedPrincipals {
+    fn derive(content: &MessageContent, positions: &impl ReferencePositions) -> Self {
+        let body = content.as_str();
+        let mut addressed = Vec::new();
+        let mut seen = HashSet::new();
+
+        for span in positions.autolink_spans(content) {
+            // A span that is not a whole autolink of THIS body addresses nobody.
+            let Some(candidate) = body.get(span) else {
+                continue;
+            };
+            let Some(destination) = candidate
+                .strip_prefix('<')
+                .and_then(|inner| inner.strip_suffix('>'))
+            else {
+                continue;
+            };
+            let Some(reference) = parse_reference_destination(destination) else {
+                continue;
+            };
+            if seen.insert((reference.kind, reference.handle.clone())) {
+                addressed.push(reference);
+            }
+        }
+        Self(addressed)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &MessageReference> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// Why a principal follows a reply cluster. Recorded because the reason outlives
@@ -383,10 +492,10 @@ pub enum SendDestination {
     Reply(MessageId),
 }
 
-/// One create-message request, as the application states it. Every field is a
-/// value that has already satisfied its own invariant.
+/// What a boundary holds once it has validated a request: everything a send needs
+/// except what can only be derived from the body.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SendMessage {
+pub struct SendMessageDraft {
     /// The conversation the sender is bound to. It keys freshness — the sender's
     /// own field of view — and is not necessarily where the message lands.
     pub source_conversation: ConversationId,
@@ -395,11 +504,76 @@ pub struct SendMessage {
     pub content: MessageContent,
     pub destination: SendDestination,
     pub attachment_refs: Vec<attachments::AttachmentRef>,
-    /// What the content addressed, parsed once by the boundary that received it.
-    /// Not re-derived here: one send is one parse, and a 64KiB body must not be
-    /// parsed while the writer is held.
-    pub references: Vec<MessageReference>,
     pub freshness_bypass: bool,
+}
+
+/// One create-message request, prepared: every field has satisfied its own
+/// invariant, and what the body addresses has been derived FROM that body.
+///
+/// The fields are sealed together on purpose. A struct whose content and whose
+/// addressed set could be set independently would let the two disagree — a body
+/// saying one thing while the send delivers to someone else — so the only way to
+/// obtain this value is [`SendMessage::prepare`], which derives one from the
+/// other. Deriving happens here, before any transaction: a 64KiB body must not be
+/// parsed while the writer is held.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SendMessage {
+    source_conversation: ConversationId,
+    target_conversation: ConversationId,
+    actor: SendActor,
+    content: MessageContent,
+    destination: SendDestination,
+    attachment_refs: Vec<attachments::AttachmentRef>,
+    addressed: AddressedPrincipals,
+    freshness_bypass: bool,
+}
+
+impl SendMessage {
+    pub fn prepare(draft: SendMessageDraft, positions: &impl ReferencePositions) -> Self {
+        let addressed = AddressedPrincipals::derive(&draft.content, positions);
+        Self {
+            source_conversation: draft.source_conversation,
+            target_conversation: draft.target_conversation,
+            actor: draft.actor,
+            content: draft.content,
+            destination: draft.destination,
+            attachment_refs: draft.attachment_refs,
+            addressed,
+            freshness_bypass: draft.freshness_bypass,
+        }
+    }
+
+    pub fn source_conversation(&self) -> &ConversationId {
+        &self.source_conversation
+    }
+
+    pub fn target_conversation(&self) -> &ConversationId {
+        &self.target_conversation
+    }
+
+    pub fn actor(&self) -> &SendActor {
+        &self.actor
+    }
+
+    pub fn content(&self) -> &MessageContent {
+        &self.content
+    }
+
+    pub fn destination(&self) -> &SendDestination {
+        &self.destination
+    }
+
+    pub fn attachment_refs(&self) -> &[attachments::AttachmentRef] {
+        &self.attachment_refs
+    }
+
+    pub fn addressed(&self) -> &AddressedPrincipals {
+        &self.addressed
+    }
+
+    pub fn freshness_bypass(&self) -> bool {
+        self.freshness_bypass
+    }
 }
 
 /// The single business fact of one committed send. Both the acknowledgement and
@@ -693,6 +867,64 @@ mod tests {
         SendActor::Agent(AgentId::parse("agent-1").unwrap())
     }
 
+    fn draft(content: MessageContent) -> SendMessageDraft {
+        SendMessageDraft {
+            source_conversation: conversation(),
+            target_conversation: conversation(),
+            actor: agent(),
+            content,
+            destination: SendDestination::MainLine,
+            attachment_refs: Vec::new(),
+            freshness_bypass: false,
+        }
+    }
+
+    /// A stand-in position rule: every `<…>` run, wherever it sits. The product
+    /// rule is Markdown structure — an autolink in prose, never quoted syntax —
+    /// and lives outside this crate; this one exists to exercise the half that IS
+    /// decided here, which is identity.
+    struct EveryBracketedRun;
+
+    impl ReferencePositions for EveryBracketedRun {
+        fn autolink_spans(&self, content: &MessageContent) -> Vec<Range<usize>> {
+            let body = content.as_str();
+            let mut spans = Vec::new();
+            let mut cursor = 0;
+            while let Some(open) = body[cursor..].find('<') {
+                let open = cursor + open;
+                let Some(close) = body[open..].find('>') else {
+                    break;
+                };
+                let close = open + close;
+                spans.push(open..close + 1);
+                cursor = close + 1;
+            }
+            spans
+        }
+    }
+
+    /// A position rule that points wherever it likes, to show what a lying one can
+    /// and cannot do.
+    struct SpansOf(Vec<Range<usize>>);
+
+    impl ReferencePositions for SpansOf {
+        fn autolink_spans(&self, _content: &MessageContent) -> Vec<Range<usize>> {
+            self.0.clone()
+        }
+    }
+
+    fn addressed_of(
+        body: &str,
+        positions: &impl ReferencePositions,
+    ) -> Vec<(PrincipalKind, String)> {
+        let content = MessageContent::parse(body).unwrap();
+        SendMessage::prepare(draft(content), positions)
+            .addressed()
+            .iter()
+            .map(|reference| (reference.kind(), reference.handle().to_owned()))
+            .collect()
+    }
+
     /// A unit of work that records whether it was ever asked to write.
     #[derive(Default)]
     struct CountingUnitOfWork {
@@ -733,16 +965,7 @@ mod tests {
 
         if let Ok(content) = MessageContent::parse(&oversized) {
             let _ = unit
-                .send_message(SendMessage {
-                    source_conversation: conversation(),
-                    target_conversation: conversation(),
-                    actor: agent(),
-                    content,
-                    destination: SendDestination::MainLine,
-                    attachment_refs: Vec::new(),
-                    references: Vec::new(),
-                    freshness_bypass: false,
-                })
+                .send_message(SendMessage::prepare(draft(content), &EveryBracketedRun))
                 .await;
         }
 
@@ -1013,5 +1236,92 @@ mod tests {
         };
 
         assert_eq!(refusal.attachment_id().as_str(), "att-1");
+    }
+
+    /// The counter-example B1 asks for: a body that addresses nobody cannot be
+    /// prepared into a command that addresses someone, whatever the position rule
+    /// claims — identity is read from the body's own bytes.
+    #[test]
+    fn a_body_that_names_nobody_addresses_nobody() {
+        let body = "hello, nothing to see here";
+        let every_span = (0..body.len()).map(|start| start..body.len()).collect();
+
+        assert!(addressed_of(body, &SpansOf(every_span)).is_empty());
+        assert!(addressed_of(body, &EveryBracketedRun).is_empty());
+    }
+
+    /// A span that is not a whole bracketed destination of this body addresses
+    /// nobody either: the derivation checks the bytes it was pointed at.
+    #[test]
+    fn a_span_that_is_not_a_destination_addresses_nobody() {
+        let body = "see <silverhand://agent/Alice> for details";
+        let inner = body.find("silverhand").unwrap();
+        let partial = std::iter::once(inner..inner + 4).collect();
+        let out_of_range = std::iter::once(body.len()..body.len() + 40).collect();
+
+        assert!(addressed_of(body, &SpansOf(partial)).is_empty());
+        assert!(addressed_of(body, &SpansOf(out_of_range)).is_empty());
+    }
+
+    #[test]
+    fn a_destination_is_read_as_kind_and_handle() {
+        let addressed = addressed_of(
+            "<silverhand://agent/Alice> and <silverhand://human/shiki>",
+            &EveryBracketedRun,
+        );
+
+        assert_eq!(
+            addressed,
+            vec![
+                (PrincipalKind::Agent, "Alice".to_owned()),
+                (PrincipalKind::Human, "shiki".to_owned()),
+            ]
+        );
+    }
+
+    /// Deduplicated, in first-occurrence order, and the two kinds are different
+    /// principals even under one name.
+    #[test]
+    fn repeats_collapse_and_the_first_position_decides_the_order() {
+        let addressed = addressed_of(
+            "<silverhand://human/shiki> <silverhand://agent/Alice> <silverhand://human/shiki> \
+             <silverhand://agent/shiki>",
+            &EveryBracketedRun,
+        );
+
+        assert_eq!(
+            addressed,
+            vec![
+                (PrincipalKind::Human, "shiki".to_owned()),
+                (PrincipalKind::Agent, "Alice".to_owned()),
+                (PrincipalKind::Agent, "shiki".to_owned()),
+            ]
+        );
+    }
+
+    /// Everything that is not exactly a reference destination addresses nobody.
+    #[test]
+    fn a_destination_outside_the_grammar_addresses_nobody() {
+        for body in [
+            "<SILVERHAND://agent/Alice>",
+            "<silverhand://Agent/Alice>",
+            "<silverhand://agent/Alice/extra>",
+            "<silverhand://agent/Alice?x=1>",
+            "<silverhand://agent/>",
+            "<silverhand://agent/1Alice>",
+            "<silverhand://agent/Alice.Bob>",
+            "<silverhand://team/Alice>",
+            "<https://example.com/agent/Alice>",
+        ] {
+            assert!(
+                addressed_of(body, &EveryBracketedRun).is_empty(),
+                "{body} addressed someone"
+            );
+        }
+
+        let too_long = format!("<silverhand://agent/a{}>", "b".repeat(64));
+        assert!(addressed_of(&too_long, &EveryBracketedRun).is_empty());
+        let longest_allowed = format!("<silverhand://agent/a{}>", "b".repeat(63));
+        assert_eq!(addressed_of(&longest_allowed, &EveryBracketedRun).len(), 1);
     }
 }

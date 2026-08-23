@@ -81,11 +81,36 @@ const SELECT_CLUSTER_HISTORY: &str = "SELECT id, from_kind, from_agent_id FROM m
 const ENSURE_INBOX_DELIVERY: &str = "INSERT INTO conversation_inboxes (conversation_id, agent_id, \
      message_id, delivered_at, delivery_kind, created_at) VALUES (?, ?, ?, NULL, ?, ?) ON \
      CONFLICT(conversation_id, agent_id, message_id) DO NOTHING";
-/// Follower rows are not authority over who may read a cluster; they are candidates
-/// that participation and liveness still have to accept. Ordered so the answer does
-/// not depend on which rows happen to share a timestamp.
-const SELECT_CLUSTER_FOLLOWER_AGENTS: &str = "SELECT principal_id FROM thread_followers WHERE \
-     thread_root_id = ? AND principal_kind = 'agent' ORDER BY followed_at ASC, principal_id ASC";
+/// Who a cluster's reply is for, as ONE set-shaped read. The follower rows for this
+/// root bound the candidates, `JOIN agents` is the liveness conjunct, and the
+/// placement predicate is correlated on each candidate's own id. Follower rows are
+/// not authority over who may read a cluster — they are candidates participation
+/// and liveness still have to accept — and they outlive both, so asking per
+/// follower would put two point queries per row inside the writer's reservation
+/// while the set itself grows with the cluster's history.
+///
+/// This is the SECOND text expressing one participation rule (the write gate holds
+/// the point form), which is a real cost paid deliberately: a differential test
+/// drives both across the placement arms, liveness, and lingering followers, and a
+/// plan test keeps the candidate set bounded by the root rather than by the
+/// installation.
+macro_rules! cluster_audience_sql {
+    () => {
+        "SELECT tf.principal_id FROM thread_followers tf JOIN conversations c ON c.id = \
+         tf.conversation_id JOIN agents a ON a.id = tf.principal_id WHERE tf.thread_root_id = ? \
+         AND tf.principal_kind = 'agent' AND ((c.placement_kind = 'workspace' AND EXISTS (SELECT 1 \
+         FROM conversation_agents ca WHERE ca.conversation_id = c.id AND ca.agent_id = a.id)) OR \
+         (c.placement_kind = 'direct_pair' AND ((c.endpoint_a_kind = 'agent' AND c.endpoint_a_id = \
+         a.id) OR (c.endpoint_b_kind = 'agent' AND c.endpoint_b_id = a.id)))) ORDER BY \
+         tf.followed_at ASC, tf.principal_id ASC"
+    };
+}
+
+const SELECT_CLUSTER_AUDIENCE: &str = cluster_audience_sql!();
+/// The same statement, asked about its own plan, so the bound cannot be asserted
+/// against a paraphrase.
+#[cfg(test)]
+const EXPLAIN_CLUSTER_AUDIENCE: &str = concat!("EXPLAIN QUERY PLAN ", cluster_audience_sql!());
 const SELECT_ATTACHMENT_SOURCE: &str =
     "SELECT id, channel_id, filename, size, content_type FROM attachments WHERE id = ?";
 const SELECT_AGENT_SESSION_SCOPE: &str = "SELECT session_scope FROM agents WHERE id = ?";
@@ -243,8 +268,8 @@ impl<E> MessagingStore<E> {
 
 impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
     #[tracing::instrument(skip(self, command), fields(
-        target_conversation = command.target_conversation.as_str(),
-        content_bytes = command.content.byte_length(),
+        target_conversation = command.target_conversation().as_str(),
+        content_bytes = command.content().byte_length(),
     ))]
     async fn send_message_transaction(
         &self,
@@ -300,9 +325,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     ) -> Result<MessageCreatedFact, SendMessageError> {
         // The sender's own binding must still exist. Read for existence only: what
         // the send is authorized against is the target.
-        if command.source_conversation != command.target_conversation
+        if command.source_conversation() != command.target_conversation()
             && self
-                .conversation_facts(&command.source_conversation)
+                .conversation_facts(command.source_conversation())
                 .await?
                 .is_none()
         {
@@ -310,19 +335,19 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         }
 
         let facts =
-            messaging::assert_post_authority(self, &command.target_conversation, &command.actor)
+            messaging::assert_post_authority(self, command.target_conversation(), command.actor())
                 .await?;
 
         let thread_root = self
-            .resolve_thread_root(&facts.id, &command.destination)
+            .resolve_thread_root(&facts.id, command.destination())
             .await?;
         let snapshots = self
-            .resolve_attachments(&facts.id, &command.attachment_refs)
+            .resolve_attachments(&facts.id, command.attachment_refs())
             .await?;
         let freshness_bypassed = self.assert_fresh(&command, &facts.id).await?;
 
         let seq = self.reserve_next_seq(&facts.id).await?;
-        let author = self.author_snapshot(&command.actor).await?;
+        let author = self.author_snapshot(command.actor()).await?;
         let message = self
             .insert_message(
                 &command,
@@ -351,9 +376,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                     // Counted after the insert, so the reported total already
                     // includes this reply and is never a value from the future.
                     reply_count: self.count_thread_replies(&facts.id, root).await?,
-                    audience: self
-                        .cluster_audience(&facts.id, root, &command.actor)
-                        .await?,
+                    audience: self.cluster_audience(root, command.actor()).await?,
                 })
             }
         };
@@ -476,7 +499,8 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         target: &ConversationId,
     ) -> Result<bool, SendMessageError> {
         let agent =
-            match messaging::freshness::freshness_gate(&command.actor, command.freshness_bypass) {
+            match messaging::freshness::freshness_gate(command.actor(), command.freshness_bypass())
+            {
                 FreshnessGate::NotApplicable => return Ok(false),
                 FreshnessGate::Bypassed => return Ok(true),
                 FreshnessGate::Check(agent) => agent,
@@ -500,7 +524,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         // what this runtime has not yet consumed, not about where it is writing.
         let undelivered: Option<i64> = match scope {
             RuntimeScope::Conversation => sqlx::query_scalar(SELECT_UNDELIVERED_IN_CONVERSATION)
-                .bind(command.source_conversation.as_str())
+                .bind(command.source_conversation().as_str())
                 .bind(agent.as_str())
                 .fetch_optional(&mut *self.tx)
                 .await
@@ -583,7 +607,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         attachments: Vec<AttachmentSnapshot>,
     ) -> Result<CreatedMessage, SendMessageError> {
         let metadata = metadata_json(&attachments)?;
-        let (from_kind, agent_id, user_id) = match &command.actor {
+        let (from_kind, agent_id, user_id) = match command.actor() {
             SendActor::Agent(agent) => (FROM_KIND_AGENT, Some(agent.as_str()), None),
             SendActor::User(user) => (FROM_KIND_USER, None, Some(user.as_str())),
         };
@@ -594,7 +618,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .bind(from_kind)
             .bind(agent_id)
             .bind(user_id)
-            .bind(command.content.as_str())
+            .bind(command.content().as_str())
             .bind(metadata)
             .bind(seq.get())
             .bind(created_at_ms)
@@ -614,17 +638,17 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         Ok(CreatedMessage {
             id,
             conversation_id: conversation.clone(),
-            from_kind: command.actor.from_kind(),
-            from_agent_id: match &command.actor {
+            from_kind: command.actor().from_kind(),
+            from_agent_id: match command.actor() {
                 SendActor::Agent(agent) => Some(agent.clone()),
                 SendActor::User(_) => None,
             },
-            from_user_id: match &command.actor {
+            from_user_id: match command.actor() {
                 SendActor::User(user) => Some(user.clone()),
                 SendActor::Agent(_) => None,
             },
             author,
-            content: command.content.clone(),
+            content: command.content().clone(),
             attachments,
             seq,
             created_at_ms,
@@ -679,7 +703,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         self.follow_actor(
             conversation,
             root,
-            &command.actor,
+            command.actor(),
             ThreadFollowerSource::Reply,
             current_seq,
             followed_at_ms,
@@ -704,22 +728,22 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             }
         }
 
-        for reference in &command.references {
+        for reference in command.addressed().iter() {
             // The reference's own kind decides which namespace answers for the
             // handle: a human reference must never resolve to an agent of the same
             // name.
-            let statement = match reference.kind {
+            let statement = match reference.kind() {
                 PrincipalKind::Agent => SELECT_AGENT_ID_BY_NAME,
                 PrincipalKind::Human => SELECT_USER_ID_BY_NAME,
             };
             let resolved: Option<String> = sqlx::query_scalar(statement)
-                .bind(&reference.handle)
+                .bind(reference.handle())
                 .fetch_optional(&mut *self.tx)
                 .await
                 .map_err(driver)?;
             let Some(resolved) = resolved else { continue };
 
-            let addressed = actor_of(reference.kind, resolved)?;
+            let addressed = actor_of(reference.kind(), resolved)?;
             self.follow_actor(
                 conversation,
                 root,
@@ -865,45 +889,35 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         Ok(())
     }
 
-    /// Who this reply is for: the cluster's follower agents, narrowed by the same
-    /// participation and liveness questions the follow path asks, minus the sender —
-    /// nobody is delivered their own message. Read here because the answer must
-    /// include the followers this transaction just created.
+    /// Who this reply is for: the cluster's follower agents that still participate
+    /// and still exist, minus the sender — nobody is delivered their own message.
+    /// Read here because the answer must include the followers this transaction
+    /// just created.
     async fn cluster_audience(
         &mut self,
-        conversation: &ConversationId,
         root: &ThreadRootId,
         actor: &SendActor,
     ) -> Result<Vec<messaging::AgentId>, SendMessageError> {
-        let rows: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_FOLLOWER_AGENTS)
+        let rows: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_AUDIENCE)
             .bind(root.as_str())
             .fetch_all(&mut *self.tx)
             .await
             .map_err(driver)?;
 
         let sender = match actor {
-            SendActor::Agent(agent) => Some(agent.clone()),
+            SendActor::Agent(agent) => Some(agent.as_str()),
             SendActor::User(_) => None,
         };
-        let mut audience = Vec::with_capacity(rows.len());
-        for candidate in rows {
-            let candidate = messaging::AgentId::parse(candidate).map_err(|_| {
-                infrastructure(MessagingStoreError::MalformedIdentity {
-                    field: "thread_followers.principal_id",
+        rows.into_iter()
+            .filter(|candidate| sender != Some(candidate.as_str()))
+            .map(|candidate| {
+                messaging::AgentId::parse(candidate).map_err(|_| {
+                    infrastructure(MessagingStoreError::MalformedIdentity {
+                        field: "thread_followers.principal_id",
+                    })
                 })
-            })?;
-            if sender.as_ref() == Some(&candidate) {
-                continue;
-            }
-            if !self.agent_exists(&candidate).await? {
-                continue;
-            }
-            if !self.is_agent_participant(conversation, &candidate).await? {
-                continue;
-            }
-            audience.push(candidate);
-        }
-        Ok(audience)
+            })
+            .collect()
     }
 
     async fn count_thread_replies(
@@ -1128,6 +1142,10 @@ fn metadata_json(attachments: &[AttachmentSnapshot]) -> Result<Option<String>, S
 }
 
 #[cfg(test)]
+#[path = "../../tests/support/current_schema_snapshot.rs"]
+mod current_schema;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1163,6 +1181,120 @@ mod tests {
 
         assert!(unix_ms_since_epoch(before_epoch).is_err());
         assert!(unix_ms_since_epoch(far_future).is_err());
+    }
+
+    /// The audience read must stay bounded by the cluster. A plan that scanned
+    /// `agents` would make every send cost the size of the installation, which is
+    /// exactly what the single statement exists to avoid.
+    #[tokio::test]
+    async fn the_audience_read_is_bounded_by_the_cluster_not_the_installation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("plan.sqlite");
+        let mut connection = super::current_schema::create_current_schema(&path).await;
+
+        let plan: Vec<String> = sqlx::query(EXPLAIN_CLUSTER_AUDIENCE)
+            .bind("root-1")
+            .fetch_all(&mut connection)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect();
+
+        let followers_bounded = plan.iter().any(|step| {
+            step.starts_with("SEARCH tf") || step.starts_with("SEARCH thread_followers")
+        });
+        assert!(
+            followers_bounded,
+            "the cluster's follower rows were not searched by root: {plan:?}"
+        );
+        for step in &plan {
+            assert!(
+                !step.starts_with("SCAN a") && !step.starts_with("SCAN agents"),
+                "the plan scans every agent in the installation: {plan:?}"
+            );
+            assert!(
+                !step.starts_with("SCAN tf"),
+                "the plan scans every follower row: {plan:?}"
+            );
+        }
+    }
+
+    /// The one cell the send path cannot reach: a follower row that names an agent
+    /// whose row is gone, on a placement whose participation is named by the
+    /// conversation row rather than by a roster with a foreign key. Participation
+    /// says yes and existence says no, and the two texts have to agree that the
+    /// answer is no — a delivery row for a principal that does not exist cannot be
+    /// written at all. Reached directly because a survivor's further sends into such
+    /// a pair are refused, so no send can observe it.
+    #[tokio::test]
+    async fn the_two_participation_texts_agree_when_a_follower_no_longer_exists() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("liveness.sqlite");
+        let mut db = super::current_schema::create_current_schema(&path).await;
+
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
+             'human', 'Human', 0, 0)",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+             display_name, created_by_user_id) VALUES ('agent-gone', 'gone', 'claude', 'host-1', \
+             0, 0, 'Gone', 'user-1')",
+            "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
+             endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, \
+             updated_at) VALUES ('pair-1', 'direct_pair', 'fixed', 'DM', 'open', 'agent', \
+             'agent-gone', 'human', 'user-1', 0, 0)",
+            "INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at) \
+             VALUES ('root-000000000000', 'pair-1', 'system', 'anchor', 1, 0)",
+            "INSERT INTO thread_followers (thread_root_id, conversation_id, principal_kind, \
+             principal_id, followed_at, source) VALUES ('root-000000000000', 'pair-1', 'agent', \
+             'agent-gone', 1, 'reply')",
+        ] {
+            sqlx::query(statement).execute(&mut db).await.unwrap();
+        }
+
+        let audience_before: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_AUDIENCE)
+            .bind("root-000000000000")
+            .fetch_all(&mut db)
+            .await
+            .unwrap();
+        assert_eq!(audience_before, vec!["agent-gone".to_owned()]);
+
+        // The agents row goes; the pair still names the same id as its endpoint,
+        // because that column is not a foreign key.
+        sqlx::query("DELETE FROM agents WHERE id = 'agent-gone'")
+            .execute(&mut db)
+            .await
+            .unwrap();
+
+        let participates: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
+            .bind("pair-1")
+            .bind("agent-gone")
+            .bind("agent-gone")
+            .bind("agent-gone")
+            .fetch_optional(&mut db)
+            .await
+            .unwrap();
+        let exists: Option<i64> = sqlx::query_scalar(SELECT_AGENT_EXISTS)
+            .bind("agent-gone")
+            .fetch_optional(&mut db)
+            .await
+            .unwrap();
+        let audience_after: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_AUDIENCE)
+            .bind("root-000000000000")
+            .fetch_all(&mut db)
+            .await
+            .unwrap();
+
+        assert!(
+            participates.is_some(),
+            "the pair stopped naming its endpoint"
+        );
+        assert!(exists.is_none());
+        assert!(
+            audience_after.is_empty(),
+            "the audience kept an agent that no longer exists"
+        );
     }
 
     #[tokio::test]

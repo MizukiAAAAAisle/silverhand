@@ -6,9 +6,9 @@
 
 use silverhand_backend_core::messaging::{
     ActorRefusal, AgentId, AttachmentId, ConversationId, ConversationRefusal,
-    EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent, MessageId, MessageReference,
-    MessageSeq, PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination,
-    SendEntropy, SendMessage, SendMessageError, SendMessageUnitOfWork, ThreadRootId,
+    EnvironmentUnavailable, MAX_MESSAGE_CONTENT_BYTES, MessageContent, MessageId, MessageSeq,
+    ReferencePositions, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
+    SendMessage, SendMessageDraft, SendMessageError, SendMessageUnitOfWork, ThreadRootId,
     ThreadRootRefusal, UserId, attachments::AttachmentRef, environment::OsEntropy,
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
@@ -304,41 +304,67 @@ fn user_actor() -> SendActor {
     SendActor::User(UserId::parse(USER_ID).unwrap())
 }
 
-fn send(actor: SendActor, conversation: &str, content: &str) -> SendMessage {
-    SendMessage {
+/// A stand-in position rule: every `<…>` run, wherever it sits. The product rule is
+/// Markdown structure — an autolink in prose, never quoted syntax or someone else's
+/// quoted words — and is not implemented yet; what these tests exercise is the
+/// identity half, which is read from the body's own bytes.
+struct EveryBracketedRun;
+
+impl ReferencePositions for EveryBracketedRun {
+    fn autolink_spans(&self, content: &MessageContent) -> Vec<std::ops::Range<usize>> {
+        let body = content.as_str();
+        let mut spans = Vec::new();
+        let mut cursor = 0;
+        while let Some(open) = body[cursor..].find('<') {
+            let open = cursor + open;
+            let Some(close) = body[open..].find('>') else {
+                break;
+            };
+            let close = open + close;
+            spans.push(open..close + 1);
+            cursor = close + 1;
+        }
+        spans
+    }
+}
+
+fn draft(actor: SendActor, conversation: &str, content: &str) -> SendMessageDraft {
+    SendMessageDraft {
         source_conversation: ConversationId::parse(conversation).unwrap(),
         target_conversation: ConversationId::parse(conversation).unwrap(),
         actor,
         content: MessageContent::parse(content).unwrap(),
         destination: SendDestination::MainLine,
         attachment_refs: Vec::new(),
-        references: Vec::new(),
         freshness_bypass: false,
     }
 }
 
-fn addressing(kind: PrincipalKind, handle: &str, command: SendMessage) -> SendMessage {
-    SendMessage {
-        references: vec![MessageReference {
-            kind,
-            handle: handle.to_owned(),
-        }],
-        ..command
-    }
+fn prepared(draft: SendMessageDraft) -> SendMessage {
+    SendMessage::prepare(draft, &EveryBracketedRun)
+}
+
+fn send(actor: SendActor, conversation: &str, content: &str) -> SendMessage {
+    prepared(draft(actor, conversation, content))
+}
+
+/// The body a reply carries when it addresses the second agent by name.
+fn addressing_broad(body: &str) -> String {
+    format!("<silverhand://agent/broad> {body}")
 }
 
 fn reply_to(actor: SendActor, conversation: &str, content: &str, target: &str) -> SendMessage {
-    SendMessage {
+    prepared(SendMessageDraft {
         destination: SendDestination::Reply(MessageId::parse(target).unwrap()),
-        ..send(actor, conversation, content)
-    }
+        ..draft(actor, conversation, content)
+    })
 }
 
 fn into_thread(actor: SendActor, conversation: &str, content: &str, root: &str) -> SendMessage {
-    SendMessage {
+    prepared(SendMessageDraft {
         destination: SendDestination::Thread(ThreadRootId::parse(root).unwrap()),
-        ..send(actor, conversation, content)
-    }
+        ..draft(actor, conversation, content)
+    })
 }
 
 fn root_cause(error: &(dyn Error + 'static)) -> String {
@@ -787,11 +813,13 @@ async fn a_human_needs_the_seat_and_the_workspace_membership() {
 #[tokio::test]
 async fn an_attachment_of_another_channel_is_refused_and_nothing_is_written() {
     let mut fixture = Fixture::new().await;
-    let mut command = send(user_actor(), CHANNEL_ID, "look at this");
-    command.attachment_refs = vec![AttachmentRef {
-        id: AttachmentId::parse("att-elsewhere").unwrap(),
-        label: None,
-    }];
+    let command = prepared(SendMessageDraft {
+        attachment_refs: vec![AttachmentRef {
+            id: AttachmentId::parse("att-elsewhere").unwrap(),
+            label: None,
+        }],
+        ..draft(user_actor(), CHANNEL_ID, "look at this")
+    });
 
     let error = fixture
         .store()
@@ -808,11 +836,13 @@ async fn an_attachment_of_another_channel_is_refused_and_nothing_is_written() {
 #[tokio::test]
 async fn an_accepted_attachment_is_stored_as_a_snapshot_in_the_message_metadata() {
     let mut fixture = Fixture::new().await;
-    let mut command = send(user_actor(), CHANNEL_ID, "with a file");
-    command.attachment_refs = vec![AttachmentRef {
-        id: AttachmentId::parse("att-here").unwrap(),
-        label: Some("File #1".to_owned()),
-    }];
+    let command = prepared(SendMessageDraft {
+        attachment_refs: vec![AttachmentRef {
+            id: AttachmentId::parse("att-here").unwrap(),
+            label: Some("File #1".to_owned()),
+        }],
+        ..draft(user_actor(), CHANNEL_ID, "with a file")
+    });
 
     let fact = fixture.store().await.send_message(command).await.unwrap();
 
@@ -919,8 +949,10 @@ async fn sending_anyway_lands_and_records_that_the_guard_was_skipped() {
         .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message.id.as_str(), None)
         .await;
 
-    let mut command = send(agent_actor(), CHANNEL_ID, "anyway");
-    command.freshness_bypass = true;
+    let command = prepared(SendMessageDraft {
+        freshness_bypass: true,
+        ..draft(agent_actor(), CHANNEL_ID, "anyway")
+    });
     let fact = store.send_message(command).await.unwrap();
 
     assert!(fact.freshness_bypassed);
@@ -1281,10 +1313,11 @@ async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
         .unwrap();
 
     let mentioning = store
-        .send_message(addressing(
-            PrincipalKind::Agent,
-            "broad",
-            reply_to(agent_actor(), CHANNEL_ID, "broad, look", &root_id),
+        .send_message(reply_to(
+            agent_actor(),
+            CHANNEL_ID,
+            &addressing_broad("look"),
+            &root_id,
         ))
         .await
         .unwrap();
@@ -1325,19 +1358,21 @@ async fn following_a_cluster_twice_queues_its_history_once() {
     let root_id = root.message.id.as_str().to_owned();
 
     store
-        .send_message(addressing(
-            PrincipalKind::Agent,
-            "broad",
-            reply_to(user_actor(), CHANNEL_ID, "broad?", &root_id),
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            &addressing_broad("are you there"),
+            &root_id,
         ))
         .await
         .unwrap();
     let after_first = fixture.queued_for(BROAD_AGENT_ID).await;
     store
-        .send_message(addressing(
-            PrincipalKind::Agent,
-            "broad",
-            reply_to(user_actor(), CHANNEL_ID, "broad, again", &root_id),
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            &addressing_broad("again"),
+            &root_id,
         ))
         .await
         .unwrap();
@@ -1359,10 +1394,11 @@ async fn a_reference_to_a_non_participant_follows_nobody() {
     let root_id = root.message.id.as_str().to_owned();
 
     store
-        .send_message(addressing(
-            PrincipalKind::Agent,
-            "outsider",
-            reply_to(user_actor(), CHANNEL_ID, "outsider, see this", &root_id),
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            "<silverhand://agent/outsider> see this",
+            &root_id,
         ))
         .await
         .unwrap();
@@ -1390,10 +1426,11 @@ async fn a_reference_resolves_only_in_the_namespace_its_kind_names() {
     let root_id = root.message.id.as_str().to_owned();
 
     store
-        .send_message(addressing(
-            PrincipalKind::Human,
-            "broad",
-            reply_to(user_actor(), CHANNEL_ID, "a person named broad?", &root_id),
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            "<silverhand://human/broad> a person by that name?",
+            &root_id,
         ))
         .await
         .unwrap();
@@ -1457,10 +1494,11 @@ async fn the_audience_is_the_cluster_followers_minus_the_sender() {
     let root_id = root.message.id.as_str().to_owned();
 
     let by_human = store
-        .send_message(addressing(
-            PrincipalKind::Agent,
-            "broad",
-            reply_to(user_actor(), CHANNEL_ID, "broad, and lio", &root_id),
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            &addressing_broad("and lio"),
+            &root_id,
         ))
         .await
         .unwrap();
@@ -1514,10 +1552,11 @@ async fn a_failed_reply_leaves_no_follower_and_no_queued_history() {
         .await;
 
     let error = store
-        .send_message(addressing(
-            PrincipalKind::Agent,
-            "broad",
-            reply_to(user_actor(), CHANNEL_ID, "broad, look", &root_id),
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            &addressing_broad("look"),
+            &root_id,
         ))
         .await
         .unwrap_err();
@@ -1532,4 +1571,188 @@ async fn a_failed_reply_leaves_no_follower_and_no_queued_history() {
     // The reply itself is gone with them, and so is the ordinal it took.
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+}
+
+/// A body that names nobody addresses nobody, end to end: the same handle written
+/// as prose rather than as a destination creates no follower and reaches no
+/// audience. The prepared command cannot say otherwise, because there is no way to
+/// give it a reference the body does not contain.
+#[tokio::test]
+async fn a_plain_handle_in_prose_addresses_nobody() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    let fact = store
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            "broad, look at this",
+            &root_id,
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        !fixture
+            .followers(&root_id)
+            .await
+            .iter()
+            .any(|(_, id, _)| id == BROAD_AGENT_ID)
+    );
+    let audience: Vec<&str> = fact
+        .thread
+        .as_ref()
+        .unwrap()
+        .audience
+        .iter()
+        .map(AgentId::as_str)
+        .collect();
+    assert_eq!(audience, vec![AGENT_ID]);
+}
+
+/// Plants a follower row the send path would never write, so the audience read can
+/// be asked about a candidate the write gate refuses.
+async fn plant_follower(fixture: &mut Fixture, root: &str, conversation: &str, agent: &str) {
+    sqlx::query(
+        "INSERT INTO thread_followers (thread_root_id, conversation_id, principal_kind, \
+         principal_id, followed_at, source) VALUES (?, ?, 'agent', ?, 1, 'manual')",
+    )
+    .bind(root)
+    .bind(conversation)
+    .bind(agent)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+}
+
+async fn audience_of_next_reply(
+    store: &MessagingStore,
+    conversation: &str,
+    root: &str,
+) -> Vec<String> {
+    store
+        .send_message(reply_to(user_actor(), conversation, "and again", root))
+        .await
+        .unwrap()
+        .thread
+        .unwrap()
+        .audience
+        .iter()
+        .map(|agent| agent.as_str().to_owned())
+        .collect()
+}
+
+/// The audience read and the write gate answer the same participation question on a
+/// workspace channel, cell by cell: a participant is in and is followed, a
+/// non-participant is neither even when a follower row names them, and a follower
+/// row that outlived its participation is refused by both.
+#[tokio::test]
+async fn the_audience_and_the_write_gate_agree_on_a_channel() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+    store
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            &addressing_broad("join us"),
+            &root_id,
+        ))
+        .await
+        .unwrap();
+
+    // participant, live: followed by the gate, present in the audience.
+    assert!(
+        fixture
+            .followers(&root_id)
+            .await
+            .iter()
+            .any(|(_, id, _)| id == BROAD_AGENT_ID)
+    );
+    assert_eq!(
+        audience_of_next_reply(&store, CHANNEL_ID, &root_id).await,
+        vec![AGENT_ID.to_owned(), BROAD_AGENT_ID.to_owned()]
+    );
+
+    // not a participant, live: the gate refuses to follow it, and a planted row
+    // does not get it into the audience either.
+    plant_follower(&mut fixture, &root_id, CHANNEL_ID, OUTSIDER_AGENT_ID).await;
+    assert_eq!(
+        audience_of_next_reply(&store, CHANNEL_ID, &root_id).await,
+        vec![AGENT_ID.to_owned(), BROAD_AGENT_ID.to_owned()],
+        "a follower row admitted a non-participant"
+    );
+
+    // participation revoked, follower row left behind: refused by both faces.
+    fixture
+        .execute(
+            "DELETE FROM conversation_agents WHERE conversation_id = 'conv-1' AND agent_id = \
+             'agent-2'",
+        )
+        .await;
+    assert_eq!(
+        audience_of_next_reply(&store, CHANNEL_ID, &root_id).await,
+        vec![AGENT_ID.to_owned()],
+        "a lingering follower stayed in the audience after losing participation"
+    );
+    fixture
+        .execute("DELETE FROM thread_followers WHERE principal_id = 'agent-2'")
+        .await;
+    store
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            &addressing_broad("still there?"),
+            &root_id,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        !fixture
+            .followers(&root_id)
+            .await
+            .iter()
+            .any(|(_, id, _)| id == BROAD_AGENT_ID),
+        "the gate followed an agent that no longer participates"
+    );
+}
+
+/// The same agreement on a direct pair, where participation is named by the row
+/// rather than by a roster: the endpoint agent is in without any roster row, and a
+/// planted follower that is not an endpoint stays out.
+#[tokio::test]
+async fn the_audience_and_the_write_gate_agree_on_a_direct_pair() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), PAIR_ID, "in the pair"))
+        .await
+        .unwrap();
+    let root_id = root.message.id.as_str().to_owned();
+
+    let audience = audience_of_next_reply(&store, PAIR_ID, &root_id).await;
+    assert_eq!(audience, vec![AGENT_ID.to_owned()]);
+    assert!(
+        fixture
+            .followers(&root_id)
+            .await
+            .iter()
+            .any(|(kind, id, _)| kind == "agent" && id == AGENT_ID)
+    );
+
+    plant_follower(&mut fixture, &root_id, PAIR_ID, OUTSIDER_AGENT_ID).await;
+    assert_eq!(
+        audience_of_next_reply(&store, PAIR_ID, &root_id).await,
+        vec![AGENT_ID.to_owned()],
+        "a planted follower entered a pair it is not an endpoint of"
+    );
 }
