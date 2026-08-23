@@ -20,10 +20,10 @@ use silverhand_backend_core::messaging::{
     MessageContent, MessageId, MessageSeq, PrincipalKind, ReferencePositions, ReplyTargetRefusal,
     SendActor, SendClock, SendDestination, SendEntropy, SendMessage, SendMessageDraft,
     SendMessageError, SendMessageUnitOfWork, ThreadRootId, ThreadRootRefusal, UserId,
-    attachments::AttachmentRef, environment::OsEntropy,
+    attachments::AttachmentRef,
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::messaging::{HostEnvironment, MessagingStore};
 use sqlx::{Row, SqliteConnection};
 use std::{
     error::Error,
@@ -1230,7 +1230,7 @@ impl SendClock for BrokenClock {
 
 impl SendEntropy for BrokenClock {
     fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
-        OsEntropy.fill(buffer)
+        HostEnvironment.fill(buffer)
     }
 }
 
@@ -1305,7 +1305,7 @@ impl SendEntropy for EntropyExhaustedAfter {
         if self.calls.fetch_add(1, Ordering::SeqCst) >= self.allowance {
             return Err(EnvironmentUnavailable::from_source(Withdrawn));
         }
-        OsEntropy.fill(buffer)
+        HostEnvironment.fill(buffer)
     }
 }
 
@@ -2725,7 +2725,7 @@ impl SendClock for SteppingClock {
 
 impl SendEntropy for SteppingClock {
     fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
-        OsEntropy.fill(buffer)
+        HostEnvironment.fill(buffer)
     }
 }
 
