@@ -11,9 +11,12 @@
 //! it requires. The product paths therefore remain unreachable in a running server, and
 //! no parity may be claimed from this file's existence.
 //!
-//! **NOR IS IT COMPLETE.** A COMMITTED send has no acknowledgement to answer with yet —
-//! see [`outcome_not_projected`] for what happens instead and why it is not dressed up as
-//! a contract. A send that FAILED is projected properly, by [`super::outcome`].
+//! Every outcome has an answer, and each door answers its OWN: a person's committed send
+//! becomes 201 and the acknowledgement ([`super::ack`]), a runtime's becomes 200 and the flat
+//! coordinate report ([`super::agent_output`]), and a failed one becomes its refusal
+//! ([`super::outcome`]). What is still missing is only the composition — no root builds this
+//! and no middleware supplies the principals it reads — so the paths remain unreachable in a
+//! running server.
 //!
 //! IDENTITY ARRIVES ALREADY AUTHENTICATED. A parent authentication middleware verifies
 //! the caller and injects a request-scoped principal fact; a handler here only READS
@@ -30,16 +33,18 @@ use axum::{
     routing::post,
 };
 use silverhand_backend_core::messaging::{
-    AgentId, ConversationId, DirectLineAuthority, SendMessageUnitOfWork, UserId,
+    ConversationId, DirectLineAuthority, SendMessageOutcome, SendMessageUnitOfWork, UserId,
 };
 use std::sync::Arc;
 
 use super::{
+    ack::send_ack,
     adapters::{
-        AgentRefusal, ChannelAccess, ChannelAccessRefusal, HumanRefusal, SendPorts, TargetAccess,
-        TargetRefusal, agent_send, human_send,
+        AddressRefusal, AgentCredential, AgentRefusal, ChannelAccess, ChannelAccessRefusal,
+        HumanRefusal, SendCapability, SendPorts, TargetAddress, agent_send, human_send,
     },
     admission::PayloadRefusal,
+    agent_output::agent_send_output,
     envelope::fence_message_send_body,
     outcome::refused_send,
     references::MarkdownReferencePositions,
@@ -55,18 +60,6 @@ use super::{
 #[derive(Clone, Debug)]
 pub struct HumanPrincipal(pub UserId);
 
-/// The authenticated agent behind a request, with the conversation its credential lives
-/// in.
-///
-/// The source is part of the CREDENTIAL, not something to infer. An agent credential
-/// without one may not be turned into a send by guessing — not from the address, not
-/// from a default — so a composition that cannot supply it must refuse before the door.
-#[derive(Clone, Debug)]
-pub struct AgentPrincipal {
-    pub agent: AgentId,
-    pub source: ConversationId,
-}
-
 /// Everything the doors need, supplied by whoever composes them.
 ///
 /// THE POSITION RULE IS NOT HERE, and that is the point. Where a body may address from is
@@ -76,44 +69,47 @@ pub struct AgentPrincipal {
 /// canonical rule and offers no way to replace it. The trait seam still exists in the domain,
 /// where it lets the derivation be tested against a stand-in; a deployer is not a caller of
 /// that seam (@Cindy, review of `be14df01`).
-pub struct SendState<C, T, D, U> {
+pub struct SendState<C, T, K, D, U> {
     pub channel_access: C,
-    pub target_access: T,
+    pub target_address: T,
+    pub capability: K,
     pub authority: D,
     pub unit_of_work: U,
 }
 
 /// The product routes, on the paths the reference uses.
-pub fn send_router<C, T, D, U>(state: SendState<C, T, D, U>) -> Router
+pub fn send_router<C, T, K, D, U>(state: SendState<C, T, K, D, U>) -> Router
 where
     C: ChannelAccess + Send + Sync + 'static,
-    T: TargetAccess + Send + Sync + 'static,
+    T: TargetAddress + Send + Sync + 'static,
+    K: SendCapability + Send + Sync + 'static,
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
     Router::new()
         .route(
             "/api/channels/{id}/messages",
-            post(human_route::<C, T, D, U>),
+            post(human_route::<C, T, K, D, U>),
         )
         .route(
             "/internal/agents/{aid}/send-message",
-            post(agent_route::<C, T, D, U>),
+            post(agent_route::<C, T, K, D, U>),
         )
         .with_state(Arc::new(state))
         .layer(middleware::from_fn(fence_message_send_body))
 }
 
-type Shared<C, T, D, U> = State<Arc<SendState<C, T, D, U>>>;
+type Shared<C, T, K, D, U> = State<Arc<SendState<C, T, K, D, U>>>;
 
-async fn human_route<C, T, D, U>(
+async fn human_route<C, T, K, D, U>(
     Path(id): Path<String>,
-    State(state): Shared<C, T, D, U>,
+    State(state): Shared<C, T, K, D, U>,
     request: Request,
 ) -> Response
 where
     C: ChannelAccess + Send + Sync + 'static,
-    T: TargetAccess + Send + Sync + 'static,
+    T: TargetAddress + Send + Sync + 'static,
+    K: SendCapability + Send + Sync + 'static,
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
@@ -141,19 +137,20 @@ where
     )
     .await
     {
-        Ok(_) => outcome_not_projected("a committed human send"),
+        Ok(outcome) => created(&outcome),
         Err(refusal) => human_wire(refusal),
     }
 }
 
-async fn agent_route<C, T, D, U>(
+async fn agent_route<C, T, K, D, U>(
     Path(aid): Path<String>,
-    State(state): Shared<C, T, D, U>,
+    State(state): Shared<C, T, K, D, U>,
     request: Request,
 ) -> Response
 where
     C: ChannelAccess + Send + Sync + 'static,
-    T: TargetAccess + Send + Sync + 'static,
+    T: TargetAddress + Send + Sync + 'static,
+    K: SendCapability + Send + Sync + 'static,
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
@@ -164,16 +161,16 @@ where
     if aid.is_empty() {
         return missing_identifier("agent id required").into_response();
     }
-    let Some(principal) = request.extensions().get::<AgentPrincipal>().cloned() else {
-        return composition_failure("agent principal");
+    let Some(credential) = request.extensions().get::<AgentCredential>().cloned() else {
+        return composition_failure("agent credential");
     };
     let body = collected(request).await;
 
     match agent_send(
-        &principal.agent,
-        &principal.source,
+        &credential,
         body,
-        &state.target_access,
+        &state.target_address,
+        &state.capability,
         SendPorts {
             positions: &MarkdownReferencePositions,
             authority: &state.authority,
@@ -182,7 +179,7 @@ where
     )
     .await
     {
-        Ok(_) => outcome_not_projected("a committed agent send"),
+        Ok(outcome) => sent(&outcome),
         Err(refusal) => agent_wire(refusal),
     }
 }
@@ -209,24 +206,25 @@ fn composition_failure(missing: &str) -> Response {
     internal("Internal Server Error")
 }
 
-/// A COMMITTED SEND LANDS HERE, because its acknowledgement does not exist yet: the
-/// reference answers with the whole committed-message payload, which needs the shared
-/// author projection and the fact's terminal shape. Refusals no longer come through here
-/// — [`super::outcome`] projects those — so this is the last piece of R10.
+/// The HUMAN door's committed answer: 201 and the acknowledgement its sender reads.
 ///
-/// The answer is 501 rather than an invented one. A fabricated 201 body would be a shape a
-/// client could parse and rely on, which would make the gap look filled. "This route
-/// cannot yet produce the response the contract defines" is the only true thing to say,
-/// and it is the concrete reason the router must not be mounted.
+/// A strict superset of the frame the conversation receives, so the renderer applies both
+/// through one seam.
+fn created(outcome: &SendMessageOutcome) -> Response {
+    (StatusCode::CREATED, Json(send_ack(outcome))).into_response()
+}
+
+/// The AGENT door's committed answer: 200 and the flat coordinate report its own schema
+/// publishes.
 ///
-/// The send REALLY DID commit before this ran. The status cannot express that, which is
-/// the whole point: the projection is missing, not optional.
-fn outcome_not_projected(what: &str) -> Response {
-    tracing::error!(
-        outcome = what,
-        "message-send outcome has no wire projection in this slice"
-    );
-    not_implemented()
+/// TWO CONTRACTS, ONE OUTCOME. Both doors project from the same `SendMessageOutcome` and
+/// share the one sender-only projector, and there the sharing stops: a runtime reads
+/// `message_id`/`message_seq`/`conversation_id` to advance its own cursor and has no schema
+/// for a message DTO or cluster projections, so answering it with the person's ACK is a
+/// client break rather than a simplification (@Cindy, terminal review P0). The statuses
+/// differ for the same reason the bodies do — each is what its own contract published.
+fn sent(outcome: &SendMessageOutcome) -> Response {
+    (StatusCode::OK, Json(agent_send_output(outcome))).into_response()
 }
 
 /// The HUMAN door's gate refusals carry an `error` sentence and nothing else, because the
@@ -236,42 +234,38 @@ fn gate_refusal(status: StatusCode, error: &'static str) -> Response {
     (status, Json(serde_json::json!({ "error": error }))).into_response()
 }
 
-/// The AGENT door's, which DO carry a code: an agent acts on which refusal it got, and the
-/// CLI turns each into a different instruction — rewrite the address, stop and report, or ask
-/// a human for a grant.
-fn target_refusal(refusal: TargetRefusal) -> Response {
+/// The AGENT door's ADDRESS refusals, which DO carry a code: an agent acts on which refusal it
+/// got, and the CLI turns each into a different instruction — rewrite the address, or stop and
+/// report.
+fn address_refusal(refusal: AddressRefusal) -> Response {
     let (status, error, code) = match refusal {
-        TargetRefusal::Malformed => (
+        AddressRefusal::Malformed => (
             StatusCode::BAD_REQUEST,
             "target is not an address",
             "target_malformed",
         ),
-        TargetRefusal::SelfPair => (
+        AddressRefusal::SelfPair => (
             StatusCode::BAD_REQUEST,
             "a direct message needs another participant",
             "self_pair_not_addressable",
         ),
-        TargetRefusal::Unresolved => (
+        AddressRefusal::Unresolved => (
             StatusCode::NOT_FOUND,
             "target names no stream you can use",
             "target_unresolved",
         ),
-        TargetRefusal::ThreadNotInTarget => (
+        AddressRefusal::ThreadNotInTarget => (
             StatusCode::NOT_FOUND,
             "target names no reply cluster of that conversation",
             "thread_not_in_target",
         ),
-        TargetRefusal::OutOfSessionScope => (
-            StatusCode::FORBIDDEN,
-            "this operation acts only in the conversation your session is anchored to",
-            "slot_out_of_scope",
-        ),
-        // ITS OWN BODY SHAPE, and not by accident: this one carries no `error` member and
-        // names the missing bucket twice, top level and in `details`. The CLI preserves the
-        // code verbatim only when it is present — a codeless 403 degrades to `forbidden` —
-        // and it reads the bucket to tell the agent what a human has to grant.
-        TargetRefusal::CapabilityDenied => return capability_denied(),
     };
+    gate_code(status, error, code)
+}
+
+/// A gate answer that names its reason with a code, which every agent-door refusal but the
+/// capability denial does.
+fn gate_code(status: StatusCode, error: &'static str, code: &'static str) -> Response {
     (
         status,
         Json(serde_json::json!({ "error": error, "code": code })),
@@ -293,18 +287,6 @@ fn capability_denied() -> Response {
             "message": format!("missing '{SEND_CAPABILITY}' capability in this workspace"),
             "details": { "capability": SEND_CAPABILITY },
         })),
-    )
-        .into_response()
-}
-
-fn not_implemented() -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/plain; charset=utf-8",
-        )],
-        "Not Implemented",
     )
         .into_response()
 }
@@ -351,7 +333,17 @@ fn agent_wire(refusal: AgentRefusal) -> Response {
         AgentRefusal::Payload(PayloadRefusal::ContentTooLarge { actual_bytes }) => {
             agent_content_too_large(actual_bytes).into_response()
         }
-        AgentRefusal::Target(refusal) => target_refusal(refusal),
+        AgentRefusal::Address(refusal) => address_refusal(refusal),
+        AgentRefusal::OutOfSessionScope => gate_code(
+            StatusCode::FORBIDDEN,
+            "this operation acts only in the conversation your session is anchored to",
+            "slot_out_of_scope",
+        ),
+        // ITS OWN BODY SHAPE, and not by accident: no `error` member, and the missing bucket
+        // named twice. The CLI preserves the code verbatim only when it is present — a codeless
+        // 403 degrades to `forbidden` — and it reads the bucket to tell the agent what a human
+        // has to grant.
+        AgentRefusal::CapabilityDenied => capability_denied(),
         AgentRefusal::Send(cause) => refused_send(&cause),
     }
 }

@@ -14,14 +14,16 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use std::collections::HashSet;
+
 use silverhand_backend_core::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationId,
     ConversationRefusal, CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads,
     EnvironmentUnavailable, FromKind, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId,
-    MessageSeq, NotificationId, ParticipantHandle, PostAuthorityReads, PrincipalKind,
-    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
-    SendMessageError, SendMessageUnitOfWork, ThreadFollowerSource, ThreadListEntry,
-    ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
+    MessageReference, MessageSeq, NotificationId, ParticipantHandle, PostAuthorityReads,
+    PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
+    SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
+    ThreadListEntry, ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
@@ -527,7 +529,7 @@ impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
     async fn send_message_transaction(
         &self,
         command: SendMessage,
-    ) -> Result<MessageCreatedFact, SendMessageError> {
+    ) -> Result<SendMessageOutcome, SendMessageError> {
         // The environment is asked before a transaction exists, so a host that
         // cannot answer costs nothing: there is no writer to reserve and no
         // statement to roll back.
@@ -539,9 +541,11 @@ impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
             entropy: &self.environment,
         };
         match scope.write(command, message_id, created_at_ms).await {
-            Ok(fact) => {
+            Ok(outcome) => {
+                // The outcome only escapes a COMMITTED unit: this is the boundary that matters,
+                // not where the value happened to be built.
                 scope.tx.commit().await.map_err(driver)?;
-                Ok(fact)
+                Ok(outcome)
             }
             Err(refusal) => {
                 // The refusal is the answer: a rollback statement that itself
@@ -652,7 +656,7 @@ impl<E: SendClock + SendEntropy + Send + Sync> SendMessageUnitOfWork for Messagi
     async fn send_message(
         &self,
         command: SendMessage,
-    ) -> Result<MessageCreatedFact, SendMessageError> {
+    ) -> Result<SendMessageOutcome, SendMessageError> {
         self.send_message_transaction(command).await
     }
 }
@@ -670,7 +674,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         command: SendMessage,
         message_id: MessageId,
         created_at_ms: i64,
-    ) -> Result<MessageCreatedFact, SendMessageError> {
+    ) -> Result<SendMessageOutcome, SendMessageError> {
         // The sender's own binding must still exist. Read for existence only: what
         // the send is authorized against is the target.
         if command.source_conversation() != command.target_conversation()
@@ -741,13 +745,91 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .plan_post_commit(command.source_conversation(), &facts.id, &command, &message)
             .await?;
 
-        Ok(MessageCreatedFact::committed(
-            message,
-            thread,
-            post_commit,
-            freshness_bypassed,
-            mention_copies,
+        // Last, so it sees the copies this send actually made and the roster as of this unit.
+        let unresolved = self
+            .unresolved_references(&command, &facts.id, &mention_copies)
+            .await?;
+
+        // Assembled INSIDE the transaction, like the fact itself; whether it ever reaches a
+        // caller is the wrapper's decision, and on a rollback it does not. Whether a local value
+        // has been constructed is not an observable property of a transaction.
+        Ok(SendMessageOutcome::committed_send(
+            MessageCreatedFact::committed(
+                message,
+                thread,
+                post_commit,
+                freshness_bypassed,
+                mention_copies,
+            ),
+            unresolved,
         ))
+    }
+
+    /// Which of this send's references reached nobody, decided INSIDE the unit that committed it.
+    ///
+    /// Asked here rather than after the commit because the answer is only true of the roster this
+    /// send saw: a membership change a moment later would make the diagnostic disagree with a
+    /// message that is already a fact.
+    ///
+    /// A reference is REACHED if the principal still participates in the TARGET conversation, or if
+    /// this very send copied the mention to that agent. Both halves matter: an agent outside the
+    /// target can still be reached through its Mentions DM, and a participant needs no copy.
+    ///
+    /// The copy outcomes are read for `Copied` ONLY — never for a skip reason. `AlreadyMember` asks
+    /// about the SOURCE conversation, so on a cross-post it answers about the wrong roster
+    /// (@Alice, DRI of that path).
+    ///
+    /// Unknown and resolvable-but-not-a-participant are ONE answer. The sender learns that the name
+    /// reached nobody, never whether it exists — so this cannot become a way to probe the roster.
+    async fn unresolved_references(
+        &mut self,
+        command: &SendMessage,
+        target: &ConversationId,
+        copies: &[mention_cc::MentionCopyOutcome],
+    ) -> Result<Vec<MessageReference>, SendMessageError> {
+        // AGENT handles, and the kind is half of the key. One body may carry both
+        // `<silverhand://agent/Alice>` and `<silverhand://human/Alice>`; a copy made for the agent
+        // says nothing about the human token, and matching on the handle alone would silently
+        // report the human one as reached (@Cindy, review of this change).
+        let copied_agents: HashSet<&str> = copies
+            .iter()
+            .filter_map(|outcome| match outcome {
+                mention_cc::MentionCopyOutcome::Copied { handle, .. } => Some(handle.as_str()),
+                mention_cc::MentionCopyOutcome::Skipped { .. } => None,
+            })
+            .collect();
+
+        let mut unresolved = Vec::new();
+        for reference in command.addressed().iter() {
+            if reference.kind() == PrincipalKind::Agent
+                && copied_agents.contains(reference.handle().as_str())
+            {
+                continue;
+            }
+            // The reference's own kind decides which namespace answers for the handle: a human
+            // reference must never resolve to an agent of the same name.
+            let statement = match reference.kind() {
+                PrincipalKind::Agent => SELECT_AGENT_ID_BY_NAME,
+                PrincipalKind::Human => SELECT_USER_ID_BY_NAME,
+            };
+            let resolved: Option<String> = sqlx::query_scalar(statement)
+                .bind(reference.handle().as_str())
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(driver)?;
+
+            let reached = match resolved {
+                None => false,
+                Some(id) => match actor_of(reference.kind(), id)? {
+                    SendActor::Agent(agent) => self.is_agent_participant(target, &agent).await?,
+                    SendActor::User(user) => self.is_user_participant(target, &user).await?,
+                },
+            };
+            if !reached {
+                unresolved.push(reference.clone());
+            }
+        }
+        Ok(unresolved)
     }
 
     /// Resolves the cluster this send belongs to, checking the caller's name for it

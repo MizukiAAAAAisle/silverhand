@@ -6,8 +6,8 @@
 //! its own type, and the only source of either is the fact itself.
 
 use super::{
-    AgentId, ConversationId, MessageAuthor, MessageContent, MessageId, MessageSeq, ThreadRootId,
-    UserId, attachments, mention_cc, post_commit,
+    AgentId, ConversationId, MessageAuthor, MessageContent, MessageId, MessageReference,
+    MessageSeq, ThreadRootId, UserId, attachments, mention_cc, post_commit,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +104,115 @@ pub struct CreatedMessage {
     pub seq: MessageSeq,
     pub created_at_ms: i64,
     pub thread_root_id: Option<ThreadRootId>,
+}
+
+/// One send's whole answer: what was committed, and what only its sender is told.
+///
+/// TWO AUDIENCES, kept apart by the type. [`MessageCreatedFact`] is the committed payload the
+/// acknowledgement AND the conversation-wide publication both project from, so it must contain
+/// nothing that may not be published. `unresolved_references` is the opposite: a diagnostic about
+/// this ATTEMPT — which of the sender's references named nobody — and it is NEVER PUBLISHED: it
+/// reaches no other principal and rides no conversation-facing payload. Stated as an audience
+/// rather than as "nobody else reads it", because the success boundary also reports the author's
+/// own tokens once at WARN for an operator, and that observation surface is not a wire audience
+/// (@Alice, whose boundary text this is, authorized the narrowing).
+///
+/// So it lives here rather than on the fact. Putting it there would have left "do not publish this
+/// field" as a rule every present and future announcer has to remember, and a payload that fans out
+/// to a whole conversation is the worst place to keep a rule like that. Announcers take
+/// [`committed`](Self::committed) and cannot reach the rest.
+///
+/// The empty vector is a TOTAL answer — "every reference this body carried named somebody" — and
+/// not an absence. Only the wire decides to omit it when empty.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SendMessageOutcome {
+    committed: MessageCreatedFact,
+    unresolved_references: Vec<MessageReference>,
+}
+
+impl SendMessageOutcome {
+    /// Assembled by the unit of work that committed the send, from what it read inside the same
+    /// atomic unit. The unresolved set is decided there, against the TARGET conversation's roster
+    /// and the mention copies this send actually made — never re-derived afterwards, when a
+    /// membership change could answer differently about a message that is already a fact.
+    pub fn committed_send(
+        committed: MessageCreatedFact,
+        unresolved_references: Vec<MessageReference>,
+    ) -> Self {
+        Self {
+            committed,
+            unresolved_references,
+        }
+    }
+
+    /// What every reader of this send may see.
+    pub fn committed(&self) -> &MessageCreatedFact {
+        &self.committed
+    }
+
+    /// The publication path CANNOT REACH the sender-only half, and that is a type fact rather
+    /// than a habit of the current implementation. Both announcers take a committed VIEW as
+    /// their only input, and only the committed half can produce one.
+    ///
+    /// Stated as the type relation itself, with a local stand-in for the announcer's parameter.
+    /// Calling the real generic announcer here would prove nothing: its effect ports cannot be
+    /// inferred from a `todo!()`, so the example would fail for that reason whatever the first
+    /// argument was — a gate that stays green while the isolation is broken (@Cindy).
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::{MainCommittedSend, SendMessageOutcome};
+    ///
+    /// fn publication_input(_: MainCommittedSend<'_>) {}
+    ///
+    /// fn leak(outcome: &SendMessageOutcome) {
+    ///     publication_input(outcome);
+    /// }
+    /// ```
+    ///
+    /// and the sender-only half is not a reply view either:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::{ReplyCommittedSend, SendMessageOutcome};
+    ///
+    /// fn reply_publication_input(_: ReplyCommittedSend<'_>) {}
+    ///
+    /// fn leak(outcome: &SendMessageOutcome) {
+    ///     reply_publication_input(outcome.unresolved_references());
+    /// }
+    /// ```
+    ///
+    /// THE POSITIVE NEIGHBOUR, which is what makes those two mean anything: the same parameter
+    /// accepts a view taken from the committed half, so the failures above are the argument's
+    /// type and not a missing name or an uninferable port.
+    ///
+    /// ```
+    /// use silverhand_backend_core::messaging::{
+    ///     MainCommittedSend, ReplyCommittedSend, SendMessageOutcome,
+    /// };
+    ///
+    /// fn publication_input(_: MainCommittedSend<'_>) {}
+    /// fn reply_publication_input(_: ReplyCommittedSend<'_>) {}
+    ///
+    /// fn accepted(outcome: &SendMessageOutcome) {
+    ///     if let Some(view) = outcome.committed().main_line() {
+    ///         publication_input(view);
+    ///     }
+    ///     if let Some(view) = outcome.committed().reply_cluster() {
+    ///         reply_publication_input(view);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// What only its sender may see, in the body's own first-occurrence order.
+    pub fn unresolved_references(&self) -> &[MessageReference] {
+        &self.unresolved_references
+    }
+
+    // THERE IS NO WAY TO TAKE ONE HALF AND DROP THE OTHER, deliberately. A consuming accessor for
+    // the committed half would be a one-step path back to the old shape that silently discards the
+    // total unresolved answer — the sender-only boundary this type exists to establish, handed back
+    // to whoever consumes a send result (@Cindy, review of this change). A consumer keeps the
+    // outcome and borrows the half it needs.
 }
 
 /// What a reply changed about its cluster, projected inside the atomic unit that

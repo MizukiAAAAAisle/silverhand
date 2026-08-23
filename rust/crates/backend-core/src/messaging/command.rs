@@ -12,8 +12,8 @@ use crate::persistence::PersistenceFailure;
 
 use super::{
     ActorRefusal, AddressedPrincipals, AgentId, ConversationId, ConversationRefusal,
-    EnvironmentUnavailable, FromKind, MessageCreatedFact, MessageId, ReferencePositions,
-    ReplyTargetRefusal, ThreadRootId, ThreadRootRefusal, UserId, attachments,
+    EnvironmentUnavailable, FromKind, MessageId, ReferencePositions, ReplyTargetRefusal,
+    SendMessageOutcome, ThreadRootId, ThreadRootRefusal, UserId, attachments,
     attachments::AttachmentRefusal, freshness, freshness::StaleRefusal,
 };
 
@@ -259,7 +259,7 @@ pub trait SendMessageUnitOfWork {
     fn send_message(
         &self,
         command: SendMessage,
-    ) -> impl Future<Output = Result<MessageCreatedFact, SendMessageError>> + Send;
+    ) -> impl Future<Output = Result<SendMessageOutcome, SendMessageError>> + Send;
 }
 
 #[cfg(test)]
@@ -339,7 +339,7 @@ mod tests {
         async fn send_message(
             &self,
             _command: SendMessage,
-        ) -> Result<MessageCreatedFact, SendMessageError> {
+        ) -> Result<SendMessageOutcome, SendMessageError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Err(ConversationRefusal::NotFound.into())
         }

@@ -17,12 +17,14 @@
 //!   adapters, but a router that reached for the body before dispatching would break it
 //!   without touching them.
 
-use std::{
-    io::{self, Write},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+// The shared log-capture harness, included rather than copied: this suite and the product
+// send suite both read what an operator saw, and one writer is enough for both.
+#[path = "support/log_capture.rs"]
+mod log_capture;
+
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use axum::{
@@ -34,17 +36,21 @@ use futures_util::stream;
 use serde_json::Value;
 use silverhand_backend_core::messaging::{
     AddressedPrincipals, AgentId, ConversationId, ConversationRefusal, DirectLineAuthority,
-    MessageCreatedFact, PrincipalKind, SendMessage, SendMessageError, SendMessageUnitOfWork,
+    PrincipalKind, SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
     UserId,
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_server::messaging::{
     MESSAGE_SEND_MAX_BODY_BYTES,
-    adapters::{ChannelAccess, ChannelAccessRefusal, ResolvedStream, TargetAccess, TargetRefusal},
-    router::{AgentPrincipal, HumanPrincipal, SendState, send_router},
+    adapters::{
+        AddressRefusal, AgentCredential, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
+        ResolvedStream, SendCapability, TargetAddress,
+    },
+    router::{HumanPrincipal, SendState, send_router},
 };
 use tower::ServiceExt;
-use tracing_subscriber::fmt::MakeWriter;
+
+use log_capture::LogBuffer;
 
 const FRAME_CAUSE: &str = "upstream frame source vanished";
 
@@ -80,16 +86,59 @@ impl ChannelAccess for Channel {
     }
 }
 
-/// Resolves every address to one fixed main-line stream, or refuses. The grammar that
-/// reads an address is not restated here; what a test needs is where one landed.
-struct Target(Result<(), TargetRefusal>);
+/// How many times a gate was ASKED. The refusal a request gets says which gate answered; only a
+/// counter says whether the later ones ran at all, and a capability check is a real read against
+/// a roster — asking it early is not a harmless detail (@Cindy, review of `65827a71`).
+#[derive(Clone, Default)]
+struct Calls(Arc<AtomicUsize>);
 
-impl TargetAccess for Target {
-    fn resolve(&self, _agent: &AgentId, _target: &str) -> Result<ResolvedStream, TargetRefusal> {
-        self.0.clone().map(|()| ResolvedStream {
-            conversation: ConversationId::parse("conv-2").unwrap(),
+impl Calls {
+    fn count(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    fn record(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Resolves every address to one fixed main-line stream, or refuses. The grammar that reads an
+/// address is not restated here; what a test needs is where one landed.
+struct Address {
+    outcome: Result<(), AddressRefusal>,
+    calls: Calls,
+}
+
+impl TargetAddress for Address {
+    fn resolve(&self, _agent: &AgentId, _target: &str) -> Result<ResolvedStream, AddressRefusal> {
+        self.calls.record();
+        self.outcome.clone().map(|()| ResolvedStream {
+            conversation: resolved_stream(),
             thread_root: None,
         })
+    }
+}
+
+/// The stream every address in this file resolves to. Deliberately NOT the conversation an
+/// anchored credential is anchored to, so a reach mistake is visible rather than accidental.
+fn resolved_stream() -> ConversationId {
+    ConversationId::parse("conv-2").unwrap()
+}
+
+/// The grant, and only the grant.
+struct Grant {
+    outcome: Result<(), CapabilityDenied>,
+    calls: Calls,
+}
+
+impl SendCapability for Grant {
+    fn may_send_messages(
+        &self,
+        _agent: &AgentId,
+        _conversation: &ConversationId,
+    ) -> Result<(), CapabilityDenied> {
+        self.calls.record();
+        self.outcome
     }
 }
 
@@ -147,7 +196,7 @@ impl SendMessageUnitOfWork for CountingUnitOfWork {
     async fn send_message(
         &self,
         command: SendMessage,
-    ) -> Result<MessageCreatedFact, SendMessageError> {
+    ) -> Result<SendMessageOutcome, SendMessageError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         self.2
             .lock()
@@ -170,20 +219,41 @@ impl SendMessageUnitOfWork for CountingUnitOfWork {
 
 fn mounted(
     channel: Result<(), ChannelAccessRefusal>,
-    target: Result<(), TargetRefusal>,
+    address: Result<(), AddressRefusal>,
+    grant: Result<(), CapabilityDenied>,
     unit: CountingUnitOfWork,
 ) -> Router {
-    send_router(SendState {
+    watched(channel, address, grant, unit).0
+}
+
+/// The same router, plus the two counters, for the cells that are about WHEN a gate is asked.
+fn watched(
+    channel: Result<(), ChannelAccessRefusal>,
+    address: Result<(), AddressRefusal>,
+    grant: Result<(), CapabilityDenied>,
+    unit: CountingUnitOfWork,
+) -> (Router, Calls, Calls) {
+    let asked_address = Calls::default();
+    let asked_capability = Calls::default();
+    let router = send_router(SendState {
         channel_access: Channel(channel),
-        target_access: Target(target),
+        target_address: Address {
+            outcome: address,
+            calls: asked_address.clone(),
+        },
+        capability: Grant {
+            outcome: grant,
+            calls: asked_capability.clone(),
+        },
         authority: GrantsNothing,
         unit_of_work: unit,
-    })
+    });
+    (router, asked_address, asked_capability)
 }
 
 /// Both gates open, so whatever answers is the request's own doing.
 fn open(unit: CountingUnitOfWork) -> Router {
-    mounted(Ok(()), Ok(()), unit)
+    mounted(Ok(()), Ok(()), Ok(()), unit)
 }
 
 fn human_request(path: &str, body: Body) -> Request<Body> {
@@ -196,9 +266,10 @@ fn human_request(path: &str, body: Body) -> Request<Body> {
 
 fn agent_request(path: &str, body: Body) -> Request<Body> {
     let mut request = Request::post(path).body(body).unwrap();
-    request.extensions_mut().insert(AgentPrincipal {
+    // Unanchored by default: reach is then the resolver's answer alone, so a cell about
+    // something else is not silently also a reach cell.
+    request.extensions_mut().insert(AgentCredential::AgentSlot {
         agent: AgentId::parse("agent-1").unwrap(),
-        source: ConversationId::parse("conv-1").unwrap(),
     });
     request
 }
@@ -223,6 +294,20 @@ async fn observed(router: Router, request: Request<Body>) -> (StatusCode, String
         .filter(|event| event["level"] == "ERROR")
         .collect();
     (status, body, errors)
+}
+
+/// A request from a credential ANCHORED to one conversation.
+fn anchored_request(source: ConversationId) -> Request<Body> {
+    let mut request = Request::post(AGENT_PATH)
+        .body(Body::from(agent_send_body(16)))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(AgentCredential::ConversationSlot {
+            agent: AgentId::parse("agent-1").unwrap(),
+            source,
+        });
+    request
 }
 
 async fn answered(router: Router, request: Request<Body>) -> (StatusCode, String) {
@@ -480,7 +565,8 @@ async fn one_faulty_request_is_answered_by_whichever_gate_its_own_door_asks_firs
     let closed = || {
         mounted(
             Err(ChannelAccessRefusal::Forbidden),
-            Err(TargetRefusal::CapabilityDenied),
+            Err(AddressRefusal::Unresolved),
+            Ok(()),
             unit.clone(),
         )
     };
@@ -662,18 +748,17 @@ async fn only_prose_addresses_and_the_route_decides_that_not_its_composition() {
     }
 }
 
-/// EVERY TARGET REFUSAL, exactly as an agent receives it.
+/// EVERY ADDRESS REFUSAL, exactly as an agent receives it.
 ///
-/// One table, because the interesting part is that the statuses DISAGREE across the six and
-/// only disagree where the fact does. A token judgement is a 400 and says nothing about what
-/// exists; the two existence answers are one 404, which is what stops this door from becoming
-/// an oracle that separates unknown from unauthorized by status; and a 403 appears only where
-/// the address was right and the credential is the limit.
+/// One table, because the interesting part is that the statuses DISAGREE and only disagree
+/// where the fact does. A token judgement is a 400 and says nothing about what exists; the two
+/// existence answers share ONE 404, which is what stops this door from separating unknown from
+/// unauthorized by status.
 #[tokio::test]
-async fn each_target_refusal_reaches_the_agent_in_its_own_words() {
-    let cases: Vec<(TargetRefusal, StatusCode, serde_json::Value)> = vec![
+async fn each_address_refusal_reaches_the_agent_in_its_own_words() {
+    let cases: Vec<(AddressRefusal, StatusCode, serde_json::Value)> = vec![
         (
-            TargetRefusal::Malformed,
+            AddressRefusal::Malformed,
             StatusCode::BAD_REQUEST,
             serde_json::json!({
                 "error": "target is not an address",
@@ -681,7 +766,7 @@ async fn each_target_refusal_reaches_the_agent_in_its_own_words() {
             }),
         ),
         (
-            TargetRefusal::SelfPair,
+            AddressRefusal::SelfPair,
             StatusCode::BAD_REQUEST,
             serde_json::json!({
                 "error": "a direct message needs another participant",
@@ -689,7 +774,7 @@ async fn each_target_refusal_reaches_the_agent_in_its_own_words() {
             }),
         ),
         (
-            TargetRefusal::Unresolved,
+            AddressRefusal::Unresolved,
             StatusCode::NOT_FOUND,
             serde_json::json!({
                 "error": "target names no stream you can use",
@@ -697,32 +782,11 @@ async fn each_target_refusal_reaches_the_agent_in_its_own_words() {
             }),
         ),
         (
-            TargetRefusal::ThreadNotInTarget,
+            AddressRefusal::ThreadNotInTarget,
             StatusCode::NOT_FOUND,
             serde_json::json!({
                 "error": "target names no reply cluster of that conversation",
                 "code": "thread_not_in_target"
-            }),
-        ),
-        (
-            TargetRefusal::OutOfSessionScope,
-            StatusCode::FORBIDDEN,
-            serde_json::json!({
-                "error": "this operation acts only in the conversation your session is anchored to",
-                "code": "slot_out_of_scope"
-            }),
-        ),
-        (
-            // ITS OWN SHAPE: no `error` member, and the missing bucket twice. A client that
-            // reads `code` to decide what to tell a human would get "forbidden" from a
-            // codeless 403 and lose the one fact that makes the refusal actionable.
-            TargetRefusal::CapabilityDenied,
-            StatusCode::FORBIDDEN,
-            serde_json::json!({
-                "code": "capability_denied",
-                "capability": "send_messages",
-                "message": "missing 'send_messages' capability in this workspace",
-                "details": { "capability": "send_messages" }
             }),
         ),
     ];
@@ -730,7 +794,7 @@ async fn each_target_refusal_reaches_the_agent_in_its_own_words() {
     for (refusal, status, body) in cases {
         let unit = CountingUnitOfWork::default();
         let (answered_status, answered_body) = answered(
-            mounted(Ok(()), Err(refusal.clone()), unit.clone()),
+            mounted(Ok(()), Err(refusal.clone()), Ok(()), unit.clone()),
             agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
         )
         .await;
@@ -741,10 +805,232 @@ async fn each_target_refusal_reaches_the_agent_in_its_own_words() {
             body,
             "{refusal:?}"
         );
-        // Every one of them refuses BEFORE the write unit: an address the door would not use
-        // is not an address it may commit a message to.
         assert_eq!(unit.calls(), 0, "{refusal:?}");
     }
+}
+
+/// THE TWO ANSWERS ABOUT THE CREDENTIAL, which are the only 403s this door gives.
+///
+/// `slot_out_of_scope` says the address was right and the session is anchored elsewhere;
+/// `capability_denied` says a human has to grant something. Neither is fixable by trying
+/// another address, which is why they are a third status family rather than more 404s.
+///
+/// The capability body is its OWN shape: no `error` member, and the missing bucket named twice.
+/// A codeless 403 degrades to "forbidden" in the CLI and loses the one fact that makes the
+/// refusal actionable.
+#[tokio::test]
+async fn the_credentials_own_refusals_are_the_only_forbidden_answers() {
+    // An anchored credential aimed at a stream that is not its anchor.
+    let unit = CountingUnitOfWork::default();
+    let (status, body) = answered(
+        open(unit.clone()),
+        anchored_request(ConversationId::parse("conv-9").unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        serde_json::json!({
+            "error": "this operation acts only in the conversation your session is anchored to",
+            "code": "slot_out_of_scope"
+        })
+    );
+    assert_eq!(unit.calls(), 0);
+
+    let unit = CountingUnitOfWork::default();
+    let (status, body) = answered(
+        mounted(Ok(()), Ok(()), Err(CapabilityDenied), unit.clone()),
+        agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        serde_json::json!({
+            "code": "capability_denied",
+            "capability": "send_messages",
+            "message": "missing 'send_messages' capability in this workspace",
+            "details": { "capability": "send_messages" }
+        })
+    );
+    assert_eq!(unit.calls(), 0);
+}
+
+/// REACH DEPENDS ON WHICH CREDENTIAL IT IS, and the two variants answer differently for the
+/// same address.
+///
+/// An anchored session may act only where it is anchored; an unanchored one may act wherever
+/// the resolver says the agent participates. A single principal shape could not express both —
+/// it would have to force an anchor on the unanchored one and then either refuse every send it
+/// makes or let every anchored session post anywhere.
+#[tokio::test]
+async fn an_anchored_credential_reaches_only_its_own_stream() {
+    // Anchored TO the stream the address resolves to: through.
+    let unit = CountingUnitOfWork::default();
+    let (status, _) = answered(open(unit.clone()), anchored_request(resolved_stream())).await;
+    assert_eq!(unit.calls(), 1);
+    assert_eq!(status, StatusCode::NOT_FOUND, "it reached the write unit");
+
+    // Anchored elsewhere: refused, and the write unit never sees it.
+    let unit = CountingUnitOfWork::default();
+    let (status, body) = answered(
+        open(unit.clone()),
+        anchored_request(ConversationId::parse("conv-9").unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains("slot_out_of_scope"), "{body}");
+    assert_eq!(unit.calls(), 0);
+
+    // Unanchored, same address: through.
+    let unit = CountingUnitOfWork::default();
+    let _ = answered(
+        open(unit.clone()),
+        agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
+    )
+    .await;
+    assert_eq!(unit.calls(), 1);
+}
+
+/// THE ORDER OF THE FOUR AUTHORITIES, held by crosses rather than by types.
+///
+/// Nothing in the code makes `validate → resolve → reach → capability` fail to compile in
+/// another order (@Cindy): the failure types differ, and a swapped pair still type-checks.
+///
+/// And a response alone is not enough to hold it. An implementation that asked the capability
+/// FIRST and still returned the address or reach refusal would answer every cell below
+/// identically — it would have turned an evaluation order into an answer priority, while a real
+/// capability read hit a roster for requests that were already doomed. So each case pins HOW
+/// MANY TIMES each gate was asked, and the counts are what go red.
+#[tokio::test]
+async fn a_request_that_fails_two_gates_is_answered_by_the_earlier_one() {
+    /// What one request cost: the answer, and how far down the chain it got.
+    struct Asked {
+        status: StatusCode,
+        body: String,
+        address: usize,
+        capability: usize,
+        committed: usize,
+    }
+
+    async fn ask(
+        request: Request<Body>,
+        address: Result<(), AddressRefusal>,
+        grant: Result<(), CapabilityDenied>,
+    ) -> Asked {
+        let unit = CountingUnitOfWork::default();
+        let (router, asked_address, asked_capability) =
+            watched(Ok(()), address, grant, unit.clone());
+        let (status, body) = answered(router, request).await;
+        Asked {
+            status,
+            body,
+            address: asked_address.count(),
+            capability: asked_capability.count(),
+            committed: unit.calls(),
+        }
+    }
+
+    let elsewhere = || ConversationId::parse("conv-9").unwrap();
+
+    // A malformed BODY, with both later gates also refusing: admission answers, and NEITHER
+    // gate is asked. This door validates before it looks at where the request aimed.
+    let payload = ask(
+        agent_request(AGENT_PATH, Body::from(r#"{"content":7,"target":"conv-2"}"#)),
+        Err(AddressRefusal::Unresolved),
+        Err(CapabilityDenied),
+    )
+    .await;
+    assert_eq!(payload.status, StatusCode::BAD_REQUEST);
+    assert!(payload.body.contains("invalid input"), "{}", payload.body);
+    assert_eq!(
+        (payload.address, payload.capability, payload.committed),
+        (0, 0, 0)
+    );
+
+    // The ADDRESS refuses and the grant would too: the address answers, and the grant is never
+    // asked about a stream that does not resolve.
+    let address = ask(
+        agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
+        Err(AddressRefusal::Unresolved),
+        Err(CapabilityDenied),
+    )
+    .await;
+    assert_eq!(address.status, StatusCode::NOT_FOUND);
+    assert!(
+        address.body.contains("target_unresolved"),
+        "{}",
+        address.body
+    );
+    assert!(!address.body.contains("capability"), "{}", address.body);
+    assert_eq!(
+        (address.address, address.capability, address.committed),
+        (1, 0, 0)
+    );
+
+    // REACH refuses and the grant would too: reach answers, and the grant is never asked about
+    // a stream this session may not act on.
+    let reach = ask(anchored_request(elsewhere()), Ok(()), Err(CapabilityDenied)).await;
+    assert_eq!(reach.status, StatusCode::FORBIDDEN);
+    assert!(reach.body.contains("slot_out_of_scope"), "{}", reach.body);
+    assert!(!reach.body.contains("capability"), "{}", reach.body);
+    assert_eq!(
+        (reach.address, reach.capability, reach.committed),
+        (1, 0, 0)
+    );
+
+    // Only the GRANT refuses: it is asked, exactly once, and nothing is committed.
+    let grant = ask(
+        agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
+        Ok(()),
+        Err(CapabilityDenied),
+    )
+    .await;
+    assert_eq!(grant.status, StatusCode::FORBIDDEN);
+    assert!(grant.body.contains("capability_denied"), "{}", grant.body);
+    assert_eq!(
+        (grant.address, grant.capability, grant.committed),
+        (1, 1, 0)
+    );
+
+    // Everything open: each gate asked once, and the send reaches the write unit.
+    let through = ask(
+        agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
+        Ok(()),
+        Ok(()),
+    )
+    .await;
+    assert_eq!(
+        (through.address, through.capability, through.committed),
+        (1, 1, 1)
+    );
+}
+
+/// Unknown and non-participant are ONE contract answer, so nothing above this port can tell
+/// them apart.
+///
+/// What this pins is the SHAPE: there is a single `AddressRefusal::Unresolved` for both facts,
+/// and it renders byte-identically. It does NOT claim the database distinction is mechanically
+/// proven — that needs the real resolver against a real schema, and two fakes cannot stand in
+/// for it (@Cindy).
+#[tokio::test]
+async fn an_unknown_stream_and_one_that_is_not_yours_are_the_same_answer() {
+    let mut answers = Vec::new();
+    for _ in 0..2 {
+        let unit = CountingUnitOfWork::default();
+        let (status, body) = answered(
+            mounted(
+                Ok(()),
+                Err(AddressRefusal::Unresolved),
+                Ok(()),
+                unit.clone(),
+            ),
+            agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
+        )
+        .await;
+        answers.push((status, body));
+    }
+    assert_eq!(answers[0], answers[1]);
 }
 
 /// The two doors keep their own vocabularies. The human door's gate answers carry NO code,
@@ -766,7 +1052,7 @@ async fn the_human_gate_does_not_borrow_the_agent_doors_codes() {
     ] {
         let unit = CountingUnitOfWork::default();
         let (answered_status, body) = answered(
-            mounted(Err(refusal.clone()), Ok(()), unit.clone()),
+            mounted(Err(refusal.clone()), Ok(()), Ok(()), unit.clone()),
             human_request(HUMAN_PATH, Body::from(human_send_body(16))),
         )
         .await;
@@ -885,39 +1171,4 @@ async fn a_missing_principal_refuses_rather_than_inventing_one() {
             .count(),
         2
     );
-}
-
-#[derive(Clone, Default)]
-struct LogBuffer(Arc<Mutex<Vec<u8>>>);
-
-impl LogBuffer {
-    fn events(&self) -> Vec<Value> {
-        let bytes = self.0.lock().unwrap().clone();
-        String::from_utf8(bytes)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-}
-
-struct LogWriter(LogBuffer);
-
-impl Write for LogWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for LogBuffer {
-    type Writer = LogWriter;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        LogWriter(self.clone())
-    }
 }

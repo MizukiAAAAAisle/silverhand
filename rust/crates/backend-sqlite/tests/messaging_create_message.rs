@@ -467,7 +467,9 @@ async fn a_main_line_send_writes_the_ordinal_the_message_and_the_head_only() {
         .await
         .send_message(send(agent_actor(), CHANNEL_ID, "first"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(fact.message().seq, MessageSeq::try_from(1).unwrap());
     assert_eq!(fact.thread(), None);
@@ -498,7 +500,9 @@ async fn the_committed_row_reports_the_same_facts_the_caller_was_given() {
         .await
         .send_message(send(user_actor(), CHANNEL_ID, "spoken once"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let mut fixture = fixture;
     let row = sqlx::query(
@@ -554,7 +558,9 @@ async fn the_returned_author_of_an_agent_send_is_the_live_agent_with_its_runtime
         .await
         .send_message(send(agent_actor(), CHANNEL_ID, "hello"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) = fact.message().author.as_ref()
     else {
@@ -579,7 +585,9 @@ async fn the_returned_author_of_a_human_send_is_the_live_human_without_a_runtime
         .await
         .send_message(send(user_actor(), CHANNEL_ID, "hi"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let Some(MessageAuthor::Active(ActiveAuthor::Human(human))) = fact.message().author.as_ref()
     else {
@@ -609,7 +617,9 @@ async fn the_returned_author_carries_the_avatar_revision_of_a_live_actor() {
         .await
         .send_message(send(agent_actor(), CHANNEL_ID, "hello"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let Some(MessageAuthor::Active(ActiveAuthor::Agent(agent))) = fact.message().author.as_ref()
     else {
@@ -625,17 +635,23 @@ async fn ordinals_are_conversation_global_and_a_thread_keeps_its_own_head() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let reply = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "reply", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let after = store
         .send_message(send(agent_actor(), CHANNEL_ID, "main line again"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     // The reply draws from the conversation's counter, not from a per-thread one.
     assert_eq!(reply.message().seq, MessageSeq::try_from(2).unwrap());
@@ -663,7 +679,9 @@ async fn ordinals_of_two_conversations_do_not_share_a_counter() {
     let elsewhere = store
         .send_message(send(agent_actor(), OTHER_CHANNEL_ID, "there"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(elsewhere.message().seq, MessageSeq::try_from(1).unwrap());
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
@@ -701,13 +719,17 @@ async fn a_reply_reports_an_absolute_count_that_excludes_system_copies() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let first = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "one", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     sqlx::query(
         "INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at, \
@@ -722,7 +744,9 @@ async fn a_reply_reports_an_absolute_count_that_excludes_system_copies() {
     let second = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "two", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(first.thread().unwrap().reply_count(), 1);
     let thread = second.thread().unwrap();
@@ -739,7 +763,9 @@ async fn a_reply_target_outside_the_conversation_is_not_found() {
     let elsewhere = store
         .send_message(send(agent_actor(), OTHER_CHANNEL_ID, "far away"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let error = store
         .send_message(reply_to(
@@ -768,11 +794,15 @@ async fn a_thread_root_that_names_no_cluster_of_this_conversation_is_refused() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let elsewhere = store
         .send_message(send(agent_actor(), OTHER_CHANNEL_ID, "far away"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let mid_cluster = store
         .send_message(reply_to(
             user_actor(),
@@ -781,7 +811,9 @@ async fn a_thread_root_that_names_no_cluster_of_this_conversation_is_refused() {
             root.message().id.as_str(),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let seq_before = fixture.latest_seq(CHANNEL_ID).await;
 
     for candidate in [
@@ -809,7 +841,9 @@ async fn a_send_into_a_named_cluster_joins_that_cluster() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let fact = store
@@ -820,7 +854,9 @@ async fn a_send_into_a_named_cluster_joins_that_cluster() {
             &root_id,
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(
         fact.message().thread_root_id.as_ref().unwrap().as_str(),
@@ -916,11 +952,15 @@ async fn a_direct_pair_endpoint_participates_without_a_roster_row() {
     let by_agent = store
         .send_message(send(agent_actor(), PAIR_ID, "from the agent"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let by_human = store
         .send_message(send(user_actor(), PAIR_ID, "from the human"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(by_agent.message().seq, MessageSeq::try_from(1).unwrap());
     assert_eq!(by_human.message().seq, MessageSeq::try_from(2).unwrap());
@@ -1003,7 +1043,14 @@ async fn an_accepted_attachment_is_stored_as_a_snapshot_in_the_message_metadata(
         ..draft(user_actor(), CHANNEL_ID, "with a file")
     });
 
-    let fact = fixture.store().await.send_message(command).await.unwrap();
+    let fact = fixture
+        .store()
+        .await
+        .send_message(command)
+        .await
+        .unwrap()
+        .committed()
+        .clone();
 
     let metadata: String = sqlx::query_scalar("SELECT metadata FROM messages WHERE id = ?")
         .bind(fact.message().id.as_str())
@@ -1032,7 +1079,9 @@ async fn an_agent_holding_undelivered_input_is_refused_as_stale() {
     let existing = store
         .send_message(send(user_actor(), CHANNEL_ID, "read me first"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
         .await;
@@ -1059,7 +1108,9 @@ async fn an_in_flight_delivery_still_counts_as_undelivered() {
     let existing = store
         .send_message(send(user_actor(), CHANNEL_ID, "leased"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
         .await;
@@ -1082,7 +1133,9 @@ async fn a_delivered_row_leaves_the_runtime_fresh() {
     let existing = store
         .send_message(send(user_actor(), CHANNEL_ID, "consumed"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(
             AGENT_ID,
@@ -1095,7 +1148,9 @@ async fn a_delivered_row_leaves_the_runtime_fresh() {
     let after_drain = store
         .send_message(send(agent_actor(), CHANNEL_ID, "my turn"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(after_drain.message().seq, MessageSeq::try_from(2).unwrap());
     assert!(!after_drain.freshness_bypassed());
@@ -1108,7 +1163,9 @@ async fn sending_anyway_lands_and_records_that_the_guard_was_skipped() {
     let existing = store
         .send_message(send(user_actor(), CHANNEL_ID, "unread"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
         .await;
@@ -1117,7 +1174,12 @@ async fn sending_anyway_lands_and_records_that_the_guard_was_skipped() {
         freshness_bypass: true,
         ..draft(agent_actor(), CHANNEL_ID, "anyway")
     });
-    let fact = store.send_message(command).await.unwrap();
+    let fact = store
+        .send_message(command)
+        .await
+        .unwrap()
+        .committed()
+        .clone();
 
     assert!(fact.freshness_bypassed());
     assert_eq!(fact.message().seq, MessageSeq::try_from(2).unwrap());
@@ -1132,7 +1194,9 @@ async fn a_human_send_is_never_stale() {
     let existing = store
         .send_message(send(user_actor(), CHANNEL_ID, "unread by the agent"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
         .await;
@@ -1140,7 +1204,9 @@ async fn a_human_send_is_never_stale() {
     let fact = store
         .send_message(send(user_actor(), CHANNEL_ID, "people keep talking"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(fact.message().seq, MessageSeq::try_from(2).unwrap());
 }
@@ -1154,7 +1220,9 @@ async fn the_conversation_arm_keys_on_the_runtimes_binding() {
     let existing = store
         .send_message(send(user_actor(), OTHER_CHANNEL_ID, "elsewhere"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(
             AGENT_ID,
@@ -1167,7 +1235,9 @@ async fn the_conversation_arm_keys_on_the_runtimes_binding() {
     let fact = store
         .send_message(send(agent_actor(), CHANNEL_ID, "unrelated stream"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(fact.message().seq, MessageSeq::try_from(1).unwrap());
 }
@@ -1181,7 +1251,9 @@ async fn the_agent_arm_spans_every_conversation() {
     let existing = store
         .send_message(send(user_actor(), OTHER_CHANNEL_ID, "elsewhere"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(
             BROAD_AGENT_ID,
@@ -1210,7 +1282,9 @@ async fn content_is_stored_byte_exact_at_the_utf8_bound() {
         .await
         .send_message(send(user_actor(), CHANNEL_ID, &content))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let stored: String = sqlx::query_scalar("SELECT content FROM messages WHERE id = ?")
         .bind(fact.message().id.as_str())
@@ -1394,7 +1468,9 @@ async fn entropy_withdrawn_inside_the_unit_rolls_back_with_nothing_written() {
     let existing = seeded
         .send_message(send(user_actor(), CHANNEL_ID, "read me first"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
         .await;
@@ -1430,7 +1506,9 @@ async fn a_reply_records_its_author_and_the_root_author_as_followers() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     store
@@ -1464,7 +1542,9 @@ async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
     let earlier = store
         .send_message(reply_to(
@@ -1474,7 +1554,9 @@ async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
             &root_id,
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let mentioning = store
         .send_message(reply_to(
@@ -1484,7 +1566,9 @@ async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
             &root_id,
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert!(fixture.followers(&root_id).await.contains(&(
         "agent".to_owned(),
@@ -1521,7 +1605,9 @@ async fn following_a_cluster_twice_queues_its_history_once() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     store
@@ -1557,7 +1643,9 @@ async fn a_reference_to_a_non_participant_follows_nobody() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     store
@@ -1589,7 +1677,9 @@ async fn a_reference_resolves_only_in_the_namespace_its_kind_names() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     store
@@ -1622,7 +1712,9 @@ async fn the_catch_up_skips_the_new_followers_own_messages() {
     let root = store
         .send_message(send(broad, CHANNEL_ID, "broad speaks first"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     // The reply makes the root's author a follower, and the only history there is
@@ -1657,7 +1749,9 @@ async fn the_audience_is_the_cluster_followers_minus_the_sender() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let by_human = store
@@ -1668,11 +1762,15 @@ async fn the_audience_is_the_cluster_followers_minus_the_sender() {
             &root_id,
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let by_agent = store
         .send_message(reply_to(agent_actor(), CHANNEL_ID, "here", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let after_human: Vec<&str> = reply_audience(&by_human);
     let after_agent: Vec<&str> = reply_audience(&by_agent);
@@ -1693,7 +1791,9 @@ async fn a_failed_reply_leaves_no_follower_and_no_queued_history() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
     // The catch-up is the last durable consequence of the reply, so failing it is
     // how the shared transaction is put to the test.
@@ -1737,7 +1837,9 @@ async fn a_plain_handle_in_prose_addresses_nobody() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let fact = store
@@ -1748,7 +1850,9 @@ async fn a_plain_handle_in_prose_addresses_nobody() {
             &root_id,
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert!(
         !fixture
@@ -1795,7 +1899,9 @@ async fn audience_of_next_reply(
     let fact = store
         .send_message(reply_to(user_actor(), conversation, "and again", root))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fact.reply_cluster()
         .expect("a reply carries a cluster plan")
         .audience()
@@ -1816,7 +1922,9 @@ async fn the_audience_and_the_write_gate_agree_on_a_channel() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
     store
         .send_message(reply_to(
@@ -1894,7 +2002,9 @@ async fn the_audience_and_the_write_gate_agree_on_a_direct_pair() {
     let root = store
         .send_message(send(agent_actor(), PAIR_ID, "in the pair"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let audience = audience_of_next_reply(&store, PAIR_ID, &root_id).await;
@@ -2007,7 +2117,9 @@ async fn a_mention_of_a_non_member_is_copied_onto_a_direct_line() {
             &grants_outsider(),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let pairs = fixture.direct_pairs().await;
     assert_eq!(pairs.len(), 1, "the copy did not mint one line: {pairs:?}");
@@ -2164,7 +2276,9 @@ async fn a_copy_that_does_not_happen_says_why() {
             &Grants(vec![("broad", BROAD_AGENT_ID)]),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     // Nobody by that name.
     let unknown = store
         .send_message(prepared_with(
@@ -2172,7 +2286,9 @@ async fn a_copy_that_does_not_happen_says_why() {
             &Grants(vec![]),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     // The same agent named twice is one addressee, so it is copied once.
     let twice = store
         .send_message(prepared_with(
@@ -2184,7 +2300,9 @@ async fn a_copy_that_does_not_happen_says_why() {
             &grants_outsider(),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     // No line the author may open.
     let ungranted = store
         .send_message(prepared_with(
@@ -2192,7 +2310,9 @@ async fn a_copy_that_does_not_happen_says_why() {
             &Grants(vec![]),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     // A direct line has no workspace to name a copy after.
     let from_a_line = store
         .send_message(prepared_with(
@@ -2200,7 +2320,9 @@ async fn a_copy_that_does_not_happen_says_why() {
             &grants_outsider(),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(
         skip_reasons(&member),
@@ -2243,7 +2365,9 @@ async fn a_grant_for_another_id_does_not_travel_with_the_handle() {
             &Grants(vec![("outsider", BROAD_AGENT_ID)]),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert_eq!(
         skip_reasons(&fact),
@@ -2274,7 +2398,9 @@ async fn an_agents_mention_copies_nothing() {
             &grants_outsider(),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert!(fact.mention_copies().is_empty());
     assert_eq!(fixture.direct_pairs().await, vec![]);
@@ -2391,7 +2517,9 @@ async fn every_effect_failing_leaves_the_committed_facts_in_place() {
             &grants_outsider(),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let refused = EverythingFails;
     let report = announce_send(
@@ -2431,7 +2559,9 @@ async fn every_effect_failing_leaves_the_committed_facts_in_place() {
     let next = reopened
         .send_message(send(user_actor(), CHANNEL_ID, "after the failures"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     assert_eq!(next.message().seq, MessageSeq::try_from(2).unwrap());
 }
 
@@ -2451,7 +2581,9 @@ async fn a_main_send_plans_who_it_reaches_and_who_it_named() {
             "<silverhand://human/human> take a look",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let view = fact
         .main_line()
@@ -2504,7 +2636,9 @@ async fn a_mention_intent_says_who_wrote_it_so_the_writer_can_exclude_them() {
             "<silverhand://human/human> talking to myself",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .execute("DELETE FROM conversation_users WHERE conversation_id = 'conv-1'")
         .await;
@@ -2517,7 +2651,9 @@ async fn a_mention_intent_says_who_wrote_it_so_the_writer_can_exclude_them() {
             "<silverhand://human/human> are you there",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     // Both sends named someone, so both carry an intent: who is entitled to a record
     // is not this layer's answer. What the intent does say is who wrote it, which is
@@ -2553,7 +2689,9 @@ async fn a_main_line_plan_answers_by_actor_and_destination() {
     let by_agent_here = store
         .send_message(send(agent_actor(), CHANNEL_ID, "in my own conversation"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let by_agent_elsewhere = store
         .send_message(send_across(
             agent_actor(),
@@ -2562,11 +2700,15 @@ async fn a_main_line_plan_answers_by_actor_and_destination() {
             "into another conversation",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let by_human = store
         .send_message(send(user_actor(), CHANNEL_ID, "from a person"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let names = |fact: &silverhand_backend_core::messaging::MessageCreatedFact| {
         let view = fact.main_line().expect("a main-line send");
@@ -2616,7 +2758,9 @@ async fn a_reply_names_people_and_still_delivers_to_its_cluster() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let reply = store
         .send_message(reply_to(
@@ -2626,7 +2770,9 @@ async fn a_reply_names_people_and_still_delivers_to_its_cluster() {
             root.message().id.as_str(),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert!(reply.main_line().is_none());
     let view = reply.reply_cluster().expect("a reply carries its cluster");
@@ -2650,7 +2796,9 @@ async fn a_reply_names_people_and_still_delivers_to_its_cluster() {
     let main_line = store
         .send_message(send(agent_actor(), CHANNEL_ID, "not a reply"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     assert_eq!(
         main_line
             .main_line()
@@ -2679,7 +2827,9 @@ async fn naming_someone_in_a_direct_line_records_nothing() {
             "<silverhand://human/human> over here",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert!(
         fact.main_line()
@@ -2704,7 +2854,9 @@ async fn the_trigger_name_falls_back_through_what_the_sender_has() {
             "<silverhand://human/human> one",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .execute("UPDATE agents SET display_name = '' WHERE id = 'agent-1'")
         .await;
@@ -2715,7 +2867,9 @@ async fn the_trigger_name_falls_back_through_what_the_sender_has() {
             "<silverhand://human/human> two",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     fixture
         .execute("UPDATE agents SET display_name = '   ' WHERE id = 'agent-1'")
         .await;
@@ -2726,7 +2880,9 @@ async fn the_trigger_name_falls_back_through_what_the_sender_has() {
             "<silverhand://human/human> three",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     let trigger = |fact: &silverhand_backend_core::messaging::MessageCreatedFact| {
         fact.main_line()
@@ -2947,7 +3103,9 @@ async fn a_committed_reply_is_delivered_to_its_cluster_and_never_starts_the_room
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     // A reply that names nobody, so the mention prefix is empty and the aftermath is
@@ -2955,7 +3113,9 @@ async fn a_committed_reply_is_delivered_to_its_cluster_and_never_starts_the_room
     let reply = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let message = reply.message().id.as_str();
 
     let recorder = MainRecorder::default();
@@ -2998,7 +3158,9 @@ async fn the_record_writes_a_row_per_entitled_viewer_and_publishes_only_those() 
     let fact = store
         .send_message(naming_both_people(CHANNEL_ID))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let recorder = MainRecorder::default();
     let report = announce_with_real_record(&fact, &store, &recorder).await;
 
@@ -3124,7 +3286,9 @@ async fn a_viewer_who_lost_either_half_of_their_access_is_told_nothing() {
                 "<silverhand://human/human> still there?",
             ))
             .await
-            .unwrap();
+            .unwrap()
+            .committed()
+            .clone();
         // The send is durable and the intent already names them. What changes is
         // whether they may still read the conversation it happened in.
         fixture.execute(revocation).await;
@@ -3180,7 +3344,9 @@ async fn a_failed_insert_leaves_no_partial_record_and_takes_no_send_back() {
     let fact = store
         .send_message(naming_both_people(CHANNEL_ID))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     // Aborts the SECOND row of the batch, so the first one has already been written
     // when the failure arrives.
     fixture
@@ -3239,7 +3405,9 @@ async fn a_person_who_named_themselves_gets_no_record_but_their_reader_does() {
             "<silverhand://human/human> <silverhand://human/second> me and you",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let recorder = MainRecorder::default();
     let report = announce_with_real_record(&fact, &store, &recorder).await;
 
@@ -3284,7 +3452,9 @@ async fn only_a_named_person_who_may_still_read_the_conversation_is_recorded() {
             "<silverhand://human/second> only you",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let recorder = MainRecorder::default();
     announce_with_real_record(&addressed_to_one, &store, &recorder).await;
     assert_eq!(
@@ -3328,7 +3498,9 @@ async fn only_a_named_person_who_may_still_read_the_conversation_is_recorded() {
             "<silverhand://human/elsewhere> over here",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let recorder = MainRecorder::default();
     let report = announce_with_real_record(&naming_a_stranger, &store, &recorder).await;
     assert!(report.failed.is_empty(), "{:?}", report.failed);
@@ -3344,7 +3516,9 @@ async fn only_a_named_person_who_may_still_read_the_conversation_is_recorded() {
     let naming_nobody = store
         .send_message(send(agent_actor(), CHANNEL_ID, "just talking"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     assert!(naming_nobody.main_line().unwrap().mentions().is_none());
     let recorder = MainRecorder::default();
     let report = announce_with_real_record(&naming_nobody, &store, &recorder).await;
@@ -3377,7 +3551,9 @@ async fn naming_an_agent_produces_no_viewer_record_even_beside_a_human() {
             "<silverhand://agent/broad> <silverhand://human/human> both of you",
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let intent = fact
         .main_line()
         .unwrap()
@@ -3634,13 +3810,17 @@ async fn the_entry_previews_the_root_and_counts_only_non_system_replies() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, root_body))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let reply = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "one", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let reply_id = reply.message().id.as_str().to_owned();
 
     // A system copy of the cluster: it is not something a participant said, so it
@@ -3684,7 +3864,9 @@ async fn a_cluster_with_no_participant_reply_has_no_entry() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     sqlx::query(
@@ -3723,7 +3905,9 @@ async fn the_entry_preview_clamps_an_astral_scalar_at_the_utf16_boundary() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, &root_body))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
     store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "one", &root_id))
@@ -3753,7 +3937,9 @@ async fn repliers_are_distinct_most_recent_first_and_capped_while_the_total_is_n
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     // seq 2..=5 through the real path: agent-1, user-1, agent-1 again, agent-2.
@@ -3809,7 +3995,9 @@ async fn a_deleted_replier_keeps_its_snapshot_and_still_counts() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
     store
         .send_message(reply_to(broad_actor(), CHANNEL_ID, "from broad", &root_id))
@@ -3846,7 +4034,9 @@ async fn an_unresolved_replier_is_dropped_from_the_shown_set_and_the_total() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
     store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "identifiable", &root_id))
@@ -3892,13 +4082,17 @@ async fn a_committed_reply_survives_total_effect_failure_including_its_list_entr
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let reply = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let reply_id = reply.message().id.as_str().to_owned();
 
     // The entry rode back ON the committed fact — the same value the publication frame
@@ -3982,13 +4176,17 @@ async fn the_published_entry_is_the_committed_one_not_a_post_commit_reread() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let reply = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let reply_id = reply.message().id.as_str().to_owned();
 
     // Change the cluster AFTER the commit: a newer participant reply from a second
@@ -4088,13 +4286,17 @@ async fn the_cold_read_matches_the_entry_committed_on_the_fact() {
     let root = store
         .send_message(send(agent_actor(), CHANNEL_ID, "root"))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let root_id = root.message().id.as_str().to_owned();
 
     let reply = store
         .send_message(reply_to(user_actor(), CHANNEL_ID, "here", &root_id))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
     let committed = reply
         .thread()
         .expect("a reply carries its cluster projection")

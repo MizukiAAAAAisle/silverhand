@@ -16,8 +16,8 @@
 //! test rather than the happy paths.
 
 use silverhand_backend_core::messaging::{
-    AgentId, ConversationId, DirectLineAuthority, MessageCreatedFact, ReferencePositions,
-    SendActor, SendDestination, SendMessageError, SendMessageUnitOfWork, ThreadRootId, UserId,
+    AgentId, ConversationId, DirectLineAuthority, ReferencePositions, SendActor, SendDestination,
+    SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadRootId, UserId,
 };
 
 use super::{
@@ -67,22 +67,20 @@ pub trait ChannelAccess {
     ) -> Result<(), ChannelAccessRefusal>;
 }
 
-/// Why the agent door refused an address, asked only once a payload is settled.
+/// WHY an address was refused, and only that: the four answers the resolver owns.
 ///
-/// SIX ANSWERS, because the reference has six and a client keys on which one it got. Two
-/// arms — "unresolvable" and "forbidden" — collapsed four distinct facts a caller acts on
-/// differently: a token that is not an address is fixed by rewriting it, a stream the
-/// credential cannot reach through this door is not fixed by rewriting anything, and a
-/// missing capability is fixed by a human on a roster.
+/// It has no arm for the credential's reach or its grants, because it cannot see either. A
+/// port that could answer all three would let an implementation pick any of them for any
+/// reason, and the three are decided by different authorities in a fixed order.
 ///
-/// THREE STATUS FAMILIES, and the split is deliberate. 400 for the two that are judgements
-/// about the TOKEN, which say nothing about what exists. 404 for the two that are about
-/// existence — and that is exactly where unknown and unauthorized COLLAPSE, because a
-/// separate 403 would let one address get a different number from another and turn this door
-/// into an existence oracle. 403 only where the address was right and the CREDENTIAL is the
-/// limit, which is a fact the caller cannot fix by trying another address.
+/// THREE STATUS FAMILIES across the agent door's answers, and the split is deliberate. 400
+/// for the two that are judgements about the TOKEN, which say nothing about what exists. 404
+/// for the two that are about existence — and that is exactly where unknown and unauthorized
+/// COLLAPSE, because a separate 403 would let one address get a different number from another
+/// and turn this door into an existence oracle. 403 is reserved for the two facts that are
+/// about the CREDENTIAL, which live below.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TargetRefusal {
+pub enum AddressRefusal {
     /// The string is not an address.
     Malformed,
     /// A direct message addressed at its own author: an inbox is not a write destination.
@@ -91,10 +89,6 @@ pub enum TargetRefusal {
     Unresolved,
     /// Names a reply cluster that is not of that conversation.
     ThreadNotInTarget,
-    /// The stream is the caller's, and this door acts only where the session is anchored.
-    OutOfSessionScope,
-    /// The credential lacks the capability this door asks for.
-    CapabilityDenied,
 }
 
 /// Where an address landed. A stream, not a conversation: an absolute address may name
@@ -106,9 +100,96 @@ pub struct ResolvedStream {
     pub thread_root: Option<ThreadRootId>,
 }
 
-/// Where an agent's send lands and whether it may, asked AFTER admission.
-pub trait TargetAccess {
-    fn resolve(&self, agent: &AgentId, target: &str) -> Result<ResolvedStream, TargetRefusal>;
+/// Which stream an address names, asked AFTER admission. Resolution also proves the agent
+/// participates: an address that names a stream this agent is not in is `Unresolved`, which is
+/// why nothing below has to re-ask about participation.
+pub trait TargetAddress {
+    fn resolve(&self, agent: &AgentId, target: &str) -> Result<ResolvedStream, AddressRefusal>;
+}
+
+/// The authenticated agent behind a request, injected upstream.
+///
+/// TWO VARIANTS, because the reference has two and they REACH differently. A slot anchored to
+/// one conversation may act only there; an unanchored one may act in any stream the agent
+/// participates in. An earlier version of this type carried `{agent, source}` for both, which
+/// forced an anchor onto a credential that has none and left reach undecidable — the door
+/// could only guess, and guessing either way is a wrong answer for half the callers
+/// (@Cindy, review of `601a0ce5`).
+///
+/// The source is part of the CREDENTIAL and is never inferred: not from the address, not from
+/// a default. It decides REACH and nothing else — in particular it is not where the message
+/// lands, which is the resolved target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentCredential {
+    /// Anchored: this session speaks in one conversation.
+    ConversationSlot {
+        agent: AgentId,
+        source: ConversationId,
+    },
+    /// Unanchored: this session speaks wherever the agent participates.
+    AgentSlot { agent: AgentId },
+}
+
+impl AgentCredential {
+    pub fn agent(&self) -> &AgentId {
+        match self {
+            Self::ConversationSlot { agent, .. } | Self::AgentSlot { agent } => agent,
+        }
+    }
+}
+
+/// The address named a stream this agent is in, and this door still acts only where the
+/// session is anchored.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OutOfSessionScope;
+
+/// Whether this credential may act on that stream through this door.
+///
+/// A PURE FUNCTION, not a port, and that is a product decision rather than a convenience: its
+/// whole input is the slot kind, the anchor the credential carries, and the conversation the
+/// address resolved to — resolution has already proven participation, so there is nothing to
+/// look up. Made a port it would become a replaceable behaviour, and a composition could then
+/// decide that an anchored session may post anywhere, which is exactly the class of injection
+/// seam the position rule was closed against.
+///
+/// CRATE-PRIVATE for the same reason. The ports around it are public because a composition has
+/// to implement them; this is the route's own canonical rule, so there is no legitimate caller
+/// outside — closing the replaceable port while leaving a public function would add a new public
+/// surface for nothing (@Cindy, review of `65827a71`).
+///
+/// It leaks nothing: reach is only asked once resolution has proven participation, so every
+/// refusal here is about a stream the caller can already enumerate.
+pub(crate) fn reach(
+    credential: &AgentCredential,
+    stream: &ResolvedStream,
+) -> Result<(), OutOfSessionScope> {
+    match credential {
+        // Unanchored, and participation was the resolver's answer, so there is nothing left to
+        // judge.
+        AgentCredential::AgentSlot { .. } => Ok(()),
+        AgentCredential::ConversationSlot { source, .. } if *source == stream.conversation => {
+            Ok(())
+        }
+        AgentCredential::ConversationSlot { .. } => Err(OutOfSessionScope),
+    }
+}
+
+/// The credential lacks the grant this door asks for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityDenied;
+
+/// Whether this agent holds the grant a SEND needs, in the target's placement.
+///
+/// NAMED FOR THE GRANT, deliberately. A port that took a capability, or answered with the one
+/// it happened to check, would be a second authority for "which grant does a send need" — and
+/// the wire already names that bucket to the caller, so the two could disagree about what a
+/// human has to change. The one name lives at the door that renders it.
+pub trait SendCapability {
+    fn may_send_messages(
+        &self,
+        agent: &AgentId,
+        conversation: &ConversationId,
+    ) -> Result<(), CapabilityDenied>;
 }
 
 /// Why the HUMAN door refused. Its own type rather than a shared one: a refusal a door
@@ -130,7 +211,9 @@ pub(crate) enum HumanRefusal {
 #[derive(Debug)]
 pub(crate) enum AgentRefusal {
     Payload(PayloadRefusal),
-    Target(TargetRefusal),
+    Address(AddressRefusal),
+    OutOfSessionScope,
+    CapabilityDenied,
     Send(SendMessageError),
 }
 
@@ -144,7 +227,7 @@ pub(crate) async fn human_send<A, P, D, U>(
     raw_body: Option<serde_json::Value>,
     access: &A,
     ports: SendPorts<'_, P, D, U>,
-) -> Result<MessageCreatedFact, HumanRefusal>
+) -> Result<SendMessageOutcome, HumanRefusal>
 where
     A: ChannelAccess,
     P: ReferencePositions,
@@ -186,34 +269,50 @@ where
     .map_err(HumanRefusal::Send)
 }
 
-/// The AGENT door: admit, then resolve a target and its capability, then commit.
+/// The AGENT door: admit, resolve, judge reach, ask for the grant, then commit.
 ///
-/// Validating first is this door's contract: a runtime is told that its payload is
-/// malformed before anything about where it aimed, because that is the error it can
-/// correct without another round trip.
+/// FOUR AUTHORITIES IN A FIXED ORDER, each answering only what it owns. Validating first is
+/// this door's contract: a runtime is told its payload is malformed before anything about where
+/// it aimed, because that is the error it can correct without another round trip. Then the
+/// address is resolved — which also proves participation — then the credential's reach, then
+/// the grant.
 ///
-/// The `source` is the conversation the CREDENTIAL lives in and the target is wherever
-/// the body's address resolved to. They are two coordinates on purpose: the source keys
-/// the runtime's own field of view, so asking the capability of it would grant a send
-/// into any stream to anyone who could post in their own.
-pub(crate) async fn agent_send<A, P, D, U>(
-    agent: &AgentId,
-    source: &ConversationId,
+/// THE ORDER IS NOT A TYPE GUARANTEE (@Cindy). Nothing here stops a future edit from asking the
+/// capability before reach; the three failure types differ, and the code would still compile.
+/// What holds the order are the cross counter-examples beside this function: a request that
+/// fails two gates at once is answered by whichever comes first, so swapping two lines turns a
+/// cell red.
+///
+/// The credential's own conversation decides REACH and nothing else. Where the message lands —
+/// and therefore the coordinate a send is bound to — is the resolved TARGET, for both variants:
+/// an anchored slot has target == source once reach has passed, and an unanchored one has no
+/// ambient source to fall back on. Passing the credential's conversation as the send's source
+/// would have aimed every unanchored send at a stream nobody named.
+pub(crate) async fn agent_send<A, C, P, D, U>(
+    credential: &AgentCredential,
     raw_body: Option<serde_json::Value>,
-    access: &A,
+    address: &A,
+    capability: &C,
     ports: SendPorts<'_, P, D, U>,
-) -> Result<MessageCreatedFact, AgentRefusal>
+) -> Result<SendMessageOutcome, AgentRefusal>
 where
-    A: TargetAccess,
+    A: TargetAddress,
+    C: SendCapability,
     P: ReferencePositions,
     D: DirectLineAuthority,
     U: SendMessageUnitOfWork,
 {
     let request = validate_agent_payload(raw_body).map_err(AgentRefusal::Payload)?;
 
-    let stream = access
-        .resolve(agent, request.target())
-        .map_err(AgentRefusal::Target)?;
+    let stream = address
+        .resolve(credential.agent(), request.target())
+        .map_err(AgentRefusal::Address)?;
+
+    reach(credential, &stream).map_err(|OutOfSessionScope| AgentRefusal::OutOfSessionScope)?;
+
+    capability
+        .may_send_messages(credential.agent(), &stream.conversation)
+        .map_err(|CapabilityDenied| AgentRefusal::CapabilityDenied)?;
 
     let destination = match stream.thread_root {
         Some(root) => SendDestination::Thread(root),
@@ -223,8 +322,8 @@ where
 
     execute(
         ResolvedSendContext::resolved(
-            SendActor::Agent(agent.clone()),
-            source.clone(),
+            SendActor::Agent(credential.agent().clone()),
+            stream.conversation.clone(),
             stream.conversation,
             destination,
             freshness_bypass,
@@ -296,7 +395,7 @@ mod tests {
         async fn send_message(
             &self,
             command: SendMessage,
-        ) -> Result<MessageCreatedFact, SendMessageError> {
+        ) -> Result<SendMessageOutcome, SendMessageError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.commands.lock().unwrap().push(Recorded {
                 actor: command.actor().clone(),
@@ -347,9 +446,9 @@ mod tests {
 
     /// A resolver that answers with a fixed stream, so a test can say what an address
     /// resolved TO without restating the grammar that reads one.
-    struct Target(Result<ResolvedStream, TargetRefusal>);
+    struct Address(Result<ResolvedStream, AddressRefusal>);
 
-    impl Target {
+    impl Address {
         fn main_line() -> Self {
             Self(Ok(ResolvedStream {
                 conversation: elsewhere(),
@@ -364,18 +463,45 @@ mod tests {
             }))
         }
 
-        fn refuses(refusal: TargetRefusal) -> Self {
+        fn refuses(refusal: AddressRefusal) -> Self {
             Self(Err(refusal))
         }
     }
 
-    impl TargetAccess for Target {
+    impl TargetAddress for Address {
         fn resolve(
             &self,
             _agent: &AgentId,
             _target: &str,
-        ) -> Result<ResolvedStream, TargetRefusal> {
+        ) -> Result<ResolvedStream, AddressRefusal> {
             self.0.clone()
+        }
+    }
+
+    /// The grant, and only the grant. It cannot name a bucket, so a test cannot accidentally
+    /// assert one this door does not ask for.
+    struct Grant(Result<(), CapabilityDenied>);
+
+    impl SendCapability for Grant {
+        fn may_send_messages(
+            &self,
+            _agent: &AgentId,
+            _conversation: &ConversationId,
+        ) -> Result<(), CapabilityDenied> {
+            self.0
+        }
+    }
+
+    /// An unanchored credential reaches wherever the resolver says the agent participates.
+    fn agent_slot() -> AgentCredential {
+        AgentCredential::AgentSlot { agent: agent() }
+    }
+
+    /// An anchored one may act only in the conversation it names.
+    fn anchored_to(source: ConversationId) -> AgentCredential {
+        AgentCredential::ConversationSlot {
+            agent: agent(),
+            source,
         }
     }
 
@@ -461,12 +587,12 @@ mod tests {
     async fn the_agent_door_judges_a_body_before_it_resolves_a_target() {
         let unit = CountingUnitOfWork::default();
 
-        for refusal in [TargetRefusal::Malformed, TargetRefusal::CapabilityDenied] {
+        for refusal in [AddressRefusal::Malformed, AddressRefusal::Unresolved] {
             let outcome = agent_send(
-                &agent(),
-                &conversation(),
+                &agent_slot(),
                 malformed(),
-                &Target::refuses(refusal),
+                &Address::refuses(refusal),
+                &Grant(Ok(())),
                 ports(&unit),
             )
             .await;
@@ -501,18 +627,18 @@ mod tests {
         )
         .await;
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             malformed(),
-            &Target::main_line(),
+            &Address::main_line(),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             agent_body(),
-            &Target::refuses(TargetRefusal::CapabilityDenied),
+            &Address::refuses(AddressRefusal::Unresolved),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;
@@ -535,10 +661,10 @@ mod tests {
         )
         .await;
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             agent_body(),
-            &Target::main_line(),
+            &Address::main_line(),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;
@@ -572,10 +698,10 @@ mod tests {
             ),
         ] {
             let outcome = agent_send(
-                &agent(),
-                &conversation(),
+                &agent_slot(),
                 Some(body.clone()),
-                &Target::main_line(),
+                &Address::main_line(),
+                &Grant(Ok(())),
                 ports(&unit),
             )
             .await;
@@ -618,18 +744,18 @@ mod tests {
         )
         .await;
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             agent_body(),
-            &Target::main_line(),
+            &Address::main_line(),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             agent_body(),
-            &Target::cluster(),
+            &Address::cluster(),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;
@@ -670,19 +796,35 @@ mod tests {
         assert_ne!(commands[0].target, elsewhere());
     }
 
-    /// THE TWO COORDINATES STAY APART. An agent's credential lives in one conversation
-    /// and its words land in whichever the address resolved to; collapsing them would
-    /// make every send local. A human's are the same conversation, because that door
-    /// cannot address a foreign stream at all.
+    /// A SEND IS BOUND TO WHERE IT LANDED, and the credential's own conversation is nowhere in
+    /// the command.
+    ///
+    /// Both coordinates are the RESOLVED stream. An anchored slot has target == source by the
+    /// time reach has passed, and an unanchored one has no ambient source at all — so passing
+    /// the credential's conversation would have bound every unanchored send to a stream nobody
+    /// named, and bound a cross-stream anchored send to one it was refused from
+    /// (@Cindy, review of `601a0ce5`). The credential's conversation decides REACH and nothing
+    /// else. A human's two coordinates are the same because that door cannot address a foreign
+    /// stream at all.
     #[tokio::test]
-    async fn an_agent_send_keeps_its_source_and_its_target_apart() {
+    async fn a_send_is_bound_to_the_stream_it_landed_in() {
         let unit = CountingUnitOfWork::default();
 
+        // Unanchored: nothing but the resolved stream could have been used.
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             agent_body(),
-            &Target::main_line(),
+            &Address::main_line(),
+            &Grant(Ok(())),
+            ports(&unit),
+        )
+        .await;
+        // Anchored to the stream it resolved to, which is the only anchored send reach admits.
+        let _ = agent_send(
+            &anchored_to(elsewhere()),
+            agent_body(),
+            &Address::main_line(),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;
@@ -696,10 +838,46 @@ mod tests {
         .await;
 
         let commands = unit.commands();
-        assert_eq!(commands[0].source, conversation());
-        assert_eq!(commands[0].target, elsewhere());
-        assert_eq!(commands[1].source, conversation());
-        assert_eq!(commands[1].target, conversation());
+        for (index, command) in commands.iter().take(2).enumerate() {
+            assert_eq!(command.source, elsewhere(), "agent send {index}");
+            assert_eq!(command.target, elsewhere(), "agent send {index}");
+            // The credential's own conversation never becomes a coordinate of the send.
+            assert_ne!(command.source, conversation(), "agent send {index}");
+        }
+        assert_eq!(commands[2].source, conversation());
+        assert_eq!(commands[2].target, conversation());
+    }
+
+    /// REACH IS DECIDED BY THE CREDENTIAL, and the two variants answer the same address
+    /// differently. A single principal shape could not express both.
+    #[tokio::test]
+    async fn an_anchored_credential_may_act_only_where_it_is_anchored() {
+        let unit = CountingUnitOfWork::default();
+
+        let refused = agent_send(
+            &anchored_to(conversation()),
+            agent_body(),
+            &Address::main_line(),
+            &Grant(Ok(())),
+            ports(&unit),
+        )
+        .await;
+        assert!(matches!(refused, Err(AgentRefusal::OutOfSessionScope)));
+        assert_eq!(unit.calls.load(Ordering::SeqCst), 0);
+
+        let allowed = agent_send(
+            &agent_slot(),
+            agent_body(),
+            &Address::main_line(),
+            &Grant(Ok(())),
+            ports(&unit),
+        )
+        .await;
+        assert!(
+            matches!(allowed, Err(AgentRefusal::Send(_))),
+            "it reached the write unit"
+        );
+        assert_eq!(unit.calls.load(Ordering::SeqCst), 1);
     }
 
     /// ONLY A RUNTIME CAN ASK TO SKIP THE FRESHNESS GUARD, and only by saying so.
@@ -713,22 +891,22 @@ mod tests {
         let unit = CountingUnitOfWork::default();
 
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             Some(serde_json::json!({
                 "content": "hello",
                 "target": "#conv:conv-2",
                 "freshness_bypass": true
             })),
-            &Target::main_line(),
+            &Address::main_line(),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;
         let _ = agent_send(
-            &agent(),
-            &conversation(),
+            &agent_slot(),
             agent_body(),
-            &Target::main_line(),
+            &Address::main_line(),
+            &Grant(Ok(())),
             ports(&unit),
         )
         .await;

@@ -90,8 +90,8 @@ pub use command::{
 pub use environment::{EnvironmentUnavailable, SendClock, SendEntropy};
 pub use fact::{
     CommittedMessageView, CreatedMessage, FromKind, MainCommittedSend, MessageCreatedFact,
-    ReplyCommittedSend, THREAD_PREVIEW_MAX_UTF16, ThreadFollowerSource, ThreadListEntry,
-    ThreadReplyFact, thread_root_preview,
+    ReplyCommittedSend, SendMessageOutcome, THREAD_PREVIEW_MAX_UTF16, ThreadFollowerSource,
+    ThreadListEntry, ThreadReplyFact, thread_root_preview,
 };
 pub use freshness::StaleRefusal;
 pub use identity::{

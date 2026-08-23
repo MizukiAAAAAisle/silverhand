@@ -629,14 +629,36 @@ pub struct MainEffects<'ports, P, R, V, U, D, S> {
 
 /// Tells the world about a committed main-line send.
 ///
-/// It takes the view, not the fact, so there is no way to hand it a reply:
+/// It takes the view, not the fact, so there is no way to hand it a reply.
+///
+/// Stated as the type relation, with a local stand-in for this function's own parameter. The
+/// earlier version called the real announcer with `MainEffects<'_, (), …>`, and unit implements
+/// none of the effect traits — so the example failed on those bounds no matter which view it
+/// was given, and would have stayed green with the views made interchangeable (@Cindy's control
+/// experiment). What the gate must isolate is the ARGUMENT's type and nothing else.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::messaging::{MessageCreatedFact, post_commit};
+/// use silverhand_backend_core::messaging::{MainCommittedSend, MessageCreatedFact};
 ///
-/// fn announce(fact: &MessageCreatedFact, ports: post_commit::MainEffects<'_, (), (), (), (), (), ()>) {
-///     let reply = fact.reply_cluster().expect("a reply");
-///     let _ = post_commit::announce_main_send(reply, ports);
+/// fn main_input(_: MainCommittedSend<'_>) {}
+///
+/// fn announce(fact: &MessageCreatedFact) {
+///     main_input(fact.reply_cluster().expect("a reply"));
+/// }
+/// ```
+///
+/// The positive neighbour, which is what makes that failure meaningful: the same parameter
+/// accepts this path's own view.
+///
+/// ```
+/// use silverhand_backend_core::messaging::{MainCommittedSend, MessageCreatedFact};
+///
+/// fn main_input(_: MainCommittedSend<'_>) {}
+///
+/// fn announce(fact: &MessageCreatedFact) {
+///     if let Some(view) = fact.main_line() {
+///         main_input(view);
+///     }
 /// }
 /// ```
 ///
@@ -715,15 +737,33 @@ pub struct ReplyEffects<'ports, P, R, V, U, D> {
 
 /// Tells the world about a committed reply.
 ///
-/// It takes the reply view, not the fact, so there is no way to hand it a main-line
-/// send:
+/// It takes the reply view, not the fact, so there is no way to hand it a main-line send.
+///
+/// The mirror of [`announce_main_send`]'s gate, and stated the same way for the same reason:
+/// calling the real announcer with unit ports would fail on the effect bounds rather than on
+/// the view, which is a gate that cannot notice the views becoming interchangeable.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::messaging::{MessageCreatedFact, post_commit};
+/// use silverhand_backend_core::messaging::{MessageCreatedFact, ReplyCommittedSend};
 ///
-/// fn announce(fact: &MessageCreatedFact, ports: post_commit::ReplyEffects<'_, (), (), (), (), ()>) {
-///     let main = fact.main_line().expect("a main-line send");
-///     let _ = post_commit::announce_reply_send(main, ports);
+/// fn reply_input(_: ReplyCommittedSend<'_>) {}
+///
+/// fn announce(fact: &MessageCreatedFact) {
+///     reply_input(fact.main_line().expect("a main-line send"));
+/// }
+/// ```
+///
+/// And its positive neighbour:
+///
+/// ```
+/// use silverhand_backend_core::messaging::{MessageCreatedFact, ReplyCommittedSend};
+///
+/// fn reply_input(_: ReplyCommittedSend<'_>) {}
+///
+/// fn announce(fact: &MessageCreatedFact) {
+///     if let Some(view) = fact.reply_cluster() {
+///         reply_input(view);
+///     }
 /// }
 /// ```
 ///
