@@ -19,6 +19,9 @@ tower-http.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
 
+[build-dependencies]
+serde_json.workspace = true
+
 [dev-dependencies]
 futures-util.workspace = true
 silverhand-backend-sqlite.workspace = true

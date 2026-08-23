@@ -14,6 +14,7 @@ const OTHER: &str = "user-2";
 const WORKSPACE: &str = "workspace-1";
 const PRIVATE: &str = "private-1";
 const PUBLIC: &str = "public-1";
+const FIXED: &str = "fixed-1";
 const PAIR: &str = "pair-1";
 
 async fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -72,6 +73,22 @@ async fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
     .await
     .unwrap();
     sqlx::query(
+        "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, visibility, created_at, updated_at) VALUES (?, ?, 'workspace', 'fixed', 'Fixed', 'fixed', 'open', 'private', 1, 1)",
+    )
+    .bind(FIXED)
+    .bind(WORKSPACE)
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES (?, ?, 1)",
+    )
+    .bind(FIXED)
+    .bind(USER)
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, title, status, visibility, created_at, updated_at) VALUES (?, NULL, 'direct_pair', 'fixed', 'human', ?, 'human', ?, '', 'idle', 'private', 1, 1)",
     )
     .bind(PAIR)
@@ -117,6 +134,14 @@ async fn real_scope_authority_preserves_each_public_scope_rule() {
             false,
         ),
         (
+            EventScope::Conversation(ConversationId::parse(FIXED).unwrap()),
+            true,
+        ),
+        (
+            EventScope::ConversationSide(ConversationId::parse(FIXED).unwrap()),
+            true,
+        ),
+        (
             EventScope::Conversation(ConversationId::parse(PAIR).unwrap()),
             true,
         ),
@@ -129,6 +154,34 @@ async fn real_scope_authority_preserves_each_public_scope_rule() {
                 .unwrap(),
             expected,
             "{scope:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fixed_workspace_conversation_requires_explicit_membership() {
+    let (_directory, path) = fixture().await;
+    let authority = SqliteEventScopeAuthority::open(&path).await.unwrap();
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?")
+        .bind(FIXED)
+        .bind(USER)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+
+    for scope in [
+        EventScope::Conversation(ConversationId::parse(FIXED).unwrap()),
+        EventScope::ConversationSide(ConversationId::parse(FIXED).unwrap()),
+    ] {
+        assert!(
+            !authority
+                .authorize_event_scope(&user(), &scope)
+                .await
+                .unwrap()
         );
     }
 }

@@ -82,7 +82,7 @@ impl SqliteEventScopeAuthority {
         let b_id: Option<String> = row.try_get("endpoint_b_id").map_err(persistence)?;
         match placement.as_str() {
             "workspace" => {
-                if roster != "open"
+                if !matches!(roster.as_str(), "open" | "fixed")
                     || !matches!(visibility.as_str(), "private" | "public")
                     || a_kind.is_some()
                     || a_id.is_some()
@@ -111,7 +111,7 @@ impl SqliteEventScopeAuthority {
                     return Ok(false);
                 }
                 let archived_at: Option<i64> = row.try_get("archived_at").map_err(persistence)?;
-                if visibility != "public" || archived_at.is_some() {
+                if roster != "open" || visibility != "public" || archived_at.is_some() {
                     return Ok(false);
                 }
                 self.workspace_member(workspace.as_str(), viewer).await

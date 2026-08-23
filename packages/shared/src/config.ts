@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BACKEND_ADMISSION } from './backend-admission.generated.js';
 
 export const ServerModeSchema = z.enum(['embedded', 'remote']);
 export type ServerMode = z.infer<typeof ServerModeSchema>;
@@ -41,7 +42,8 @@ export const SERVER_CONFIG_FILENAME = 'server-config.json';
 export const INSTALLATION_ID_FILENAME = 'installation_id';
 export const DAEMON_HOST_CONFIG_FILENAME = 'daemon-config.json';
 export const EMBEDDED_BOOTSTRAP_FILENAME = 'embedded-bootstrap';
-export const EVENT_WS_SESSION_COOKIE = 'silverhand_event_ws_session';
+export const EVENT_WS_SESSION_COOKIE =
+  BACKEND_ADMISSION.eventWebSocketSessionCookie;
 export const AUTH_TOKEN_HEADER = 'authorization';
 
 export const DaemonHostConfigSchema = z.object({

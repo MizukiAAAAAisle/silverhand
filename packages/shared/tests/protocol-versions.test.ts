@@ -9,13 +9,9 @@ import {
 /**
  * #task:2110 — the single-authority DERIVATION guard.
  *
- * Every wire-protocol version number derives from ONE record
- * (`protocol-versions.ts`). What this suite protects is DERIVATION, not the
- * write-point: it fails RED if a future authority bump moves a field but a
- * derived constant is not re-read from it (export drift). It CANNOT prove
- * "written in exactly one place" — re-hardcoding a derived constant to the same
- * number stays green here — so that property is verified by source review / grep
- * in this ticket, not at runtime, and no source-AST checker is added for it.
+ * Desktop values derive from the generated projection of the shared backend
+ * admission artifact. The dedicated artifact suite protects that projection;
+ * this suite protects the public version facade and admission constants.
  *
  * Hermetic by design: no git, no tag reader, no filesystem. The `+1`
  * release-step discipline is a manual runbook check (`docs/desktop-server-api-epoch.md`)

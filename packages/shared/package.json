@@ -19,6 +19,8 @@
     "./app-data-layout": "./src/app-data-layout.ts"
   },
   "scripts": {
+    "generate:backend-admission": "node scripts/generate-backend-admission.mjs",
+    "check:backend-admission": "node scripts/generate-backend-admission.mjs --check",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "test": "vitest run",

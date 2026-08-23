@@ -35,11 +35,7 @@ use tokio::{
     time::{Instant, Sleep},
 };
 
-pub const EVENT_WEBSOCKET_PATH: &str = "/api/ws/events";
-pub const EVENT_WS_SESSION_COOKIE: &str = "silverhand_event_ws_session";
-pub const DESKTOP_API_EPOCH_HEADER: &str = "x-silverhand-desktop-api-epoch";
-pub const DESKTOP_SERVER_API_EPOCH: u32 = 3;
-pub const MINIMUM_CLIENT_API_EPOCH: u32 = 3;
+include!(concat!(env!("OUT_DIR"), "/backend_admission.rs"));
 
 const MAX_INBOUND_BYTES: usize = 64 * 1024;
 const REPLAY_CAPACITY: usize = 200;
@@ -803,7 +799,7 @@ async fn connection<A, S>(
                             &mut subscriptions,
                         ).await.is_err() { break; }
                     }
-                    Message::Pong(_) => { heartbeat.on_pong(); pong_deadline = None; }
+                    Message::Pong(_) => {}
                     Message::Close(_) => break,
                     Message::Ping(payload) => {
                         if socket.send(Message::Pong(payload)).await.is_err() { break; }
@@ -1591,6 +1587,79 @@ mod tests {
         assert_eq!(u16::from(close.code), 1008);
         assert_eq!(close.reason, "pong_timeout");
         controller.close().await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn control_pong_does_not_satisfy_the_json_heartbeat() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let origin = "http://127.0.0.1";
+        let mut config = EventWebSocketConfig::test(origin);
+        config.ping_interval = Duration::from_millis(20);
+        config.pong_timeout = Duration::from_millis(20);
+        let (app, controller) = router(hub, Sessions, Allows, config);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut socket = connect(address, origin).await;
+        assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+        assert_eq!(next_json(&mut socket).await["type"], "ping");
+        socket
+            .send(ClientMessage::Pong(Vec::new().into()))
+            .await
+            .unwrap();
+        let close = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ClientMessage::Close(Some(close)) = close else {
+            panic!("control pong must not clear the application heartbeat")
+        };
+        assert_eq!(u16::from(close.code), 1008);
+        assert_eq!(close.reason, "pong_timeout");
+        controller.close().await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn json_pong_clears_the_application_heartbeat() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let origin = "http://127.0.0.1";
+        let mut config = EventWebSocketConfig::test(origin);
+        config.ping_interval = Duration::from_millis(20);
+        config.pong_timeout = Duration::from_millis(20);
+        let (app, controller) = router(hub, Sessions, Allows, config);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut socket = connect(address, origin).await;
+        assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+        assert_eq!(next_json(&mut socket).await["type"], "ping");
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({ "type": "pong" }).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut socket).await["type"], "ping");
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({ "type": "pong" }).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        controller.close().await;
+        let close = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ClientMessage::Close(Some(close)) = close else {
+            panic!("controller must close a healthy socket")
+        };
+        assert_eq!(u16::from(close.code), 1001);
+        assert_eq!(close.reason, "server_shutdown");
         server.abort();
     }
 
