@@ -828,7 +828,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             outcomes.push(MentionCopyOutcome::Copied {
                 handle,
                 agent,
-                copy,
+                copy: Box::new(copy),
             });
         }
         Ok(outcomes)

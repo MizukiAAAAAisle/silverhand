@@ -31,7 +31,9 @@ pub enum MentionCopyOutcome {
     Copied {
         handle: ParticipantHandle,
         agent: AgentId,
-        copy: CommittedMentionCopy,
+        /// Boxed so an outcome costs the same whichever arm it is: a skip is a
+        /// handle and a reason, and it should not carry the footprint of a copy.
+        copy: Box<CommittedMentionCopy>,
     },
     Skipped {
         handle: ParticipantHandle,
