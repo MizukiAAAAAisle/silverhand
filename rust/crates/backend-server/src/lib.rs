@@ -6,5 +6,6 @@ mod bearer;
 mod error;
 pub mod host_runtime;
 pub mod http;
+pub mod messaging;
 pub mod runtime_credential;
 pub mod wire;

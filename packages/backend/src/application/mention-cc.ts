@@ -487,7 +487,12 @@ export async function dispatchMentionCcEffects(
   }
 }
 
-function renderMentionWrap(args: {
+/** Exported for the cross-implementation contract test (`tests/mention-cc-contract.test.ts`).
+ *  Internal to this module's own path — deliberately absent from the package
+ *  barrel and from any public surface: it is the production renderer, reached
+ *  directly so the contract is asserted against what ships rather than against a
+ *  copy of it. */
+export function renderMentionWrap(args: {
   agentHandle: string;
   sourceWorkspaceName: string;
   sourceConversationTitle: string;
@@ -520,15 +525,24 @@ function renderMentionWrap(args: {
   ].join('\n');
 }
 
+/** Quote every LOGICAL line. CommonMark ends a line at a bare CR as well as at LF
+ *  and CRLF, so splitting on `\n` alone left the rest of a CR-separated original as
+ *  live prose — and a reference in that remainder addressed its subject a second
+ *  time, which is the harm quoting exists to prevent. */
 function blockquote(text: string): string {
   return text
-    .split('\n')
+    .split(/\r\n|\r|\n/)
     .map(line => `> ${line}`)
     .join('\n');
 }
 
-function excerpt(text: string): string {
+/** Cut at a count of CHARACTERS, never inside one. `String.length` counts UTF-16
+ *  units, so slicing by it can split a surrogate pair and store a lone surrogate —
+ *  not text, and not something a second implementation can reproduce. Exported for
+ *  the same reason as the renderer above. */
+export function excerpt(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  if (flat.length <= EXCERPT_LIMIT) return flat;
-  return flat.slice(0, EXCERPT_LIMIT - 1) + '…';
+  const characters = Array.from(flat);
+  if (characters.length <= EXCERPT_LIMIT) return flat;
+  return characters.slice(0, EXCERPT_LIMIT - 1).join('') + '…';
 }

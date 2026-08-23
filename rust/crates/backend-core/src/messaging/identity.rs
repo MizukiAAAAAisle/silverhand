@@ -1,0 +1,228 @@
+//! Identities and ordinals: the forms this system mints, publishes and reads back.
+//!
+//! An identity is opaque here — minted in one place, and never parsed for meaning
+//! afterwards. The ordinal is the one value with a domain rule of its own, and it
+//! has no unchecked constructor in either direction.
+//!
+//! Minting CONSUMES a host capability and does not own one: [`super::environment`]
+//! declares the narrow ports and their failure, and what belongs here is the
+//! identity format those ports are spent on.
+
+use super::environment::{self, EnvironmentUnavailable, SendEntropy};
+
+/// A message identity as the application handles it: opaque, and never parsed for
+/// meaning once minted.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MessageId(String);
+
+/// A conversation-global ordinal. It counts messages in a conversation, not in a
+/// stream: a reply and a main-line message draw from the same sequence.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MessageSeq(i64);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ConversationId(String);
+
+/// The root of a reply cluster. Its only roles are the message row's own column
+/// and the stream-head key; it takes no part in ordinal assignment.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ThreadRootId(String);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AgentId(String);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UserId(String);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AttachmentId(String);
+
+/// A workspace, as Messaging needs to name one. Its own type rather than a borrowed
+/// one from whoever owns workspaces: this module only ever carries the coordinate.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct WorkspaceId(String);
+
+/// A notification is not a message. They happen to share an identity form, and
+/// giving them one type is how a notification eventually gets passed to something
+/// that expects a message.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct NotificationId(String);
+
+macro_rules! opaque_id {
+    ($name:ident) => {
+        impl $name {
+            /// Rejects only emptiness. An identity also arrives from outside,
+            /// where it is a coordinate rather than a claim, so validating its
+            /// shape here would refuse ids this system itself once minted.
+            pub fn parse(raw: impl Into<String>) -> Result<Self, EmptyIdentifier> {
+                let raw = raw.into();
+                if raw.is_empty() {
+                    return Err(EmptyIdentifier);
+                }
+                Ok(Self(raw))
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            pub fn into_inner(self) -> String {
+                self.0
+            }
+        }
+    };
+}
+
+opaque_id!(MessageId);
+opaque_id!(ConversationId);
+opaque_id!(ThreadRootId);
+opaque_id!(AgentId);
+opaque_id!(UserId);
+opaque_id!(AttachmentId);
+opaque_id!(WorkspaceId);
+opaque_id!(NotificationId);
+
+#[derive(Debug, thiserror::Error)]
+#[error("identifier must not be empty")]
+pub struct EmptyIdentifier;
+
+/// Bytes of entropy behind a minted message id. Twelve encode to exactly sixteen
+/// base64url characters with no padding, which is the identity clients already
+/// hold.
+const MESSAGE_ID_ENTROPY_BYTES: usize = 12;
+
+/// Mints an opaque identity in the form this system publishes. The format is owned
+/// here rather than by whichever store writes the row, and the entropy is a
+/// capability the caller provides: reaching for it implicitly would hide a failure
+/// that has to stay reportable.
+fn mint_identity(entropy: &impl SendEntropy) -> Result<String, EnvironmentUnavailable> {
+    let mut bytes = [0u8; MESSAGE_ID_ENTROPY_BYTES];
+    entropy.fill(&mut bytes)?;
+    Ok(environment::base64url(&bytes))
+}
+
+impl MessageId {
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
+    }
+}
+
+impl ConversationId {
+    /// A conversation minted by the system — the direct line a mention copy travels
+    /// on — carries the same identity form as every other.
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
+    }
+}
+
+impl NotificationId {
+    pub fn mint(entropy: &impl SendEntropy) -> Result<Self, EnvironmentUnavailable> {
+        Ok(Self(mint_identity(entropy)?))
+    }
+}
+
+impl MessageSeq {
+    pub fn get(self) -> i64 {
+        self.0
+    }
+}
+
+/// The only way to obtain an ordinal, whichever direction it came from. A negative
+/// ordinal has no meaning in either, so there is no unchecked constructor for a
+/// caller — including a store reading its own column — to prefer.
+impl TryFrom<i64> for MessageSeq {
+    type Error = InvalidSeq;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if value < 0 {
+            return Err(InvalidSeq { value });
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("message ordinal {value} is negative")]
+pub struct InvalidSeq {
+    pub value: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::*;
+
+    /// Entropy with no randomness in it, so an encoding can be asserted exactly.
+    struct FixedEntropy(&'static [u8]);
+
+    impl SendEntropy for FixedEntropy {
+        fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+            buffer.copy_from_slice(&self.0[..buffer.len()]);
+            Ok(())
+        }
+    }
+
+    /// Chosen so the two characters that distinguish base64url from base64 both
+    /// appear: a standard encoder would answer `+/+/ABCDEFGHIJKL` here.
+    const URL_SAFE_PROBE: &[u8] = &[
+        0xfb, 0xff, 0xbf, 0x00, 0x10, 0x83, 0x10, 0x51, 0x87, 0x20, 0x92, 0x8b,
+    ];
+
+    #[test]
+    fn an_ordinal_has_no_unchecked_constructor() {
+        assert_eq!(MessageSeq::try_from(7).unwrap().get(), 7);
+        assert_eq!(MessageSeq::try_from(0).unwrap().get(), 0);
+        assert_eq!(MessageSeq::try_from(-1).unwrap_err().value, -1);
+        assert!(MessageSeq::try_from(2).unwrap() > MessageSeq::try_from(1).unwrap());
+    }
+
+    #[test]
+    fn identifiers_reject_only_emptiness() {
+        assert!(MessageId::parse("").is_err());
+        assert_eq!(
+            MessageId::parse("Ab_1-cD2eF3gH4i").unwrap().as_str(),
+            "Ab_1-cD2eF3gH4i"
+        );
+        assert_eq!(ConversationId::parse("x").unwrap().as_str(), "x");
+    }
+
+    /// The published identity: twelve bytes as sixteen base64url characters with
+    /// no padding. Asserted against known entropy, so the encoding itself is
+    /// pinned rather than sampled.
+    #[test]
+    fn a_minted_message_id_encodes_its_entropy_the_way_clients_read_it() {
+        let from_probe = MessageId::mint(&FixedEntropy(URL_SAFE_PROBE)).unwrap();
+        let from_ascending =
+            MessageId::mint(&FixedEntropy(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])).unwrap();
+
+        assert_eq!(from_probe.as_str(), "-_-_ABCDEFGHIJKL");
+        assert_eq!(from_ascending.as_str(), "AAECAwQFBgcICQoL");
+        assert_eq!(from_probe.as_str().len(), 16);
+        assert!(!from_probe.as_str().contains('='));
+    }
+
+    /// Entropy is a capability, so its failure is reportable with the reason
+    /// intact rather than collapsing into "could not mint".
+    #[test]
+    fn a_failing_entropy_source_keeps_its_cause() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("entropy device is offline")]
+        struct Offline;
+
+        struct Broken;
+
+        impl SendEntropy for Broken {
+            fn fill(&self, _buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+                Err(EnvironmentUnavailable::from_source(Offline))
+            }
+        }
+
+        let failure = MessageId::mint(&Broken).unwrap_err();
+
+        assert_eq!(
+            failure.source().unwrap().to_string(),
+            "entropy device is offline"
+        );
+    }
+}

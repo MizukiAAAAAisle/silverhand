@@ -1,0 +1,1051 @@
+{
+  "oracle": "packages/backend/tests/send-ingress-contract.test.ts",
+  "consumer": "rust/crates/backend-server/tests/send_ingress_contract.rs",
+  "command": "scripts/parity-send-ingress.sh",
+  "ruler": "The approved Error parity policy measures status, `error`, and each issue's code, path and contract-defined message. Zod's extra issue metadata (`expected`/`received`/`options`/bounds/`inclusive`) is deliberately NOT part of the contract, so the oracle projects real issues onto that ruler before comparing. A difference the ruler does not measure is not a divergence.",
+  "cases": [
+    {
+      "name": "human: a body with no content names nothing",
+      "door": "human",
+      "body": {},
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "content"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: content must be a string",
+      "door": "human",
+      "body": {
+        "content": 1
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "content"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: an empty body says nothing at all",
+      "door": "human",
+      "body": {
+        "content": ""
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "custom",
+                "path": [
+                  "content"
+                ],
+                "message": "message must include text or at least one attachment"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: whitespace is not text",
+      "door": "human",
+      "body": {
+        "content": "   "
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "custom",
+                "path": [
+                  "content"
+                ],
+                "message": "message must include text or at least one attachment"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: U+FEFF is whitespace to the refine, so this body says nothing",
+      "door": "human",
+      "body": {
+        "content": "﻿"
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "custom",
+                "path": [
+                  "content"
+                ],
+                "message": "message must include text or at least one attachment"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: an optional list is not a nullable one",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": null
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "attachment_ids"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: a blank bare id is not an id",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": [
+          ""
+        ]
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "too_small",
+                "path": [
+                  "attachment_ids",
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "rust_expected": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "too_small",
+                "path": [
+                  "attachment_ids",
+                  0,
+                  "id"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "deviation": {
+        "policy_ref": "R7",
+        "boundary": "Attachment members only, and PATH only: the member's own path plus the field that broke, where the reference stops at the member index. Same status, same refusal.",
+        "owner": "Lio",
+        "exit": "Delete when the reference's own schema stops expressing this member as a union, or when a client is shown to consume the union's own error shape."
+      }
+    },
+    {
+      "name": "human: an attachment id must be a string",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": [
+          {
+            "id": 7
+          }
+        ]
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_union",
+                "path": [
+                  "attachment_ids",
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "rust_expected": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "attachment_ids",
+                  0,
+                  "id"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "deviation": {
+        "policy_ref": "R7",
+        "boundary": "Attachment members only, and PATH only: the member's own path plus the field that broke, where the reference stops at the member index. Same status, same refusal.",
+        "owner": "Lio",
+        "exit": "Delete when the reference's own schema stops expressing this member as a union, or when a client is shown to consume the union's own error shape."
+      }
+    },
+    {
+      "name": "human: an attachment label must be a string",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": [
+          {
+            "id": "att-1",
+            "label": 7
+          }
+        ]
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_union",
+                "path": [
+                  "attachment_ids",
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "rust_expected": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "attachment_ids",
+                  0,
+                  "label"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "deviation": {
+        "policy_ref": "R7",
+        "boundary": "Attachment members only, and PATH only: the member's own path plus the field that broke, where the reference stops at the member index. Same status, same refusal.",
+        "owner": "Lio",
+        "exit": "Delete when the reference's own schema stops expressing this member as a union, or when a client is shown to consume the union's own error shape."
+      }
+    },
+    {
+      "name": "human: a label must be the shape the contract words",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": [
+          {
+            "id": "att-1",
+            "label": "nonsense"
+          }
+        ]
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_string",
+                "path": [
+                  "attachment_ids",
+                  0,
+                  "label"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: two attachments may not wear the same label",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": [
+          {
+            "id": "att-1",
+            "label": "Image #1"
+          },
+          {
+            "id": "att-2",
+            "label": " Image #1 "
+          }
+        ]
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "custom",
+                "path": [
+                  "attachment_ids"
+                ],
+                "message": "attachment labels must be unique within a message"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: over the count bound, both broken rules answer",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": [
+          {
+            "id": "a",
+            "label": "Image #1"
+          },
+          {
+            "id": "b",
+            "label": "Image #1"
+          },
+          {
+            "id": "c",
+            "label": "Image #1"
+          },
+          {
+            "id": "d",
+            "label": "Image #1"
+          },
+          {
+            "id": "e",
+            "label": "Image #1"
+          },
+          {
+            "id": "f",
+            "label": "Image #1"
+          },
+          {
+            "id": "g",
+            "label": "Image #1"
+          },
+          {
+            "id": "h",
+            "label": "Image #1"
+          },
+          {
+            "id": "i",
+            "label": "Image #1"
+          },
+          {
+            "id": "j",
+            "label": "Image #1"
+          },
+          {
+            "id": "k",
+            "label": "Image #1"
+          },
+          {
+            "id": "l",
+            "label": "Image #1"
+          },
+          {
+            "id": "m",
+            "label": "Image #1"
+          },
+          {
+            "id": "n",
+            "label": "Image #1"
+          },
+          {
+            "id": "o",
+            "label": "Image #1"
+          },
+          {
+            "id": "p",
+            "label": "Image #1"
+          },
+          {
+            "id": "q",
+            "label": "Image #1"
+          },
+          {
+            "id": "r",
+            "label": "Image #1"
+          },
+          {
+            "id": "s",
+            "label": "Image #1"
+          },
+          {
+            "id": "t",
+            "label": "Image #1"
+          },
+          {
+            "id": "u",
+            "label": "Image #1"
+          }
+        ]
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "too_big",
+                "path": [
+                  "attachment_ids"
+                ]
+              },
+              {
+                "code": "custom",
+                "path": [
+                  "attachment_ids"
+                ],
+                "message": "attachment labels must be unique within a message"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: a reply target may be absent but not empty",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "reply_to_message_id": ""
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "too_small",
+                "path": [
+                  "reply_to_message_id"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: a reply target may not be null",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "reply_to_message_id": null
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "reply_to_message_id"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: every failing key answers, in the schema's own order",
+      "door": "human",
+      "body": {
+        "content": 1,
+        "attachment_ids": null,
+        "reply_to_message_id": ""
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "content"
+                ]
+              },
+              {
+                "code": "invalid_type",
+                "path": [
+                  "attachment_ids"
+                ]
+              },
+              {
+                "code": "too_small",
+                "path": [
+                  "reply_to_message_id"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: a body that is not an object is judged as a document",
+      "door": "human",
+      "body": 7,
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: an array is not an object either",
+      "door": "human",
+      "body": [],
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: an unreadable body is judged as an empty object",
+      "door": "human",
+      "raw_body": "not json at all",
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "content"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "human: content over the byte cap, in this door's words",
+      "door": "human",
+      "reference": {
+        "refused": {
+          "status": 413,
+          "body": {
+            "error": "message content exceeds 64KiB limit",
+            "code": "content_too_large",
+            "max_bytes": 65536,
+            "actual_bytes": 65537
+          }
+        }
+      },
+      "body": {},
+      "generated_content": {
+        "repeat": "a",
+        "times": 65537
+      }
+    },
+    {
+      "name": "human: the shape is judged before the size",
+      "door": "human",
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "custom",
+                "path": [
+                  "content"
+                ],
+                "message": "message must include text or at least one attachment"
+              }
+            ]
+          }
+        }
+      },
+      "body": {},
+      "generated_content": {
+        "repeat": " ",
+        "times": 100001
+      }
+    },
+    {
+      "name": "human: an attachment is enough to say something",
+      "door": "human",
+      "body": {
+        "content": "",
+        "attachment_ids": [
+          "att-1"
+        ]
+      },
+      "reference": {
+        "admitted": {
+          "content": "",
+          "attachments": [
+            {
+              "id": "att-1"
+            }
+          ],
+          "reply_to_message_id": null
+        }
+      }
+    },
+    {
+      "name": "human: a label is trimmed before it is judged, and admitted trimmed",
+      "door": "human",
+      "body": {
+        "content": "see this",
+        "attachment_ids": [
+          {
+            "id": "att-1",
+            "label": " Image #1 "
+          }
+        ]
+      },
+      "reference": {
+        "admitted": {
+          "content": "see this",
+          "attachments": [
+            {
+              "id": "att-1",
+              "label": "Image #1"
+            }
+          ],
+          "reply_to_message_id": null
+        }
+      }
+    },
+    {
+      "name": "human: an opaque id is NOT trimmed",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "attachment_ids": [
+          " "
+        ]
+      },
+      "reference": {
+        "admitted": {
+          "content": "hi",
+          "attachments": [
+            {
+              "id": " "
+            }
+          ],
+          "reply_to_message_id": null
+        }
+      }
+    },
+    {
+      "name": "human: an unknown key is dropped, not refused",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "nonsense": 1
+      },
+      "reference": {
+        "admitted": {
+          "content": "hi",
+          "attachments": [],
+          "reply_to_message_id": null
+        }
+      }
+    },
+    {
+      "name": "human: a runtime's freshness field is an unknown key here",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "freshness_bypass": true
+      },
+      "reference": {
+        "admitted": {
+          "content": "hi",
+          "attachments": [],
+          "reply_to_message_id": null
+        }
+      }
+    },
+    {
+      "name": "human: U+0085 is not whitespace to the refine, so this body says something",
+      "door": "human",
+      "body": {
+        "content": ""
+      },
+      "reference": {
+        "admitted": {
+          "content": "",
+          "attachments": [],
+          "reply_to_message_id": null
+        }
+      }
+    },
+    {
+      "name": "human: a reply names the message it answers",
+      "door": "human",
+      "body": {
+        "content": "hi",
+        "reply_to_message_id": "msg-1"
+      },
+      "reference": {
+        "admitted": {
+          "content": "hi",
+          "attachments": [],
+          "reply_to_message_id": "msg-1"
+        }
+      }
+    },
+    {
+      "name": "agent: a send with no address is not a send",
+      "door": "agent",
+      "body": {
+        "content": "hi"
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "target"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "agent: an address may not be null",
+      "door": "agent",
+      "body": {
+        "content": "hi",
+        "target": null
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "target"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "agent: an address may not be empty",
+      "door": "agent",
+      "body": {
+        "content": "hi",
+        "target": ""
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "too_small",
+                "path": [
+                  "target"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "agent: both faults answer, in the schema's own order",
+      "door": "agent",
+      "body": {
+        "content": 1,
+        "target": ""
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "content"
+                ]
+              },
+              {
+                "code": "too_small",
+                "path": [
+                  "target"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "agent: a send may not carry the one resolution a send cannot have",
+      "door": "agent",
+      "body": {
+        "content": "hi",
+        "target": "#conv:conv-1",
+        "stale_event_id": "evt-1",
+        "stale_resolution_reason": "obsolete"
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_enum_value",
+                "path": [
+                  "stale_resolution_reason"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "agent: the freshness escape hatch is a boolean",
+      "door": "agent",
+      "body": {
+        "content": "hi",
+        "target": "#conv:conv-1",
+        "freshness_bypass": "yes"
+      },
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "freshness_bypass"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "agent: an unreadable body is missing both required members",
+      "door": "agent",
+      "raw_body": "}{",
+      "reference": {
+        "refused": {
+          "status": 400,
+          "body": {
+            "error": "invalid input",
+            "issues": [
+              {
+                "code": "invalid_type",
+                "path": [
+                  "content"
+                ]
+              },
+              {
+                "code": "invalid_type",
+                "path": [
+                  "target"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "agent: content over the byte cap, in this door's words",
+      "door": "agent",
+      "reference": {
+        "refused": {
+          "status": 413,
+          "body": {
+            "error": "message content exceeds 64KiB limit; send it as an attachment instead",
+            "code": "content_too_large",
+            "max_bytes": 65536,
+            "actual_bytes": 65537
+          }
+        }
+      },
+      "body": {
+        "target": "#conv:conv-1"
+      },
+      "generated_content": {
+        "repeat": "a",
+        "times": 65537
+      }
+    },
+    {
+      "name": "agent: a body that names its address is admitted",
+      "door": "agent",
+      "body": {
+        "content": "hi",
+        "target": "#conv:conv-1",
+        "attachment_ids": [
+          "att-1"
+        ],
+        "freshness_bypass": true
+      },
+      "reference": {
+        "admitted": {
+          "content": "hi",
+          "attachments": [
+            {
+              "id": "att-1"
+            }
+          ],
+          "target": "#conv:conv-1",
+          "freshness_bypass": true
+        }
+      }
+    },
+    {
+      "name": "agent: the cap counts bytes, not characters",
+      "door": "agent",
+      "reference": {
+        "refused": {
+          "status": 413,
+          "body": {
+            "error": "message content exceeds 64KiB limit; send it as an attachment instead",
+            "code": "content_too_large",
+            "max_bytes": 65536,
+            "actual_bytes": 65538
+          }
+        }
+      },
+      "body": {
+        "target": "#conv:conv-1"
+      },
+      "generated_content": {
+        "repeat": "é",
+        "times": 32769
+      }
+    }
+  ],
+  "generated_content": "A case may replace its body's `content` with `generated_content: {repeat, times}` — that character repeated that many times — so a case about a byte bound does not put 64KiB of literal into the artifact. `body` then carries the case's other members; `content` is supplied by the generator."
+}

@@ -1,15 +1,19 @@
 #![forbid(unsafe_code)]
-//! SQLite implementation of the `foundation_message` ports in `backend-core`.
+//! SQLite adapters for `backend-core`'s ports.
 //!
-//! This is the foundation proof store, not the product message store. It owns
-//! its own `foundation_*` tables, creates them itself, and claims no migration
-//! ledger, so opening it against a database cannot take over that database's
-//! schema identity or version history.
+//! The `foundation_message` store below is the foundation proof store, not the
+//! product message store. It owns its own `foundation_*` tables, creates them
+//! itself, and claims no migration ledger, so opening it against a database cannot
+//! take over that database's schema identity or version history. The product
+//! create-message write unit lives in [`messaging`], which consumes a database it
+//! does not own.
 //!
 //! Everything specific to the engine stays inside this crate: SQL text, schema,
 //! PRAGMAs, transaction modes and driver errors. The ports return application
 //! facts and `PersistenceFailure`, so no driver type reaches the application or
 //! the wire.
+
+pub mod messaging;
 
 use std::{path::Path, time::Duration};
 
