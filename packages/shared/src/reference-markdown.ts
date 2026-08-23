@@ -66,40 +66,38 @@ import {
  */
 
 /**
- * The string this module's OFFSETS are relative to, and the prefix the parser
- * dropped to get there.
+ * The coordinate system the parser's offsets are expressed in, derived from the
+ * value the parser was given.
  *
- * `fromMarkdown` removes a leading U+FEFF before parsing and does not adjust the
- * positions it reports, so every node offset in the document is one short of the
- * value that was handed in. Both consumers here index text BY those offsets — the
+ * `fromMarkdown` removes ONE leading U+FEFF from its input and does not adjust the
+ * positions it reports, so every offset in the document is expressed against
+ * `original.slice(1)`. Both consumers here index text BY those offsets — the
  * autolink discriminator slices it, the shorthand scan tests containment against it
- * — so handing them the original value made a BOM-prefixed body address nobody and
- * made the composer silently drop its last `@handle`.
+ * — so indexing the original value made a BOM-prefixed body address nobody and made
+ * the composer silently drop its last `@handle`.
  *
- * THE WHOLE LEADING RUN, not one character, and the difference is not pedantic: the
- * parser strips one BOM from WHATEVER STRING IT IS GIVEN. Removing a single one from
- * `\uFEFF\uFEFF…` hands it a value that still begins with a BOM, it strips that one
- * too, and the offsets are shifted by one all over again — the original bug, one
- * character further in. What this function has to guarantee is the invariant the
- * offsets depend on: **the body handed to the parser does not begin with a BOM.**
+ * THE PARSER ALWAYS EATS THE ORIGINAL (@Cindy, review of the first fix). This
+ * function describes a coordinate origin; it does not choose the parser's input.
+ * Removing the whole leading RUN and parsing that instead looked equivalent — the
+ * offsets line up either way — but it silently reclassifies content as prefix: the
+ * parser drops one BOM and SEES the rest, so `\uFEFF\uFEFF` + four spaces is a
+ * paragraph (the surviving BOM opens the line), while the same value with both
+ * removed is an indented CODE BLOCK. Same reference, opposite answer. So exactly one
+ * character comes off here, and any survivor stays in `body`, where the parser
+ * counted it.
  *
- * LEADING ONLY, and U+FEFF only. A BOM anywhere else is content the parser counted
- * and shifts nothing, so it is left exactly where it was written. This is not
- * whitespace handling and not normalization — it is the coordinate origin, and
- * widening it (a trim, a Unicode normalize, ZWSP/NBSP) would silently change which
- * bytes a body is made of. Those characters keep their own meaning: they are text
- * the parser sees.
+ * LEADING ONLY, and U+FEFF only. A BOM anywhere else was never dropped and shifts
+ * nothing. This is not whitespace handling and not normalization — widening it (a
+ * trim, a Unicode normalize, ZWSP/NBSP) would change which bytes a body is made of.
  *
- * Callers that only read the body pass `body` and ignore `prefix`. The one caller
- * that REWRITES splices `body` and puts `prefix` back verbatim, so no byte is lost
- * and the stored value differs from the author's only where a handle was rewritten.
+ * Callers that only READ use `body` and ignore `prefix`. The one caller that
+ * REWRITES splices `body` and puts `prefix` back verbatim, so no byte is lost and
+ * the stored value differs from the author's only where a handle was rewritten.
  */
 function parserCoordinates(value: string): { prefix: string; body: string } {
-  let end = 0;
-  while (value.charCodeAt(end) === 0xfeff) end += 1;
-  return end === 0
-    ? { prefix: '', body: value }
-    : { prefix: value.slice(0, end), body: value.slice(end) };
+  return value.charCodeAt(0) === 0xfeff
+    ? { prefix: value.slice(0, 1), body: value.slice(1) }
+    : { prefix: '', body: value };
 }
 
 /**
@@ -174,14 +172,10 @@ const NON_PROSE_TYPES: ReadonlySet<string> = new Set([
  */
 export function extractMessageReferences(content: string): Reference[] {
   // No Markdown parse at all for the overwhelming majority of bodies. Sound
-  // because the parser's accepted set is prefixed by the literal this tests for,
-  // and it reads the whole value because it needs no offsets.
+  // because the parser's accepted set is prefixed by the literal this tests for.
   if (!mayContainReference(content)) return [];
 
-  // One string for the parse AND for the slice below: they have to agree about
-  // where things are.
-  const { body } = parserCoordinates(content);
-  const tree = fromMarkdown(body);
+  const tree = fromMarkdown(content);
 
   const out: Reference[] = [];
   const seen = new Set<string>();
@@ -197,7 +191,7 @@ export function extractMessageReferences(content: string): Reference[] {
       // Children are the label. In an autolink they are a copy of the
       // destination, and in every other link form they are exactly the part we
       // refuse to read — so identity comes from the destination or nowhere.
-      if (isAutolink(node, body)) {
+      if (isAutolink(node, content)) {
         const ref = parseReference(node.url);
         if (ref) {
           const key = `${ref.kind}/${ref.handle}`;
@@ -236,23 +230,26 @@ export type LinkSpan = {
 
 /**
  * Whether this `link` node was written as a CommonMark autolink, decided by
- * slicing the text it was parsed from. A node without offsets or without a
+ * slicing the document it was parsed from. A node without offsets or without a
  * destination is refused rather than guessed at — `fromMarkdown` always positions
  * its nodes, so the absence would mean a synthetic tree, which is not a body
  * anyone sent.
  *
- * `source` MUST be the exact string that was handed to the parser. A parser that
- * dropped a prefix (`fromMarkdown` drops one leading U+FEFF) reports offsets
- * against what it KEPT, so passing the value before that step shifts every offset
- * in the document and this returns `false` for autolinks that are perfectly well
- * formed. Fail-closed, and silent: the caller sees a body that addresses nobody and
- * renders no chip, with nothing to indicate why. See {@link parserCoordinates},
- * which is how this module's own callers satisfy the requirement.
+ * `source` is THE VALUE THE PARSER WAS GIVEN — the whole document, exactly as it
+ * arrived. The coordinate adjustment the offsets need lives inside this function
+ * ({@link parserCoordinates}), which is why callers need to know nothing about it:
+ * the parser expresses its positions against the input minus one leading U+FEFF, so
+ * a naive slice of the original is one character out for every link in the
+ * document, and this predicate then answers `false` for perfectly well-formed
+ * autolinks — silently, leaving a body that addresses nobody and renders no chip.
  *
  * SHARED BETWEEN THE TWO AXES, and only at this layer (@Cindy, #task:2001):
  * delivery and display both ask "was this written as `<dest>`?", so asking it
  * twice would be two implementations of one syntax fact — and a body's bytes
  * would then be able to mean different things to the reader and to the fanout.
+ * That is also why the adjustment belongs HERE rather than in each caller: the
+ * renderer hands over its own document and gets the same answer as the fanout,
+ * without a second copy of this correction to keep in step.
  * What is NOT shared is POSITION policy: delivery refuses code spans and
  * blockquotes ({@link extractMessageReferences}), while the renderer chips inside
  * both, because quoting a message must keep looking like the message. Each axis
@@ -265,7 +262,7 @@ export function isAutolink(node: LinkSpan, source: string): boolean {
   if (url === undefined || start === undefined || end === undefined) {
     return false;
   }
-  return source.slice(start, end) === `<${url}>`;
+  return parserCoordinates(source).body.slice(start, end) === `<${url}>`;
 }
 
 /**
@@ -317,21 +314,25 @@ type ShorthandMatch = {
  * and it makes an entity-encoded `@` a non-match for free, which is correct:
  * `&commat;alice` is not the alias form.
  *
- * Takes the PARSER'S BODY ({@link parserCoordinates}), and the ranges it returns are
- * relative to that same string: a caller that spliced the author's original value
- * with these offsets would be one character out for every body the parser trimmed a
- * prefix from.
+ * Takes the ORIGINAL value and PARSES it — block structure is decided by the whole
+ * document — while every offset it returns belongs to the parser's coordinate body
+ * ({@link parserCoordinates}), which is also what the regex scans so the two agree.
+ * A caller that spliced the original with these ranges would be one character out
+ * for every document that began with a BOM, which is how the last `@handle` in such
+ * a body came to be dropped.
  */
-function collectShorthandMatches(body: string): ShorthandMatch[] {
+function collectShorthandMatches(source: string): ShorthandMatch[] {
   // Fast path, mirroring `mayContainReference` on the delivery side but keyed on
   // the OTHER spelling: no `@` anywhere means nothing to rewrite, so an ordinary
   // message never pays for a Markdown parse on the send path.
-  if (!body.includes('@')) return [];
+  if (!source.includes('@')) return [];
 
   // Plain CommonMark, deliberately the same dialect (and the same call) as the
   // extractor above: the two must agree about block structure, and the extractor
-  // is the one that decides delivery.
-  const tree = fromMarkdown(body);
+  // is the one that decides delivery. Both hand over the ORIGINAL, so neither can
+  // change what the other sees.
+  const tree = fromMarkdown(source);
+  const { body } = parserCoordinates(source);
 
   // Admitted `text` ranges in document order. The walk is the extractor's —
   // iterative for the same reason, and pre-order so leaves come out ascending
@@ -430,10 +431,7 @@ function isEscapedAt(source: string, at: number, floor: number): boolean {
 export function findShorthandCandidates(source: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  // Reports handles rather than positions, so the dropped prefix cannot reach the
-  // answer — but it has to agree with the rewrite about which occurrences EXIST,
-  // and that is a question about offsets.
-  for (const match of collectShorthandMatches(parserCoordinates(source).body)) {
+  for (const match of collectShorthandMatches(source)) {
     if (seen.has(match.handle)) continue;
     seen.add(match.handle);
     out.push(match.handle);
@@ -466,7 +464,7 @@ export function rewriteShorthandReferences(
 ): string {
   const { prefix, body } = parserCoordinates(source);
   const edits: Array<{ start: number; end: number; text: string }> = [];
-  for (const { start, end, handle } of collectShorthandMatches(body)) {
+  for (const { start, end, handle } of collectShorthandMatches(source)) {
     const kind = resolve(handle);
     if (!kind) continue;
     edits.push({ start, end, text: formatReferenceToken({ kind, handle }) });

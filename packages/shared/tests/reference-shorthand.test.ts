@@ -303,13 +303,32 @@ describe('rewriteShorthandReferences — a body that begins with a BOM', () => {
     const stored = rewriteShorthandReferences(`${bom}@Alice`, roster);
     expect(stored.startsWith(bom)).toBe(true);
     expect(stored.split(bom)).toHaveLength(2);
-    // A DOUBLED prefix still rewrites, and still comes back whole. The whole run
-    // has to leave the parser's input — it strips one BOM from whatever it is
-    // given, so leaving the second in place would shift every offset again — and
-    // re-prepending it verbatim is what keeps that invisible to the author.
+    // A DOUBLED prefix still rewrites and still comes back whole, but only ONE
+    // character is re-prepended: the parser drops one and counts the rest as
+    // content, so the survivor is already inside the body being spliced.
     expect(rewriteShorthandReferences(`${bom}${bom}@Alice and @shiki`, roster)).toBe(
       `${bom}${bom}<silverhand://agent/Alice> and <silverhand://human/shiki>`,
     );
+  });
+
+  it('rewrites according to what the parser actually sees', () => {
+    // The same discriminating pair the extractor has, on this face. Four spaces open
+    // an indented code block — where a shorthand could never address anyone — unless
+    // something else opens the line first:
+    //
+    //   one BOM  → dropped, so the line is `    @Alice` → CODE → left alone.
+    //   two BOMs → one dropped, one SEEN, so it is a paragraph → rewritten.
+    //
+    // A coordinate rule that removed the whole run would parse both as code and
+    // rewrite neither, which is a body whose author is never told.
+    expect(rewriteShorthandReferences(`${bom}    @Alice`, roster)).toBe(
+      `${bom}    @Alice`,
+    );
+    expect(findShorthandCandidates(`${bom}    @Alice`)).toEqual([]);
+    expect(rewriteShorthandReferences(`${bom}${bom}    @Alice`, roster)).toBe(
+      `${bom}${bom}    <silverhand://agent/Alice>`,
+    );
+    expect(findShorthandCandidates(`${bom}${bom}    @Alice`)).toEqual(['Alice']);
   });
 
   it('returns the value the author wrote when nothing resolved', () => {

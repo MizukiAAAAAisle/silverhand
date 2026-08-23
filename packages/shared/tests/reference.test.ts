@@ -353,14 +353,31 @@ describe('a body that begins with a BOM still addresses the people it names', ()
     ).toEqual([{ kind: 'human', handle: 'shiki' }, alice]);
   });
 
-  it('reads through a repeated prefix, not just a single one', () => {
-    // The parser strips one BOM from whatever it is handed, so removing a single
-    // character would leave a value that still begins with one and shift every
-    // offset again. The whole leading run is the coordinate prefix.
+  it('reads through a repeated prefix', () => {
     for (const depth of [2, 3, 8]) {
       const body = `${bom.repeat(depth)}<silverhand://agent/Alice>`;
       expect(extractMessageReferences(body), `depth ${depth}`).toEqual([alice]);
     }
+  });
+
+  it('leaves the BOMs it did not drop as content the parser sees', () => {
+    // The discriminating pair, and it is about PARSE SEMANTICS rather than about
+    // whether extraction happens to work. Four spaces open an indented code block,
+    // unless something else opens the line first.
+    //
+    //   one BOM  → the parser drops it, sees `    <ref>` → CODE → nobody.
+    //   two BOMs → it drops one and SEES the other, which opens the line, so
+    //              `\uFEFF    <ref>` is a PARAGRAPH → the reference is read.
+    //
+    // Opposite answers from the same four spaces. A coordinate rule that removed the
+    // whole run would hand the parser `    <ref>` in both cases and lose the second
+    // reference — which is why the run must stay in the body it was counted in.
+    expect(extractMessageReferences(`${bom}    <silverhand://agent/Alice>`)).toEqual(
+      [],
+    );
+    expect(
+      extractMessageReferences(`${bom}${bom}    <silverhand://agent/Alice>`),
+    ).toEqual([alice]);
   });
 
   it('keeps the position rules it always had', () => {
