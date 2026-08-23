@@ -1857,6 +1857,20 @@ impl Fixture {
         .collect()
     }
 
+    /// The identity and moment of each stored notification, in insertion order.
+    /// Kept apart from {@link notification_rows} because these two columns are
+    /// MINTED by the adapter rather than projected from the send: they are the only
+    /// values a returned row could disagree with the table about.
+    async fn notification_identities(&mut self) -> Vec<(String, i64)> {
+        sqlx::query("SELECT id, created_at FROM notifications ORDER BY rowid")
+            .fetch_all(&mut self.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.get::<String, _>("id"), row.get::<i64, _>("created_at")))
+            .collect()
+    }
+
     async fn notification_rows(&mut self) -> Vec<serde_json::Value> {
         sqlx::query(
             "SELECT kind, user_id, agent_id, workspace_id, conversation_id, message_id, \
@@ -2684,17 +2698,56 @@ fn naming_both_people(conversation: &str) -> SendMessage {
     )
 }
 
+/// A clock that never answers twice with the same moment, over real entropy.
+///
+/// Reading the host clock a second time is normally INVISIBLE — two calls inside
+/// one millisecond agree — so a test that wanted to catch it would be asserting on
+/// timing. Here every reading steps, which turns "this value was read where it was
+/// used" into a mechanical question: a row stamped with one reading and reported
+/// with another cannot match.
+struct SteppingClock {
+    readings: AtomicUsize,
+}
+
+impl SteppingClock {
+    fn new() -> Self {
+        Self {
+            readings: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl SendClock for SteppingClock {
+    fn now_unix_ms(&self) -> Result<i64, EnvironmentUnavailable> {
+        Ok(1_000 + self.readings.fetch_add(1, Ordering::SeqCst) as i64)
+    }
+}
+
+impl SendEntropy for SteppingClock {
+    fn fill(&self, buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+        OsEntropy.fill(buffer)
+    }
+}
+
 /// The main-line ports, recording what was asked of them. Only the record port is
 /// real: these say whether an attempt happened at all, which is the half the
 /// database cannot answer.
 #[derive(Default)]
 struct MainRecorder {
     calls: std::sync::Mutex<Vec<String>>,
+    /// The rows the publication was actually handed. Kept whole, because a
+    /// consumer sees this object and never the table it came from — so it is the
+    /// only thing that can be compared against the table.
+    published: std::sync::Mutex<Vec<CommittedMentionRow>>,
 }
 
 impl MainRecorder {
     fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
+    }
+
+    fn published_rows(&self) -> Vec<CommittedMentionRow> {
+        self.published.lock().unwrap().clone()
     }
 
     fn note(&self, call: String) {
@@ -2715,6 +2768,7 @@ impl MainPublication for MainRecorder {
 impl ViewerNotification for MainRecorder {
     async fn notify_viewer(&self, mention: &CommittedMentionRow) -> Result<(), EffectFailure> {
         self.note(format!("notified:{}", mention.viewer().as_str()));
+        self.published.lock().unwrap().push(mention.clone());
         Ok(())
     }
 }
@@ -2750,9 +2804,9 @@ impl IdleStart for MainRecorder {
 
 /// Runs a committed main-line send's aftermath with the real record adapter and
 /// recording everything else.
-async fn announce_with_real_record(
+async fn announce_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
     fact: &silverhand_backend_core::messaging::MessageCreatedFact,
-    store: &MessagingStore,
+    store: &MessagingStore<E>,
     recorder: &MainRecorder,
 ) -> silverhand_backend_core::messaging::post_commit::EffectReport {
     announce_main_send(
@@ -2774,11 +2828,14 @@ async fn announce_with_real_record(
 /// coordinate triples, and the payload the Activity surface renders. Only the rows
 /// that were written are published, so the two people named produce exactly two
 /// notifications and exactly two viewer frames.
+///
+/// Driven by a clock that steps on every reading, so the identity AND the moment of
+/// each row are both mechanically traceable to the one place they were minted.
 #[tokio::test]
 async fn the_record_writes_a_row_per_entitled_viewer_and_publishes_only_those() {
     let mut fixture = Fixture::new().await;
     seed_second_viewer(&mut fixture).await;
-    let store = fixture.store().await;
+    let store = fixture.store_with(SteppingClock::new()).await;
 
     let fact = store
         .send_message(naming_both_people(CHANNEL_ID))
@@ -2842,6 +2899,52 @@ async fn the_record_writes_a_row_per_entitled_viewer_and_publishes_only_those() 
             format!("delivered:{BROAD_AGENT_ID}"),
         ]
     );
+
+    // WHAT WAS RETURNED IS WHAT WAS STORED. The identity and the moment are minted
+    // per row inside the adapter, so they are the only values the published object
+    // could disagree with the table about — every other field is projected from the
+    // intent and would survive a second mint unnoticed. Compared against the two
+    // columns no other assertion here reads.
+    let published = recorder.published_rows();
+    let stored = fixture.notification_identities().await;
+    assert_eq!(published.len(), 2);
+    assert_eq!(
+        published
+            .iter()
+            .map(|row| (row.id().as_str().to_owned(), row.created_at_ms()))
+            .collect::<Vec<_>>(),
+        stored,
+        "a published row does not carry the identity and moment of the row that was written"
+    );
+    // And the rest of each published row still answers for the same table row.
+    let rows = fixture.notification_rows().await;
+    for (published, row) in published.iter().zip(&rows) {
+        assert_eq!(published.viewer().as_str(), row["user_id"]);
+        assert_eq!(
+            published.mentioned_name().as_str(),
+            row["payload"]["mentioned_name"]
+        );
+        assert_eq!(
+            published.intent().source_message().as_str(),
+            row["message_id"]
+        );
+        assert_eq!(
+            published.intent().source_conversation().as_str(),
+            row["source_conversation_id"]
+        );
+        assert_eq!(
+            published.intent().source_workspace().as_str(),
+            row["source_workspace_id"]
+        );
+        assert_eq!(
+            published.intent().excerpt(),
+            row["payload"]["mention_excerpt"]
+        );
+        assert_eq!(
+            published.intent().trigger_name(),
+            row["payload"]["trigger_name"]
+        );
+    }
 }
 
 /// Entitlement is decided WHEN THE RECORD IS WRITTEN, and it is two facts, not one.
@@ -2998,4 +3101,150 @@ async fn a_person_who_named_themselves_gets_no_record_but_their_reader_does() {
             .contains(&format!("notified:{SECOND_USER_ID}"))
     );
     assert!(!recorder.calls().contains(&format!("notified:{USER_ID}")));
+}
+
+/// The visibility matrix, whole: a record exists for exactly the people a body
+/// NAMED **and** who may still read the conversation it happened in. Three of the
+/// four cells write nothing, and each is refused for its own reason — so a change
+/// that widened one of them could not hide behind the others.
+///
+/// The fourth cell (named AND entitled) is
+/// `the_record_writes_a_row_per_entitled_viewer_and_publishes_only_those`, which
+/// also proves the row that was returned is the row that was stored.
+#[tokio::test]
+async fn only_a_named_person_who_may_still_read_the_conversation_is_recorded() {
+    // ENTITLED BUT NOT NAMED. A channel member reads every message in it; being
+    // able to read one is not being addressed by it, and this is the cell that says
+    // the record is driven by the body rather than by the roster.
+    let mut fixture = Fixture::new().await;
+    seed_second_viewer(&mut fixture).await;
+    let store = fixture.store().await;
+    let addressed_to_one = store
+        .send_message(send(
+            agent_actor(),
+            CHANNEL_ID,
+            "<silverhand://human/second> only you",
+        ))
+        .await
+        .unwrap();
+    let recorder = MainRecorder::default();
+    announce_with_real_record(&addressed_to_one, &store, &recorder).await;
+    assert_eq!(
+        fixture
+            .notification_rows()
+            .await
+            .iter()
+            .map(|row| row["user_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        vec![SECOND_USER_ID],
+        "a member who was not named was recorded anyway"
+    );
+
+    // NAMED BUT NEVER ENTITLED — as distinct from having LOST access. This person
+    // exists and reads another conversation of the same workspace; they were never
+    // on this one, so there is nothing to revoke and still nothing to tell them.
+    let mut fixture = Fixture::new().await;
+    fixture
+        .execute(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES \
+             ('user-3', 'elsewhere', 'Elsewhere', 2, 2)",
+        )
+        .await;
+    fixture
+        .execute(
+            "INSERT INTO workspace_users (workspace_id, user_id, joined_at) VALUES ('ws-1', \
+             'user-3', 0)",
+        )
+        .await;
+    fixture
+        .execute(
+            "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES \
+             ('conv-2', 'user-3', 0)",
+        )
+        .await;
+    let store = fixture.store().await;
+    let naming_a_stranger = store
+        .send_message(send(
+            agent_actor(),
+            CHANNEL_ID,
+            "<silverhand://human/elsewhere> over here",
+        ))
+        .await
+        .unwrap();
+    let recorder = MainRecorder::default();
+    let report = announce_with_real_record(&naming_a_stranger, &store, &recorder).await;
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert!(
+        fixture.notification_rows().await.is_empty(),
+        "a person who reads another conversation was told about this one"
+    );
+
+    // NEITHER. A body that names nobody carries no intent at all, so the record is
+    // not merely empty — it is never attempted, and there is no step to fail.
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let naming_nobody = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "just talking"))
+        .await
+        .unwrap();
+    assert!(naming_nobody.main_line().unwrap().mentions().is_none());
+    let recorder = MainRecorder::default();
+    let report = announce_with_real_record(&naming_nobody, &store, &recorder).await;
+    assert!(
+        !report
+            .attempted
+            .iter()
+            .any(|(_, step)| *step == EffectStep::MentionedViewerRecorded),
+        "a body that named nobody still asked for a record"
+    );
+    assert!(fixture.notification_rows().await.is_empty());
+}
+
+/// The kind in a reference is answered by the namespace it names, and only the human
+/// namespace produces this record. Naming an agent addresses it through its own
+/// path — the mention copy — so a `mention_self` row for it would be a second,
+/// wrongly-shaped telling of the same fact.
+///
+/// Both names here resolve, and they resolve to different kinds of principal: the
+/// row that appears is the human's, and the agent's absence is not a lookup failure.
+#[tokio::test]
+async fn naming_an_agent_produces_no_viewer_record_even_beside_a_human() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+
+    let fact = store
+        .send_message(send(
+            agent_actor(),
+            CHANNEL_ID,
+            "<silverhand://agent/broad> <silverhand://human/human> both of you",
+        ))
+        .await
+        .unwrap();
+    let intent = fact
+        .main_line()
+        .unwrap()
+        .mentions()
+        .expect("the body named someone");
+    // The intent already carries only the human half: the kind is decided where the
+    // reference is read, not by the store failing to find an agent in `users`.
+    assert_eq!(
+        intent
+            .handles()
+            .iter()
+            .map(ParticipantHandle::as_str)
+            .collect::<Vec<_>>(),
+        vec!["human"]
+    );
+
+    let recorder = MainRecorder::default();
+    announce_with_real_record(&fact, &store, &recorder).await;
+    assert_eq!(
+        fixture
+            .notification_rows()
+            .await
+            .iter()
+            .map(|row| row["user_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        vec![USER_ID]
+    );
 }
