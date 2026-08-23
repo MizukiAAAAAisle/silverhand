@@ -1104,7 +1104,7 @@ mod tests {
     fn reply_projection(root: &str, reply_count: i64) -> crate::messaging::ThreadReplyFact {
         use crate::messaging::{MessageId, ThreadListEntry, ThreadRootId};
         let entry = ThreadListEntry::committed(
-            MessageId::parse(root).unwrap(),
+            ThreadRootId::parse(root).unwrap(),
             None,
             "root body",
             0,
@@ -1115,7 +1115,7 @@ mod tests {
             Vec::new(),
             0,
         );
-        crate::messaging::ThreadReplyFact::committed(ThreadRootId::parse(root).unwrap(), entry)
+        crate::messaging::ThreadReplyFact::committed(entry)
     }
 
     fn copied(id: &str, line: &str, agent: &str, handle: &str) -> MentionCopyOutcome {

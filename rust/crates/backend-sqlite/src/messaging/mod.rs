@@ -237,7 +237,7 @@ const INSERT_STREAM_HEAD: &str = "INSERT INTO conversation_stream_heads (convers
 /// (`from_kind != 'system'`). The `agg` subquery is empty when no participant has
 /// replied, so the JOIN yields no row and the entry is absent — the projection
 /// never invents a placement for a cluster nobody has spoken in.
-const THREAD_LIST_ENTRY_FOR_ROOT: &str = "SELECT root.id AS root_message_id, \
+const THREAD_LIST_ENTRY_FOR_ROOT: &str = "SELECT \
      root.from_kind AS root_from_kind, root.from_agent_id AS root_from_agent_id, \
      root.from_user_id AS root_from_user_id, root.author_id AS root_author_id, \
      root.author_name AS root_author_name, root.author_display_name AS root_author_display_name, \
@@ -450,7 +450,6 @@ async fn project_list_entry(
         return Ok(None);
     };
 
-    let root_message_id: String = row.try_get("root_message_id").map_err(driver)?;
     let root_from_kind: String = row.try_get("root_from_kind").map_err(driver)?;
     let root_content: String = row.try_get("root_content").map_err(driver)?;
     let root_created_at: i64 = row.try_get("root_created_at").map_err(driver)?;
@@ -505,7 +504,7 @@ async fn project_list_entry(
     }
 
     Ok(Some(ThreadListEntry::committed(
-        MessageId::parse(root_message_id).map_err(|_| malformed("messages.id"))?,
+        root.clone(),
         root_author,
         &root_content,
         root_created_at,
@@ -729,7 +728,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 let list_entry = project_list_entry(&mut self.tx, &facts.id, root)
                     .await?
                     .ok_or_else(|| infrastructure(MessagingStoreError::MissingClusterProjection))?;
-                Some(ThreadReplyFact::committed(root.clone(), list_entry))
+                Some(ThreadReplyFact::committed(list_entry))
             }
         };
 

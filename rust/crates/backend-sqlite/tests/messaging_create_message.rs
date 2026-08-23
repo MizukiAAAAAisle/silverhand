@@ -3474,6 +3474,23 @@ fn labels(entry: &ThreadListEntry) -> Vec<String> {
     entry.repliers().iter().map(replier_label).collect()
 }
 
+/// A replier's *current* display name as the projection resolved it. Distinct from
+/// [`replier_label`] (which is rename-invariant kind:id): this is the axis a
+/// post-commit rename would move, so a test can tell a frozen committed value from a
+/// live reread.
+fn replier_display(author: &MessageAuthor) -> String {
+    match author {
+        MessageAuthor::Active(ActiveAuthor::Agent(agent)) => agent.display_name().to_owned(),
+        MessageAuthor::Active(ActiveAuthor::Human(human)) => human.display_name().to_owned(),
+        MessageAuthor::Deleted(deleted) => deleted.name().to_owned(),
+        MessageAuthor::Unresolved(_) => "unresolved".to_owned(),
+    }
+}
+
+fn display_labels(entry: &ThreadListEntry) -> Vec<String> {
+    entry.repliers().iter().map(replier_display).collect()
+}
+
 /// Reply-publication ports that always fail: the analog of `EverythingFails` for the
 /// message-publication path, so a committed reply's aftermath can be driven to total
 /// failure and the durable half asserted afterwards.
@@ -3522,15 +3539,27 @@ impl ReplyDelivery for ReplyEffectsRefused {
 }
 
 /// A publication that records the list entry the frame carried — reply_count, replier
-/// labels, and the last-reply id — so a test can assert the value publication actually
-/// saw, rather than what the database says at announce time.
+/// labels, their current display names, and the last-reply id — so a test can assert
+/// the value publication actually saw, rather than what the database says at announce
+/// time.
 #[derive(Default)]
 struct RecordingPublication {
-    observed: std::sync::Mutex<Option<(i64, Vec<String>, String)>>,
+    observed: std::sync::Mutex<Option<ObservedEntry>>,
+}
+
+/// What the recording publication saw on the frame, on every axis a post-commit
+/// mutation could move: the count, the replier set (kind:id), their display names,
+/// and the last reply.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ObservedEntry {
+    reply_count: i64,
+    repliers: Vec<String>,
+    replier_names: Vec<String>,
+    last_reply_id: String,
 }
 
 impl RecordingPublication {
-    fn observed(&self) -> (i64, Vec<String>, String) {
+    fn observed(&self) -> ObservedEntry {
         self.observed
             .lock()
             .unwrap()
@@ -3546,11 +3575,12 @@ impl CommittedMessagePublication for RecordingPublication {
     ) -> Result<(), EffectFailure> {
         if let Some(fact) = committed.reply_projection() {
             let entry = fact.list_entry();
-            *self.observed.lock().unwrap() = Some((
-                entry.reply_count(),
-                labels(entry),
-                entry.last_reply_message_id().as_str().to_owned(),
-            ));
+            *self.observed.lock().unwrap() = Some(ObservedEntry {
+                reply_count: entry.reply_count(),
+                repliers: labels(entry),
+                replier_names: display_labels(entry),
+                last_reply_id: entry.last_reply_message_id().as_str().to_owned(),
+            });
         }
         Ok(())
     }
@@ -3633,7 +3663,7 @@ async fn the_entry_previews_the_root_and_counts_only_non_system_replies() {
         .unwrap()
         .expect("a cluster with a non-system reply has an entry");
 
-    assert_eq!(entry.root_message_id().as_str(), root_id);
+    assert_eq!(entry.root_id().as_str(), root_id);
     assert_eq!(entry.root_preview(), thread_root_preview(root_body));
     assert_eq!(entry.root_preview(), root_body); // short enough to be returned whole
     assert_eq!(entry.reply_count(), 1);
@@ -3938,10 +3968,13 @@ async fn a_committed_reply_survives_total_effect_failure_including_its_list_entr
 
 /// The entry publication carries is the one committed WITH the reply, never a
 /// post-commit reread. After the send commits, a newer reply is written directly and
-/// the live author renamed; publication still sees the commit-time entry (count 1,
-/// the one replier, this reply as last), not the mutated cluster. Structurally,
-/// `publish_message` takes only a `CommittedMessageView` and no store handle, so a
-/// reread at publish time cannot be written — this pins that against regression.
+/// the live author renamed; a cold reread is first shown to observe all of that
+/// (count 2, the newer reply as last, both repliers, the renamed name), so the
+/// mutation is proven to reach the projection — then publication is asserted to still
+/// see the commit-time entry (count 1, the one replier, its committed name, this reply
+/// as last). Structurally, `publish_message` takes only a `CommittedMessageView` and
+/// no store handle, so a reread at publish time cannot be written — this pins that
+/// against regression.
 #[tokio::test]
 async fn the_published_entry_is_the_committed_one_not_a_post_commit_reread() {
     let mut fixture = Fixture::new().await;
@@ -3980,6 +4013,37 @@ async fn the_published_entry_is_the_committed_one_not_a_post_commit_reread() {
         .await
         .unwrap();
 
+    // The mutation is only a meaningful counterexample if a reread would actually
+    // observe it; prove that first, so "publication is still old" is a real contrast
+    // and not a query that silently missed the new row.
+    let conversation = ConversationId::parse(CHANNEL_ID).unwrap();
+    let root_ref = ThreadRootId::parse(&root_id).unwrap();
+    let counterfactual = store
+        .thread_list_entry_for_root(&conversation, &root_ref)
+        .await
+        .unwrap()
+        .expect("the cluster still has an entry after the mutation");
+    assert_eq!(
+        counterfactual.reply_count(),
+        2,
+        "a reread now counts both replies"
+    );
+    assert_eq!(
+        counterfactual.last_reply_message_id().as_str(),
+        "reply-newer00000",
+        "a reread now points at the newer reply"
+    );
+    assert_eq!(
+        labels(&counterfactual),
+        vec!["agent:agent-2".to_owned(), "human:user-1".to_owned()],
+        "a reread now names both repliers, newest first"
+    );
+    assert_eq!(
+        display_labels(&counterfactual),
+        vec!["Broad".to_owned(), "Renamed".to_owned()],
+        "a reread reflects the live rename"
+    );
+
     // Announce with a recording publication; the rest accept so it runs to completion.
     let publication = RecordingPublication::default();
     let accepting = AcceptingReplyEffects;
@@ -3998,12 +4062,18 @@ async fn the_published_entry_is_the_committed_one_not_a_post_commit_reread() {
     .await;
     assert!(report.failed.is_empty(), "every accepting effect succeeds");
 
-    let (reply_count, replier_labels, last_reply_id) = publication.observed();
-    assert_eq!(reply_count, 1, "the committed count, not the reread's two");
-    assert_eq!(replier_labels, vec!["human:user-1".to_owned()]);
+    // Despite the reread above proving the cluster moved on every axis, publication
+    // carries the entry committed WITH the reply — count, replier set, live names, and
+    // last reply all frozen at commit time.
     assert_eq!(
-        last_reply_id, reply_id,
-        "the committed last reply, not the newer row"
+        publication.observed(),
+        ObservedEntry {
+            reply_count: 1,
+            repliers: vec!["human:user-1".to_owned()],
+            replier_names: vec!["Human".to_owned()],
+            last_reply_id: reply_id.clone(),
+        },
+        "the frame carries the committed entry, not a post-commit reread"
     );
 }
 

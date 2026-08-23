@@ -117,21 +117,25 @@ pub struct CreatedMessage {
 /// rows — but none of them re-reads to build *this* reply's frame, so a later rename,
 /// a newer reply, or a read failure cannot change or withhold what was published.
 ///
-/// Private fields with a public [`committed`](ThreadReplyFact::committed) seam and
-/// read-only accessors: the unit of work that computed the projection inside the
-/// atomic unit is the only thing that assembles one, and nothing downstream can
-/// fabricate or mutate it. `reply_count` is not stored twice — it is read straight off
-/// the carried entry, so the ACK's count and the placed entry's count are one value.
+/// A single private field with a public [`committed`](ThreadReplyFact::committed)
+/// seam and read-only accessors: the unit of work that computed the projection
+/// inside the atomic unit is the only thing that assembles one, and nothing
+/// downstream can fabricate or mutate it. Neither `reply_count` nor the root
+/// identity is stored twice — both are read straight off the carried entry, so the
+/// value delivery/audience routes by and the value publication/ACK place are the
+/// same cluster. There is no separate root field a caller could set to a different
+/// cluster than the entry describes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThreadReplyFact {
-    thread_root_id: ThreadRootId,
     list_entry: ThreadListEntry,
 }
 
 impl ThreadReplyFact {
     /// Assembled by the unit of work that committed the reply, from the facts it
-    /// read inside the same atomic unit — including the [`ThreadListEntry`] it
-    /// projected there, so the entry the frame carries is the committed one.
+    /// read inside the same atomic unit — the [`ThreadListEntry`] it projected
+    /// there, so the entry the frame carries is the committed one. The entry is the
+    /// fact's only root authority: there is no second root parameter, so
+    /// `root-A + entry(root-B)` cannot be expressed at construction.
     ///
     /// A caller outside this crate cannot assemble one field by field:
     ///
@@ -139,7 +143,6 @@ impl ThreadReplyFact {
     /// use silverhand_backend_core::messaging::ThreadReplyFact;
     ///
     /// let fact = ThreadReplyFact {
-    ///     thread_root_id: todo!(),
     ///     list_entry: todo!(),
     /// };
     /// ```
@@ -153,15 +156,23 @@ impl ThreadReplyFact {
     ///     fact.list_entry = todo!();
     /// }
     /// ```
-    pub fn committed(thread_root_id: ThreadRootId, list_entry: ThreadListEntry) -> Self {
-        Self {
-            thread_root_id,
-            list_entry,
-        }
+    ///
+    /// nor pass a root identity beside the entry — the arity itself refuses a
+    /// mismatched root, so the divergence has no way to enter:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_core::messaging::{ThreadReplyFact, ThreadRootId};
+    ///
+    /// let fact = ThreadReplyFact::committed(ThreadRootId::parse("root-A").unwrap(), todo!());
+    /// ```
+    pub fn committed(list_entry: ThreadListEntry) -> Self {
+        Self { list_entry }
     }
 
+    /// The cluster this reply belongs to, read off the carried entry — the fact's
+    /// single root authority, the same identity delivery and audience route by.
     pub fn thread_root_id(&self) -> &ThreadRootId {
-        &self.thread_root_id
+        self.list_entry.root_id()
     }
 
     /// The absolute count of participant replies in the cluster, already including
@@ -232,7 +243,7 @@ pub fn thread_root_preview(content: &str) -> String {
 /// arbitrarily-truncated preview.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThreadListEntry {
-    root_message_id: MessageId,
+    root_id: ThreadRootId,
     root_author: Option<MessageAuthor>,
     root_preview: String,
     root_created_at_ms: i64,
@@ -255,7 +266,7 @@ impl ThreadListEntry {
     /// use silverhand_backend_core::messaging::ThreadListEntry;
     ///
     /// let entry = ThreadListEntry {
-    ///     root_message_id: todo!(),
+    ///     root_id: todo!(),
     ///     replier_total: 0,
     /// };
     /// ```
@@ -271,7 +282,7 @@ impl ThreadListEntry {
     /// ```
     #[allow(clippy::too_many_arguments)]
     pub fn committed(
-        root_message_id: MessageId,
+        root_id: ThreadRootId,
         root_author: Option<MessageAuthor>,
         root_content: &str,
         root_created_at_ms: i64,
@@ -283,7 +294,7 @@ impl ThreadListEntry {
         replier_total: i64,
     ) -> Self {
         Self {
-            root_message_id,
+            root_id,
             root_author,
             root_preview: thread_root_preview(root_content),
             root_created_at_ms,
@@ -296,8 +307,12 @@ impl ThreadListEntry {
         }
     }
 
-    pub fn root_message_id(&self) -> &MessageId {
-        &self.root_message_id
+    /// The cluster's root identity — the single coordinate that names which message
+    /// this entry is about. A [`ThreadReplyFact`] derives its own
+    /// [`thread_root_id`](ThreadReplyFact::thread_root_id) from here, so the fact
+    /// carries exactly one root.
+    pub fn root_id(&self) -> &ThreadRootId {
+        &self.root_id
     }
 
     pub fn root_author(&self) -> Option<&MessageAuthor> {
