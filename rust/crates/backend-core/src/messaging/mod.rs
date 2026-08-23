@@ -9,6 +9,7 @@ pub mod attachments;
 pub mod environment;
 pub mod freshness;
 pub mod mention_cc;
+pub mod post_commit;
 
 use std::{collections::HashSet, error::Error, future::Future, ops::Range};
 

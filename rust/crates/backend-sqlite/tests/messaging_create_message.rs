@@ -6,7 +6,11 @@
 
 use silverhand_backend_core::messaging::ParticipantHandle;
 use silverhand_backend_core::messaging::mention_cc::{
-    MentionCopyOutcome, MentionCopySource, render_copy_body,
+    CommittedMentionCopy, MentionCopyOutcome, MentionCopySource, render_copy_body,
+};
+use silverhand_backend_core::messaging::post_commit::{
+    CopyNotification, DirectLineInvalidation, EffectFailure, MentionSkipRecord, MessagePublication,
+    RuntimeDelivery, RuntimeStart, SendEffects, SkippedMention, announce_send,
 };
 use silverhand_backend_core::messaging::{
     ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId, ConversationRefusal,
@@ -2205,4 +2209,119 @@ async fn a_failed_notification_rolls_back_the_whole_send() {
     );
     assert!(fixture.notification_rows().await.is_empty());
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("every effect was told to fail")]
+struct EffectRefused;
+
+/// Ports that cannot do anything. What a committed send owes the world is not what
+/// makes it a fact, so none of these failing may take the row back.
+struct EverythingFails;
+
+impl DirectLineInvalidation for EverythingFails {
+    async fn direct_lines_changed(
+        &self,
+        _line: &ConversationId,
+        _agent: &AgentId,
+    ) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl MessagePublication for EverythingFails {
+    async fn publish_copy(&self, _copy: &CommittedMentionCopy) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl CopyNotification for EverythingFails {
+    async fn notify_author(
+        &self,
+        _author: &UserId,
+        _agent: &AgentId,
+        _copy: &CommittedMentionCopy,
+    ) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl RuntimeStart for EverythingFails {
+    async fn start(&self, _agent: &AgentId) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl RuntimeDelivery for EverythingFails {
+    async fn deliver(
+        &self,
+        _agent: &AgentId,
+        _copy: &CommittedMentionCopy,
+    ) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+impl MentionSkipRecord for EverythingFails {
+    async fn record_skip(&self, _skipped: &SkippedMention<'_>) -> Result<(), EffectFailure> {
+        Err(EffectFailure::from_source(EffectRefused))
+    }
+}
+
+/// Custody: the durable half of a send belongs to the commit, and the announcement
+/// afterwards cannot revoke it. Asserted against the database as it is found on a
+/// fresh connection, not against the values the send happened to return.
+#[tokio::test]
+async fn every_effect_failing_leaves_the_committed_facts_in_place() {
+    let mut fixture = Fixture::new().await;
+    let fact = fixture
+        .store()
+        .await
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            &grants_outsider(),
+        ))
+        .await
+        .unwrap();
+
+    let refused = EverythingFails;
+    let report = announce_send(
+        &fact,
+        SendEffects {
+            direct_lines: &refused,
+            publication: &refused,
+            notification: &refused,
+            start: &refused,
+            delivery: &refused,
+            skips: &refused,
+        },
+    )
+    .await;
+    assert_eq!(report.failed.len(), 5, "every attempt should have failed");
+
+    // Reopened: a new pool on the same file, so what is asserted is what was
+    // committed rather than what is still in memory.
+    let reopened = fixture.store().await;
+    let line = fixture.direct_pairs().await.into_iter().next().unwrap().0;
+
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
+            .await,
+        1
+    );
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 2);
+    assert_eq!(fixture.queued_for(OUTSIDER_AGENT_ID).await.len(), 1);
+    assert_eq!(fixture.notification_rows().await.len(), 1);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
+    assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(1));
+    assert_eq!(fixture.latest_seq(&line).await, 1);
+    assert_eq!(fixture.stream_head(&line, None).await, Some(1));
+
+    // And the reopened store carries on from those facts rather than from zero.
+    let next = reopened
+        .send_message(send(user_actor(), CHANNEL_ID, "after the failures"))
+        .await
+        .unwrap();
+    assert_eq!(next.message.seq, MessageSeq::try_from(2).unwrap());
 }
