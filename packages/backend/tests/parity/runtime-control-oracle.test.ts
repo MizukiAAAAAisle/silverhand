@@ -91,6 +91,30 @@ describe('conversation runtime-control Rust parity oracle', () => {
         expect(removal.status).toBe(200);
         target.fake.stops = [];
       }
+      if (entry.setup === 'non_creator') {
+        const seat = await http(target).post(
+          `/api/conversations/${ids.channelId}/members`,
+          { kind: 'human', user_id: 'teammate' },
+        );
+        expect(seat.status).toBe(200);
+      }
+
+      let providerCalls = 0;
+      const start = target.fake.start.bind(target.fake);
+      target.fake.start = async (...args) => {
+        providerCalls++;
+        return start(...args);
+      };
+      const stop = target.fake.stop.bind(target.fake);
+      target.fake.stop = async (...args) => {
+        providerCalls++;
+        return stop(...args);
+      };
+      const clearSession = target.fake.clearSession.bind(target.fake);
+      target.fake.clearSession = async (...args) => {
+        providerCalls++;
+        return clearSession(...args);
+      };
 
       const expected = expandFixture(entry.expected_body, ids.channelId, ids.agentId);
       if (entry.provider.startsWith('placement_')) {
@@ -153,14 +177,9 @@ describe('conversation runtime-control Rust parity oracle', () => {
       expect(response.status).toBe(entry.expected_status);
       expect(await response.json()).toEqual(expected);
 
-      const providerCalls = target.fake.starts.length +
-        target.fake.stops.length + target.fake.clearedSessions.length;
       const shouldReachProvider = entry.setup === 'normal' &&
         entry.name !== 'legacy_soft_stop';
-      if (!shouldReachProvider) expect(providerCalls).toBe(0);
-      if (entry.provider === 'success' && shouldReachProvider) {
-        expect(providerCalls).toBe(1);
-      }
+      expect(providerCalls).toBe(shouldReachProvider ? 1 : 0);
     });
   }
 });

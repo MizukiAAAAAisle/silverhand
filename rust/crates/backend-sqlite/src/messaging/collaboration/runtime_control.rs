@@ -219,16 +219,24 @@ fn decode_endpoint(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use silverhand_backend_core::{
         identity::{AgentId, ConversationId, UserId},
         messaging::collaboration::{
+            ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
+            HardStopRuntimeProviderRefusal, RuntimeControlAdmissionRefusal,
             RuntimeControlAdmissionScope, RuntimeControlPort, RuntimeControlTarget,
             StartRuntimeOutcome, StartRuntimeProviderRefusal, start_conversation_runtime,
         },
     };
-    use sqlx::{Connection, Executor, SqliteConnection};
+    use sqlx::{
+        Connection, Executor, SqliteConnection,
+        sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    };
 
     use super::*;
 
@@ -238,23 +246,31 @@ mod tests {
         let mut db = crate::current_schema::create_current_schema(&path).await;
         db.execute(sqlx::raw_sql(
             "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES \
-                 ('user-1', 'owner', 'Owner', 0, 0); \
+                 ('user-1', 'owner', 'Owner', 0, 0), ('user-2', 'other', 'Other', 0, 0); \
              INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'Host', 'local', 0); \
              INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
                  display_name, created_by_user_id, materialization_status, session_scope) VALUES \
-                 ('agent-1', 'agent', 'codex', 'host-1', 0, 0, 'Agent', 'user-1', 'active', 'conversation'); \
+                 ('agent-1', 'agent', 'codex', 'host-1', 0, 0, 'Agent', 'user-1', 'active', 'conversation'), \
+                 ('agent-2', 'agent-two', 'codex', 'host-1', 0, 0, 'Agent Two', 'user-1', 'active', 'conversation'); \
              INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
                  VALUES ('workspace-1', 'Space', 'space', 'user-1', 0, 0); \
-             INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) \
-                 VALUES ('workspace-1', 'user-1', 0, 'owner'); \
+             INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES \
+                 ('workspace-1', 'user-1', 0, 'owner'), ('workspace-1', 'user-2', 0, 'member'); \
              INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
                  title_key, status, visibility, created_at, updated_at) VALUES \
                  ('conversation-1', 'workspace-1', 'workspace', 'open', 'General', 'general', \
+                  'open', 'private', 0, 0), \
+                 ('conversation-fixed', 'workspace-1', 'workspace', 'fixed', 'Fixed', 'fixed', \
                   'open', 'private', 0, 0); \
-             INSERT INTO conversation_users (conversation_id, user_id, joined_at) \
-                 VALUES ('conversation-1', 'user-1', 0); \
-             INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
-                 VALUES ('conversation-1', 'agent-1', 0);",
+             INSERT INTO conversations (id, workspace_id, endpoint_a_kind, endpoint_a_id, \
+                 endpoint_b_kind, endpoint_b_id, placement_kind, roster_policy, title, title_key, \
+                 status, visibility, created_at, updated_at) VALUES \
+                 ('pair-1', NULL, 'agent', 'agent-2', 'human', 'user-1', 'direct_pair', 'fixed', \
+                  'Direct Pair', NULL, 'idle', 'private', 0, 0); \
+             INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES \
+                 ('conversation-1', 'user-1', 0), ('conversation-fixed', 'user-1', 0); \
+             INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES \
+                 ('conversation-1', 'agent-1', 0), ('conversation-fixed', 'agent-1', 0);",
         ))
         .await
         .unwrap();
@@ -335,26 +351,30 @@ mod tests {
         fresh.finish().await.unwrap();
     }
 
-    struct WritingProvider {
-        path: std::path::PathBuf,
+    struct AcquiringProvider {
+        pool: SqlitePool,
         calls: Arc<Mutex<usize>>,
     }
 
-    impl RuntimeControlPort for WritingProvider {
-        type Error = std::io::Error;
+    #[derive(Debug, Error)]
+    enum AcquireProviderFailure {
+        #[error("timed out acquiring the admission pool after snapshot finish")]
+        Timeout,
+        #[error("database operation failed")]
+        Sql(#[from] sqlx::Error),
+    }
+
+    impl RuntimeControlPort for AcquiringProvider {
+        type Error = AcquireProviderFailure;
 
         async fn start(
             &self,
             _target: &RuntimeControlTarget,
         ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
-            let mut writer = SqliteConnection::connect(&format!("sqlite:{}", self.path.display()))
+            let connection = tokio::time::timeout(Duration::from_secs(1), self.pool.acquire())
                 .await
-                .map_err(std::io::Error::other)?;
-            sqlx::query("UPDATE users SET display_name='After Finish' WHERE id='user-1'")
-                .execute(&mut writer)
-                .await
-                .map_err(std::io::Error::other)?;
-            writer.close().await.map_err(std::io::Error::other)?;
+                .map_err(|_| AcquireProviderFailure::Timeout)??;
+            drop(connection);
             *self.calls.lock().unwrap() += 1;
             Ok(Ok(StartRuntimeOutcome))
         }
@@ -387,19 +407,186 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finish_releases_the_sqlite_read_before_the_provider_runs() {
+    async fn finish_returns_the_only_pool_connection_before_the_provider_runs() {
         let (directory, store) = seeded().await;
+        drop(store);
+        let options = SqliteConnectOptions::new()
+            .filename(directory.path().join("runtime-control.sqlite"))
+            .create_if_missing(false)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Full)
+            .busy_timeout(super::super::super::BUSY_TIMEOUT);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let admission = SqliteRuntimeControlAdmission { pool: pool.clone() };
         let calls = Arc::new(Mutex::new(0));
-        let provider = WritingProvider {
-            path: directory.path().join("runtime-control.sqlite"),
+        let provider = AcquiringProvider {
+            pool,
             calls: Arc::clone(&calls),
         };
         assert_eq!(
-            start_conversation_runtime(&store.runtime_control_admission(), &provider, target())
+            start_conversation_runtime(&admission, &provider, target())
                 .await
                 .unwrap(),
             Ok(StartRuntimeOutcome)
         );
         assert_eq!(*calls.lock().unwrap(), 1);
+    }
+
+    #[derive(Default)]
+    struct CountingProvider(Arc<Mutex<usize>>);
+
+    impl RuntimeControlPort for CountingProvider {
+        type Error = std::io::Error;
+
+        async fn start(
+            &self,
+            _target: &RuntimeControlTarget,
+        ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
+            *self.0.lock().unwrap() += 1;
+            Ok(Ok(StartRuntimeOutcome))
+        }
+
+        async fn hard_stop(
+            &self,
+            _target: &RuntimeControlTarget,
+        ) -> Result<Result<HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal>, Self::Error>
+        {
+            unreachable!()
+        }
+
+        async fn clear_session(
+            &self,
+            _target: &RuntimeControlTarget,
+        ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
+            unreachable!()
+        }
+    }
+
+    fn target_for(actor: &str, conversation: &str, agent: &str) -> RuntimeControlTarget {
+        RuntimeControlTarget::new(
+            UserId::parse(actor).unwrap(),
+            ConversationId::parse(conversation).unwrap(),
+            AgentId::parse(agent).unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn fixed_workspace_seats_admit_while_a_direct_pair_without_roster_refuses_first() {
+        let (_directory, store) = seeded().await;
+        let provider = CountingProvider::default();
+        assert_eq!(
+            start_conversation_runtime(
+                &store.runtime_control_admission(),
+                &provider,
+                target_for("user-1", "conversation-fixed", "agent-1"),
+            )
+            .await
+            .unwrap(),
+            Ok(StartRuntimeOutcome)
+        );
+        assert_eq!(*provider.0.lock().unwrap(), 1);
+
+        assert_eq!(
+            start_conversation_runtime(
+                &store.runtime_control_admission(),
+                &provider,
+                target_for("user-1", "pair-1", "agent-2"),
+            )
+            .await
+            .unwrap(),
+            Err(
+                silverhand_backend_core::messaging::collaboration::StartRuntimeRefusal::Admission(
+                    RuntimeControlAdmissionRefusal::AgentNotMember,
+                )
+            )
+        );
+        assert_eq!(*provider.0.lock().unwrap(), 1);
+    }
+
+    async fn direct_pair_post(
+        admission: &SqliteRuntimeControlAdmission,
+        actor: &str,
+    ) -> Result<bool, RuntimeControlAdmissionStoreError> {
+        let mut snapshot = admission.begin_snapshot().await?;
+        let result = snapshot
+            .actor_may_post(
+                &ConversationId::parse("pair-1").unwrap(),
+                &UserId::parse(actor).unwrap(),
+            )
+            .await;
+        let finish = snapshot.finish().await;
+        match result {
+            Ok(value) => {
+                finish?;
+                Ok(value)
+            }
+            Err(cause) => Err(cause),
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_pair_post_authority_is_endpoint_scoped_and_fails_closed_on_liveness() {
+        let (directory, store) = seeded().await;
+        let admission = store.runtime_control_admission();
+        assert!(direct_pair_post(&admission, "user-1").await.unwrap());
+        assert!(!direct_pair_post(&admission, "user-2").await.unwrap());
+
+        let path = directory.path().join("runtime-control.sqlite");
+        let mut writer = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE conversations SET endpoint_a_deleted_at=1 WHERE id='pair-1'")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        assert!(!direct_pair_post(&admission, "user-1").await.unwrap());
+
+        let (missing_directory, missing_store) = seeded().await;
+        let missing_admission = missing_store.runtime_control_admission();
+        let missing_path = missing_directory.path().join("runtime-control.sqlite");
+        let mut writer = SqliteConnection::connect(&format!("sqlite:{}", missing_path.display()))
+            .await
+            .unwrap();
+        writer
+            .execute(sqlx::raw_sql(
+                "DROP TRIGGER trg_agents_stamp_endpoint_deleted; DELETE FROM agents WHERE id='agent-2';",
+            ))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        assert!(
+            !direct_pair_post(&missing_admission, "user-1")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_direct_pair_endpoint_is_a_typed_store_failure() {
+        let (directory, store) = seeded().await;
+        let admission = store.runtime_control_admission();
+        let path = directory.path().join("runtime-control.sqlite");
+        let mut writer = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        writer
+            .execute(sqlx::raw_sql(
+                "DROP TRIGGER trg_conversations_endpoints_immutable; \
+                 PRAGMA ignore_check_constraints = ON; \
+                 UPDATE conversations SET endpoint_a_kind='bogus' WHERE id='pair-1';",
+            ))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        assert!(matches!(
+            direct_pair_post(&admission, "user-1").await,
+            Err(RuntimeControlAdmissionStoreError::MalformedDirectPairEndpoint)
+        ));
     }
 }

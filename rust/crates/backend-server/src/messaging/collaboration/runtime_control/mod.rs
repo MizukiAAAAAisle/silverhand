@@ -10,7 +10,7 @@ use std::sync::Arc;
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Extension, Path, State},
+    extract::{Extension, Path, State},
     response::Response,
     routing::post,
 };
@@ -61,9 +61,8 @@ where
         .route(START_PATH, post(start::<A, P>))
         .route(HARD_STOP_PATH, post(hard_stop::<A, P>))
         .route(CLEAR_SESSION_PATH, post(clear_session::<A, P>))
-        // The published legacy stop contract has no body-size refusal. It only
-        // inspects two keys, so the route owns no hidden Axum default limit.
-        .layer(DefaultBodyLimit::disable())
+        // Request-size admission belongs to the app-owned global perimeter.
+        // This product router neither disables nor replaces that one authority.
         .with_state(state)
 }
 
