@@ -32,6 +32,7 @@ pub mod host_runtime;
 pub mod runtime_credential;
 pub mod runtime_delivery;
 pub mod scope_event;
+pub mod unread_read;
 
 #[cfg(test)]
 #[path = "../tests/support/current_schema_snapshot.rs"]

@@ -74,6 +74,7 @@ pub mod environment;
 pub mod freshness;
 pub mod mention_cc;
 pub mod post_commit;
+pub mod unread;
 
 pub use addressing::{AddressedPrincipals, MessageReference, ReferencePositions};
 pub use attachments::AttachmentRefusal;
