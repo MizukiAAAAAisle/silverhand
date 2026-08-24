@@ -10,12 +10,14 @@
 //! millisecond count (negative before 1970). A clock that could fail would add a
 //! `500` this surface can never emit, so reading the time is not a failure mode.
 //!
-//! The host wall clock that implements it lives here too, beside the port and
-//! next to the sibling contexts' own system clocks (`auth::SystemSessionClock`,
-//! `host_runtime::SystemClock`). Reading `SystemTime` is an environment capability,
-//! not a storage driver, so it does not belong to the persistence crate — that
-//! crate only persists — and keeping the single production implementation beside
-//! the port it satisfies is what the rest of the tree already does.
+//! What lives here is the PORT and the pure `Date.now()`-parity conversion
+//! ([`unix_millis`]) — both are domain semantics: the trait names the capability,
+//! and the signed/saturating rule is the product contract, testable without a
+//! wall clock. What does NOT live here is the concrete adapter that reads
+//! `SystemTime::now()`: reading the environment is a composition-root concern, so
+//! the production `EnrollmentClock` is assembled in the app layer (next segment,
+//! once the surface is mounted) as a one-line wrapper over [`unix_millis`]. Until
+//! then the only implementations are the deterministic test clocks.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,31 +36,22 @@ pub trait EnrollmentClock: Clone + Send + Sync + 'static {
     fn now_unix_millis(&self) -> i64;
 }
 
-/// The production [`EnrollmentClock`]: the host wall clock, read once by the
-/// application before the write transaction opens.
+/// The signed, saturating Unix-millisecond conversion that defines `Date.now()`
+/// parity, as a pure function of its input.
 ///
-/// It matches `Date.now()` for every reachable time and never fails. A time at
-/// or after the Unix epoch yields a positive millisecond count; a pre-epoch host
-/// clock yields a *negative* one (as `Date.now()` returns for dates before 1970)
-/// rather than a faked zero or a refusal; and only a time beyond the `i64`
-/// millisecond range — hundreds of millions of years out, unreachable in
-/// practice — saturates to the nearest bound instead of wrapping. Reading the
-/// clock is therefore not a failure mode, so this surface never emits a `500`
-/// the product route could not.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemEnrollmentClock;
-
-impl EnrollmentClock for SystemEnrollmentClock {
-    fn now_unix_millis(&self) -> i64 {
-        unix_millis(SystemTime::now())
-    }
-}
-
-/// The signed, saturating Unix-millisecond conversion behind
-/// [`SystemEnrollmentClock`], split out as a pure function of its input so the
-/// epoch, pre-epoch and overflow edges are pinned by fixed-input tests rather
-/// than the wall clock.
-fn unix_millis(now: SystemTime) -> i64 {
+/// This is the enrollment slice's time SEMANTICS, and it lives in the domain
+/// because it is a product contract, not an environment read: the app-layer
+/// production `EnrollmentClock` is the trivial wrapper `unix_millis(SystemTime::
+/// now())`, and every edge that could go wrong is in this function, pinned by
+/// fixed-input tests rather than the wall clock.
+///
+/// It matches `Date.now()` for every reachable time. A time at or after the Unix
+/// epoch yields a positive millisecond count; a pre-epoch time yields a
+/// *negative* one (as `Date.now()` returns for dates before 1970) rather than a
+/// faked zero or a refusal; and only a time beyond the `i64` millisecond range —
+/// hundreds of millions of years out, unreachable in practice — saturates to the
+/// nearest bound instead of wrapping.
+pub fn unix_millis(now: SystemTime) -> i64 {
     match now.duration_since(UNIX_EPOCH) {
         // At or after the epoch: a positive count, saturating only past i64::MAX.
         Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),

@@ -13,13 +13,14 @@ pub use agent_enrollment::{
     AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentKey, Principal,
     add_workspace_agent_member, can_enroll_agent,
 };
-pub use clock::{EnrollmentClock, SystemEnrollmentClock};
+pub use clock::{EnrollmentClock, unix_millis};
 pub use governance::{
     WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts, governance_ceiling,
 };
 pub use human_enrollment::{
-    AddHumanMemberError, HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentReadPort,
-    HumanEnrollmentUnitOfWork, HumanUser, ViewerWorkspacesChangedSink, WorkspaceUserMembership,
+    AddHumanMemberError, HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentOutcome,
+    HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, ViewerAnnounce,
+    ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceUserMembership,
     add_workspace_human_member, human_enrollment_authorized,
 };
 pub use role::{WorkspaceRole, role_governs_workspace};

@@ -18,11 +18,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use silverhand_backend_core::access::{
-    AddHumanMemberError, EnrollmentClock, HumanEnrollmentReadPort, Principal,
-    ViewerWorkspacesChangedSink, WorkspaceRole, add_workspace_human_member,
+    AddHumanMemberError, EnrollmentClock, HumanEnrollmentOutcome, HumanEnrollmentReadPort,
+    Principal, ViewerAnnounce, ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole,
+    add_workspace_human_member,
 };
 use silverhand_backend_core::identity::{UserId, WorkspaceId};
-use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use tempfile::TempDir;
 
@@ -70,7 +70,7 @@ impl ViewerWorkspacesChangedSink for CountingSink {
         _user_id: &UserId,
         _workspace_id: &WorkspaceId,
         _role: WorkspaceRole,
-    ) -> Result<(), PersistenceFailure> {
+    ) -> Result<(), ViewerAnnounceFailure> {
         self.announces.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -183,7 +183,7 @@ async fn enroll(
     sink: &CountingSink,
     actor: Principal,
     target: &str,
-) -> Result<silverhand_backend_core::access::WorkspaceUserMembership, AddHumanMemberError> {
+) -> Result<HumanEnrollmentOutcome, AddHumanMemberError> {
     add_workspace_human_member(
         store,
         sink,
@@ -201,13 +201,14 @@ async fn an_admin_enrolls_a_new_human_at_member_role_and_the_clock_join_time() {
     let store = SqliteAccessStore::open(&path).await.unwrap();
     let sink = CountingSink::default();
 
-    let member = enroll(&store, &sink, human(ADMIN), TARGET).await.unwrap();
+    let outcome = enroll(&store, &sink, human(ADMIN), TARGET).await.unwrap();
 
-    assert_eq!(member.role, WorkspaceRole::Member);
+    assert_eq!(outcome.member.role, WorkspaceRole::Member);
     assert_eq!(
-        member.joined_at_ms, JOIN_TIME_MS,
+        outcome.member.joined_at_ms, JOIN_TIME_MS,
         "a create stores exactly the candidate the clock produced"
     );
+    assert!(matches!(outcome.announce, ViewerAnnounce::Delivered));
     assert_eq!(
         sink.announces.load(Ordering::SeqCst),
         1,
@@ -232,16 +233,20 @@ async fn a_re_enrollment_keeps_the_original_role_and_join_time_and_is_silent() {
     let store = SqliteAccessStore::open(&path).await.unwrap();
     let sink = CountingSink::default();
 
-    let member = enroll(&store, &sink, human(ADMIN), TARGET).await.unwrap();
+    let outcome = enroll(&store, &sink, human(ADMIN), TARGET).await.unwrap();
 
     assert_eq!(
-        member.role,
+        outcome.member.role,
         WorkspaceRole::Owner,
         "the idempotent write never demotes the existing owner to member"
     );
     assert_eq!(
-        member.joined_at_ms, ORIGINAL_JOIN_MS,
+        outcome.member.joined_at_ms, ORIGINAL_JOIN_MS,
         "re-enrollment keeps the original join time, not the new clock read"
+    );
+    assert!(
+        matches!(outcome.announce, ViewerAnnounce::NotOwed),
+        "no announce was OWED here — a different fact from one that was delivered"
     );
     assert_eq!(
         sink.announces.load(Ordering::SeqCst),
@@ -263,9 +268,9 @@ async fn an_owner_actor_may_enroll() {
     let store = SqliteAccessStore::open(&path).await.unwrap();
     let sink = CountingSink::default();
 
-    let member = enroll(&store, &sink, human(OWNER), TARGET).await.unwrap();
+    let outcome = enroll(&store, &sink, human(OWNER), TARGET).await.unwrap();
 
-    assert_eq!(member.role, WorkspaceRole::Member);
+    assert_eq!(outcome.member.role, WorkspaceRole::Member);
     let mut probe = open_probe(&path).await;
     assert!(stored_membership(&mut probe, TARGET).await.is_some());
 }
@@ -277,11 +282,11 @@ async fn the_system_principal_may_enroll_without_a_role_row() {
     let sink = CountingSink::default();
 
     // System holds no workspace_users row; the rule admits it without one.
-    let member = enroll(&store, &sink, Principal::System, TARGET)
+    let outcome = enroll(&store, &sink, Principal::System, TARGET)
         .await
         .unwrap();
 
-    assert_eq!(member.role, WorkspaceRole::Member);
+    assert_eq!(outcome.member.role, WorkspaceRole::Member);
     let mut probe = open_probe(&path).await;
     assert!(stored_membership(&mut probe, TARGET).await.is_some());
 }

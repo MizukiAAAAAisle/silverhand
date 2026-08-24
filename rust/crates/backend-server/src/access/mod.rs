@@ -34,7 +34,7 @@ use axum::{
 };
 use silverhand_backend_core::access::{
     AddAgentMemberError, AddHumanMemberError, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    EnrollmentClock, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, Principal,
+    EnrollmentClock, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, Principal, ViewerAnnounce,
     ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
     add_workspace_agent_member, add_workspace_human_member,
 };
@@ -244,11 +244,29 @@ where
     )
     .await
     {
-        Ok(member) => Ok((
-            StatusCode::CREATED,
-            Json(AddWorkspaceHumanMemberResponse::build(&user, member)),
-        )
-            .into_response()),
+        Ok(outcome) => {
+            // The enrollment is committed and answers `201` no matter what became of
+            // the announce — but the loss is not swallowed. This boundary owns
+            // observability, so it renders the whole cause chain exactly once, here,
+            // and nowhere else. `NotOwed` is silent BY CONSTRUCTION: a re-enrollment
+            // created nothing, so there is no lost notification to report and an
+            // "announce skipped" line would be noise indistinguishable from a real
+            // loss in a log search.
+            if let ViewerAnnounce::Failed(cause) = &outcome.announce {
+                tracing::error!(
+                    error_chain = %error::describe(cause),
+                    "the new workspace membership was committed but its viewer announce was lost"
+                );
+            }
+            Ok((
+                StatusCode::CREATED,
+                Json(AddWorkspaceHumanMemberResponse::build(
+                    &user,
+                    outcome.member,
+                )),
+            )
+                .into_response())
+        }
         // The route gate refused a non-admin already; a `Forbidden` from here is
         // the in-lock re-derivation catching authority lost in the seam.
         Err(AddHumanMemberError::Forbidden) => Ok(refusal(StatusCode::FORBIDDEN, FORBIDDEN, None)),

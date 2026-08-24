@@ -15,8 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use silverhand_backend_core::access::{
     AddHumanMemberError, EnrollmentClock, HumanEnrollmentCommit, HumanEnrollmentKey,
-    HumanEnrollmentUnitOfWork, Principal, ViewerWorkspacesChangedSink, WorkspaceRole,
-    WorkspaceUserMembership, add_workspace_human_member, human_enrollment_authorized,
+    HumanEnrollmentOutcome, HumanEnrollmentUnitOfWork, Principal, ViewerAnnounce,
+    ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole, WorkspaceUserMembership,
+    add_workspace_human_member, human_enrollment_authorized,
 };
 use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
@@ -139,9 +140,11 @@ impl ViewerWorkspacesChangedSink for FakeAccess {
         user_id: &UserId,
         _workspace_id: &WorkspaceId,
         _role: WorkspaceRole,
-    ) -> Result<(), PersistenceFailure> {
+    ) -> Result<(), ViewerAnnounceFailure> {
         if self.fail_sink {
-            return Err(PersistenceFailure::from_source(DriverError("sink failed")));
+            return Err(ViewerAnnounceFailure::from_source(DriverError(
+                "sink failed",
+            )));
         }
         self.announces
             .lock()
@@ -165,7 +168,7 @@ async fn enroll(
     fake: &FakeAccess,
     actor: Principal,
     target: &str,
-) -> Result<WorkspaceUserMembership, AddHumanMemberError> {
+) -> Result<HumanEnrollmentOutcome, AddHumanMemberError> {
     add_workspace_human_member(
         fake,
         fake,
@@ -181,10 +184,11 @@ async fn enroll(
 async fn an_admin_creates_a_member_at_the_clock_join_time_and_announces_once() {
     let fake = FakeAccess::default().with_role("admin", WorkspaceRole::Admin);
 
-    let member = enroll(&fake, human("admin"), "invitee").await.unwrap();
+    let outcome = enroll(&fake, human("admin"), "invitee").await.unwrap();
 
-    assert_eq!(member.role, WorkspaceRole::Member);
-    assert_eq!(member.joined_at_ms, JOINED_AT_MS);
+    assert_eq!(outcome.member.role, WorkspaceRole::Member);
+    assert_eq!(outcome.member.joined_at_ms, JOINED_AT_MS);
+    assert!(matches!(outcome.announce, ViewerAnnounce::Delivered));
     assert_eq!(fake.announces.lock().unwrap().as_slice(), ["invitee"]);
 }
 
@@ -194,14 +198,21 @@ async fn a_re_enrollment_keeps_the_existing_role_and_join_time_and_is_silent() {
         .with_role("admin", WorkspaceRole::Admin)
         .with_member("invitee", 111, WorkspaceRole::Owner);
 
-    let member = enroll(&fake, human("admin"), "invitee").await.unwrap();
+    let outcome = enroll(&fake, human("admin"), "invitee").await.unwrap();
 
     assert_eq!(
-        member.role,
+        outcome.member.role,
         WorkspaceRole::Owner,
         "the idempotent write never demotes the existing owner"
     );
-    assert_eq!(member.joined_at_ms, 111, "the original join time is kept");
+    assert_eq!(
+        outcome.member.joined_at_ms, 111,
+        "the original join time is kept"
+    );
+    assert!(
+        matches!(outcome.announce, ViewerAnnounce::NotOwed),
+        "no announce was OWED — which is a different fact from one delivered"
+    );
     assert!(
         fake.announces.lock().unwrap().is_empty(),
         "a re-enrollment created nothing, so it announces nothing"
@@ -251,9 +262,9 @@ async fn an_agent_principal_can_never_enroll() {
 async fn the_system_principal_enrolls_without_a_role_row() {
     let fake = FakeAccess::default();
 
-    let member = enroll(&fake, Principal::System, "invitee").await.unwrap();
+    let outcome = enroll(&fake, Principal::System, "invitee").await.unwrap();
 
-    assert_eq!(member.role, WorkspaceRole::Member);
+    assert_eq!(outcome.member.role, WorkspaceRole::Member);
     assert_eq!(fake.announces.lock().unwrap().as_slice(), ["invitee"]);
 }
 
@@ -282,14 +293,25 @@ async fn a_failing_announce_does_not_flip_the_committed_enrollment() {
     let mut fake = FakeAccess::default().with_role("admin", WorkspaceRole::Admin);
     fake.fail_sink = true;
 
-    // The write has committed by the time the announce runs; a sink failure is
-    // best-effort and must never turn a committed create into an error.
-    let member = enroll(&fake, human("admin"), "invitee").await.unwrap();
+    // The write has committed by the time the announce runs; a sink failure can
+    // never turn a committed create into an error — but it is reported, not
+    // swallowed, so a caller cannot fail to notice the viewer went untold.
+    let outcome = enroll(&fake, human("admin"), "invitee").await.unwrap();
 
-    assert_eq!(member.role, WorkspaceRole::Member);
+    assert_eq!(outcome.member.role, WorkspaceRole::Member);
     assert_eq!(
         fake.store.lock().unwrap().memberships.get("invitee"),
         Some(&(JOINED_AT_MS, WorkspaceRole::Member)),
         "the enrollment stands despite the failed announce"
+    );
+
+    let ViewerAnnounce::Failed(cause) = outcome.announce else {
+        panic!("a refused sink must be reported as a LOSS, not as NotOwed or Delivered");
+    };
+    // The sink's own error survives as the chain's tail, so the boundary that logs
+    // it can name the real reason rather than "announce failed".
+    assert_eq!(
+        std::error::Error::source(&cause).unwrap().to_string(),
+        "sink failed"
     );
 }

@@ -23,10 +23,11 @@
 //! candidate is *not* sampled here — the application samples its clock after
 //! authorization and hands the candidate in, so a re-enrollment keeps the stored
 //! value and the time source stays in the application. This crate owns no clock
-//! at all: the production [`EnrollmentClock`](silverhand_backend_core::access::SystemEnrollmentClock)
-//! lives beside its port in the application layer, because reading the host wall
-//! clock is not persistence. Every driver error is handed to the port's caller as
-//! the source of a `PersistenceFailure`; nothing is logged here.
+//! at all: the [`EnrollmentClock`](silverhand_backend_core::access::EnrollmentClock)
+//! port and its `Date.now()`-parity semantics live in the domain, and the concrete
+//! host-wall-clock adapter is assembled in the application layer, because reading
+//! the host wall clock is not persistence. Every driver error is handed to the
+//! port's caller as the source of a `PersistenceFailure`; nothing is logged here.
 
 use std::{path::Path, time::Duration};
 

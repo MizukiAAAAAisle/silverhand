@@ -24,8 +24,8 @@ use silverhand_backend_core::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, EnrollmentClock, EnrollmentKey, HumanEnrollmentCommit,
     HumanEnrollmentKey, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, Principal,
-    ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceRole,
-    WorkspaceUserMembership,
+    ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
+    WorkspaceRole, WorkspaceUserMembership,
 };
 use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
@@ -63,6 +63,9 @@ struct FakeAccess {
     /// (`true`) announces, a re-enrollment (`false`) stays silent.
     human_role: WorkspaceRole,
     human_created: bool,
+    /// The announce transport refuses. The membership is already committed when
+    /// this fires, so it must change the LOG and nothing else.
+    announce_fails: bool,
     trace: Arc<Mutex<Vec<&'static str>>>,
     memberships: Arc<Mutex<Vec<(String, String)>>>,
 }
@@ -79,6 +82,7 @@ impl Default for FakeAccess {
             human_enroll_fails: false,
             human_role: WorkspaceRole::Member,
             human_created: true,
+            announce_fails: false,
             trace: Arc::new(Mutex::new(Vec::new())),
             memberships: Arc::new(Mutex::new(Vec::new())),
         }
@@ -211,8 +215,11 @@ impl ViewerWorkspacesChangedSink for FakeAccess {
         _user_id: &UserId,
         _workspace_id: &WorkspaceId,
         _role: WorkspaceRole,
-    ) -> Result<(), PersistenceFailure> {
+    ) -> Result<(), ViewerAnnounceFailure> {
         self.trace.lock().unwrap().push("sink");
+        if self.announce_fails {
+            return Err(ViewerAnnounceFailure::from_source(DriverError));
+        }
         Ok(())
     }
 }
@@ -684,9 +691,106 @@ async fn a_human_write_failure_travels_the_same_seam_and_logs_one_chain() {
     );
 }
 
+/// A lost announce is an OBSERVABILITY event, not a product failure: the
+/// membership is committed, so the client is told `201`, and the one thing that
+/// changes is that somebody can find out the viewer went untold.
+///
+/// Three facts at once, and each is a distinct way this could go wrong: the
+/// response must not degrade (a `500` here would discard a committed write), the
+/// full cause chain must reach the log (an opaque "announce failed" line would
+/// send an operator hunting the wrong layer), and it must be logged EXACTLY once
+/// (both the route and the error seam could plausibly claim this line; only one
+/// may).
+#[tokio::test]
+async fn a_lost_announce_still_answers_created_and_logs_one_full_chain() {
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let fake = FakeAccess {
+        announce_fails: true,
+        ..FakeAccess::default().with_user(invitee())
+    };
+
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
+
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the membership committed; a transport that could not deliver its notice \
+         cannot retract that"
+    );
+    assert_eq!(body["member"]["role"], "member");
+    // The sink WAS reached — "called and failed" is not "never called".
+    assert_eq!(
+        fake.trace(),
+        ["policy", "user_read", "human_enroll", "sink"]
+    );
+
+    let errors: Vec<Value> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event["level"] == "ERROR")
+        .collect();
+    assert_eq!(errors.len(), 1, "the loss is reported once, by one owner");
+    assert_eq!(
+        errors[0]["fields"]["message"],
+        "the new workspace membership was committed but its viewer announce was lost"
+    );
+    let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+    assert!(
+        chain.contains("viewer workspace announce could not be delivered"),
+        "the chain names the announce failure: {chain}"
+    );
+    assert!(
+        chain.contains(DRIVER_DETAIL),
+        "the transport's own reason survives to the log: {chain}"
+    );
+}
+
+/// A re-enrollment is silent on BOTH channels, and the second half is the one a
+/// naive implementation gets wrong: it is easy to log "announce skipped" for
+/// every idempotent retry, which then makes a real loss unfindable in a log
+/// search. `NotOwed` must produce no line at all.
+#[tokio::test]
+async fn a_re_enrollment_neither_announces_nor_logs() {
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    // The sink is ALSO armed to fail, so "no log" cannot be explained away by a
+    // sink that happened to succeed: nothing was owed, so nothing was attempted.
+    let fake = FakeAccess {
+        human_created: false,
+        human_role: WorkspaceRole::Owner,
+        announce_fails: true,
+        ..FakeAccess::default().with_user(invitee())
+    };
+
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["member"]["role"], "owner");
+    assert_eq!(fake.trace(), ["policy", "user_read", "human_enroll"]);
+    assert!(
+        logs.events().is_empty(),
+        "a re-enrollment owes no announce, so it writes no line: {:?}",
+        logs.events()
+    );
+}
+
 #[derive(Clone, Default)]
 struct LogBuffer(Arc<Mutex<Vec<u8>>>);
-
 impl LogBuffer {
     fn events(&self) -> Vec<Value> {
         let bytes = self.0.lock().unwrap().clone();

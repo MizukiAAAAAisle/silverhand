@@ -26,6 +26,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    access::{ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole},
     auth::{AuthenticateHumanSession, SessionBearer},
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
@@ -247,10 +248,38 @@ enum ProductEvent {
     /// moved without the unread that moved it would be a value the client cannot
     /// reconcile.
     AttentionBadgeUpdated(AttentionBadge),
+    /// A viewer's set of workspaces changed, so their `['workspaces']` read model
+    /// is stale. A HINT by contract, exactly as in the TypeScript producer: the
+    /// payload says what moved, and the client refetches the list as the
+    /// authority — which is only sound while every producer agrees on `change`
+    /// and on the per-viewer scope.
+    ///
+    /// Only `added` exists here because only enrollment has been migrated. The
+    /// TypeScript contract also carries `role_changed`, `removed` and
+    /// `metadata_changed`, and those belong to the removal, role and metadata
+    /// paths; naming them without a producer would ship a shape no test can
+    /// exercise. Their `role` is optional there for the same reason it is
+    /// mandatory here — `added` always carries the role it was added at.
+    ViewerWorkspacesChanged {
+        change: ViewerWorkspaceChange,
+        workspace_id: String,
+        /// The persisted role token, taken from the committed membership row via
+        /// `WorkspaceRole::as_str` — never spelled again at this boundary.
+        role: &'static str,
+    },
     #[cfg(test)]
     Test {
         value: String,
     },
+}
+
+/// Which delta moved a viewer's workspace set. Closed, and today one-valued: see
+/// [`ProductEvent::ViewerWorkspacesChanged`] for why the other three TypeScript
+/// values are absent rather than forgotten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ViewerWorkspaceChange {
+    Added,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -404,6 +433,29 @@ impl ScopeEventHub {
             EventScope::Viewer(viewer.clone()),
             ProductEvent::DirectPairsChanged {
                 conversation_id: conversation.as_str().to_owned(),
+            },
+        )
+    }
+
+    /// Tell one viewer they were added to a workspace. The only `change` this
+    /// server emits today, and the only one enrollment owes.
+    ///
+    /// It rides the VIEWER scope, not the workspace scope, and that is the
+    /// contract: the frame exists to invalidate a per-person list, and the person
+    /// it concerns is by definition not yet subscribed to the workspace they just
+    /// gained.
+    pub(crate) fn publish_viewer_added_to_workspace(
+        &self,
+        viewer: &UserId,
+        workspace: &WorkspaceId,
+        role: WorkspaceRole,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::ViewerWorkspacesChanged {
+                change: ViewerWorkspaceChange::Added,
+                workspace_id: workspace.as_str().to_owned(),
+                role: role.as_str(),
             },
         )
     }
@@ -695,6 +747,33 @@ impl ViewerNotification for ScopeEventHub {
             }),
         )
         .map_err(EffectFailure::from_source)
+    }
+}
+
+/// The identity & access context's post-commit announce, over the real transport.
+///
+/// This is the whole adapter: the enrollment use case decided WHAT is true (a
+/// person gained a membership at a role), and this seam only routes that fact to
+/// the viewer's socket. It deliberately maps the transport's own error into
+/// [`ViewerAnnounceFailure`] rather than letting `ScopeEventHubError` reach the
+/// application layer — and `from_source` keeps the concrete cause as the chain's
+/// tail, so the boundary that logs it can name the real reason instead of an
+/// opaque "announce failed".
+///
+/// Note the failure type is access's, not messaging's `EffectFailure`, even though
+/// the two are the same shape: each bounded context owns the failure of its own
+/// capabilities. This one adapter type implements both because the transport is
+/// shared infrastructure — which is exactly the layer where serving two contexts
+/// is not coupling.
+impl ViewerWorkspacesChangedSink for ScopeEventHub {
+    async fn viewer_added_to_workspace(
+        &self,
+        user_id: &UserId,
+        workspace_id: &WorkspaceId,
+        role: WorkspaceRole,
+    ) -> Result<(), ViewerAnnounceFailure> {
+        self.publish_viewer_added_to_workspace(user_id, workspace_id, role)
+            .map_err(ViewerAnnounceFailure::from_source)
     }
 }
 
@@ -4440,6 +4519,7 @@ mod tests {
         "notification",
         "unread_updated",
         "attention_badge_updated",
+        "viewer_workspaces_changed",
     ];
 
     /// The wire `kind` a product event MUST serialize as. Exhaustive by construction: a new
@@ -4459,6 +4539,7 @@ mod tests {
             ProductEvent::Notification(_) => "notification",
             ProductEvent::UnreadUpdated(_) => "unread_updated",
             ProductEvent::AttentionBadgeUpdated(_) => "attention_badge_updated",
+            ProductEvent::ViewerWorkspacesChanged { .. } => "viewer_workspaces_changed",
             ProductEvent::Test { .. } => "test",
         }
     }
@@ -4501,6 +4582,11 @@ mod tests {
                 workspace_id: "w-1".to_owned(),
                 badge_count: 1,
             }),
+            ProductEvent::ViewerWorkspacesChanged {
+                change: ViewerWorkspaceChange::Added,
+                workspace_id: "w-1".to_owned(),
+                role: WorkspaceRole::Member.as_str(),
+            },
         ];
         let mut produced = std::collections::BTreeSet::new();
         for event in &samples {
@@ -4658,6 +4744,131 @@ mod tests {
             json!({
                 "type": "event", "scope": "conversation:pair-1", "seq": 2, "epoch": "epoch-1",
                 "kind": "message", "payload": { "message": { "id": "m-2" } },
+            })
+        );
+
+        controller.close().await;
+        server.abort();
+    }
+
+    /// The enrollment announce, end to end: one committed membership must leave
+    /// BOTH a durable row a fresh connection can read AND a live
+    /// `viewer_workspaces_changed` frame on the enrolled viewer's own socket.
+    ///
+    /// This is the dual evidence the seam owes. The two proofs are independent on
+    /// purpose: the durable row shows the write actually committed (not merely that
+    /// a frame was emitted), and the live frame shows the post-commit announce
+    /// reached the real transport for THIS viewer (not merely that a row exists).
+    /// A regression that emitted the frame without committing, or committed without
+    /// announcing, fails exactly one half.
+    ///
+    /// A note on scope: the TS contract's *cold* half is a `['workspaces']` list
+    /// refetch, and there is no workspaces read model in this Rust tree yet — that
+    /// projection is a separate lane. The durable committed row IS the honest cold
+    /// evidence available here: it is what any future list read model would read.
+    #[tokio::test]
+    async fn one_enrollment_leaves_a_durable_row_and_a_live_viewer_frame() {
+        #[derive(Clone, Copy)]
+        struct FixedClock(i64);
+        impl silverhand_backend_core::access::EnrollmentClock for FixedClock {
+            fn now_unix_millis(&self) -> i64 {
+                self.0
+            }
+        }
+
+        const JOIN_MS: i64 = 1_700_000_000_555;
+
+        // The socket authenticates as `user()` (= "user-1"); enroll THAT person, so
+        // the viewer who gains the membership is the one listening on `viewer:self`.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("enroll.db");
+        {
+            let mut db = current_schema::create_current_schema(&path).await;
+            for statement in [
+                "INSERT INTO users (id, name, display_name, created_at, updated_at) \
+                 VALUES ('admin-1', 'Admin', 'Admin', 1, 1)",
+                "INSERT INTO users (id, name, display_name, created_at, updated_at) \
+                 VALUES ('user-1', 'Invitee', 'Invitee', 1, 1)",
+                "INSERT INTO workspaces (id, name, name_key, created_at, updated_at) \
+                 VALUES ('workspace-1', 'Space', 'space', 1, 1)",
+                "INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) \
+                 VALUES ('workspace-1', 'admin-1', 1, 'admin')",
+            ] {
+                sqlx::query(statement).execute(&mut db).await.unwrap();
+            }
+            db.close().await.unwrap();
+        }
+
+        let store = silverhand_backend_sqlite::access::SqliteAccessStore::open(&path)
+            .await
+            .unwrap();
+
+        let hub = ScopeEventHub::test("epoch-1");
+        let origin = "http://127.0.0.1";
+        let (app, controller) = router(
+            hub.clone(),
+            Sessions,
+            Allows,
+            EventWebSocketConfig::test(origin),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut viewer_socket = connect(address, origin).await;
+        assert_eq!(next_json(&mut viewer_socket).await["type"], "authenticated");
+        subscribe_scope(&mut viewer_socket, "viewer:self").await;
+
+        // The production use case, driven through the REAL store and the REAL hub as
+        // its sink — the same path the mounted surface will call.
+        let outcome = silverhand_backend_core::access::add_workspace_human_member(
+            &store,
+            &hub,
+            &FixedClock(JOIN_MS),
+            &silverhand_backend_core::access::Principal::Human {
+                user_id: UserId::parse("admin-1").unwrap(),
+            },
+            WorkspaceId::parse("workspace-1").unwrap(),
+            user(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                outcome.announce,
+                silverhand_backend_core::access::ViewerAnnounce::Delivered
+            ),
+            "the hub accepted the announce"
+        );
+
+        // Evidence 1 — durable: a FRESH connection reads the committed row.
+        let mut probe = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        let row: Option<(i64, String)> = sqlx::query_as(
+            "SELECT joined_at, role FROM workspace_users WHERE workspace_id = ? AND user_id = ?",
+        )
+        .bind("workspace-1")
+        .bind("user-1")
+        .fetch_optional(&mut probe)
+        .await
+        .unwrap();
+        probe.close().await.unwrap();
+        assert_eq!(
+            row,
+            Some((JOIN_MS, "member".to_owned())),
+            "the enrollment committed at the clock join time and the default member role"
+        );
+
+        // Evidence 2 — live: the enrolled viewer's own socket receives the frame,
+        // as exact JSON, on the viewer scope (not the workspace scope: the person is
+        // not yet subscribed to the workspace they just gained).
+        assert_eq!(
+            next_json(&mut viewer_socket).await,
+            json!({
+                "type": "event", "scope": "viewer:user-1", "seq": 1, "epoch": "epoch-1",
+                "kind": "viewer_workspaces_changed",
+                "payload": { "change": "added", "workspace_id": "workspace-1", "role": "member" },
             })
         );
 

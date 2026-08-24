@@ -135,4 +135,29 @@ describe('member-add input classification', () => {
     expect(res.status).toBe(404);
     expect(JSON.parse(await res.text())).toEqual({ error: 'user not found' });
   });
+
+  // The id fields are bare `z.string()` — no `.min(1)` — so an EMPTY string is a
+  // valid string and the body classifies. The empty id is then just an id no
+  // member has, so it reaches existence and answers 404, never the 400 an
+  // unclassifiable body earns. This is the exact wire behavior the Rust port must
+  // match: an accepted-but-empty id is "not found", not "invalid input". A schema
+  // that grew a non-empty constraint on either side would flip one of these to a
+  // 400 and fail here.
+  it('an empty agent_id classifies as an agent and is 404, never 400', async () => {
+    t = buildTestApp();
+    const ws = await createWorkspace(t, 'classify-empty-agent');
+
+    const res = await postBody(ws, { agent_id: '' });
+    expect(res.status).toBe(404);
+    expect(JSON.parse(await res.text())).toEqual({ error: 'agent not found' });
+  });
+
+  it('an empty human user_id classifies as a human and is 404, never 400', async () => {
+    t = buildTestApp();
+    const ws = await createWorkspace(t, 'classify-empty-human');
+
+    const res = await postBody(ws, { kind: 'human', user_id: '' });
+    expect(res.status).toBe(404);
+    expect(JSON.parse(await res.text())).toEqual({ error: 'user not found' });
+  });
 });
