@@ -20,6 +20,7 @@ pub mod runtime_credential;
 pub mod runtime_delivery;
 pub mod runtime_event;
 pub mod scope_event;
+pub mod teardown;
 pub mod viewer_workspace_sort;
 pub mod workspace_cold_read;
 pub mod workspace_face;

@@ -1,0 +1,154 @@
+//! The typed facts a teardown consumes, one projection per phase.
+//!
+//! Deliberately not one wide impact object and not a row DTO: each type below
+//! names exactly what ONE phase reads, so a column added to an agent, workspace
+//! or conversation cannot silently become an input to a delete.
+
+use crate::{
+    agent_lifecycle::MaterializationStatus,
+    identity::{AgentId, ConversationId, HostId, UserId},
+    runtime_credential::{RuntimeGeneration, RuntimeScope},
+    runtime_event::RuntimeObservedStatus,
+};
+
+/// The agent facts a teardown consumes. Every field has a named consumer:
+/// the stage drives the dispatch and the in-lock eligibility re-read; the host
+/// routes the host-local purge and the post-commit runtime stop on both axes (by
+/// then no agent row is left to resolve it from); name, display name and runtime
+/// serve the summary logs and the computer cascade's dependent projection; the
+/// failure code serves the row-only delete's log line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentTeardownFacts {
+    pub id: AgentId,
+    pub name: String,
+    pub display_name: String,
+    /// Which runtime this agent runs, as an opaque projection. Teardown never
+    /// branches on it — it forwards it to a log and a dependent listing — so a
+    /// closed runtime vocabulary is not this module's to declare.
+    pub runtime: String,
+    pub host_id: HostId,
+    pub materialization_status: MaterializationStatus,
+    pub failed_code: Option<String>,
+    pub deletion_started_at: Option<i64>,
+}
+
+/// One runtime SEAT of the agent, with its RAW observed status. Deciding which
+/// statuses still own a live child is a domain rule and stays in
+/// [`is_running_session`]; an adapter-side filter would put that rule where no
+/// test of this layer can see it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentRuntimeSessionFacts {
+    /// The stable custody identity. Its source conversation, when it has one, is
+    /// read from the scope rather than carried a second time.
+    pub scope: RuntimeScope,
+    pub status: RuntimeObservedStatus,
+    /// Captured before the cascade so a post-commit stop cannot target a
+    /// successor that claimed the seat afterwards.
+    pub generation: RuntimeGeneration,
+}
+
+/// Whether this seat still owns a live runtime child.
+pub fn is_running_session(session: &AgentRuntimeSessionFacts) -> bool {
+    matches!(
+        session.status,
+        RuntimeObservedStatus::Starting | RuntimeObservedStatus::Active
+    )
+}
+
+/// Where a blob physically lives. Opaque here on purpose: teardown never
+/// interprets either half, it only carries them to the post-commit sweeper.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredBlobRef {
+    pub storage: String,
+    pub storage_key: String,
+}
+
+/// Everything the POST-COMMIT phase needs, captured inside the write scope
+/// because the same transaction deletes every row it derives from.
+///
+/// The blob refs are why this cannot be recomputed afterwards: the storage key
+/// lives on the attachment row, which cascades away with the agent's home. The
+/// sessions are the authoritative live-child set for both axes and are stopped in
+/// FULL on both — a scope-and-generation pair names a seat, not a promise that
+/// nothing reclaimed it, and re-stopping is sound because the daemon's stop is
+/// idempotent. The workspace count is a log-only fact: the log is the only place
+/// a residue-leaving best-effort phase can be accounted for.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentTeardownCapture {
+    pub runtime_sessions: Vec<AgentRuntimeSessionFacts>,
+    pub dm_blob_refs: Vec<StoredBlobRef>,
+    /// The agent's own home channel, for the summary log. Absent when it owns no
+    /// home.
+    pub dm_channel_id: Option<ConversationId>,
+    pub regular_workspace_count: u32,
+}
+
+/// What a committed teardown proved: the facts it deleted the row on, and the
+/// post-commit work captured from that same snapshot. One type, because every
+/// write path that deletes an agent owes exactly this pair.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentTeardownCommitted {
+    pub facts: AgentTeardownFacts,
+    pub capture: AgentTeardownCapture,
+}
+
+/// How a computer's lifecycle is managed. Only a user-managed computer can be
+/// deleted by a user request, so this is the fact the pre-flight refusal reads
+/// and the conditional row delete re-states.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProvisioningSource {
+    UserInvite,
+    Managed,
+}
+
+/// The computer facts the pre-flight refusals read: who owns it, and whether its
+/// lifecycle is user-managed at all.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ComputerTeardownFacts {
+    pub id: HostId,
+    /// Absent for a computer with no owner, which no user request may delete.
+    pub user_id: Option<UserId>,
+    pub provisioning_source: ProvisioningSource,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(status: RuntimeObservedStatus) -> AgentRuntimeSessionFacts {
+        AgentRuntimeSessionFacts {
+            scope: RuntimeScope::AgentSlot {
+                agent: AgentId::parse("a1").expect("agent id"),
+            },
+            status,
+            generation: RuntimeGeneration::new(3).expect("generation"),
+        }
+    }
+
+    #[test]
+    fn only_a_starting_or_active_seat_owns_a_live_child() {
+        assert!(is_running_session(&session(
+            RuntimeObservedStatus::Starting
+        )));
+        assert!(is_running_session(&session(RuntimeObservedStatus::Active)));
+        assert!(!is_running_session(&session(RuntimeObservedStatus::Idle)));
+        assert!(!is_running_session(&session(
+            RuntimeObservedStatus::Crashed
+        )));
+    }
+
+    #[test]
+    fn a_seat_reads_its_source_from_the_scope_rather_than_a_second_field() {
+        let conversation = ConversationId::parse("c1").expect("conversation id");
+        let seat = AgentRuntimeSessionFacts {
+            scope: RuntimeScope::ConversationSlot {
+                agent: AgentId::parse("a1").expect("agent id"),
+                source: conversation.clone(),
+            },
+            status: RuntimeObservedStatus::Active,
+            generation: RuntimeGeneration::new(1).expect("generation"),
+        };
+        assert_eq!(seat.scope.source(), Some(&conversation));
+        assert_eq!(session(RuntimeObservedStatus::Active).scope.source(), None);
+    }
+}

@@ -77,6 +77,7 @@ opaque_identity!(
     EmptyDaemonInstanceId,
     "daemon instance id must not be empty"
 );
+opaque_identity!(HostId, EmptyHostId, "host id must not be empty");
 
 /// Who is asking. The one application principal, shared by every capability that
 /// decides on authority — enrollment, governance and the agent surfaces all read
