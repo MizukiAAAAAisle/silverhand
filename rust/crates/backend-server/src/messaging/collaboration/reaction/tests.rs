@@ -1,0 +1,734 @@
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex},
+};
+
+use axum::{
+    body::{Body, to_bytes},
+    extract::Extension,
+    http::{Method, Request, StatusCode},
+};
+use serde_json::{Value, json};
+use silverhand_backend_core::{
+    identity::{DaemonInstanceId, UserId},
+    messaging::{
+        MessageId,
+        collaboration::reaction::{
+            ReactionAftermath, ReactionChangedFact, ReactionReadPort, Reactor,
+        },
+    },
+    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
+};
+use silverhand_backend_sqlite::messaging::MessagingStore;
+use sqlx::{Connection, Executor, SqliteConnection};
+use tower::ServiceExt;
+use tracing_subscriber::fmt::MakeWriter;
+
+use super::{router, wire};
+
+fn fixture_case(name: &str) -> (StatusCode, Value) {
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/reaction-wire.json"
+    )))
+    .unwrap();
+    let case = fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap();
+    (
+        StatusCode::from_u16(case["status"].as_u64().unwrap() as u16).unwrap(),
+        case["body"].clone(),
+    )
+}
+
+fn fixture_event(name: &str) -> Value {
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/reaction-wire.json"
+    )))
+    .unwrap();
+    fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap()["event"]
+        .clone()
+}
+
+#[derive(Clone, Default)]
+struct Events(Arc<Mutex<Vec<ReactionChangedFact>>>);
+
+impl ReactionAftermath for Events {
+    async fn announce(&self, fact: &ReactionChangedFact) {
+        self.0.lock().unwrap().push(fact.clone());
+    }
+}
+
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl LogBuffer {
+    fn events(&self) -> Vec<Value> {
+        let bytes = self.0.lock().unwrap().clone();
+        String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
+struct LogWriter(LogBuffer);
+
+impl Write for LogWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for LogBuffer {
+    type Writer = LogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        LogWriter(self.clone())
+    }
+}
+
+async fn seeded() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    MessagingStore,
+    Events,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reactions.sqlite");
+    let mut db = crate::current_schema::create_current_schema(&path).await;
+    db.execute(sqlx::raw_sql(
+        "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES \
+           ('user-1', 'owner', 'Owner', 0, 0), ('user-2', 'outsider', 'Outsider', 0, 0); \
+         INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'Host', 'local', 0); \
+         INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+           created_by_user_id, materialization_status, session_scope) VALUES \
+           ('agent-1', 'agent', 'codex', 'host-1', 0, 0, 'Agent', 'user-1', 'active', 'conversation'); \
+         INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+           VALUES ('workspace-1', 'Space', 'space', 'user-1', 0, 0); \
+         INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES \
+           ('workspace-1', 'user-1', 0, 'owner'), ('workspace-1', 'user-2', 0, 'member'); \
+         INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES \
+           ('workspace-1', 'agent-1', 0); \
+         INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability) VALUES \
+           ('workspace-1', 'agent-1', 'send_messages'); \
+         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
+           title_key, status, visibility, created_at, updated_at, latest_message_seq) VALUES \
+           ('conversation-1', 'workspace-1', 'workspace', 'open', 'General', 'general', \
+            'open', 'private', 0, 0, 2), \
+           ('conversation-closed', 'workspace-1', 'workspace', 'open', 'Closed', 'closed', \
+            'open', 'private', 0, 0, 1); \
+         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
+           title_key, status, visibility, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, \
+           created_at, updated_at, latest_message_seq) VALUES \
+           ('pair-1', NULL, 'direct_pair', 'fixed', 'Pair', NULL, 'idle', 'private', \
+            'agent', 'agent-1', 'human', 'user-1', 0, 0, 1); \
+         UPDATE conversations SET closed_at = 1 WHERE id = 'conversation-closed'; \
+         INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES \
+           ('conversation-1', 'user-1', 0), ('conversation-closed', 'user-1', 0); \
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES \
+           ('conversation-1', 'agent-1', 0); \
+         INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at) VALUES \
+           ('message-1', 'conversation-1', 'user', 'user-1', 'hello', 1, 1), \
+           ('system-1', 'conversation-1', 'system', NULL, 'notice', 2, 2), \
+           ('reply-1', 'conversation-1', 'user', 'user-1', 'reply', 3, 3), \
+           ('closed-message', 'conversation-closed', 'user', 'user-1', 'old', 1, 1), \
+           ('pair-message', 'pair-1', 'user', 'user-1', 'dm', 1, 1); \
+         UPDATE messages SET thread_root_id='message-1' WHERE id='reply-1'; \
+         INSERT INTO conversation_stream_heads (conversation_id, thread_root_id, latest_seq) VALUES \
+           ('conversation-1', NULL, 2), ('conversation-1', 'message-1', 3);"
+    )).await.unwrap();
+    db.close().await.unwrap();
+    let store = MessagingStore::open(&path).await.unwrap();
+    (directory, path, store, Events::default())
+}
+
+async fn call(app: axum::Router, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()))
+    };
+    (status, value)
+}
+
+#[tokio::test]
+async fn human_add_remove_is_idempotent_and_never_moves_message_freshness() {
+    let (_directory, path, store, events) = seeded().await;
+    let app = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+
+    let (status, body) = call(
+        app.clone(),
+        Method::POST,
+        "/api/messages/message-1/reactions",
+        json!({"emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"changed":true,"emoji":"👍","count":1}));
+    let (status, body) = call(
+        app.clone(),
+        Method::POST,
+        "/api/messages/message-1/reactions",
+        json!({"emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({"changed":false,"emoji":"👍","count":1})
+        )
+    );
+    assert_eq!(events.0.lock().unwrap().len(), 1);
+
+    let (status, detail) = call(
+        app.clone(),
+        Method::GET,
+        "/api/messages/message-1/reactions",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        detail,
+        json!({"reactions":[{"emoji":"👍","reactors":[{"kind":"user","id":"user-1","display_name":"Owner"}]}]})
+    );
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    let freshness: (i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT seq FROM messages WHERE id='message-1'), \
+         (SELECT latest_message_seq FROM conversations WHERE id='conversation-1'), \
+         (SELECT latest_seq FROM conversation_stream_heads WHERE conversation_id='conversation-1' AND thread_root_id IS NULL)"
+    ).fetch_one(&mut db).await.unwrap();
+    assert_eq!(freshness, (1, 2, 2));
+
+    let (status, body) = call(
+        app,
+        Method::DELETE,
+        "/api/messages/message-1/reactions",
+        json!({"emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({"changed":true,"emoji":"👍","count":0})
+        )
+    );
+    assert_eq!(events.0.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_reply_reaction_preserves_both_stream_heads_and_projects_the_exact_cluster_coordinate() {
+    let (_directory, path, store, events) = seeded().await;
+    let app = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+
+    let (status, _) = call(
+        app,
+        Method::POST,
+        "/api/messages/reply-1/reactions",
+        json!({"emoji":"🔥"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let fact = events.0.lock().unwrap()[0].clone();
+    assert_eq!(
+        wire::MESSAGE_REACTION_CHANGED_EVENT,
+        "message_reaction_changed"
+    );
+    assert_eq!(
+        serde_json::to_value(wire::changed_event(&fact)).unwrap(),
+        json!({
+            "message_id":"reply-1",
+            "conversation_id":"conversation-1",
+            "thread_root_id":"message-1",
+            "emoji":"🔥",
+            "op":"add",
+            "reactor_kind":"user",
+            "reactor_id":"user-1",
+            "count":1
+        })
+    );
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    let heads: Vec<(Option<String>, i64)> = sqlx::query_as(
+        "SELECT thread_root_id, latest_seq FROM conversation_stream_heads \
+         WHERE conversation_id='conversation-1' ORDER BY thread_root_id",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(heads, vec![(None, 2), (Some("message-1".into()), 3)]);
+    let latest: i64 = sqlx::query_scalar(
+        "SELECT latest_message_seq FROM conversations WHERE id='conversation-1'",
+    )
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(latest, 2);
+}
+
+#[tokio::test]
+async fn runtime_route_binds_the_authenticated_agent_and_source_before_the_uow() {
+    let (_directory, _path, store, events) = seeded().await;
+    let custody = RuntimeCustody::new(
+        RuntimeGeneration::new(1).unwrap(),
+        DaemonInstanceId::parse("daemon-1").unwrap(),
+    );
+    let principal = RuntimePrincipal::ConversationSlot {
+        agent: silverhand_backend_core::identity::AgentId::parse("agent-1").unwrap(),
+        source: silverhand_backend_core::identity::ConversationId::parse("conversation-1").unwrap(),
+        custody,
+    };
+    let app =
+        router(store.reactions(), store.reactions(), events.clone()).layer(Extension(principal));
+    let (status, body) = call(
+        app.clone(),
+        Method::POST,
+        "/internal/agents/agent-1/react-message",
+        json!({"message_id":"message-1","emoji":"🎯"}),
+    )
+    .await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({"changed":true,"emoji":"🎯","count":1})
+        )
+    );
+    let (status, _) = call(
+        app,
+        Method::POST,
+        "/internal/agents/other/react-message",
+        json!({"message_id":"message-1","emoji":"🎯"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(events.0.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn refusals_are_exact_and_commit_nothing() {
+    let (_directory, path, store, events) = seeded().await;
+    let owner = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    for (uri, emoji, status, code) in [
+        (
+            "/api/messages/missing/reactions",
+            "👍",
+            StatusCode::NOT_FOUND,
+            "message_not_found",
+        ),
+        (
+            "/api/messages/system-1/reactions",
+            "👍",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "system_message_not_reactable",
+        ),
+        (
+            "/api/messages/closed-message/reactions",
+            "👍",
+            StatusCode::CONFLICT,
+            "conversation_closed",
+        ),
+        (
+            "/api/messages/message-1/reactions",
+            "words",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_reaction",
+        ),
+    ] {
+        let (actual_status, body) =
+            call(owner.clone(), Method::POST, uri, json!({"emoji":emoji})).await;
+        assert_eq!(actual_status, status);
+        assert_eq!(body["code"], code);
+    }
+    let outsider = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-2").unwrap()));
+    let (status, body) = call(
+        outsider,
+        Method::POST,
+        "/api/messages/message-1/reactions",
+        json!({"emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "forbidden");
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message_reactions")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    assert!(events.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cold_aggregate_and_live_fact_share_the_authoritative_post_change_count() {
+    let (_directory, _path, store, events) = seeded().await;
+    let app = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    let _ = call(
+        app,
+        Method::POST,
+        "/api/messages/message-1/reactions",
+        json!({"emoji":"✨"}),
+    )
+    .await;
+    let cold = store
+        .reactions()
+        .aggregates(
+            &Reactor::Human(UserId::parse("user-1").unwrap()),
+            &[MessageId::parse("message-1").unwrap()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(cold[0].1[0].count(), events.0.lock().unwrap()[0].count());
+    assert!(cold[0].1[0].viewer_reacted());
+    assert_eq!(cold[0].1[0].emoji(), events.0.lock().unwrap()[0].emoji());
+}
+
+fn runtime_principal(source: &str) -> RuntimePrincipal {
+    RuntimePrincipal::ConversationSlot {
+        agent: silverhand_backend_core::identity::AgentId::parse("agent-1").unwrap(),
+        source: silverhand_backend_core::identity::ConversationId::parse(source).unwrap(),
+        custody: RuntimeCustody::new(
+            RuntimeGeneration::new(1).unwrap(),
+            DaemonInstanceId::parse("daemon-1").unwrap(),
+        ),
+    }
+}
+
+#[tokio::test]
+async fn production_routes_consume_every_ts_signed_wire_case() {
+    let (_directory, path, store, events) = seeded().await;
+    let human = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    db.execute(sqlx::raw_sql(
+        "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, visibility, created_at, updated_at) \
+         VALUES ('conversation-other', 'workspace-1', 'workspace', 'open', 'Other', 'other', 'open', 'private', 0, 0); \
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation-other', 'agent-1', 0);"
+    )).await.unwrap();
+
+    for (name, method, uri, body) in [
+        (
+            "human_add",
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({"emoji":"👀"}),
+        ),
+        (
+            "human_duplicate",
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({"emoji":"👀"}),
+        ),
+        (
+            "human_remove",
+            Method::DELETE,
+            "/api/messages/message-1/reactions",
+            json!({"emoji":"👀"}),
+        ),
+        (
+            "invalid_reaction",
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({"emoji":"not emoji"}),
+        ),
+        (
+            "missing_message",
+            Method::POST,
+            "/api/messages/missing/reactions",
+            json!({"emoji":"👍"}),
+        ),
+        (
+            "system_target",
+            Method::POST,
+            "/api/messages/system-1/reactions",
+            json!({"emoji":"👍"}),
+        ),
+    ] {
+        assert_eq!(
+            call(human.clone(), method, uri, body).await,
+            fixture_case(name),
+            "{name}"
+        );
+    }
+    let first = events.0.lock().unwrap()[0].clone();
+    assert_eq!(
+        serde_json::to_value(wire::changed_event(&first)).unwrap(),
+        fixture_event("human_add")
+    );
+    sqlx::query("UPDATE conversations SET closed_at=1 WHERE id='conversation-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            human.clone(),
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({"emoji":"👍"})
+        )
+        .await,
+        fixture_case("closed_conversation")
+    );
+    sqlx::query("UPDATE conversations SET closed_at=NULL, archived_at=1 WHERE id='conversation-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            human,
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({"emoji":"👍"})
+        )
+        .await,
+        fixture_case("archived_conversation")
+    );
+    sqlx::query("UPDATE conversations SET archived_at=NULL WHERE id='conversation-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+
+    let agent = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(runtime_principal("conversation-1")));
+    assert_eq!(
+        call(
+            agent,
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"🎯"})
+        )
+        .await,
+        fixture_case("agent_add")
+    );
+    let wrong = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(runtime_principal("conversation-other")));
+    assert_eq!(
+        call(
+            wrong,
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"🚀"})
+        )
+        .await,
+        fixture_case("agent_wrong_source")
+    );
+    sqlx::query("DELETE FROM workspace_agent_capabilities WHERE workspace_id='workspace-1' AND agent_id='agent-1' AND capability='send_messages'").execute(&mut db).await.unwrap();
+    let denied = router(store.reactions(), store.reactions(), events)
+        .layer(Extension(runtime_principal("conversation-1")));
+    assert_eq!(
+        call(
+            denied,
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"🚀"})
+        )
+        .await,
+        fixture_case("agent_capability_denied")
+    );
+}
+
+#[tokio::test]
+async fn direct_pair_endpoints_write_without_roster_but_a_half_dead_pair_is_read_only() {
+    let (_directory, path, store, events) = seeded().await;
+    let human = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    let (status, _) = call(
+        human.clone(),
+        Method::POST,
+        "/api/messages/pair-message/reactions",
+        json!({"emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let agent = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(runtime_principal("pair-1")));
+    let (status, body) = call(
+        agent,
+        Method::POST,
+        "/internal/agents/agent-1/react-message",
+        json!({"message_id":"pair-message","emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({"changed":true,"emoji":"👍","count":2})
+        )
+    );
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE conversations SET endpoint_a_deleted_at=9 WHERE id='pair-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let (status, body) = call(
+        human.clone(),
+        Method::POST,
+        "/api/messages/pair-message/reactions",
+        json!({"emoji":"🎯"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "forbidden");
+    let (status, detail) = call(
+        human,
+        Method::GET,
+        "/api/messages/pair-message/reactions",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        detail["reactions"][0]["reactors"].as_array().unwrap().len(),
+        2
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_real_mutation_driver_failure_is_safe_logged_once_and_publishes_nothing() {
+    let (_directory, path, store, events) = seeded().await;
+    let mut breaker = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    breaker
+        .execute("DROP TABLE message_reactions")
+        .await
+        .unwrap();
+    breaker.close().await.unwrap();
+    let app = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (status, body) = call(
+        app,
+        Method::POST,
+        "/api/messages/message-1/reactions",
+        json!({"emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, Value::String("Internal Server Error".into()));
+    assert!(events.0.lock().unwrap().is_empty());
+    let errors = logs
+        .events()
+        .into_iter()
+        .filter(|event| event["level"] == "ERROR")
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["fields"]["message"], "reaction mutation failed");
+    let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+    assert!(chain.contains("database operation failed"), "{chain}");
+    assert!(
+        chain.contains("no such table: message_reactions"),
+        "{chain}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn malformed_persisted_reaction_data_is_a_safe_read_failure_with_its_source_chain() {
+    let (_directory, path, store, events) = seeded().await;
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO message_reactions \
+         (id, message_id, reactor_kind, reactor_id, emoji, created_at) \
+         VALUES ('bad-reaction', 'message-1', 'user', 'user-1', 'not-emoji', 1)",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+    let app = router(store.reactions(), store.reactions(), events)
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (status, body) = call(
+        app,
+        Method::GET,
+        "/api/messages/message-1/reactions",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, Value::String("Internal Server Error".into()));
+    let errors = logs
+        .events()
+        .into_iter()
+        .filter(|event| event["level"] == "ERROR")
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0]["fields"]["message"],
+        "reaction detail read failed"
+    );
+    let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+    assert!(
+        chain.contains("stored reaction emoji is outside the published grammar"),
+        "{chain}"
+    );
+    assert!(!chain.contains("not-emoji"), "{chain}");
+}

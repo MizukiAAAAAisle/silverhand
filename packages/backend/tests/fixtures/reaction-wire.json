@@ -1,0 +1,13 @@
+[
+  {"name":"human_add","status":200,"body":{"changed":true,"emoji":"👀","count":1},"event":{"message_id":"message-1","conversation_id":"conversation-1","thread_root_id":null,"emoji":"👀","op":"add","reactor_kind":"user","reactor_id":"user-1","count":1}},
+  {"name":"human_duplicate","status":200,"body":{"changed":false,"emoji":"👀","count":1}},
+  {"name":"human_remove","status":200,"body":{"changed":true,"emoji":"👀","count":0}},
+  {"name":"invalid_reaction","status":422,"body":{"error":"emoji must not contain whitespace","code":"invalid_reaction"}},
+  {"name":"missing_message","status":404,"body":{"error":"message not found","code":"message_not_found"}},
+  {"name":"system_target","status":422,"body":{"error":"cannot react to a system message","code":"system_message_not_reactable"}},
+  {"name":"closed_conversation","status":409,"body":{"error":"conversation is closed","code":"conversation_closed"}},
+  {"name":"archived_conversation","status":409,"body":{"error":"conversation is archived","code":"conversation_archived"}},
+  {"name":"agent_add","status":200,"body":{"changed":true,"emoji":"🎯","count":1}},
+  {"name":"agent_wrong_source","status":404,"body":{"error":"message not found"}},
+  {"name":"agent_capability_denied","status":403,"body":{"code":"capability_denied","capability":"send_messages","message":"missing 'send_messages' capability in this workspace","details":{"capability":"send_messages"}}}
+]
