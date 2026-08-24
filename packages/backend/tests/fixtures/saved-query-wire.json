@@ -97,6 +97,58 @@
     "route_status": 400
   },
   {
+    "name": "max_finite_prefix_stays_a_valid_beyond_range_integer",
+    "input": { "since": "0xfffffffffffff800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+    "output": { "since": 1.7976931348623157e+308 },
+    "rust_output": { "since": "beyond_persisted_range" },
+    "path": "/api/saved?since=0xfffffffffffff800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "prefix_at_the_binary64_overflow_tie_is_rejected_as_float",
+    "input": { "since": "0xfffffffffffffc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ],
+    "path": "/api/saved?since=0xfffffffffffffc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "route_status": 400
+  },
+  {
+    "name": "rust_inf_alias_is_ecmascript_nan",
+    "input": { "since": "inf" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "number",
+        "received": "nan",
+        "path": ["since"],
+        "message": "Expected number, received nan"
+      }
+    ],
+    "path": "/api/saved?since=inf",
+    "route_status": 400
+  },
+  {
+    "name": "signed_case_insensitive_rust_infinity_alias_is_ecmascript_nan",
+    "input": { "since": "+infinity" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "number",
+        "received": "nan",
+        "path": ["since"],
+        "message": "Expected number, received nan"
+      }
+    ],
+    "path": "/api/saved?since=%2Binfinity",
+    "route_status": 400
+  },
+  {
     "name": "fractional_since_is_rejected_as_float",
     "input": { "since": "1.5" },
     "issues": [

@@ -229,6 +229,9 @@ fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
     } else if let Some((digits, radix)) = prefixed_integer(trimmed) {
         return coerce_prefixed(digits, radix);
     } else {
+        if !is_ecmascript_decimal_literal(trimmed) {
+            return Err(NumberIssue::Nan);
+        }
         trimmed.parse::<f64>().map_err(|_| NumberIssue::Nan)?
     };
     if number.is_nan() {
@@ -250,6 +253,48 @@ fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
         return Ok(CoercedInteger::BeyondPersistedRange);
     }
     Ok(CoercedInteger::Persisted(number as i64))
+}
+
+/// `f64::from_str` deliberately accepts Rust spellings such as `inf` and is
+/// case-insensitive for several non-finite values. `Number(string)` does not:
+/// after trimming and the exact `Infinity` spellings above, only the ECMAScript
+/// decimal grammar may reach the binary64 parser.
+fn is_ecmascript_decimal_literal(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    let mut cursor = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let integer_start = cursor;
+    while matches!(bytes.get(cursor), Some(b'0'..=b'9')) {
+        cursor += 1;
+    }
+    let integer_digits = cursor - integer_start;
+
+    let mut fraction_digits = 0;
+    if bytes.get(cursor) == Some(&b'.') {
+        cursor += 1;
+        let fraction_start = cursor;
+        while matches!(bytes.get(cursor), Some(b'0'..=b'9')) {
+            cursor += 1;
+        }
+        fraction_digits = cursor - fraction_start;
+    }
+    if integer_digits == 0 && fraction_digits == 0 {
+        return false;
+    }
+
+    if matches!(bytes.get(cursor), Some(b'e' | b'E')) {
+        cursor += 1;
+        if matches!(bytes.get(cursor), Some(b'+' | b'-')) {
+            cursor += 1;
+        }
+        let exponent_start = cursor;
+        while matches!(bytes.get(cursor), Some(b'0'..=b'9')) {
+            cursor += 1;
+        }
+        if cursor == exponent_start {
+            return false;
+        }
+    }
+    cursor == bytes.len()
 }
 
 fn coerce_prefixed(digits: &str, radix: u32) -> Result<CoercedInteger, NumberIssue> {
