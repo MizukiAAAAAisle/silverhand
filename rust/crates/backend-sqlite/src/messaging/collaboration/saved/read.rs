@@ -5,8 +5,8 @@ use silverhand_backend_core::{
         attachments::AttachmentSnapshot,
         collaboration::saved::{
             SavedAt, SavedEntry, SavedEntryId, SavedLinkedTask, SavedListQuery, SavedMessage,
-            SavedMessageProjection, SavedPlace, SavedReadPort, SavedReadRefusal, SavedTaskAssignee,
-            SavedTaskNumber, SavedTaskStatus,
+            SavedMessageProjection, SavedPlace, SavedReadPort, SavedReadRefusal, SavedSince,
+            SavedTaskAssignee, SavedTaskNumber, SavedTaskStatus,
         },
     },
     persistence::PersistenceFailure,
@@ -78,7 +78,12 @@ where
                 .push(" AND m.author_id = ")
                 .push_bind(sender.id());
         }
-        if let Some(since) = query.since {
+        if matches!(query.since, Some(SavedSince::BeyondPersistedRange)) {
+            // The public z.coerce.number contract accepts nonnegative integers
+            // beyond SQLite's i64 timestamp domain. They are valid filters with
+            // an empty result, not malformed input and never a saturated bound.
+            builder.push(" AND 0");
+        } else if let Some(SavedSince::Persisted(since)) = query.since {
             builder.push(" AND sm.saved_at >= ").push_bind(since.get());
         }
         builder

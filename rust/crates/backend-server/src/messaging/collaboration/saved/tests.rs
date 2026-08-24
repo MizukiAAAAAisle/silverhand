@@ -523,7 +523,12 @@ fn the_rust_query_boundary_consumes_the_ts_signed_trim_and_coercion_contract() {
             continue;
         }
         let query = parsed.unwrap_or_else(|issues| panic!("{}: {issues:?}", case["name"]));
-        assert_eq!(query_value(query), case["output"], "{}", case["name"]);
+        assert_eq!(
+            query_value(query),
+            case.get("rust_output").unwrap_or(&case["output"]).clone(),
+            "{}",
+            case["name"]
+        );
     }
 }
 
@@ -533,7 +538,12 @@ fn query_value(query: SavedListQuery) -> Value {
         out.insert("workspace_id".to_owned(), json!(workspace.as_str()));
     }
     if let Some(since) = query.since {
-        out.insert("since".to_owned(), json!(since.get()));
+        out.insert(
+            "since".to_owned(),
+            since
+                .persisted_value()
+                .map_or_else(|| json!("beyond_persisted_range"), |value| json!(value)),
+        );
     }
     if let Some(sender) = query.sender {
         match sender {
@@ -542,6 +552,52 @@ fn query_value(query: SavedListQuery) -> Value {
         };
     }
     Value::Object(out)
+}
+
+#[tokio::test]
+async fn valid_since_beyond_i64_is_empty_only_after_workspace_authority() {
+    let (_directory, _path, store, events) = seeded().await;
+    let app = router(store.saved(), store.saved(), events)
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    assert_eq!(
+        call(app.clone(), Method::POST, "/api/messages/message-1/save")
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/saved-query-wire.json"
+    )))
+    .unwrap();
+    for case in fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case.get("path").is_some())
+    {
+        let path = case["path"].as_str().unwrap();
+        assert_eq!(
+            call(app.clone(), Method::GET, path).await,
+            (StatusCode::OK, json!({"saved":[]})),
+            "{}",
+            case["name"]
+        );
+        assert_eq!(
+            call(
+                app.clone(),
+                Method::GET,
+                &format!("{path}&workspace_id=missing"),
+            )
+            .await,
+            (
+                StatusCode::NOT_FOUND,
+                json!({"error":"workspace not found"})
+            ),
+            "{}: workspace authority first",
+            case["name"]
+        );
+    }
 }
 
 #[tokio::test]

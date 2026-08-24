@@ -140,14 +140,17 @@ fn list_query(raw: ListQueryWire) -> Result<SavedListQuery, Vec<serde_json::Valu
                     ),
                 }]
             })?;
-            Some(SavedSince::new(parsed).ok_or_else(|| {
-                vec![json_issue(
-                    "too_small",
-                    "Number must be greater than or equal to 0",
-                    "number",
-                    "since",
-                )]
-            })?)
+            Some(match parsed {
+                CoercedInteger::Persisted(value) => SavedSince::new(value).ok_or_else(|| {
+                    vec![json_issue(
+                        "too_small",
+                        "Number must be greater than or equal to 0",
+                        "number",
+                        "since",
+                    )]
+                })?,
+                CoercedInteger::BeyondPersistedRange => SavedSince::beyond_persisted_range(),
+            })
         }
     };
     let human = search_optional(raw.user_id)
@@ -207,19 +210,23 @@ enum NumberIssue {
     Float,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CoercedInteger {
+    Persisted(i64),
+    BeyondPersistedRange,
+}
+
 /// The published query uses `z.coerce.number().int()`. Rust's integer parser is
 /// narrower (it rejects exponent and integral-decimal spellings), so coerce via
 /// a finite f64 first and only then enter the persisted i64 timestamp domain.
-fn coerce_integer(raw: &str) -> Result<i64, NumberIssue> {
+fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
     let trimmed = crate::messaging::admission::ecmascript_trim(raw);
     let number = if trimmed.is_empty() {
         0.0
     } else if matches!(trimmed, "Infinity" | "+Infinity" | "-Infinity") {
         return Err(NumberIssue::Float);
     } else if let Some((digits, radix)) = prefixed_integer(trimmed) {
-        u128::from_str_radix(digits, radix)
-            .map(|value| value as f64)
-            .map_err(|_| NumberIssue::Nan)?
+        coerce_prefixed(digits, radix)?
     } else {
         trimmed.parse::<f64>().map_err(|_| NumberIssue::Nan)?
     };
@@ -232,10 +239,26 @@ fn coerce_integer(raw: &str) -> Result<i64, NumberIssue> {
     if number.fract() != 0.0 {
         return Err(NumberIssue::Float);
     }
-    if number < i64::MIN as f64 || number > i64::MAX as f64 {
+    if number < 0.0 {
+        return Ok(CoercedInteger::Persisted(-1));
+    }
+    // 2^63 is the first nonnegative integer outside SQLite's signed timestamp
+    // domain. Comparing against this exact power-of-two avoids the lossy
+    // `i64::MAX as f64` boundary, which is itself rounded up to 2^63.
+    if number >= 9_223_372_036_854_775_808.0 {
+        return Ok(CoercedInteger::BeyondPersistedRange);
+    }
+    Ok(CoercedInteger::Persisted(number as i64))
+}
+
+fn coerce_prefixed(digits: &str, radix: u32) -> Result<f64, NumberIssue> {
+    if digits.is_empty() {
         return Err(NumberIssue::Nan);
     }
-    Ok(number as i64)
+    digits.chars().try_fold(0.0_f64, |value, character| {
+        let digit = character.to_digit(radix).ok_or(NumberIssue::Nan)?;
+        Ok(value.mul_add(radix as f64, digit as f64))
+    })
 }
 
 fn prefixed_integer(raw: &str) -> Option<(&str, u32)> {

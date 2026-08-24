@@ -111,6 +111,15 @@ describe('saved wire is signed by the production TypeScript routes', () => {
     expect(list.status).toBe(fixtureCase('list').status);
     expect(normalizeSaved(await body(list), ids)).toEqual(expectedBody('list'));
 
+    for (const entry of queryFixture.filter(entry => 'path' in entry)) {
+      const beyond = await http(t).get(entry.path!);
+      expect(beyond.status, entry.name).toBe(200);
+      expect(await beyond.json(), entry.name).toEqual({ saved: [] });
+      const missingWorkspace = await http(t).get(`${entry.path!}&workspace_id=missing`);
+      expect(missingWorkspace.status, `${entry.name}: workspace authority first`).toBe(404);
+      expect(await missingWorkspace.json()).toEqual({ error: 'workspace not found' });
+    }
+
     for (const [name, path] of [
       ['list_both_senders', '/api/saved?user_id=local&agent_id=agent-1'],
       ['list_negative_since', '/api/saved?since=-1'],

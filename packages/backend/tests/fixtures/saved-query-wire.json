@@ -60,6 +60,20 @@
     "output": { "since": 8 }
   },
   {
+    "name": "prefix_beyond_u128_is_valid_but_outside_persisted_range",
+    "input": { "since": "0x100000000000000000000000000000000" },
+    "output": { "since": 3.402823669209385e+38 },
+    "rust_output": { "since": "beyond_persisted_range" },
+    "path": "/api/saved?since=0x100000000000000000000000000000000"
+  },
+  {
+    "name": "two_to_the_63_is_not_saturated_to_i64_max",
+    "input": { "since": "9223372036854775808" },
+    "output": { "since": 9223372036854776000 },
+    "rust_output": { "since": "beyond_persisted_range" },
+    "path": "/api/saved?since=9223372036854775808"
+  },
+  {
     "name": "fractional_since_is_rejected_as_float",
     "input": { "since": "1.5" },
     "issues": [

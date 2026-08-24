@@ -5,15 +5,25 @@ use crate::identity::{AgentId, UserId, WorkspaceId};
 use super::{SavedAt, SavedEntry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SavedSince(SavedAt);
+pub enum SavedSince {
+    Persisted(SavedAt),
+    BeyondPersistedRange,
+}
 
 impl SavedSince {
     pub fn new(value: i64) -> Option<Self> {
-        SavedAt::new(value).ok().map(Self)
+        SavedAt::new(value).ok().map(Self::Persisted)
     }
 
-    pub fn get(self) -> i64 {
-        self.0.get()
+    pub fn beyond_persisted_range() -> Self {
+        Self::BeyondPersistedRange
+    }
+
+    pub fn persisted_value(self) -> Option<i64> {
+        match self {
+            Self::Persisted(value) => Some(value.get()),
+            Self::BeyondPersistedRange => None,
+        }
     }
 }
 
