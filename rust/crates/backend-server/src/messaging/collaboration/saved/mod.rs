@@ -216,9 +216,10 @@ enum CoercedInteger {
     BeyondPersistedRange,
 }
 
-/// The published query uses `z.coerce.number().int()`. Rust's integer parser is
-/// narrower (it rejects exponent and integral-decimal spellings), so coerce via
-/// a finite f64 first and only then enter the persisted i64 timestamp domain.
+/// The published query uses `z.coerce.number().int()`. Decimal spellings use
+/// Rust's correctly-rounded binary64 parser. Power-of-two prefixes are parsed as
+/// exact integers and rounded once, matching ECMAScript rather than repeatedly
+/// rounding an accumulator.
 fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
     let trimmed = crate::messaging::admission::ecmascript_trim(raw);
     let number = if trimmed.is_empty() {
@@ -226,7 +227,7 @@ fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
     } else if matches!(trimmed, "Infinity" | "+Infinity" | "-Infinity") {
         return Err(NumberIssue::Float);
     } else if let Some((digits, radix)) = prefixed_integer(trimmed) {
-        coerce_prefixed(digits, radix)?
+        return coerce_prefixed(digits, radix);
     } else {
         trimmed.parse::<f64>().map_err(|_| NumberIssue::Nan)?
     };
@@ -251,14 +252,121 @@ fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
     Ok(CoercedInteger::Persisted(number as i64))
 }
 
-fn coerce_prefixed(digits: &str, radix: u32) -> Result<f64, NumberIssue> {
+fn coerce_prefixed(digits: &str, radix: u32) -> Result<CoercedInteger, NumberIssue> {
+    let bits_per_digit = match radix {
+        2 => 1,
+        8 => 3,
+        16 => 4,
+        _ => return Err(NumberIssue::Nan),
+    };
     if digits.is_empty() {
         return Err(NumberIssue::Nan);
     }
-    digits.chars().try_fold(0.0_f64, |value, character| {
-        let digit = character.to_digit(radix).ok_or(NumberIssue::Nan)?;
-        Ok(value.mul_add(radix as f64, digit as f64))
-    })
+
+    let mut exact = Some(0_u64);
+    let mut first_nonzero = None;
+    for (index, byte) in digits.bytes().enumerate() {
+        let Some(digit) = ascii_digit(byte, radix) else {
+            return Err(NumberIssue::Nan);
+        };
+        if digit != 0 && first_nonzero.is_none() {
+            first_nonzero = Some((index, digit));
+        }
+        exact = exact.and_then(|value| {
+            value
+                .checked_mul(u64::from(radix))
+                .and_then(|value| value.checked_add(u64::from(digit)))
+        });
+    }
+    let Some((first_index, first_digit)) = first_nonzero else {
+        return Ok(CoercedInteger::Persisted(0));
+    };
+
+    if let Some(value) = exact.filter(|value| *value < (1_u64 << 63)) {
+        let rounded = round_u64_to_binary64_integer(value);
+        return if rounded < (1_u64 << 63) {
+            Ok(CoercedInteger::Persisted(rounded as i64))
+        } else {
+            Ok(CoercedInteger::BeyondPersistedRange)
+        };
+    }
+
+    let significant_digits = digits.len() - first_index;
+    let first_bits = u32::BITS - first_digit.leading_zeros();
+    let bit_length = (significant_digits - 1)
+        .checked_mul(bits_per_digit)
+        .and_then(|tail| tail.checked_add(first_bits as usize))
+        .ok_or(NumberIssue::Float)?;
+    match bit_length.cmp(&1024) {
+        std::cmp::Ordering::Less => Ok(CoercedInteger::BeyondPersistedRange),
+        std::cmp::Ordering::Greater => Err(NumberIssue::Float),
+        std::cmp::Ordering::Equal => {
+            // The round-to-infinity threshold is 2^1024 - 2^970: its leading
+            // 54 bits are ones and every lower bit is zero. At the exact tie,
+            // round-to-nearest-even chooses Infinity. Any 1024-bit integer whose
+            // first 54 significant bits are not all one remains finite.
+            if leading_significant_bits_are_ones(digits, radix, 54) {
+                Err(NumberIssue::Float)
+            } else {
+                Ok(CoercedInteger::BeyondPersistedRange)
+            }
+        }
+    }
+}
+
+fn ascii_digit(byte: u8, radix: u32) -> Option<u32> {
+    let value = match byte {
+        b'0'..=b'9' => u32::from(byte - b'0'),
+        b'a'..=b'f' => 10 + u32::from(byte - b'a'),
+        b'A'..=b'F' => 10 + u32::from(byte - b'A'),
+        _ => return None,
+    };
+    (value < radix).then_some(value)
+}
+
+fn round_u64_to_binary64_integer(value: u64) -> u64 {
+    let bit_length = u64::BITS - value.leading_zeros();
+    if bit_length <= 53 {
+        return value;
+    }
+    let shift = bit_length - 53;
+    let unit = 1_u64 << shift;
+    let retained = value >> shift;
+    let remainder = value & (unit - 1);
+    let halfway = unit >> 1;
+    let round_up = remainder > halfway || (remainder == halfway && retained & 1 == 1);
+    (retained + u64::from(round_up)) << shift
+}
+
+fn leading_significant_bits_are_ones(digits: &str, radix: u32, wanted: usize) -> bool {
+    let bits_per_digit = match radix {
+        2 => 1,
+        8 => 3,
+        16 => 4,
+        _ => return false,
+    };
+    let mut started = false;
+    let mut seen = 0;
+    for byte in digits.bytes() {
+        let digit = ascii_digit(byte, radix).expect("digits were validated before classification");
+        for bit in (0..bits_per_digit).rev() {
+            let set = digit & (1 << bit) != 0;
+            if !started {
+                if !set {
+                    continue;
+                }
+                started = true;
+            }
+            if !set {
+                return false;
+            }
+            seen += 1;
+            if seen == wanted {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn prefixed_integer(raw: &str) -> Option<(&str, u32)> {

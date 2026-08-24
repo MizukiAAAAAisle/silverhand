@@ -556,7 +556,7 @@ fn query_value(query: SavedListQuery) -> Value {
 
 #[tokio::test]
 async fn valid_since_beyond_i64_is_empty_only_after_workspace_authority() {
-    let (_directory, _path, store, events) = seeded().await;
+    let (_directory, database_path, store, events) = seeded().await;
     let app = router(store.saved(), store.saved(), events)
         .layer(Extension(UserId::parse("user-1").unwrap()));
     assert_eq!(
@@ -577,12 +577,37 @@ async fn valid_since_beyond_i64_is_empty_only_after_workspace_authority() {
         .filter(|case| case.get("path").is_some())
     {
         let path = case["path"].as_str().unwrap();
+        if let Some(boundary) = case.get("boundary_saved_at").and_then(Value::as_str) {
+            let mut db = SqliteConnection::connect(&format!("sqlite:{}", database_path.display()))
+                .await
+                .unwrap();
+            sqlx::query("UPDATE saved_messages SET saved_at=? WHERE message_id='message-1'")
+                .bind(boundary.parse::<i64>().unwrap())
+                .execute(&mut db)
+                .await
+                .unwrap();
+        }
+        let expected_status = case
+            .get("route_status")
+            .and_then(Value::as_u64)
+            .unwrap_or(200) as u16;
+        let expected_body = if expected_status == 200 {
+            json!({"saved":[]})
+        } else {
+            json!({"error":"invalid input","issues":case["issues"]})
+        };
         assert_eq!(
             call(app.clone(), Method::GET, path).await,
-            (StatusCode::OK, json!({"saved":[]})),
+            (
+                StatusCode::from_u16(expected_status).unwrap(),
+                expected_body
+            ),
             "{}",
             case["name"]
         );
+        if expected_status != 200 {
+            continue;
+        }
         assert_eq!(
             call(
                 app.clone(),

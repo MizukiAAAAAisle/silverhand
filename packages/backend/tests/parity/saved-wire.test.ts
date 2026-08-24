@@ -112,9 +112,23 @@ describe('saved wire is signed by the production TypeScript routes', () => {
     expect(normalizeSaved(await body(list), ids)).toEqual(expectedBody('list'));
 
     for (const entry of queryFixture.filter(entry => 'path' in entry)) {
+      if ('boundary_saved_at' in entry) {
+        // Fixture-owned decimal literal: binding it as a JS number would round
+        // the stored INTEGER before the query and erase the cross-language
+        // predicate falsifier this row exists to carry.
+        t.ctx.db.prepare(
+          `UPDATE saved_messages SET saved_at = ${entry.boundary_saved_at} WHERE message_id = ?`,
+        ).run(message);
+      }
       const beyond = await http(t).get(entry.path!);
-      expect(beyond.status, entry.name).toBe(200);
-      expect(await beyond.json(), entry.name).toEqual({ saved: [] });
+      const expectedStatus = 'route_status' in entry ? entry.route_status : 200;
+      expect(beyond.status, entry.name).toBe(expectedStatus);
+      expect(await beyond.json(), entry.name).toEqual(
+        expectedStatus === 200
+          ? { saved: [] }
+          : { error: 'invalid input', issues: entry.issues },
+      );
+      if (expectedStatus !== 200) continue;
       const missingWorkspace = await http(t).get(`${entry.path!}&workspace_id=missing`);
       expect(missingWorkspace.status, `${entry.name}: workspace authority first`).toBe(404);
       expect(await missingWorkspace.json()).toEqual({ error: 'workspace not found' });

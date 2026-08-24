@@ -74,6 +74,29 @@
     "path": "/api/saved?since=9223372036854775808"
   },
   {
+    "name": "prefixed_integer_is_rounded_once_before_the_persisted_predicate",
+    "input": { "since": "0x200000000000011" },
+    "output": { "since": 144115188075855900 },
+    "rust_output": { "since": 144115188075855904 },
+    "path": "/api/saved?since=0x200000000000011",
+    "boundary_saved_at": "144115188075855890"
+  },
+  {
+    "name": "prefix_that_rounds_to_infinity_is_rejected_as_float",
+    "input": { "since": "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ],
+    "path": "/api/saved?since=0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "route_status": 400
+  },
+  {
     "name": "fractional_since_is_rejected_as_float",
     "input": { "since": "1.5" },
     "issues": [
