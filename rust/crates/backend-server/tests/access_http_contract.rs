@@ -285,11 +285,7 @@ async fn tagged_agent_body_is_accepted_like_the_bare_form() {
 
     let (status, _) = send(
         app(&fake),
-        request(
-            "ws-1",
-            "user-1",
-            r#"{"kind":"agent","agent_id":"agent-1"}"#,
-        ),
+        request("ws-1", "user-1", r#"{"kind":"agent","agent_id":"agent-1"}"#),
     )
     .await;
 

@@ -339,7 +339,11 @@ async fn the_read_port_derives_the_avatar_url_and_reports_a_missing_user_as_none
     let (_dir, path) = schema_with_fixtures().await;
     let store = SqliteAccessStore::open(&path).await.unwrap();
 
-    let present = store.user(&UserId::parse(TARGET).unwrap()).await.unwrap().unwrap();
+    let present = store
+        .user(&UserId::parse(TARGET).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(present.display_name, "Target");
     assert_eq!(
         present.avatar_url.as_deref(),
@@ -348,7 +352,11 @@ async fn the_read_port_derives_the_avatar_url_and_reports_a_missing_user_as_none
     );
 
     // An actor user with no avatar columns has no avatar URL.
-    let no_avatar = store.user(&UserId::parse(ADMIN).unwrap()).await.unwrap().unwrap();
+    let no_avatar = store
+        .user(&UserId::parse(ADMIN).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(no_avatar.avatar_url, None);
 
     // A user that does not exist is the `None` the surface maps to 404.

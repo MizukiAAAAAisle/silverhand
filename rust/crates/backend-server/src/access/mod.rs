@@ -296,9 +296,9 @@ impl From<PersistenceFailure> for AccessError {
 impl IntoResponse for AccessError {
     fn into_response(self) -> Response {
         match self {
-            AccessError::MissingPrincipal => tracing::error!(
-                "workspace member route reached without its human principal fact"
-            ),
+            AccessError::MissingPrincipal => {
+                tracing::error!("workspace member route reached without its human principal fact")
+            }
             AccessError::Persistence(cause) => tracing::error!(
                 error_chain = %error::describe(&cause),
                 "request failed at the persistence boundary"

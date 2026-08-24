@@ -166,7 +166,15 @@ async fn enroll(
     actor: Principal,
     target: &str,
 ) -> Result<WorkspaceUserMembership, AddHumanMemberError> {
-    add_workspace_human_member(fake, fake, &clock(), &actor, ws(), UserId::parse(target).unwrap()).await
+    add_workspace_human_member(
+        fake,
+        fake,
+        &clock(),
+        &actor,
+        ws(),
+        UserId::parse(target).unwrap(),
+    )
+    .await
 }
 
 #[tokio::test]

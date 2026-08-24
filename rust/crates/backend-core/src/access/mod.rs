@@ -14,7 +14,9 @@ pub use agent_enrollment::{
     add_workspace_agent_member, can_enroll_agent,
 };
 pub use clock::{EnrollmentClock, SystemEnrollmentClock};
-pub use governance::{WorkspaceAccessPolicy, WorkspaceGovernance};
+pub use governance::{
+    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts, governance_ceiling,
+};
 pub use human_enrollment::{
     AddHumanMemberError, HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentReadPort,
     HumanEnrollmentUnitOfWork, HumanUser, ViewerWorkspacesChangedSink, WorkspaceUserMembership,

@@ -1,11 +1,20 @@
-//! SQLite adapter for agent workspace enrollment.
+//! SQLite adapter for workspace enrollment and the governance door in front of
+//! it.
 //!
 //! Unlike the foundation proof store, this is a **pure consumer** of an existing
 //! product database: it opens a pool against a schema that already exists and
 //! creates, migrates, or seeds no schema of its own. It therefore never takes
-//! over a database's schema identity — it only reads the `agents` row and writes
-//! the `workspace_members` / `workspace_agent_capabilities` edges the product
-//! schema already defines.
+//! over a database's schema identity — it only reads the `agents`, `workspaces`
+//! and `users` rows and writes the `workspace_members` /
+//! `workspace_agent_capabilities` / `workspace_users` edges the product schema
+//! already defines.
+//!
+//! It decides nothing. Both authorization doors it serves are rules in the
+//! application layer: the request-boundary verdict is
+//! [`governance_ceiling`] over the facts this adapter reads, and the in-lock
+//! re-derivation is `human_enrollment_authorized` over the role it re-reads under
+//! the write lock. Neither role axis is re-implemented here, so the two doors
+//! cannot drift apart in this crate.
 //!
 //! The whole enrollment is one `BEGIN IMMEDIATE` transaction. The membership
 //! insert is `INSERT OR IGNORE`, so a re-enrollment is a no-op on the row;
@@ -24,10 +33,11 @@ use std::{path::Path, time::Duration};
 use silverhand_backend_core::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, EnrollmentKey, HumanEnrollmentCommit, HumanEnrollmentKey,
-    HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, Principal, WorkspaceRole,
-    WorkspaceUserMembership, human_enrollment_authorized,
+    HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, Principal,
+    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceRole,
+    WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
 };
-use silverhand_backend_core::identity::{AgentId, UserId};
+use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     SqlitePool,
@@ -60,6 +70,20 @@ const SELECT_HUMAN_MEMBERSHIP: &str =
     "SELECT joined_at, role FROM workspace_users WHERE workspace_id = ? AND user_id = ?";
 const SELECT_USER: &str = "SELECT id, name, display_name, avatar_storage_key, created_at, \
      updated_at FROM users WHERE id = ?";
+
+// The request-boundary governance door. `owner_agent_id` is the authority on
+// whether a row is some agent's private home (never a stored kind word), so it
+// is selected rather than inferred, and the caller's role is left-joined in the
+// SAME statement: the door's contract is that the container and the caller's
+// ceiling are resolved together, in one read, before any enrollment work runs.
+const SELECT_WORKSPACE_GOVERNANCE_FOR_HUMAN: &str = "SELECT w.owner_agent_id, u.role \
+     FROM workspaces w \
+     LEFT JOIN workspace_users u ON u.workspace_id = w.id AND u.user_id = ? \
+     WHERE w.id = ?";
+/// A non-human principal holds no role row, so its verdict needs only the
+/// container fact — reading a role for it would be reading a row that by
+/// definition cannot exist.
+const SELECT_WORKSPACE_CONTAINER: &str = "SELECT owner_agent_id FROM workspaces WHERE id = ?";
 
 /// A pooled connection to an existing product database, offering only the
 /// agent-enrollment ports. It holds no clock: the join-time candidate is passed
@@ -107,6 +131,8 @@ enum AccessReadFailure {
     Sql(#[from] sqlx::Error),
     #[error(transparent)]
     Integrity(#[from] CorruptStoredIdentifier),
+    #[error(transparent)]
+    Role(#[from] CorruptRoleToken),
 }
 
 /// The internal outcome of the human-enrollment transaction. `Forbidden` is the
@@ -177,6 +203,55 @@ impl SqliteAccessStore {
             id: agent_id.clone(),
             created_by_user_id,
         }))
+    }
+
+    /// Reads exactly the facts the pure boundary rule needs. It decides nothing:
+    /// the ceiling is derived by [`governance_ceiling`] in the application layer,
+    /// so this adapter never re-implements the role axis.
+    async fn governance_facts(
+        &self,
+        principal: &Principal,
+        workspace_id: &WorkspaceId,
+    ) -> Result<WorkspaceGovernanceFacts, AccessReadFailure> {
+        let (owner_agent_id, role_token) = match principal {
+            Principal::Human { user_id } => {
+                let row: Option<(Option<String>, Option<String>)> =
+                    sqlx::query_as(SELECT_WORKSPACE_GOVERNANCE_FOR_HUMAN)
+                        .bind(user_id.as_str())
+                        .bind(workspace_id.as_str())
+                        .fetch_optional(&self.pool)
+                        .await?;
+                match row {
+                    Some((owner_agent_id, role_token)) => (owner_agent_id, role_token),
+                    None => return Ok(WorkspaceGovernanceFacts::NoSuchWorkspace),
+                }
+            }
+            Principal::System | Principal::Agent { .. } => {
+                let row: Option<Option<String>> = sqlx::query_scalar(SELECT_WORKSPACE_CONTAINER)
+                    .bind(workspace_id.as_str())
+                    .fetch_optional(&self.pool)
+                    .await?;
+                match row {
+                    Some(owner_agent_id) => (owner_agent_id, None),
+                    None => return Ok(WorkspaceGovernanceFacts::NoSuchWorkspace),
+                }
+            }
+        };
+
+        // A row with a home agent is that agent's private container, which has no
+        // roster to govern — the same "no such workspace" as a missing row, so the
+        // caller cannot tell the two apart.
+        if owner_agent_id.is_some() {
+            return Ok(WorkspaceGovernanceFacts::NoSuchWorkspace);
+        }
+
+        // A committed role outside the schema's CHECK set is corruption, never a
+        // silent "not a member": it fails the read as an integrity fault.
+        let actor_role = match role_token {
+            Some(token) => Some(WorkspaceRole::parse(&token).ok_or(CorruptRoleToken(token))?),
+            None => None,
+        };
+        Ok(WorkspaceGovernanceFacts::Regular { actor_role })
     }
 
     #[tracing::instrument(skip(self, seed_on_create))]
@@ -324,6 +399,20 @@ impl SqliteAccessStore {
             },
             created,
         })
+    }
+}
+
+impl WorkspaceAccessPolicy for SqliteAccessStore {
+    async fn authorize_member_governance(
+        &self,
+        principal: &Principal,
+        workspace_id: &WorkspaceId,
+    ) -> Result<WorkspaceGovernance, PersistenceFailure> {
+        let facts = self
+            .governance_facts(principal, workspace_id)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        Ok(governance_ceiling(principal, facts))
     }
 }
 
