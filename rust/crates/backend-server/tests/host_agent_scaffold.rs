@@ -45,9 +45,88 @@ const CRATE_ROOTS: &[&str] = &[
     "backend-sqlite",
 ];
 
-/// Every namespace this lane owns. A namespace absent from this list is not
-/// guarded by G3, G4 or G5 at all, so adding one is part of adding a namespace.
-const LANE_NAMESPACES: &[(&str, &str)] = &[
+/// Every module this lane DECLARES at a crate root — the seam ledger. Shaping
+/// owes one labeled integration-seam line per entry, and G4 holds each to a single
+/// declaration with no second owner anywhere.
+///
+/// Flat modules belong here too. One table serving every gate is what let a flat
+/// module sit in no inventory at all, guarded by nothing and with no signal, so
+/// membership here answers only "did this lane declare it at a root".
+const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
+    ("backend-core", "agent_lifecycle"),
+    ("backend-core", "capability"),
+    ("backend-core", "cold_read"),
+    ("backend-core", "policy"),
+    ("backend-core", "teardown"),
+    ("backend-server", "host_agent_background"),
+];
+
+/// The declarations in those same roots that this lane did NOT add.
+///
+/// It exists so the seam ledger can be CLOSED over the tree rather than trusted:
+/// recognising a declaration no inventory knows about requires knowing what was
+/// already there. Without it, forgetting an entry above is silent — twice now the
+/// same defect.
+///
+/// CP1-temporary, with G3's accounting: it guards "every lane module is registered
+/// where it is guarded", it is deleted when the seam is extracted into the
+/// integration commit that owns those lines, and its owner is the review gate. A
+/// merge that brings new modules into these roots must extend one list or the
+/// other, and having to choose is the point.
+const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
+    ("backend-core", "access"),
+    ("backend-core", "auth"),
+    ("backend-core", "direct_pair_read"),
+    ("backend-core", "foundation_message"),
+    ("backend-core", "host_runtime"),
+    ("backend-core", "identity"),
+    ("backend-core", "messaging"),
+    ("backend-core", "persistence"),
+    ("backend-core", "runtime_credential"),
+    ("backend-core", "runtime_delivery"),
+    ("backend-core", "runtime_event"),
+    ("backend-core", "scope_event"),
+    ("backend-core", "viewer_workspace_sort"),
+    ("backend-core", "workspace_cold_read"),
+    ("backend-core", "workspace_face"),
+    ("backend-server", "access"),
+    ("backend-server", "auth"),
+    ("backend-server", "bearer"),
+    ("backend-server", "current_schema"),
+    ("backend-server", "daemon_delivery"),
+    ("backend-server", "daemon_events"),
+    ("backend-server", "direct_pairs"),
+    ("backend-server", "error"),
+    ("backend-server", "host_runtime"),
+    ("backend-server", "http"),
+    ("backend-server", "messaging"),
+    ("backend-server", "runtime_credential"),
+    ("backend-server", "scope_events"),
+    ("backend-server", "wire"),
+    ("backend-server", "workspaces"),
+];
+
+/// The seam modules that are DIRECTORY modules, owning a `<name>/mod.rs`. G5 reads
+/// that file, so a flat module must not appear here — the gate would then fail on a
+/// missing path instead of on a violation. G0 holds this list to exactly the
+/// directory-shaped entries above, so neither shape can drift out of its gate.
+const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
+    ("backend-core", "capability"),
+    ("backend-core", "cold_read"),
+    ("backend-core", "policy"),
+    ("backend-core", "teardown"),
+    ("backend-server", "host_agent_background"),
+];
+
+/// The modules a composition must name to ACTIVATE this lane: rules that decide, a
+/// read that answers a route, the write that commits, the timers that fire.
+///
+/// Membership is that question and not "is it ours". `agent_lifecycle` is a
+/// materialization vocabulary the base crates already share; converting a stored
+/// token into that enum starts no rule, opens no port and fires no timer, so it is
+/// deliberately absent, while every deciding, reading, writing and timing module is
+/// present. G0 keeps it a subset of the seam ledger.
+const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
@@ -266,20 +345,101 @@ fn names_identifier(source: &str, identifier: &str) -> bool {
     })
 }
 
+/// Whether every character is legal in an identifier, and there is at least one.
+fn is_identifier(candidate: &str) -> bool {
+    !candidate.is_empty()
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// Drops leading attributes, so `#[cfg(test)] mod x;` parses as the declaration it
+/// is, and a crate root's own `#![forbid(..)]` does not hide the first one.
+///
+/// Terminates each attribute at the first `]`, which is sufficient for attributes
+/// carrying paths, strings and nested parens; an attribute containing a `]` inside a
+/// string would end the scan early and can only make this predicate MISS, never
+/// invent, a declaration.
+fn strip_attributes(item: &str) -> &str {
+    let mut rest = item.trim_start();
+    loop {
+        let opened = rest.strip_prefix("#![").or_else(|| rest.strip_prefix("#["));
+        let Some(attribute) = opened else {
+            return rest;
+        };
+        let Some(end) = attribute.find(']') else {
+            return rest;
+        };
+        rest = attribute[end + 1..].trim_start();
+    }
+}
+
+/// Splits a leading visibility off an item, reporting whether the item is EXPORTED
+/// beyond its own file.
+///
+/// `pub`, `pub(crate)`, `pub(super)` and `pub(in path)` are four spellings of one
+/// property, and matching text per spelling is how `pub(crate) use` slipped past a
+/// gate whose prose claimed to catch re-exports.
+fn split_visibility(item: &str) -> (bool, &str) {
+    let Some(rest) = item.strip_prefix("pub") else {
+        return (false, item);
+    };
+    if let Some(restriction) = rest.strip_prefix('(') {
+        return match restriction.find(')') {
+            Some(end) => (true, restriction[end + 1..].trim_start()),
+            None => (false, item),
+        };
+    }
+    // `pub` must be a whole token: `published` is not a visibility.
+    if rest.starts_with(char::is_whitespace) {
+        return (true, rest.trim_start());
+    }
+    (false, item)
+}
+
 /// Whether this source takes OWNERSHIP of `namespace` — declares it, or re-exports
 /// it under a second path.
 ///
 /// Deliberately not "mentions it": a crate root legitimately consumes another
 /// crate's namespace, and prose and a struct field can carry the same word. Only a
-/// declaration or a re-export creates a second owner.
+/// declaration or an exported `use` creates a second owner — a private `use` names
+/// the namespace for one file and adds no path anyone else can reach.
+///
+/// Item-based rather than line-based, because a visibility qualifier, a leading
+/// attribute and a braced group spanning several lines are all legal ways to own a
+/// name, and a line-anchored equality test recognises none of them.
 fn declares_or_reexports(source: &str, namespace: &str) -> bool {
-    strip_comments(source).lines().any(|line| {
-        let line = line.trim();
-        let declares =
-            line == format!("mod {namespace};") || line == format!("pub mod {namespace};");
-        let reexports = line.starts_with("pub use ") && names_identifier(line, namespace);
-        declares || reexports
+    strip_comments(source).split(';').any(|item| {
+        let (exported, rest) = split_visibility(strip_attributes(item));
+        if let Some(module) = rest.strip_prefix("mod ") {
+            // Any visibility: a second `mod` of this name is a second module, and
+            // a private one still owns the directory.
+            return module.trim() == namespace;
+        }
+        match rest.strip_prefix("use ") {
+            Some(reexport) => exported && names_identifier(reexport, namespace),
+            None => false,
+        }
     })
+}
+
+/// Every module a crate root declares from a file, by name.
+///
+/// Inline modules are excluded on purpose: `mod tests { .. }` declares no seam line
+/// and owns no directory.
+fn root_module_declarations(crate_dir: &str) -> BTreeSet<String> {
+    let root = rust_root()
+        .join("crates")
+        .join(crate_dir)
+        .join("src/lib.rs");
+    strip_comments(&read(&root))
+        .split(';')
+        .filter_map(|item| {
+            let (_, rest) = split_visibility(strip_attributes(item));
+            let name = rest.strip_prefix("mod ")?.trim();
+            is_identifier(name).then(|| name.to_owned())
+        })
+        .collect()
 }
 
 /// Whether the source reaches `namespace` as a path segment. Bare substring
@@ -313,6 +473,87 @@ fn names_path_segment(source: &str, namespace: &str) -> bool {
             line.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
                 .any(|token| token == namespace)
         })
+}
+
+/// G0 — every lane module sits in the inventory that guards it.
+///
+/// The gates below are driven by tables, and a module missing from a table is not
+/// guarded by anything, with no signal at all. That failure has now happened twice,
+/// so the tables are checked against the tree instead of trusted: a declaration no
+/// inventory knows about fails here, and a shape mismatch (a flat module listed
+/// where a `mod.rs` is read) fails here rather than as a confusing missing path.
+#[test]
+fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
+    // Controls, both directions: a declaration is recognised at any visibility and
+    // behind attributes, and nothing else is mistaken for one.
+    assert!(is_identifier("cold_read") && !is_identifier("cold_read {") && !is_identifier(""));
+    assert_eq!(split_visibility("pub(crate) use x"), (true, "use x"));
+    assert_eq!(
+        split_visibility("pub(in crate::wire) mod x"),
+        (true, "mod x")
+    );
+    assert_eq!(split_visibility("pub mod x"), (true, "mod x"));
+    assert_eq!(split_visibility("mod x"), (false, "mod x"));
+    assert_eq!(
+        split_visibility("published_at: 1"),
+        (false, "published_at: 1")
+    );
+    assert_eq!(
+        strip_attributes("#[cfg(test)]\n#[path = \"../x.rs\"]\nmod current_schema"),
+        "mod current_schema"
+    );
+    // A crate root opens with an inner attribute, and it sits in the same item as
+    // the first declaration: missing it hides that declaration from the closure.
+    assert_eq!(
+        strip_attributes("#![forbid(unsafe_code)]\n\npub mod access"),
+        "pub mod access"
+    );
+
+    for crate_dir in SEAM_ROOT_MODULES
+        .iter()
+        .map(|(crate_dir, _)| *crate_dir)
+        .collect::<BTreeSet<&str>>()
+    {
+        let registered: BTreeSet<String> = SEAM_ROOT_MODULES
+            .iter()
+            .chain(ROOT_MODULES_WE_DID_NOT_ADD)
+            .filter(|(owner, _)| *owner == crate_dir)
+            .map(|(_, module)| (*module).to_owned())
+            .collect();
+        assert_eq!(
+            root_module_declarations(crate_dir),
+            registered,
+            "{crate_dir}/src/lib.rs declares a module no inventory knows about, or an \
+             inventory names one it no longer declares"
+        );
+    }
+
+    for (crate_dir, module) in SEAM_ROOT_MODULES {
+        let module_dir = rust_root()
+            .join("crates")
+            .join(crate_dir)
+            .join("src")
+            .join(module);
+        let directory_shaped = module_dir.join("mod.rs").is_file();
+        assert!(
+            directory_shaped != module_dir.with_extension("rs").is_file(),
+            "{}: a module is either a directory with mod.rs or a flat file",
+            module_dir.display()
+        );
+        assert_eq!(
+            directory_shaped,
+            DIRECTORY_NAMESPACES.contains(&(crate_dir, module)),
+            "{}: the directory inventory and the tree disagree about this module's shape",
+            module_dir.display()
+        );
+    }
+
+    for entry in ACTIVATION_NAMESPACES {
+        assert!(
+            SEAM_ROOT_MODULES.contains(entry),
+            "{entry:?} is fenced against activation but is not in the seam ledger"
+        );
+    }
 }
 
 #[test]
@@ -415,7 +656,7 @@ fn g3_cp1_activation_fence_keeps_the_lane_unmounted() {
     assert!(!app.is_empty());
     for path in app {
         let source = strip_comments(&read(&path));
-        for (_, namespace) in LANE_NAMESPACES {
+        for (_, namespace) in ACTIVATION_NAMESPACES {
             assert!(
                 !names_path_segment(&source, namespace),
                 "{} references {namespace}: CP1 ships no composition edge",
@@ -427,21 +668,54 @@ fn g3_cp1_activation_fence_keeps_the_lane_unmounted() {
 
 #[test]
 fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
+    // A near-miss name is not a second declaration, and a field is not a re-export.
     assert!(!declares_or_reexports(
         "pub mod workspace_cold_read;",
-        "cold_read"
-    ));
-    assert!(declares_or_reexports("pub mod cold_read;", "cold_read"));
-    assert!(declares_or_reexports(
-        "pub use silverhand_backend_core::cold_read;",
         "cold_read"
     ));
     assert!(!declares_or_reexports(
         "    capability: messaging_store.clone(),",
         "capability"
     ));
+    // A private import names the namespace for one file and creates no second path.
+    assert!(!declares_or_reexports(
+        "use silverhand_backend_core::cold_read::availability::read_agent_availability;",
+        "cold_read"
+    ));
+    // Stripping a visibility must not turn every item into a declaration.
+    assert!(!declares_or_reexports(
+        "pub(crate) fn cold_read() {}",
+        "cold_read"
+    ));
 
-    for (crate_dir, namespace) in LANE_NAMESPACES {
+    // Every spelling that DOES create a second owner, including the ones a
+    // line-anchored `pub use ` test used to miss.
+    assert!(declares_or_reexports("pub mod cold_read;", "cold_read"));
+    assert!(declares_or_reexports("mod cold_read;", "cold_read"));
+    assert!(declares_or_reexports(
+        "pub use silverhand_backend_core::cold_read;",
+        "cold_read"
+    ));
+    // The standing counterexample for the module that was in no inventory at all:
+    // both bypass spellings, in the two roots that could host them.
+    assert!(declares_or_reexports(
+        "pub(crate) use silverhand_backend_core::agent_lifecycle;",
+        "agent_lifecycle"
+    ));
+    assert!(declares_or_reexports(
+        "pub(in crate::wire) use silverhand_backend_core::agent_lifecycle;",
+        "agent_lifecycle"
+    ));
+    assert!(declares_or_reexports(
+        "pub(crate) mod agent_lifecycle;",
+        "agent_lifecycle"
+    ));
+    assert!(declares_or_reexports(
+        "pub use silverhand_backend_core::{\n    agent_lifecycle,\n    identity,\n};",
+        "agent_lifecycle"
+    ));
+
+    for (crate_dir, namespace) in SEAM_ROOT_MODULES {
         let declaration = format!("pub mod {namespace};");
         let root = rust_root()
             .join("crates")
@@ -476,25 +750,24 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
 
 #[test]
 fn g5_namespaces_declare_and_never_carry_business() {
-    for (crate_dir, namespace) in LANE_NAMESPACES {
+    for (crate_dir, namespace) in DIRECTORY_NAMESPACES {
         let path = rust_root()
             .join("crates")
             .join(crate_dir)
             .join("src")
             .join(namespace)
             .join("mod.rs");
-        for line in read(&path).lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with("//!") {
+        // Item-based for the same reason as G4: a braced re-export group and a
+        // visibility qualifier are legal, and a function body is not.
+        for item in strip_comments(&read(&path)).split(';') {
+            let item = item.trim();
+            if item.is_empty() {
                 continue;
             }
-            let is_declaration = (line.starts_with("mod ")
-                || line.starts_with("pub mod ")
-                || line.starts_with("pub use "))
-                && line.ends_with(';');
+            let (_, rest) = split_visibility(strip_attributes(item));
             assert!(
-                is_declaration,
-                "{} carries `{line}`: a namespace declares and re-exports only",
+                rest.starts_with("mod ") || rest.starts_with("use "),
+                "{} carries `{item}`: a namespace declares and re-exports only",
                 path.display()
             );
         }
