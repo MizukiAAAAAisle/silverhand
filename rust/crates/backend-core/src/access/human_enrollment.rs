@@ -18,17 +18,22 @@
 //! may be `owner`) and its original join time — which is why the returned member
 //! is re-read from the row rather than assumed. On a genuine create, and only
 //! then, the application announces the new membership through the slice-local
-//! [`ViewerWorkspacesChangedSink`]; that announce is best-effort and never flips
-//! the committed enrollment.
+//! [`ViewerWorkspacesChangedSink`]. That announce runs after the commit, so it can
+//! never emit a phantom event, and it can never flip the committed enrollment —
+//! but it is not swallowed either: its fate comes back as [`ViewerAnnounce`], for
+//! the boundary that owns observability to record.
 
 use std::future::Future;
 
 use thiserror::Error;
 
-use super::agent_enrollment::{Principal, UserId, WorkspaceId};
+use super::agent_enrollment::Principal;
 use super::clock::EnrollmentClock;
 use super::role::{WorkspaceRole, role_governs_workspace};
-use crate::persistence::PersistenceFailure;
+use crate::{
+    identity::{UserId, WorkspaceId},
+    persistence::PersistenceFailure,
+};
 
 /// A person's display identity, resolved for the enrollment response. Read
 /// through [`HumanEnrollmentReadPort`] before the write, because "does this user
@@ -128,17 +133,106 @@ pub trait HumanEnrollmentUnitOfWork: Clone + Send + Sync + 'static {
 /// not a generic event bus — this slice emits exactly one kind of change and says
 /// so in the type.
 ///
-/// The announce is best-effort: the enrollment has already committed by the time
-/// it runs, so a failure here must never flip the result. Implementations own
-/// logging their own failure; the real event-bus adapter and its composition into
-/// the served application are an integration residual outside this slice.
+/// Its failure is [`ViewerAnnounceFailure`] and deliberately NOT a
+/// `PersistenceFailure`: announcing is not storing. A transport that could not
+/// reach a viewer has lost a notification, not corrupted a fact, and calling it
+/// persistence would send a reader looking for a database problem that is not
+/// there.
+///
+/// The announce is best-effort in the sense that it can never flip the committed
+/// enrollment — but "best-effort" is not "unobserved": the outcome is carried back
+/// to the caller as [`ViewerAnnounce`], because a lost notification leaves a
+/// client stale until it refetches and somebody has to be able to say so.
 pub trait ViewerWorkspacesChangedSink: Clone + Send + Sync + 'static {
     fn viewer_added_to_workspace(
         &self,
         user_id: &UserId,
         workspace_id: &WorkspaceId,
         role: WorkspaceRole,
-    ) -> impl Future<Output = Result<(), PersistenceFailure>> + Send;
+    ) -> impl Future<Output = Result<(), ViewerAnnounceFailure>> + Send;
+}
+
+/// An outward announce could not be delivered. Opaque like
+/// [`PersistenceFailure`] and for the same reason — the transport's concrete
+/// error stays available as the `source` for the boundary that records it, while
+/// no transport type leaks into the application layer.
+///
+/// Deliberately NOT the messaging context's `EffectFailure`, which is the same
+/// shape: that type belongs to messaging's post-commit capabilities, and having
+/// enrollment import it would make this context depend on that one for a concept
+/// it merely shares. Messaging's own rule is that each capability owns its
+/// failure. If the two ever want one name, the move is to promote a single
+/// crate-level post-commit failure that both contexts consume — not to reach
+/// sideways.
+#[derive(Debug, Error)]
+#[error("viewer workspace announce could not be delivered")]
+pub struct ViewerAnnounceFailure {
+    #[source]
+    source: Box<dyn std::error::Error + Send + Sync + 'static>,
+}
+
+impl ViewerAnnounceFailure {
+    pub fn from_source<E>(source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self {
+            source: Box::new(source),
+        }
+    }
+}
+
+/// What became of the post-commit announce — a value the enrollment hands back
+/// rather than a `Result` its caller may quietly drop. Not a `Result` for the same
+/// reason messaging's post-commit report is not one: the enrollment happened, and
+/// nothing here can unhappen it.
+///
+/// The three arms are the three distinct facts a boundary may need to record, and
+/// keeping them distinct is the point: `NotOwed` (nothing was created, so nothing
+/// was announced and there is nothing to log) must not be confused with
+/// `Delivered`, and neither with `Failed`, which is the only one that leaves a
+/// client stale.
+#[derive(Debug)]
+pub enum ViewerAnnounce {
+    /// No announce was owed: this request enrolled nobody new, so the sink was
+    /// never called. A re-enrollment lands here and is silent by construction.
+    NotOwed,
+    /// The announce was owed and the sink accepted it.
+    Delivered,
+    /// The announce was owed and could not be delivered. The enrollment is
+    /// committed regardless; the viewer simply was not told, so their read model
+    /// stays stale until it refetches for another reason.
+    Failed(ViewerAnnounceFailure),
+}
+
+/// A committed enrollment together with the fate of its announce.
+///
+/// The two travel together because they are one request's outcome: the membership
+/// is the product answer, and the announce is a side obligation that either was
+/// not owed, was met, or was lost. The fields are SEALED and reachable only through
+/// [`into_parts`](Self::into_parts), which yields both at once — so a caller cannot
+/// take the `member` while letting the [`ViewerAnnounce`] fall on the floor.
+///
+/// This is a *sealed outcome plus a `#[must_use]` guard*, not a linear type: Rust
+/// cannot force the returned value to be consumed at all. What it does force is that
+/// any consumer who opens it receives the announce in the same move and must name
+/// it, and `#[must_use]` makes an outright discard a warning. The one production
+/// consumer matches that announce exhaustively (no `_` arm), so a future new
+/// [`ViewerAnnounce`] arm breaks the build rather than being silently ignored.
+#[derive(Debug)]
+#[must_use = "a committed enrollment carries an announce outcome that must be recorded"]
+pub struct HumanEnrollmentOutcome {
+    member: WorkspaceUserMembership,
+    announce: ViewerAnnounce,
+}
+
+impl HumanEnrollmentOutcome {
+    /// Split the outcome into its two halves at once: the committed membership and
+    /// the fate of its announce. This is the ONLY way to reach either, so a caller
+    /// that wants the member necessarily receives the announce in the same move.
+    pub fn into_parts(self) -> (WorkspaceUserMembership, ViewerAnnounce) {
+        (self.member, self.announce)
+    }
 }
 
 /// Whether `actor` may enroll a human, decided from the actor's workspace role as
@@ -162,8 +256,11 @@ pub fn human_enrollment_authorized(actor: &Principal, actor_role: Option<Workspa
 /// and is ignored by the idempotent insert on a re-enrollment — and the clock is
 /// infallible (mirroring `Date.now()`), so it adds no failure path.
 ///
-/// On a genuine create, the new membership is announced through `sink` exactly
-/// once; the announce is best-effort and does not affect the returned member.
+/// On a genuine create, and only then, the new membership is announced through
+/// `sink` exactly once. The announce runs strictly AFTER the commit, so a
+/// rolled-back write can never emit a phantom event, and its fate never touches
+/// the returned member — it is reported beside it as
+/// [`ViewerAnnounce`](HumanEnrollmentOutcome::announce) for the boundary to record.
 pub async fn add_workspace_human_member<U, S, C>(
     uow: &U,
     sink: &S,
@@ -171,7 +268,7 @@ pub async fn add_workspace_human_member<U, S, C>(
     actor: &Principal,
     workspace_id: WorkspaceId,
     user_id: UserId,
-) -> Result<WorkspaceUserMembership, AddHumanMemberError>
+) -> Result<HumanEnrollmentOutcome, AddHumanMemberError>
 where
     U: HumanEnrollmentUnitOfWork,
     S: ViewerWorkspacesChangedSink,
@@ -186,27 +283,35 @@ where
         .enroll_human(key, actor.clone(), joined_at_candidate)
         .await?;
 
-    if commit.created {
-        // The enrollment has committed; a failed announce must not flip it. The
-        // sink adapter owns logging its own failure (the real event-bus adapter
-        // is an integration residual), so here we only guarantee the committed
-        // result stands and that a re-enrollment — which did not create — stays
-        // silent.
-        let _ = sink
+    // The role announced is the one the WRITE returned, re-read from the row —
+    // never the `member` default the insert bound, so the announce can never
+    // describe a membership the database does not hold.
+    let announce = if commit.created {
+        match sink
             .viewer_added_to_workspace(
                 &commit.member.user_id,
                 &commit.member.workspace_id,
                 commit.member.role,
             )
-            .await;
-    }
+            .await
+        {
+            Ok(()) => ViewerAnnounce::Delivered,
+            Err(cause) => ViewerAnnounce::Failed(cause),
+        }
+    } else {
+        ViewerAnnounce::NotOwed
+    };
 
-    Ok(commit.member)
+    Ok(HumanEnrollmentOutcome {
+        member: commit.member,
+        announce,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -221,9 +326,33 @@ mod tests {
             _user_id: &UserId,
             _workspace_id: &WorkspaceId,
             _role: WorkspaceRole,
-        ) -> Result<(), PersistenceFailure> {
+        ) -> Result<(), ViewerAnnounceFailure> {
             self.announces.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    #[derive(Debug, Error)]
+    #[error("the transport was unreachable")]
+    struct TransportDown;
+
+    /// A sink that always refuses, so the lost-announce arm is exercised without a
+    /// transport — and counts its calls, so "called once and failed" stays
+    /// distinguishable from "never called".
+    #[derive(Clone, Default)]
+    struct FailingSink {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl ViewerWorkspacesChangedSink for FailingSink {
+        async fn viewer_added_to_workspace(
+            &self,
+            _user_id: &UserId,
+            _workspace_id: &WorkspaceId,
+            _role: WorkspaceRole,
+        ) -> Result<(), ViewerAnnounceFailure> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            Err(ViewerAnnounceFailure::from_source(TransportDown))
         }
     }
 
@@ -265,7 +394,7 @@ mod tests {
 
     fn admin() -> Principal {
         Principal::Human {
-            user_id: UserId::new("actor"),
+            user_id: UserId::parse("actor").unwrap(),
         }
     }
 
@@ -277,7 +406,7 @@ mod tests {
     #[test]
     fn an_agent_principal_never_governs_even_with_a_role_fact() {
         let actor = Principal::Agent {
-            agent_id: super::super::AgentId::new("a"),
+            agent_id: crate::identity::AgentId::parse("a").unwrap(),
         };
         assert!(!human_enrollment_authorized(
             &actor,
@@ -310,19 +439,21 @@ mod tests {
             role: WorkspaceRole::Member,
         };
 
-        let member = add_workspace_human_member(
+        let (member, announce) = add_workspace_human_member(
             &uow,
             &sink,
             &FixedClock(1_700_000_000_123),
             &admin(),
-            WorkspaceId::new("ws"),
-            UserId::new("invitee"),
+            WorkspaceId::parse("ws").unwrap(),
+            UserId::parse("invitee").unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_parts();
 
         assert_eq!(member.joined_at_ms, 1_700_000_000_123);
         assert_eq!(member.role, WorkspaceRole::Member);
+        assert!(matches!(announce, ViewerAnnounce::Delivered));
         assert_eq!(
             sink.announces.load(Ordering::SeqCst),
             1,
@@ -338,26 +469,72 @@ mod tests {
             role: WorkspaceRole::Owner,
         };
 
-        let member = add_workspace_human_member(
+        let (member, announce) = add_workspace_human_member(
             &uow,
             &sink,
             &FixedClock(42),
             &admin(),
-            WorkspaceId::new("ws"),
-            UserId::new("owner"),
+            WorkspaceId::parse("ws").unwrap(),
+            UserId::parse("owner").unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_parts();
 
         assert_eq!(
             member.role,
             WorkspaceRole::Owner,
             "a re-enrollment reports the unchanged role, never a demotion to member"
         );
+        assert!(
+            matches!(announce, ViewerAnnounce::NotOwed),
+            "nothing was created, so no announce was owed — not a delivered one"
+        );
         assert_eq!(
             sink.announces.load(Ordering::SeqCst),
             0,
             "a re-enrollment announces nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_announce_leaves_the_enrollment_committed_and_names_its_cause() {
+        let sink = FailingSink::default();
+        let uow = FixedUow {
+            created: true,
+            role: WorkspaceRole::Member,
+        };
+
+        let (member, announce) = add_workspace_human_member(
+            &uow,
+            &sink,
+            &FixedClock(7),
+            &admin(),
+            WorkspaceId::parse("ws").unwrap(),
+            UserId::parse("invitee").unwrap(),
+        )
+        .await
+        .expect("a lost announce is not an enrollment failure")
+        .into_parts();
+
+        assert_eq!(
+            member.joined_at_ms, 7,
+            "the committed membership stands exactly as written"
+        );
+        assert_eq!(sink.attempts.load(Ordering::SeqCst), 1);
+
+        let ViewerAnnounce::Failed(cause) = announce else {
+            panic!("a refused sink must surface the loss, not report delivery");
+        };
+        // The transport's own error survives as the source, so a boundary can log
+        // the whole chain instead of an opaque "announce failed".
+        assert_eq!(
+            cause.to_string(),
+            "viewer workspace announce could not be delivered"
+        );
+        assert_eq!(
+            cause.source().unwrap().to_string(),
+            "the transport was unreachable"
         );
     }
 }

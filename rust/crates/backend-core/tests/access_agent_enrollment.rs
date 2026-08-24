@@ -13,9 +13,10 @@ use std::sync::{Arc, Mutex};
 
 use silverhand_backend_core::access::{
     AddAgentMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    AgentId, AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
-    EnrollmentKey, Principal, UserId, WorkspaceId, add_workspace_agent_member,
+    AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
+    EnrollmentKey, Principal, add_workspace_agent_member,
 };
+use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 const JOINED_AT_MS: i64 = 1_700_000_000_000;
@@ -58,8 +59,8 @@ impl FakeAccess {
         self.agents.insert(
             id.to_owned(),
             AgentAuthorityFacts {
-                id: AgentId::new(id),
-                created_by_user_id: UserId::new(owner),
+                id: AgentId::parse(id).unwrap(),
+                created_by_user_id: UserId::parse(owner).unwrap(),
             },
         );
         self
@@ -131,7 +132,7 @@ impl AgentEnrollmentUnitOfWork for FakeAccess {
 }
 
 fn ws() -> WorkspaceId {
-    WorkspaceId::new("ws-1")
+    WorkspaceId::parse("ws-1").unwrap()
 }
 
 fn granted(store: &Store, agent: &str) -> Vec<&'static str> {
@@ -147,7 +148,7 @@ fn granted(store: &Store, agent: &str) -> Vec<&'static str> {
 async fn owner_enrolls_own_agent_and_seeds_on_first_create() {
     let fake = FakeAccess::default().with_agent("agent-1", "user-1");
     let principal = Principal::Human {
-        user_id: UserId::new("user-1"),
+        user_id: UserId::parse("user-1").unwrap(),
     };
 
     let member = add_workspace_agent_member(
@@ -156,12 +157,12 @@ async fn owner_enrolls_own_agent_and_seeds_on_first_create() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("agent-1"),
+        AgentId::parse("agent-1").unwrap(),
     )
     .await
     .expect("owner may enroll own agent");
 
-    assert_eq!(member.agent_id, AgentId::new("agent-1"));
+    assert_eq!(member.agent_id, AgentId::parse("agent-1").unwrap());
     let store = fake.store.lock().unwrap();
     assert_eq!(store.memberships.len(), 1);
     let expected: Vec<&str> = DEFAULT_AGENT_CAPABILITIES
@@ -175,7 +176,7 @@ async fn owner_enrolls_own_agent_and_seeds_on_first_create() {
 async fn re_enroll_does_not_reseed() {
     let fake = FakeAccess::default().with_agent("agent-1", "user-1");
     let principal = Principal::Human {
-        user_id: UserId::new("user-1"),
+        user_id: UserId::parse("user-1").unwrap(),
     };
 
     add_workspace_agent_member(
@@ -184,7 +185,7 @@ async fn re_enroll_does_not_reseed() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("agent-1"),
+        AgentId::parse("agent-1").unwrap(),
     )
     .await
     .unwrap();
@@ -194,7 +195,7 @@ async fn re_enroll_does_not_reseed() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("agent-1"),
+        AgentId::parse("agent-1").unwrap(),
     )
     .await
     .expect("re-enroll is idempotent");
@@ -219,7 +220,7 @@ async fn missing_agent_is_not_found() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("ghost"),
+        AgentId::parse("ghost").unwrap(),
     )
     .await
     .unwrap_err();
@@ -232,7 +233,7 @@ async fn missing_agent_is_not_found() {
 async fn foreign_agent_is_not_owned() {
     let fake = FakeAccess::default().with_agent("agent-1", "owner");
     let principal = Principal::Human {
-        user_id: UserId::new("intruder"),
+        user_id: UserId::parse("intruder").unwrap(),
     };
 
     let err = add_workspace_agent_member(
@@ -241,7 +242,7 @@ async fn foreign_agent_is_not_owned() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("agent-1"),
+        AgentId::parse("agent-1").unwrap(),
     )
     .await
     .unwrap_err();
@@ -254,7 +255,7 @@ async fn foreign_agent_is_not_owned() {
 async fn agent_principal_can_never_enroll() {
     let fake = FakeAccess::default().with_agent("agent-1", "user-1");
     let principal = Principal::Agent {
-        agent_id: AgentId::new("agent-1"),
+        agent_id: AgentId::parse("agent-1").unwrap(),
     };
 
     let err = add_workspace_agent_member(
@@ -263,7 +264,7 @@ async fn agent_principal_can_never_enroll() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("agent-1"),
+        AgentId::parse("agent-1").unwrap(),
     )
     .await
     .unwrap_err();
@@ -282,7 +283,7 @@ async fn system_may_enroll_any_existing_agent() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("agent-1"),
+        AgentId::parse("agent-1").unwrap(),
     )
     .await
     .expect("system enrolls regardless of ownership");
@@ -293,7 +294,7 @@ async fn persistence_failure_rolls_back_and_surfaces() {
     let mut fake = FakeAccess::default().with_agent("agent-1", "user-1");
     fake.fail_seed = true;
     let principal = Principal::Human {
-        user_id: UserId::new("user-1"),
+        user_id: UserId::parse("user-1").unwrap(),
     };
 
     let err = add_workspace_agent_member(
@@ -302,7 +303,7 @@ async fn persistence_failure_rolls_back_and_surfaces() {
         &clock(),
         &principal,
         ws(),
-        AgentId::new("agent-1"),
+        AgentId::parse("agent-1").unwrap(),
     )
     .await
     .unwrap_err();

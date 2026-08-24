@@ -1,11 +1,20 @@
-//! SQLite adapter for agent workspace enrollment.
+//! SQLite adapter for workspace enrollment and the governance door in front of
+//! it.
 //!
 //! Unlike the foundation proof store, this is a **pure consumer** of an existing
 //! product database: it opens a pool against a schema that already exists and
 //! creates, migrates, or seeds no schema of its own. It therefore never takes
-//! over a database's schema identity — it only reads the `agents` row and writes
-//! the `workspace_members` / `workspace_agent_capabilities` edges the product
-//! schema already defines.
+//! over a database's schema identity — it only reads the `agents`, `workspaces`
+//! and `users` rows and writes the `workspace_members` /
+//! `workspace_agent_capabilities` / `workspace_users` edges the product schema
+//! already defines.
+//!
+//! It decides nothing. Both authorization doors it serves are rules in the
+//! application layer: the request-boundary verdict is
+//! [`governance_ceiling`] over the facts this adapter reads, and the in-lock
+//! re-derivation is `human_enrollment_authorized` over the role it re-reads under
+//! the write lock. Neither role axis is re-implemented here, so the two doors
+//! cannot drift apart in this crate.
 //!
 //! The whole enrollment is one `BEGIN IMMEDIATE` transaction. The membership
 //! insert is `INSERT OR IGNORE`, so a re-enrollment is a no-op on the row;
@@ -13,20 +22,23 @@
 //! create-only capability seed runs only when it created the row. The join-time
 //! candidate is *not* sampled here — the application samples its clock after
 //! authorization and hands the candidate in, so a re-enrollment keeps the stored
-//! value and the time source stays in the application. Every driver error is
-//! handed to the port's caller as the source of a `PersistenceFailure`; nothing
-//! is logged here.
+//! value and the time source stays in the application. This crate owns no clock
+//! at all: the [`EnrollmentClock`](silverhand_backend_core::access::EnrollmentClock)
+//! port and its `Date.now()`-parity semantics live in the domain, and the concrete
+//! host-wall-clock adapter is assembled in the application layer, because reading
+//! the host wall clock is not persistence. Every driver error is handed to the
+//! port's caller as the source of a `PersistenceFailure`; nothing is logged here.
 
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    AgentId, AgentWorkspaceMembership, Capability, EnrollmentClock, EnrollmentKey,
-    HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork,
-    HumanUser, Principal, UserId, WorkspaceRole, WorkspaceUserMembership,
-    human_enrollment_authorized,
+    AgentWorkspaceMembership, Capability, EnrollmentKey, HumanEnrollmentCommit, HumanEnrollmentKey,
+    HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, Principal,
+    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceRole,
+    WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
 };
+use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     SqlitePool,
@@ -60,47 +72,26 @@ const SELECT_HUMAN_MEMBERSHIP: &str =
 const SELECT_USER: &str = "SELECT id, name, display_name, avatar_storage_key, created_at, \
      updated_at FROM users WHERE id = ?";
 
+// The request-boundary governance door. `owner_agent_id` is the authority on
+// whether a row is some agent's private home (never a stored kind word), so it
+// is selected rather than inferred, and the caller's role is left-joined in the
+// SAME statement: the door's contract is that the container and the caller's
+// ceiling are resolved together, in one read, before any enrollment work runs.
+const SELECT_WORKSPACE_GOVERNANCE_FOR_HUMAN: &str = "SELECT w.owner_agent_id, u.role \
+     FROM workspaces w \
+     LEFT JOIN workspace_users u ON u.workspace_id = w.id AND u.user_id = ? \
+     WHERE w.id = ?";
+/// A non-human principal holds no role row, so its verdict needs only the
+/// container fact — reading a role for it would be reading a row that by
+/// definition cannot exist.
+const SELECT_WORKSPACE_CONTAINER: &str = "SELECT owner_agent_id FROM workspaces WHERE id = ?";
+
 /// A pooled connection to an existing product database, offering only the
 /// agent-enrollment ports. It holds no clock: the join-time candidate is passed
 /// into the unit of work by the application, which owns the time source.
 #[derive(Clone)]
 pub struct SqliteAccessStore {
     pool: SqlitePool,
-}
-
-/// The production [`EnrollmentClock`]: the host wall clock, read once by the
-/// application before the write transaction opens.
-///
-/// It matches `Date.now()` for every reachable time and never fails. A time at
-/// or after the Unix epoch yields a positive millisecond count; a pre-epoch host
-/// clock yields a *negative* one (as `Date.now()` returns for dates before 1970)
-/// rather than a faked zero or a refusal; and only a time beyond the `i64`
-/// millisecond range — hundreds of millions of years out, unreachable in
-/// practice — saturates to the nearest bound instead of wrapping. Reading the
-/// clock is therefore not a failure mode, so this surface never emits a `500`
-/// the product route could not.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemClock;
-
-impl EnrollmentClock for SystemClock {
-    fn now_unix_millis(&self) -> i64 {
-        unix_millis(SystemTime::now())
-    }
-}
-
-/// The signed, saturating Unix-millisecond conversion behind [`SystemClock`],
-/// split out as a pure function of its input so the epoch, pre-epoch and
-/// overflow edges are pinned by fixed-input tests rather than the wall clock.
-fn unix_millis(now: SystemTime) -> i64 {
-    match now.duration_since(UNIX_EPOCH) {
-        // At or after the epoch: a positive count, saturating only past i64::MAX.
-        Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
-        // Before the epoch: a negative count, saturating only past i64::MIN.
-        Err(before) => match i64::try_from(before.duration().as_millis()) {
-            Ok(millis) => -millis,
-            Err(_) => i64::MIN,
-        },
-    }
 }
 
 /// Startup and driver failures, surfaced only to the composition root that opens
@@ -117,6 +108,33 @@ pub enum SqliteAccessStoreError {
 #[derive(Debug, Error)]
 #[error("workspace_users.role holds an unrecognized value: {0}")]
 struct CorruptRoleToken(String);
+
+/// A committed row whose identifier column decodes to a value the domain refuses
+/// — today only the empty string, which `identity::parse` rejects. The product
+/// schema's ids are non-empty by construction, so such a row is a
+/// persistence-integrity fault: it is surfaced as the source of a
+/// [`PersistenceFailure`] (a safe `500`), never coerced to a sentinel id and never
+/// mistaken for the `404` that a *requested* empty id earns at the wire.
+#[derive(Debug, Error)]
+#[error("{table}.{column} holds an unusable identifier")]
+struct CorruptStoredIdentifier {
+    table: &'static str,
+    column: &'static str,
+}
+
+/// A read that failed in the driver or on a row that cannot be decoded into the
+/// domain. Both reach the caller as the source of one `PersistenceFailure`; the
+/// split exists so an integrity fault names its exact column instead of
+/// masquerading as a driver error.
+#[derive(Debug, Error)]
+enum AccessReadFailure {
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Integrity(#[from] CorruptStoredIdentifier),
+    #[error(transparent)]
+    Role(#[from] CorruptRoleToken),
+}
 
 /// The internal outcome of the human-enrollment transaction. `Forbidden` is the
 /// in-lock authority refusal (a rollback), kept distinct from the driver
@@ -167,15 +185,74 @@ impl SqliteAccessStore {
     async fn agent_authority(
         &self,
         agent_id: &AgentId,
-    ) -> Result<Option<AgentAuthorityFacts>, SqliteAccessStoreError> {
+    ) -> Result<Option<AgentAuthorityFacts>, AccessReadFailure> {
         let created_by: Option<String> = sqlx::query_scalar(SELECT_AGENT_AUTHORITY)
             .bind(agent_id.as_str())
             .fetch_optional(&self.pool)
             .await?;
-        Ok(created_by.map(|user_id| AgentAuthorityFacts {
+        let Some(user_id) = created_by else {
+            return Ok(None);
+        };
+        // A stored owner id the domain refuses is corruption of a committed row,
+        // not a product answer, so it fails the read rather than resolving the
+        // agent to an unusable owner.
+        let created_by_user_id = UserId::parse(user_id).map_err(|_| CorruptStoredIdentifier {
+            table: "agents",
+            column: "created_by_user_id",
+        })?;
+        Ok(Some(AgentAuthorityFacts {
             id: agent_id.clone(),
-            created_by_user_id: UserId::new(user_id),
+            created_by_user_id,
         }))
+    }
+
+    /// Reads exactly the facts the pure boundary rule needs. It decides nothing:
+    /// the ceiling is derived by [`governance_ceiling`] in the application layer,
+    /// so this adapter never re-implements the role axis.
+    async fn governance_facts(
+        &self,
+        principal: &Principal,
+        workspace_id: &WorkspaceId,
+    ) -> Result<WorkspaceGovernanceFacts, AccessReadFailure> {
+        let (owner_agent_id, role_token) = match principal {
+            Principal::Human { user_id } => {
+                let row: Option<(Option<String>, Option<String>)> =
+                    sqlx::query_as(SELECT_WORKSPACE_GOVERNANCE_FOR_HUMAN)
+                        .bind(user_id.as_str())
+                        .bind(workspace_id.as_str())
+                        .fetch_optional(&self.pool)
+                        .await?;
+                match row {
+                    Some((owner_agent_id, role_token)) => (owner_agent_id, role_token),
+                    None => return Ok(WorkspaceGovernanceFacts::NoSuchWorkspace),
+                }
+            }
+            Principal::System | Principal::Agent { .. } => {
+                let row: Option<Option<String>> = sqlx::query_scalar(SELECT_WORKSPACE_CONTAINER)
+                    .bind(workspace_id.as_str())
+                    .fetch_optional(&self.pool)
+                    .await?;
+                match row {
+                    Some(owner_agent_id) => (owner_agent_id, None),
+                    None => return Ok(WorkspaceGovernanceFacts::NoSuchWorkspace),
+                }
+            }
+        };
+
+        // A row with a home agent is that agent's private container, which has no
+        // roster to govern — the same "no such workspace" as a missing row, so the
+        // caller cannot tell the two apart.
+        if owner_agent_id.is_some() {
+            return Ok(WorkspaceGovernanceFacts::NoSuchWorkspace);
+        }
+
+        // A committed role outside the schema's CHECK set is corruption, never a
+        // silent "not a member": it fails the read as an integrity fault.
+        let actor_role = match role_token {
+            Some(token) => Some(WorkspaceRole::parse(&token).ok_or(CorruptRoleToken(token))?),
+            None => None,
+        };
+        Ok(WorkspaceGovernanceFacts::Regular { actor_role })
     }
 
     #[tracing::instrument(skip(self, seed_on_create))]
@@ -227,35 +304,35 @@ impl SqliteAccessStore {
         })
     }
 
-    async fn user_record(
-        &self,
-        user_id: &UserId,
-    ) -> Result<Option<HumanUser>, SqliteAccessStoreError> {
+    async fn user_record(&self, user_id: &UserId) -> Result<Option<HumanUser>, AccessReadFailure> {
         let row: Option<(String, String, String, Option<String>, i64, i64)> =
             sqlx::query_as(SELECT_USER)
                 .bind(user_id.as_str())
                 .fetch_optional(&self.pool)
                 .await?;
-        Ok(row.map(
-            |(id, name, display_name, avatar_storage_key, created_at, updated_at)| {
-                // Mirror `principalAvatarUrl`: a present, non-empty storage key
-                // yields a versioned avatar path, otherwise there is no avatar.
-                let avatar_url = match avatar_storage_key {
-                    Some(ref key) if !key.is_empty() => {
-                        Some(format!("/api/users/{id}/avatar?v={updated_at}"))
-                    }
-                    _ => None,
-                };
-                HumanUser {
-                    id: UserId::new(id),
-                    name,
-                    display_name,
-                    avatar_url,
-                    created_at,
-                    updated_at,
-                }
-            },
-        ))
+        let Some((id, name, display_name, avatar_storage_key, created_at, updated_at)) = row else {
+            return Ok(None);
+        };
+        // Mirror `principalAvatarUrl`: a present, non-empty storage key yields a
+        // versioned avatar path, otherwise there is no avatar.
+        let avatar_url = match avatar_storage_key {
+            Some(ref key) if !key.is_empty() => {
+                Some(format!("/api/users/{id}/avatar?v={updated_at}"))
+            }
+            _ => None,
+        };
+        let id = UserId::parse(id).map_err(|_| CorruptStoredIdentifier {
+            table: "users",
+            column: "id",
+        })?;
+        Ok(Some(HumanUser {
+            id,
+            name,
+            display_name,
+            avatar_url,
+            created_at,
+            updated_at,
+        }))
     }
 
     #[tracing::instrument(skip(self))]
@@ -326,6 +403,20 @@ impl SqliteAccessStore {
     }
 }
 
+impl WorkspaceAccessPolicy for SqliteAccessStore {
+    async fn authorize_member_governance(
+        &self,
+        principal: &Principal,
+        workspace_id: &WorkspaceId,
+    ) -> Result<WorkspaceGovernance, PersistenceFailure> {
+        let facts = self
+            .governance_facts(principal, workspace_id)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        Ok(governance_ceiling(principal, facts))
+    }
+}
+
 impl AgentEnrollmentReadPort for SqliteAccessStore {
     async fn agent(
         &self,
@@ -382,42 +473,5 @@ impl HumanEnrollmentUnitOfWork for SqliteAccessStore {
                     PersistenceFailure::from_source(CorruptRoleToken(token)),
                 ),
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unix_millis;
-    use std::time::{Duration, UNIX_EPOCH};
-
-    #[test]
-    fn the_epoch_maps_to_zero() {
-        assert_eq!(unix_millis(UNIX_EPOCH), 0);
-    }
-
-    #[test]
-    fn a_time_after_the_epoch_is_a_positive_millisecond_count() {
-        let now = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
-        assert_eq!(unix_millis(now), 1_700_000_000_123);
-    }
-
-    #[test]
-    fn a_pre_epoch_time_is_negative_never_a_faked_zero() {
-        let before = UNIX_EPOCH
-            .checked_sub(Duration::from_millis(1500))
-            .expect("platform represents pre-epoch instants");
-        assert_eq!(
-            unix_millis(before),
-            -1500,
-            "a pre-1970 clock must read negative, exactly as Date.now() does"
-        );
-    }
-
-    #[test]
-    fn a_time_beyond_the_i64_millisecond_range_saturates_rather_than_wrapping() {
-        let far_future = UNIX_EPOCH
-            .checked_add(Duration::from_millis(u64::MAX))
-            .expect("platform represents far-future instants");
-        assert_eq!(unix_millis(far_future), i64::MAX);
     }
 }

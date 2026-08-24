@@ -22,14 +22,15 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    AgentId, AgentWorkspaceMembership, Capability, EnrollmentClock, EnrollmentKey,
-    HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork,
-    HumanUser, Principal, UserId, ViewerWorkspacesChangedSink, WorkspaceId, WorkspaceRole,
-    WorkspaceUserMembership,
+    AgentWorkspaceMembership, Capability, EnrollmentClock, EnrollmentKey, HumanEnrollmentCommit,
+    HumanEnrollmentKey, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, Principal,
+    ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
+    WorkspaceRole, WorkspaceUserMembership,
 };
+use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_server::access::{
-    WorkspaceAccessPolicy, WorkspaceGovernance, router,
+    router,
     wire::{AGENT_NOT_OWNED_CODE, AGENT_NOT_OWNED_MESSAGE},
 };
 use tower::ServiceExt;
@@ -62,6 +63,9 @@ struct FakeAccess {
     /// (`true`) announces, a re-enrollment (`false`) stays silent.
     human_role: WorkspaceRole,
     human_created: bool,
+    /// The announce transport refuses. The membership is already committed when
+    /// this fires, so it must change the LOG and nothing else.
+    announce_fails: bool,
     trace: Arc<Mutex<Vec<&'static str>>>,
     memberships: Arc<Mutex<Vec<(String, String)>>>,
 }
@@ -78,6 +82,7 @@ impl Default for FakeAccess {
             human_enroll_fails: false,
             human_role: WorkspaceRole::Member,
             human_created: true,
+            announce_fails: false,
             trace: Arc::new(Mutex::new(Vec::new())),
             memberships: Arc::new(Mutex::new(Vec::new())),
         }
@@ -89,8 +94,8 @@ impl FakeAccess {
         self.agents.insert(
             id.to_owned(),
             AgentAuthorityFacts {
-                id: AgentId::new(id),
-                created_by_user_id: UserId::new(owner),
+                id: AgentId::parse(id).unwrap(),
+                created_by_user_id: UserId::parse(owner).unwrap(),
             },
         );
         self
@@ -210,8 +215,11 @@ impl ViewerWorkspacesChangedSink for FakeAccess {
         _user_id: &UserId,
         _workspace_id: &WorkspaceId,
         _role: WorkspaceRole,
-    ) -> Result<(), PersistenceFailure> {
+    ) -> Result<(), ViewerAnnounceFailure> {
         self.trace.lock().unwrap().push("sink");
+        if self.announce_fails {
+            return Err(ViewerAnnounceFailure::from_source(DriverError));
+        }
         Ok(())
     }
 }
@@ -220,14 +228,18 @@ fn app(fake: &FakeAccess) -> Router {
     router(fake.clone(), fake.clone(), fake.clone(), fake.clone())
 }
 
-fn request(workspace_id: &str, principal: Principal, body: &str) -> Request<Body> {
+fn request(workspace_id: &str, viewer: &str, body: &str) -> Request<Body> {
     let mut request = Request::builder()
         .method("POST")
         .uri(format!("/api/workspaces/{workspace_id}/members"))
         .header("content-type", "application/json")
         .body(Body::from(body.to_owned()))
         .unwrap();
-    request.extensions_mut().insert(principal);
+    // Exactly what `require_human_session` leaves behind: the sole `UserId`.
+    // The route constructs the application principal from it.
+    request
+        .extensions_mut()
+        .insert(UserId::parse(viewer).unwrap());
     request
 }
 
@@ -255,19 +267,13 @@ async fn send_raw(app: Router, request: Request<Body>) -> (StatusCode, Option<St
     )
 }
 
-fn human(user: &str) -> Principal {
-    Principal::Human {
-        user_id: UserId::new(user),
-    }
-}
-
 #[tokio::test]
 async fn admitted_owner_enrolls_and_the_two_doors_run_in_order() {
     let fake = FakeAccess::default().with_agent("agent-1", "user-1");
 
     let (status, body) = send(
         app(&fake),
-        request("ws-1", human("user-1"), r#"{"agent_id":"agent-1"}"#),
+        request("ws-1", "user-1", r#"{"agent_id":"agent-1"}"#),
     )
     .await;
 
@@ -286,11 +292,7 @@ async fn tagged_agent_body_is_accepted_like_the_bare_form() {
 
     let (status, _) = send(
         app(&fake),
-        request(
-            "ws-1",
-            human("user-1"),
-            r#"{"kind":"agent","agent_id":"agent-1"}"#,
-        ),
+        request("ws-1", "user-1", r#"{"kind":"agent","agent_id":"agent-1"}"#),
     )
     .await;
 
@@ -302,7 +304,7 @@ async fn floor_refuses_before_the_body_is_parsed_or_the_agent_is_read() {
     let fake = FakeAccess::default().governed(WorkspaceGovernance::Denied);
 
     // A body that could never parse: the floor must still answer first.
-    let (status, body) = send(app(&fake), request("ws-1", human("user-1"), "not json")).await;
+    let (status, body) = send(app(&fake), request("ws-1", "user-1", "not json")).await;
 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body, json!({"error": "forbidden"}));
@@ -315,7 +317,7 @@ async fn unknown_workspace_is_not_found_at_the_boundary() {
 
     let (status, body) = send(
         app(&fake),
-        request("ghost", human("user-1"), r#"{"agent_id":"agent-1"}"#),
+        request("ghost", "user-1", r#"{"agent_id":"agent-1"}"#),
     )
     .await;
 
@@ -328,7 +330,7 @@ async fn unknown_workspace_is_not_found_at_the_boundary() {
 async fn invalid_body_is_rejected_after_the_floor_admits() {
     let fake = FakeAccess::default();
 
-    let (status, body) = send(app(&fake), request("ws-1", human("user-1"), "{}")).await;
+    let (status, body) = send(app(&fake), request("ws-1", "user-1", "{}")).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body, json!({"error": "invalid input"}));
@@ -342,7 +344,7 @@ async fn missing_agent_is_not_found_after_admission() {
 
     let (status, body) = send(
         app(&fake),
-        request("ws-1", human("user-1"), r#"{"agent_id":"ghost"}"#),
+        request("ws-1", "user-1", r#"{"agent_id":"ghost"}"#),
     )
     .await;
 
@@ -352,13 +354,103 @@ async fn missing_agent_is_not_found_after_admission() {
     assert_eq!(fake.trace(), ["policy", "agent_read"]);
 }
 
+/// The product's `agent_id` is a plain string with no minimum length, so
+/// `{"agent_id":""}` *classifies* — it is a well-formed agent request naming an
+/// id no agent can have. The answer is therefore the same exact `404` as any
+/// other miss, never `400 invalid input`: the body was valid, the agent is not
+/// there. Because the domain's id type refuses the value before the port, this
+/// `404` is reached with the read and the write both untouched.
+#[tokio::test]
+async fn an_empty_agent_id_is_the_exact_agent_not_found_without_touching_the_ports() {
+    let fake = FakeAccess::default();
+
+    let (status, body) = send(app(&fake), request("ws-1", "user-1", r#"{"agent_id":""}"#)).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"error": "agent not found"}));
+    assert_eq!(
+        fake.trace(),
+        ["policy"],
+        "an unusable id is decided at the wire: neither the read port nor the unit of work runs"
+    );
+}
+
+/// The human arm of the same rule: `{"kind":"human","user_id":""}` classifies as
+/// a human request, clears the admin floor, and then earns the exact
+/// `user not found` — not `invalid input` — with the user read never entered.
+#[tokio::test]
+async fn an_empty_user_id_is_the_exact_user_not_found_without_touching_the_ports() {
+    let fake = FakeAccess::default().with_user(invitee());
+
+    let (status, body) = send(
+        app(&fake),
+        request("ws-1", "admin", r#"{"kind":"human","user_id":""}"#),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"error": "user not found"}));
+    assert_eq!(
+        fake.trace(),
+        ["policy"],
+        "an unusable id is decided at the wire: the user read never runs"
+    );
+}
+
+/// A route composed without the human-session perimeter has no identity to act
+/// as. That is a wiring fault, not a request the product can answer, so it takes
+/// the lane's safe `500` — logged once, and before the policy is ever consulted,
+/// so a missing perimeter can never be mistaken for an authorization outcome.
+#[tokio::test]
+async fn a_route_reached_without_the_perimeter_is_a_logged_safe_500_before_any_door() {
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let fake = FakeAccess::default().with_agent("agent-1", "user-1");
+    let mut unauthenticated = Request::builder()
+        .method("POST")
+        .uri("/api/workspaces/ws-1/members")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"agent_id":"agent-1"}"#))
+        .unwrap();
+    unauthenticated.extensions_mut().clear();
+
+    let (status, content_type, body) = send_raw(app(&fake), unauthenticated).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(content_type.as_deref(), Some("text/plain; charset=utf-8"));
+    assert_eq!(body, "Internal Server Error");
+    assert_eq!(
+        fake.trace(),
+        Vec::<&str>::new(),
+        "no identity means no door runs at all"
+    );
+
+    let errors: Vec<Value> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event["level"] == "ERROR")
+        .collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0]["fields"]["message"],
+        "workspace member route reached without its human principal fact"
+    );
+}
+
 #[tokio::test]
 async fn foreign_agent_is_refused_with_the_exact_ownership_body() {
     let fake = FakeAccess::default().with_agent("agent-1", "owner");
 
     let (status, body) = send(
         app(&fake),
-        request("ws-1", human("intruder"), r#"{"agent_id":"agent-1"}"#),
+        request("ws-1", "intruder", r#"{"agent_id":"agent-1"}"#),
     )
     .await;
 
@@ -388,7 +480,7 @@ async fn persistence_failure_in_the_write_returns_a_safe_500_and_logs_one_chain(
 
     let (status, content_type, body) = send_raw(
         app(&fake),
-        request("ws-1", human("user-1"), r#"{"agent_id":"agent-1"}"#),
+        request("ws-1", "user-1", r#"{"agent_id":"agent-1"}"#),
     )
     .await;
 
@@ -424,7 +516,7 @@ async fn persistence_failure_in_the_write_returns_a_safe_500_and_logs_one_chain(
 /// adapter's concern and pinned there, so here it only has to reach the wire.
 fn invitee() -> HumanUser {
     HumanUser {
-        id: UserId::new("invitee"),
+        id: UserId::parse("invitee").unwrap(),
         name: "invitee-name".to_owned(),
         display_name: "Invitee".to_owned(),
         avatar_url: Some("/api/users/invitee/avatar?v=99".to_owned()),
@@ -443,7 +535,7 @@ async fn a_member_ceiling_admits_the_agent_branch() {
 
     let (status, _) = send(
         app(&fake),
-        request("ws-1", human("user-1"), r#"{"agent_id":"agent-1"}"#),
+        request("ws-1", "user-1", r#"{"agent_id":"agent-1"}"#),
     )
     .await;
 
@@ -458,7 +550,7 @@ async fn a_member_ceiling_refuses_the_human_branch_before_any_read() {
         .governed(WorkspaceGovernance::Member)
         .with_user(invitee());
 
-    let (status, body) = send(app(&fake), request("ws-1", human("plain"), HUMAN_BODY)).await;
+    let (status, body) = send(app(&fake), request("ws-1", "plain", HUMAN_BODY)).await;
 
     // The people roster needs the admin floor; a plain member is refused by the
     // pure comparison, so neither the user read nor the write ever runs.
@@ -471,7 +563,7 @@ async fn a_member_ceiling_refuses_the_human_branch_before_any_read() {
 async fn an_admin_enrolls_a_human_and_returns_the_merged_member() {
     let fake = FakeAccess::default().with_user(invitee());
 
-    let (status, body) = send(app(&fake), request("ws-1", human("admin"), HUMAN_BODY)).await;
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
 
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(
@@ -508,7 +600,7 @@ async fn an_admin_enrolls_a_human_and_returns_the_merged_member() {
 async fn enrolling_an_absent_user_is_not_found_without_a_write() {
     let fake = FakeAccess::default();
 
-    let (status, body) = send(app(&fake), request("ws-1", human("admin"), HUMAN_BODY)).await;
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body, json!({"error": "user not found"}));
@@ -523,7 +615,7 @@ async fn in_lock_authority_loss_is_forbidden_and_announces_nothing() {
         ..FakeAccess::default().with_user(invitee())
     };
 
-    let (status, body) = send(app(&fake), request("ws-1", human("admin"), HUMAN_BODY)).await;
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
 
     // The boundary admitted an admin, but the in-lock re-derivation caught
     // authority lost in the seam: a typed 403, and no announce after a rollback.
@@ -540,7 +632,7 @@ async fn a_re_enrollment_succeeds_but_announces_nothing() {
         ..FakeAccess::default().with_user(invitee())
     };
 
-    let (status, body) = send(app(&fake), request("ws-1", human("admin"), HUMAN_BODY)).await;
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
 
     assert_eq!(status, StatusCode::CREATED);
     // The idempotent write kept the original role; no demotion to member.
@@ -566,7 +658,7 @@ async fn a_human_write_failure_travels_the_same_seam_and_logs_one_chain() {
     };
 
     let (status, content_type, body) =
-        send_raw(app(&fake), request("ws-1", human("admin"), HUMAN_BODY)).await;
+        send_raw(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
 
     // A persistence failure on the human write is not the human branch's to
     // render: it surfaces the same `AccessError` the agent branch does, so the
@@ -599,9 +691,106 @@ async fn a_human_write_failure_travels_the_same_seam_and_logs_one_chain() {
     );
 }
 
+/// A lost announce is an OBSERVABILITY event, not a product failure: the
+/// membership is committed, so the client is told `201`, and the one thing that
+/// changes is that somebody can find out the viewer went untold.
+///
+/// Three facts at once, and each is a distinct way this could go wrong: the
+/// response must not degrade (a `500` here would discard a committed write), the
+/// full cause chain must reach the log (an opaque "announce failed" line would
+/// send an operator hunting the wrong layer), and it must be logged EXACTLY once
+/// (both the route and the error seam could plausibly claim this line; only one
+/// may).
+#[tokio::test]
+async fn a_lost_announce_still_answers_created_and_logs_one_full_chain() {
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let fake = FakeAccess {
+        announce_fails: true,
+        ..FakeAccess::default().with_user(invitee())
+    };
+
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
+
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the membership committed; a transport that could not deliver its notice \
+         cannot retract that"
+    );
+    assert_eq!(body["member"]["role"], "member");
+    // The sink WAS reached — "called and failed" is not "never called".
+    assert_eq!(
+        fake.trace(),
+        ["policy", "user_read", "human_enroll", "sink"]
+    );
+
+    let errors: Vec<Value> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event["level"] == "ERROR")
+        .collect();
+    assert_eq!(errors.len(), 1, "the loss is reported once, by one owner");
+    assert_eq!(
+        errors[0]["fields"]["message"],
+        "the new workspace membership was committed but its viewer announce was lost"
+    );
+    let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+    assert!(
+        chain.contains("viewer workspace announce could not be delivered"),
+        "the chain names the announce failure: {chain}"
+    );
+    assert!(
+        chain.contains(DRIVER_DETAIL),
+        "the transport's own reason survives to the log: {chain}"
+    );
+}
+
+/// A re-enrollment is silent on BOTH channels, and the second half is the one a
+/// naive implementation gets wrong: it is easy to log "announce skipped" for
+/// every idempotent retry, which then makes a real loss unfindable in a log
+/// search. `NotOwed` must produce no line at all.
+#[tokio::test]
+async fn a_re_enrollment_neither_announces_nor_logs() {
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    // The sink is ALSO armed to fail, so "no log" cannot be explained away by a
+    // sink that happened to succeed: nothing was owed, so nothing was attempted.
+    let fake = FakeAccess {
+        human_created: false,
+        human_role: WorkspaceRole::Owner,
+        announce_fails: true,
+        ..FakeAccess::default().with_user(invitee())
+    };
+
+    let (status, body) = send(app(&fake), request("ws-1", "admin", HUMAN_BODY)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["member"]["role"], "owner");
+    assert_eq!(fake.trace(), ["policy", "user_read", "human_enroll"]);
+    assert!(
+        logs.events().is_empty(),
+        "a re-enrollment owes no announce, so it writes no line: {:?}",
+        logs.events()
+    );
+}
+
 #[derive(Clone, Default)]
 struct LogBuffer(Arc<Mutex<Vec<u8>>>);
-
 impl LogBuffer {
     fn events(&self) -> Vec<Value> {
         let bytes = self.0.lock().unwrap().clone();
