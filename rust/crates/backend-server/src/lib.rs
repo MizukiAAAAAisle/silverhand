@@ -14,6 +14,7 @@ pub mod messaging;
 pub mod runtime_credential;
 pub mod scope_events;
 pub mod wire;
+pub mod workspaces;
 
 #[cfg(test)]
 #[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
