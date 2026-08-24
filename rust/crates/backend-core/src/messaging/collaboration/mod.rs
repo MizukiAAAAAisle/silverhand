@@ -6,8 +6,10 @@
 mod runtime_control;
 
 pub use runtime_control::{
-    ClearSessionOutcome, CliSessionId, EmptyCliSessionId, RuntimeControlAdmission,
-    RuntimeControlCommand, RuntimeControlFailure, RuntimeControlOperation, RuntimeControlOutcome,
-    RuntimeControlPort, RuntimeControlProviderRefusal, RuntimeControlRefusal,
-    control_conversation_runtime,
+    ClearSessionOutcome, ClearSessionProviderRefusal, ClearSessionRefusal, CliSessionId,
+    EmptyCliSessionId, HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal,
+    HardStopRuntimeRefusal, RuntimeControlAdmission, RuntimeControlAdmissionRefusal,
+    RuntimeControlAdmissionScope, RuntimeControlFailure, RuntimeControlPort, RuntimeControlTarget,
+    RuntimePlacementRefusal, StartRuntimeOutcome, StartRuntimeProviderRefusal, StartRuntimeRefusal,
+    clear_conversation_runtime_session, hard_stop_conversation_runtime, start_conversation_runtime,
 };
