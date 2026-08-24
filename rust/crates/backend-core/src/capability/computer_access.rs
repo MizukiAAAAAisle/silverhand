@@ -14,14 +14,18 @@
 //!
 //! [`Principal`]: crate::identity::Principal
 
-use crate::identity::UserId;
+use crate::identity::{HostId, UserId};
 
-/// The one fact this rule reads. A narrow projection on purpose: it names the
-/// single column an ownership question is about, so a computer row that grows a
-/// lifecycle, a fleet or a billing column cannot silently become an input to an
-/// authorization decision.
+/// The facts this rule reads: WHICH computer, and whose it is. A narrow projection
+/// on purpose — a computer row that grows a lifecycle, a fleet or a billing column
+/// cannot silently become an input to an authorization decision.
+///
+/// The id is not an input to the decision; it is the coordinate the verdict is
+/// ABOUT. Carrying it is what lets a later seal prove that this answer and the
+/// facts a write acts on describe one computer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComputerOwnershipFacts {
+    pub id: HostId,
     /// Absent for a computer no user owns.
     pub owner: Option<UserId>,
 }
@@ -36,37 +40,77 @@ pub enum ComputerAccessRefused {
     NotTheirs,
 }
 
-/// Proof that THIS rule matched THIS requester against the computer's recorded
-/// owner.
+/// Proof that THIS rule matched THIS requester against the recorded owner of THIS
+/// computer.
 ///
-/// Private constructor, and it carries the owner it matched. The owner is not
-/// bookkeeping: everything a computer teardown announces afterwards is fanned out
-/// on the owner's scope, so the post-commit phase needs the identity the decision
-/// was actually made on rather than one re-derived from a row that no longer
-/// exists.
+/// Private constructor, and it carries both halves of what it matched. The owner is
+/// not bookkeeping: everything a computer teardown announces afterwards is fanned
+/// out on the owner's scope, so the post-commit phase needs the identity the
+/// decision was actually made on rather than one re-derived from a row that no
+/// longer exists. The computer is the coordinate — an authorization that does not
+/// say what it authorizes can be carried onto another computer's facts, and the
+/// seals that consume this witness check it.
 ///
-/// What it proves is narrow — that this rule ran, on some facts. It does not prove
-/// the facts were read under a write mechanism, whole and current; a witness minted
-/// from a stale read is a well-formed witness. That residual belongs to the
-/// persistence contract of whichever mechanism consumes it.
+/// What it does NOT prove is that the facts were read under a write mechanism,
+/// whole and current; a witness minted from a stale or filtered read is a
+/// well-formed witness. That residual belongs to the persistence contract of
+/// whichever mechanism consumes it, and it is a different question from the
+/// coordinate — which is closed here, structurally.
+///
+/// ```compile_fail
+/// use silverhand_backend_core::capability::computer_access::ComputerAccessHeld;
+/// // Assembled from parts, this would authorize a requester no rule matched.
+/// let _: ComputerAccessHeld = ComputerAccessHeld {
+///     computer: unimplemented!(),
+///     owner: unimplemented!(),
+/// };
+/// ```
+///
+/// The control for that gate: the same path, named the same way, minted the only
+/// way it can be. A `compile_fail` block passes on ANY error, so without this the
+/// gate above would also pass on a renamed type.
+///
+/// ```
+/// use silverhand_backend_core::{
+///     capability::computer_access::{
+///         ComputerAccess, ComputerAccessHeld, ComputerOwnershipFacts, can_access_computer,
+///     },
+///     identity::{HostId, UserId},
+/// };
+/// let owner = UserId::parse("u1").unwrap();
+/// let ComputerAccess::Held(held) = can_access_computer(
+///     &owner,
+///     Some(&ComputerOwnershipFacts {
+///         id: HostId::parse("h1").unwrap(),
+///         owner: Some(owner.clone()),
+///     }),
+/// ) else {
+///     panic!("the owner is admitted");
+/// };
+/// let held: ComputerAccessHeld = held;
+/// assert_eq!(held.computer().as_str(), "h1");
+/// assert_eq!(held.owner(), &owner);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComputerAccessHeld {
+    computer: HostId,
     owner: UserId,
 }
 
 impl ComputerAccessHeld {
+    /// The computer this verdict is about.
+    pub fn computer(&self) -> &HostId {
+        &self.computer
+    }
+
     /// The owner this requester matched.
     pub fn owner(&self) -> &UserId {
         &self.owner
     }
 }
 
-/// This rule's verdict.
-///
-/// Not [`crate::capability::decision::Decision`]: that type's `Allow` is a
-/// publicly constructible unit variant, so it can carry no seal. A capability that
-/// gates a WRITE needs its admitted arm to be unforgeable, and one whose verdict is
-/// only rendered does not.
+/// This rule's verdict. Not [`crate::capability::decision::Decision`]: this one
+/// gates a write, so the module rule applies.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ComputerAccess {
     Held(ComputerAccessHeld),
@@ -82,10 +126,13 @@ pub fn can_access_computer(
     requester: &UserId,
     computer: Option<&ComputerOwnershipFacts>,
 ) -> ComputerAccess {
-    match computer.and_then(|computer| computer.owner.as_ref()) {
-        Some(owner) if owner == requester => ComputerAccess::Held(ComputerAccessHeld {
-            owner: owner.clone(),
-        }),
+    match computer {
+        Some(facts) if facts.owner.as_ref() == Some(requester) => {
+            ComputerAccess::Held(ComputerAccessHeld {
+                computer: facts.id.clone(),
+                owner: requester.clone(),
+            })
+        }
         _ => ComputerAccess::Refused(ComputerAccessRefused::NotTheirs),
     }
 }
@@ -98,8 +145,13 @@ mod tests {
         UserId::parse(id).expect("user id")
     }
 
+    fn host() -> HostId {
+        HostId::parse("h1").expect("host id")
+    }
+
     fn owned_by(owner: &str) -> ComputerOwnershipFacts {
         ComputerOwnershipFacts {
+            id: host(),
             owner: Some(user(owner)),
         }
     }
@@ -115,12 +167,15 @@ mod tests {
     }
 
     #[test]
-    fn the_owner_is_admitted_and_the_witness_names_them() {
+    fn the_owner_is_admitted_and_the_witness_names_them_and_the_computer() {
         let ComputerAccess::Held(held) = can_access_computer(&user("u1"), Some(&owned_by("u1")))
         else {
             panic!("expected the owner to be admitted");
         };
         assert_eq!(held.owner(), &user("u1"));
+        // Without this the verdict would not say what it authorizes, and could be
+        // carried onto another computer's facts.
+        assert_eq!(held.computer(), &host());
     }
 
     #[test]
@@ -137,7 +192,13 @@ mod tests {
     #[test]
     fn a_computer_no_user_owns_is_no_ones_to_act_on() {
         assert_eq!(
-            refusal("u1", Some(&ComputerOwnershipFacts { owner: None })),
+            refusal(
+                "u1",
+                Some(&ComputerOwnershipFacts {
+                    id: host(),
+                    owner: None,
+                })
+            ),
             Some(ComputerAccessRefused::NotTheirs)
         );
     }

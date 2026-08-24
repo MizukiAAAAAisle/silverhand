@@ -108,16 +108,60 @@ pub enum EligibilityMoved {
 ///  - an implementation cannot report a committed teardown from a comparison it
 ///    re-stated itself, because the outcome type it must return can only be built
 ///    around a witness (see [`crate::teardown::write::AgentTornDown`]);
-///  - a committed outcome cannot describe a row other than the one that was
-///    admitted, because there is no second place for facts to come from — a stale
-///    or reused witness carries its own stale facts and says so.
+///  - the facts a committed teardown reports as the row it deleted are the facts
+///    this rule judged, because it has no copy of its own to report instead.
 ///
-/// What it does NOT prove is that the facts handed in were read under the
-/// mechanism, or read unfiltered. A witness minted from fabricated facts is a
-/// well-formed witness. That residual is the differential persistence contract's,
-/// which must include a fact-filtering case and an in-transaction-versus-pre-read
-/// case, because an implementation that filters facts can still answer correctly
-/// for the cases a naive suite happens to try.
+/// It does NOT by itself make a committed outcome single-channel. The post-commit
+/// capture is a second channel that describes a row, and binding it to this witness
+/// is [`crate::teardown::write::AgentTornDown::seal`]'s job, not this type's.
+///
+/// It also does not prove the facts handed in were read under the mechanism, or
+/// read unfiltered. A witness minted from fabricated facts is a well-formed
+/// witness. That residual is the differential persistence contract's, which must
+/// include a fact-filtering case and an in-transaction-versus-pre-read case, because
+/// an implementation that filters facts can still answer correctly for the cases a
+/// naive suite happens to try.
+///
+/// ```compile_fail
+/// use silverhand_backend_core::teardown::eligibility::EligibilityHeld;
+/// // Assembled from parts, this would admit a write no rule judged.
+/// let _: EligibilityHeld = EligibilityHeld { facts: unimplemented!() };
+/// ```
+///
+/// The control for that gate — same path, same name, minted the only way it can be.
+/// A `compile_fail` block passes on any error, including a stale path, so the gate
+/// above is only worth something next to this.
+///
+/// ```
+/// use silverhand_backend_core::{
+///     agent_lifecycle::MaterializationStatus,
+///     identity::{AgentId, HostId},
+///     teardown::{
+///         eligibility::{
+///             AgentTeardownEligibility, EligibilityHeld, EligibilityVerdict, hold_eligibility,
+///         },
+///         facts::AgentTeardownFacts,
+///     },
+/// };
+/// let host_id = HostId::parse("h1").unwrap();
+/// let facts = AgentTeardownFacts {
+///     id: AgentId::parse("a1").unwrap(),
+///     name: "a1".into(),
+///     display_name: "a1".into(),
+///     runtime: "claude".into(),
+///     host_id: host_id.clone(),
+///     materialization_status: MaterializationStatus::Active,
+///     failed_code: None,
+///     deletion_started_at: None,
+/// };
+/// let EligibilityVerdict::Held(held) =
+///     hold_eligibility(&AgentTeardownEligibility::ActiveOn { host_id }, facts)
+/// else {
+///     panic!("an unmoved active row is admitted");
+/// };
+/// let held: EligibilityHeld = held;
+/// assert_eq!(held.facts().id.as_str(), "a1");
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EligibilityHeld {
     facts: AgentTeardownFacts,
@@ -147,9 +191,11 @@ pub enum EligibilityVerdict {
 /// contract is owed to every engine and every future placement writer, and a
 /// guarantee that rests on the absence of a writer documents nothing.
 ///
-/// The facts are taken BY VALUE so the admitted verdict can own them. An
-/// implementation that kept its own copy and passed a different one onward is not
-/// expressible: there is nowhere else for a committed outcome to read facts from.
+/// The facts are taken BY VALUE so the admitted verdict can own them: an
+/// implementation that kept its own copy and passed a different one onward cannot
+/// report it AS the judged row, because the outcome reads that row out of the
+/// witness. Other channels a committed outcome carries are bound where they are
+/// composed, not here.
 pub fn hold_eligibility(
     expected: &AgentTeardownEligibility,
     facts: AgentTeardownFacts,
@@ -238,9 +284,9 @@ mod tests {
 
     #[test]
     fn the_witness_carries_the_very_facts_that_were_judged() {
-        // The write boundary reads its facts back out of the witness, so this is
-        // the only channel a committed outcome has. A witness that described some
-        // other row would be a committed teardown of a row nothing admitted.
+        // The write boundary reads the judged row back out of the witness rather
+        // than keeping a copy, so a witness that described some other row would be
+        // a committed teardown of a row nothing admitted.
         let judged = facts(MaterializationStatus::Active, "h1");
         let EligibilityVerdict::Held(held) = hold_eligibility(&active_on("h1"), judged.clone())
         else {

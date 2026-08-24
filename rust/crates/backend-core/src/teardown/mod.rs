@@ -15,10 +15,16 @@
 //! outcome is only constructible around one, so no implementation can commit on a
 //! comparison it re-stated for itself.
 //!
+//! A witness alone does not make a committed outcome coherent: several
+//! individually well-formed witnesses and captures, each about a DIFFERENT row, can
+//! be assembled into one report. Every seal that composes them therefore checks that
+//! they name one aggregate, in [`contract`]'s vocabulary.
+//!
 //! WHOSE computer it is is not decided here at all: that is authorization and lives
 //! in [`crate::capability::computer_access`]. This namespace consumes its witness.
 
 pub mod cascade;
+pub mod contract;
 pub mod eligibility;
 pub mod facts;
 pub mod intent;

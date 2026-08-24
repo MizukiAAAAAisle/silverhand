@@ -75,6 +75,12 @@ pub struct StoredBlobRef {
 /// a residue-leaving best-effort phase can be accounted for.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentTeardownCapture {
+    /// Whose capture this is. Not consumed by any post-commit phase — every phase
+    /// below is already keyed by what it carries — but a capture is the SECOND
+    /// channel through which a committed teardown could describe a row, so it must
+    /// name the row it came from or nothing can check that it is the same one the
+    /// rule admitted. See [`crate::teardown::write::AgentTornDown::seal`].
+    pub agent_id: AgentId,
     pub runtime_sessions: Vec<AgentRuntimeSessionFacts>,
     pub dm_blob_refs: Vec<StoredBlobRef>,
     /// The agent's own home channel, for the summary log. Absent when it owns no
