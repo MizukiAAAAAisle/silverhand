@@ -28,6 +28,7 @@ use sqlx::{
 use thiserror::Error;
 
 pub mod auth;
+pub mod direct_pair_read;
 pub mod host_runtime;
 pub mod runtime_credential;
 pub mod runtime_delivery;

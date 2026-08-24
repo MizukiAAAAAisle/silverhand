@@ -18,7 +18,7 @@
 //! referenced as a scalar subquery `(SELECT viewer FROM p)`. The predicate text is
 //! otherwise unchanged, so the set it selects is the same set.
 
-use std::{path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, time::Duration};
 
 use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
@@ -187,6 +187,18 @@ const CONVERSATION_UNREAD_COUNT: &str = concat!(
     rollup_unread!()
 );
 
+/// The same roll-up for a set of conversations, used by complete list faces. The
+/// requested ids drive the query and `SUM(CASE ...)` preserves a zero row for a pair
+/// with no messages; no list reader re-spells the unread predicate.
+const CONVERSATION_UNREAD_COUNTS: &str = concat!(
+    "WITH p(viewer) AS (SELECT ?), requested(conversation_id) AS (SELECT value FROM json_each(?)) \
+     SELECT requested.conversation_id AS conversation_id, COALESCE(SUM(CASE WHEN m.id IS NOT NULL \
+     AND ",
+    rollup_unread!(),
+    " THEN 1 ELSE 0 END), 0) AS unread_count FROM requested LEFT JOIN messages m ON \
+     m.conversation_id = requested.conversation_id GROUP BY requested.conversation_id"
+);
+
 /// The viewer's unread count across every conversation they are seated in, in one workspace.
 const WORKSPACE_UNREAD_COUNT: &str = concat!(
     "WITH p(viewer, ws) AS (SELECT ?, ?) SELECT COUNT(m.id) AS c FROM conversations c JOIN \
@@ -234,6 +246,8 @@ pub struct SqliteUnreadReadModel {
 pub enum UnreadReadModelError {
     #[error("database operation failed")]
     Sql(#[from] sqlx::Error),
+    #[error("read-model coordinate serialization failed")]
+    Serialization(#[from] serde_json::Error),
     /// A workspace-placed conversation whose `workspace_id` is null contradicts the
     /// schema's placement constraint: there is no workspace tier to report, so this is
     /// a broken row rather than an empty audience. The oracle's `requireWorkspacePlacement`
@@ -246,6 +260,39 @@ pub enum UnreadReadModelError {
     /// A stored column that should name something names nothing.
     #[error("stored column {0} does not name a usable identity")]
     MalformedIdentity(&'static str),
+}
+
+/// Batch form of the canonical per-conversation unread roll-up. Kept in this
+/// module so a complete direct-pair list and the live unread publisher cannot drift
+/// into two definitions of what one unread message is.
+pub(crate) async fn conversation_unread_counts(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+    conversations: &[ConversationId],
+) -> Result<HashMap<ConversationId, i64>, UnreadReadModelError> {
+    if conversations.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let requested = serde_json::to_string(
+        &conversations
+            .iter()
+            .map(ConversationId::as_str)
+            .collect::<Vec<_>>(),
+    )?;
+    let rows = sqlx::query(CONVERSATION_UNREAD_COUNTS)
+        .bind(viewer.as_str())
+        .bind(requested)
+        .fetch_all(&mut **tx)
+        .await?;
+    let mut counts = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let conversation_id: String = row.try_get("conversation_id")?;
+        let conversation = ConversationId::parse(conversation_id)
+            .map_err(|_| UnreadReadModelError::MalformedIdentity("conversations.id"))?;
+        let unread_count: i64 = row.try_get("unread_count")?;
+        counts.insert(conversation, unread_count);
+    }
+    Ok(counts)
 }
 
 const PLACEMENT_WORKSPACE: &str = "workspace";
