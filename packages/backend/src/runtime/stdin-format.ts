@@ -23,9 +23,11 @@
  */
 import {
   composeRuntimeDeliveryPresentation,
+  formatRuntimeDeliveryAttachmentSuffix,
+  formatRuntimeDeliveryHeader,
   formatStreamAddressToken,
   requireAddressableId,
-  resolveAttachmentLabels,
+  runtimeDeliveryInstructionSignal,
   type AddressFallbackReason,
   type AttachmentSnapshot,
   type DeliveryTarget,
@@ -219,21 +221,11 @@ function deliveryInstructionSignal(
   recipientAgentName: string | undefined,
   referencesOf: DeliveryReferencesOf,
 ): RuntimeDeliveryInstructionSignal {
-  const references = referencesOf(message);
-  const addressesRecipient =
-    recipientAgentName !== undefined
-    && references.some(
-      ref => ref.kind === 'agent' && ref.handle === recipientAgentName,
-    );
-  if (message.from_kind === 'user') {
-    return references.length === 0 || addressesRecipient
-      ? 'user_for_recipient'
-      : 'user_for_other';
-  }
-  if (message.from_kind !== 'system' && addressesRecipient) {
-    return 'non_system_mention';
-  }
-  return message.from_kind === 'system' ? 'system' : 'other';
+  return runtimeDeliveryInstructionSignal({
+    fromKind: message.from_kind,
+    references: referencesOf(message),
+    recipientAgentName,
+  });
 }
 
 /**
@@ -342,29 +334,48 @@ export function formatStdinMessageHeader(
   // no title (see MessageLite).
   const taskHeader = extractTaskHeaderFromRow({ metadata: msg.metadata ?? null });
   const taskSuffix = taskHeader
-    ? ` task=#${taskHeader.task_number} status=${taskHeader.task_status}`
-    : '';
+    ? { number: taskHeader.task_number, status: taskHeader.task_status }
+    : null;
   switch (msg.from_kind) {
     case 'agent': {
       const handle = msg.from_agent_id
         ? agentNameById(msg.from_agent_id)
         : undefined;
-      const sender = handle ? `@${handle}` : 'agent';
       const computerId = msg.from_agent_id
         ? agentComputerIdById(msg.from_agent_id)
         : undefined;
-      const computer = computerId ? ` computer=${computerId}` : '';
-      return `[msg_id=${msg.id} sender=${sender} type=agent${computer} target=${target} time=${time}${taskSuffix}]`;
+      return formatRuntimeDeliveryHeader({
+        messageId: msg.id,
+        sender: {
+          kind: 'agent',
+          handle: handle ?? null,
+          computer: computerId ?? null,
+        },
+        target,
+        timestamp: time,
+        task: taskSuffix,
+      });
     }
     case 'user': {
       const resolved = msg.from_user_id
         ? userNameById(msg.from_user_id) ?? defaultUserHandle
         : defaultUserHandle;
-      const sender = resolved ? `@${resolved}` : 'user';
-      return `[msg_id=${msg.id} sender=${sender} type=human target=${target} time=${time}${taskSuffix}]`;
+      return formatRuntimeDeliveryHeader({
+        messageId: msg.id,
+        sender: { kind: 'human', handle: resolved ?? null },
+        target,
+        timestamp: time,
+        task: taskSuffix,
+      });
     }
     case 'system': {
-      return `[msg_id=${msg.id} sender=system type=system target=${target} time=${time}${taskSuffix}]`;
+      return formatRuntimeDeliveryHeader({
+        messageId: msg.id,
+        sender: { kind: 'system' },
+        target,
+        timestamp: time,
+        task: taskSuffix,
+      });
     }
   }
 }
@@ -397,16 +408,5 @@ export function formatStdinTimestamp(epochMs: number): string {
 export function formatAttachmentSuffix(
   attachments: AttachmentSnapshot[] | null | undefined,
 ): string {
-  if (!attachments || attachments.length === 0) return '';
-  const labels = resolveAttachmentLabels(attachments);
-  const lines = attachments.map(
-    (a, i) =>
-      `  - ${labels[i]} — id=${a.id} filename=${JSON.stringify(a.filename)} ` +
-      `content_type=${a.content_type} size=${a.size}`,
-  );
-  const header =
-    attachments.length === 1
-      ? '[1 attachment — the label (e.g. `Image #1`) is how the sender refers to it; use `silverhand file view --attachment-id <id>` with the id below to read it]'
-      : `[${attachments.length} attachments — the label (e.g. \`Image #1\`) is how the sender refers to each; use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
-  return `\n\n${header}\n${lines.join('\n')}`;
+  return formatRuntimeDeliveryAttachmentSuffix(attachments);
 }

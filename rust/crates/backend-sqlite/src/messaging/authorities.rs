@@ -733,11 +733,37 @@ fn split_thread(raw: &str, named: bool) -> Option<(&str, Option<String>)> {
     address_id(suffix).then(|| (head, Some(suffix.to_owned())))
 }
 
-fn address_id(raw: &str) -> bool {
+pub(crate) fn address_id(raw: &str) -> bool {
     raw.len() == ADDRESS_ID_LEN
         && raw
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+pub(crate) fn encode_name_segment(raw: &str, max: usize) -> Option<String> {
+    if raw.is_empty()
+        || raw.chars().count() > max
+        || raw.trim() != raw
+        || raw.nfc().collect::<String>() != raw
+        || raw.chars().any(name_character_is_forbidden)
+    {
+        return None;
+    }
+    let mut encoded = String::new();
+    for character in raw.chars() {
+        match character {
+            '%' => encoded.push_str("%25"),
+            '/' => encoded.push_str("%2F"),
+            ch if is_space_separator(ch) => {
+                for byte in ch.to_string().as_bytes() {
+                    use std::fmt::Write as _;
+                    write!(&mut encoded, "%{byte:02X}").expect("writing to a String cannot fail");
+                }
+            }
+            ch => encoded.push(ch),
+        }
+    }
+    Some(encoded)
 }
 
 fn fold_key(raw: &str) -> String {

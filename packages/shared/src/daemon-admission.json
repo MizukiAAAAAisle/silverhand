@@ -1,0 +1,6 @@
+{
+  "hostProtocolVersion": 11,
+  "outboundProtocolVersion": 10,
+  "hostWebSocketPath": "/api/hosts/connect",
+  "updateRequiredCloseReason": "UPDATE_REQUIRED"
+}

@@ -90,7 +90,7 @@ pub trait ReferencePositions {
 pub struct AddressedPrincipals(Vec<MessageReference>);
 
 impl AddressedPrincipals {
-    pub(super) fn derive(content: &MessageContent, positions: &impl ReferencePositions) -> Self {
+    pub(crate) fn derive(content: &MessageContent, positions: &impl ReferencePositions) -> Self {
         let body = content.as_str();
         let mut addressed = Vec::new();
         let mut seen = HashSet::new();

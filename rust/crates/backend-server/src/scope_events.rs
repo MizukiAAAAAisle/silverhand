@@ -41,10 +41,6 @@ use tokio::{
 
 include!(concat!(env!("OUT_DIR"), "/backend_admission.rs"));
 
-#[cfg(test)]
-#[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
-mod current_schema;
-
 const MAX_INBOUND_BYTES: usize = 64 * 1024;
 const REPLAY_CAPACITY: usize = 200;
 const LIVE_CAPACITY: usize = 200;
@@ -1333,6 +1329,8 @@ mod tests {
         tungstenite::{Message as ClientMessage, client::IntoClientRequest},
     };
     use tower::ServiceExt;
+
+    use crate::current_schema;
 
     use super::*;
 
