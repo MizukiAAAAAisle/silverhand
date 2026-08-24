@@ -36,9 +36,21 @@ const DRIVER_WIRE_RUNTIME: &[&str] = &[
     "tungstenite",
 ];
 
+/// Every crate root in the workspace. The seam budget is counted in these files,
+/// so all of them are checked and not only the ones that own a lane namespace.
+const CRATE_ROOTS: &[&str] = &[
+    "backend-app",
+    "backend-core",
+    "backend-server",
+    "backend-sqlite",
+];
+
+/// Every namespace this lane owns. A namespace absent from this list is not
+/// guarded by G3, G4 or G5 at all, so adding one is part of adding a namespace.
 const LANE_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "capability"),
     ("backend-core", "policy"),
+    ("backend-core", "teardown"),
     ("backend-server", "host_agent_background"),
 ];
 
@@ -237,6 +249,38 @@ fn lane_source_paths(crate_dir: &str, namespace: &str) -> Vec<PathBuf> {
     )
 }
 
+/// Whether the source names `identifier` as a WHOLE identifier.
+///
+/// A bare substring cannot be used for a namespace name that is a suffix of an
+/// unrelated one — `workspace_cold_read` is a different module, not a second
+/// declaration of `cold_read` — and [`names_path_segment`] cannot either, because
+/// a declaration or re-export of a namespace need not carry a `::`.
+fn names_identifier(source: &str, identifier: &str) -> bool {
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    source.match_indices(identifier).any(|(start, matched)| {
+        let before_is_ident = start > 0 && is_ident(source.as_bytes()[start - 1]);
+        let after = start + matched.len();
+        let after_is_ident = after < source.len() && is_ident(source.as_bytes()[after]);
+        !before_is_ident && !after_is_ident
+    })
+}
+
+/// Whether this source takes OWNERSHIP of `namespace` — declares it, or re-exports
+/// it under a second path.
+///
+/// Deliberately not "mentions it": a crate root legitimately consumes another
+/// crate's namespace, and prose and a struct field can carry the same word. Only a
+/// declaration or a re-export creates a second owner.
+fn declares_or_reexports(source: &str, namespace: &str) -> bool {
+    strip_comments(source).lines().any(|line| {
+        let line = line.trim();
+        let declares =
+            line == format!("mod {namespace};") || line == format!("pub mod {namespace};");
+        let reexports = line.starts_with("pub use ") && names_identifier(line, namespace);
+        declares || reexports
+    })
+}
+
 /// Whether the source reaches `namespace` as a path segment. Bare substring
 /// matching is not usable here: `roster_policy` is a column, not a module.
 fn names_path_segment(source: &str, namespace: &str) -> bool {
@@ -382,6 +426,20 @@ fn g3_cp1_activation_fence_keeps_the_lane_unmounted() {
 
 #[test]
 fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
+    assert!(!declares_or_reexports(
+        "pub mod workspace_cold_read;",
+        "cold_read"
+    ));
+    assert!(declares_or_reexports("pub mod cold_read;", "cold_read"));
+    assert!(declares_or_reexports(
+        "pub use silverhand_backend_core::cold_read;",
+        "cold_read"
+    ));
+    assert!(!declares_or_reexports(
+        "    capability: messaging_store.clone(),",
+        "capability"
+    ));
+
     for (crate_dir, namespace) in LANE_NAMESPACES {
         let declaration = format!("pub mod {namespace};");
         let root = rust_root()
@@ -398,7 +456,7 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
             "{} must declare {namespace} exactly once",
             root.display()
         );
-        for (other_dir, _) in LANE_NAMESPACES {
+        for other_dir in CRATE_ROOTS {
             if other_dir == crate_dir {
                 continue;
             }
@@ -407,8 +465,8 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
                 .join(other_dir)
                 .join("src/lib.rs");
             assert!(
-                !read(&other).contains(namespace),
-                "{} must not name {namespace}",
+                !declares_or_reexports(&read(&other), namespace),
+                "{} declares or re-exports {namespace}: one namespace, one owner",
                 other.display()
             );
         }
