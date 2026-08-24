@@ -46,6 +46,7 @@ use thiserror::Error;
 
 mod author;
 pub(crate) mod authorities;
+pub mod collaboration;
 use author::{AuthorEvidence, resolve_authors};
 pub use authorities::{SqliteTargetAddress, TargetAddressStoreError};
 
