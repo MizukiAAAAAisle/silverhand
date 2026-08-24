@@ -117,11 +117,11 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
     });
 
     const saved = new SavedMessageRepo(db);
-    // `save()` gates on PLACEMENT, not participation, so the row persists and is
-    // readable by id — proving the list exclusion below is the participation
-    // gate, not a failed write.
+    workspaces.addUserMember(ws.id, viewer, 'member');
     expect(saved.save(msg.id, viewer)).not.toBeNull();
     expect(saved.getByMessageIdForUser(msg.id, viewer)).not.toBeNull();
+    db.prepare('DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = ?')
+      .run(ws.id, viewer);
 
     // Stricter workspace arm (v25): seat ∧ workspace_users. Seat alone → dropped.
     expect(saved.listForUser(viewer).map(s => s.message.id)).not.toContain(msg.id);
@@ -178,10 +178,11 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
     });
 
     const saved = new SavedMessageRepo(db);
-    // `save()` gates on PLACEMENT, not participation, so the row persists and is
-    // readable by id — isolating the list exclusion below as the seat gate.
+    conversations.addUser(channel.id, viewer);
     expect(saved.save(msg.id, viewer)).not.toBeNull();
     expect(saved.getByMessageIdForUser(msg.id, viewer)).not.toBeNull();
+    db.prepare('DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?')
+      .run(channel.id, viewer);
     expect(saved.listForUser(viewer).map(s => s.message.id)).not.toContain(msg.id);
 
     // Grant the seat → the row lists. Isolates the exclusion to the seat conjunct
@@ -217,7 +218,10 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
     // would fail, which `toMatchObject` could not see. `agent_home` is a
     // deliberate input: it is the container that used to take the special
     // branch, so it is the state where a re-introduced word would surface first.
-    expect(saved.save(msg.id, viewer)).not.toBeNull();
+    db.prepare(
+      `INSERT INTO saved_messages (id, user_id, message_id, conversation_id, saved_at)
+       VALUES ('saved-agent-home', ?, ?, ?, 1)`,
+    ).run(viewer, msg.id, dm.id);
     const echo = saved.getByMessageIdForUser(msg.id, viewer);
     expect(echo!.place).toEqual({
       kind: 'workspace_channel',

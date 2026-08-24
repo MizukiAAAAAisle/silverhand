@@ -1117,17 +1117,19 @@ export function createConversationRuntimeApp(
       return c.json({ error: 'message not found' }, 404);
     }
     const viewerUserId = requireViewerUserId(c);
-    const row = saved.save(id, viewerUserId);
-    if (!row) return c.json({ error: 'message not found' }, 404);
+    const committed = saved.saveCommitted(id, viewerUserId);
+    if (!committed) return c.json({ error: 'message not found' }, 404);
     // Notify the resolved viewer's private scope so the saved list
     // invalidates without polling. Pre-PR1 this was 'viewer:local';
     // routes now resolve the current viewer principal.
-    ctx.events.publishToScope(
-      `viewer:${viewerUserId}`,
-      'saved_changed',
-      { message_id: id, action: 'save' },
-    );
-    return c.json({ saved: row }, 201);
+    if (committed.changed) {
+      ctx.events.publishToScope(
+        `viewer:${viewerUserId}`,
+        'saved_changed',
+        { message_id: id, action: 'save' },
+      );
+    }
+    return c.json({ saved: committed.saved }, 201);
   });
 
   app.delete(apiPaths.messageSave(':id'), c => {
@@ -1138,12 +1140,14 @@ export function createConversationRuntimeApp(
       return c.json({ error: 'message not found' }, 404);
     }
     const viewerUserId = requireViewerUserId(c);
-    saved.remove(id, viewerUserId);
-    ctx.events.publishToScope(
-      `viewer:${viewerUserId}`,
-      'saved_changed',
-      { message_id: id, action: 'unsave' },
-    );
+    const committed = saved.removeCommitted(id, viewerUserId);
+    if (committed.changed) {
+      ctx.events.publishToScope(
+        `viewer:${viewerUserId}`,
+        'saved_changed',
+        { message_id: id, action: 'unsave' },
+      );
+    }
     return c.body(null, 204);
   });
 

@@ -1,0 +1,110 @@
+//! SQLite projection and mutation unit for viewer-private saved messages.
+
+mod mutation;
+mod read;
+
+use silverhand_backend_core::{
+    messaging::{
+        collaboration::saved::SavedEntry,
+        environment::{SendClock, SendEntropy},
+    },
+    persistence::PersistenceFailure,
+};
+use sqlx::SqlitePool;
+use thiserror::Error;
+
+use crate::messaging::{HostEnvironment, MessagingStore};
+
+#[derive(Clone)]
+pub struct SqliteSavedStore<E = HostEnvironment> {
+    pub(super) pool: SqlitePool,
+    pub(super) environment: E,
+}
+
+impl<E: Clone> MessagingStore<E> {
+    pub fn saved(&self) -> SqliteSavedStore<E> {
+        SqliteSavedStore {
+            pool: self.pool.clone(),
+            environment: self.environment.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum SavedStoreError {
+    #[error("database operation failed")]
+    Sql(#[from] sqlx::Error),
+    #[error("stored saved-message identity is malformed")]
+    MalformedIdentity,
+    #[error("stored saved timestamp or message ordinal is outside its domain")]
+    MalformedOrdinal,
+    #[error("stored saved-message placement is outside the published domain")]
+    MalformedPlacement,
+    #[error("stored message metadata is malformed")]
+    MalformedMetadata(#[source] serde_json::Error),
+    #[error("stored message metadata is not an object")]
+    MalformedMetadataShape,
+    #[error("stored message author kind is outside the published domain")]
+    MalformedAuthor,
+    #[error("stored linked-task projection is malformed")]
+    MalformedLinkedTask,
+    #[error("environment could not mint the saved-message fact")]
+    Environment(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
+}
+
+impl From<SavedStoreError> for PersistenceFailure {
+    fn from(value: SavedStoreError) -> Self {
+        Self::from_source(value)
+    }
+}
+
+impl<E> SqliteSavedStore<E>
+where
+    E: SendClock + SendEntropy + Send + Sync,
+{
+    fn new_entry_id(
+        &self,
+    ) -> Result<
+        silverhand_backend_core::messaging::collaboration::saved::SavedEntryId,
+        PersistenceFailure,
+    > {
+        silverhand_backend_core::messaging::collaboration::saved::SavedEntryId::mint(
+            &self.environment,
+        )
+        .map_err(|error| SavedStoreError::Environment(error).into())
+    }
+
+    fn now(
+        &self,
+    ) -> Result<silverhand_backend_core::messaging::collaboration::saved::SavedAt, PersistenceFailure>
+    {
+        let value = self
+            .environment
+            .now_unix_ms()
+            .map_err(SavedStoreError::Environment)?;
+        silverhand_backend_core::messaging::collaboration::saved::SavedAt::new(value)
+            .map_err(|_| SavedStoreError::MalformedOrdinal.into())
+    }
+}
+
+pub(super) fn push_participates(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, viewer: &str) {
+    builder
+        .push("((c.placement_kind = 'workspace' AND EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = ")
+        .push_bind(viewer.to_owned())
+        .push(") AND EXISTS (SELECT 1 FROM workspace_users wu WHERE wu.workspace_id = c.workspace_id AND wu.user_id = ")
+        .push_bind(viewer.to_owned())
+        .push(")) OR (c.placement_kind = 'direct_pair' AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ")
+        .push_bind(viewer.to_owned())
+        .push(") OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ")
+        .push_bind(viewer.to_owned())
+        .push("))))");
+}
+
+pub(super) const SELECT_JOINED: &str = "SELECT sm.id AS saved_id, sm.saved_at, m.id AS message_id, m.conversation_id, m.from_kind, m.from_agent_id, m.from_user_id, m.author_id, m.author_name, m.author_display_name, m.content, m.metadata, m.seq, m.created_at, m.thread_root_id, c.placement_kind, c.workspace_id, CASE WHEN c.placement_kind = 'workspace' THEN c.title ELSE NULL END AS channel_name, lt.id AS task_id, lt.task_number, lt.title AS task_title, lt.status AS task_status, lt.assignee_agent_id, lt.assignee_user_id, lta.display_name AS assignee_agent_name, ltu.display_name AS assignee_user_name FROM saved_messages sm JOIN messages m ON m.id = sm.message_id JOIN conversations c ON c.id = sm.conversation_id LEFT JOIN tasks lt ON lt.source_message_id = m.id LEFT JOIN agents lta ON lta.id = lt.assignee_agent_id LEFT JOIN users ltu ON ltu.id = lt.assignee_user_id";
+
+pub(super) async fn decode_entries(
+    conn: &mut sqlx::SqliteConnection,
+    rows: Vec<sqlx::sqlite::SqliteRow>,
+) -> Result<Vec<SavedEntry>, PersistenceFailure> {
+    read::decode_entries(conn, rows).await
+}

@@ -1,0 +1,123 @@
+[
+  {
+    "name": "save_changed",
+    "surface": "human_post",
+    "status": 201,
+    "body": {
+      "saved": {
+        "id": "saved-1",
+        "message": {
+          "id": "message-1",
+          "conversation_id": "conversation-1",
+          "from_kind": "user",
+          "from_agent_id": null,
+          "from_user_id": "user-1",
+          "author": {
+            "status": "active",
+            "kind": "user",
+            "id": "user-1",
+            "name": "local-test",
+            "display_name": "Local Test User",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "content": "saved parity",
+          "metadata": null,
+          "attachments": null,
+          "reactions": null,
+          "seq": 1,
+          "created_at": 100,
+          "thread_root_id": null,
+          "linked_task": null
+        },
+        "place": {
+          "kind": "workspace_channel",
+          "conversation_id": "conversation-1",
+          "workspace_id": "workspace-1",
+          "channel_name": "saved-main"
+        },
+        "saved_at": 1000
+      }
+    },
+    "event": { "message_id": "message-1", "action": "save" }
+  },
+  {
+    "name": "save_duplicate",
+    "surface": "human_post",
+    "status": 201,
+    "body_case": "save_changed",
+    "event": null
+  },
+  {
+    "name": "list",
+    "surface": "human_get",
+    "status": 200,
+    "body": { "saved_case": "save_changed" }
+  },
+  {
+    "name": "list_both_senders",
+    "surface": "human_get",
+    "status": 400,
+    "body": {
+      "error": "invalid input",
+      "issues": [
+        {
+          "code": "custom",
+          "message": "user_id and agent_id cannot both be set",
+          "path": ["user_id"]
+        }
+      ]
+    }
+  },
+  {
+    "name": "list_negative_since",
+    "surface": "human_get",
+    "status": 400,
+    "body": {
+      "error": "invalid input",
+      "issues": [
+        {
+          "code": "too_small",
+          "minimum": 0,
+          "type": "number",
+          "inclusive": true,
+          "exact": false,
+          "message": "Number must be greater than or equal to 0",
+          "path": ["since"]
+        }
+      ]
+    }
+  },
+  {
+    "name": "unsave_changed",
+    "surface": "human_delete",
+    "status": 204,
+    "body": null,
+    "event": { "message_id": "message-1", "action": "unsave" }
+  },
+  {
+    "name": "unsave_duplicate",
+    "surface": "human_delete",
+    "status": 204,
+    "body": null,
+    "event": null
+  },
+  {
+    "name": "save_missing",
+    "surface": "human_post",
+    "status": 404,
+    "body": { "error": "message not found" }
+  },
+  {
+    "name": "save_public_unseated",
+    "surface": "human_post",
+    "status": 404,
+    "body": { "error": "message not found" }
+  },
+  {
+    "name": "unsave_missing",
+    "surface": "human_delete",
+    "status": 404,
+    "body": { "error": "message not found" }
+  }
+]
