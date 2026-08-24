@@ -20,8 +20,8 @@ use silverhand_backend_core::{
         CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, ProjectRuntimeStatus,
         RefineRuntimeToolCallInput, RefinedRuntimeActivity, RuntimeActivityCommitResult,
         RuntimeActivityFact, RuntimeActivityPayload, RuntimeConsumedCommitResult,
-        RuntimeExitCommitResult, RuntimeExitDisposition, RuntimeToolCallInputCommitResult,
-        StampRuntimePresence, UpsertRuntimeTextActivity,
+        RuntimeEventAdmission, RuntimeExitCommitResult, RuntimeExitDisposition,
+        RuntimeToolCallInputCommitResult, StampRuntimePresence, UpsertRuntimeTextActivity,
     },
 };
 use sqlx::{
@@ -659,28 +659,33 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
 }
 
 impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
-    async fn current_principal(
+    async fn current_admission(
         &self,
+        host_id: String,
         scope: RuntimeScope,
-    ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+    ) -> Result<Option<RuntimeEventAdmission>, PersistenceFailure> {
         let mut tx = self.pool.begin().await.map_err(persistence)?;
         let row = match &scope {
             RuntimeScope::ConversationSlot { agent, source } => sqlx::query(
-                "SELECT generation, claimed_by_daemon_instance_id
-                   FROM agent_runtime_slots
-                  WHERE agent_id = ? AND conversation_id = ?",
+                "SELECT s.generation, s.claimed_by_daemon_instance_id
+                   FROM agent_runtime_slots s
+                   JOIN agents a ON a.id = s.agent_id
+                  WHERE s.agent_id = ? AND s.conversation_id = ? AND a.host_id = ?",
             )
             .bind(agent.as_str())
             .bind(source.as_str())
+            .bind(&host_id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(persistence)?,
             RuntimeScope::AgentSlot { agent } => sqlx::query(
-                "SELECT generation, claimed_by_daemon_instance_id
-                   FROM agent_runtime_slots
-                  WHERE agent_id = ? AND conversation_id IS NULL",
+                "SELECT s.generation, s.claimed_by_daemon_instance_id
+                   FROM agent_runtime_slots s
+                   JOIN agents a ON a.id = s.agent_id
+                  WHERE s.agent_id = ? AND s.conversation_id IS NULL AND a.host_id = ?",
             )
             .bind(agent.as_str())
+            .bind(&host_id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(persistence)?,
@@ -699,10 +704,13 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .map_err(PersistenceFailure::from_source)?;
         tx.commit().await.map_err(persistence)?;
         Ok(daemon.map(|daemon| {
-            RuntimePrincipal::for_scope(
-                scope,
-                silverhand_backend_core::runtime_credential::RuntimeCustody::new(
-                    generation, daemon,
+            RuntimeEventAdmission::new(
+                host_id,
+                RuntimePrincipal::for_scope(
+                    scope,
+                    silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+                        generation, daemon,
+                    ),
                 ),
             )
         }))
@@ -717,8 +725,9 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
-        let principal = event.principal();
-        let row = current_slot_row(&mut tx, principal).await?;
+        let admission = event.admission();
+        let principal = admission.principal();
+        let row = current_slot_row(&mut tx, admission).await?;
         let Some(row) = row else {
             tx.commit().await.map_err(persistence)?;
             return Ok(RuntimeExitCommitResult::new(
@@ -843,7 +852,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
-        let Some(row) = current_slot_row(&mut tx, event.principal()).await? else {
+        let Some(row) = current_slot_row(&mut tx, event.admission()).await? else {
             tx.commit().await.map_err(persistence)?;
             return Ok(false);
         };
@@ -856,8 +865,8 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .map(DaemonInstanceId::parse)
             .transpose()
             .map_err(PersistenceFailure::from_source)?;
-        if generation != event.principal().custody().generation()
-            || daemon.as_ref() != Some(event.principal().custody().daemon_instance())
+        if generation != event.admission().principal().custody().generation()
+            || daemon.as_ref() != Some(event.admission().principal().custody().daemon_instance())
         {
             tx.commit().await.map_err(persistence)?;
             return Ok(false);
@@ -872,7 +881,14 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         .bind(event.cli_session_id())
         .bind(slot_id)
         .bind(generation.as_i64())
-        .bind(event.principal().custody().daemon_instance().as_str())
+        .bind(
+            event
+                .admission()
+                .principal()
+                .custody()
+                .daemon_instance()
+                .as_str(),
+        )
         .execute(&mut *tx)
         .await
         .map_err(persistence)?
@@ -883,7 +899,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         insert_runtime_projection_event(
             &mut tx,
             slot_id,
-            event.principal(),
+            event.admission().principal(),
             "projection_updated",
             event.status().as_str(),
             event.cli_session_id(),
@@ -896,7 +912,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
 
     async fn record_activity(
         &self,
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         event: RuntimeActivityFact,
         presence_at: silverhand_backend_core::runtime_credential::RuntimeEventTime,
     ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
@@ -905,7 +921,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
-        if !principal_is_current_in_tx(&mut tx, &principal).await? {
+        if !principal_is_current_in_tx(&mut tx, &admission).await? {
             tx.commit().await.map_err(persistence)?;
             return Ok(None);
         }
@@ -925,7 +941,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
-        if !principal_is_current_in_tx(&mut tx, event.principal()).await? {
+        if !principal_is_current_in_tx(&mut tx, event.admission()).await? {
             tx.commit().await.map_err(persistence)?;
             return Ok(None);
         }
@@ -971,7 +987,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
-        if !principal_is_current_in_tx(&mut tx, event.principal()).await? {
+        if !principal_is_current_in_tx(&mut tx, event.admission()).await? {
             tx.commit().await.map_err(persistence)?;
             return Ok(None);
         }
@@ -1045,7 +1061,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
-        if !principal_is_current_in_tx(&mut tx, event.principal()).await? {
+        if !principal_is_current_in_tx(&mut tx, event.admission()).await? {
             tx.commit().await.map_err(persistence)?;
             return Ok(None);
         }
@@ -1065,25 +1081,29 @@ enum Settlement {
 
 async fn current_slot_row(
     tx: &mut Transaction<'_, Sqlite>,
-    principal: &RuntimePrincipal,
+    admission: &RuntimeEventAdmission,
 ) -> Result<Option<sqlx::sqlite::SqliteRow>, PersistenceFailure> {
-    match principal {
+    match admission.principal() {
         RuntimePrincipal::ConversationSlot { agent, source, .. } => sqlx::query(
-            "SELECT id, generation, claimed_by_daemon_instance_id
-               FROM agent_runtime_slots
-              WHERE agent_id = ? AND conversation_id = ?",
+            "SELECT s.id, s.generation, s.claimed_by_daemon_instance_id
+               FROM agent_runtime_slots s
+               JOIN agents a ON a.id = s.agent_id
+              WHERE s.agent_id = ? AND s.conversation_id = ? AND a.host_id = ?",
         )
         .bind(agent.as_str())
         .bind(source.as_str())
+        .bind(admission.host_id())
         .fetch_optional(&mut **tx)
         .await
         .map_err(persistence),
         RuntimePrincipal::AgentSlot { agent, .. } => sqlx::query(
-            "SELECT id, generation, claimed_by_daemon_instance_id
-               FROM agent_runtime_slots
-              WHERE agent_id = ? AND conversation_id IS NULL",
+            "SELECT s.id, s.generation, s.claimed_by_daemon_instance_id
+               FROM agent_runtime_slots s
+               JOIN agents a ON a.id = s.agent_id
+              WHERE s.agent_id = ? AND s.conversation_id IS NULL AND a.host_id = ?",
         )
         .bind(agent.as_str())
+        .bind(admission.host_id())
         .fetch_optional(&mut **tx)
         .await
         .map_err(persistence),
@@ -1092,9 +1112,9 @@ async fn current_slot_row(
 
 async fn principal_is_current_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
-    principal: &RuntimePrincipal,
+    admission: &RuntimeEventAdmission,
 ) -> Result<bool, PersistenceFailure> {
-    let Some(row) = current_slot_row(tx, principal).await? else {
+    let Some(row) = current_slot_row(tx, admission).await? else {
         return Ok(false);
     };
     let generation = RuntimeGeneration::new(row.try_get("generation").map_err(persistence)?)
@@ -1105,8 +1125,8 @@ async fn principal_is_current_in_tx(
         .map(DaemonInstanceId::parse)
         .transpose()
         .map_err(PersistenceFailure::from_source)?;
-    Ok(generation == principal.custody().generation()
-        && daemon.as_ref() == Some(principal.custody().daemon_instance()))
+    Ok(generation == admission.principal().custody().generation()
+        && daemon.as_ref() == Some(admission.principal().custody().daemon_instance()))
 }
 
 async fn stamp_agent_presence(

@@ -22,8 +22,9 @@ use silverhand_backend_core::{
     runtime_event::{
         CommitRuntimeExit, DaemonEventDurablePort, ProjectRuntimeStatus,
         RefineRuntimeToolCallInput, RuntimeActivityFact, RuntimeActivityKind,
-        RuntimeActivityPayload, RuntimeExitCommitResult, RuntimeExitDisposition,
-        RuntimeObservedStatus, StampRuntimePresence, UpsertRuntimeTextActivity,
+        RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitCommitResult,
+        RuntimeExitDisposition, RuntimeObservedStatus, StampRuntimePresence,
+        UpsertRuntimeTextActivity,
     },
 };
 
@@ -70,11 +71,11 @@ pub(crate) struct DaemonRuntimeEventOwner<P> {
 
 #[derive(Default)]
 struct RuntimeOwnerState {
-    runs: HashMap<RuntimePrincipal, AgentRunStateWire>,
-    pending_text: HashMap<RuntimePrincipal, PendingTextActivity>,
-    timeout_reasons: HashMap<RuntimePrincipal, InitTimeoutReason>,
-    init_failed: HashSet<RuntimePrincipal>,
-    fatal: HashSet<RuntimePrincipal>,
+    runs: HashMap<RuntimeEventAdmission, AgentRunStateWire>,
+    pending_text: HashMap<RuntimeEventAdmission, PendingTextActivity>,
+    timeout_reasons: HashMap<RuntimeEventAdmission, InitTimeoutReason>,
+    init_failed: HashSet<RuntimeEventAdmission>,
+    fatal: HashSet<RuntimeEventAdmission>,
 }
 
 #[derive(Clone)]
@@ -108,6 +109,7 @@ where
 
     pub(crate) async fn hydrate(
         &self,
+        host_id: &str,
         runtimes: Vec<HydratedRuntime>,
     ) -> Result<(), DaemonRuntimeEventError> {
         let mut state = self
@@ -118,24 +120,32 @@ where
             .iter()
             .map(|runtime| runtime.principal.custody().daemon_instance().clone())
             .collect::<HashSet<_>>();
-        state.runs.retain(|principal, _| {
-            !hydrated_daemons.contains(principal.custody().daemon_instance())
+        state.runs.retain(|admission, _| {
+            admission.host_id() != host_id
+                || !hydrated_daemons.contains(admission.principal().custody().daemon_instance())
         });
-        state.pending_text.retain(|principal, _| {
-            !hydrated_daemons.contains(principal.custody().daemon_instance())
+        state.pending_text.retain(|admission, _| {
+            admission.host_id() != host_id
+                || !hydrated_daemons.contains(admission.principal().custody().daemon_instance())
         });
-        state.timeout_reasons.retain(|principal, _| {
-            !hydrated_daemons.contains(principal.custody().daemon_instance())
+        state.timeout_reasons.retain(|admission, _| {
+            admission.host_id() != host_id
+                || !hydrated_daemons.contains(admission.principal().custody().daemon_instance())
         });
-        state
-            .init_failed
-            .retain(|principal| !hydrated_daemons.contains(principal.custody().daemon_instance()));
-        state
-            .fatal
-            .retain(|principal| !hydrated_daemons.contains(principal.custody().daemon_instance()));
+        state.init_failed.retain(|admission| {
+            admission.host_id() != host_id
+                || !hydrated_daemons.contains(admission.principal().custody().daemon_instance())
+        });
+        state.fatal.retain(|admission| {
+            admission.host_id() != host_id
+                || !hydrated_daemons.contains(admission.principal().custody().daemon_instance())
+        });
         for runtime in runtimes {
             if let Some(run_state) = runtime.run_state {
-                state.runs.insert(runtime.principal, run_state);
+                state.runs.insert(
+                    RuntimeEventAdmission::new(host_id.to_owned(), runtime.principal),
+                    run_state,
+                );
             }
         }
         Ok(())
@@ -143,41 +153,49 @@ where
 
     pub(crate) fn detach_daemon(
         &self,
+        host_id: &str,
         daemon: &DaemonInstanceId,
     ) -> Result<(), DaemonRuntimeEventError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
-        state
-            .runs
-            .retain(|principal, _| principal.custody().daemon_instance() != daemon);
-        state
-            .pending_text
-            .retain(|principal, _| principal.custody().daemon_instance() != daemon);
-        state
-            .timeout_reasons
-            .retain(|principal, _| principal.custody().daemon_instance() != daemon);
-        state
-            .init_failed
-            .retain(|principal| principal.custody().daemon_instance() != daemon);
-        state
-            .fatal
-            .retain(|principal| principal.custody().daemon_instance() != daemon);
+        state.runs.retain(|admission, _| {
+            admission.host_id() != host_id
+                || admission.principal().custody().daemon_instance() != daemon
+        });
+        state.pending_text.retain(|admission, _| {
+            admission.host_id() != host_id
+                || admission.principal().custody().daemon_instance() != daemon
+        });
+        state.timeout_reasons.retain(|admission, _| {
+            admission.host_id() != host_id
+                || admission.principal().custody().daemon_instance() != daemon
+        });
+        state.init_failed.retain(|admission| {
+            admission.host_id() != host_id
+                || admission.principal().custody().daemon_instance() != daemon
+        });
+        state.fatal.retain(|admission| {
+            admission.host_id() != host_id
+                || admission.principal().custody().daemon_instance() != daemon
+        });
         Ok(())
     }
 
     pub(crate) async fn handle(
         &self,
+        host_id: &str,
         daemon: &DaemonInstanceId,
         event: RuntimeProductEvent,
     ) -> Result<RuntimeEventDirective, DaemonRuntimeEventError> {
         match event {
             RuntimeProductEvent::State(event) => {
-                let principal = self
-                    .current_principal(daemon, event.coordinate.scope()?)
+                let admission = self
+                    .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
-                if principal.custody().generation().as_i64() != event.runtime_generation {
+                if admission.principal().custody().generation().as_i64() != event.runtime_generation
+                {
                     return Ok(RuntimeEventDirective::None);
                 }
                 {
@@ -186,11 +204,11 @@ where
                         .lock()
                         .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
                     if event.state.terminal_reason.is_none() {
-                        state.timeout_reasons.remove(&principal);
-                        state.init_failed.remove(&principal);
-                        state.fatal.remove(&principal);
+                        state.timeout_reasons.remove(&admission);
+                        state.init_failed.remove(&admission);
+                        state.fatal.remove(&admission);
                     }
-                    state.runs.insert(principal, event.state.clone());
+                    state.runs.insert(admission, event.state.clone());
                 }
                 self.publish(
                     event.coordinate.conversation()?,
@@ -199,8 +217,8 @@ where
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::Output(event) => {
-                let _principal = self
-                    .current_principal(daemon, event.coordinate.scope()?)
+                let _admission = self
+                    .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
                 tracing::info!(
                     runtime_event = "runtime_output",
@@ -214,13 +232,18 @@ where
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::ReadyForDrain(event) => {
-                let principal = self
-                    .principal_for_generation(daemon, &event.coordinate, event.runtime_generation)
+                let admission = self
+                    .admission_for_generation(
+                        host_id,
+                        daemon,
+                        &event.coordinate,
+                        event.runtime_generation,
+                    )
                     .await?;
                 if !self
                     .durable
                     .project_status(ProjectRuntimeStatus::new(
-                        principal,
+                        admission,
                         RuntimeObservedStatus::Active,
                         None,
                         RuntimeEventTime::from_unix_millis(event.ts),
@@ -243,8 +266,13 @@ where
                 })
             }
             RuntimeProductEvent::InitTimeout(event) => {
-                let principal = self
-                    .principal_for_generation(daemon, &event.coordinate, event.runtime_generation)
+                let admission = self
+                    .admission_for_generation(
+                        host_id,
+                        daemon,
+                        &event.coordinate,
+                        event.runtime_generation,
+                    )
                     .await?;
                 {
                     let mut state = self
@@ -253,9 +281,9 @@ where
                         .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
                     state
                         .timeout_reasons
-                        .insert(principal.clone(), event.timeout_reason);
+                        .insert(admission.clone(), event.timeout_reason);
                     if !event.retrying {
-                        state.init_failed.insert(principal);
+                        state.init_failed.insert(admission);
                     }
                 }
                 self.publish(
@@ -274,20 +302,25 @@ where
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::InitRetrying(event) => {
-                let principal = self
-                    .principal_for_generation(daemon, &event.coordinate, event.runtime_generation)
+                let admission = self
+                    .admission_for_generation(
+                        host_id,
+                        daemon,
+                        &event.coordinate,
+                        event.runtime_generation,
+                    )
                     .await?;
                 let timeout = self
                     .state
                     .lock()
                     .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?
                     .timeout_reasons
-                    .get(&principal)
+                    .get(&admission)
                     .copied();
                 if self
                     .durable
                     .project_status(ProjectRuntimeStatus::new(
-                        principal,
+                        admission,
                         RuntimeObservedStatus::Starting,
                         None,
                         RuntimeEventTime::from_unix_millis(event.ts),
@@ -308,21 +341,26 @@ where
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::InitCooldown(event) => {
-                let principal = self
-                    .principal_for_generation(daemon, &event.coordinate, event.runtime_generation)
+                let admission = self
+                    .admission_for_generation(
+                        host_id,
+                        daemon,
+                        &event.coordinate,
+                        event.runtime_generation,
+                    )
                     .await?;
                 {
                     let mut state = self
                         .state
                         .lock()
                         .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
-                    state.timeout_reasons.remove(&principal);
-                    state.init_failed.insert(principal.clone());
+                    state.timeout_reasons.remove(&admission);
+                    state.init_failed.insert(admission.clone());
                 }
                 if self
                     .durable
                     .project_status(ProjectRuntimeStatus::new(
-                        principal,
+                        admission,
                         RuntimeObservedStatus::Crashed,
                         None,
                         RuntimeEventTime::from_unix_millis(event.ts),
@@ -342,8 +380,8 @@ where
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::CompactionStale(event) => {
-                let _principal = self
-                    .current_principal(daemon, event.coordinate.scope()?)
+                let _admission = self
+                    .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
                 self.publish(
                     event.coordinate.conversation()?,
@@ -355,30 +393,30 @@ where
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::OutputDropped(event) => {
-                let _principal = self
-                    .current_principal(daemon, event.coordinate.scope()?)
+                let _admission = self
+                    .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
                 tracing::warn!(runtime_event = "runtime_output_dropped", conversation_id = %event.coordinate.conversation_id, agent_id = %event.coordinate.agent_id, dropped_count = event.dropped_count, bytes_dropped = event.bytes_dropped, since_ts = event.since_ts, "daemon runtime output dropped");
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::OutputPaused(event) => {
-                let _principal = self
-                    .current_principal(daemon, event.coordinate.scope()?)
+                let _admission = self
+                    .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
                 tracing::info!(runtime_event = "runtime_output_paused", conversation_id = %event.coordinate.conversation_id, agent_id = %event.coordinate.agent_id, "daemon runtime output paused");
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::OutputResumed(event) => {
-                let _principal = self
-                    .current_principal(daemon, event.coordinate.scope()?)
+                let _admission = self
+                    .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
                 tracing::info!(runtime_event = "runtime_output_resumed", conversation_id = %event.coordinate.conversation_id, agent_id = %event.coordinate.agent_id, "daemon runtime output resumed");
                 Ok(RuntimeEventDirective::None)
             }
-            RuntimeProductEvent::Parsed(event) => self.handle_parsed(daemon, event).await,
+            RuntimeProductEvent::Parsed(event) => self.handle_parsed(host_id, daemon, event).await,
             RuntimeProductEvent::ParsedDropped(event) => {
-                let principal = self
-                    .current_principal(daemon, event.coordinate.scope()?)
+                let admission = self
+                    .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
                 let fact = RuntimeActivityFact::new(
                     event.coordinate.conversation()?,
@@ -391,12 +429,17 @@ where
                     },
                     RuntimeEventTime::from_unix_millis(event.ts),
                 );
-                self.record_and_publish(principal, fact, None).await?;
+                self.record_and_publish(admission, fact, None).await?;
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::MessageStale(event) => {
-                let principal = self
-                    .principal_for_generation(daemon, &event.coordinate, event.runtime_generation)
+                let admission = self
+                    .admission_for_generation(
+                        host_id,
+                        daemon,
+                        &event.coordinate,
+                        event.runtime_generation,
+                    )
                     .await?;
                 let fact = RuntimeActivityFact::new(
                     event.coordinate.conversation()?,
@@ -405,7 +448,7 @@ where
                     RuntimeActivityPayload::None,
                     RuntimeEventTime::from_unix_millis(event.ts),
                 );
-                self.record_and_publish(principal, fact, None).await?;
+                self.record_and_publish(admission, fact, None).await?;
                 Ok(RuntimeEventDirective::None)
             }
         }
@@ -413,6 +456,7 @@ where
 
     pub(crate) fn prepare_exit(
         &self,
+        host_id: &str,
         principal: RuntimePrincipal,
         code: Option<i64>,
         intentional: bool,
@@ -422,11 +466,12 @@ where
             .state
             .lock()
             .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
-        state.pending_text.remove(&principal);
-        let failed = state.init_failed.contains(&principal) || state.fatal.contains(&principal);
+        let admission = RuntimeEventAdmission::new(host_id.to_owned(), principal);
+        state.pending_text.remove(&admission);
+        let failed = state.init_failed.contains(&admission) || state.fatal.contains(&admission);
         let status = runtime_exit_status(failed, false, intentional, code);
         Ok(CommitRuntimeExit::new(
-            principal,
+            admission,
             status,
             RuntimeEventTime::from_unix_millis(observed_at),
             None,
@@ -459,7 +504,7 @@ where
 
     pub(crate) fn complete_exit_state(
         &self,
-        principal: &RuntimePrincipal,
+        admission: &RuntimeEventAdmission,
         result: &RuntimeExitCommitResult,
         conversation: ConversationId,
         code: Option<i64>,
@@ -473,16 +518,16 @@ where
                 .state
                 .lock()
                 .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
-            let init_failed = state.init_failed.remove(principal);
-            let fatal = state.fatal.remove(principal);
-            state.timeout_reasons.remove(principal);
-            let run_state = state.runs.remove(principal);
+            let init_failed = state.init_failed.remove(admission);
+            let fatal = state.fatal.remove(admission);
+            state.timeout_reasons.remove(admission);
+            let run_state = state.runs.remove(admission);
             (init_failed, fatal, run_state)
         };
         let status = runtime_exit_status(init_failed, fatal, intentional, code).as_str();
         Ok(Some(RuntimeExitPostCommit {
             conversation,
-            agent: principal.agent().clone(),
+            agent: admission.principal().agent().clone(),
             status,
             code,
             intentional,
@@ -509,11 +554,12 @@ where
 
     async fn handle_parsed(
         &self,
+        host_id: &str,
         daemon: &DaemonInstanceId,
         event: RuntimeParsedEvent,
     ) -> Result<RuntimeEventDirective, DaemonRuntimeEventError> {
-        let principal = self
-            .principal_for_generation(daemon, &event.coordinate, event.runtime_generation)
+        let admission = self
+            .admission_for_generation(host_id, daemon, &event.coordinate, event.runtime_generation)
             .await?;
         if let ParsedEventWire::InputLifecycle {
             command_uuid,
@@ -536,14 +582,14 @@ where
                 .lock()
                 .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?
                 .fatal
-                .insert(principal.clone());
+                .insert(admission.clone());
         }
         let (directive, status_payload) =
             if let ParsedEventWire::SessionInit { session_id } = &event.parsed {
                 let projected = self
                     .durable
                     .project_status(ProjectRuntimeStatus::new(
-                        principal.clone(),
+                        admission.clone(),
                         RuntimeObservedStatus::Active,
                         Some(session_id.clone()),
                         RuntimeEventTime::from_unix_millis(event.ts),
@@ -566,7 +612,7 @@ where
         let activity_projection = match &event.parsed {
             ParsedEventWire::Thinking { text } => {
                 self.upsert_text_and_publish(
-                    principal,
+                    admission,
                     &event.coordinate,
                     RuntimeActivityKind::Thinking,
                     text,
@@ -577,7 +623,7 @@ where
             }
             ParsedEventWire::Text { text } => {
                 self.upsert_text_and_publish(
-                    principal,
+                    admission,
                     &event.coordinate,
                     RuntimeActivityKind::Text,
                     text,
@@ -590,12 +636,12 @@ where
                 tool_call_id,
                 input,
             } => {
-                self.clear_pending_text(&principal)?;
+                self.clear_pending_text(&admission)?;
                 let input = sanitize_json_value(input, 0);
                 let Some(committed) = self
                     .durable
                     .refine_tool_call_input(RefineRuntimeToolCallInput::new(
-                        principal,
+                        admission,
                         event.coordinate.conversation()?,
                         event.coordinate.agent()?,
                         tool_call_id.clone(),
@@ -629,15 +675,15 @@ where
                 finish_live_effects([presence, agent_projection, activity])
             }
             _ => {
-                self.clear_pending_text(&principal)?;
+                self.clear_pending_text(&admission)?;
                 if let Some(fact) = event.parsed.activity(&event.coordinate, event.ts)? {
-                    self.record_and_publish(principal, fact, Some(agent_event.clone()))
+                    self.record_and_publish(admission, fact, Some(agent_event.clone()))
                         .await
                 } else {
                     let viewers = self
                         .durable
                         .stamp_presence(StampRuntimePresence::new(
-                            principal,
+                            admission,
                             event.coordinate.agent()?,
                             RuntimeEventTime::from_unix_millis(presence_now()),
                         ))
@@ -664,19 +710,19 @@ where
 
     fn clear_pending_text(
         &self,
-        principal: &RuntimePrincipal,
+        admission: &RuntimeEventAdmission,
     ) -> Result<(), DaemonRuntimeEventError> {
         self.state
             .lock()
             .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?
             .pending_text
-            .remove(principal);
+            .remove(admission);
         Ok(())
     }
 
     async fn upsert_text_and_publish(
         &self,
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         coordinate: &RuntimeCoordinate,
         kind: RuntimeActivityKind,
         fragment: &str,
@@ -687,7 +733,7 @@ where
             let viewers = self
                 .durable
                 .stamp_presence(StampRuntimePresence::new(
-                    principal,
+                    admission,
                     coordinate.agent()?,
                     RuntimeEventTime::from_unix_millis(presence_now()),
                 ))
@@ -704,15 +750,15 @@ where
                 .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
             if state
                 .pending_text
-                .get(&principal)
+                .get(&admission)
                 .is_some_and(|pending| pending.kind != kind)
             {
-                state.pending_text.remove(&principal);
+                state.pending_text.remove(&admission);
             }
             let pending =
                 state
                     .pending_text
-                    .entry(principal.clone())
+                    .entry(admission.clone())
                     .or_insert(PendingTextActivity {
                         conversation: coordinate.conversation()?,
                         agent: coordinate.agent()?,
@@ -745,7 +791,7 @@ where
         let id = self
             .durable
             .upsert_text_activity(UpsertRuntimeTextActivity::new(
-                principal.clone(),
+                admission.clone(),
                 fact.clone(),
                 previous_event_id,
                 RuntimeEventTime::from_unix_millis(presence_now()),
@@ -757,7 +803,7 @@ where
                 .state
                 .lock()
                 .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
-            if let Some(pending) = state.pending_text.get_mut(&principal)
+            if let Some(pending) = state.pending_text.get_mut(&admission)
                 && pending.kind == kind
             {
                 pending.event_id = Some(id.id());
@@ -782,14 +828,14 @@ where
 
     async fn record_and_publish(
         &self,
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         fact: RuntimeActivityFact,
         agent_event: Option<DaemonSideEvent>,
     ) -> Result<(), DaemonRuntimeEventError> {
         let id = self
             .durable
             .record_activity(
-                principal,
+                admission,
                 fact.clone(),
                 RuntimeEventTime::from_unix_millis(presence_now()),
             )
@@ -814,28 +860,30 @@ where
         finish_live_effects([presence, agent_projection, activity])
     }
 
-    async fn current_principal(
+    async fn current_admission(
         &self,
+        host_id: &str,
         daemon: &DaemonInstanceId,
         scope: RuntimeScope,
-    ) -> Result<RuntimePrincipal, DaemonRuntimeEventError> {
-        let principal = self
+    ) -> Result<RuntimeEventAdmission, DaemonRuntimeEventError> {
+        let admission = self
             .durable
-            .current_principal(scope)
+            .current_admission(host_id.to_owned(), scope)
             .await?
             .ok_or(DaemonRuntimeEventError::StaleRuntime)?;
-        if principal.custody().daemon_instance() != daemon {
+        if admission.principal().custody().daemon_instance() != daemon {
             return Err(DaemonRuntimeEventError::StaleRuntime);
         }
-        Ok(principal)
+        Ok(admission)
     }
 
-    async fn principal_for_generation(
+    async fn admission_for_generation(
         &self,
+        host_id: &str,
         daemon: &DaemonInstanceId,
         coordinate: &RuntimeCoordinate,
         generation: i64,
-    ) -> Result<RuntimePrincipal, DaemonRuntimeEventError> {
+    ) -> Result<RuntimeEventAdmission, DaemonRuntimeEventError> {
         let principal = RuntimePrincipal::for_scope(
             coordinate.scope()?,
             RuntimeCustody::new(
@@ -843,11 +891,14 @@ where
                 daemon.clone(),
             ),
         );
-        let current = self.durable.current_principal(principal.scope()).await?;
-        if current.as_ref() != Some(&principal) {
+        let current = self
+            .durable
+            .current_admission(host_id.to_owned(), principal.scope())
+            .await?;
+        if current.as_ref().map(RuntimeEventAdmission::principal) != Some(&principal) {
             return Err(DaemonRuntimeEventError::StaleRuntime);
         }
-        Ok(principal)
+        Ok(current.expect("current admission was compared as present"))
     }
 
     fn publish_status(

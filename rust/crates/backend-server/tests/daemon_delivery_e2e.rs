@@ -28,8 +28,8 @@ use silverhand_backend_core::{
     runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, ProjectRuntimeStatus,
         RefineRuntimeToolCallInput, RuntimeActivityCommitResult, RuntimeActivityFact,
-        RuntimeConsumedCommitResult, RuntimeExitCommitResult, RuntimeToolCallInputCommitResult,
-        StampRuntimePresence, UpsertRuntimeTextActivity,
+        RuntimeConsumedCommitResult, RuntimeEventAdmission, RuntimeExitCommitResult,
+        RuntimeToolCallInputCommitResult, StampRuntimePresence, UpsertRuntimeTextActivity,
     },
 };
 use silverhand_backend_server::{
@@ -66,6 +66,7 @@ use tokio_tungstenite::{
 };
 
 const TOKEN: &str = "host-token";
+const TOKEN_2: &str = "host-token-2";
 const SESSION_TOKEN: &str = "session-token";
 const EVENT_ORIGIN: &str = "http://desktop.test";
 const AGENT: &str = "agent-delivery";
@@ -253,11 +254,12 @@ impl RuntimeInboxCustodyPort for CountingRuntimeDeliveryStore {
 }
 
 impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
-    async fn current_principal(
+    async fn current_admission(
         &self,
+        host_id: String,
         scope: RuntimeScope,
-    ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
-        self.inner.current_principal(scope).await
+    ) -> Result<Option<RuntimeEventAdmission>, PersistenceFailure> {
+        self.inner.current_admission(host_id, scope).await
     }
 
     async fn commit_exit(
@@ -284,12 +286,12 @@ impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
 
     async fn record_activity(
         &self,
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         event: RuntimeActivityFact,
         presence_at: RuntimeEventTime,
     ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
         self.inner
-            .record_activity(principal, event, presence_at)
+            .record_activity(admission, event, presence_at)
             .await
     }
 
@@ -514,6 +516,10 @@ async fn connect_with_token(
 }
 
 async fn send_ready(socket: &mut Socket, protocol_version: u32) {
+    send_ready_with_instance(socket, protocol_version, "instance-test").await;
+}
+
+async fn send_ready_with_instance(socket: &mut Socket, protocol_version: u32, instance_id: &str) {
     socket
         .send(Message::Text(
             json!({
@@ -523,7 +529,7 @@ async fn send_ready(socket: &mut Socket, protocol_version: u32) {
                 "protocol_version": protocol_version,
                 "daemon_version": "test",
                 "daemon_id": "daemon-test",
-                "instance_id": "instance-test",
+                "instance_id": instance_id,
                 "host_descriptor": { "name": "Test host", "kind": "remote" },
                 "capabilities": [],
                 "daemon_pid": 42,
@@ -850,7 +856,7 @@ async fn compatible_ready_cannot_finalize_or_settle_before_hydration_attaches() 
     custody
         .claim_or_current(ClaimRuntimeCustody::new(
             runtime_scope(),
-            DaemonInstanceId::parse("42:100").unwrap(),
+            DaemonInstanceId::parse("instance-test").unwrap(),
             RuntimeEventTime::from_unix_millis(10),
         ))
         .await
@@ -877,7 +883,7 @@ async fn compatible_ready_cannot_finalize_or_settle_before_hydration_attaches() 
     .fetch_one(&mut exit_db)
     .await
     .unwrap();
-    assert_eq!(daemon.as_deref(), Some("42:100"));
+    assert_eq!(daemon.as_deref(), Some("instance-test"));
     exit_fixture.controller.close().await;
     exit_fixture.server.abort();
 
@@ -1056,7 +1062,7 @@ async fn ambiguous_disconnect_releases_the_lease_but_preserves_custody_for_hydra
     assert_eq!(
         slot.get::<Option<String>, _>("claimed_by_daemon_instance_id")
             .as_deref(),
-        Some("42:100")
+        Some("instance-test")
     );
 
     fixture.controller.close().await;
@@ -1135,6 +1141,214 @@ async fn restart_hydration_stops_the_new_process_and_finalizes_old_daemon_custod
     );
 
     socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn authenticated_host_fences_colliding_daemon_instances_from_foreign_custody_and_cache() {
+    let fixture = fixture("host-bound-daemon-events.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::query(
+        "INSERT INTO hosts (id, name, kind, created_at, user_id)
+         VALUES ('host-2', 'host-2', 'remote', 1, 'user-1')",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO host_credentials (
+            id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at
+         ) VALUES ('credential-2', 'host-2', ?, 'long_lived', NULL, NULL, NULL)",
+    )
+    .bind(token_hash(TOKEN_2))
+    .execute(&mut db)
+    .await
+    .unwrap();
+
+    let mut live = connect_conversation_side(fixture.address).await;
+    let mut owner = connect(fixture.address).await;
+    complete_attachment(&mut owner, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut owner).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut owner,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+    send_product(
+        &mut owner,
+        product_frame(
+            "runtime_state",
+            Some(generation),
+            json!({
+                "state": {
+                    "runId": "owner-run",
+                    "agentId": AGENT,
+                    "conversationId": CONVERSATION,
+                    "status": "thinking",
+                    "startedAt": 10,
+                    "updatedAt": 11,
+                    "lastActivityAt": 11,
+                },
+                "ts": 11,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(next_json(&mut live).await["payload"]["runId"], "owner-run");
+
+    let mut foreign = connect_with_token(fixture.address, TOKEN_2).await.unwrap();
+    send_ready_with_instance(&mut foreign, OUTBOUND_PROTOCOL_VERSION, "instance-test").await;
+    let status = next_json(&mut foreign).await;
+    respond(
+        &mut foreign,
+        &status,
+        json!({
+            "runtimes": [{
+                "runtime_scope": {
+                    "kind": "conversation",
+                    "conversation_id": CONVERSATION,
+                    "agent_id": AGENT,
+                },
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+                "runtime_generation": generation,
+                "pid": 9,
+                "phase": "ready",
+                "run_state": {
+                    "runId": "forged-run",
+                    "agentId": AGENT,
+                    "conversationId": CONVERSATION,
+                    "status": "waiting",
+                    "startedAt": 20,
+                    "updatedAt": 21,
+                    "lastActivityAt": 21,
+                },
+                "started_at": 200,
+            }]
+        }),
+    )
+    .await;
+    let stop = next_json(&mut foreign).await;
+    assert_eq!(stop["kind"], "runtime_stop");
+    respond(
+        &mut foreign,
+        &stop,
+        json!({ "mode": "hard", "stopped": true, "exit_code": 0 }),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while fixture.controller.attached_connection_count() != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // The foreign host may describe the colliding daemon/scope, but its exit
+    // CAS is stale. A following heartbeat is a deterministic processing
+    // barrier before the persisted custody assertion.
+    send_runtime_exit(&mut foreign, generation, false, 30).await;
+    send_product(
+        &mut foreign,
+        json!({
+            "direction": "daemon_to_server",
+            "type": "heartbeat",
+            "kind": "ping",
+            "ts": 31,
+        }),
+    )
+    .await;
+    let pong = next_json(&mut foreign).await;
+    assert_eq!(pong["kind"], "pong");
+    assert_eq!(pong["echo_ts"], 31);
+    let claimed: Option<String> = sqlx::query_scalar(
+        "SELECT claimed_by_daemon_instance_id
+           FROM agent_runtime_slots
+          WHERE agent_id = ? AND conversation_id = ?",
+    )
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(claimed.as_deref(), Some("instance-test"));
+
+    send_product(
+        &mut foreign,
+        product_frame(
+            "runtime_state",
+            Some(generation),
+            json!({
+                "state": {
+                    "runId": "foreign-write",
+                    "agentId": AGENT,
+                    "conversationId": CONVERSATION,
+                    "status": "thinking",
+                    "startedAt": 30,
+                    "updatedAt": 31,
+                    "lastActivityAt": 31,
+                },
+                "ts": 31,
+            }),
+        ),
+    )
+    .await;
+    send_product(
+        &mut foreign,
+        json!({
+            "direction": "daemon_to_server",
+            "type": "heartbeat",
+            "kind": "ping",
+            "ts": 32,
+        }),
+    )
+    .await;
+    assert_eq!(next_json(&mut foreign).await["echo_ts"], 32);
+    foreign.close(None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while fixture.controller.attached_connection_count() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Detaching the foreign host's colliding instance cannot clear the real
+    // host's process cache. Exact owner exit still carries owner-run.
+    send_runtime_exit(&mut owner, generation, true, 40).await;
+    let exit = next_json(&mut live).await;
+    assert_eq!(exit["kind"], "agent_status");
+    assert_eq!(exit["payload"]["run_state"]["runId"], "owner-run");
+    let claimed: Option<String> = sqlx::query_scalar(
+        "SELECT claimed_by_daemon_instance_id
+           FROM agent_runtime_slots
+          WHERE agent_id = ? AND conversation_id = ?",
+    )
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert!(claimed.is_none());
+
+    live.close(None).await.unwrap();
+    owner.close(None).await.unwrap();
+    fixture.event_controller.close().await;
     fixture.controller.close().await;
     fixture.server.abort();
 }
@@ -1225,7 +1439,7 @@ async fn runtime_exit_finalizes_only_the_exact_generation_and_never_its_successo
     assert_eq!(
         slot.get::<Option<String>, _>("claimed_by_daemon_instance_id")
             .as_deref(),
-        Some("42:100")
+        Some("instance-test")
     );
 
     socket.close(None).await.unwrap();

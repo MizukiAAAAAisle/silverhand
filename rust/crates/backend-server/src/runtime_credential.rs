@@ -425,7 +425,7 @@ where
     where
         P: DaemonEventDurablePort,
     {
-        let principal = event.principal().clone();
+        let principal = event.admission().principal().clone();
         let _scope_guard = self.scope_guards.acquire(&principal.scope()).await;
         let disposition = durable.commit_exit(event).await?;
         if disposition.disposition() == RuntimeExitDisposition::Applied {

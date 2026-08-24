@@ -8,7 +8,8 @@ use silverhand_backend_core::{
     },
     runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, RuntimeActivityFact,
-        RuntimeActivityKind, RuntimeActivityPayload, RuntimeExitDisposition, RuntimeObservedStatus,
+        RuntimeActivityKind, RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitDisposition,
+        RuntimeObservedStatus,
     },
 };
 use silverhand_backend_sqlite::{
@@ -733,8 +734,7 @@ async fn consumed_settlement_and_non_replayable_activity_are_one_root_transactio
         panic!("pending rows must be claimed")
     };
     let input = CommitRuntimeConsumed::new(
-        "host-1".into(),
-        principal.clone(),
+        RuntimeEventAdmission::new("host-1".into(), principal.clone()),
         conversation.clone(),
         lease_owner.clone(),
         batch.delivery_ids(),
@@ -838,7 +838,7 @@ async fn exit_finalization_status_activity_and_lease_cleanup_are_one_root_transa
         RuntimeEventTime::from_unix_millis(300),
     );
     let input = CommitRuntimeExit::new(
-        principal.clone(),
+        RuntimeEventAdmission::new("host-1".into(), principal.clone()),
         RuntimeObservedStatus::Crashed,
         RuntimeEventTime::from_unix_millis(300),
         Some(pending),
@@ -927,7 +927,7 @@ async fn presence_audience_is_emitted_only_on_deterministic_away_to_online_edges
     let first = fixture
         .delivery
         .record_activity(
-            principal.clone(),
+            RuntimeEventAdmission::new("host-1".into(), principal.clone()),
             fact(1_000),
             RuntimeEventTime::from_unix_millis(1_000),
         )
@@ -946,7 +946,7 @@ async fn presence_audience_is_emitted_only_on_deterministic_away_to_online_edges
     let continuous = fixture
         .delivery
         .record_activity(
-            principal.clone(),
+            RuntimeEventAdmission::new("host-1".into(), principal.clone()),
             fact(2_000),
             RuntimeEventTime::from_unix_millis(2_000),
         )
@@ -959,7 +959,7 @@ async fn presence_audience_is_emitted_only_on_deterministic_away_to_online_edges
     let recovered = fixture
         .delivery
         .record_activity(
-            principal,
+            RuntimeEventAdmission::new("host-1".into(), principal),
             fact(recovered_at),
             RuntimeEventTime::from_unix_millis(recovered_at),
         )

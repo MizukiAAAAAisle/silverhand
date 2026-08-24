@@ -39,7 +39,7 @@ use silverhand_backend_core::{
         RuntimeDispatchTarget, RuntimeInboxCustodyPort, RuntimeMember, RuntimePlacement,
         RuntimeRoster, RuntimeSpawnPlan,
     },
-    runtime_event::{CommitRuntimeConsumed, DaemonEventDurablePort},
+    runtime_event::{CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission},
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -201,7 +201,7 @@ where
             .hydrated(attachment.daemon_instance.clone())
             .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         self.events
-            .hydrate(hydrated)
+            .hydrate(&attachment.host_id, hydrated)
             .await
             .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         let persisted = self
@@ -1187,7 +1187,7 @@ async fn connection<C, D, H>(
                 Some(Ok(Message::Text(text))) => {
                     let parsed = parse_daemon_frame(&text);
                     match parsed {
-                        Ok(DaemonFrame::Ready(ReadyFrame { protocol_version, daemon_pid, started_at })) => {
+                        Ok(DaemonFrame::Ready(ReadyFrame { protocol_version, instance_id })) => {
                             if protocol_version != OUTBOUND_PROTOCOL_VERSION {
                                 let _ = socket.send(Message::Close(Some(CloseFrame {
                                     code: 1002,
@@ -1195,7 +1195,7 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             }
-                            let Ok(instance) = silverhand_backend_core::runtime_delivery::daemon_instance_for_ready(daemon_pid, started_at) else {
+                            let Ok(instance) = DaemonInstanceId::parse(instance_id) else {
                                 break;
                             };
                             if compatible.is_some() {
@@ -1279,7 +1279,7 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             };
-                            finalize_runtime_event(&runtime, Some(instance), event).await;
+                            finalize_runtime_event(&runtime, &host_id, Some(instance), event).await;
                         }
                         Ok(DaemonFrame::Product(event)) => {
                             let Some(instance) = attached.as_ref() else {
@@ -1289,7 +1289,7 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             };
-                            match runtime.events.handle(instance, event).await {
+                            match runtime.events.handle(&host_id, instance, event).await {
                                 Ok(RuntimeEventDirective::None) => {}
                                 Ok(RuntimeEventDirective::Drain { conversation, agent }) => {
                                     let effect_runtime = runtime.clone();
@@ -1359,7 +1359,7 @@ async fn connection<C, D, H>(
         let _ = response.send(Err(CommandDispatchError::Ambiguous));
     }
     if let Some(instance) = attached.as_ref().or(compatible.as_ref())
-        && let Err(cause) = runtime.events.detach_daemon(instance)
+        && let Err(cause) = runtime.events.detach_daemon(&host_id, instance)
     {
         tracing::error!(
             error_chain = %error::describe(&cause),
@@ -1510,8 +1510,7 @@ async fn commit_consumed_event<C, D, H>(
         .events
         .durable()
         .commit_consumed(CommitRuntimeConsumed::new(
-            host_id.to_owned(),
-            principal,
+            RuntimeEventAdmission::new(host_id.to_owned(), principal),
             conversation.clone(),
             owner,
             delivery_ids,
@@ -1550,6 +1549,7 @@ async fn commit_consumed_event<C, D, H>(
 
 async fn finalize_runtime_event<C, D, H>(
     runtime: &DaemonDeliveryRuntime<C, D, H>,
+    host_id: &str,
     attached: Option<&DaemonInstanceId>,
     event: RuntimeExitEvent,
 ) where
@@ -1571,6 +1571,7 @@ async fn finalize_runtime_event<C, D, H>(
         }
     };
     let commit = match runtime.events.prepare_exit(
+        host_id,
         principal.clone(),
         event.code,
         event.intentional,
@@ -1586,6 +1587,7 @@ async fn finalize_runtime_event<C, D, H>(
             return;
         }
     };
+    let admission = commit.admission().clone();
     match runtime
         .credentials
         .commit_daemon_exit(runtime.events.durable(), commit)
@@ -1604,7 +1606,7 @@ async fn finalize_runtime_event<C, D, H>(
                 }
             };
             match runtime.events.complete_exit_state(
-                &principal,
+                &admission,
                 &result,
                 conversation,
                 event.code,
@@ -1680,8 +1682,7 @@ struct HeartbeatPongFrame {
 #[derive(Deserialize)]
 struct ReadyFrame {
     protocol_version: u32,
-    daemon_pid: i64,
-    started_at: i64,
+    instance_id: String,
 }
 
 #[derive(Deserialize)]

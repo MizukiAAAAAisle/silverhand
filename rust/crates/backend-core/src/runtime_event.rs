@@ -14,6 +14,28 @@ use crate::{
     runtime_delivery::{DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition},
 };
 
+/// One daemon event admission fact: the authenticated host and its exact live
+/// runtime custody are inseparable after the persistence boundary answers.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct RuntimeEventAdmission {
+    host_id: String,
+    principal: RuntimePrincipal,
+}
+
+impl RuntimeEventAdmission {
+    pub fn new(host_id: String, principal: RuntimePrincipal) -> Self {
+        Self { host_id, principal }
+    }
+
+    pub fn host_id(&self) -> &str {
+        &self.host_id
+    }
+
+    pub fn principal(&self) -> &RuntimePrincipal {
+        &self.principal
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeObservedStatus {
     Idle,
@@ -116,7 +138,7 @@ pub struct RuntimeActivityFact {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpsertRuntimeTextActivity {
-    principal: RuntimePrincipal,
+    admission: RuntimeEventAdmission,
     event: RuntimeActivityFact,
     previous_event_id: Option<i64>,
     presence_at: RuntimeEventTime,
@@ -124,21 +146,21 @@ pub struct UpsertRuntimeTextActivity {
 
 impl UpsertRuntimeTextActivity {
     pub fn new(
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         event: RuntimeActivityFact,
         previous_event_id: Option<i64>,
         presence_at: RuntimeEventTime,
     ) -> Self {
         Self {
-            principal,
+            admission,
             event,
             previous_event_id,
             presence_at,
         }
     }
 
-    pub fn principal(&self) -> &RuntimePrincipal {
-        &self.principal
+    pub fn admission(&self) -> &RuntimeEventAdmission {
+        &self.admission
     }
     pub fn event(&self) -> &RuntimeActivityFact {
         &self.event
@@ -174,7 +196,7 @@ impl RuntimeActivityCommitResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefineRuntimeToolCallInput {
-    principal: RuntimePrincipal,
+    admission: RuntimeEventAdmission,
     conversation: ConversationId,
     agent: AgentId,
     tool_call_id: String,
@@ -214,22 +236,26 @@ impl RuntimeToolCallInputCommitResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StampRuntimePresence {
-    principal: RuntimePrincipal,
+    admission: RuntimeEventAdmission,
     agent: AgentId,
     observed_at: RuntimeEventTime,
 }
 
 impl StampRuntimePresence {
-    pub fn new(principal: RuntimePrincipal, agent: AgentId, observed_at: RuntimeEventTime) -> Self {
+    pub fn new(
+        admission: RuntimeEventAdmission,
+        agent: AgentId,
+        observed_at: RuntimeEventTime,
+    ) -> Self {
         Self {
-            principal,
+            admission,
             agent,
             observed_at,
         }
     }
 
-    pub fn principal(&self) -> &RuntimePrincipal {
-        &self.principal
+    pub fn admission(&self) -> &RuntimeEventAdmission {
+        &self.admission
     }
 
     pub fn agent(&self) -> &AgentId {
@@ -263,7 +289,7 @@ impl RefinedRuntimeActivity {
 
 impl RefineRuntimeToolCallInput {
     pub fn new(
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         conversation: ConversationId,
         agent: AgentId,
         tool_call_id: String,
@@ -271,7 +297,7 @@ impl RefineRuntimeToolCallInput {
         observed_at: RuntimeEventTime,
     ) -> Self {
         Self {
-            principal,
+            admission,
             conversation,
             agent,
             tool_call_id,
@@ -280,8 +306,8 @@ impl RefineRuntimeToolCallInput {
         }
     }
 
-    pub fn principal(&self) -> &RuntimePrincipal {
-        &self.principal
+    pub fn admission(&self) -> &RuntimeEventAdmission {
+        &self.admission
     }
     pub fn conversation(&self) -> &ConversationId {
         &self.conversation
@@ -336,7 +362,7 @@ impl RuntimeActivityFact {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitRuntimeExit {
-    principal: RuntimePrincipal,
+    admission: RuntimeEventAdmission,
     status: RuntimeObservedStatus,
     observed_at: RuntimeEventTime,
     pending_activity: Option<RuntimeActivityFact>,
@@ -344,21 +370,21 @@ pub struct CommitRuntimeExit {
 
 impl CommitRuntimeExit {
     pub fn new(
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         status: RuntimeObservedStatus,
         observed_at: RuntimeEventTime,
         pending_activity: Option<RuntimeActivityFact>,
     ) -> Self {
         Self {
-            principal,
+            admission,
             status,
             observed_at,
             pending_activity,
         }
     }
 
-    pub fn principal(&self) -> &RuntimePrincipal {
-        &self.principal
+    pub fn admission(&self) -> &RuntimeEventAdmission {
+        &self.admission
     }
     pub fn status(&self) -> RuntimeObservedStatus {
         self.status
@@ -432,8 +458,7 @@ impl RuntimeConsumedCommitResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitRuntimeConsumed {
-    host_id: String,
-    principal: RuntimePrincipal,
+    admission: RuntimeEventAdmission,
     conversation: ConversationId,
     owner: DeliveryLeaseOwner,
     delivery_ids: Vec<InboxDeliveryId>,
@@ -443,8 +468,7 @@ pub struct CommitRuntimeConsumed {
 
 impl CommitRuntimeConsumed {
     pub fn new(
-        host_id: String,
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         conversation: ConversationId,
         owner: DeliveryLeaseOwner,
         delivery_ids: Vec<InboxDeliveryId>,
@@ -452,8 +476,7 @@ impl CommitRuntimeConsumed {
         presence_at: RuntimeEventTime,
     ) -> Self {
         Self {
-            host_id,
-            principal,
+            admission,
             conversation,
             owner,
             delivery_ids,
@@ -463,10 +486,13 @@ impl CommitRuntimeConsumed {
     }
 
     pub fn host_id(&self) -> &str {
-        &self.host_id
+        self.admission.host_id()
     }
     pub fn principal(&self) -> &RuntimePrincipal {
-        &self.principal
+        self.admission.principal()
+    }
+    pub fn admission(&self) -> &RuntimeEventAdmission {
+        &self.admission
     }
     pub fn conversation(&self) -> &ConversationId {
         &self.conversation
@@ -487,7 +513,7 @@ impl CommitRuntimeConsumed {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectRuntimeStatus {
-    principal: RuntimePrincipal,
+    admission: RuntimeEventAdmission,
     status: RuntimeObservedStatus,
     cli_session_id: Option<String>,
     observed_at: RuntimeEventTime,
@@ -495,21 +521,21 @@ pub struct ProjectRuntimeStatus {
 
 impl ProjectRuntimeStatus {
     pub fn new(
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         status: RuntimeObservedStatus,
         cli_session_id: Option<String>,
         observed_at: RuntimeEventTime,
     ) -> Self {
         Self {
-            principal,
+            admission,
             status,
             cli_session_id,
             observed_at,
         }
     }
 
-    pub fn principal(&self) -> &RuntimePrincipal {
-        &self.principal
+    pub fn admission(&self) -> &RuntimeEventAdmission {
+        &self.admission
     }
     pub fn status(&self) -> RuntimeObservedStatus {
         self.status
@@ -523,10 +549,11 @@ impl ProjectRuntimeStatus {
 }
 
 pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
-    fn current_principal(
+    fn current_admission(
         &self,
+        host_id: String,
         scope: crate::runtime_credential::RuntimeScope,
-    ) -> impl Future<Output = Result<Option<RuntimePrincipal>, PersistenceFailure>> + Send;
+    ) -> impl Future<Output = Result<Option<RuntimeEventAdmission>, PersistenceFailure>> + Send;
 
     fn commit_exit(
         &self,
@@ -545,7 +572,7 @@ pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
 
     fn record_activity(
         &self,
-        principal: RuntimePrincipal,
+        admission: RuntimeEventAdmission,
         event: RuntimeActivityFact,
         presence_at: RuntimeEventTime,
     ) -> impl Future<Output = Result<Option<RuntimeActivityCommitResult>, PersistenceFailure>> + Send;

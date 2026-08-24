@@ -5,7 +5,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
+    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{AddressedPrincipals, FromKind, MessageContent, PrincipalKind, ReferencePositions},
     persistence::PersistenceFailure,
     runtime_credential::{RuntimePrincipal, RuntimeScope},
@@ -351,10 +351,3 @@ pub fn runtime_scope_for(
 #[derive(Debug, Error)]
 #[error("persisted runtime session scope is unsupported")]
 pub struct InvalidRuntimeSessionScope;
-
-pub fn daemon_instance_for_ready(
-    daemon_pid: i64,
-    started_at_ms: i64,
-) -> Result<DaemonInstanceId, crate::identity::EmptyDaemonInstanceId> {
-    DaemonInstanceId::parse(format!("{daemon_pid}:{started_at_ms}"))
-}
