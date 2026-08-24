@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! HTTP, WebSocket and wire projection boundary.
 
+pub mod access;
 pub mod auth;
 mod bearer;
 pub mod daemon_delivery;
