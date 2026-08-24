@@ -246,24 +246,29 @@ where
     {
         Ok(outcome) => {
             // The enrollment is committed and answers `201` no matter what became of
-            // the announce — but the loss is not swallowed. This boundary owns
-            // observability, so it renders the whole cause chain exactly once, here,
-            // and nowhere else. `NotOwed` is silent BY CONSTRUCTION: a re-enrollment
-            // created nothing, so there is no lost notification to report and an
-            // "announce skipped" line would be noise indistinguishable from a real
-            // loss in a log search.
-            if let ViewerAnnounce::Failed(cause) = &outcome.announce {
-                tracing::error!(
-                    error_chain = %error::describe(cause),
+            // the announce — but the loss is not swallowed. `into_parts` is the only
+            // door into the outcome, so taking the member here necessarily hands us
+            // the announce in the same move. This boundary owns observability, so the
+            // announce is matched EXHAUSTIVELY (no `_` arm): a future new
+            // `ViewerAnnounce` arm breaks this build instead of being silently
+            // ignored.
+            let (member, announce) = outcome.into_parts();
+            match announce {
+                // The only case that leaves a client stale: render the whole cause
+                // chain exactly once, here, and nowhere else.
+                ViewerAnnounce::Failed(cause) => tracing::error!(
+                    error_chain = %error::describe(&cause),
                     "the new workspace membership was committed but its viewer announce was lost"
-                );
+                ),
+                // Both silent. `NotOwed` is silent BY CONSTRUCTION: a re-enrollment
+                // created nothing, so there is no lost notification to report and an
+                // "announce skipped" line would be noise indistinguishable from a real
+                // loss in a log search. `Delivered` needs no line either.
+                ViewerAnnounce::Delivered | ViewerAnnounce::NotOwed => {}
             }
             Ok((
                 StatusCode::CREATED,
-                Json(AddWorkspaceHumanMemberResponse::build(
-                    &user,
-                    outcome.member,
-                )),
+                Json(AddWorkspaceHumanMemberResponse::build(&user, member)),
             )
                 .into_response())
         }

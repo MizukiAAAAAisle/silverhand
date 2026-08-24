@@ -201,14 +201,17 @@ async fn an_admin_enrolls_a_new_human_at_member_role_and_the_clock_join_time() {
     let store = SqliteAccessStore::open(&path).await.unwrap();
     let sink = CountingSink::default();
 
-    let outcome = enroll(&store, &sink, human(ADMIN), TARGET).await.unwrap();
+    let (member, announce) = enroll(&store, &sink, human(ADMIN), TARGET)
+        .await
+        .unwrap()
+        .into_parts();
 
-    assert_eq!(outcome.member.role, WorkspaceRole::Member);
+    assert_eq!(member.role, WorkspaceRole::Member);
     assert_eq!(
-        outcome.member.joined_at_ms, JOIN_TIME_MS,
+        member.joined_at_ms, JOIN_TIME_MS,
         "a create stores exactly the candidate the clock produced"
     );
-    assert!(matches!(outcome.announce, ViewerAnnounce::Delivered));
+    assert!(matches!(announce, ViewerAnnounce::Delivered));
     assert_eq!(
         sink.announces.load(Ordering::SeqCst),
         1,
@@ -233,19 +236,22 @@ async fn a_re_enrollment_keeps_the_original_role_and_join_time_and_is_silent() {
     let store = SqliteAccessStore::open(&path).await.unwrap();
     let sink = CountingSink::default();
 
-    let outcome = enroll(&store, &sink, human(ADMIN), TARGET).await.unwrap();
+    let (member, announce) = enroll(&store, &sink, human(ADMIN), TARGET)
+        .await
+        .unwrap()
+        .into_parts();
 
     assert_eq!(
-        outcome.member.role,
+        member.role,
         WorkspaceRole::Owner,
         "the idempotent write never demotes the existing owner to member"
     );
     assert_eq!(
-        outcome.member.joined_at_ms, ORIGINAL_JOIN_MS,
+        member.joined_at_ms, ORIGINAL_JOIN_MS,
         "re-enrollment keeps the original join time, not the new clock read"
     );
     assert!(
-        matches!(outcome.announce, ViewerAnnounce::NotOwed),
+        matches!(announce, ViewerAnnounce::NotOwed),
         "no announce was OWED here — a different fact from one that was delivered"
     );
     assert_eq!(
@@ -268,9 +274,12 @@ async fn an_owner_actor_may_enroll() {
     let store = SqliteAccessStore::open(&path).await.unwrap();
     let sink = CountingSink::default();
 
-    let outcome = enroll(&store, &sink, human(OWNER), TARGET).await.unwrap();
+    let (member, _announce) = enroll(&store, &sink, human(OWNER), TARGET)
+        .await
+        .unwrap()
+        .into_parts();
 
-    assert_eq!(outcome.member.role, WorkspaceRole::Member);
+    assert_eq!(member.role, WorkspaceRole::Member);
     let mut probe = open_probe(&path).await;
     assert!(stored_membership(&mut probe, TARGET).await.is_some());
 }
@@ -282,11 +291,12 @@ async fn the_system_principal_may_enroll_without_a_role_row() {
     let sink = CountingSink::default();
 
     // System holds no workspace_users row; the rule admits it without one.
-    let outcome = enroll(&store, &sink, Principal::System, TARGET)
+    let (member, _announce) = enroll(&store, &sink, Principal::System, TARGET)
         .await
-        .unwrap();
+        .unwrap()
+        .into_parts();
 
-    assert_eq!(outcome.member.role, WorkspaceRole::Member);
+    assert_eq!(member.role, WorkspaceRole::Member);
     let mut probe = open_probe(&path).await;
     assert!(stored_membership(&mut probe, TARGET).await.is_some());
 }

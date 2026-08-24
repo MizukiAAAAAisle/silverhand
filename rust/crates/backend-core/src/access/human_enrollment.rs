@@ -209,13 +209,30 @@ pub enum ViewerAnnounce {
 ///
 /// The two travel together because they are one request's outcome: the membership
 /// is the product answer, and the announce is a side obligation that either was
-/// not owed, was met, or was lost. Returning them as one value is what makes the
-/// lost case impossible to drop silently — a caller destructures this to reach
-/// the member and therefore has the announce in hand.
+/// not owed, was met, or was lost. The fields are SEALED and reachable only through
+/// [`into_parts`](Self::into_parts), which yields both at once — so a caller cannot
+/// take the `member` while letting the [`ViewerAnnounce`] fall on the floor.
+///
+/// This is a *sealed outcome plus a `#[must_use]` guard*, not a linear type: Rust
+/// cannot force the returned value to be consumed at all. What it does force is that
+/// any consumer who opens it receives the announce in the same move and must name
+/// it, and `#[must_use]` makes an outright discard a warning. The one production
+/// consumer matches that announce exhaustively (no `_` arm), so a future new
+/// [`ViewerAnnounce`] arm breaks the build rather than being silently ignored.
 #[derive(Debug)]
+#[must_use = "a committed enrollment carries an announce outcome that must be recorded"]
 pub struct HumanEnrollmentOutcome {
-    pub member: WorkspaceUserMembership,
-    pub announce: ViewerAnnounce,
+    member: WorkspaceUserMembership,
+    announce: ViewerAnnounce,
+}
+
+impl HumanEnrollmentOutcome {
+    /// Split the outcome into its two halves at once: the committed membership and
+    /// the fate of its announce. This is the ONLY way to reach either, so a caller
+    /// that wants the member necessarily receives the announce in the same move.
+    pub fn into_parts(self) -> (WorkspaceUserMembership, ViewerAnnounce) {
+        (self.member, self.announce)
+    }
 }
 
 /// Whether `actor` may enroll a human, decided from the actor's workspace role as
@@ -422,7 +439,7 @@ mod tests {
             role: WorkspaceRole::Member,
         };
 
-        let outcome = add_workspace_human_member(
+        let (member, announce) = add_workspace_human_member(
             &uow,
             &sink,
             &FixedClock(1_700_000_000_123),
@@ -431,11 +448,12 @@ mod tests {
             UserId::parse("invitee").unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_parts();
 
-        assert_eq!(outcome.member.joined_at_ms, 1_700_000_000_123);
-        assert_eq!(outcome.member.role, WorkspaceRole::Member);
-        assert!(matches!(outcome.announce, ViewerAnnounce::Delivered));
+        assert_eq!(member.joined_at_ms, 1_700_000_000_123);
+        assert_eq!(member.role, WorkspaceRole::Member);
+        assert!(matches!(announce, ViewerAnnounce::Delivered));
         assert_eq!(
             sink.announces.load(Ordering::SeqCst),
             1,
@@ -451,7 +469,7 @@ mod tests {
             role: WorkspaceRole::Owner,
         };
 
-        let outcome = add_workspace_human_member(
+        let (member, announce) = add_workspace_human_member(
             &uow,
             &sink,
             &FixedClock(42),
@@ -460,15 +478,16 @@ mod tests {
             UserId::parse("owner").unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_parts();
 
         assert_eq!(
-            outcome.member.role,
+            member.role,
             WorkspaceRole::Owner,
             "a re-enrollment reports the unchanged role, never a demotion to member"
         );
         assert!(
-            matches!(outcome.announce, ViewerAnnounce::NotOwed),
+            matches!(announce, ViewerAnnounce::NotOwed),
             "nothing was created, so no announce was owed — not a delivered one"
         );
         assert_eq!(
@@ -486,7 +505,7 @@ mod tests {
             role: WorkspaceRole::Member,
         };
 
-        let outcome = add_workspace_human_member(
+        let (member, announce) = add_workspace_human_member(
             &uow,
             &sink,
             &FixedClock(7),
@@ -495,15 +514,16 @@ mod tests {
             UserId::parse("invitee").unwrap(),
         )
         .await
-        .expect("a lost announce is not an enrollment failure");
+        .expect("a lost announce is not an enrollment failure")
+        .into_parts();
 
         assert_eq!(
-            outcome.member.joined_at_ms, 7,
+            member.joined_at_ms, 7,
             "the committed membership stands exactly as written"
         );
         assert_eq!(sink.attempts.load(Ordering::SeqCst), 1);
 
-        let ViewerAnnounce::Failed(cause) = outcome.announce else {
+        let ViewerAnnounce::Failed(cause) = announce else {
             panic!("a refused sink must surface the loss, not report delivery");
         };
         // The transport's own error survives as the source, so a boundary can log

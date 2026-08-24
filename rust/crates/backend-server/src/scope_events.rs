@@ -4762,12 +4762,21 @@ mod tests {
     /// A regression that emitted the frame without committing, or committed without
     /// announcing, fails exactly one half.
     ///
-    /// A note on scope: the TS contract's *cold* half is a `['workspaces']` list
-    /// refetch, and there is no workspaces read model in this Rust tree yet — that
-    /// projection is a separate lane. The durable committed row IS the honest cold
-    /// evidence available here: it is what any future list read model would read.
+    /// Scope of the "authenticated" claim: the socket traverses the REAL perimeter
+    /// SEAM — the router's authenticate-then-authorize wiring, the real transport,
+    /// and the real hub as the enrollment's sink. But `Sessions`/`Allows` here are
+    /// test DOUBLES standing in for the session and scope authorities, so this pins
+    /// the seam and the frame path, NOT the real human-session authority. The
+    /// composed proof over the real `SqliteSessionStore` + `SqliteEventScopeAuthority`
+    /// is owed by the #2190 prerequisite, not claimed here.
+    ///
+    /// A note on the cold half: the TS contract's *cold* evidence is a `['workspaces']`
+    /// list refetch, and there is no workspaces read model in this Rust tree yet —
+    /// that projection is the same #2190 lane. The durable committed row is the honest
+    /// cold evidence available here: it is what any future list read model would read.
     #[tokio::test]
-    async fn one_enrollment_leaves_a_durable_row_and_a_live_viewer_frame() {
+    async fn one_enrollment_leaves_a_durable_row_and_a_live_frame_through_the_authenticated_perimeter_seam()
+     {
         #[derive(Clone, Copy)]
         struct FixedClock(i64);
         impl silverhand_backend_core::access::EnrollmentClock for FixedClock {
@@ -4821,7 +4830,7 @@ mod tests {
 
         // The production use case, driven through the REAL store and the REAL hub as
         // its sink — the same path the mounted surface will call.
-        let outcome = silverhand_backend_core::access::add_workspace_human_member(
+        let (_membership, announce) = silverhand_backend_core::access::add_workspace_human_member(
             &store,
             &hub,
             &FixedClock(JOIN_MS),
@@ -4832,10 +4841,11 @@ mod tests {
             user(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_parts();
         assert!(
             matches!(
-                outcome.announce,
+                announce,
                 silverhand_backend_core::access::ViewerAnnounce::Delivered
             ),
             "the hub accepted the announce"

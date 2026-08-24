@@ -184,11 +184,14 @@ async fn enroll(
 async fn an_admin_creates_a_member_at_the_clock_join_time_and_announces_once() {
     let fake = FakeAccess::default().with_role("admin", WorkspaceRole::Admin);
 
-    let outcome = enroll(&fake, human("admin"), "invitee").await.unwrap();
+    let (member, announce) = enroll(&fake, human("admin"), "invitee")
+        .await
+        .unwrap()
+        .into_parts();
 
-    assert_eq!(outcome.member.role, WorkspaceRole::Member);
-    assert_eq!(outcome.member.joined_at_ms, JOINED_AT_MS);
-    assert!(matches!(outcome.announce, ViewerAnnounce::Delivered));
+    assert_eq!(member.role, WorkspaceRole::Member);
+    assert_eq!(member.joined_at_ms, JOINED_AT_MS);
+    assert!(matches!(announce, ViewerAnnounce::Delivered));
     assert_eq!(fake.announces.lock().unwrap().as_slice(), ["invitee"]);
 }
 
@@ -198,19 +201,19 @@ async fn a_re_enrollment_keeps_the_existing_role_and_join_time_and_is_silent() {
         .with_role("admin", WorkspaceRole::Admin)
         .with_member("invitee", 111, WorkspaceRole::Owner);
 
-    let outcome = enroll(&fake, human("admin"), "invitee").await.unwrap();
+    let (member, announce) = enroll(&fake, human("admin"), "invitee")
+        .await
+        .unwrap()
+        .into_parts();
 
     assert_eq!(
-        outcome.member.role,
+        member.role,
         WorkspaceRole::Owner,
         "the idempotent write never demotes the existing owner"
     );
-    assert_eq!(
-        outcome.member.joined_at_ms, 111,
-        "the original join time is kept"
-    );
+    assert_eq!(member.joined_at_ms, 111, "the original join time is kept");
     assert!(
-        matches!(outcome.announce, ViewerAnnounce::NotOwed),
+        matches!(announce, ViewerAnnounce::NotOwed),
         "no announce was OWED — which is a different fact from one delivered"
     );
     assert!(
@@ -262,9 +265,12 @@ async fn an_agent_principal_can_never_enroll() {
 async fn the_system_principal_enrolls_without_a_role_row() {
     let fake = FakeAccess::default();
 
-    let outcome = enroll(&fake, Principal::System, "invitee").await.unwrap();
+    let (member, _announce) = enroll(&fake, Principal::System, "invitee")
+        .await
+        .unwrap()
+        .into_parts();
 
-    assert_eq!(outcome.member.role, WorkspaceRole::Member);
+    assert_eq!(member.role, WorkspaceRole::Member);
     assert_eq!(fake.announces.lock().unwrap().as_slice(), ["invitee"]);
 }
 
@@ -296,16 +302,19 @@ async fn a_failing_announce_does_not_flip_the_committed_enrollment() {
     // The write has committed by the time the announce runs; a sink failure can
     // never turn a committed create into an error — but it is reported, not
     // swallowed, so a caller cannot fail to notice the viewer went untold.
-    let outcome = enroll(&fake, human("admin"), "invitee").await.unwrap();
+    let (member, announce) = enroll(&fake, human("admin"), "invitee")
+        .await
+        .unwrap()
+        .into_parts();
 
-    assert_eq!(outcome.member.role, WorkspaceRole::Member);
+    assert_eq!(member.role, WorkspaceRole::Member);
     assert_eq!(
         fake.store.lock().unwrap().memberships.get("invitee"),
         Some(&(JOINED_AT_MS, WorkspaceRole::Member)),
         "the enrollment stands despite the failed announce"
     );
 
-    let ViewerAnnounce::Failed(cause) = outcome.announce else {
+    let ViewerAnnounce::Failed(cause) = announce else {
         panic!("a refused sink must be reported as a LOSS, not as NotOwed or Delivered");
     };
     // The sink's own error survives as the chain's tail, so the boundary that logs
