@@ -21,6 +21,8 @@
   "scripts": {
     "generate:backend-admission": "node scripts/generate-backend-admission.mjs",
     "check:backend-admission": "node scripts/generate-backend-admission.mjs --check",
+    "generate:daemon-admission": "node scripts/generate-daemon-admission.mjs",
+    "check:daemon-admission": "node scripts/generate-daemon-admission.mjs --check",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "test": "vitest run",

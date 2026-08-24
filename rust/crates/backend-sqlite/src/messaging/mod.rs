@@ -45,7 +45,7 @@ use sqlx::{
 use thiserror::Error;
 
 mod author;
-mod authorities;
+pub(crate) mod authorities;
 use author::{AuthorEvidence, resolve_authors};
 pub use authorities::{SqliteTargetAddress, TargetAddressStoreError};
 

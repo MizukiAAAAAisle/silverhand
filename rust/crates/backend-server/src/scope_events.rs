@@ -24,9 +24,10 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use silverhand_backend_core::{
     auth::{AuthenticateHumanSession, SessionBearer},
-    identity::{ConversationId, UserId, WorkspaceId},
+    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         post_commit::{DirectLineInvalidation, EffectFailure},
@@ -40,10 +41,6 @@ use tokio::{
 };
 
 include!(concat!(env!("OUT_DIR"), "/backend_admission.rs"));
-
-#[cfg(test)]
-#[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
-mod current_schema;
 
 const MAX_INBOUND_BYTES: usize = 64 * 1024;
 const REPLAY_CAPACITY: usize = 200;
@@ -207,10 +204,29 @@ enum ProductEvent {
     DirectPairsChanged {
         conversation_id: String,
     },
+    AgentActivity(Value),
+    AgentStatus(Value),
+    AgentInitTimeout(Value),
+    CompactionStale(Value),
+    AgentEvent(Value),
+    ConversationActivity(Value),
+    AgentPresenceChanged {
+        agent_id: String,
+    },
     #[cfg(test)]
     Test {
         value: String,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DaemonSideEvent {
+    AgentActivity(Value),
+    AgentStatus(Value),
+    AgentInitTimeout(Value),
+    CompactionStale(Value),
+    AgentEvent(Value),
+    ConversationActivity(Value),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -310,6 +326,37 @@ impl ScopeEventHub {
                 conversation_id: conversation.as_str().to_owned(),
             },
         )
+    }
+
+    pub(crate) fn publish_agent_presence_changed(
+        &self,
+        viewer: &UserId,
+        agent: &AgentId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::AgentPresenceChanged {
+                agent_id: agent.as_str().to_owned(),
+            },
+        )
+    }
+
+    pub(crate) fn publish_daemon_side(
+        &self,
+        conversation: &ConversationId,
+        event: DaemonSideEvent,
+    ) -> Result<(), ScopeEventHubError> {
+        let event = match event {
+            DaemonSideEvent::AgentActivity(payload) => ProductEvent::AgentActivity(payload),
+            DaemonSideEvent::AgentStatus(payload) => ProductEvent::AgentStatus(payload),
+            DaemonSideEvent::AgentInitTimeout(payload) => ProductEvent::AgentInitTimeout(payload),
+            DaemonSideEvent::CompactionStale(payload) => ProductEvent::CompactionStale(payload),
+            DaemonSideEvent::AgentEvent(payload) => ProductEvent::AgentEvent(payload),
+            DaemonSideEvent::ConversationActivity(payload) => {
+                ProductEvent::ConversationActivity(payload)
+            }
+        };
+        self.publish(EventScope::ConversationSide(conversation.clone()), event)
     }
 
     fn publish(&self, scope: EventScope, event: ProductEvent) -> Result<(), ScopeEventHubError> {
@@ -1308,7 +1355,7 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
-        identity::AgentId,
+        identity::{AgentId, DaemonInstanceId},
         messaging::{
             AddressedPrincipals, CapabilityDenied, DirectLineAuthority, DirectPairOpenedPort,
             DirectPairParticipants, EnvironmentUnavailable, MessageContent, OpenDirectPairError,
@@ -1325,7 +1372,9 @@ mod tests {
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
         scope_event::AuthorizeEventScope,
     };
-    use silverhand_backend_sqlite::messaging::MessagingStore;
+    use silverhand_backend_sqlite::{
+        messaging::MessagingStore, runtime_delivery::SqliteRuntimeDeliveryStore,
+    };
     use sqlx::{Connection, SqliteConnection};
     use tokio::sync::Barrier;
     use tokio_tungstenite::{
@@ -1333,6 +1382,12 @@ mod tests {
         tungstenite::{Message as ClientMessage, client::IntoClientRequest},
     };
     use tower::ServiceExt;
+
+    use crate::current_schema;
+    use crate::daemon_events::{
+        DaemonRuntimeEventOwner, ParsedEventWire, RuntimeCoordinate, RuntimeEventDirective,
+        RuntimeParsedEvent, RuntimeProductEvent, RuntimeScopeWire,
+    };
 
     use super::*;
 
@@ -1556,6 +1611,160 @@ mod tests {
         .unwrap();
         db.close().await.unwrap();
         (directory, path)
+    }
+
+    async fn runtime_event_database() -> (tempfile::TempDir, std::path::PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runtime-events.sqlite");
+        let mut db = current_schema::create_current_schema(&path).await;
+        sqlx::raw_sql(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('user-1', 'user', 'User', 1, 1);
+             INSERT INTO hosts (id, name, kind, created_at)
+             VALUES ('host-1', 'host', 'local', 1);
+             INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at)
+             VALUES ('workspace-1', 'Space', 'space', 'user-1', 1, 1);
+             INSERT INTO workspace_users (workspace_id, user_id, joined_at, role)
+             VALUES ('workspace-1', 'user-1', 1, 'owner');
+             INSERT INTO agents (
+               id, name, runtime, host_id, created_at, updated_at, display_name,
+               created_by_user_id, session_scope
+             ) VALUES (
+               'agent-1', 'agent', 'claude', 'host-1', 1, 1, 'Agent', 'user-1', 'agent'
+             );
+             INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+             VALUES ('workspace-1', 'agent-1', 1);
+             INSERT INTO conversations (
+               id, workspace_id, placement_kind, roster_policy, title, title_key,
+               status, visibility, created_at, updated_at
+             ) VALUES
+               ('conversation-1', 'workspace-1', 'workspace', 'fixed', 'First', 'first',
+                'active', 'private', 1, 1),
+               ('conversation-2', 'workspace-1', 'workspace', 'fixed', 'Second', 'second',
+                'active', 'private', 1, 1);
+             INSERT INTO conversation_users (conversation_id, user_id, joined_at)
+             VALUES ('conversation-1', 'user-1', 1), ('conversation-2', 'user-1', 1);
+             INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+             VALUES ('conversation-1', 'agent-1', 1), ('conversation-2', 'agent-1', 1);
+             UPDATE agent_runtime_slots
+                SET generation = 1, claimed_by_daemon_instance_id = 'daemon-1'
+              WHERE agent_id = 'agent-1' AND conversation_id IS NULL;",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        (directory, path)
+    }
+
+    #[tokio::test]
+    async fn session_init_attempts_every_live_audience_and_still_requests_one_drain() {
+        let (_directory, path) = runtime_event_database().await;
+        let durable = SqliteRuntimeDeliveryStore::open(&path).await.unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let first = ConversationId::parse("conversation-1").unwrap();
+        let second = ConversationId::parse("conversation-2").unwrap();
+        let first_scope = EventScope::ConversationSide(first.clone());
+        hub.scopes
+            .lock()
+            .unwrap()
+            .entry(first_scope.clone())
+            .or_insert_with(ScopeState::new)
+            .seq = TransportSeq(MAX_TRANSPORT_SEQ);
+        let owner = DaemonRuntimeEventOwner::new(durable, hub.clone());
+        let daemon = DaemonInstanceId::parse("daemon-1").unwrap();
+        let directive = owner
+            .handle(
+                "host-1",
+                &daemon,
+                RuntimeProductEvent::Parsed(RuntimeParsedEvent {
+                    coordinate: RuntimeCoordinate {
+                        runtime_scope: RuntimeScopeWire::Agent {
+                            agent_id: "agent-1".to_owned(),
+                        },
+                        conversation_id: first.as_str().to_owned(),
+                        agent_id: "agent-1".to_owned(),
+                    },
+                    runtime_generation: 1,
+                    parsed: ParsedEventWire::SessionInit {
+                        session_id: "session-1".to_owned(),
+                    },
+                    ts: 10,
+                }),
+            )
+            .await
+            .unwrap();
+
+        let RuntimeEventDirective::Drain {
+            conversation,
+            agent: drained_agent,
+            post_commit_failure,
+        } = directive
+        else {
+            panic!("a committed session init must request one drain")
+        };
+        assert_eq!(conversation, first);
+        assert_eq!(drained_agent, agent());
+        assert!(matches!(
+            post_commit_failure,
+            Some(crate::daemon_events::DaemonRuntimeEventError::Hub(
+                ScopeEventHubError::SequenceExhausted
+            ))
+        ));
+        assert_eq!(
+            hub.scopes.lock().unwrap()[&first_scope].seq,
+            TransportSeq(MAX_TRANSPORT_SEQ)
+        );
+        let second_events = hub
+            .resume(
+                &EventScope::ConversationSide(second),
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(second_events) = second_events.replay else {
+            panic!("the second status audience must receive a live projection")
+        };
+        assert_eq!(second_events.len(), 1);
+        assert!(matches!(
+            second_events[0].event,
+            ProductEvent::AgentStatus(_)
+        ));
+        let viewer_events = hub
+            .resume(
+                &EventScope::Viewer(user()),
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(viewer_events) = viewer_events.replay else {
+            panic!("the independent presence audience must still be attempted")
+        };
+        assert_eq!(viewer_events.len(), 1);
+        assert!(matches!(
+            viewer_events[0].event,
+            ProductEvent::AgentPresenceChanged { .. }
+        ));
+
+        let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        let status: String = sqlx::query_scalar(
+            "SELECT observed_status FROM agent_runtime_slots
+              WHERE agent_id = 'agent-1' AND conversation_id IS NULL",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        let activities: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM conversation_events
+              WHERE conversation_id = 'conversation-1' AND kind = 'session_init'",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        assert_eq!(status, "active");
+        assert_eq!(activities, 1);
     }
 
     async fn direct_pair_count(path: &std::path::Path) -> i64 {

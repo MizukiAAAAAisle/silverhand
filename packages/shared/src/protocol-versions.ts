@@ -23,12 +23,13 @@
  * (e.g. `z.literal(OUTBOUND_PROTOCOL_VERSION)`).
  */
 import { BACKEND_ADMISSION } from './backend-admission.generated.js';
+import { DAEMON_ADMISSION } from './daemon-admission.generated.js';
 
 export const PROTOCOL_VERSIONS = {
   /** CLI/backend ↔ local daemon (strict-equality hello gate). */
-  host: 11,
+  host: DAEMON_ADMISSION.hostProtocolVersion,
   /** Remote daemon ↔ standalone server (strict-equality hello gate). */
-  outbound: 10,
+  outbound: DAEMON_ADMISSION.outboundProtocolVersion,
   /** Desktop ↔ server current epoch (min-window range gate). */
   desktopApi: BACKEND_ADMISSION.desktopApi,
   /** Lowest client epoch this server build admits. */

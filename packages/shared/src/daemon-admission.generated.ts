@@ -1,0 +1,28 @@
+// Generated from daemon-admission.json. Do not edit by hand.
+export const DAEMON_ADMISSION = {
+  hostProtocolVersion: 11,
+  outboundProtocolVersion: 10,
+  hostWebSocketPath: "/api/hosts/connect",
+  updateRequiredCloseReason: "UPDATE_REQUIRED",
+  daemonEventKinds: {
+    "ready": "ready",
+    "shuttingDown": "shutting_down",
+    "runtimeState": "runtime_state",
+    "runtimeOutput": "runtime_output",
+    "runtimeExit": "runtime_exit",
+    "runtimeReadyForDrain": "runtime_ready_for_drain",
+    "runtimeDeliveryConsumed": "runtime_delivery_consumed",
+    "runtimeDeliveryFailed": "runtime_delivery_failed",
+    "runtimeInitTimeout": "runtime_init_timeout",
+    "runtimeInitRetrying": "runtime_init_retrying",
+    "runtimeInitCooldown": "runtime_init_cooldown",
+    "runtimeCompactionStale": "runtime_compaction_stale",
+    "runtimeOutputDropped": "runtime_output_dropped",
+    "runtimeOutputPaused": "runtime_output_paused",
+    "runtimeOutputResumed": "runtime_output_resumed",
+    "runtimeParsedEvent": "runtime_parsed_event",
+    "runtimeParsedEventDropped": "runtime_parsed_event_dropped",
+    "runtimeMessageStale": "runtime_message_stale"
+  },
+  parsedEventKinds: ["session_init","thinking","text","tool_call","tool_call_input","tool_output","turn_end","compaction_started","compaction_finished","input_lifecycle","api_response","error","unknown"],
+} as const;

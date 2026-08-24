@@ -13,4 +13,6 @@ pub mod identity;
 pub mod messaging;
 pub mod persistence;
 pub mod runtime_credential;
+pub mod runtime_delivery;
+pub mod runtime_event;
 pub mod scope_event;
