@@ -24,4 +24,5 @@ export const DAEMON_ADMISSION = {
     "runtimeParsedEventDropped": "runtime_parsed_event_dropped",
     "runtimeMessageStale": "runtime_message_stale"
   },
+  parsedEventKinds: ["session_init","thinking","text","tool_call","tool_call_input","tool_output","turn_end","compaction_started","compaction_finished","input_lifecycle","api_response","error","unknown"],
 } as const;

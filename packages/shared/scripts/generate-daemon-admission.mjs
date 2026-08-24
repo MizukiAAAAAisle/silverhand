@@ -44,6 +44,18 @@ function eventKinds(record) {
   return Object.fromEntries(entries);
 }
 
+function parsedEventKinds(record) {
+  const value = record.parsedEventKinds;
+  if (!Array.isArray(value) || value.length !== 13) {
+    fail('parsedEventKinds must contain 13 arms');
+  }
+  if (value.some(kind => typeof kind !== 'string' || kind.length === 0)) {
+    fail('parsedEventKinds must contain non-empty strings');
+  }
+  if (new Set(value).size !== value.length) fail('parsedEventKinds must be unique');
+  return value;
+}
+
 function render(record) {
   const hostProtocolVersion = positiveInteger(record, 'hostProtocolVersion');
   const outboundProtocolVersion = positiveInteger(
@@ -56,10 +68,11 @@ function render(record) {
     'updateRequiredCloseReason',
   );
   const daemonEventKinds = eventKinds(record);
+  const parsedKinds = parsedEventKinds(record);
   if (!hostWebSocketPath.startsWith('/')) {
     fail('hostWebSocketPath must be absolute');
   }
-  return `// Generated from daemon-admission.json. Do not edit by hand.\nexport const DAEMON_ADMISSION = {\n  hostProtocolVersion: ${hostProtocolVersion},\n  outboundProtocolVersion: ${outboundProtocolVersion},\n  hostWebSocketPath: ${JSON.stringify(hostWebSocketPath)},\n  updateRequiredCloseReason: ${JSON.stringify(updateRequiredCloseReason)},\n  daemonEventKinds: ${JSON.stringify(daemonEventKinds, null, 2).replaceAll('\n', '\n  ')},\n} as const;\n`;
+  return `// Generated from daemon-admission.json. Do not edit by hand.\nexport const DAEMON_ADMISSION = {\n  hostProtocolVersion: ${hostProtocolVersion},\n  outboundProtocolVersion: ${outboundProtocolVersion},\n  hostWebSocketPath: ${JSON.stringify(hostWebSocketPath)},\n  updateRequiredCloseReason: ${JSON.stringify(updateRequiredCloseReason)},\n  daemonEventKinds: ${JSON.stringify(daemonEventKinds, null, 2).replaceAll('\n', '\n  ')},\n  parsedEventKinds: ${JSON.stringify(parsedKinds)},\n} as const;\n`;
 }
 
 const expected = render(JSON.parse(readFileSync(source, 'utf8')));

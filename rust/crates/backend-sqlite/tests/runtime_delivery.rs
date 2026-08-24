@@ -7,9 +7,9 @@ use silverhand_backend_core::{
         RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeInboxCustodyPort,
     },
     runtime_event::{
-        CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, RuntimeActivityFact,
-        RuntimeActivityKind, RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitDisposition,
-        RuntimeObservedStatus,
+        CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
+        ProjectRuntimeStatus, RuntimeActivityFact, RuntimeActivityKind, RuntimeActivityPayload,
+        RuntimeEventAdmission, RuntimeExitDisposition, RuntimeObservedStatus,
     },
 };
 use silverhand_backend_sqlite::{
@@ -807,6 +807,219 @@ async fn consumed_settlement_and_non_replayable_activity_are_one_root_transactio
 }
 
 #[tokio::test]
+async fn session_init_status_presence_and_activity_are_one_root_transaction() {
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-session-init").await;
+    let conversation = ConversationId::parse(CONVERSATION).unwrap();
+    let input = CommitRuntimeSessionInit::new(
+        RuntimeEventAdmission::new("host-1".into(), principal),
+        conversation,
+        AgentId::parse(AGENT).unwrap(),
+        "cli-session-1".into(),
+        RuntimeEventTime::from_unix_millis(200),
+        RuntimeEventTime::from_unix_millis(201),
+    );
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql(
+        "CREATE TRIGGER fail_session_init_activity
+         BEFORE INSERT ON conversation_events
+         WHEN NEW.kind = 'session_init'
+         BEGIN SELECT RAISE(ABORT, 'session-init-activity-failure'); END;",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    assert!(
+        fixture
+            .delivery
+            .commit_session_init(input.clone())
+            .await
+            .is_err()
+    );
+    let row = sqlx::query(
+        "SELECT s.observed_status, s.cli_session_id, a.last_activity_at,
+                (SELECT COUNT(*) FROM agent_runtime_events WHERE event_kind = 'projection_updated') AS projections,
+                (SELECT COUNT(*) FROM conversation_events WHERE kind = 'session_init') AS activities
+           FROM agent_runtime_slots s JOIN agents a ON a.id = s.agent_id
+          WHERE s.conversation_id = ? AND s.agent_id = ?",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("observed_status"), "starting");
+    assert!(row.get::<Option<String>, _>("cli_session_id").is_none());
+    assert!(row.get::<Option<i64>, _>("last_activity_at").is_none());
+    assert_eq!(row.get::<i64, _>("projections"), 0);
+    assert_eq!(row.get::<i64, _>("activities"), 0);
+    sqlx::raw_sql("DROP TRIGGER fail_session_init_activity;")
+        .execute(&mut db)
+        .await
+        .unwrap();
+
+    let committed = fixture
+        .delivery
+        .commit_session_init(input)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.status_targets().len(), 1);
+    let row = sqlx::query(
+        "SELECT s.observed_status, s.cli_session_id, a.last_activity_at,
+                (SELECT COUNT(*) FROM conversation_events WHERE kind = 'session_init') AS activities
+           FROM agent_runtime_slots s JOIN agents a ON a.id = s.agent_id
+          WHERE s.conversation_id = ? AND s.agent_id = ?",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("observed_status"), "active");
+    assert_eq!(row.get::<String, _>("cli_session_id"), "cli-session-1");
+    assert_eq!(row.get::<i64, _>("last_activity_at"), 201);
+    assert_eq!(row.get::<i64, _>("activities"), 1);
+}
+
+#[tokio::test]
+async fn agent_slot_status_targets_every_placement_participation_and_only_origin_carries_detail() {
+    let fixture = fixture().await;
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql(
+        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, session_scope)
+         VALUES ('agent-aggregate', 'agent-aggregate', 'codex', 'host-1', 1, 1, 'Aggregate Agent', 'user-1', 'agent');
+         INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1);
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1);
+         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
+         VALUES ('conversation0002', 'workspace-1', 'workspace', 'fixed', 'Second', 'second', 'active', 1, 1),
+                ('conversation0003', 'workspace-1', 'workspace', 'open', 'Not Seated', 'not seated', 'active', 1, 1);
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES ('conversation0002', 'agent-aggregate', 1);
+         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at,
+                                    endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id)
+         VALUES ('conversation0004', NULL, 'direct_pair', 'fixed', 'DM', NULL, 'active', 1, 1,
+                 'agent', 'agent-aggregate', 'human', 'user-1');",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    let scope = RuntimeScope::AgentSlot {
+        agent: AgentId::parse("agent-aggregate").unwrap(),
+    };
+    let principal = fixture
+        .custody
+        .claim_or_current(ClaimRuntimeCustody::new(
+            scope,
+            DaemonInstanceId::parse("daemon-agent-slot").unwrap(),
+            RuntimeEventTime::from_unix_millis(10),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .into_principal();
+    let result = fixture
+        .delivery
+        .project_status(ProjectRuntimeStatus::new(
+            RuntimeEventAdmission::new("host-1".into(), principal),
+            ConversationId::parse(CONVERSATION).unwrap(),
+            RuntimeObservedStatus::Active,
+            None,
+            RuntimeEventTime::from_unix_millis(20),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let targets = result
+        .targets()
+        .iter()
+        .map(|target| {
+            (
+                target.conversation().as_str(),
+                target.carries_origin_detail(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        targets,
+        vec![
+            ("conversation0001", true),
+            ("conversation0002", false),
+            ("conversation0004", false),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_stale_exit_cannot_clear_the_successors_cli_session() {
+    let fixture = fixture().await;
+    let conversation = ConversationId::parse(CONVERSATION).unwrap();
+    let old = claim_runtime(&fixture, "daemon-old").await;
+    fixture
+        .delivery
+        .project_status(ProjectRuntimeStatus::new(
+            RuntimeEventAdmission::new("host-1".into(), old.clone()),
+            conversation.clone(),
+            RuntimeObservedStatus::Active,
+            Some("old-cli".into()),
+            RuntimeEventTime::from_unix_millis(20),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .delivery
+        .commit_exit(CommitRuntimeExit::new(
+            RuntimeEventAdmission::new("host-1".into(), old.clone()),
+            conversation.clone(),
+            RuntimeObservedStatus::Crashed,
+            false,
+            RuntimeEventTime::from_unix_millis(21),
+            None,
+        ))
+        .await
+        .unwrap();
+    let successor = claim_runtime(&fixture, "daemon-successor").await;
+    fixture
+        .delivery
+        .project_status(ProjectRuntimeStatus::new(
+            RuntimeEventAdmission::new("host-1".into(), successor),
+            conversation.clone(),
+            RuntimeObservedStatus::Active,
+            Some("successor-cli".into()),
+            RuntimeEventTime::from_unix_millis(22),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let stale = fixture
+        .delivery
+        .commit_exit(CommitRuntimeExit::new(
+            RuntimeEventAdmission::new("host-1".into(), old),
+            conversation,
+            RuntimeObservedStatus::Crashed,
+            true,
+            RuntimeEventTime::from_unix_millis(23),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(stale.disposition(), RuntimeExitDisposition::Stale);
+    let mut db = open(&fixture.path).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT cli_session_id FROM agent_runtime_slots WHERE conversation_id = ? AND agent_id = ?",
+        )
+        .bind(CONVERSATION)
+        .bind(AGENT)
+        .fetch_one(&mut db)
+        .await
+        .unwrap(),
+        "successor-cli"
+    );
+}
+
+#[tokio::test]
 async fn exit_finalization_status_activity_and_lease_cleanup_are_one_root_transaction() {
     let fixture = fixture().await;
     let principal = claim_runtime(&fixture, "daemon-exit").await;
@@ -829,7 +1042,7 @@ async fn exit_finalization_status_activity_and_lease_cleanup_are_one_root_transa
         panic!("pending rows must be claimed")
     };
     let pending = RuntimeActivityFact::new(
-        conversation,
+        conversation.clone(),
         AgentId::parse(AGENT).unwrap(),
         RuntimeActivityKind::Text,
         RuntimeActivityPayload::Text {
@@ -839,7 +1052,9 @@ async fn exit_finalization_status_activity_and_lease_cleanup_are_one_root_transa
     );
     let input = CommitRuntimeExit::new(
         RuntimeEventAdmission::new("host-1".into(), principal.clone()),
+        conversation,
         RuntimeObservedStatus::Crashed,
+        false,
         RuntimeEventTime::from_unix_millis(300),
         Some(pending),
     );

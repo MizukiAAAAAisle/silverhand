@@ -363,7 +363,9 @@ impl RuntimeActivityFact {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitRuntimeExit {
     admission: RuntimeEventAdmission,
+    origin_conversation: ConversationId,
     status: RuntimeObservedStatus,
+    clear_cli_session_id: bool,
     observed_at: RuntimeEventTime,
     pending_activity: Option<RuntimeActivityFact>,
 }
@@ -371,13 +373,17 @@ pub struct CommitRuntimeExit {
 impl CommitRuntimeExit {
     pub fn new(
         admission: RuntimeEventAdmission,
+        origin_conversation: ConversationId,
         status: RuntimeObservedStatus,
+        clear_cli_session_id: bool,
         observed_at: RuntimeEventTime,
         pending_activity: Option<RuntimeActivityFact>,
     ) -> Self {
         Self {
             admission,
+            origin_conversation,
             status,
+            clear_cli_session_id,
             observed_at,
             pending_activity,
         }
@@ -388,6 +394,12 @@ impl CommitRuntimeExit {
     }
     pub fn status(&self) -> RuntimeObservedStatus {
         self.status
+    }
+    pub fn origin_conversation(&self) -> &ConversationId {
+        &self.origin_conversation
+    }
+    pub fn clear_cli_session_id(&self) -> bool {
+        self.clear_cli_session_id
     }
     pub fn observed_at(&self) -> RuntimeEventTime {
         self.observed_at
@@ -407,13 +419,19 @@ pub enum RuntimeExitDisposition {
 pub struct RuntimeExitCommitResult {
     disposition: RuntimeExitDisposition,
     activity_id: Option<i64>,
+    status_targets: Vec<RuntimeStatusTarget>,
 }
 
 impl RuntimeExitCommitResult {
-    pub fn new(disposition: RuntimeExitDisposition, activity_id: Option<i64>) -> Self {
+    pub fn new(
+        disposition: RuntimeExitDisposition,
+        activity_id: Option<i64>,
+        status_targets: Vec<RuntimeStatusTarget>,
+    ) -> Self {
         Self {
             disposition,
             activity_id,
+            status_targets,
         }
     }
 
@@ -422,6 +440,47 @@ impl RuntimeExitCommitResult {
     }
     pub fn activity_id(&self) -> Option<i64> {
         self.activity_id
+    }
+    pub fn status_targets(&self) -> &[RuntimeStatusTarget] {
+        &self.status_targets
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeStatusTarget {
+    conversation: ConversationId,
+    carries_origin_detail: bool,
+}
+
+impl RuntimeStatusTarget {
+    pub fn new(conversation: ConversationId, carries_origin_detail: bool) -> Self {
+        Self {
+            conversation,
+            carries_origin_detail,
+        }
+    }
+
+    pub fn conversation(&self) -> &ConversationId {
+        &self.conversation
+    }
+
+    pub fn carries_origin_detail(&self) -> bool {
+        self.carries_origin_detail
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeStatusCommitResult {
+    targets: Vec<RuntimeStatusTarget>,
+}
+
+impl RuntimeStatusCommitResult {
+    pub fn new(targets: Vec<RuntimeStatusTarget>) -> Self {
+        Self { targets }
+    }
+
+    pub fn targets(&self) -> &[RuntimeStatusTarget] {
+        &self.targets
     }
 }
 
@@ -514,6 +573,7 @@ impl CommitRuntimeConsumed {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectRuntimeStatus {
     admission: RuntimeEventAdmission,
+    origin_conversation: ConversationId,
     status: RuntimeObservedStatus,
     cli_session_id: Option<String>,
     observed_at: RuntimeEventTime,
@@ -522,12 +582,14 @@ pub struct ProjectRuntimeStatus {
 impl ProjectRuntimeStatus {
     pub fn new(
         admission: RuntimeEventAdmission,
+        origin_conversation: ConversationId,
         status: RuntimeObservedStatus,
         cli_session_id: Option<String>,
         observed_at: RuntimeEventTime,
     ) -> Self {
         Self {
             admission,
+            origin_conversation,
             status,
             cli_session_id,
             observed_at,
@@ -540,11 +602,93 @@ impl ProjectRuntimeStatus {
     pub fn status(&self) -> RuntimeObservedStatus {
         self.status
     }
+    pub fn origin_conversation(&self) -> &ConversationId {
+        &self.origin_conversation
+    }
     pub fn cli_session_id(&self) -> Option<&str> {
         self.cli_session_id.as_deref()
     }
     pub fn observed_at(&self) -> RuntimeEventTime {
         self.observed_at
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitRuntimeSessionInit {
+    admission: RuntimeEventAdmission,
+    conversation: ConversationId,
+    agent: AgentId,
+    cli_session_id: String,
+    observed_at: RuntimeEventTime,
+    presence_at: RuntimeEventTime,
+}
+
+impl CommitRuntimeSessionInit {
+    pub fn new(
+        admission: RuntimeEventAdmission,
+        conversation: ConversationId,
+        agent: AgentId,
+        cli_session_id: String,
+        observed_at: RuntimeEventTime,
+        presence_at: RuntimeEventTime,
+    ) -> Self {
+        Self {
+            admission,
+            conversation,
+            agent,
+            cli_session_id,
+            observed_at,
+            presence_at,
+        }
+    }
+
+    pub fn admission(&self) -> &RuntimeEventAdmission {
+        &self.admission
+    }
+    pub fn conversation(&self) -> &ConversationId {
+        &self.conversation
+    }
+    pub fn agent(&self) -> &AgentId {
+        &self.agent
+    }
+    pub fn cli_session_id(&self) -> &str {
+        &self.cli_session_id
+    }
+    pub fn observed_at(&self) -> RuntimeEventTime {
+        self.observed_at
+    }
+    pub fn presence_at(&self) -> RuntimeEventTime {
+        self.presence_at
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeSessionInitCommitResult {
+    activity_id: i64,
+    presence_viewers: Vec<UserId>,
+    status_targets: Vec<RuntimeStatusTarget>,
+}
+
+impl RuntimeSessionInitCommitResult {
+    pub fn new(
+        activity_id: i64,
+        presence_viewers: Vec<UserId>,
+        status_targets: Vec<RuntimeStatusTarget>,
+    ) -> Self {
+        Self {
+            activity_id,
+            presence_viewers,
+            status_targets,
+        }
+    }
+    pub fn activity_id(&self) -> i64 {
+        self.activity_id
+    }
+    pub fn presence_viewers(&self) -> &[UserId] {
+        &self.presence_viewers
+    }
+    pub fn status_targets(&self) -> &[RuntimeStatusTarget] {
+        &self.status_targets
     }
 }
 
@@ -565,10 +709,15 @@ pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
         event: CommitRuntimeConsumed,
     ) -> impl Future<Output = Result<RuntimeConsumedCommitResult, PersistenceFailure>> + Send;
 
+    fn commit_session_init(
+        &self,
+        event: CommitRuntimeSessionInit,
+    ) -> impl Future<Output = Result<Option<RuntimeSessionInitCommitResult>, PersistenceFailure>> + Send;
+
     fn project_status(
         &self,
         event: ProjectRuntimeStatus,
-    ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
+    ) -> impl Future<Output = Result<Option<RuntimeStatusCommitResult>, PersistenceFailure>> + Send;
 
     fn record_activity(
         &self,

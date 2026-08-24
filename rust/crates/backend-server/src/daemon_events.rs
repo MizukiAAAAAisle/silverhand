@@ -20,22 +20,23 @@ use silverhand_backend_core::{
         RuntimeCustody, RuntimeEventTime, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
     runtime_event::{
-        CommitRuntimeExit, DaemonEventDurablePort, ProjectRuntimeStatus,
+        CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort, ProjectRuntimeStatus,
         RefineRuntimeToolCallInput, RuntimeActivityFact, RuntimeActivityKind,
         RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitCommitResult,
-        RuntimeExitDisposition, RuntimeObservedStatus, StampRuntimePresence,
+        RuntimeExitDisposition, RuntimeObservedStatus, RuntimeStatusTarget, StampRuntimePresence,
         UpsertRuntimeTextActivity,
     },
 };
 
 use crate::scope_events::{DaemonSideEvent, ScopeEventHub, ScopeEventHubError};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum RuntimeEventDirective {
     None,
     Drain {
         conversation: ConversationId,
         agent: AgentId,
+        post_commit_failure: Option<DaemonRuntimeEventError>,
     },
 }
 
@@ -43,9 +44,11 @@ pub(crate) enum RuntimeEventDirective {
 pub(crate) struct RuntimeExitPostCommit {
     conversation: ConversationId,
     agent: AgentId,
+    status_targets: Vec<RuntimeStatusTarget>,
     status: &'static str,
     code: Option<i64>,
     intentional: bool,
+    clear_cli_session_id: bool,
     run_state: Option<AgentRunStateWire>,
     respawn: bool,
 }
@@ -76,6 +79,7 @@ struct RuntimeOwnerState {
     timeout_reasons: HashMap<RuntimeEventAdmission, InitTimeoutReason>,
     init_failed: HashSet<RuntimeEventAdmission>,
     fatal: HashSet<RuntimeEventAdmission>,
+    clear_cli_session_on_exit: HashSet<RuntimeEventAdmission>,
 }
 
 #[derive(Clone)]
@@ -140,6 +144,10 @@ where
             admission.host_id() != host_id
                 || !hydrated_daemons.contains(admission.principal().custody().daemon_instance())
         });
+        state.clear_cli_session_on_exit.retain(|admission| {
+            admission.host_id() != host_id
+                || !hydrated_daemons.contains(admission.principal().custody().daemon_instance())
+        });
         for runtime in runtimes {
             if let Some(run_state) = runtime.run_state {
                 state.runs.insert(
@@ -180,6 +188,10 @@ where
             admission.host_id() != host_id
                 || admission.principal().custody().daemon_instance() != daemon
         });
+        state.clear_cli_session_on_exit.retain(|admission| {
+            admission.host_id() != host_id
+                || admission.principal().custody().daemon_instance() != daemon
+        });
         Ok(())
     }
 
@@ -207,6 +219,7 @@ where
                         state.timeout_reasons.remove(&admission);
                         state.init_failed.remove(&admission);
                         state.fatal.remove(&admission);
+                        state.clear_cli_session_on_exit.remove(&admission);
                     }
                     state.runs.insert(admission, event.state.clone());
                 }
@@ -240,29 +253,31 @@ where
                         event.runtime_generation,
                     )
                     .await?;
-                if !self
+                let Some(projected) = self
                     .durable
                     .project_status(ProjectRuntimeStatus::new(
                         admission,
+                        event.coordinate.conversation()?,
                         RuntimeObservedStatus::Active,
                         None,
                         RuntimeEventTime::from_unix_millis(event.ts),
                     ))
                     .await?
-                {
+                else {
                     return Ok(RuntimeEventDirective::None);
-                }
-                if let Err(cause) =
-                    self.publish_status(&event.coordinate, json!({ "status": "active" }))
-                {
-                    tracing::error!(
-                        error_chain = %crate::error::describe(&cause),
-                        "runtime-ready live projection failed after durable commit"
-                    );
-                }
+                };
+                let post_commit_failure = self
+                    .publish_status(
+                        projected.targets(),
+                        &event.coordinate.agent()?,
+                        json!({ "status": "active" }),
+                        None,
+                    )
+                    .err();
                 Ok(RuntimeEventDirective::Drain {
                     conversation: event.coordinate.conversation()?,
                     agent: event.coordinate.agent()?,
+                    post_commit_failure,
                 })
             }
             RuntimeProductEvent::InitTimeout(event) => {
@@ -317,10 +332,11 @@ where
                     .timeout_reasons
                     .get(&admission)
                     .copied();
-                if self
+                if let Some(projected) = self
                     .durable
                     .project_status(ProjectRuntimeStatus::new(
                         admission,
+                        event.coordinate.conversation()?,
                         RuntimeObservedStatus::Starting,
                         None,
                         RuntimeEventTime::from_unix_millis(event.ts),
@@ -328,7 +344,8 @@ where
                     .await?
                 {
                     self.publish_status(
-                        &event.coordinate,
+                        projected.targets(),
+                        &event.coordinate.agent()?,
                         json!({
                             "status": "starting",
                             "reason": "init_timeout_retrying",
@@ -336,6 +353,7 @@ where
                             "max_retries": event.max_retries,
                             "timeout_reason": timeout.map(InitTimeoutReason::as_str),
                         }),
+                        None,
                     )?;
                 }
                 Ok(RuntimeEventDirective::None)
@@ -357,10 +375,11 @@ where
                     state.timeout_reasons.remove(&admission);
                     state.init_failed.insert(admission.clone());
                 }
-                if self
+                if let Some(projected) = self
                     .durable
                     .project_status(ProjectRuntimeStatus::new(
                         admission,
+                        event.coordinate.conversation()?,
                         RuntimeObservedStatus::Crashed,
                         None,
                         RuntimeEventTime::from_unix_millis(event.ts),
@@ -368,13 +387,15 @@ where
                     .await?
                 {
                     self.publish_status(
-                        &event.coordinate,
+                        projected.targets(),
+                        &event.coordinate.agent()?,
                         json!({
                             "status": "crashed",
                             "reason": "init_cooldown",
                             "cooldown_until": event.cooldown_until,
                             "attempts_exhausted": event.attempts_exhausted,
                         }),
+                        None,
                     )?;
                 }
                 Ok(RuntimeEventDirective::None)
@@ -458,6 +479,7 @@ where
         &self,
         host_id: &str,
         principal: RuntimePrincipal,
+        origin_conversation: ConversationId,
         code: Option<i64>,
         intentional: bool,
         observed_at: i64,
@@ -469,10 +491,13 @@ where
         let admission = RuntimeEventAdmission::new(host_id.to_owned(), principal);
         state.pending_text.remove(&admission);
         let failed = state.init_failed.contains(&admission) || state.fatal.contains(&admission);
+        let clear_cli_session_id = state.clear_cli_session_on_exit.contains(&admission);
         let status = runtime_exit_status(failed, false, intentional, code);
         Ok(CommitRuntimeExit::new(
             admission,
+            origin_conversation,
             status,
+            clear_cli_session_id,
             RuntimeEventTime::from_unix_millis(observed_at),
             None,
         ))
@@ -513,24 +538,27 @@ where
         if result.disposition() != RuntimeExitDisposition::Applied {
             return Ok(None);
         }
-        let (init_failed, fatal, run_state) = {
+        let (init_failed, fatal, clear_cli_session_id, run_state) = {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
             let init_failed = state.init_failed.remove(admission);
             let fatal = state.fatal.remove(admission);
+            let clear_cli_session_id = state.clear_cli_session_on_exit.remove(admission);
             state.timeout_reasons.remove(admission);
             let run_state = state.runs.remove(admission);
-            (init_failed, fatal, run_state)
+            (init_failed, fatal, clear_cli_session_id, run_state)
         };
         let status = runtime_exit_status(init_failed, fatal, intentional, code).as_str();
         Ok(Some(RuntimeExitPostCommit {
             conversation,
             agent: admission.principal().agent().clone(),
+            status_targets: result.status_targets().to_vec(),
             status,
             code,
             intentional,
+            clear_cli_session_id,
             run_state,
             respawn: runtime_exit_should_respawn(init_failed, fatal, intentional),
         }))
@@ -540,15 +568,22 @@ where
         &self,
         effect: &RuntimeExitPostCommit,
     ) -> Result<(), DaemonRuntimeEventError> {
-        self.publish(
-            effect.conversation.clone(),
-            DaemonSideEvent::AgentStatus(json!({
-                "agent_id": effect.agent.as_str(),
-                "status": effect.status,
-                "exit_code": effect.code,
-                "intentional": effect.intentional,
-                "run_state": effect.run_state,
-            })),
+        let mut payload = json!({
+            "status": effect.status,
+            "exit_code": effect.code,
+            "intentional": effect.intentional,
+        });
+        if effect.clear_cli_session_id {
+            payload
+                .as_object_mut()
+                .expect("status payload is an object")
+                .insert("cli_session_id".into(), Value::Null);
+        }
+        self.publish_status(
+            &effect.status_targets,
+            &effect.agent,
+            payload,
+            Some(json!({ "run_state": effect.run_state })),
         )
     }
 
@@ -561,54 +596,82 @@ where
         let admission = self
             .admission_for_generation(host_id, daemon, &event.coordinate, event.runtime_generation)
             .await?;
+        let parsed_kind = event.parsed.kind();
         if let ParsedEventWire::InputLifecycle {
             command_uuid,
             state,
         } = &event.parsed
         {
-            tracing::info!(runtime_event = "runtime_parsed_event", parsed_kind = "input_lifecycle", command_uuid, state = ?state, "runtime input lifecycle");
+            tracing::info!(runtime_event = "runtime_parsed_event", parsed_kind, command_uuid, state = ?state, "runtime input lifecycle");
             return Ok(RuntimeEventDirective::None);
         }
         let sanitized = event.parsed.sanitized();
+        debug_assert_eq!(sanitized.kind(), parsed_kind);
         let agent_event = DaemonSideEvent::AgentEvent(json!({
             "agent_id": event.coordinate.agent_id,
             "event": sanitized,
         }));
         if let ParsedEventWire::Error {
-            fatal: Some(true), ..
+            code,
+            fatal: Some(true),
+            ..
         } = &event.parsed
         {
-            self.state
+            let mut state = self
+                .state
                 .lock()
-                .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?
-                .fatal
-                .insert(admission.clone());
+                .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
+            state.fatal.insert(admission.clone());
+            if code
+                .as_deref()
+                .is_some_and(|code| matches!(code, "thread_not_found" | "session_archived"))
+            {
+                state.clear_cli_session_on_exit.insert(admission.clone());
+            }
         }
-        let (directive, status_payload) =
-            if let ParsedEventWire::SessionInit { session_id } = &event.parsed {
-                let projected = self
-                    .durable
-                    .project_status(ProjectRuntimeStatus::new(
-                        admission.clone(),
-                        RuntimeObservedStatus::Active,
-                        Some(session_id.clone()),
-                        RuntimeEventTime::from_unix_millis(event.ts),
-                    ))
-                    .await?;
-                (
-                    RuntimeEventDirective::Drain {
-                        conversation: event.coordinate.conversation()?,
-                        agent: event.coordinate.agent()?,
-                    },
-                    projected.then(|| {
-                        json!({
-                            "status": "active", "cli_session_id": session_id,
-                        })
-                    }),
-                )
-            } else {
-                (RuntimeEventDirective::None, None)
-            };
+        if let ParsedEventWire::SessionInit { session_id } = &event.parsed {
+            let conversation = event.coordinate.conversation()?;
+            let agent = event.coordinate.agent()?;
+            let committed = self
+                .durable
+                .commit_session_init(CommitRuntimeSessionInit::new(
+                    admission,
+                    conversation.clone(),
+                    agent.clone(),
+                    session_id.clone(),
+                    RuntimeEventTime::from_unix_millis(event.ts),
+                    RuntimeEventTime::from_unix_millis(presence_now()),
+                ))
+                .await?
+                .ok_or(DaemonRuntimeEventError::StaleRuntime)?;
+            let presence = self.publish_presence(committed.presence_viewers(), &agent);
+            let agent_projection = self.publish(conversation.clone(), agent_event);
+            let activity = self.publish(
+                conversation.clone(),
+                DaemonSideEvent::ConversationActivity(json!({
+                    "id": committed.activity_id(),
+                    "conversation_id": conversation.as_str(),
+                    "agent_id": agent.as_str(),
+                    "kind": "session_init",
+                    "payload": { "text": session_id },
+                    "created_at": event.ts,
+                })),
+            );
+            let status = self.publish_status(
+                committed.status_targets(),
+                &agent,
+                json!({ "status": "active", "cli_session_id": session_id }),
+                None,
+            );
+            let post_commit_failure =
+                finish_live_effects([presence, agent_projection, activity, status]).err();
+            return Ok(RuntimeEventDirective::Drain {
+                conversation,
+                agent,
+                post_commit_failure,
+            });
+        }
+        let directive = RuntimeEventDirective::None;
         let activity_projection = match &event.parsed {
             ParsedEventWire::Thinking { text } => {
                 self.upsert_text_and_publish(
@@ -701,10 +764,7 @@ where
             Err(DaemonRuntimeEventError::Hub(cause)) => Some(DaemonRuntimeEventError::Hub(cause)),
             Err(cause) => return Err(cause),
         };
-        let status_event = status_payload
-            .map(|payload| self.publish_status(&event.coordinate, payload))
-            .unwrap_or(Ok(()));
-        finish_live_effects([live_failure.map_or(Ok(()), Err), status_event])?;
+        finish_live_effects([live_failure.map_or(Ok(()), Err)])?;
         Ok(directive)
     }
 
@@ -903,21 +963,32 @@ where
 
     fn publish_status(
         &self,
-        coordinate: &RuntimeCoordinate,
+        targets: &[RuntimeStatusTarget],
+        agent: &AgentId,
         payload: Value,
+        origin_payload: Option<Value>,
     ) -> Result<(), DaemonRuntimeEventError> {
-        let mut object = payload
-            .as_object()
-            .cloned()
-            .ok_or(DaemonRuntimeEventError::InvalidPayload)?;
-        object.insert(
-            "agent_id".into(),
-            Value::String(coordinate.agent_id.clone()),
-        );
-        self.publish(
-            coordinate.conversation()?,
-            DaemonSideEvent::AgentStatus(Value::Object(object)),
-        )
+        let mut first_failure = None;
+        for target in targets {
+            let mut object = payload
+                .as_object()
+                .cloned()
+                .ok_or(DaemonRuntimeEventError::InvalidPayload)?;
+            if target.carries_origin_detail()
+                && let Some(detail) = origin_payload.as_ref().and_then(Value::as_object)
+            {
+                object.extend(detail.clone());
+            }
+            object.insert("agent_id".into(), Value::String(agent.as_str().to_owned()));
+            if let Err(cause) = self.publish(
+                target.conversation().clone(),
+                DaemonSideEvent::AgentStatus(Value::Object(object)),
+            ) && first_failure.is_none()
+            {
+                first_failure = Some(cause);
+            }
+        }
+        first_failure.map_or(Ok(()), Err)
     }
 
     fn publish(
@@ -935,11 +1006,24 @@ where
         viewers: &[silverhand_backend_core::identity::UserId],
         agent: &AgentId,
     ) -> Result<(), DaemonRuntimeEventError> {
+        let mut first_failure = None;
         for viewer in viewers {
-            self.hub.publish_agent_presence_changed(viewer, agent)?;
+            if let Err(cause) = self.hub.publish_agent_presence_changed(viewer, agent)
+                && first_failure.is_none()
+            {
+                first_failure = Some(cause.into());
+            }
         }
-        Ok(())
+        first_failure.map_or(Ok(()), Err)
     }
+}
+
+fn deserialize_optional_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 fn finish_live_effects<const N: usize>(
@@ -1123,7 +1207,7 @@ impl RuntimeCoordinate {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct AgentRunStateWire {
     pub run_id: String,
     pub agent_id: String,
@@ -1132,22 +1216,60 @@ pub(crate) struct AgentRunStateWire {
     pub started_at: serde_json::Number,
     pub updated_at: serde_json::Number,
     pub last_activity_at: serde_json::Number,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub terminal_reason: Option<AgentRunTerminalReason>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub activity_snippet: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub activity_snippet_kind: Option<AgentActivitySnippetKind>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tool_call_counts: Option<std::collections::BTreeMap<String, serde_json::Number>>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub compacting: Option<bool>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub compacting_since: Option<serde_json::Number>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub compaction_stale: Option<bool>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub detail: Option<String>,
+}
+
+impl AgentRunStateWire {
+    pub(crate) fn matches_coordinate(&self, agent: &str, conversation: &str) -> bool {
+        self.agent_id == agent && self.conversation_id == conversation
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1318,6 +1440,36 @@ pub(crate) enum ParsedEventWire {
         raw: String,
     },
 }
+
+macro_rules! parsed_event_kind_map {
+    ($($pattern:pat => $kind:literal),+ $(,)?) => {
+        impl ParsedEventWire {
+            pub(crate) const IMPLEMENTED_KINDS: &'static [&'static str] = &[$($kind),+];
+
+            pub(crate) fn kind(&self) -> &'static str {
+                match self {
+                    $($pattern => $kind),+
+                }
+            }
+        }
+    };
+}
+
+parsed_event_kind_map!(
+    Self::SessionInit { .. } => "session_init",
+    Self::Thinking { .. } => "thinking",
+    Self::Text { .. } => "text",
+    Self::ToolCall { .. } => "tool_call",
+    Self::ToolCallInput { .. } => "tool_call_input",
+    Self::ToolOutput { .. } => "tool_output",
+    Self::TurnEnd { .. } => "turn_end",
+    Self::CompactionStarted => "compaction_started",
+    Self::CompactionFinished => "compaction_finished",
+    Self::InputLifecycle { .. } => "input_lifecycle",
+    Self::ApiResponse { .. } => "api_response",
+    Self::Error { .. } => "error",
+    Self::Unknown { .. } => "unknown",
+);
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1814,6 +1966,68 @@ pub(crate) fn decode_product_event(
             "daemon event keys do not match the published arm",
         ));
     }
+    fn reject_null(
+        object: &serde_json::Map<String, Value>,
+        field: &str,
+    ) -> Result<(), serde_json::Error> {
+        if object.get(field).is_some_and(Value::is_null) {
+            Err(serde_json::Error::custom(format!(
+                "{field} must be omitted rather than null"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+    match kind {
+        "runtime_init_timeout" => reject_null(object, "cooldown_until")?,
+        "runtime_state" => {
+            let state = object
+                .get("state")
+                .and_then(Value::as_object)
+                .ok_or_else(|| serde_json::Error::custom("state must be an object"))?;
+            for field in [
+                "terminalReason",
+                "activitySnippet",
+                "activitySnippetKind",
+                "toolCallCounts",
+                "compacting",
+                "compactingSince",
+                "compactionStale",
+                "detail",
+            ] {
+                reject_null(state, field)?;
+            }
+        }
+        "runtime_parsed_event" => {
+            let parsed = object
+                .get("parsed")
+                .and_then(Value::as_object)
+                .ok_or_else(|| serde_json::Error::custom("parsed must be an object"))?;
+            let parsed_kind = parsed
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or_else(|| serde_json::Error::custom("parsed kind must be a string"))?;
+            if !ParsedEventWire::IMPLEMENTED_KINDS.contains(&parsed_kind) {
+                return Err(serde_json::Error::custom(
+                    "parsed kind is not implemented by the Rust owner",
+                ));
+            }
+            match parsed.get("kind").and_then(Value::as_str) {
+                Some("tool_call") => reject_null(parsed, "toolCallId")?,
+                Some("tool_output") => {
+                    reject_null(parsed, "name")?;
+                    reject_null(parsed, "toolCallId")?;
+                }
+                Some("turn_end") => reject_null(parsed, "sessionId")?,
+                Some("error") => {
+                    reject_null(parsed, "code")?;
+                    reject_null(parsed, "fatal")?;
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
     let event = match kind {
         "runtime_state" => body(value).map(RuntimeProductEvent::State),
         "runtime_output" => body(value).map(RuntimeProductEvent::Output),
@@ -1918,7 +2132,8 @@ impl RuntimeProductEvent {
                         "invalid parsed-event drop reason",
                     ));
                 }
-                if !PARSED_EVENT_KINDS.contains(&event.parsed_kind.as_str()) {
+                if !crate::daemon_delivery::PARSED_EVENT_KINDS.contains(&event.parsed_kind.as_str())
+                {
                     return Err(serde_json::Error::custom("invalid parsed-event kind"));
                 }
                 &event.coordinate
@@ -1940,8 +2155,15 @@ impl RuntimeProductEvent {
                 nonempty(agent_id, "runtime_scope.agent_id")?;
             }
         }
-        if let Self::State(event) = self {
-            nonempty(&event.state.run_id, "state.runId")?;
+        if let Self::State(event) = self
+            && !event.state.matches_coordinate(
+                &event.coordinate.agent_id,
+                &event.coordinate.conversation_id,
+            )
+        {
+            return Err(serde_json::Error::custom(
+                "runtime state coordinate does not match outer event",
+            ));
         }
         if let Self::Parsed(event) = self {
             match &event.parsed {
@@ -1991,19 +2213,3 @@ impl RuntimeProductEvent {
         Ok(())
     }
 }
-
-const PARSED_EVENT_KINDS: [&str; 13] = [
-    "session_init",
-    "thinking",
-    "text",
-    "tool_call",
-    "tool_call_input",
-    "tool_output",
-    "turn_end",
-    "compaction_started",
-    "compaction_finished",
-    "input_lifecycle",
-    "api_response",
-    "error",
-    "unknown",
-];

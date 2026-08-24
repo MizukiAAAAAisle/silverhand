@@ -26,9 +26,10 @@ use silverhand_backend_core::{
         RuntimeInboxCustodyPort,
     },
     runtime_event::{
-        CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, ProjectRuntimeStatus,
-        RefineRuntimeToolCallInput, RuntimeActivityCommitResult, RuntimeActivityFact,
-        RuntimeConsumedCommitResult, RuntimeEventAdmission, RuntimeExitCommitResult,
+        CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
+        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RuntimeActivityCommitResult,
+        RuntimeActivityFact, RuntimeConsumedCommitResult, RuntimeEventAdmission,
+        RuntimeExitCommitResult, RuntimeSessionInitCommitResult, RuntimeStatusCommitResult,
         RuntimeToolCallInputCommitResult, StampRuntimePresence, UpsertRuntimeTextActivity,
     },
 };
@@ -277,10 +278,17 @@ impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
         self.inner.commit_consumed(event).await
     }
 
+    async fn commit_session_init(
+        &self,
+        event: CommitRuntimeSessionInit,
+    ) -> Result<Option<RuntimeSessionInitCommitResult>, PersistenceFailure> {
+        self.inner.commit_session_init(event).await
+    }
+
     async fn project_status(
         &self,
         event: ProjectRuntimeStatus,
-    ) -> Result<bool, PersistenceFailure> {
+    ) -> Result<Option<RuntimeStatusCommitResult>, PersistenceFailure> {
         self.inner.project_status(event).await
     }
 
@@ -470,6 +478,13 @@ async fn connect_conversation_side(address: std::net::SocketAddr) -> Socket {
 }
 
 async fn connect_event_scope(address: std::net::SocketAddr, scope: &str) -> Socket {
+    connect_event_scope_with_ack(address, scope).await.0
+}
+
+async fn connect_event_scope_with_ack(
+    address: std::net::SocketAddr,
+    scope: &str,
+) -> (Socket, Value) {
     let mut request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
         .into_client_request()
         .unwrap();
@@ -498,8 +513,9 @@ async fn connect_event_scope(address: std::net::SocketAddr, scope: &str) -> Sock
         ))
         .await
         .unwrap();
-    assert_eq!(next_json(&mut socket).await["type"], "subscribed");
-    socket
+    let subscribed = next_json(&mut socket).await;
+    assert_eq!(subscribed["type"], "subscribed");
+    (socket, subscribed)
 }
 
 async fn connect_with_token(
@@ -1631,20 +1647,36 @@ async fn wait_for_inbox_state(
 }
 
 fn product_frame(kind: &str, generation: Option<i64>, fields: Value) -> Value {
+    product_frame_for(
+        kind,
+        generation,
+        fields,
+        AGENT,
+        CONVERSATION,
+        "conversation",
+    )
+}
+
+fn product_frame_for(
+    kind: &str,
+    generation: Option<i64>,
+    fields: Value,
+    agent: &str,
+    conversation: &str,
+    scope_kind: &str,
+) -> Value {
+    let runtime_scope = if scope_kind == "agent" {
+        json!({ "kind": "agent", "agent_id": agent })
+    } else {
+        json!({ "kind": "conversation", "conversation_id": conversation, "agent_id": agent })
+    };
     let mut frame = serde_json::Map::from_iter([
         ("direction".to_owned(), json!("daemon_to_server")),
         ("type".to_owned(), json!("event")),
         ("kind".to_owned(), json!(kind)),
-        (
-            "runtime_scope".to_owned(),
-            json!({
-                "kind": "conversation",
-                "conversation_id": CONVERSATION,
-                "agent_id": AGENT,
-            }),
-        ),
-        ("conversation_id".to_owned(), json!(CONVERSATION)),
-        ("agent_id".to_owned(), json!(AGENT)),
+        ("runtime_scope".to_owned(), runtime_scope),
+        ("conversation_id".to_owned(), json!(conversation)),
+        ("agent_id".to_owned(), json!(agent)),
     ]);
     if let Some(generation) = generation {
         frame.insert("runtime_generation".to_owned(), json!(generation));
@@ -2022,15 +2054,18 @@ async fn hydrated_run_state_is_the_cold_authority_and_session_init_drains_once()
     .await
     .unwrap();
 
-    let hydrated_run_state = json!({
-        "runId": "hydrated-run",
-        "agentId": AGENT,
-        "conversationId": CONVERSATION,
-        "status": "waiting",
-        "startedAt": 10,
-        "updatedAt": 11,
-        "lastActivityAt": 11,
-    });
+    let wire_fixture: Value = serde_json::from_str(include_str!(
+        "../../../../packages/host/tests/fixtures/outbound-daemon-events.json"
+    ))
+    .unwrap();
+    let run_state_case = wire_fixture["runState"]["valid"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|test_case| test_case["name"] == "authenticated_hydrate_and_egress")
+        .unwrap();
+    let hydrated_run_state = run_state_case["state"].clone();
+    let expected_live_run_state = run_state_case["canonical"].clone();
     let mut live = connect_conversation_side(fixture.address).await;
     let mut daemon = connect(fixture.address).await;
     send_ready(&mut daemon, OUTBOUND_PROTOCOL_VERSION).await;
@@ -2094,26 +2129,7 @@ async fn hydrated_run_state_is_the_cold_authority_and_session_init_drains_once()
     let exit = next_json(&mut live).await;
     assert_eq!(exit["kind"], "agent_status");
     assert_eq!(exit["payload"]["status"], "idle");
-    assert_eq!(
-        exit["payload"]["run_state"],
-        json!({
-            "runId": "hydrated-run",
-            "agentId": AGENT,
-            "conversationId": CONVERSATION,
-            "status": "waiting",
-            "startedAt": 10,
-            "updatedAt": 11,
-            "lastActivityAt": 11,
-            "terminalReason": null,
-            "activitySnippet": null,
-            "activitySnippetKind": null,
-            "toolCallCounts": null,
-            "compacting": null,
-            "compactingSince": null,
-            "compactionStale": null,
-            "detail": null,
-        })
-    );
+    assert_eq!(exit["payload"]["run_state"], expected_live_run_state);
 
     let mut db = open(&fixture.path).await;
     let projections = sqlx::query(
@@ -2135,6 +2151,313 @@ async fn hydrated_run_state_is_the_cold_authority_and_session_init_drains_once()
     );
 
     live.close(None).await.unwrap();
+    daemon.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn session_init_activity_failure_rolls_back_status_presence_and_live_drain() {
+    let fixture = fixture("daemon-session-init-root-uow.sqlite").await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    let (mut before, before_snapshot) = connect_event_scope_with_ack(
+        fixture.address,
+        &format!("conversation-side:{CONVERSATION}"),
+    )
+    .await;
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql(
+        "CREATE TRIGGER fail_session_init_activity
+         BEFORE INSERT ON conversation_events
+         WHEN NEW.kind = 'session_init'
+         BEGIN SELECT RAISE(ABORT, 'session-init-activity-failure'); END;",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": { "kind": "session_init", "sessionId": "must-rollback" },
+                "ts": 20,
+            }),
+        ),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while fixture.controller.active_connection_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let row = sqlx::query(
+        "SELECT s.observed_status, s.cli_session_id, a.last_activity_at,
+                (SELECT COUNT(*) FROM conversation_events WHERE kind = 'session_init') AS activities
+           FROM agent_runtime_slots s JOIN agents a ON a.id = s.agent_id
+          WHERE s.conversation_id = ? AND s.agent_id = ?",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("observed_status"), "starting");
+    assert!(row.get::<Option<String>, _>("cli_session_id").is_none());
+    assert!(row.get::<Option<i64>, _>("last_activity_at").is_none());
+    assert_eq!(row.get::<i64, _>("activities"), 0);
+    let (mut after, after_snapshot) = connect_event_scope_with_ack(
+        fixture.address,
+        &format!("conversation-side:{CONVERSATION}"),
+    )
+    .await;
+    assert_eq!(after_snapshot["seq"], before_snapshot["seq"]);
+
+    before.close(None).await.unwrap();
+    after.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn stale_resume_fatal_clears_cli_session_before_successor_start() {
+    let fixture = fixture("daemon-stale-resume-clear.sqlite").await;
+    let mut live = connect_conversation_side(fixture.address).await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": { "kind": "session_init", "sessionId": "stale-cli-session" },
+                "ts": 20,
+            }),
+        ),
+    )
+    .await;
+    for expected in ["agent_event", "conversation_activity", "agent_status"] {
+        assert_eq!(next_json(&mut live).await["kind"], expected);
+    }
+    let drain = next_json(&mut daemon).await;
+    respond(
+        &mut daemon,
+        &drain,
+        json!({ "disposition": "admitted", "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": {
+                    "kind": "error",
+                    "message": "resume target vanished",
+                    "code": "thread_not_found",
+                    "fatal": true
+                },
+                "ts": 21,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(next_json(&mut live).await["kind"], "agent_event");
+    assert_eq!(next_json(&mut live).await["kind"], "conversation_activity");
+    send_runtime_exit(&mut daemon, generation, false, 22).await;
+    let exited = next_json(&mut live).await;
+    assert_eq!(exited["kind"], "agent_status");
+    assert_eq!(exited["payload"]["status"], "crashed");
+    assert!(exited["payload"]["cli_session_id"].is_null());
+    let mut db = open(&fixture.path).await;
+    assert!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT cli_session_id FROM agent_runtime_slots WHERE conversation_id = ? AND agent_id = ?",
+        )
+        .bind(CONVERSATION)
+        .bind(AGENT)
+        .fetch_one(&mut db)
+        .await
+        .unwrap()
+        .is_none()
+    );
+    add_inbox(&mut db, "message-successor", 50).await;
+    let effects = fixture.effects.clone();
+    let successor = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let successor_command = next_json(&mut daemon).await;
+    assert_eq!(successor_command["kind"], "runtime_start");
+    assert!(successor_command["params"]["spawn_options"]["driver"]["cli_session_id"].is_null());
+    respond(
+        &mut daemon,
+        &successor_command,
+        json!({ "started": true, "pid": 8, "started_at": 200 }),
+    )
+    .await;
+    successor.await.unwrap().unwrap();
+
+    live.close(None).await.unwrap();
+    daemon.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_the_origin() {
+    const AGGREGATE_AGENT: &str = "agent-aggregate";
+    const SECOND: &str = "conversation0002";
+    let fixture = fixture("daemon-agent-slot-status.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql(
+        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, session_scope)
+         VALUES ('agent-aggregate', 'agent-aggregate', 'codex', 'host-1', 1, 1, 'Aggregate Agent', 'user-1', 'agent');
+         INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1);
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1);
+         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
+         VALUES ('conversation0002', 'workspace-1', 'workspace', 'fixed', 'Second', 'second', 'active', 1, 1);
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1);
+         INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES ('conversation0002', 'user-1', 1);
+         INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at)
+         VALUES ('aggregate-message', 'conversation0001', 'user', 'user-1', 'wake aggregate', 2, 2);
+         INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, created_at, delivery_kind)
+         VALUES ('conversation0001', 'agent-aggregate', 'aggregate-message', 2, 'turn');",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    let mut origin = connect_event_scope(
+        fixture.address,
+        &format!("conversation-side:{CONVERSATION}"),
+    )
+    .await;
+    let mut second =
+        connect_event_scope(fixture.address, &format!("conversation-side:{SECOND}")).await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGGREGATE_AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 8, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+    send_product(
+        &mut daemon,
+        product_frame_for(
+            "runtime_state",
+            Some(generation),
+            json!({
+                "state": {
+                    "runId": "aggregate-run",
+                    "agentId": AGGREGATE_AGENT,
+                    "conversationId": CONVERSATION,
+                    "status": "thinking",
+                    "startedAt": 10,
+                    "updatedAt": 11,
+                    "lastActivityAt": 11
+                },
+                "ts": 11
+            }),
+            AGGREGATE_AGENT,
+            CONVERSATION,
+            "agent",
+        ),
+    )
+    .await;
+    assert_eq!(next_json(&mut origin).await["kind"], "agent_activity");
+    send_product(
+        &mut daemon,
+        product_frame_for(
+            "runtime_exit",
+            Some(generation),
+            json!({ "code": 0, "intentional": true, "ts": 12 }),
+            AGGREGATE_AGENT,
+            CONVERSATION,
+            "agent",
+        ),
+    )
+    .await;
+    let origin_status = next_json(&mut origin).await;
+    let second_status = next_json(&mut second).await;
+    assert_eq!(origin_status["kind"], "agent_status");
+    assert_eq!(second_status["kind"], "agent_status");
+    assert_eq!(
+        origin_status["payload"]["run_state"]["runId"],
+        "aggregate-run"
+    );
+    assert!(second_status["payload"].get("run_state").is_none());
+
+    origin.close(None).await.unwrap();
+    second.close(None).await.unwrap();
     daemon.close(None).await.unwrap();
     fixture.event_controller.close().await;
     fixture.controller.close().await;

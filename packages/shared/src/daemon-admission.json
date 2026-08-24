@@ -3,6 +3,11 @@
   "outboundProtocolVersion": 10,
   "hostWebSocketPath": "/api/hosts/connect",
   "updateRequiredCloseReason": "UPDATE_REQUIRED",
+  "parsedEventKinds": [
+    "session_init", "thinking", "text", "tool_call", "tool_call_input",
+    "tool_output", "turn_end", "compaction_started", "compaction_finished",
+    "input_lifecycle", "api_response", "error", "unknown"
+  ],
   "daemonEventKinds": {
     "ready": "ready",
     "shuttingDown": "shutting_down",

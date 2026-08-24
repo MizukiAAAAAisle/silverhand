@@ -890,7 +890,7 @@ export const OutboundRuntimeMessageStaleEventFrameSchema = z
   })
   .strict();
 
-export const OutboundDaemonToServerEventFrameSchema = z.discriminatedUnion('kind', [
+const OutboundDaemonToServerEventFrameUnion = z.discriminatedUnion('kind', [
   OutboundReadyEventFrameSchema,
   OutboundShuttingDownEventFrameSchema,
   OutboundRuntimeStateEventFrameSchema,
@@ -911,14 +911,40 @@ export const OutboundDaemonToServerEventFrameSchema = z.discriminatedUnion('kind
   OutboundRuntimeMessageStaleEventFrameSchema,
 ]);
 
+/**
+ * The kinds implemented by the real Zod union. This is intentionally derived
+ * from the union rather than from daemon-admission.json, so the fixture gate
+ * detects drift in either direction.
+ */
+export const OUTBOUND_DAEMON_EVENT_SCHEMA_KINDS =
+  OutboundDaemonToServerEventFrameUnion.options.map(
+    option => option.shape.kind.value,
+  );
+
+export const OutboundDaemonToServerEventFrameSchema =
+  OutboundDaemonToServerEventFrameUnion.superRefine((frame, ctx) => {
+    if (
+      frame.kind === DAEMON_ADMISSION.daemonEventKinds.runtimeState &&
+      (frame.state.agentId !== frame.agent_id ||
+        frame.state.conversationId !== frame.conversation_id)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['state'],
+        message: 'runtime state coordinate must match its outer event',
+      });
+    }
+  });
+
 export type OutboundDaemonToServerEventFrame = z.infer<
   typeof OutboundDaemonToServerEventFrameSchema
 >;
 
 export type OutboundDaemonEventKind = OutboundDaemonToServerEventFrame['kind'];
 
-export const OUTBOUND_DAEMON_EVENT_KINDS = OutboundDaemonToServerEventFrameSchema
-  .options.map(option => option.shape.kind.value) as OutboundDaemonEventKind[];
+export const OUTBOUND_DAEMON_EVENT_KINDS = Object.values(
+  DAEMON_ADMISSION.daemonEventKinds,
+) as OutboundDaemonEventKind[];
 
 export const OutboundFrameSchema = z.union([
   OutboundServerToDaemonCommandFrameSchema,

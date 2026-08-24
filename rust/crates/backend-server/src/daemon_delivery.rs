@@ -1291,7 +1291,11 @@ async fn connection<C, D, H>(
                             };
                             match runtime.events.handle(&host_id, instance, event).await {
                                 Ok(RuntimeEventDirective::None) => {}
-                                Ok(RuntimeEventDirective::Drain { conversation, agent }) => {
+                                Ok(RuntimeEventDirective::Drain {
+                                    conversation,
+                                    agent,
+                                    post_commit_failure,
+                                }) => {
                                     let effect_runtime = runtime.clone();
                                     tokio::spawn(async move {
                                         if let Err(cause) =
@@ -1300,6 +1304,12 @@ async fn connection<C, D, H>(
                                             tracing::error!(
                                                 error_chain = %error::describe(&cause),
                                                 "daemon runtime drain effect failed"
+                                            );
+                                        }
+                                        if let Some(cause) = post_commit_failure {
+                                            tracing::error!(
+                                                error_chain = %error::describe(&cause),
+                                                "daemon runtime live projection failed after durable commit"
                                             );
                                         }
                                     });
@@ -1573,6 +1583,13 @@ async fn finalize_runtime_event<C, D, H>(
     let commit = match runtime.events.prepare_exit(
         host_id,
         principal.clone(),
+        match event.conversation() {
+            Ok(conversation) => conversation,
+            Err(cause) => {
+                tracing::error!(error_chain = %error::describe(&cause), "daemon runtime exit coordinate decode failed");
+                return;
+            }
+        },
         event.code,
         event.intentional,
         event.ts,
@@ -2078,10 +2095,12 @@ impl RuntimeStatusResult {
                 let run_state = if row.run_state.is_null() {
                     None
                 } else {
-                    Some(
-                        serde_json::from_value::<AgentRunStateWire>(row.run_state.clone())
-                            .map_err(|_| EventIdentityError)?,
-                    )
+                    let state = serde_json::from_value::<AgentRunStateWire>(row.run_state.clone())
+                        .map_err(|_| EventIdentityError)?;
+                    if !state.matches_coordinate(&row.agent_id, &row.conversation_id) {
+                        return Err(EventIdentityError);
+                    }
+                    Some(state)
                 };
                 Ok(HydratedRuntime {
                     principal,
@@ -2553,6 +2572,97 @@ mod tests {
                 parse_daemon_frame(&frame.to_string()).is_ok(),
                 "valid fixture rejected: {}",
                 frame["kind"]
+            );
+        }
+        let parsed_envelope = valid
+            .iter()
+            .find(|frame| frame["kind"] == "runtime_parsed_event")
+            .unwrap();
+        let parsed_kinds = fixture["parsedValid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|parsed| parsed["kind"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            parsed_kinds,
+            PARSED_EVENT_KINDS
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_eq!(
+            crate::daemon_events::ParsedEventWire::IMPLEMENTED_KINDS
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            PARSED_EVENT_KINDS
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        for parsed in fixture["parsedValid"].as_array().unwrap() {
+            let mut frame = parsed_envelope.clone();
+            frame["parsed"] = parsed.clone();
+            let parsed_frame = parse_daemon_frame(&frame.to_string())
+                .unwrap_or_else(|_| panic!("valid parsed fixture rejected: {}", parsed["kind"]));
+            let DaemonFrame::Product(crate::daemon_events::RuntimeProductEvent::Parsed(event)) =
+                parsed_frame
+            else {
+                panic!("parsed fixture reached the wrong owner: {}", parsed["kind"]);
+            };
+            assert_eq!(event.parsed.kind(), parsed["kind"].as_str().unwrap());
+        }
+        let state_envelope = valid
+            .iter()
+            .find(|frame| frame["kind"] == "runtime_state")
+            .unwrap();
+        for test_case in fixture["runState"]["valid"].as_array().unwrap() {
+            let state = serde_json::from_value::<crate::daemon_events::AgentRunStateWire>(
+                test_case["state"].clone(),
+            )
+            .unwrap_or_else(|_| panic!("valid run state rejected: {}", test_case["name"]));
+            assert_eq!(
+                serde_json::to_value(&state).unwrap(),
+                test_case["canonical"]
+            );
+            let mut frame = state_envelope.clone();
+            frame["runtime_scope"] = json!({
+                "kind": "conversation",
+                "conversation_id": test_case["state"]["conversationId"],
+                "agent_id": test_case["state"]["agentId"],
+            });
+            frame["conversation_id"] = test_case["state"]["conversationId"].clone();
+            frame["agent_id"] = test_case["state"]["agentId"].clone();
+            frame["state"] = test_case["state"].clone();
+            assert!(
+                parse_daemon_frame(&frame.to_string()).is_ok(),
+                "valid ingress run state rejected: {}",
+                test_case["name"]
+            );
+        }
+        for test_case in fixture["runState"]["invalid"].as_array().unwrap() {
+            assert!(
+                serde_json::from_value::<crate::daemon_events::AgentRunStateWire>(
+                    test_case["state"].clone(),
+                )
+                .is_err(),
+                "invalid hydrate/live run state accepted: {}",
+                test_case["name"]
+            );
+            let mut frame = state_envelope.clone();
+            frame["runtime_scope"] = json!({
+                "kind": "conversation",
+                "conversation_id": test_case["state"]["conversationId"],
+                "agent_id": test_case["state"]["agentId"],
+            });
+            frame["conversation_id"] = test_case["state"]["conversationId"].clone();
+            frame["agent_id"] = test_case["state"]["agentId"].clone();
+            frame["state"] = test_case["state"].clone();
+            assert!(
+                parse_daemon_frame(&frame.to_string()).is_err(),
+                "invalid ingress run state accepted: {}",
+                test_case["name"]
             );
         }
         for test_case in fixture["invalid"].as_array().unwrap() {
