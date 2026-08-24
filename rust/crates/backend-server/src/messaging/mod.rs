@@ -7,9 +7,9 @@
 //! - [`execute`] — the one place a settled request becomes a committed send.
 //! - [`adapters`] — the two doors, which differ only in the order they ask their gates.
 //! - [`ack`] / [`agent_output`] — the two doors' own published success contracts.
-//! - [`message_wire`] — the single projector authority for a committed message: consumed by
-//!   the ACK today and by the conversation-scope `message` broadcast frame once it lands, so
-//!   both project the same row.
+//! - [`message_wire`] — the single projector authority for a committed message, consumed by
+//!   both the ACK and the conversation-scope `message` broadcast frame.
+//! - [`aftermath`] — the one required post-commit fan-out from a successful outcome.
 //! - [`unresolved_wire`] — the sender-only diagnostic, shared by both of them.
 //! - [`outcome`] — how a send that reached the write unit is answered.
 //! - [`references`] — where in a body a reference can address from.
@@ -26,6 +26,7 @@
 pub(crate) mod ack;
 pub mod adapters;
 pub(crate) mod admission;
+pub mod aftermath;
 pub(crate) mod agent_output;
 pub(crate) mod author_wire;
 pub(crate) mod envelope;

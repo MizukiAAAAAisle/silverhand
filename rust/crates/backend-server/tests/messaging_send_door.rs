@@ -21,6 +21,10 @@
 // send suite both read what an operator saw, and one writer is enough for both.
 #[path = "support/log_capture.rs"]
 mod log_capture;
+#[path = "support/no_aftermath.rs"]
+mod no_aftermath;
+
+use no_aftermath::NoAftermath;
 
 use std::{
     convert::Infallible,
@@ -265,6 +269,7 @@ fn watched(
         },
         authority: GrantsNothing,
         unit_of_work: unit,
+        aftermath: NoAftermath,
     });
     (router, asked_address, asked_capability)
 }

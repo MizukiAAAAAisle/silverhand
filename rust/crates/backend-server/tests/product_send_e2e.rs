@@ -12,9 +12,10 @@
 //! sender-only member — so the cells below pin each door's status and top-level key set
 //! separately, and pin that the shared member is spelled identically on both.
 //!
-//! IT DOES NOT OBSERVE PUBLICATION. The router runs no post-commit announcer, so nothing here
-//! may claim the published frame and a success payload were produced by one request. That
-//! boundary is a type fact, proven by the compile gates beside `SendMessageOutcome`.
+//! IT DOES NOT OBSERVE PRODUCTION AFTERMATH. This suite explicitly injects its inert test
+//! aftermath because its subject is the committed row and the two HTTP success contracts.
+//! The production router now REQUIRES an aftermath, and the real multi-port outcome→frame
+//! proof lives beside `ScopeEventHub`; this suite does not duplicate that proof.
 
 // The checked-in schema's fail-closed materializer, reused as test-only source rather than
 // copied: it is the one authority for what a current database looks like, and a second copy
@@ -26,6 +27,10 @@ mod current_schema;
 // the send-door suite.
 #[path = "support/log_capture.rs"]
 mod log_capture;
+#[path = "support/no_aftermath.rs"]
+mod no_aftermath;
+
+use no_aftermath::NoAftermath;
 
 use std::{
     path::Path,
@@ -325,6 +330,7 @@ where
         capability: GrantsSend,
         authority: DirectLines(direct_lines),
         unit_of_work,
+        aftermath: NoAftermath,
     })
 }
 
@@ -579,6 +585,7 @@ async fn a_real_authority_driver_failure_is_one_safe_500_before_the_real_uow() {
                 inner: store,
                 calls: calls.clone(),
             },
+            aftermath: NoAftermath,
         });
         let before = sink.events().len();
         let request = if *human {
@@ -683,6 +690,7 @@ async fn collapsed_target_refusals_keep_distinct_operator_reasons() {
                 inner: store,
                 calls: calls.clone(),
             },
+            aftermath: NoAftermath,
         });
 
         let before = sink.events().len();
@@ -739,6 +747,7 @@ async fn refusal_observer_failure_is_one_safe_500_before_the_uow() {
             inner: store,
             calls: calls.clone(),
         },
+        aftermath: NoAftermath,
     });
 
     let before = sink.events().len();
@@ -830,6 +839,7 @@ async fn real_authority_refusals_keep_their_public_shape_and_never_enter_the_uow
                 inner: store,
                 calls: calls.clone(),
             },
+            aftermath: NoAftermath,
         });
         let request = if human {
             human_send("not committed")

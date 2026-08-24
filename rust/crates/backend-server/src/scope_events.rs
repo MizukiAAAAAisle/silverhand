@@ -746,22 +746,39 @@ impl<R: UnreadReadModel + Send + Sync> UnreadPublication for HubUnreadPublisher<
 
         match audience {
             // Workspace placement: each seated viewer receives the unread+badge co-emit,
-            // through the one door that emits both.
+            // through the one door that emits both. A scope-local transport failure is
+            // isolated to that viewer: retain the first cause, but still attempt every
+            // already-computed audience before returning it to the outer effect report.
             UnreadAudience::Workspace { workspace, viewers } => {
+                let mut first_failure = None;
                 for viewer in &viewers {
-                    self.hub
-                        .publish_unread_updated_to_viewer(&workspace, conversation, viewer)
-                        .map_err(EffectFailure::from_source)?;
+                    if let Err(cause) =
+                        self.hub
+                            .publish_unread_updated_to_viewer(&workspace, conversation, viewer)
+                        && first_failure.is_none()
+                    {
+                        first_failure = Some(EffectFailure::from_source(cause));
+                    }
+                }
+                if let Some(failure) = first_failure {
+                    return Err(failure);
                 }
             }
             // A direct line has no workspace unread surface: each human endpoint's
             // direct-line LIST is invalidated instead — the distinct DM axis, the same
-            // frame arrival and clearing both ride.
+            // frame arrival and clearing both ride. The same per-viewer isolation rule
+            // applies here.
             UnreadAudience::DirectPair { viewers } => {
+                let mut first_failure = None;
                 for viewer in &viewers {
-                    self.hub
-                        .publish_direct_pairs_changed(viewer, conversation)
-                        .map_err(EffectFailure::from_source)?;
+                    if let Err(cause) = self.hub.publish_direct_pairs_changed(viewer, conversation)
+                        && first_failure.is_none()
+                    {
+                        first_failure = Some(EffectFailure::from_source(cause));
+                    }
+                }
+                if let Some(failure) = first_failure {
+                    return Err(failure);
                 }
             }
         }
@@ -1659,9 +1676,9 @@ mod tests {
             SendMessageUnitOfWork,
             mention_cc::{CommittedMentionCopy, MentionCopyOutcome},
             post_commit::{
-                CopyNotification, EffectStep, IdleStart, MainDelivery, MainEffects, MentionIntent,
-                MentionSkipRecord, MessagePublication, RuntimeDelivery, RuntimeStart, SendEffects,
-                SkippedMention, announce_main_send, announce_send,
+                CopyNotification, EffectStep, IdleStart, MainDelivery, MentionIntent,
+                MentionSkipRecord, MessagePublication, ReplyDelivery, RuntimeDelivery,
+                RuntimeStart, SendEffects, SkippedMention, announce_send,
             },
         },
         persistence::PersistenceFailure,
@@ -1815,6 +1832,39 @@ mod tests {
             _copy: &CommittedMentionCopy,
         ) -> Result<(), EffectFailure> {
             self.record(EffectStep::CopyDelivered);
+            Ok(())
+        }
+    }
+
+    impl MainDelivery for OtherEffects {
+        async fn deliver_to(
+            &self,
+            _recipient: &AgentId,
+            _message: &CreatedMessage,
+        ) -> Result<(), EffectFailure> {
+            self.record(EffectStep::MainDelivered);
+            Ok(())
+        }
+    }
+
+    impl ReplyDelivery for OtherEffects {
+        async fn deliver_to(
+            &self,
+            _recipient: &AgentId,
+            _message: &CreatedMessage,
+        ) -> Result<(), EffectFailure> {
+            self.record(EffectStep::ReplyDelivered);
+            Ok(())
+        }
+    }
+
+    impl IdleStart for OtherEffects {
+        async fn start_if_idle(
+            &self,
+            _recipient: &AgentId,
+            _conversation: &ConversationId,
+        ) -> Result<(), EffectFailure> {
+            self.record(EffectStep::IdleStarted);
             Ok(())
         }
     }
@@ -2091,6 +2141,12 @@ mod tests {
         }
     }
 
+    struct NoAftermath;
+
+    impl crate::messaging::aftermath::SendAftermath for NoAftermath {
+        async fn announce(&self, _outcome: &SendMessageOutcome) {}
+    }
+
     struct CountedStore {
         inner: MessagingStore,
         calls: Arc<AtomicUsize>,
@@ -2120,6 +2176,7 @@ mod tests {
                 inner: store,
                 calls,
             },
+            aftermath: NoAftermath,
         })
         .layer(axum::Extension(RuntimePrincipal::AgentSlot {
             agent: agent(),
@@ -2909,30 +2966,6 @@ mod tests {
         }
     }
 
-    /// Delivery and idle-start are #2185's lane; here they are inert, so a call that
-    /// should never reach them is caught by the frame assertions rather than a panic.
-    struct Discarded;
-
-    impl MainDelivery for Discarded {
-        async fn deliver_to(
-            &self,
-            _recipient: &AgentId,
-            _message: &CreatedMessage,
-        ) -> Result<(), EffectFailure> {
-            Ok(())
-        }
-    }
-
-    impl IdleStart for Discarded {
-        async fn start_if_idle(
-            &self,
-            _recipient: &AgentId,
-            _conversation: &ConversationId,
-        ) -> Result<(), EffectFailure> {
-            Ok(())
-        }
-    }
-
     fn mentioned() -> UserId {
         UserId::parse("user-2").unwrap()
     }
@@ -3352,40 +3385,18 @@ mod tests {
             hub.clone(),
             SqliteUnreadReadModel::open(&path).await.unwrap(),
         );
-        let doubles = OtherEffects::default();
-        let discarded = Discarded;
+        let aftermath = crate::messaging::aftermath::MessagingAftermath::new(
+            hub.clone(),
+            OtherEffects::default(),
+            store.clone(),
+            unread,
+        );
 
-        // The copy layer: the copy's own line invalidation, publication, and the author's
-        // notice. Delivery/start/skip are #2185's inert doubles.
-        let copy_report = announce_send(
-            outcome.committed(),
-            SendEffects {
-                direct_lines: &hub,
-                publication: &hub,
-                notification: &hub,
-                start: &doubles,
-                delivery: &doubles,
-                skips: &doubles,
-            },
-        )
-        .await;
-        assert!(copy_report.failed.is_empty());
-
-        // The main-line layer: the one conversation frame, the durable mention rows and
-        // their notices, and the unread/badge co-emit through the real read model.
-        let main_report = announce_main_send(
-            outcome.committed().main_line().expect("a main-line send"),
-            MainEffects {
-                publication: &hub,
-                mentions: &store,
-                viewers: &hub,
-                unread: &unread,
-                delivery: &discarded,
-                idle: &discarded,
-            },
-        )
-        .await;
-        assert!(main_report.failed.is_empty());
+        // The ONE production orchestration consumes the committed outcome. It runs the
+        // copy layer and exactly one path layer (main here), so the assertions below
+        // would expose either a missing layer or a second invocation as missing/duplicate
+        // frames and durable mention rows.
+        crate::messaging::aftermath::SendAftermath::announce(&aftermath, &outcome).await;
 
         // The channel carries EXACTLY ONE message frame: the copy did not widen onto it,
         // and no path published the message twice.
@@ -3631,6 +3642,84 @@ mod tests {
                 ProductEvent::UnreadUpdated(_),
                 ProductEvent::AttentionBadgeUpdated(_),
             ]
+        ));
+    }
+
+    /// A workspace viewer's exhausted transport is local to that viewer. The read model
+    /// has already computed the complete audience, so the publisher retains the first
+    /// failure while still delivering the atomic unread+badge pair to later viewers.
+    #[tokio::test]
+    async fn a_workspace_viewer_failure_does_not_drop_the_remaining_real_audience() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspace-isolation.sqlite");
+        seed_fanout(&path).await;
+        let hub = ScopeEventHub::test("epoch-1");
+        let failed_scope = EventScope::Viewer(user());
+        hub.scopes
+            .lock()
+            .unwrap()
+            .entry(failed_scope.clone())
+            .or_insert_with(ScopeState::new)
+            .seq = TransportSeq(MAX_TRANSPORT_SEQ);
+        let publisher = HubUnreadPublisher::new(
+            hub.clone(),
+            SqliteUnreadReadModel::open(&path).await.unwrap(),
+        );
+
+        let failure = publisher
+            .publish_unread(&channel())
+            .await
+            .expect_err("the first viewer's exhausted sequence must still surface");
+        assert!(matches!(
+            Error::source(&failure).and_then(|source| source.downcast_ref()),
+            Some(ScopeEventHubError::SequenceExhausted)
+        ));
+        assert!(
+            hub.scopes.lock().unwrap()[&failed_scope].replay.is_empty(),
+            "the failed viewer must receive neither half of the co-emit"
+        );
+        assert!(matches!(
+            scope_events(&hub, EventScope::Viewer(mentioned())).as_slice(),
+            [
+                ProductEvent::UnreadUpdated(_),
+                ProductEvent::AttentionBadgeUpdated(_)
+            ]
+        ));
+    }
+
+    /// Direct-pair invalidation has the same audience isolation: one endpoint's
+    /// exhausted scope cannot suppress the hint owed to the other endpoint.
+    #[tokio::test]
+    async fn a_direct_pair_viewer_failure_does_not_drop_the_remaining_real_audience() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("direct-pair-isolation.sqlite");
+        seed_direct_pair(&path).await;
+        let hub = ScopeEventHub::test("epoch-1");
+        let failed_scope = EventScope::Viewer(user());
+        hub.scopes
+            .lock()
+            .unwrap()
+            .entry(failed_scope.clone())
+            .or_insert_with(ScopeState::new)
+            .seq = TransportSeq(MAX_TRANSPORT_SEQ);
+        let publisher = HubUnreadPublisher::new(
+            hub.clone(),
+            SqliteUnreadReadModel::open(&path).await.unwrap(),
+        );
+
+        let failure = publisher
+            .publish_unread(&ConversationId::parse("conversation-2").unwrap())
+            .await
+            .expect_err("the first endpoint's exhausted sequence must still surface");
+        assert!(matches!(
+            Error::source(&failure).and_then(|source| source.downcast_ref()),
+            Some(ScopeEventHubError::SequenceExhausted)
+        ));
+        assert!(hub.scopes.lock().unwrap()[&failed_scope].replay.is_empty());
+        assert!(matches!(
+            scope_events(&hub, EventScope::Viewer(mentioned())).as_slice(),
+            [ProductEvent::DirectPairsChanged { conversation_id }]
+                if conversation_id == "conversation-2"
         ));
     }
 

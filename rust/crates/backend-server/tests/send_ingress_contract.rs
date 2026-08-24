@@ -15,6 +15,11 @@
 //! the shared `reference` otherwise, and the artifact's own meta-gates (asserted by the oracle)
 //! are what stop a Rust-only snapshot from hiding in that field.
 
+#[path = "support/no_aftermath.rs"]
+mod no_aftermath;
+
+use no_aftermath::NoAftermath;
+
 use std::{
     convert::Infallible,
     path::PathBuf,
@@ -168,6 +173,7 @@ fn mounted(unit: RecordingUnit, address: RecordingAddress) -> Router {
         capability: GrantsSend,
         authority: GrantsNothing,
         unit_of_work: unit,
+        aftermath: NoAftermath,
     })
 }
 

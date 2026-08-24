@@ -22,6 +22,7 @@ use silverhand_backend_core::{
 };
 
 use super::admission::ValidatedSendPayload;
+use super::aftermath::SendAftermath;
 
 /// The resolved input a route adapter hands to [`execute`]: who is writing, where
 /// from and to, and whether they asked to skip the freshness guard.
@@ -66,7 +67,8 @@ impl ResolvedSendContext {
     }
 }
 
-/// Turns a resolved, settled request into a committed fact.
+/// Turns a resolved, settled request into a committed fact, then invokes exactly one
+/// required aftermath before returning the still-successful outcome.
 ///
 /// Derivation of what the body addressed happens inside `prepare`, before any
 /// transaction: a 64KiB body must not be parsed while the writer is held, and
@@ -77,6 +79,7 @@ pub(crate) async fn execute<U>(
     positions: &impl ReferencePositions,
     authority: &impl DirectLineAuthority,
     unit_of_work: &U,
+    aftermath: &impl SendAftermath,
 ) -> Result<SendMessageOutcome, SendMessageError>
 where
     U: SendMessageUnitOfWork,
@@ -94,6 +97,7 @@ where
     let source_conversation = draft.source_conversation.clone();
     let command = SendMessage::prepare(draft, positions, authority).await?;
     let outcome = unit_of_work.send_message(command).await?;
+    aftermath.announce(&outcome).await;
     report_unresolved_references(&source_conversation, &outcome);
     Ok(outcome)
 }
@@ -179,12 +183,19 @@ fn unresolved_tokens(references: &[MessageReference]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use silverhand_backend_core::persistence::PersistenceFailure;
     use silverhand_backend_core::{
         identity::{AgentId, UserId},
-        messaging::{AddressedPrincipals, MessageContent},
+        messaging::{
+            AddressedPrincipals, CreatedMessage, FromKind, MessageContent, MessageCreatedFact,
+            MessageId, MessageSeq,
+            post_commit::{DeliveryPlan, MainDeliveryPlan, PostCommitPlan},
+        },
     };
 
     use super::*;
@@ -236,6 +247,62 @@ mod tests {
         }
     }
 
+    struct NoAftermath;
+
+    impl SendAftermath for NoAftermath {
+        async fn announce(&self, _outcome: &SendMessageOutcome) {}
+    }
+
+    #[derive(Default)]
+    struct CountingAftermath(AtomicUsize);
+
+    impl SendAftermath for CountingAftermath {
+        async fn announce(&self, _outcome: &SendMessageOutcome) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct SuccessfulUnit(SendMessageOutcome);
+
+    impl SendMessageUnitOfWork for SuccessfulUnit {
+        async fn send_message(
+            &self,
+            _command: SendMessage,
+        ) -> Result<SendMessageOutcome, SendMessageError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn committed_outcome() -> SendMessageOutcome {
+        let message = CreatedMessage {
+            id: MessageId::parse("message-1").unwrap(),
+            conversation_id: conversation(),
+            from_kind: FromKind::User,
+            from_agent_id: None,
+            from_user_id: Some(UserId::parse("user-1").unwrap()),
+            author: None,
+            content: MessageContent::parse("hello").unwrap(),
+            attachments: Vec::new(),
+            seq: MessageSeq::try_from(1).unwrap(),
+            created_at_ms: 1,
+            thread_root_id: None,
+        };
+        SendMessageOutcome::committed_send(
+            MessageCreatedFact::committed(
+                message,
+                None,
+                PostCommitPlan::committed(
+                    None,
+                    DeliveryPlan::MainLine(MainDeliveryPlan::committed(Vec::new(), Vec::new())),
+                    Vec::new(),
+                ),
+                false,
+                Vec::new(),
+            ),
+            Vec::new(),
+        )
+    }
+
     fn conversation() -> ConversationId {
         ConversationId::parse("conv-1").unwrap()
     }
@@ -275,6 +342,7 @@ mod tests {
                 &NoPositions,
                 &GrantsNothing,
                 &unit,
+                &NoAftermath,
             )
             .await;
         }
@@ -302,9 +370,42 @@ mod tests {
             &NoPositions,
             &GrantsNothing,
             &unit,
+            &NoAftermath,
         )
         .await;
 
         assert_eq!(unit.actors().len(), 1);
+    }
+
+    /// A successful write reaches exactly one required aftermath before its outcome is
+    /// returned. A refused write reaches none, so post-commit effects cannot run for a
+    /// fact that does not exist.
+    #[tokio::test]
+    async fn only_a_committed_send_reaches_the_single_aftermath() {
+        let aftermath = CountingAftermath::default();
+        let expected = committed_outcome();
+        let actual = execute(
+            context(SendActor::User(UserId::parse("user-1").unwrap())),
+            settled(),
+            &NoPositions,
+            &GrantsNothing,
+            &SuccessfulUnit(expected.clone()),
+            &aftermath,
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(aftermath.0.load(Ordering::SeqCst), 1);
+
+        let _ = execute(
+            context(SendActor::User(UserId::parse("user-1").unwrap())),
+            settled(),
+            &NoPositions,
+            &GrantsNothing,
+            &RecordingUnitOfWork::default(),
+            &aftermath,
+        )
+        .await;
+        assert_eq!(aftermath.0.load(Ordering::SeqCst), 1);
     }
 }

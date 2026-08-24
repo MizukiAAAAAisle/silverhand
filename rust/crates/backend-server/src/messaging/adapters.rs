@@ -28,6 +28,7 @@ use silverhand_backend_core::{
 
 use super::{
     admission::{PayloadRefusal, validate_agent_payload, validate_human_payload},
+    aftermath::SendAftermath,
     execute::{ResolvedSendContext, execute},
 };
 
@@ -38,10 +39,11 @@ use super::{
 /// eight loose parameters was the lint's way of saying the same thing. Naming the set
 /// once also makes "one use-case" visible at the call site: the doors differ in their
 /// gates, never in the machinery.
-pub(crate) struct SendPorts<'ports, P, A, U> {
+pub(crate) struct SendPorts<'ports, P, A, U, F> {
     pub positions: &'ports P,
     pub authority: &'ports A,
     pub unit_of_work: &'ports U,
+    pub aftermath: &'ports F,
 }
 
 /// The address named a stream this agent is in, and this door still acts only where the
@@ -111,18 +113,19 @@ pub(crate) enum AgentRefusal {
 ///
 /// Authorization first is not an optimization — it is what keeps a person who may not
 /// post to a channel from learning anything about how their body was judged.
-pub(crate) async fn human_send<A, P, D, U>(
+pub(crate) async fn human_send<A, P, D, U, F>(
     channel: &ConversationId,
     author: &UserId,
     raw_body: Option<serde_json::Value>,
     access: &A,
-    ports: SendPorts<'_, P, D, U>,
+    ports: SendPorts<'_, P, D, U, F>,
 ) -> Result<SendMessageOutcome, HumanRefusal>
 where
     A: ChannelAccess,
     P: ReferencePositions,
     D: DirectLineAuthority,
     U: SendMessageUnitOfWork,
+    F: SendAftermath,
 {
     access
         .may_post(channel, author)
@@ -156,6 +159,7 @@ where
         ports.positions,
         ports.authority,
         ports.unit_of_work,
+        ports.aftermath,
     )
     .await
     .map_err(HumanRefusal::Send)
@@ -180,12 +184,12 @@ where
 /// an anchored slot has target == source once reach has passed, and an unanchored one has no
 /// ambient source to fall back on. Passing the credential's conversation as the send's source
 /// would have aimed every unanchored send at a stream nobody named.
-pub(crate) async fn agent_send<A, C, P, D, U>(
+pub(crate) async fn agent_send<A, C, P, D, U, F>(
     credential: &RuntimePrincipal,
     raw_body: Option<serde_json::Value>,
     address: &A,
     capability: &C,
-    ports: SendPorts<'_, P, D, U>,
+    ports: SendPorts<'_, P, D, U, F>,
 ) -> Result<SendMessageOutcome, AgentRefusal>
 where
     A: TargetAddress,
@@ -193,6 +197,7 @@ where
     P: ReferencePositions,
     D: DirectLineAuthority,
     U: SendMessageUnitOfWork,
+    F: SendAftermath,
 {
     let request = validate_agent_payload(raw_body).map_err(AgentRefusal::Payload)?;
 
@@ -232,6 +237,7 @@ where
         ports.positions,
         ports.authority,
         ports.unit_of_work,
+        ports.aftermath,
     )
     .await
     .map_err(AgentRefusal::Send)
@@ -336,6 +342,12 @@ mod tests {
         }
     }
 
+    struct NoAftermath;
+
+    impl SendAftermath for NoAftermath {
+        async fn announce(&self, _outcome: &SendMessageOutcome) {}
+    }
+
     /// The gate, and ONLY the gate. It is handed `elsewhere()` so it would answer with a
     /// foreign conversation if the port let it — and the port does not, which is what
     /// `the_human_gate_cannot_move_the_send_it_authorized` reads back.
@@ -433,11 +445,12 @@ mod tests {
 
     fn ports<'a>(
         unit: &'a CountingUnitOfWork,
-    ) -> SendPorts<'a, NoPositions, GrantsNothing, CountingUnitOfWork> {
+    ) -> SendPorts<'a, NoPositions, GrantsNothing, CountingUnitOfWork, NoAftermath> {
         SendPorts {
             positions: &NoPositions,
             authority: &GrantsNothing,
             unit_of_work: unit,
+            aftermath: &NoAftermath,
         }
     }
 

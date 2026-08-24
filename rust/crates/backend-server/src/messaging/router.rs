@@ -46,6 +46,7 @@ use super::{
     ack::send_ack,
     adapters::{AgentRefusal, HumanRefusal, SendPorts, agent_send, human_send},
     admission::PayloadRefusal,
+    aftermath::SendAftermath,
     agent_output::agent_send_output,
     envelope::fence_message_send_body,
     outcome::refused_send,
@@ -65,41 +66,43 @@ use super::{
 /// canonical rule and offers no way to replace it. The trait seam still exists in the domain,
 /// where it lets the derivation be tested against a stand-in; a deployer is not a caller of
 /// that seam (@Cindy, review of `be14df01`).
-pub struct SendState<C, T, K, D, U> {
+pub struct SendState<C, T, K, D, U, F> {
     pub channel_access: C,
     pub target_address: T,
     pub capability: K,
     pub authority: D,
     pub unit_of_work: U,
+    pub aftermath: F,
 }
 
 /// The product routes, on the paths the reference uses.
-pub fn send_router<C, T, K, D, U>(state: SendState<C, T, K, D, U>) -> Router
+pub fn send_router<C, T, K, D, U, F>(state: SendState<C, T, K, D, U, F>) -> Router
 where
     C: ChannelAccess + Send + Sync + 'static,
     T: TargetAddress + Send + Sync + 'static,
     K: SendCapability + Send + Sync + 'static,
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
+    F: SendAftermath + Send + Sync + 'static,
 {
     Router::new()
         .route(
             "/api/channels/{id}/messages",
-            post(human_route::<C, T, K, D, U>),
+            post(human_route::<C, T, K, D, U, F>),
         )
         .route(
             "/internal/agents/{aid}/send-message",
-            post(agent_route::<C, T, K, D, U>),
+            post(agent_route::<C, T, K, D, U, F>),
         )
         .with_state(Arc::new(state))
         .layer(middleware::from_fn(fence_message_send_body))
 }
 
-type Shared<C, T, K, D, U> = State<Arc<SendState<C, T, K, D, U>>>;
+type Shared<C, T, K, D, U, F> = State<Arc<SendState<C, T, K, D, U, F>>>;
 
-async fn human_route<C, T, K, D, U>(
+async fn human_route<C, T, K, D, U, F>(
     Path(id): Path<String>,
-    State(state): Shared<C, T, K, D, U>,
+    State(state): Shared<C, T, K, D, U, F>,
     request: Request,
 ) -> Response
 where
@@ -108,6 +111,7 @@ where
     K: SendCapability + Send + Sync + 'static,
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
+    F: SendAftermath + Send + Sync + 'static,
 {
     // The principal is read, never derived. Absent means the composition is wrong.
     let Some(author) = request.extensions().get::<UserId>().cloned() else {
@@ -129,6 +133,7 @@ where
             positions: &MarkdownReferencePositions,
             authority: &state.authority,
             unit_of_work: &state.unit_of_work,
+            aftermath: &state.aftermath,
         },
     )
     .await
@@ -138,8 +143,8 @@ where
     }
 }
 
-async fn agent_route<C, T, K, D, U>(
-    State(state): Shared<C, T, K, D, U>,
+async fn agent_route<C, T, K, D, U, F>(
+    State(state): Shared<C, T, K, D, U, F>,
     request: Request,
 ) -> Response
 where
@@ -148,6 +153,7 @@ where
     K: SendCapability + Send + Sync + 'static,
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
+    F: SendAftermath + Send + Sync + 'static,
 {
     let Some(credential) = request.extensions().get::<RuntimePrincipal>().cloned() else {
         return composition_failure("agent credential");
@@ -163,6 +169,7 @@ where
             positions: &MarkdownReferencePositions,
             authority: &state.authority,
             unit_of_work: &state.unit_of_work,
+            aftermath: &state.aftermath,
         },
     )
     .await
