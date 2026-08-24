@@ -37,6 +37,29 @@ type Contract = {
 
 const contract = JSON.parse(readFileSync(CONTRACT, 'utf8')) as Contract;
 
+/**
+ * ES2022-expressible equivalent of `String.prototype.isWellFormed()` (ES2024):
+ * a UTF-16 string is well-formed iff it contains no lone surrogate. We scan the
+ * code units directly rather than round-tripping through a lossy codec — a
+ * replacement-character or JSON-escaping pass would silently pass a lone
+ * surrogate as U+FFFD and defeat the very check we need.
+ */
+function isWellFormedUtf16(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      // High surrogate: the next unit must be its low-surrogate mate.
+      const mate = text.charCodeAt(i + 1);
+      if (!(mate >= 0xdc00 && mate <= 0xdfff)) return false;
+      i++; // consume the paired low surrogate
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      // Low surrogate with no preceding high surrogate.
+      return false;
+    }
+  }
+  return true;
+}
+
 describe('mention CC durable text contract', () => {
   it.each(contract.excerpt)('excerpt: $name', testCase => {
     expect(excerpt(testCase.input)).toBe(testCase.expected);
@@ -65,6 +88,15 @@ describe('mention CC durable text contract', () => {
     expect(cut.endsWith('…')).toBe(true);
     // A surrogate PAIR is how an astral character is stored; what must never
     // appear is a lone one, which is exactly what well-formedness asks.
-    expect(cut.isWellFormed()).toBe(true);
+    expect(isWellFormedUtf16(cut)).toBe(true);
+  });
+
+  // Locks the equivalent predicate on the four grid cells that separate a real
+  // well-formedness check from an approximation.
+  it('well-formedness predicate distinguishes paired from lone surrogates', () => {
+    expect(isWellFormedUtf16('\u{1d11e}')).toBe(true); // valid astral pair
+    expect(isWellFormedUtf16('plain BMP: café')).toBe(true); // no surrogates
+    expect(isWellFormedUtf16(String.fromCharCode(0xd834))).toBe(false); // lone high
+    expect(isWellFormedUtf16(String.fromCharCode(0xdd1e))).toBe(false); // lone low
   });
 });
