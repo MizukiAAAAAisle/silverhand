@@ -4907,6 +4907,19 @@ mod tests {
         origin: &str,
     ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
     {
+        // The scope-transport tests here front the socket with the `Sessions` double,
+        // which resolves any bearer to the same viewer, so the cookie value is
+        // immaterial to them. The causal enrollment test drives a REAL session
+        // authority and passes its seeded bearer through `connect_with_session`.
+        connect_with_session(address, origin, "token").await
+    }
+
+    async fn connect_with_session(
+        address: std::net::SocketAddr,
+        origin: &str,
+        session: &str,
+    ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
+    {
         let mut request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
             .into_client_request()
             .unwrap();
@@ -4915,7 +4928,9 @@ mod tests {
             .insert(ORIGIN, origin.parse().unwrap());
         request.headers_mut().insert(
             COOKIE,
-            format!("{EVENT_WS_SESSION_COOKIE}=token").parse().unwrap(),
+            format!("{EVENT_WS_SESSION_COOKIE}={session}")
+                .parse()
+                .unwrap(),
         );
         request
             .headers_mut()
@@ -4931,5 +4946,341 @@ mod tests {
             panic!("expected a text frame")
         };
         serde_json::from_str(&frame).unwrap()
+    }
+
+    /// The enrollment→refetch contract, proven CAUSALLY end to end (#task:2190 P0-4).
+    ///
+    /// A juxtaposition proof — a hand-written `INSERT workspace_users` next to a
+    /// hand-written `publish_viewer_added_to_workspace` — would stay green even if
+    /// the real enrollment use case never emitted at all. That is exactly the
+    /// regression this task must catch, so this test refuses that shortcut and
+    /// drives the PRODUCTION path instead: an admin's authenticated
+    /// `POST /api/workspaces/{id}/members` runs `add_workspace_human_member`, whose
+    /// single post-commit sink call is the ONLY producer of the hint. The SAME
+    /// `ScopeEventHub` is both the access route's sink and the WS perimeter's state,
+    /// so the frame the enrollment emits is the frame the target's live `viewer:self`
+    /// subscription receives — and the SAME served cold read (`GET /api/workspaces`)
+    /// is the authority that grows on refetch.
+    ///
+    /// It goes RED if ANY link in the chain breaks:
+    ///   * delete the sink call, or move it before the commit — no frame, so the
+    ///     live socket assertion and the `current_seq == 1` assertion both fail;
+    ///   * swap the real hub for a no-op sink — the frame never reaches the socket;
+    ///   * misfire the idempotent re-enroll — the second POST would advance the
+    ///     stream or add a second row, and both are asserted unchanged;
+    ///   * let the frame's `(workspace_id, role)` disagree with the committed row
+    ///     the cold read returns — the exact-JSON frame, the durable row, and the
+    ///     newly-appearing cold-read id are cross-checked to be the same coordinate.
+    ///
+    /// Composition notes. The enrollment and cold-read HTTP surfaces are driven
+    /// in-process with `oneshot` (this test tree has no HTTP client); only the WS
+    /// perimeter, which needs a real socket, is served on a real listener. All three
+    /// share one hub, so the causal chain still crosses the real transport. Every
+    /// principal on this test is REAL: the HTTP surfaces authenticate through a
+    /// `HumanSessionAuthenticator` over `SqliteSessionStore`, and the WS perimeter
+    /// resolves the target viewer through the SAME real session authority from the
+    /// seeded `EVENT_WS_SESSION_COOKIE` bearer — so deleting the
+    /// `SqliteSessionStore → WS principal` wiring turns this test RED rather than
+    /// leaving a fake cookie to stand in. WS scope authorization likewise runs
+    /// through the real `SqliteEventScopeAuthority`.
+    #[tokio::test]
+    async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honors() {
+        use sqlx::Executor;
+
+        #[derive(Clone, Copy)]
+        struct AtClock(i64);
+        impl silverhand_backend_core::auth::SessionClock for AtClock {
+            fn now_unix_millis(&self) -> i64 {
+                self.0
+            }
+        }
+        impl silverhand_backend_core::access::EnrollmentClock for AtClock {
+            fn now_unix_millis(&self) -> i64 {
+                self.0
+            }
+        }
+
+        /// Drives one authenticated request through a router in-process and decodes
+        /// the JSON body (or `Null` for an empty one).
+        async fn call(
+            app: &Router,
+            method: &str,
+            uri: &str,
+            bearer: &str,
+            body: axum::body::Body,
+        ) -> (StatusCode, Value) {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("authorization", format!("Bearer {bearer}"))
+                        .header("content-type", "application/json")
+                        .body(body)
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let value = if bytes.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_slice(&bytes).unwrap()
+            };
+            (status, value)
+        }
+
+        fn workspace_ids(envelope: &Value) -> Vec<String> {
+            envelope["workspaces"]
+                .as_array()
+                .expect("the envelope carries a workspaces array")
+                .iter()
+                .map(|workspace| workspace["id"].as_str().unwrap().to_owned())
+                .collect()
+        }
+
+        const NOW_MS: i64 = 10_000;
+        const JOIN_MS: i64 = 1_700_000_000_555;
+        // sha256 → URL_SAFE_NO_PAD of the raw bearers (the same hashing the session
+        // authority applies); the admin actor and the target viewer are told apart
+        // purely by which seeded session their token resolves to.
+        const TARGET_TOKEN: &str = "valid-token";
+        const TARGET_HASH: &str = "OXoqnFv14szsOMJZa2grsb0F_m5OzqbBDPQnVf8iVAM";
+        const ADMIN_TOKEN: &str = "admin-token";
+        const ADMIN_HASH: &str = "EKTHyfxSBtbzbcaUSoG7b0o8sOJQFK47EubD5ScSKSo";
+        const SEED_SQL: &str = include_str!(
+            "../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql"
+        );
+
+        // The shared cold-read seed makes the target (user-1) a member of three
+        // workspaces and NOT of `ws-foreign`. Add the enrolling admin, make it an
+        // admin of `ws-foreign`, and seed the two live sessions (valid under NOW_MS:
+        // last_used_at 9_500, TTL 1_000ms).
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("enroll-causal.sqlite");
+        {
+            let mut db = current_schema::create_current_schema(&path).await;
+            db.execute(sqlx::raw_sql(SEED_SQL))
+                .await
+                .expect("shared cold-read seed must load against the current schema");
+            for statement in [
+                "INSERT INTO users (id, name, display_name, created_at, updated_at) \
+                 VALUES ('admin-1', 'Admin', 'Admin', 1, 1)",
+                "INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) \
+                 VALUES ('ws-foreign', 'admin-1', 1, 'admin')",
+            ] {
+                sqlx::query(statement).execute(&mut db).await.unwrap();
+            }
+            // The token hashes are dynamic data, so they ride bind parameters rather
+            // than being interpolated into the SQL text.
+            for (id, user, hash) in [
+                ("session-target", "user-1", TARGET_HASH),
+                ("session-admin", "admin-1", ADMIN_HASH),
+            ] {
+                sqlx::query(
+                    "INSERT INTO auth_sessions (id, user_id, token_hash, created_at, \
+                     last_used_at, revoked_at, user_agent, ip_first_seen) \
+                     VALUES (?, ?, ?, 1, 9500, NULL, NULL, NULL)",
+                )
+                .bind(id)
+                .bind(user)
+                .bind(hash)
+                .execute(&mut db)
+                .await
+                .unwrap();
+            }
+            db.close().await.unwrap();
+        }
+
+        // One hub, shared as the enrollment sink AND the WS perimeter state.
+        let hub = ScopeEventHub::test("epoch-1");
+        let origin = "http://127.0.0.1";
+
+        // The real session authority, shared by every principal on this test: the two
+        // HTTP surfaces AND the WS perimeter resolve their caller through it.
+        let session_store = silverhand_backend_sqlite::auth::SqliteSessionStore::open(&path)
+            .await
+            .unwrap();
+        let ttl = silverhand_backend_core::auth::SessionTtl::from_millis(1_000).unwrap();
+        let authenticator = || {
+            silverhand_backend_core::auth::HumanSessionAuthenticator::new(
+                session_store.clone(),
+                AtClock(NOW_MS),
+                ttl,
+            )
+        };
+
+        // The WS perimeter on a real listener: real scope authority, and its principal
+        // comes from the SAME real session authority via the seeded cookie bearer.
+        let scope_authority =
+            silverhand_backend_sqlite::scope_event::SqliteEventScopeAuthority::open(&path)
+                .await
+                .unwrap();
+        let (ws_app, controller) = router(
+            hub.clone(),
+            authenticator(),
+            scope_authority,
+            EventWebSocketConfig::test(origin),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, ws_app).await.unwrap() });
+
+        // The two HTTP surfaces, each behind the REAL human-session perimeter over the
+        // seeded sessions. The access route's sink is the shared hub; the workspaces
+        // route reads the same database's cold authority.
+        let store = silverhand_backend_sqlite::access::SqliteAccessStore::open(&path)
+            .await
+            .unwrap();
+        let cold_read =
+            silverhand_backend_sqlite::workspace_cold_read::SqliteWorkspaceColdRead::open(&path)
+                .await
+                .unwrap();
+        let enroll_app = crate::auth::require_human_session(
+            crate::access::router(store.clone(), store, hub.clone(), AtClock(JOIN_MS)),
+            authenticator(),
+            crate::auth::PublicJsonUnauthorized,
+        );
+        let read_app = crate::auth::require_human_session(
+            crate::workspaces::router(cold_read),
+            authenticator(),
+            crate::auth::PublicJsonUnauthorized,
+        );
+
+        // The page-load authority BEFORE the change, read through the SAME served cold
+        // endpoint the client would call: `ws-foreign` is absent.
+        let (status, before) = call(
+            &read_app,
+            "GET",
+            "/api/workspaces",
+            TARGET_TOKEN,
+            axum::body::Body::empty(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let before_ids = workspace_ids(&before);
+        assert_eq!(before_ids, ["ws-archived", "ws-regular", "ws-agent"]);
+
+        // The target subscribes its own viewer stream on the real transport, its WS
+        // principal resolved from the seeded target bearer by the real session
+        // authority; its stream sits at the origin until something is emitted.
+        let mut target_socket = connect_with_session(address, origin, TARGET_TOKEN).await;
+        assert_eq!(next_json(&mut target_socket).await["type"], "authenticated");
+        subscribe_scope(&mut target_socket, "viewer:self").await;
+        let scope = EventScope::Viewer(user());
+        assert_eq!(hub.current_seq(&scope).unwrap(), TransportSeq::ZERO);
+
+        // The CAUSE: an admin's authenticated enrollment POST, which runs the real
+        // `add_workspace_human_member` and its post-commit sink call — nothing else.
+        let (status, body) = call(
+            &enroll_app,
+            "POST",
+            "/api/workspaces/ws-foreign/members",
+            ADMIN_TOKEN,
+            axum::body::Body::from(r#"{"kind":"human","user_id":"user-1"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+
+        // EFFECT 1 — the hub's own high-water advanced by EXACTLY ONE, and the retained
+        // replay is that single hint. This is checked FIRST because it is synchronous
+        // with the (awaited) sink call: a deleted or no-op sink leaves the stream at the
+        // origin and fails HERE, before the blocking socket read is ever reached.
+        assert_eq!(hub.current_seq(&scope).unwrap(), TransportSeq(1));
+        assert_eq!(
+            scope_events(&hub, scope.clone()).as_slice(),
+            [ProductEvent::ViewerWorkspacesChanged {
+                change: ViewerWorkspaceChange::Added,
+                workspace_id: "ws-foreign".to_owned(),
+                role: "member",
+            }]
+        );
+
+        // EFFECT 2 — the exact same hint crosses the REAL transport to the target's live
+        // `viewer:self` subscription: seq 1, carrying only the coordinate + role, no list.
+        assert_eq!(
+            next_json(&mut target_socket).await,
+            json!({
+                "type": "event", "scope": "viewer:user-1", "seq": 1, "epoch": "epoch-1",
+                "kind": "viewer_workspaces_changed",
+                "payload": { "change": "added", "workspace_id": "ws-foreign", "role": "member" },
+            })
+        );
+
+        // EFFECT 3 — the durable committed row, at the clock's join time and the default
+        // member role. This is the coordinate the frame must agree with.
+        let mut probe = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT joined_at, role FROM workspace_users WHERE workspace_id = ? AND user_id = ?",
+        )
+        .bind("ws-foreign")
+        .bind("user-1")
+        .fetch_all(&mut probe)
+        .await
+        .unwrap();
+        assert_eq!(rows, [(JOIN_MS, "member".to_owned())]);
+
+        // EFFECT 4 — the SAME served cold read now honors the hint: `ws-foreign`
+        // (updated_at 500) leads the regular group, and the ONLY id it gained is exactly
+        // the workspace the frame named. Frame coordinate == durable row == cold delta.
+        let (status, after) = call(
+            &read_app,
+            "GET",
+            "/api/workspaces",
+            TARGET_TOKEN,
+            axum::body::Body::empty(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            workspace_ids(&after),
+            ["ws-foreign", "ws-archived", "ws-regular", "ws-agent"]
+        );
+        let gained: Vec<String> = workspace_ids(&after)
+            .into_iter()
+            .filter(|id| !before_ids.contains(id))
+            .collect();
+        assert_eq!(gained, ["ws-foreign"]);
+
+        // Idempotent re-enroll: a second identical POST still answers 201 but owes no
+        // announce. The membership stays a single row and the viewer stream does NOT
+        // advance — proven by the hub's high-water, never by waiting for a frame.
+        let seq_before_reenroll = hub.current_seq(&scope).unwrap();
+        let (status, _) = call(
+            &enroll_app,
+            "POST",
+            "/api/workspaces/ws-foreign/members",
+            ADMIN_TOKEN,
+            axum::body::Body::from(r#"{"kind":"human","user_id":"user-1"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let membership_rows: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM workspace_users WHERE workspace_id = ? AND user_id = ?",
+        )
+        .bind("ws-foreign")
+        .bind("user-1")
+        .fetch_one(&mut probe)
+        .await
+        .unwrap();
+        assert_eq!(
+            membership_rows.0, 1,
+            "re-enroll must not add a second membership"
+        );
+        assert_eq!(
+            hub.current_seq(&scope).unwrap(),
+            seq_before_reenroll,
+            "an idempotent re-enroll owes no announce, so the viewer stream must not advance"
+        );
+        probe.close().await.unwrap();
+
+        controller.close().await;
+        server.abort();
     }
 }
