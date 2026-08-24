@@ -15,6 +15,8 @@ use silverhand_backend_core::{
 };
 use tokio::task::JoinHandle;
 
+use crate::error;
+
 /// Last-seen persistence. Takes the decided value; it never reads state back.
 pub trait LastSeenSink: Clone + Send + Sync + 'static {
     fn touch_last_seen(
@@ -24,9 +26,14 @@ pub trait LastSeenSink: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), PersistenceFailure>> + Send;
 }
 
-/// Publication of a decided presence fact on the app scope.
+/// Publication of a decided presence fact on the app scope. Publishing is
+/// fallible because the live transport is, and it runs while the presence state
+/// lock is held so that fact order equals transition order; an implementation
+/// must therefore neither block nor call back into the timers.
 pub trait PresenceFactSink: Clone + Send + Sync + 'static {
-    fn publish(&self, fact: PresenceFact);
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn publish(&self, fact: PresenceFact) -> Result<(), Self::Error>;
 }
 
 struct PendingOffline {
@@ -42,6 +49,13 @@ struct Tracked {
 }
 
 impl Tracked {
+    /// Whether this exact grace window still owns the user's offline decision.
+    fn owns(&self, user_id: &UserId, epoch: u64) -> bool {
+        self.pending
+            .get(user_id)
+            .is_some_and(|pending| pending.epoch == epoch)
+    }
+
     fn cancel_pending(&mut self, user_id: &UserId) {
         if let Some(pending) = self.pending.remove(user_id) {
             pending.handle.abort();
@@ -88,22 +102,19 @@ where
     }
 
     pub fn on_connect(&self, user_id: &UserId, connection_id: &str) {
-        let announce = {
-            let mut tracked = self.tracked.lock().expect("presence state");
-            let already_online = is_online(
-                tracked.connections.contains_key(user_id),
-                tracked.pending.contains_key(user_id),
-            );
-            tracked.cancel_pending(user_id);
-            tracked
-                .connections
-                .entry(user_id.clone())
-                .or_default()
-                .insert(connection_id.to_owned());
-            on_connect(user_id, already_online).1
-        };
-        if let Some(fact) = announce {
-            self.facts.publish(fact);
+        let mut tracked = self.tracked.lock().expect("presence state");
+        let already_online = is_online(
+            tracked.connections.contains_key(user_id),
+            tracked.pending.contains_key(user_id),
+        );
+        tracked.cancel_pending(user_id);
+        tracked
+            .connections
+            .entry(user_id.clone())
+            .or_default()
+            .insert(connection_id.to_owned());
+        if let Some(fact) = on_connect(user_id, already_online).1 {
+            self.announce(fact);
         }
     }
 
@@ -127,33 +138,42 @@ where
         let grace = self.grace.millis().max(0) as u64;
         let handle = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(grace)).await;
-            let reconnected = {
-                let mut tracked = timers.tracked.lock().expect("presence state");
-                match tracked.pending.get(&owner) {
-                    Some(pending) if pending.epoch == epoch => {
-                        tracked.pending.remove(&owner);
-                    }
-                    // A newer window or a cancel already owns this user.
-                    _ => return,
-                }
-                tracked.connections.contains_key(&owner)
-            };
-            let Some(outcome) = schedule.elapsed(reconnected) else {
-                return;
-            };
-            if let Err(error) = timers
-                .last_seen
-                .touch_last_seen(owner.clone(), outcome.persist_last_seen_at)
-                .await
+
+            // The window keeps its entry across the write, so the viewer still
+            // counts as present while the transition is in flight: a reconnect
+            // during persistence can neither be announced and then contradicted
+            // by this window, nor let this window commit behind that announce.
+            if !timers
+                .tracked
+                .lock()
+                .expect("presence state")
+                .owns(&owner, epoch)
             {
+                return;
+            }
+
+            let persisted = timers
+                .last_seen
+                .touch_last_seen(owner.clone(), schedule.disconnected_at())
+                .await;
+
+            let mut tracked = timers.tracked.lock().expect("presence state");
+            if !tracked.owns(&owner, epoch) {
+                return;
+            }
+            let reconnected = tracked.connections.contains_key(&owner);
+            tracked.pending.remove(&owner);
+            if let Err(error) = persisted {
                 tracing::warn!(
                     user_id = %owner.as_str(),
-                    last_seen_at = outcome.persist_last_seen_at,
-                    error = %error,
+                    last_seen_at = schedule.disconnected_at(),
+                    error_chain = %error::describe(&error),
                     "presence: failed to persist last_seen_at"
                 );
             }
-            timers.facts.publish(outcome.publish);
+            if let Some(outcome) = schedule.elapsed(reconnected) {
+                timers.announce(outcome.publish);
+            }
         });
         tracked
             .pending
@@ -178,19 +198,55 @@ where
         }
         tracked.connections.clear();
     }
+
+    /// A live publication failure never reverses the transition it describes:
+    /// the durable last-seen value stands and the loss is audited once.
+    fn announce(&self, fact: PresenceFact) {
+        if let Err(error) = self.facts.publish(fact) {
+            tracing::warn!(
+                error_chain = %error::describe(&error),
+                "presence: failed to publish a presence fact"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::{
+        convert::Infallible,
+        io::{self, Write},
+    };
+
+    use thiserror::Error;
+    use tokio::sync::{
+        Semaphore,
+        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    };
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
 
+    const GRACE_MS: i64 = 20_000;
+
+    #[derive(Debug, Error)]
+    #[error("transport registry poisoned")]
+    struct TransportPoisoned;
+
+    #[derive(Debug, Error)]
+    #[error("presence fact rejected")]
+    struct PublishRejected {
+        #[source]
+        source: TransportPoisoned,
+    }
+
     #[derive(Clone)]
     struct RecordingSinks {
-        facts: Sender<PresenceFact>,
-        touched: Sender<(UserId, i64)>,
+        facts: UnboundedSender<PresenceFact>,
+        touched: UnboundedSender<(UserId, i64)>,
         fail_persist: bool,
+        fail_publish: bool,
+        hold: Option<Arc<Semaphore>>,
     }
 
     impl LastSeenSink for RecordingSinks {
@@ -200,6 +256,9 @@ mod tests {
             last_seen_at: i64,
         ) -> Result<(), PersistenceFailure> {
             self.touched.send((user_id, last_seen_at)).unwrap();
+            if let Some(hold) = &self.hold {
+                let _permit = hold.acquire().await.expect("write barrier");
+            }
             if self.fail_persist {
                 return Err(PersistenceFailure::from_source(std::io::Error::other(
                     "disk gone",
@@ -210,78 +269,129 @@ mod tests {
     }
 
     impl PresenceFactSink for RecordingSinks {
-        fn publish(&self, fact: PresenceFact) {
+        type Error = PublishRejected;
+
+        fn publish(&self, fact: PresenceFact) -> Result<(), Self::Error> {
             self.facts.send(fact).unwrap();
+            if self.fail_publish {
+                return Err(PublishRejected {
+                    source: TransportPoisoned,
+                });
+            }
+            Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct Sinks {
+        fail_persist: bool,
+        fail_publish: bool,
+        hold: Option<Arc<Semaphore>>,
     }
 
     struct Harness {
         timers: PresenceGraceTimers<RecordingSinks, RecordingSinks>,
-        facts: Receiver<PresenceFact>,
-        touched: Receiver<(UserId, i64)>,
+        facts: UnboundedReceiver<PresenceFact>,
+        touched: UnboundedReceiver<(UserId, i64)>,
     }
 
-    fn harness(grace_ms: i64, fail_persist: bool) -> Harness {
-        let (facts_tx, facts) = channel();
-        let (touched_tx, touched) = channel();
-        let sinks = RecordingSinks {
+    fn build(sinks: Sinks) -> Harness {
+        let (facts_tx, facts) = unbounded_channel();
+        let (touched_tx, touched) = unbounded_channel();
+        let recording = RecordingSinks {
             facts: facts_tx,
             touched: touched_tx,
-            fail_persist,
+            fail_persist: sinks.fail_persist,
+            fail_publish: sinks.fail_publish,
+            hold: sinks.hold,
         };
         Harness {
             timers: PresenceGraceTimers::new(
-                sinks.clone(),
-                sinks,
-                GraceWindow::from_millis_or_default(Some(grace_ms)),
+                recording.clone(),
+                recording,
+                GraceWindow::from_millis_or_default(Some(GRACE_MS)),
             ),
             facts,
             touched,
         }
     }
 
-    async fn next_fact(facts: &Receiver<PresenceFact>) -> PresenceFact {
-        for _ in 0..200 {
-            if let Ok(fact) = facts.try_recv() {
-                return fact;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+    fn harness() -> Harness {
+        build(Sinks::default())
+    }
+
+    /// The returned barrier holds the last-seen write open until it is given a
+    /// permit, so a test can act while the transition is in flight.
+    fn harness_holding_the_write() -> (Harness, Arc<Semaphore>) {
+        let barrier = Arc::new(Semaphore::new(0));
+        (
+            build(Sinks {
+                hold: Some(Arc::clone(&barrier)),
+                ..Sinks::default()
+            }),
+            barrier,
+        )
+    }
+
+    /// Virtual time only: reaching the deadline is an explicit step, so a
+    /// negative assertion states "the deadline passed and nothing happened"
+    /// rather than "the test did not wait long enough".
+    async fn reach_the_deadline() {
+        // A window registers its sleep the first time its task is polled, so the
+        // clock may only move once every started window is actually waiting.
+        settle().await;
+        tokio::time::advance(Duration::from_millis(GRACE_MS as u64 + 1)).await;
+        settle().await;
+    }
+
+    /// Lets every runnable task drain. No wall-clock time is involved.
+    async fn settle() {
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
         }
-        panic!("no presence fact published");
     }
 
     fn user(id: &str) -> UserId {
         UserId::parse(id).unwrap()
     }
 
-    #[tokio::test]
+    fn online(id: &str) -> PresenceFact {
+        PresenceFact::Online { user_id: user(id) }
+    }
+
+    fn offline(id: &str, last_seen_at: i64) -> PresenceFact {
+        PresenceFact::Offline {
+            user_id: user(id),
+            last_seen_at,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_first_connection_publishes_online_once_per_transition() {
-        let h = harness(0, false);
+        let mut h = harness();
         h.timers.on_connect(&user("user-1"), "c1");
         h.timers.on_connect(&user("user-1"), "c2");
-        assert_eq!(
-            next_fact(&h.facts).await,
-            PresenceFact::Online {
-                user_id: user("user-1")
-            }
-        );
+        settle().await;
+
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
         assert!(h.facts.try_recv().is_err());
         assert!(h.timers.is_online(&user("user-1")));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_offline_fact_dates_from_the_disconnect_not_the_expiry() {
-        let h = harness(0, false);
+        let mut h = harness();
         h.timers.on_connect(&user("user-1"), "c1");
-        next_fact(&h.facts).await;
         h.timers
             .on_disconnect(&user("user-1"), "c1", 1_700_000_000_123);
+        assert!(h.timers.is_online(&user("user-1")));
+
+        reach_the_deadline().await;
+
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
         assert_eq!(
-            next_fact(&h.facts).await,
-            PresenceFact::Offline {
-                user_id: user("user-1"),
-                last_seen_at: 1_700_000_000_123,
-            }
+            h.facts.try_recv().unwrap(),
+            offline("user-1", 1_700_000_000_123)
         );
         assert_eq!(
             h.touched.try_recv().unwrap(),
@@ -290,69 +400,234 @@ mod tests {
         assert!(!h.timers.is_online(&user("user-1")));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_reconnect_inside_the_window_cancels_the_offline_fact_and_stays_quiet() {
-        let h = harness(60_000, false);
+        let mut h = harness();
         h.timers.on_connect(&user("user-1"), "c1");
-        next_fact(&h.facts).await;
         h.timers.on_disconnect(&user("user-1"), "c1", 10);
         assert!(h.timers.is_online(&user("user-1")));
         h.timers.on_connect(&user("user-1"), "c2");
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
 
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        reach_the_deadline().await;
+
         assert!(h.facts.try_recv().is_err());
         assert!(h.touched.try_recv().is_err());
         assert!(h.timers.is_online(&user("user-1")));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
+    async fn a_superseded_window_stays_silent_and_the_newer_one_publishes_once() {
+        let mut h = harness();
+        h.timers.on_connect(&user("user-1"), "c1");
+        h.timers.on_disconnect(&user("user-1"), "c1", 10);
+        h.timers.on_connect(&user("user-1"), "c2");
+        h.timers.on_disconnect(&user("user-1"), "c2", 20);
+
+        reach_the_deadline().await;
+
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
+        assert_eq!(h.facts.try_recv().unwrap(), offline("user-1", 20));
+        assert!(h.facts.try_recv().is_err());
+        assert_eq!(h.touched.try_recv().unwrap(), (user("user-1"), 20));
+        assert!(h.touched.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_remaining_connection_starts_no_window() {
-        let h = harness(0, false);
+        let mut h = harness();
         h.timers.on_connect(&user("user-1"), "c1");
         h.timers.on_connect(&user("user-1"), "c2");
-        next_fact(&h.facts).await;
         h.timers.on_disconnect(&user("user-1"), "c1", 10);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        reach_the_deadline().await;
+
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
         assert!(h.facts.try_recv().is_err());
+        assert!(h.touched.try_recv().is_err());
         assert!(h.timers.is_online(&user("user-1")));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_unknown_connection_id_changes_nothing() {
-        let h = harness(0, false);
+        let mut h = harness();
         h.timers.on_connect(&user("user-1"), "c1");
-        next_fact(&h.facts).await;
         h.timers.on_disconnect(&user("user-1"), "other", 10);
         h.timers.on_disconnect(&user("user-2"), "c1", 10);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        reach_the_deadline().await;
+
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
         assert!(h.facts.try_recv().is_err());
+        assert!(h.touched.try_recv().is_err());
         assert!(h.timers.is_online(&user("user-1")));
     }
 
-    #[tokio::test]
-    async fn a_failed_last_seen_write_still_publishes_offline() {
-        let h = harness(0, true);
-        h.timers.on_connect(&user("user-1"), "c1");
-        next_fact(&h.facts).await;
-        h.timers.on_disconnect(&user("user-1"), "c1", 42);
-        assert_eq!(
-            next_fact(&h.facts).await,
-            PresenceFact::Offline {
-                user_id: user("user-1"),
-                last_seen_at: 42,
-            }
-        );
-    }
-
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn dispose_drops_pending_windows_without_publishing() {
-        let h = harness(30, false);
+        let mut h = harness();
         h.timers.on_connect(&user("user-1"), "c1");
-        next_fact(&h.facts).await;
         h.timers.on_disconnect(&user("user-1"), "c1", 10);
         h.timers.dispose();
         assert!(!h.timers.is_online(&user("user-1")));
-        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        reach_the_deadline().await;
+
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
         assert!(h.facts.try_recv().is_err());
+        assert!(h.touched.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reconnect_during_the_last_seen_write_never_publishes_a_stale_offline() {
+        let (mut h, barrier) = harness_holding_the_write();
+        h.timers.on_connect(&user("user-1"), "c1");
+        h.timers.on_disconnect(&user("user-1"), "c1", 42);
+
+        reach_the_deadline().await;
+
+        // The transition is in flight: the write was entered and is blocked, and
+        // the viewer still counts as present because the window holds its entry.
+        assert_eq!(h.touched.try_recv().unwrap(), (user("user-1"), 42));
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
+        assert!(h.facts.try_recv().is_err());
+        assert!(h.timers.is_online(&user("user-1")));
+
+        h.timers.on_connect(&user("user-1"), "c2");
+        barrier.add_permits(1);
+        settle().await;
+
+        assert!(h.timers.is_online(&user("user-1")));
+        assert!(
+            h.facts.try_recv().is_err(),
+            "a viewer that is present again must be neither re-announced nor described as absent"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_last_seen_write_still_publishes_offline_and_audits_the_chain() {
+        let logs = LogBuffer::default();
+        let _guard = tracing::subscriber::set_default(json_subscriber(&logs));
+        let mut h = build(Sinks {
+            fail_persist: true,
+            ..Sinks::default()
+        });
+        h.timers.on_connect(&user("user-1"), "c1");
+        h.timers.on_disconnect(&user("user-1"), "c1", 42);
+
+        reach_the_deadline().await;
+
+        assert_eq!(h.facts.try_recv().unwrap(), online("user-1"));
+        assert_eq!(h.facts.try_recv().unwrap(), offline("user-1", 42));
+        assert_eq!(
+            logs.chains("presence: failed to persist last_seen_at"),
+            vec!["persistence operation failed: disk gone".to_owned()]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_publication_is_audited_once_per_lost_fact_with_its_full_chain() {
+        let logs = LogBuffer::default();
+        let _guard = tracing::subscriber::set_default(json_subscriber(&logs));
+        let h = build(Sinks {
+            fail_publish: true,
+            ..Sinks::default()
+        });
+        h.timers.on_connect(&user("user-1"), "c1");
+        h.timers.on_disconnect(&user("user-1"), "c1", 42);
+
+        reach_the_deadline().await;
+
+        // Two lost facts, two audit lines, and the transition still committed.
+        assert_eq!(
+            logs.chains("presence: failed to publish a presence fact"),
+            vec![
+                "presence fact rejected: transport registry poisoned".to_owned(),
+                "presence fact rejected: transport registry poisoned".to_owned(),
+            ]
+        );
+        assert!(!h.timers.is_online(&user("user-1")));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_infallible_sink_needs_no_error_type_of_its_own() {
+        #[derive(Clone)]
+        struct NoEffects;
+
+        impl LastSeenSink for NoEffects {
+            async fn touch_last_seen(
+                &self,
+                _user_id: UserId,
+                _last_seen_at: i64,
+            ) -> Result<(), PersistenceFailure> {
+                Ok(())
+            }
+        }
+
+        impl PresenceFactSink for NoEffects {
+            type Error = Infallible;
+
+            fn publish(&self, _fact: PresenceFact) -> Result<(), Self::Error> {
+                Ok(())
+            }
+        }
+
+        let timers = PresenceGraceTimers::new(
+            NoEffects,
+            NoEffects,
+            GraceWindow::from_millis_or_default(Some(GRACE_MS)),
+        );
+        timers.on_connect(&user("user-1"), "c1");
+        timers.on_disconnect(&user("user-1"), "c1", 10);
+
+        reach_the_deadline().await;
+
+        assert!(!timers.is_online(&user("user-1")));
+    }
+
+    fn json_subscriber(logs: &LogBuffer) -> impl tracing::Subscriber + Send + Sync {
+        tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish()
+    }
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl LogBuffer {
+        fn chains(&self, message: &str) -> Vec<String> {
+            let bytes = self.0.lock().unwrap().clone();
+            String::from_utf8(bytes)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .filter(|event| event["fields"]["message"] == message)
+                .map(|event| event["fields"]["error_chain"].as_str().unwrap().to_owned())
+                .collect()
+        }
+    }
+
+    struct LogWriter(LogBuffer);
+
+    impl Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuffer {
+        type Writer = LogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            LogWriter(self.clone())
+        }
     }
 }
