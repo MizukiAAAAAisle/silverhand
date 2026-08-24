@@ -19,7 +19,7 @@ use std::future::Future;
 use crate::{
     identity::{AgentId, HostId},
     persistence::PersistenceFailure,
-    teardown::facts::AgentTeardownCommitted,
+    teardown::write::AgentTornDown,
 };
 
 /// A deletion attempt that is durably recorded. Carries exactly what completing
@@ -103,7 +103,13 @@ pub enum CompleteDeletion {
     AttemptLost,
     /// Boxed: this is the only arm that carries facts, and the refusals are
     /// what a hot retry loop moves around.
-    Committed(Box<AgentTeardownCommitted>),
+    ///
+    /// The completing write's compare-and-set is "still active, still on the
+    /// computer this attempt routes to", which IS
+    /// [`crate::teardown::eligibility::AgentTeardownEligibility::ActiveOn`] — so it
+    /// mints its witness through the same rule the other producers use rather than
+    /// re-stating the comparison for itself.
+    Committed(Box<AgentTornDown>),
 }
 
 /// The durable half of the deletion lifecycle. Both writes are short and hold no

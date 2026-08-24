@@ -1,23 +1,30 @@
 //! Deleting a computer, and with it everything rooted on that computer.
 //!
-//! Two rules live here, and they are deliberately at different depths:
+//! Two rules live here, at deliberately different depths:
 //!
-//!  - [`computer_lifecycle_refusal`] is a PRE-FLIGHT question — is this computer's
-//!    lifecycle the user's to end at all — answerable without taking a write lock,
-//!    because saying "not user-managed" needs no coordination. The conditional row
-//!    delete re-states the same condition in its own `WHERE`, so this answering
-//!    early is an optimization, not the guarantee.
-//!  - [`cascade_refusal`] is the IN-LOCK question, decided from the authoritative
+//!  - [`hold_computer_lifecycle`] answers whether this computer's lifecycle is a
+//!    user request's to END at all. It is answerable from the computer row alone,
+//!    so a pre-flight face may ask it without taking a write lock to say no. The
+//!    conditional row delete re-states the same condition in its own `WHERE`, so
+//!    answering early is an optimization, not the guarantee.
+//!  - [`admit_cascade`] is the IN-LOCK question, decided from the authoritative
 //!    dependency set. Every refusal it produces rolls the whole scope back, which
 //!    is what makes "non-2xx means nothing happened — including bytes" true: the
 //!    commit is the single decision point, and every unrollbackable effect (runtime
 //!    stops, the host-local purge, the blob sweep) runs after it.
+//!
+//! WHOSE computer it is belongs to neither: that is authorization over a computer
+//! and lives in [`crate::capability::computer_access`]. This module consumes its
+//! witness, so the order — is it theirs, then may its lifecycle be ended, then does
+//! its dependency set admit the cascade — is carried by the types rather than by an
+//! implementation remembering to ask in that order.
 //!
 //! A regular workspace is NOT rooted on a computer, so this cascade can never
 //! reach one. Its member agents placed here are deleted, which is the same outcome
 //! as deleting those agents individually.
 
 use crate::{
+    capability::computer_access::ComputerAccessHeld,
     identity::UserId,
     teardown::{
         eligibility::{TeardownBranch, teardown_branch},
@@ -39,40 +46,54 @@ pub enum CascadeConsent {
     Absent,
 }
 
-/// Why a computer's lifecycle is not the requester's to end. Both arms are
-/// pre-flight and neither takes a lock to say no.
+/// Proof that this computer's lifecycle is a user request's to end, and that the
+/// requester it answers to was already established.
+///
+/// Private constructor, and it owns both halves it rests on: the access witness and
+/// the computer facts it judged. So a committed cascade cannot describe a computer
+/// other than the one admitted, and cannot exist for a requester no rule matched.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ComputerLifecycleRefused {
-    /// No such computer, or not this requester's. ONE arm on purpose: a requester
-    /// who does not own the computer must not learn that the id exists.
-    NotFound,
-    /// Present and theirs, but the platform owns this computer's lifecycle.
+pub struct ComputerLifecycleHeld {
+    access: ComputerAccessHeld,
+    facts: ComputerTeardownFacts,
+}
+
+impl ComputerLifecycleHeld {
+    /// The owner every post-commit announcement is fanned out on. Read from the
+    /// access witness, because by then the row it came from is deleted.
+    pub fn owner(&self) -> &UserId {
+        self.access.owner()
+    }
+
+    pub fn computer(&self) -> &ComputerTeardownFacts {
+        &self.facts
+    }
+}
+
+/// The lifecycle rule's verdict.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ComputerLifecycle {
+    Held(ComputerLifecycleHeld),
+    /// Theirs, but the platform owns this computer's lifecycle.
     NotUserManaged,
 }
 
-/// Whether this requester may end this computer's lifecycle at all.
+/// May this computer's lifecycle be ended by a user request?
 ///
 /// The deletable computer is a CONJUNCTION — a `remote` machine the user invited —
 /// and it is stated here rather than pre-combined by an adapter, so the other
 /// combinations cannot quietly acquire a meaning. An app install and a system
 /// computer are refused for the same reason a local one is: their lifecycle is not
 /// a user request's to end.
-pub fn computer_lifecycle_refusal(
-    computer: Option<&ComputerTeardownFacts>,
-    requester: &UserId,
-) -> Option<ComputerLifecycleRefused> {
-    let Some(computer) = computer else {
-        return Some(ComputerLifecycleRefused::NotFound);
-    };
-    if computer.user_id.as_ref() != Some(requester) {
-        return Some(ComputerLifecycleRefused::NotFound);
-    }
-    if computer.provisioning_source != ProvisioningSource::UserInvite
-        || computer.kind != HostKind::Remote
+pub fn hold_computer_lifecycle(
+    access: ComputerAccessHeld,
+    facts: ComputerTeardownFacts,
+) -> ComputerLifecycle {
+    if facts.provisioning_source != ProvisioningSource::UserInvite || facts.kind != HostKind::Remote
     {
-        return Some(ComputerLifecycleRefused::NotUserManaged);
+        return ComputerLifecycle::NotUserManaged;
     }
-    None
+    ComputerLifecycle::Held(ComputerLifecycleHeld { access, facts })
 }
 
 /// Why the cascade may not run, decided from the dependency set read under the
@@ -92,7 +113,57 @@ pub enum CascadeRefused {
     ConsentRequired { dependents: Vec<AgentTeardownFacts> },
 }
 
-/// Whether the authoritative dependency set admits the cascade.
+/// Proof that the authoritative dependency set admitted the cascade.
+///
+/// Owns the set it judged and the lifecycle witness it required, so a committed
+/// cascade can be built only around facts this rule saw, and only for a computer
+/// whose lifecycle and requester were established first. Transitive on purpose:
+/// the write boundary consumes one witness and gets all three answers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CascadeAdmitted {
+    lifecycle: ComputerLifecycleHeld,
+    dependents: Vec<AgentTeardownFacts>,
+}
+
+impl CascadeAdmitted {
+    pub fn lifecycle(&self) -> &ComputerLifecycleHeld {
+        &self.lifecycle
+    }
+
+    /// Hand the lifecycle witness on to the committed outcome, which must keep it:
+    /// the owner it names is read after the row it came from is deleted.
+    pub fn into_lifecycle(self) -> ComputerLifecycleHeld {
+        self.lifecycle
+    }
+
+    /// Every agent row this cascade may delete, as judged.
+    pub fn dependents(&self) -> &[AgentTeardownFacts] {
+        &self.dependents
+    }
+
+    /// The admitted rows whose stage owes nothing but the row delete. Derived from
+    /// the judged set through the one stage authority, so the half of a cascade
+    /// that has no post-commit work of its own cannot be reported from anywhere
+    /// else.
+    pub fn row_only(&self) -> Vec<AgentTeardownFacts> {
+        self.dependents
+            .iter()
+            .filter(|agent| {
+                teardown_branch(agent.materialization_status) == TeardownBranch::RowOnly
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+/// The cascade rule's verdict.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CascadeAdmission {
+    Admitted(CascadeAdmitted),
+    Refused(CascadeRefused),
+}
+
+/// Does the authoritative dependency set admit the cascade?
 ///
 /// Legality is decided before consent. A computer holding a mid-materialization
 /// agent is not made deletable by confirming a cascade, so reporting the missing
@@ -101,10 +172,15 @@ pub enum CascadeRefused {
 /// TypeScript authority's, not derived: both are transient and either would be a
 /// defensible answer for a computer holding both, so the two implementations must
 /// at least answer identically while both are reachable.
-pub fn cascade_refusal(
-    agents: &[AgentTeardownFacts],
+///
+/// The set is taken BY VALUE: the admitted witness owns it, and the consent refusal
+/// hands it back rather than copying it, so there is no second set anywhere for a
+/// report to disagree with.
+pub fn admit_cascade(
+    lifecycle: ComputerLifecycleHeld,
+    agents: Vec<AgentTeardownFacts>,
     consent: CascadeConsent,
-) -> Option<CascadeRefused> {
+) -> CascadeAdmission {
     // The stage rule is the single authority for "may this row be torn down", so a
     // stage that stops being teardownable joins this refusal without being
     // mentioned here.
@@ -113,21 +189,24 @@ pub fn cascade_refusal(
         .filter(|agent| teardown_branch(agent.materialization_status) == TeardownBranch::Refused)
         .count();
     if in_flight > 0 {
-        return Some(CascadeRefused::MaterializationInFlight { agents: in_flight });
+        return CascadeAdmission::Refused(CascadeRefused::MaterializationInFlight {
+            agents: in_flight,
+        });
     }
     let deleting = agents
         .iter()
         .filter(|agent| agent.deletion_started_at.is_some())
         .count();
     if deleting > 0 {
-        return Some(CascadeRefused::DeletionInFlight { agents: deleting });
+        return CascadeAdmission::Refused(CascadeRefused::DeletionInFlight { agents: deleting });
     }
     if !agents.is_empty() && consent == CascadeConsent::Absent {
-        return Some(CascadeRefused::ConsentRequired {
-            dependents: agents.to_vec(),
-        });
+        return CascadeAdmission::Refused(CascadeRefused::ConsentRequired { dependents: agents });
     }
-    None
+    CascadeAdmission::Admitted(CascadeAdmitted {
+        lifecycle,
+        dependents: agents,
+    })
 }
 
 #[cfg(test)]
@@ -135,11 +214,46 @@ mod tests {
     use super::*;
     use crate::{
         agent_lifecycle::MaterializationStatus,
+        capability::computer_access::{
+            ComputerAccess, ComputerOwnershipFacts, can_access_computer,
+        },
         identity::{AgentId, HostId},
     };
 
     fn user(id: &str) -> UserId {
         UserId::parse(id).expect("user id")
+    }
+
+    /// The access witness cannot be built from parts, so every test that needs one
+    /// obtains it the way production does. That is the guarantee, not a detour.
+    fn access(owner: &str) -> ComputerAccessHeld {
+        let facts = ComputerOwnershipFacts {
+            owner: Some(user(owner)),
+        };
+        let ComputerAccess::Held(held) = can_access_computer(&user(owner), Some(&facts)) else {
+            panic!("expected the owner to be admitted");
+        };
+        held
+    }
+
+    fn computer(kind: HostKind, provisioning_source: ProvisioningSource) -> ComputerTeardownFacts {
+        ComputerTeardownFacts {
+            id: HostId::parse("h1").expect("host id"),
+            kind,
+            provisioning_source,
+        }
+    }
+
+    fn user_managed() -> ComputerTeardownFacts {
+        computer(HostKind::Remote, ProvisioningSource::UserInvite)
+    }
+
+    fn lifecycle_held() -> ComputerLifecycleHeld {
+        let ComputerLifecycle::Held(held) = hold_computer_lifecycle(access("u1"), user_managed())
+        else {
+            panic!("expected a user-managed computer to be admitted");
+        };
+        held
     }
 
     fn agent(id: &str, status: MaterializationStatus) -> AgentTeardownFacts {
@@ -157,134 +271,125 @@ mod tests {
 
     fn deleting(id: &str) -> AgentTeardownFacts {
         AgentTeardownFacts {
-            deletion_started_at: Some(17),
+            deletion_started_at: Some(1),
             ..agent(id, MaterializationStatus::Active)
         }
     }
 
-    fn computer(
-        owner: Option<&str>,
-        kind: HostKind,
-        provisioning_source: ProvisioningSource,
-    ) -> ComputerTeardownFacts {
-        ComputerTeardownFacts {
-            id: HostId::parse("h1").expect("host id"),
-            user_id: owner.map(user),
-            kind,
-            provisioning_source,
+    fn refusal(agents: Vec<AgentTeardownFacts>, consent: CascadeConsent) -> Option<CascadeRefused> {
+        match admit_cascade(lifecycle_held(), agents, consent) {
+            CascadeAdmission::Admitted(_) => None,
+            CascadeAdmission::Refused(refused) => Some(refused),
         }
-    }
-
-    fn user_managed() -> ComputerTeardownFacts {
-        computer(Some("u1"), HostKind::Remote, ProvisioningSource::UserInvite)
-    }
-
-    #[test]
-    fn the_owner_of_a_user_invited_remote_computer_may_end_its_lifecycle() {
-        assert_eq!(
-            computer_lifecycle_refusal(Some(&user_managed()), &user("u1")),
-            None
-        );
-    }
-
-    #[test]
-    fn a_computer_that_is_not_the_requesters_is_indistinguishable_from_absent() {
-        // Both answer NotFound, which is the point: a non-owner learns nothing
-        // about the id, not even that a computer they may not touch exists.
-        assert_eq!(
-            computer_lifecycle_refusal(None, &user("u1")),
-            Some(ComputerLifecycleRefused::NotFound)
-        );
-        assert_eq!(
-            computer_lifecycle_refusal(Some(&user_managed()), &user("u2")),
-            Some(ComputerLifecycleRefused::NotFound)
-        );
-        assert_eq!(
-            computer_lifecycle_refusal(
-                Some(&computer(
-                    None,
-                    HostKind::Remote,
-                    ProvisioningSource::UserInvite
-                )),
-                &user("u1")
-            ),
-            Some(ComputerLifecycleRefused::NotFound)
-        );
     }
 
     #[test]
     fn both_halves_of_user_managed_are_required() {
-        // Each combination that is not (remote, user_invite) is refused for the
-        // same reason, so neither half can be dropped from the conjunction.
         for facts in [
-            computer(Some("u1"), HostKind::Local, ProvisioningSource::UserInvite),
-            computer(Some("u1"), HostKind::Remote, ProvisioningSource::AppInstall),
-            computer(Some("u1"), HostKind::Remote, ProvisioningSource::System),
+            computer(HostKind::Local, ProvisioningSource::UserInvite),
+            computer(HostKind::Remote, ProvisioningSource::AppInstall),
+            computer(HostKind::Remote, ProvisioningSource::System),
+            computer(HostKind::Local, ProvisioningSource::AppInstall),
         ] {
             assert_eq!(
-                computer_lifecycle_refusal(Some(&facts), &user("u1")),
-                Some(ComputerLifecycleRefused::NotUserManaged),
-                "{facts:?} must not be user-deletable"
+                hold_computer_lifecycle(access("u1"), facts),
+                ComputerLifecycle::NotUserManaged
             );
         }
     }
 
     #[test]
-    fn an_empty_computer_needs_no_confirmation() {
-        assert_eq!(cascade_refusal(&[], CascadeConsent::Absent), None);
+    fn the_lifecycle_witness_carries_the_requester_the_fan_out_needs() {
+        // Read from the access witness rather than the computer row, because by the
+        // time the fan-out runs that row is deleted.
+        let held = lifecycle_held();
+        assert_eq!(held.owner(), &user("u1"));
+        assert_eq!(held.computer(), &user_managed());
     }
 
     #[test]
-    fn a_confirmed_cascade_over_teardownable_agents_is_admitted() {
-        assert_eq!(
-            cascade_refusal(
-                &[
-                    agent("a1", MaterializationStatus::Active),
-                    agent("a2", MaterializationStatus::Failed)
-                ],
-                CascadeConsent::Confirmed
-            ),
-            None
-        );
+    fn a_computer_with_no_agents_needs_no_confirmation() {
+        assert_eq!(refusal(Vec::new(), CascadeConsent::Absent), None);
     }
 
     #[test]
     fn an_unconfirmed_cascade_reports_what_it_would_have_destroyed() {
-        let agents = [agent("a1", MaterializationStatus::Active)];
         assert_eq!(
-            cascade_refusal(&agents, CascadeConsent::Absent),
+            refusal(
+                vec![agent("a1", MaterializationStatus::Active)],
+                CascadeConsent::Absent
+            ),
             Some(CascadeRefused::ConsentRequired {
-                dependents: agents.to_vec()
+                dependents: vec![agent("a1", MaterializationStatus::Active)],
             })
         );
     }
 
     #[test]
-    fn illegality_is_reported_even_when_the_cascade_was_never_confirmed() {
-        // Consent cannot make either of these legal, so answering "confirm first"
-        // would walk the user through a dialog whose answer is refused anyway.
+    fn a_confirmed_cascade_admits_the_very_set_it_judged() {
+        let agents = vec![
+            agent("a1", MaterializationStatus::Active),
+            agent("a2", MaterializationStatus::Failed),
+        ];
+        let CascadeAdmission::Admitted(admitted) =
+            admit_cascade(lifecycle_held(), agents.clone(), CascadeConsent::Confirmed)
+        else {
+            panic!("expected the cascade to be admitted");
+        };
+        assert_eq!(admitted.dependents(), agents.as_slice());
+        assert_eq!(admitted.lifecycle().owner(), &user("u1"));
+    }
+
+    #[test]
+    fn the_row_only_half_is_derived_through_the_one_stage_authority() {
+        let CascadeAdmission::Admitted(admitted) = admit_cascade(
+            lifecycle_held(),
+            vec![
+                agent("a1", MaterializationStatus::Active),
+                agent("a2", MaterializationStatus::Failed),
+            ],
+            CascadeConsent::Confirmed,
+        ) else {
+            panic!("expected the cascade to be admitted");
+        };
         assert_eq!(
-            cascade_refusal(
-                &[agent("a1", MaterializationStatus::PendingMaterialization)],
-                CascadeConsent::Absent
-            ),
-            Some(CascadeRefused::MaterializationInFlight { agents: 1 })
-        );
-        assert_eq!(
-            cascade_refusal(&[deleting("a1")], CascadeConsent::Absent),
-            Some(CascadeRefused::DeletionInFlight { agents: 1 })
+            admitted
+                .row_only()
+                .iter()
+                .map(|agent| agent.id.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["a2"]
         );
     }
 
     #[test]
+    fn illegality_is_reported_even_when_the_cascade_was_never_confirmed() {
+        // Confirming would not make it legal, so asking for confirmation first
+        // would walk the user through a dialog whose answer is refused anyway.
+        for consent in [CascadeConsent::Absent, CascadeConsent::Confirmed] {
+            assert_eq!(
+                refusal(
+                    vec![agent("a1", MaterializationStatus::PendingMaterialization)],
+                    consent
+                ),
+                Some(CascadeRefused::MaterializationInFlight { agents: 1 })
+            );
+            assert_eq!(
+                refusal(vec![deleting("a1")], consent),
+                Some(CascadeRefused::DeletionInFlight { agents: 1 })
+            );
+        }
+    }
+
+    #[test]
     fn a_stage_in_flight_is_named_before_a_deletion_in_flight() {
-        // Both are transient; the order is parity with the TypeScript authority
-        // while both implementations are reachable, and this pins it.
+        // Both are transient and either answer would be defensible; the order is
+        // parity with the TypeScript authority, not a derived principle.
         assert_eq!(
-            cascade_refusal(
-                &[
+            refusal(
+                vec![
                     deleting("a1"),
-                    agent("a2", MaterializationStatus::PendingMaterialization)
+                    agent("a2", MaterializationStatus::PendingMaterialization),
                 ],
                 CascadeConsent::Confirmed
             ),
@@ -295,19 +400,35 @@ mod tests {
     #[test]
     fn a_refusal_counts_every_agent_it_is_about() {
         assert_eq!(
-            cascade_refusal(
-                &[
+            refusal(
+                vec![
                     agent("a1", MaterializationStatus::PendingMaterialization),
                     agent("a2", MaterializationStatus::PendingMaterialization),
-                    agent("a3", MaterializationStatus::Active)
                 ],
                 CascadeConsent::Confirmed
             ),
             Some(CascadeRefused::MaterializationInFlight { agents: 2 })
         );
         assert_eq!(
-            cascade_refusal(&[deleting("a1"), deleting("a2")], CascadeConsent::Confirmed),
-            Some(CascadeRefused::DeletionInFlight { agents: 2 })
+            refusal(
+                vec![deleting("a1"), deleting("a2"), deleting("a3")],
+                CascadeConsent::Confirmed
+            ),
+            Some(CascadeRefused::DeletionInFlight { agents: 3 })
+        );
+    }
+
+    #[test]
+    fn a_teardownable_stage_is_not_in_flight_for_either_reason() {
+        assert_eq!(
+            refusal(
+                vec![
+                    agent("a1", MaterializationStatus::Active),
+                    agent("a2", MaterializationStatus::Failed),
+                ],
+                CascadeConsent::Confirmed
+            ),
+            None
         );
     }
 }

@@ -6,7 +6,7 @@
 
 use crate::{
     agent_lifecycle::MaterializationStatus,
-    identity::{AgentId, ConversationId, HostId, UserId},
+    identity::{AgentId, ConversationId, HostId},
     runtime_credential::{RuntimeGeneration, RuntimeScope},
     runtime_event::RuntimeObservedStatus,
 };
@@ -83,15 +83,6 @@ pub struct AgentTeardownCapture {
     pub regular_workspace_count: u32,
 }
 
-/// What a committed teardown proved: the facts it deleted the row on, and the
-/// post-commit work captured from that same snapshot. One type, because every
-/// write path that deletes an agent owes exactly this pair.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentTeardownCommitted {
-    pub facts: AgentTeardownFacts,
-    pub capture: AgentTeardownCapture,
-}
-
 /// Where a computer record came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProvisioningSource {
@@ -111,18 +102,20 @@ pub enum HostKind {
     Remote,
 }
 
-/// The computer facts the pre-flight refusals read: who owns it, and the two
-/// halves of "is this lifecycle the user's to end".
+/// The computer facts the LIFECYCLE rule reads: the two halves of "is this
+/// lifecycle a user request's to end".
 ///
-/// Both halves are projected RAW rather than pre-combined into one deletable flag,
-/// because the combination is a rule — see
-/// [`crate::teardown::cascade::computer_lifecycle_refusal`] — and an adapter that
+/// Whose computer it is is deliberately absent. Ownership is authorization and is
+/// read as its own narrow projection by [`crate::capability::computer_access`], so
+/// neither rule can answer the other's question from a field it happens to hold.
+///
+/// Both halves here are projected RAW rather than pre-combined into one deletable
+/// flag, because the combination is a rule — see
+/// [`crate::teardown::cascade::hold_computer_lifecycle`] — and an adapter that
 /// collapsed them would hold that rule where no test of this layer can see it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComputerTeardownFacts {
     pub id: HostId,
-    /// Absent for a computer with no owner, which no user request may delete.
-    pub user_id: Option<UserId>,
     pub kind: HostKind,
     pub provisioning_source: ProvisioningSource,
 }

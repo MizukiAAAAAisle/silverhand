@@ -10,8 +10,13 @@
 //! may not run inside a write lock, and one answers a refusal without taking a
 //! write lock to say no. Those pre-lock reads are HINTS ([`read`]); the
 //! authoritative facts are re-read under the one write boundary ([`write`]) and
-//! judged there by [`eligibility::eligibility_moved`] and
-//! [`cascade::cascade_refusal`].
+//! judged there by [`eligibility::hold_eligibility`] and [`cascade::admit_cascade`].
+//! Each admits by minting a witness that owns the facts it judged, and a committed
+//! outcome is only constructible around one, so no implementation can commit on a
+//! comparison it re-stated for itself.
+//!
+//! WHOSE computer it is is not decided here at all: that is authorization and lives
+//! in [`crate::capability::computer_access`]. This namespace consumes its witness.
 
 pub mod cascade;
 pub mod eligibility;

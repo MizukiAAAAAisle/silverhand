@@ -7,14 +7,15 @@
 //!
 //! None of it is the decision. The authoritative facts are re-read inside the
 //! mechanism ([`crate::teardown::write::AgentTeardownUnitOfWork`]) and judged there
-//! by [`crate::teardown::eligibility::eligibility_moved`] and
-//! [`crate::teardown::cascade::cascade_refusal`]. A cascade that trusted this face
+//! by [`crate::teardown::eligibility::hold_eligibility`] and
+//! [`crate::teardown::cascade::admit_cascade`]. A cascade that trusted this face
 //! would delete an agent that moved computer meanwhile, or tear down a row whose
 //! materialization restarted.
 
 use std::future::Future;
 
 use crate::{
+    capability::computer_access::ComputerOwnershipFacts,
     identity::{AgentId, HostId},
     persistence::PersistenceFailure,
     teardown::facts::{AgentRuntimeSessionFacts, AgentTeardownFacts, ComputerTeardownFacts},
@@ -46,8 +47,20 @@ pub trait AgentTeardownReadPort: Clone + Send + Sync + 'static {
         agent_id: &AgentId,
     ) -> impl Future<Output = Result<Vec<AgentRuntimeSessionFacts>, PersistenceFailure>> + Send;
 
-    /// Pre-flight ownership and lifecycle refusals for the computer path.
-    fn read_computer_facts(
+    /// Whose computer this is, for the pre-flight access refusal. Absent when the
+    /// id is unknown, which that rule folds into the same answer as "someone
+    /// else's".
+    fn read_computer_ownership(
+        &self,
+        host_id: &HostId,
+    ) -> impl Future<Output = Result<Option<ComputerOwnershipFacts>, PersistenceFailure>> + Send;
+
+    /// The lifecycle halves, for the pre-flight refusal that a platform-owned
+    /// computer is not a user request's to end. Separate from
+    /// [`Self::read_computer_ownership`] because the two rules are separate: one
+    /// projection serving both would let either rule read a fact it has no business
+    /// deciding on.
+    fn read_computer_lifecycle(
         &self,
         host_id: &HostId,
     ) -> impl Future<Output = Result<Option<ComputerTeardownFacts>, PersistenceFailure>> + Send;

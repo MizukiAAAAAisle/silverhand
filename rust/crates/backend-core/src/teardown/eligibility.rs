@@ -57,9 +57,13 @@ pub enum AgentTeardownEligibility {
     /// The row-only branch: no runtime stops, no purge, nothing routed — so
     /// placement cannot be wrong and is not part of the eligibility.
     RowOnly,
-    /// The destructive branch, which has already destroyed this computer's
-    /// host-local tree.
-    Purged { host_id: HostId },
+    /// Active, and on this computer. Both axes owe the placement comparison, for
+    /// two different reasons: the single-agent path has ALREADY destroyed that
+    /// computer's host-local tree before taking the lock, and the computer
+    /// cascade's whole dependency set is keyed on that computer. The arm names the
+    /// comparison rather than either reason, so neither axis has to pretend it is
+    /// the other.
+    ActiveOn { host_id: HostId },
 }
 
 impl AgentTeardownEligibility {
@@ -67,15 +71,16 @@ impl AgentTeardownEligibility {
     pub fn expected_status(&self) -> MaterializationStatus {
         match self {
             Self::RowOnly => MaterializationStatus::Failed,
-            Self::Purged { .. } => MaterializationStatus::Active,
+            Self::ActiveOn { .. } => MaterializationStatus::Active,
         }
     }
 
-    /// The computer whose tree is already gone, when there is one.
-    pub fn purged_host(&self) -> Option<&HostId> {
+    /// The computer the row must still be on, when placement is part of the
+    /// eligibility at all.
+    pub fn expected_host(&self) -> Option<&HostId> {
         match self {
             Self::RowOnly => None,
-            Self::Purged { host_id } => Some(host_id),
+            Self::ActiveOn { host_id } => Some(host_id),
         }
     }
 }
@@ -94,21 +99,69 @@ pub enum EligibilityMoved {
     Placement,
 }
 
-/// Whether the facts read under the lock still match what the caller acted on.
+/// Proof that THIS rule judged THESE facts and admitted the write.
+///
+/// The witness has no public constructor, and it OWNS the facts it was minted
+/// from — the write boundary reads them back out of it rather than keeping its own
+/// copy. Two things follow, and only these two:
+///
+///  - an implementation cannot report a committed teardown from a comparison it
+///    re-stated itself, because the outcome type it must return can only be built
+///    around a witness (see [`crate::teardown::write::AgentTornDown`]);
+///  - a committed outcome cannot describe a row other than the one that was
+///    admitted, because there is no second place for facts to come from — a stale
+///    or reused witness carries its own stale facts and says so.
+///
+/// What it does NOT prove is that the facts handed in were read under the
+/// mechanism, or read unfiltered. A witness minted from fabricated facts is a
+/// well-formed witness. That residual is the differential persistence contract's,
+/// which must include a fact-filtering case and an in-transaction-versus-pre-read
+/// case, because an implementation that filters facts can still answer correctly
+/// for the cases a naive suite happens to try.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EligibilityHeld {
+    facts: AgentTeardownFacts,
+}
+
+impl EligibilityHeld {
+    /// The facts as judged. The only facts a committed outcome may describe.
+    pub fn facts(&self) -> &AgentTeardownFacts {
+        &self.facts
+    }
+
+    pub fn into_facts(self) -> AgentTeardownFacts {
+        self.facts
+    }
+}
+
+/// The rule's verdict: admitted with a witness, or the fact that moved.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EligibilityVerdict {
+    Held(EligibilityHeld),
+    Moved(EligibilityMoved),
+}
+
+/// Judge the facts read under the mechanism against what the caller acted on.
 ///
 /// Deliberately not conditioned on whether anything moves placement today: the
 /// contract is owed to every engine and every future placement writer, and a
 /// guarantee that rests on the absence of a writer documents nothing.
-pub fn eligibility_moved(
+///
+/// The facts are taken BY VALUE so the admitted verdict can own them. An
+/// implementation that kept its own copy and passed a different one onward is not
+/// expressible: there is nowhere else for a committed outcome to read facts from.
+pub fn hold_eligibility(
     expected: &AgentTeardownEligibility,
-    facts: &AgentTeardownFacts,
-) -> Option<EligibilityMoved> {
+    facts: AgentTeardownFacts,
+) -> EligibilityVerdict {
     if facts.materialization_status != expected.expected_status() {
-        return Some(EligibilityMoved::Materialization);
+        return EligibilityVerdict::Moved(EligibilityMoved::Materialization);
     }
-    match expected.purged_host() {
-        Some(purged) if facts.host_id != *purged => Some(EligibilityMoved::Placement),
-        _ => None,
+    match expected.expected_host() {
+        Some(host_id) if facts.host_id != *host_id => {
+            EligibilityVerdict::Moved(EligibilityMoved::Placement)
+        }
+        _ => EligibilityVerdict::Held(EligibilityHeld { facts }),
     }
 }
 
@@ -134,6 +187,23 @@ mod tests {
         }
     }
 
+    fn moved(
+        expected: &AgentTeardownEligibility,
+        status: MaterializationStatus,
+        host_id: &str,
+    ) -> Option<EligibilityMoved> {
+        match hold_eligibility(expected, facts(status, host_id)) {
+            EligibilityVerdict::Held(_) => None,
+            EligibilityVerdict::Moved(moved) => Some(moved),
+        }
+    }
+
+    fn active_on(host_id: &str) -> AgentTeardownEligibility {
+        AgentTeardownEligibility::ActiveOn {
+            host_id: host(host_id),
+        }
+    }
+
     #[test]
     fn every_stage_states_the_teardown_it_owes() {
         assert_eq!(
@@ -153,21 +223,31 @@ mod tests {
     #[test]
     fn an_unmoved_row_is_still_the_row_the_decision_was_made_for() {
         assert_eq!(
-            eligibility_moved(
-                &AgentTeardownEligibility::Purged {
-                    host_id: host("h1")
-                },
-                &facts(MaterializationStatus::Active, "h1")
-            ),
+            moved(&active_on("h1"), MaterializationStatus::Active, "h1"),
             None
         );
         assert_eq!(
-            eligibility_moved(
+            moved(
                 &AgentTeardownEligibility::RowOnly,
-                &facts(MaterializationStatus::Failed, "h1")
+                MaterializationStatus::Failed,
+                "h1"
             ),
             None
         );
+    }
+
+    #[test]
+    fn the_witness_carries_the_very_facts_that_were_judged() {
+        // The write boundary reads its facts back out of the witness, so this is
+        // the only channel a committed outcome has. A witness that described some
+        // other row would be a committed teardown of a row nothing admitted.
+        let judged = facts(MaterializationStatus::Active, "h1");
+        let EligibilityVerdict::Held(held) = hold_eligibility(&active_on("h1"), judged.clone())
+        else {
+            panic!("expected the rule to admit");
+        };
+        assert_eq!(held.facts(), &judged);
+        assert_eq!(held.into_facts(), judged);
     }
 
     #[test]
@@ -178,18 +258,14 @@ mod tests {
         // the operator to look at a computer while the real event was a
         // provisioning transition — so the stage is the one reported.
         assert_eq!(
-            eligibility_moved(
-                &AgentTeardownEligibility::Purged {
-                    host_id: host("h1")
-                },
-                &facts(MaterializationStatus::Failed, "h2")
-            ),
+            moved(&active_on("h1"), MaterializationStatus::Failed, "h2"),
             Some(EligibilityMoved::Materialization)
         );
         assert_eq!(
-            eligibility_moved(
+            moved(
                 &AgentTeardownEligibility::RowOnly,
-                &facts(MaterializationStatus::Active, "h2")
+                MaterializationStatus::Active,
+                "h2"
             ),
             Some(EligibilityMoved::Materialization)
         );
@@ -198,12 +274,7 @@ mod tests {
     #[test]
     fn a_row_that_moved_computer_is_refused_even_at_the_right_stage() {
         assert_eq!(
-            eligibility_moved(
-                &AgentTeardownEligibility::Purged {
-                    host_id: host("h1")
-                },
-                &facts(MaterializationStatus::Active, "h2")
-            ),
+            moved(&active_on("h1"), MaterializationStatus::Active, "h2"),
             Some(EligibilityMoved::Placement)
         );
     }
@@ -213,9 +284,10 @@ mod tests {
         // No purge was dispatched, so no computer is wrong for it. A row-only
         // teardown of a row that moved computer is still eligible.
         assert_eq!(
-            eligibility_moved(
+            moved(
                 &AgentTeardownEligibility::RowOnly,
-                &facts(MaterializationStatus::Failed, "somewhere-else")
+                MaterializationStatus::Failed,
+                "somewhere-else"
             ),
             None
         );
@@ -228,12 +300,9 @@ mod tests {
             MaterializationStatus::Failed
         );
         assert_eq!(
-            AgentTeardownEligibility::Purged {
-                host_id: host("h1")
-            }
-            .expected_status(),
+            active_on("h1").expected_status(),
             MaterializationStatus::Active
         );
-        assert_eq!(AgentTeardownEligibility::RowOnly.purged_host(), None);
+        assert_eq!(AgentTeardownEligibility::RowOnly.expected_host(), None);
     }
 }
