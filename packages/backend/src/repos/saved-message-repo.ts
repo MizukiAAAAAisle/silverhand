@@ -103,6 +103,12 @@ function placeFromRow(row: JoinedRow): SavedPlace {
 }
 
 function rowToDto(row: JoinedRow, author: MessageAuthorDto | null): SavedMessageDto {
+  if (row.conversation_id !== row.m_conversation_id) {
+    throw new Error(
+      `saved row ${row.id} points at conversation ${row.conversation_id}, ` +
+        `but message ${row.m_id} belongs to ${row.m_conversation_id}`,
+    );
+  }
   return {
     id: row.id,
     saved_at: row.saved_at,
@@ -232,8 +238,8 @@ export class SavedMessageRepo {
 
   /**
    * The viewer's saved messages, newest-saved first. Filters (`workspaceId` /
-   * `since`) are applied in the WHERE clause — BEFORE `ORDER BY saved_at DESC
-   * LIMIT` — so they narrow the whole saved history, not just the capped window
+   * `since`) are applied in the WHERE clause — BEFORE `ORDER BY saved_at DESC,
+   * id DESC LIMIT` — so they narrow the whole saved history, not just the capped window
    * a client would otherwise filter (#task:1258, mirrors archived-channels).
    * `since` is `saved_at >= since` (save-time window, epoch ms).
    *
@@ -292,7 +298,7 @@ export class SavedMessageRepo {
       .prepare<(string | number)[], JoinedRow>(
         `${SELECT_JOINED}
          WHERE ${conds.join('\n           AND ')}
-         ORDER BY sm.saved_at DESC
+         ORDER BY sm.saved_at DESC, sm.id DESC
          LIMIT ?`,
       )
       .all(...params);

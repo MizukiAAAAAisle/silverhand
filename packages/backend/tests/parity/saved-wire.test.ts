@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+import { SavedMessagesQueryInputSchema } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import fixture from '../fixtures/saved-wire.json' with { type: 'json' };
+import queryFixture from '../fixtures/saved-query-wire.json' with { type: 'json' };
+import orderingFixture from '../fixtures/saved-ordering.json' with { type: 'json' };
 
 function fixtureCase(name: string): any {
   const found = fixture.find(entry => entry.name === name);
@@ -146,5 +149,52 @@ describe('saved wire is signed by the production TypeScript routes', () => {
       'human_post',
     ]);
     expect(fixture).toHaveLength(10);
+  });
+
+  it('uses the persisted saved id as the total-order tie break at the 200-row cap', async () => {
+    t = buildTestApp();
+    const workspaceResponse = await http(t).post('/api/workspaces', { name: 'saved-ordering' });
+    const workspace = ((await workspaceResponse.json()) as any).workspace.id as string;
+    const channelResponse = await http(t).post(`/api/workspaces/${workspace}/channels`, {
+      title: 'saved-ordering', member_agent_ids: [],
+    });
+    const conversation = ((await channelResponse.json()) as any).channel.id as string;
+    const messages = new MessageRepo(t.ctx.db);
+    for (let ordinal = 1; ordinal <= orderingFixture.seed_count; ordinal += 1) {
+      const message = messages.insertForConversation({
+        conversationId: conversation,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: `same-millisecond-${ordinal}`,
+      });
+      t.ctx.db.prepare(
+        `INSERT INTO saved_messages (id, user_id, message_id, conversation_id, saved_at)
+         VALUES (?, 'local', ?, ?, 1000)`,
+      ).run(`saved-${String(ordinal).padStart(3, '0')}`, message.id, conversation);
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await http(t).get('/api/saved');
+      expect(response.status).toBe(200);
+      const ids = ((await response.json()) as any).saved.map((entry: any) => entry.id);
+      expect(ids).toHaveLength(orderingFixture.limit);
+      expect(ids[0]).toBe(orderingFixture.first_saved_id);
+      expect(ids.at(-1)).toBe(orderingFixture.last_saved_id);
+    }
+  });
+});
+
+describe('saved query wire is signed by the production TypeScript schema', () => {
+  it('locks ECMAScript trim and number coercion without a second parser', () => {
+    for (const entry of queryFixture) {
+      const parsed = SavedMessagesQueryInputSchema.safeParse(entry.input);
+      if ('issues' in entry) {
+        expect(parsed.success, entry.name).toBe(false);
+        if (!parsed.success) expect(parsed.error.issues, entry.name).toEqual(entry.issues);
+      } else {
+        expect(parsed.success, entry.name).toBe(true);
+        if (parsed.success) expect(parsed.data, entry.name).toEqual(entry.output);
+      }
+    }
   });
 });

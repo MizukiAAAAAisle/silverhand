@@ -9,9 +9,9 @@ mod mutation;
 mod read;
 
 pub use model::{
-    InvalidSavedAt, InvalidSavedEntryId, InvalidTaskNumber, SavedAt, SavedEntry, SavedEntryId,
-    SavedLinkedTask, SavedMessage, SavedMessageProjection, SavedPlace, SavedTaskAssignee,
-    SavedTaskNumber, SavedTaskStatus,
+    InvalidSavedAt, InvalidSavedEntryId, InvalidTaskNumber, SavedAt, SavedCoordinateMismatch,
+    SavedEntry, SavedEntryId, SavedLinkedTask, SavedMessage, SavedMessageProjection, SavedPlace,
+    SavedTaskAssignee, SavedTaskNumber, SavedTaskStatus,
 };
 pub use mutation::{
     CommittedSave, CommittedUnsave, SaveExecution, SavedAction, SavedAftermath, SavedChangeFact,

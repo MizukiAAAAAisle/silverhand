@@ -82,7 +82,7 @@ where
             builder.push(" AND sm.saved_at >= ").push_bind(since.get());
         }
         builder
-            .push(" ORDER BY sm.saved_at DESC LIMIT ")
+            .push(" ORDER BY sm.saved_at DESC, sm.id DESC LIMIT ")
             .push_bind(LIST_LIMIT);
         let rows = builder
             .build()
@@ -129,17 +129,24 @@ fn decode_entry(
     row: &SqliteRow,
     author: Option<silverhand_backend_core::messaging::MessageAuthor>,
 ) -> Result<SavedEntry, PersistenceFailure> {
-    let conversation = conversation_id(
-        row.try_get("conversation_id")
+    let saved_conversation = conversation_id(
+        row.try_get("saved_conversation_id")
             .map_err(SavedStoreError::from)?,
     )?;
+    let message_conversation = conversation_id(
+        row.try_get("message_conversation_id")
+            .map_err(SavedStoreError::from)?,
+    )?;
+    if saved_conversation != message_conversation {
+        return Err(SavedStoreError::MismatchedConversation.into());
+    }
     let place = match row
         .try_get::<String, _>("placement_kind")
         .map_err(SavedStoreError::from)?
         .as_str()
     {
         "workspace" => SavedPlace::WorkspaceChannel {
-            conversation: conversation.clone(),
+            conversation: saved_conversation.clone(),
             workspace: WorkspaceId::parse(
                 row.try_get::<Option<String>, _>("workspace_id")
                     .map_err(SavedStoreError::from)?
@@ -152,7 +159,7 @@ fn decode_entry(
                 .ok_or(SavedStoreError::MalformedPlacement)?,
         },
         "direct_pair" => SavedPlace::DirectPair {
-            conversation: conversation.clone(),
+            conversation: saved_conversation.clone(),
         },
         _ => return Err(SavedStoreError::MalformedPlacement.into()),
     };
@@ -161,7 +168,7 @@ fn decode_entry(
     let linked_task = decode_linked_task(row)?;
     let projection = SavedMessageProjection {
         id: message_id(row.try_get("message_id").map_err(SavedStoreError::from)?)?,
-        conversation,
+        conversation: message_conversation,
         from_kind: decode_from_kind(row.try_get("from_kind").map_err(SavedStoreError::from)?)?,
         from_agent: optional_agent(
             row.try_get("from_agent_id")
@@ -186,7 +193,7 @@ fn decode_entry(
             .map_err(|_| SavedStoreError::MalformedIdentity)?,
         linked_task,
     };
-    Ok(SavedEntry::projected(
+    SavedEntry::projected(
         SavedEntryId::parse(
             row.try_get::<String, _>("saved_id")
                 .map_err(SavedStoreError::from)?,
@@ -199,7 +206,8 @@ fn decode_entry(
                 .map_err(SavedStoreError::from)?,
         )
         .map_err(|_| SavedStoreError::MalformedOrdinal)?,
-    ))
+    )
+    .map_err(|_| SavedStoreError::MismatchedConversation.into())
 }
 
 fn decode_linked_task(row: &SqliteRow) -> Result<Option<SavedLinkedTask>, PersistenceFailure> {

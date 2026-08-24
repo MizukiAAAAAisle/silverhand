@@ -741,7 +741,8 @@ export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;
  *  messages older than the newest N). `workspace_id` narrows to one workspace
  *  (omitted = all workspaces the caller can see); `since` is `saved_at >= since`
  *  (epoch ms) — the SAVE-time window, not message created/updated time, matching
- *  the list's `saved_at DESC` order. All are applied before `ORDER BY … LIMIT`.
+ *  the list's `saved_at DESC, id DESC` total order. All are applied before
+ *  `ORDER BY … LIMIT`.
  *
  *  `user_id` / `agent_id` narrow by SENDER (#task:2059). They are the shared
  *  `SENDER_FILTER_FIELDS` axis above, spread — not copied — so this face and

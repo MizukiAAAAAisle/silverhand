@@ -3,8 +3,7 @@ use silverhand_backend_core::{
     messaging::{
         MessageId,
         collaboration::saved::{
-            CommittedSave, CommittedUnsave, SavedAction, SavedChangeFact, SavedMutationPort,
-            SavedMutationRefusal,
+            CommittedSave, CommittedUnsave, SavedMutationPort, SavedMutationRefusal,
         },
     },
     persistence::PersistenceFailure,
@@ -60,10 +59,11 @@ where
             .map_err(SavedStoreError::from)?;
         let mut entries = decode_entries(&mut tx, rows).await?;
         let entry = entries.pop().ok_or(SavedStoreError::MalformedIdentity)?;
-        let committed = CommittedSave::committed(
-            entry,
-            changed.then(|| SavedChangeFact::committed(viewer, message, SavedAction::Save)),
-        );
+        let committed = if changed {
+            CommittedSave::changed(viewer, entry)
+        } else {
+            CommittedSave::unchanged(entry)
+        };
         tx.commit().await.map_err(SavedStoreError::from)?;
         Ok(Ok(committed))
     }
@@ -86,9 +86,11 @@ where
                 .map_err(SavedStoreError::from)?
                 .rows_affected()
                 == 1;
-        let committed = CommittedUnsave::committed(
-            changed.then(|| SavedChangeFact::committed(viewer, message, SavedAction::Unsave)),
-        );
+        let committed = if changed {
+            CommittedUnsave::changed(viewer, message)
+        } else {
+            CommittedUnsave::unchanged()
+        };
         tx.commit().await.map_err(SavedStoreError::from)?;
         Ok(Ok(committed))
     }

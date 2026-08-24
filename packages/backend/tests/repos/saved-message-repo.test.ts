@@ -230,4 +230,35 @@ describe('SavedMessageRepo — placement-derived read, live participation', () =
       channel_name: dm.title,
     });
   });
+
+  it('refuses a forged saved/message conversation split instead of projecting two coordinates', () => {
+    const workspace = workspaces.insert({
+      name: fixedWorkspaceName('coordinate-ws'),
+      description: null,
+    });
+    workspaces.addUserMember(workspace.id, viewer, 'member');
+    const channel = conversations.insertChannel({
+      workspaceId: workspace.id,
+      title: fixedConversationTitle('source'),
+    });
+    const other = conversations.insertChannel({
+      workspaceId: workspace.id,
+      title: fixedConversationTitle('other'),
+    });
+    conversations.addUser(channel.id, viewer);
+    conversations.addUser(other.id, viewer);
+    const msg = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: viewer,
+      content: 'coordinate mismatch',
+    });
+    const saved = new SavedMessageRepo(db);
+    expect(saved.save(msg.id, viewer)).not.toBeNull();
+    db.prepare('UPDATE saved_messages SET conversation_id = ? WHERE message_id = ?')
+      .run(other.id, msg.id);
+    expect(() => saved.getByMessageIdForUser(msg.id, viewer)).toThrow(
+      /points at conversation.*but message.*belongs to/,
+    );
+  });
 });

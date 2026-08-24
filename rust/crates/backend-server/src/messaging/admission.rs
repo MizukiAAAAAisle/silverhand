@@ -190,7 +190,7 @@ const ECMASCRIPT_WHITESPACE: &[char] = &[
 ];
 
 /// The reference's `.trim()`, exactly.
-fn ecmascript_trim(value: &str) -> &str {
+pub(crate) fn ecmascript_trim(value: &str) -> &str {
     value.trim_matches(|character| ECMASCRIPT_WHITESPACE.contains(&character))
 }
 

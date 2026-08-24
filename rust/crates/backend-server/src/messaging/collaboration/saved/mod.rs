@@ -113,33 +113,48 @@ where
 }
 
 fn list_query(raw: ListQueryWire) -> Result<SavedListQuery, Vec<serde_json::Value>> {
-    let workspace = nonempty(raw.workspace_id)
+    // The workspace member uses a blank-only preprocessor but deliberately does
+    // not trim a nonblank value. Sender ids use SearchOptionalStringSchema and
+    // therefore return the ECMAScript-trimmed value. These are two distinct TS
+    // production contracts despite looking similar at the wire edge.
+    let workspace = blank_to_none(raw.workspace_id)
         .map(WorkspaceId::parse)
         .transpose()
         .map_err(|_| Vec::new())?;
-    let since = match nonempty(raw.since) {
+    let since = match raw.since.filter(|value| !value.is_empty()) {
         None => None,
         Some(raw) => {
-            let parsed = raw.parse::<i64>().map_err(|_| {
-                vec![json_issue(
-                    "invalid_type",
-                    "Expected number, received nan",
-                    "since",
-                )]
+            let parsed = coerce_integer(&raw).map_err(|issue| {
+                vec![match issue {
+                    NumberIssue::Nan => json_issue(
+                        "invalid_type",
+                        "Expected number, received nan",
+                        "nan",
+                        "since",
+                    ),
+                    NumberIssue::Float => json_issue(
+                        "invalid_type",
+                        "Expected integer, received float",
+                        "float",
+                        "since",
+                    ),
+                }]
             })?;
             Some(SavedSince::new(parsed).ok_or_else(|| {
-                vec![serde_json::json!({
-                    "code":"too_small","minimum":0,"type":"number","inclusive":true,
-                    "exact":false,"message":"Number must be greater than or equal to 0","path":["since"]
-                })]
+                vec![json_issue(
+                    "too_small",
+                    "Number must be greater than or equal to 0",
+                    "number",
+                    "since",
+                )]
             })?)
         }
     };
-    let human = nonempty(raw.user_id)
+    let human = search_optional(raw.user_id)
         .map(UserId::parse)
         .transpose()
         .map_err(|_| Vec::new())?;
-    let agent = nonempty(raw.agent_id)
+    let agent = search_optional(raw.agent_id)
         .map(AgentId::parse)
         .transpose()
         .map_err(|_| Vec::new())?;
@@ -163,13 +178,80 @@ fn list_query(raw: ListQueryWire) -> Result<SavedListQuery, Vec<serde_json::Valu
 fn json_issue(
     code: &'static str,
     message: &'static str,
+    received: &'static str,
     member: &'static str,
 ) -> serde_json::Value {
-    serde_json::json!({"code":code,"expected":"number","received":"nan","path":[member],"message":message})
+    if code == "too_small" {
+        return serde_json::json!({
+            "code":"too_small","minimum":0,"type":"number","inclusive":true,
+            "exact":false,"message":message,"path":[member]
+        });
+    }
+    serde_json::json!({"code":code,"expected":if received == "float" { "integer" } else { "number" },"received":received,"path":[member],"message":message})
 }
 
-fn nonempty(raw: Option<String>) -> Option<String> {
-    raw.filter(|value| !value.trim().is_empty())
+fn blank_to_none(raw: Option<String>) -> Option<String> {
+    raw.filter(|value| !crate::messaging::admission::ecmascript_trim(value).is_empty())
+}
+
+fn search_optional(raw: Option<String>) -> Option<String> {
+    raw.and_then(|value| {
+        let trimmed = crate::messaging::admission::ecmascript_trim(&value);
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NumberIssue {
+    Nan,
+    Float,
+}
+
+/// The published query uses `z.coerce.number().int()`. Rust's integer parser is
+/// narrower (it rejects exponent and integral-decimal spellings), so coerce via
+/// a finite f64 first and only then enter the persisted i64 timestamp domain.
+fn coerce_integer(raw: &str) -> Result<i64, NumberIssue> {
+    let trimmed = crate::messaging::admission::ecmascript_trim(raw);
+    let number = if trimmed.is_empty() {
+        0.0
+    } else if matches!(trimmed, "Infinity" | "+Infinity" | "-Infinity") {
+        return Err(NumberIssue::Float);
+    } else if let Some((digits, radix)) = prefixed_integer(trimmed) {
+        u128::from_str_radix(digits, radix)
+            .map(|value| value as f64)
+            .map_err(|_| NumberIssue::Nan)?
+    } else {
+        trimmed.parse::<f64>().map_err(|_| NumberIssue::Nan)?
+    };
+    if number.is_nan() {
+        return Err(NumberIssue::Nan);
+    }
+    if !number.is_finite() {
+        return Err(NumberIssue::Float);
+    }
+    if number.fract() != 0.0 {
+        return Err(NumberIssue::Float);
+    }
+    if number < i64::MIN as f64 || number > i64::MAX as f64 {
+        return Err(NumberIssue::Nan);
+    }
+    Ok(number as i64)
+}
+
+fn prefixed_integer(raw: &str) -> Option<(&str, u32)> {
+    raw.strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .map(|digits| (digits, 16))
+        .or_else(|| {
+            raw.strip_prefix("0b")
+                .or_else(|| raw.strip_prefix("0B"))
+                .map(|digits| (digits, 2))
+        })
+        .or_else(|| {
+            raw.strip_prefix("0o")
+                .or_else(|| raw.strip_prefix("0O"))
+                .map(|digits| (digits, 8))
+        })
 }
 
 async fn save<R, M, A>(

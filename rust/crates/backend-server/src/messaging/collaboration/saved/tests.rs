@@ -14,14 +14,16 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     identity::UserId,
-    messaging::collaboration::saved::{SavedAftermath, SavedChangeFact, SavedPublicationFailure},
+    messaging::collaboration::saved::{
+        SavedAftermath, SavedChangeFact, SavedListQuery, SavedPublicationFailure, SavedSender,
+    },
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
 
-use super::{changed_event, router};
+use super::{ListQueryWire, changed_event, list_query, router};
 
 fn fixture_case(name: &str) -> Value {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
@@ -482,4 +484,134 @@ async fn malformed_persisted_metadata_fails_closed_instead_of_emitting_an_invali
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body, Value::String("Internal Server Error".to_owned()));
     assert_eq!(events.0.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn the_rust_query_boundary_consumes_the_ts_signed_trim_and_coercion_contract() {
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/saved-query-wire.json"
+    )))
+    .unwrap();
+    for case in fixture.as_array().unwrap() {
+        let input = &case["input"];
+        let parsed = list_query(ListQueryWire {
+            workspace_id: input
+                .get("workspace_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            since: input
+                .get("since")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            user_id: input
+                .get("user_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            agent_id: input
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        });
+        if let Some(issues) = case.get("issues") {
+            assert_eq!(
+                Value::Array(parsed.unwrap_err()),
+                *issues,
+                "{}",
+                case["name"]
+            );
+            continue;
+        }
+        let query = parsed.unwrap_or_else(|issues| panic!("{}: {issues:?}", case["name"]));
+        assert_eq!(query_value(query), case["output"], "{}", case["name"]);
+    }
+}
+
+fn query_value(query: SavedListQuery) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(workspace) = query.workspace {
+        out.insert("workspace_id".to_owned(), json!(workspace.as_str()));
+    }
+    if let Some(since) = query.since {
+        out.insert("since".to_owned(), json!(since.get()));
+    }
+    if let Some(sender) = query.sender {
+        match sender {
+            SavedSender::Human(id) => out.insert("user_id".to_owned(), json!(id.as_str())),
+            SavedSender::Agent(id) => out.insert("agent_id".to_owned(), json!(id.as_str())),
+        };
+    }
+    Value::Object(out)
+}
+
+#[tokio::test]
+async fn saved_and_message_conversation_mismatch_is_corruption_not_a_split_wire_coordinate() {
+    let (_directory, path, store, events) = seeded().await;
+    let app = router(store.saved(), store.saved(), events)
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    assert_eq!(
+        call(app.clone(), Method::POST, "/api/messages/message-1/save")
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE saved_messages SET conversation_id='pair-1' WHERE message_id='message-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(app, Method::GET, "/api/saved").await,
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Value::String("Internal Server Error".to_owned())
+        )
+    );
+}
+
+#[tokio::test]
+async fn same_millisecond_saved_rows_have_one_total_order_across_the_cap() {
+    let (_directory, path, store, events) = seeded().await;
+    let ordering: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/saved-ordering.json"
+    )))
+    .unwrap();
+    let count = ordering["seed_count"].as_i64().unwrap();
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    for ordinal in 1..=count {
+        let message = format!("ordered-message-{ordinal:03}");
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, from_kind, from_user_id, author_id, author_name, author_display_name, content, seq, created_at) VALUES (?, 'conversation-1', 'user', 'user-1', 'user-1', 'owner', 'Owner', ?, ?, 100)",
+        )
+        .bind(&message)
+        .bind(format!("same-millisecond-{ordinal}"))
+        .bind(ordinal + 10)
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO saved_messages (id, user_id, message_id, conversation_id, saved_at) VALUES (?, 'user-1', ?, 'conversation-1', 1000)",
+        )
+        .bind(format!("saved-{ordinal:03}"))
+        .bind(message)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    }
+    drop(db);
+    let app = router(store.saved(), store.saved(), events)
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    for _ in 0..3 {
+        let (status, body) = call(app.clone(), Method::GET, "/api/saved").await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["saved"].as_array().unwrap();
+        assert_eq!(entries.len() as u64, ordering["limit"].as_u64().unwrap());
+        assert_eq!(entries[0]["id"], ordering["first_saved_id"]);
+        assert_eq!(entries.last().unwrap()["id"], ordering["last_saved_id"]);
+    }
 }

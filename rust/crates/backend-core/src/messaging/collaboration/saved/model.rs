@@ -203,14 +203,16 @@ impl SavedEntry {
         message: SavedMessage,
         place: SavedPlace,
         saved_at: SavedAt,
-    ) -> Self {
-        debug_assert_eq!(message.projection().conversation, *place.conversation());
-        Self {
+    ) -> Result<Self, SavedCoordinateMismatch> {
+        if message.projection().conversation != *place.conversation() {
+            return Err(SavedCoordinateMismatch);
+        }
+        Ok(Self {
             id,
             message,
             place,
             saved_at,
-        }
+        })
     }
 
     pub fn id(&self) -> &SavedEntryId {
@@ -229,3 +231,7 @@ impl SavedEntry {
         self.saved_at
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("saved row and message disagree on conversation")]
+pub struct SavedCoordinateMismatch;

@@ -22,7 +22,7 @@ pub struct SavedChangeFact {
 }
 
 impl SavedChangeFact {
-    pub fn committed(viewer: UserId, message: MessageId, action: SavedAction) -> Self {
+    fn committed(viewer: UserId, message: MessageId, action: SavedAction) -> Self {
         Self {
             viewer,
             message,
@@ -44,34 +44,92 @@ impl SavedChangeFact {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedSave {
     entry: SavedEntry,
-    fact: Option<SavedChangeFact>,
+    change: SaveChange,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SaveChange {
+    Changed(SavedChangeFact),
+    Unchanged,
 }
 
 impl CommittedSave {
-    pub fn committed(entry: SavedEntry, fact: Option<SavedChangeFact>) -> Self {
-        Self { entry, fact }
+    /// A newly committed save. The event message is derived from the same entry
+    /// returned in the ACK, so the two identities cannot be supplied separately.
+    pub fn changed(viewer: UserId, entry: SavedEntry) -> Self {
+        let message = entry.message().projection().id.clone();
+        Self {
+            entry,
+            change: SaveChange::Changed(SavedChangeFact::committed(
+                viewer,
+                message,
+                SavedAction::Save,
+            )),
+        }
+    }
+
+    pub fn unchanged(entry: SavedEntry) -> Self {
+        Self {
+            entry,
+            change: SaveChange::Unchanged,
+        }
     }
     pub fn entry(&self) -> &SavedEntry {
         &self.entry
     }
     pub fn fact(&self) -> Option<&SavedChangeFact> {
-        self.fact.as_ref()
+        match &self.change {
+            SaveChange::Changed(fact) => Some(fact),
+            SaveChange::Unchanged => None,
+        }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedUnsave {
-    fact: Option<SavedChangeFact>,
+    change: UnsaveChange,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum UnsaveChange {
+    Changed(SavedChangeFact),
+    Unchanged,
 }
 
 impl CommittedUnsave {
-    pub fn committed(fact: Option<SavedChangeFact>) -> Self {
-        Self { fact }
+    pub fn changed(viewer: UserId, message: MessageId) -> Self {
+        Self {
+            change: UnsaveChange::Changed(SavedChangeFact::committed(
+                viewer,
+                message,
+                SavedAction::Unsave,
+            )),
+        }
+    }
+
+    pub fn unchanged() -> Self {
+        Self {
+            change: UnsaveChange::Unchanged,
+        }
     }
     pub fn fact(&self) -> Option<&SavedChangeFact> {
-        self.fact.as_ref()
+        match &self.change {
+            UnsaveChange::Changed(fact) => Some(fact),
+            UnsaveChange::Unchanged => None,
+        }
     }
 }
+
+/// The old free-form constructors would make operation/identity mismatches
+/// representable. The public API deliberately has no such constructor.
+///
+/// ```compile_fail
+/// # use silverhand_backend_core::messaging::collaboration::saved::{CommittedSave, SavedChangeFact, SavedEntry};
+/// fn forge(entry: SavedEntry, fact: SavedChangeFact) {
+///     let _ = CommittedSave::committed(entry, Some(fact));
+/// }
+/// ```
+const _: () = ();
 
 pub trait SavedMutationPort {
     type Error: Error + Send + Sync + 'static;

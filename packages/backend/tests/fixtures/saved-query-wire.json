@@ -1,0 +1,116 @@
+[
+  {
+    "name": "sender_is_ecmascript_trimmed",
+    "input": { "user_id": "﻿user-1﻿" },
+    "output": { "user_id": "user-1" }
+  },
+  {
+    "name": "nel_is_not_ecmascript_whitespace",
+    "input": { "user_id": "user-1" },
+    "output": { "user_id": "user-1" }
+  },
+  {
+    "name": "blank_sender_is_absent",
+    "input": { "agent_id": " ﻿ " },
+    "output": {}
+  },
+  {
+    "name": "workspace_blank_is_absent",
+    "input": { "workspace_id": "﻿" },
+    "output": {}
+  },
+  {
+    "name": "workspace_nonblank_is_not_trimmed_by_the_published_schema",
+    "input": { "workspace_id": " workspace-1 " },
+    "output": { "workspace_id": " workspace-1 " }
+  },
+  {
+    "name": "empty_since_is_absent",
+    "input": { "since": "" },
+    "output": {}
+  },
+  {
+    "name": "whitespace_since_coerces_to_zero",
+    "input": { "since": " " },
+    "output": { "since": 0 }
+  },
+  {
+    "name": "exponent_since_coerces_to_integer",
+    "input": { "since": "1e3" },
+    "output": { "since": 1000 }
+  },
+  {
+    "name": "integral_decimal_since_coerces_to_integer",
+    "input": { "since": "1.0" },
+    "output": { "since": 1 }
+  },
+  {
+    "name": "hex_since_uses_ecmascript_number_coercion",
+    "input": { "since": "0x10" },
+    "output": { "since": 16 }
+  },
+  {
+    "name": "binary_since_uses_ecmascript_number_coercion",
+    "input": { "since": "0b10" },
+    "output": { "since": 2 }
+  },
+  {
+    "name": "octal_since_uses_ecmascript_number_coercion",
+    "input": { "since": "0o10" },
+    "output": { "since": 8 }
+  },
+  {
+    "name": "fractional_since_is_rejected_as_float",
+    "input": { "since": "1.5" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ]
+  },
+  {
+    "name": "infinite_since_is_rejected_as_float",
+    "input": { "since": "Infinity" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ]
+  },
+  {
+    "name": "nan_since_is_rejected_as_nan",
+    "input": { "since": "NaN" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "number",
+        "received": "nan",
+        "message": "Expected number, received nan",
+        "path": ["since"]
+      }
+    ]
+  },
+  {
+    "name": "negative_since_is_rejected",
+    "input": { "since": "-1" },
+    "issues": [
+      {
+        "code": "too_small",
+        "minimum": 0,
+        "type": "number",
+        "inclusive": true,
+        "exact": false,
+        "message": "Number must be greater than or equal to 0",
+        "path": ["since"]
+      }
+    ]
+  }
+]
