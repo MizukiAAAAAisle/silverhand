@@ -49,6 +49,7 @@ const CRATE_ROOTS: &[&str] = &[
 /// guarded by G3, G4 or G5 at all, so adding one is part of adding a namespace.
 const LANE_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "capability"),
+    ("backend-core", "cold_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-server", "host_agent_background"),

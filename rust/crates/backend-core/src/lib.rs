@@ -9,6 +9,7 @@ pub mod access;
 pub mod agent_lifecycle;
 pub mod auth;
 pub mod capability;
+pub mod cold_read;
 pub mod direct_pair_read;
 pub mod foundation_message;
 pub mod host_runtime;
