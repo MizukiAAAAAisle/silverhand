@@ -41,7 +41,8 @@ impl RuntimeControlTarget {
 ///
 /// The use case still asks each question separately and in published order, so
 /// an early refusal does not touch later tables. A production SQLite adapter holds
-/// one read transaction behind this scope; it is dropped before daemon work begins.
+/// one read transaction behind this scope; [`Self::finish`] completes its
+/// asynchronous release before daemon work begins.
 pub trait RuntimeControlAdmissionScope {
     type Error: Error + Send + Sync + 'static;
 
@@ -72,6 +73,13 @@ pub trait RuntimeControlAdmissionScope {
         actor: &UserId,
         agent: &AgentId,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// Finish the consistent read and release its resources.
+    ///
+    /// This is deliberately product language rather than transaction language:
+    /// adapters may use a database transaction, a snapshot handle, or another
+    /// consistency mechanism. Consuming `self` prevents further reads.
+    fn finish(self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 pub trait RuntimeControlAdmission {
@@ -261,32 +269,47 @@ async fn admit<A: RuntimeControlAdmission>(
     target: &RuntimeControlTarget,
 ) -> Result<Option<RuntimeControlAdmissionRefusal>, A::Error> {
     let mut snapshot = admission.begin_snapshot().await?;
-    if !snapshot.conversation_exists(target.conversation()).await? {
-        return Ok(Some(RuntimeControlAdmissionRefusal::ConversationNotFound));
+    let decision = async {
+        if !snapshot.conversation_exists(target.conversation()).await? {
+            return Ok(Some(RuntimeControlAdmissionRefusal::ConversationNotFound));
+        }
+        if !snapshot.agent_exists(target.agent()).await? {
+            return Ok(Some(RuntimeControlAdmissionRefusal::AgentNotFound));
+        }
+        if !snapshot
+            .agent_is_member(target.conversation(), target.agent())
+            .await?
+        {
+            return Ok(Some(RuntimeControlAdmissionRefusal::AgentNotMember));
+        }
+        if !snapshot
+            .actor_may_post(target.conversation(), target.actor())
+            .await?
+        {
+            return Ok(Some(RuntimeControlAdmissionRefusal::Forbidden));
+        }
+        if !snapshot
+            .actor_may_edit_agent(target.actor(), target.agent())
+            .await?
+        {
+            return Ok(Some(RuntimeControlAdmissionRefusal::Forbidden));
+        }
+        Ok(None)
     }
-    if !snapshot.agent_exists(target.agent()).await? {
-        return Ok(Some(RuntimeControlAdmissionRefusal::AgentNotFound));
+    .await;
+
+    match decision {
+        Ok(decision) => {
+            snapshot.finish().await?;
+            Ok(decision)
+        }
+        Err(query_error) => {
+            // The query failure remains the authoritative cause. Finishing is
+            // still awaited so no snapshot can overlap a later side effect.
+            let _finish_result = snapshot.finish().await;
+            Err(query_error)
+        }
     }
-    if !snapshot
-        .agent_is_member(target.conversation(), target.agent())
-        .await?
-    {
-        return Ok(Some(RuntimeControlAdmissionRefusal::AgentNotMember));
-    }
-    if !snapshot
-        .actor_may_post(target.conversation(), target.actor())
-        .await?
-    {
-        return Ok(Some(RuntimeControlAdmissionRefusal::Forbidden));
-    }
-    if !snapshot
-        .actor_may_edit_agent(target.actor(), target.agent())
-        .await?
-    {
-        return Ok(Some(RuntimeControlAdmissionRefusal::Forbidden));
-    }
-    drop(snapshot);
-    Ok(None)
 }
 
 pub async fn start_conversation_runtime<A, P>(
@@ -366,7 +389,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use super::*;
 
@@ -377,12 +403,29 @@ mod tests {
     struct Admission {
         answers: [bool; 5],
         begin_error: Option<Failure>,
+        query_error_at: Option<usize>,
+        finish_error: Option<Failure>,
         calls: Arc<Mutex<Vec<&'static str>>>,
+        finished: Arc<AtomicBool>,
     }
 
     struct Snapshot {
         answers: [bool; 5],
+        query_error_at: Option<usize>,
+        finish_error: Option<Failure>,
         calls: Arc<Mutex<Vec<&'static str>>>,
+        finished: Arc<AtomicBool>,
+    }
+
+    impl Snapshot {
+        fn answer(&self, index: usize, name: &'static str) -> Result<bool, Failure> {
+            self.calls.lock().unwrap().push(name);
+            if self.query_error_at == Some(index) {
+                Err(Failure("query"))
+            } else {
+                Ok(self.answers[index])
+            }
+        }
     }
 
     impl RuntimeControlAdmission for Admission {
@@ -390,11 +433,15 @@ mod tests {
         type Scope = Snapshot;
 
         async fn begin_snapshot(&self) -> Result<Self::Scope, Self::Error> {
+            self.finished.store(false, Ordering::Release);
             self.begin_error.map_or_else(
                 || {
                     Ok(Snapshot {
                         answers: self.answers,
+                        query_error_at: self.query_error_at,
+                        finish_error: self.finish_error,
                         calls: Arc::clone(&self.calls),
+                        finished: Arc::clone(&self.finished),
                     })
                 },
                 Err,
@@ -409,13 +456,11 @@ mod tests {
             &mut self,
             _conversation: &ConversationId,
         ) -> Result<bool, Self::Error> {
-            self.calls.lock().unwrap().push("conversation");
-            Ok(self.answers[0])
+            self.answer(0, "conversation")
         }
 
         async fn agent_exists(&mut self, _agent: &AgentId) -> Result<bool, Self::Error> {
-            self.calls.lock().unwrap().push("agent");
-            Ok(self.answers[1])
+            self.answer(1, "agent")
         }
 
         async fn agent_is_member(
@@ -423,8 +468,7 @@ mod tests {
             _conversation: &ConversationId,
             _agent: &AgentId,
         ) -> Result<bool, Self::Error> {
-            self.calls.lock().unwrap().push("membership");
-            Ok(self.answers[2])
+            self.answer(2, "membership")
         }
 
         async fn actor_may_post(
@@ -432,8 +476,7 @@ mod tests {
             _conversation: &ConversationId,
             _actor: &UserId,
         ) -> Result<bool, Self::Error> {
-            self.calls.lock().unwrap().push("post");
-            Ok(self.answers[3])
+            self.answer(3, "post")
         }
 
         async fn actor_may_edit_agent(
@@ -441,14 +484,20 @@ mod tests {
             _actor: &UserId,
             _agent: &AgentId,
         ) -> Result<bool, Self::Error> {
-            self.calls.lock().unwrap().push("edit");
-            Ok(self.answers[4])
+            self.answer(4, "edit")
+        }
+
+        async fn finish(self) -> Result<(), Self::Error> {
+            self.calls.lock().unwrap().push("finish");
+            self.finished.store(true, Ordering::Release);
+            self.finish_error.map_or(Ok(()), Err)
         }
     }
 
     struct Provider {
         calls: Mutex<Vec<&'static str>>,
         fail: bool,
+        admission_finished: Arc<AtomicBool>,
     }
 
     impl RuntimeControlPort for Provider {
@@ -458,6 +507,7 @@ mod tests {
             &self,
             _target: &RuntimeControlTarget,
         ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
+            assert!(self.admission_finished.load(Ordering::Acquire));
             self.calls.lock().unwrap().push("start");
             if self.fail {
                 Err(Failure("provider"))
@@ -471,6 +521,7 @@ mod tests {
             _target: &RuntimeControlTarget,
         ) -> Result<Result<HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal>, Self::Error>
         {
+            assert!(self.admission_finished.load(Ordering::Acquire));
             self.calls.lock().unwrap().push("hard_stop");
             if self.fail {
                 Err(Failure("provider"))
@@ -483,6 +534,7 @@ mod tests {
             &self,
             _target: &RuntimeControlTarget,
         ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
+            assert!(self.admission_finished.load(Ordering::Acquire));
             self.calls.lock().unwrap().push("clear_session");
             if self.fail {
                 Err(Failure("provider"))
@@ -496,14 +548,18 @@ mod tests {
         Admission {
             answers,
             begin_error: None,
+            query_error_at: None,
+            finish_error: None,
             calls: Arc::new(Mutex::new(Vec::new())),
+            finished: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn provider(fail: bool) -> Provider {
+    fn provider(admission: &Admission, fail: bool) -> Provider {
         Provider {
             calls: Mutex::new(Vec::new()),
             fail,
+            admission_finished: Arc::clone(&admission.finished),
         }
     }
 
@@ -528,7 +584,7 @@ mod tests {
             let mut answers = [true; 5];
             answers[refused_at] = false;
             let admission = admission(answers);
-            let provider = provider(false);
+            let provider = provider(&admission, false);
             assert_eq!(
                 start_conversation_runtime(&admission, &provider, target())
                     .await
@@ -536,14 +592,16 @@ mod tests {
                 Err(StartRuntimeRefusal::Admission(expected))
             );
             assert!(provider.calls.lock().unwrap().is_empty());
-            assert_eq!(admission.calls.lock().unwrap().len(), refused_at + 1);
+            assert!(admission.finished.load(Ordering::Acquire));
+            assert_eq!(admission.calls.lock().unwrap().len(), refused_at + 2);
+            assert_eq!(admission.calls.lock().unwrap().last(), Some(&"finish"));
         }
     }
 
     #[tokio::test]
     async fn each_operation_has_its_own_success_type() {
         let admission = admission([true; 5]);
-        let provider = provider(false);
+        let provider = provider(&admission, false);
         assert_eq!(
             start_conversation_runtime(&admission, &provider, target())
                 .await
@@ -570,7 +628,7 @@ mod tests {
 
     #[tokio::test]
     async fn operation_specific_provider_refusals_pass_through_exactly() {
-        struct Refusing;
+        struct Refusing(Arc<AtomicBool>);
         impl RuntimeControlPort for Refusing {
             type Error = Failure;
 
@@ -579,6 +637,7 @@ mod tests {
                 _: &RuntimeControlTarget,
             ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error>
             {
+                assert!(self.0.load(Ordering::Acquire));
                 Ok(Err(StartRuntimeProviderRefusal::ShuttingDown))
             }
 
@@ -587,6 +646,7 @@ mod tests {
                 _: &RuntimeControlTarget,
             ) -> Result<Result<HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal>, Self::Error>
             {
+                assert!(self.0.load(Ordering::Acquire));
                 Ok(Err(HardStopRuntimeProviderRefusal::Placement(
                     RuntimePlacementRefusal::HostAttachPending,
                 )))
@@ -597,13 +657,15 @@ mod tests {
                 _: &RuntimeControlTarget,
             ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error>
             {
+                assert!(self.0.load(Ordering::Acquire));
                 Ok(Err(ClearSessionProviderRefusal::Timeout))
             }
         }
 
         let admission = admission([true; 5]);
+        let refusing = Refusing(Arc::clone(&admission.finished));
         assert_eq!(
-            start_conversation_runtime(&admission, &Refusing, target())
+            start_conversation_runtime(&admission, &refusing, target())
                 .await
                 .unwrap(),
             Err(StartRuntimeRefusal::Provider(
@@ -611,7 +673,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            hard_stop_conversation_runtime(&admission, &Refusing, target())
+            hard_stop_conversation_runtime(&admission, &refusing, target())
                 .await
                 .unwrap(),
             Err(HardStopRuntimeRefusal::Provider(
@@ -621,7 +683,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            clear_conversation_runtime_session(&admission, &Refusing, target())
+            clear_conversation_runtime_session(&admission, &refusing, target())
                 .await
                 .unwrap(),
             Err(ClearSessionRefusal::Provider(
@@ -635,17 +697,43 @@ mod tests {
         let admission = Admission {
             answers: [true; 5],
             begin_error: Some(Failure("admission")),
+            query_error_at: None,
+            finish_error: None,
             calls: Arc::new(Mutex::new(Vec::new())),
+            finished: Arc::new(AtomicBool::new(false)),
         };
-        let error = start_conversation_runtime(&admission, &provider(false), target())
+        let error = start_conversation_runtime(&admission, &provider(&admission, false), target())
             .await
             .unwrap_err();
         assert_eq!(error.source().unwrap().to_string(), "admission");
 
-        let error =
-            start_conversation_runtime(&self::admission([true; 5]), &provider(true), target())
-                .await
-                .unwrap_err();
+        let admission = self::admission([true; 5]);
+        let error = start_conversation_runtime(&admission, &provider(&admission, true), target())
+            .await
+            .unwrap_err();
         assert_eq!(error.source().unwrap().to_string(), "provider");
+    }
+
+    #[tokio::test]
+    async fn query_and_finish_failures_never_reach_the_provider() {
+        let mut query_admission = admission([true; 5]);
+        query_admission.query_error_at = Some(2);
+        let query_provider = provider(&query_admission, false);
+        let error = start_conversation_runtime(&query_admission, &query_provider, target())
+            .await
+            .unwrap_err();
+        assert_eq!(error.source().unwrap().to_string(), "query");
+        assert!(query_admission.finished.load(Ordering::Acquire));
+        assert!(query_provider.calls.lock().unwrap().is_empty());
+
+        let mut finish_admission = admission([true; 5]);
+        finish_admission.finish_error = Some(Failure("finish"));
+        let finish_provider = provider(&finish_admission, false);
+        let error = start_conversation_runtime(&finish_admission, &finish_provider, target())
+            .await
+            .unwrap_err();
+        assert_eq!(error.source().unwrap().to_string(), "finish");
+        assert!(finish_admission.finished.load(Ordering::Acquire));
+        assert!(finish_provider.calls.lock().unwrap().is_empty());
     }
 }
