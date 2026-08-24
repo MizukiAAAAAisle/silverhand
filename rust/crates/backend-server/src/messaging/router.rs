@@ -5,18 +5,14 @@
 //! with this file rather than before it — a lint quieted by a fake call site would have
 //! hidden exactly this gap.
 //!
-//! **DEFINED IS NOT MOUNTED** (@Cindy). Exporting a router is not wiring one into the
-//! production composition, and nothing here does the latter: no composition root builds
-//! this, and there is no authentication middleware to populate the principal extensions
-//! it requires. The product paths therefore remain unreachable in a running server, and
-//! no parity may be claimed from this file's existence.
+//! This library defines the boundary but does not own its process. The executable app
+//! composes the two routers below with different real authentication authorities; a
+//! library caller that uses [`send_router`] directly must still supply principal facts.
 //!
 //! Every outcome has an answer, and each door answers its OWN: a person's committed send
 //! becomes 201 and the acknowledgement ([`super::ack`]), a runtime's becomes 200 and the flat
 //! coordinate report ([`super::agent_output`]), and a failed one becomes its refusal
-//! ([`super::outcome`]). What is still missing is only the composition — no root builds this
-//! and no middleware supplies the principals it reads — so the paths remain unreachable in a
-//! running server.
+//! ([`super::outcome`]).
 //!
 //! IDENTITY ARRIVES ALREADY AUTHENTICATED. A parent authentication middleware verifies
 //! the caller and injects a request-scoped principal fact; a handler here only READS
@@ -85,17 +81,39 @@ where
     U: SendMessageUnitOfWork + Send + Sync + 'static,
     F: SendAftermath + Send + Sync + 'static,
 {
-    Router::new()
+    let (human, agent) = send_routers(state);
+    human.merge(agent)
+}
+
+/// The two authenticated product doors, separated so the executable composition
+/// can apply the human-session authority only to the public route and the runtime
+/// credential authority only to the internal route. Both routers retain one shared
+/// application state; this is an authentication boundary, not two product models.
+pub fn send_routers<C, T, K, D, U, F>(state: SendState<C, T, K, D, U, F>) -> (Router, Router)
+where
+    C: ChannelAccess + Send + Sync + 'static,
+    T: TargetAddress + Send + Sync + 'static,
+    K: SendCapability + Send + Sync + 'static,
+    D: DirectLineAuthority + Send + Sync + 'static,
+    U: SendMessageUnitOfWork + Send + Sync + 'static,
+    F: SendAftermath + Send + Sync + 'static,
+{
+    let state = Arc::new(state);
+    let human = Router::new()
         .route(
             "/api/channels/{id}/messages",
             post(human_route::<C, T, K, D, U, F>),
         )
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn(fence_message_send_body));
+    let agent = Router::new()
         .route(
             "/internal/agents/{aid}/send-message",
             post(agent_route::<C, T, K, D, U, F>),
         )
-        .with_state(Arc::new(state))
-        .layer(middleware::from_fn(fence_message_send_body))
+        .with_state(state)
+        .layer(middleware::from_fn(fence_message_send_body));
+    (human, agent)
 }
 
 type Shared<C, T, K, D, U, F> = State<Arc<SendState<C, T, K, D, U, F>>>;

@@ -1217,6 +1217,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "silverhand-backend-app"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "serde_json",
+ "silverhand-backend-core",
+ "silverhand-backend-server",
+ "silverhand-backend-sqlite",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "silverhand-backend-core"
 version = "0.1.0"
 dependencies = [

@@ -16,10 +16,10 @@
 //! - [`router`] — the routes those doors hang on.
 //! - [`send_request`] — the flat snake_case refusals the product routes answer with.
 //!
-//! WHAT MAY NOT BE CLAIMED FROM THIS: the routes are DEFINED, not mounted. No
-//! composition root builds [`router::send_router`] and there is no authentication middleware
-//! to supply the principals it reads, so nothing here is reachable in a running server and no
-//! public parity may be claimed from these files existing.
+//! This crate defines the product boundary but does not own its process. The executable
+//! composition mounts [`router::send_routers`] behind the distinct human-session and runtime
+//! credential authorities; library-only uses of [`router::send_router`] still have to provide
+//! authenticated principal facts themselves.
 
 // Internal stages: this module's own layout, which no consumer should couple to. The
 // router and the ports a composition must implement are the public face.

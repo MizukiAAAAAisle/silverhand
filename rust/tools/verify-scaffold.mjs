@@ -15,6 +15,7 @@ if (cargo.status !== 0) {
 
 const metadata = JSON.parse(cargo.stdout);
 const names = [
+  'silverhand-backend-app',
   'silverhand-backend-core',
   'silverhand-backend-server',
   'silverhand-backend-sqlite',
@@ -25,6 +26,11 @@ const workspaceNames = metadata.workspace_members
   .sort();
 
 assertEqual(workspaceNames, names, 'workspace members');
+assertInternalDependencies('silverhand-backend-app', null, [
+  'silverhand-backend-core',
+  'silverhand-backend-server',
+  'silverhand-backend-sqlite',
+]);
 assertInternalDependencies('silverhand-backend-core', null, []);
 assertInternalDependencies('silverhand-backend-server', null, [
   'silverhand-backend-core',
@@ -58,8 +64,15 @@ assertNormalDependencyClosureExcludes('silverhand-backend-core', [
   'ts-rs',
 ]);
 assertNormalDependencyClosureExcludes('silverhand-backend-server', [
+  'silverhand-backend-app',
   'libsqlite3-sys',
   'sqlx',
+]);
+assertNormalDependencyClosureExcludes('silverhand-backend-core', [
+  'silverhand-backend-app',
+]);
+assertNormalDependencyClosureExcludes('silverhand-backend-sqlite', [
+  'silverhand-backend-app',
 ]);
 
 process.stdout.write('Rust scaffold dependency direction verified\n');
