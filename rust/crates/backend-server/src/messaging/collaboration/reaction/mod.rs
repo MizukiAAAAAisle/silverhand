@@ -249,9 +249,11 @@ where
         Some(value) => value,
         None => return internal_error("system time is outside reaction storage range"),
     };
+    let emoji = ReactionEmoji::parse(&raw_emoji);
+    drop(raw_emoji);
     execute_mutation(
         state,
-        ReactionMutation::agent(actor, source, message, raw_emoji, change, occurred_at_ms),
+        ReactionMutation::agent(actor, source, message, emoji, change, occurred_at_ms),
     )
     .await
 }

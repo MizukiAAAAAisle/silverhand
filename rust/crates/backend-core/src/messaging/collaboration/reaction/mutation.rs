@@ -76,7 +76,7 @@ pub struct ReactionMutation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ReactionEmojiCandidate {
     Validated(ReactionEmoji),
-    Deferred(String),
+    Invalid(InvalidReactionEmoji),
 }
 
 impl ReactionMutation {
@@ -102,14 +102,17 @@ impl ReactionMutation {
         actor: AgentId,
         source: Option<ConversationId>,
         message: MessageId,
-        raw_emoji: String,
+        emoji: Result<ReactionEmoji, InvalidReactionEmoji>,
         change: ReactionChange,
         occurred_at_ms: i64,
     ) -> Self {
         Self {
             actor: ReactionActor::Agent { id: actor, source },
             message,
-            emoji: ReactionEmojiCandidate::Deferred(raw_emoji),
+            emoji: match emoji {
+                Ok(emoji) => ReactionEmojiCandidate::Validated(emoji),
+                Err(error) => ReactionEmojiCandidate::Invalid(error),
+            },
             change,
             occurred_at_ms,
         }
@@ -124,7 +127,14 @@ impl ReactionMutation {
     pub fn validate_emoji(&self) -> Result<ReactionEmoji, InvalidReactionEmoji> {
         match &self.emoji {
             ReactionEmojiCandidate::Validated(emoji) => Ok(emoji.clone()),
-            ReactionEmojiCandidate::Deferred(raw) => ReactionEmoji::parse(raw),
+            ReactionEmojiCandidate::Invalid(error) => Err(*error),
+        }
+    }
+    #[cfg(test)]
+    fn retained_emoji_bytes(&self) -> usize {
+        match &self.emoji {
+            ReactionEmojiCandidate::Validated(emoji) => emoji.as_str().len(),
+            ReactionEmojiCandidate::Invalid(_) => 0,
         }
     }
     pub fn change(&self) -> ReactionChange {
@@ -345,4 +355,30 @@ pub async fn change_reaction<P: ReactionMutationPort>(
         },
         publication_failure,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_oversized_agent_emoji_is_reduced_to_a_bounded_verdict_before_the_store() {
+        let raw = "x".repeat(1024 * 1024);
+        let verdict = ReactionEmoji::parse(&raw);
+        assert!(verdict.is_err());
+        let mutation = ReactionMutation::agent(
+            AgentId::parse("agent-1").unwrap(),
+            Some(ConversationId::parse("conversation-1").unwrap()),
+            MessageId::parse("message-1").unwrap(),
+            verdict,
+            ReactionChange::Add,
+            1,
+        );
+        drop(raw);
+        assert_eq!(mutation.retained_emoji_bytes(), 0);
+        assert_eq!(
+            mutation.validate_emoji(),
+            Err(InvalidReactionEmoji::TooLong)
+        );
+    }
 }
