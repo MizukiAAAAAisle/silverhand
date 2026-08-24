@@ -11,5 +11,6 @@ pub use runtime_control::{
     HardStopRuntimeRefusal, RuntimeControlAdmission, RuntimeControlAdmissionRefusal,
     RuntimeControlAdmissionScope, RuntimeControlFailure, RuntimeControlPort, RuntimeControlTarget,
     RuntimePlacementRefusal, StartRuntimeOutcome, StartRuntimeProviderRefusal, StartRuntimeRefusal,
-    clear_conversation_runtime_session, hard_stop_conversation_runtime, start_conversation_runtime,
+    check_runtime_control_admission, clear_conversation_runtime_session,
+    hard_stop_conversation_runtime, start_conversation_runtime,
 };

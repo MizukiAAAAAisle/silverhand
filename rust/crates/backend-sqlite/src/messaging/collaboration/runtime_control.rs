@@ -1,0 +1,405 @@
+//! One-snapshot SQLite admission for conversation runtime control.
+
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, UserId},
+    messaging::collaboration::{RuntimeControlAdmission, RuntimeControlAdmissionScope},
+};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
+use thiserror::Error;
+
+use super::super::MessagingStore;
+
+const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
+const SELECT_CONVERSATION_SHAPE: &str =
+    "SELECT placement_kind, roster_policy FROM conversations WHERE id = ?";
+const SELECT_AGENT_EXISTS: &str = "SELECT 1 FROM agents WHERE id = ?";
+const SELECT_AGENT_MEMBERSHIP: &str =
+    "SELECT 1 FROM conversation_agents WHERE conversation_id = ? AND agent_id = ?";
+const SELECT_CONVERSATION_POST_FACTS: &str = "SELECT placement_kind, workspace_id, \
+    endpoint_a_kind, endpoint_a_id, endpoint_a_deleted_at, endpoint_b_kind, endpoint_b_id, \
+    endpoint_b_deleted_at FROM conversations WHERE id = ?";
+const SELECT_WORKSPACE_HUMAN_PARTICIPATION: &str = "SELECT \
+    EXISTS(SELECT 1 FROM workspace_users WHERE workspace_id = ? AND user_id = ?) \
+    AND EXISTS(SELECT 1 FROM conversation_users WHERE conversation_id = ? AND user_id = ?) \
+    AS participates";
+const SELECT_AGENT_CREATOR: &str = "SELECT created_by_user_id FROM agents WHERE id = ?";
+const SELECT_USER_EXISTS: &str = "SELECT 1 FROM users WHERE id = ?";
+
+#[derive(Clone)]
+pub struct SqliteRuntimeControlAdmission {
+    pool: SqlitePool,
+}
+
+#[derive(Debug, Error)]
+pub enum RuntimeControlAdmissionStoreError {
+    #[error("database operation failed")]
+    Sql(#[from] sqlx::Error),
+    #[error("stored conversation placement is outside the closed runtime-control set")]
+    InvalidConversationPlacement,
+    #[error("stored direct-pair endpoint is malformed")]
+    MalformedDirectPairEndpoint,
+}
+
+impl<E> MessagingStore<E> {
+    pub fn runtime_control_admission(&self) -> SqliteRuntimeControlAdmission {
+        SqliteRuntimeControlAdmission {
+            pool: self.pool.clone(),
+        }
+    }
+}
+
+impl RuntimeControlAdmission for SqliteRuntimeControlAdmission {
+    type Error = RuntimeControlAdmissionStoreError;
+    type Scope = SqliteRuntimeControlSnapshot;
+
+    async fn begin_snapshot(&self) -> Result<Self::Scope, Self::Error> {
+        Ok(SqliteRuntimeControlSnapshot {
+            tx: self.pool.begin_with(DEFERRED_READ_BEGIN).await?,
+        })
+    }
+}
+
+pub struct SqliteRuntimeControlSnapshot {
+    tx: Transaction<'static, Sqlite>,
+}
+
+impl RuntimeControlAdmissionScope for SqliteRuntimeControlSnapshot {
+    type Error = RuntimeControlAdmissionStoreError;
+
+    async fn conversation_exists(
+        &mut self,
+        conversation: &ConversationId,
+    ) -> Result<bool, Self::Error> {
+        let Some(row) = sqlx::query(SELECT_CONVERSATION_SHAPE)
+            .bind(conversation.as_str())
+            .fetch_optional(&mut *self.tx)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let placement: String = row.try_get("placement_kind")?;
+        let roster: String = row.try_get("roster_policy")?;
+        match (placement.as_str(), roster.as_str()) {
+            ("workspace", "open" | "fixed") | ("direct_pair", "fixed") => Ok(true),
+            _ => Err(RuntimeControlAdmissionStoreError::InvalidConversationPlacement),
+        }
+    }
+
+    async fn agent_exists(&mut self, agent: &AgentId) -> Result<bool, Self::Error> {
+        Ok(sqlx::query(SELECT_AGENT_EXISTS)
+            .bind(agent.as_str())
+            .fetch_optional(&mut *self.tx)
+            .await?
+            .is_some())
+    }
+
+    async fn agent_is_member(
+        &mut self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+    ) -> Result<bool, Self::Error> {
+        Ok(sqlx::query(SELECT_AGENT_MEMBERSHIP)
+            .bind(conversation.as_str())
+            .bind(agent.as_str())
+            .fetch_optional(&mut *self.tx)
+            .await?
+            .is_some())
+    }
+
+    async fn actor_may_post(
+        &mut self,
+        conversation: &ConversationId,
+        actor: &UserId,
+    ) -> Result<bool, Self::Error> {
+        let Some(row) = sqlx::query(SELECT_CONVERSATION_POST_FACTS)
+            .bind(conversation.as_str())
+            .fetch_optional(&mut *self.tx)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let placement: String = row.try_get("placement_kind")?;
+        match placement.as_str() {
+            "workspace" => {
+                let workspace: Option<String> = row.try_get("workspace_id")?;
+                let Some(workspace) = workspace else {
+                    return Err(RuntimeControlAdmissionStoreError::InvalidConversationPlacement);
+                };
+                let participation: i64 = sqlx::query_scalar(SELECT_WORKSPACE_HUMAN_PARTICIPATION)
+                    .bind(workspace)
+                    .bind(actor.as_str())
+                    .bind(conversation.as_str())
+                    .bind(actor.as_str())
+                    .fetch_one(&mut *self.tx)
+                    .await?;
+                Ok(participation != 0)
+            }
+            "direct_pair" => {
+                let endpoint_a = decode_endpoint(&row, "endpoint_a")?;
+                let endpoint_b = decode_endpoint(&row, "endpoint_b")?;
+                let actor_participates = endpoint_a.is_human(actor) || endpoint_b.is_human(actor);
+                if !actor_participates {
+                    return Ok(false);
+                }
+                Ok(endpoint_a.is_live(&mut self.tx).await?
+                    && endpoint_b.is_live(&mut self.tx).await?)
+            }
+            _ => Err(RuntimeControlAdmissionStoreError::InvalidConversationPlacement),
+        }
+    }
+
+    async fn actor_may_edit_agent(
+        &mut self,
+        actor: &UserId,
+        agent: &AgentId,
+    ) -> Result<bool, Self::Error> {
+        let creator: Option<String> = sqlx::query_scalar(SELECT_AGENT_CREATOR)
+            .bind(agent.as_str())
+            .fetch_optional(&mut *self.tx)
+            .await?;
+        Ok(creator.as_deref() == Some(actor.as_str()))
+    }
+
+    async fn finish(self) -> Result<(), Self::Error> {
+        self.tx.commit().await?;
+        Ok(())
+    }
+}
+
+enum Endpoint {
+    Human { id: String, deleted_at: Option<i64> },
+    Agent { id: String, deleted_at: Option<i64> },
+}
+
+impl Endpoint {
+    fn is_human(&self, actor: &UserId) -> bool {
+        matches!(self, Self::Human { id, .. } if id == actor.as_str())
+    }
+
+    async fn is_live(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+    ) -> Result<bool, RuntimeControlAdmissionStoreError> {
+        let (query, id, deleted_at) = match self {
+            Self::Human { id, deleted_at } => (SELECT_USER_EXISTS, id, deleted_at),
+            Self::Agent { id, deleted_at } => (SELECT_AGENT_EXISTS, id, deleted_at),
+        };
+        if deleted_at.is_some() {
+            return Ok(false);
+        }
+        Ok(sqlx::query(query)
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .is_some())
+    }
+}
+
+fn decode_endpoint(
+    row: &sqlx::sqlite::SqliteRow,
+    prefix: &'static str,
+) -> Result<Endpoint, RuntimeControlAdmissionStoreError> {
+    let (kind_field, id_field, deleted_field) = match prefix {
+        "endpoint_a" => ("endpoint_a_kind", "endpoint_a_id", "endpoint_a_deleted_at"),
+        "endpoint_b" => ("endpoint_b_kind", "endpoint_b_id", "endpoint_b_deleted_at"),
+        _ => unreachable!("endpoint prefix is module-owned"),
+    };
+    let kind: Option<String> = row.try_get(kind_field)?;
+    let id: Option<String> = row.try_get(id_field)?;
+    let deleted_at: Option<i64> = row.try_get(deleted_field)?;
+    let id = id
+        .filter(|value| !value.is_empty())
+        .ok_or(RuntimeControlAdmissionStoreError::MalformedDirectPairEndpoint)?;
+    match kind.as_deref() {
+        Some("human") => Ok(Endpoint::Human { id, deleted_at }),
+        Some("agent") => Ok(Endpoint::Agent { id, deleted_at }),
+        _ => Err(RuntimeControlAdmissionStoreError::MalformedDirectPairEndpoint),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use silverhand_backend_core::{
+        identity::{AgentId, ConversationId, UserId},
+        messaging::collaboration::{
+            RuntimeControlAdmissionScope, RuntimeControlPort, RuntimeControlTarget,
+            StartRuntimeOutcome, StartRuntimeProviderRefusal, start_conversation_runtime,
+        },
+    };
+    use sqlx::{Connection, Executor, SqliteConnection};
+
+    use super::*;
+
+    async fn seeded() -> (tempfile::TempDir, MessagingStore) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runtime-control.sqlite");
+        let mut db = crate::current_schema::create_current_schema(&path).await;
+        db.execute(sqlx::raw_sql(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES \
+                 ('user-1', 'owner', 'Owner', 0, 0); \
+             INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'Host', 'local', 0); \
+             INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+                 display_name, created_by_user_id, materialization_status, session_scope) VALUES \
+                 ('agent-1', 'agent', 'codex', 'host-1', 0, 0, 'Agent', 'user-1', 'active', 'conversation'); \
+             INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+                 VALUES ('workspace-1', 'Space', 'space', 'user-1', 0, 0); \
+             INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) \
+                 VALUES ('workspace-1', 'user-1', 0, 'owner'); \
+             INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
+                 title_key, status, visibility, created_at, updated_at) VALUES \
+                 ('conversation-1', 'workspace-1', 'workspace', 'open', 'General', 'general', \
+                  'open', 'private', 0, 0); \
+             INSERT INTO conversation_users (conversation_id, user_id, joined_at) \
+                 VALUES ('conversation-1', 'user-1', 0); \
+             INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
+                 VALUES ('conversation-1', 'agent-1', 0);",
+        ))
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        let store = MessagingStore::open(&path).await.unwrap();
+        (directory, store)
+    }
+
+    fn target() -> RuntimeControlTarget {
+        RuntimeControlTarget::new(
+            UserId::parse("user-1").unwrap(),
+            ConversationId::parse("conversation-1").unwrap(),
+            AgentId::parse("agent-1").unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn concurrent_revocation_cannot_tear_the_five_question_snapshot() {
+        let (directory, store) = seeded().await;
+        let admission = store.runtime_control_admission();
+        let mut snapshot = admission.begin_snapshot().await.unwrap();
+        let target = target();
+
+        assert!(
+            snapshot
+                .conversation_exists(target.conversation())
+                .await
+                .unwrap()
+        );
+
+        let path = directory.path().join("runtime-control.sqlite");
+        let mut writer = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        writer
+            .execute(sqlx::raw_sql(
+                "DELETE FROM conversation_agents WHERE conversation_id='conversation-1' AND agent_id='agent-1'; \
+                 DELETE FROM conversation_users WHERE conversation_id='conversation-1' AND user_id='user-1';",
+            ))
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        assert!(snapshot.agent_exists(target.agent()).await.unwrap());
+        assert!(
+            snapshot
+                .agent_is_member(target.conversation(), target.agent())
+                .await
+                .unwrap()
+        );
+        assert!(
+            snapshot
+                .actor_may_post(target.conversation(), target.actor())
+                .await
+                .unwrap()
+        );
+        assert!(
+            snapshot
+                .actor_may_edit_agent(target.actor(), target.agent())
+                .await
+                .unwrap()
+        );
+        snapshot.finish().await.unwrap();
+
+        let mut fresh = admission.begin_snapshot().await.unwrap();
+        assert!(
+            !fresh
+                .agent_is_member(target.conversation(), target.agent())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !fresh
+                .actor_may_post(target.conversation(), target.actor())
+                .await
+                .unwrap()
+        );
+        fresh.finish().await.unwrap();
+    }
+
+    struct WritingProvider {
+        path: std::path::PathBuf,
+        calls: Arc<Mutex<usize>>,
+    }
+
+    impl RuntimeControlPort for WritingProvider {
+        type Error = std::io::Error;
+
+        async fn start(
+            &self,
+            _target: &RuntimeControlTarget,
+        ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
+            let mut writer = SqliteConnection::connect(&format!("sqlite:{}", self.path.display()))
+                .await
+                .map_err(std::io::Error::other)?;
+            sqlx::query("UPDATE users SET display_name='After Finish' WHERE id='user-1'")
+                .execute(&mut writer)
+                .await
+                .map_err(std::io::Error::other)?;
+            writer.close().await.map_err(std::io::Error::other)?;
+            *self.calls.lock().unwrap() += 1;
+            Ok(Ok(StartRuntimeOutcome))
+        }
+
+        async fn hard_stop(
+            &self,
+            _target: &RuntimeControlTarget,
+        ) -> Result<
+            Result<
+                silverhand_backend_core::messaging::collaboration::HardStopRuntimeOutcome,
+                silverhand_backend_core::messaging::collaboration::HardStopRuntimeProviderRefusal,
+            >,
+            Self::Error,
+        > {
+            unreachable!()
+        }
+
+        async fn clear_session(
+            &self,
+            _target: &RuntimeControlTarget,
+        ) -> Result<
+            Result<
+                silverhand_backend_core::messaging::collaboration::ClearSessionOutcome,
+                silverhand_backend_core::messaging::collaboration::ClearSessionProviderRefusal,
+            >,
+            Self::Error,
+        > {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn finish_releases_the_sqlite_read_before_the_provider_runs() {
+        let (directory, store) = seeded().await;
+        let calls = Arc::new(Mutex::new(0));
+        let provider = WritingProvider {
+            path: directory.path().join("runtime-control.sqlite"),
+            calls: Arc::clone(&calls),
+        };
+        assert_eq!(
+            start_conversation_runtime(&store.runtime_control_admission(), &provider, target())
+                .await
+                .unwrap(),
+            Ok(StartRuntimeOutcome)
+        );
+        assert_eq!(*calls.lock().unwrap(), 1);
+    }
+}

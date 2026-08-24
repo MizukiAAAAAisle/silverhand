@@ -312,6 +312,19 @@ async fn admit<A: RuntimeControlAdmission>(
     }
 }
 
+/// Run the ordered product admission without constructing a provider command.
+///
+/// The stop wire uses this only for a legacy body it must reject *after* the
+/// published product checks. It returns no reusable capability: an admitted
+/// result is merely `None`, and a real operation still performs its own fresh
+/// snapshot before invoking the provider.
+pub async fn check_runtime_control_admission<A: RuntimeControlAdmission>(
+    admission: &A,
+    target: &RuntimeControlTarget,
+) -> Result<Option<RuntimeControlAdmissionRefusal>, A::Error> {
+    admit(admission, target).await
+}
+
 pub async fn start_conversation_runtime<A, P>(
     admission: &A,
     provider: &P,

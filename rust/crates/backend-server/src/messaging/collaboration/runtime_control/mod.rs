@@ -1,0 +1,205 @@
+//! Human-session wire boundary for per-conversation runtime control.
+
+mod wire;
+
+#[cfg(test)]
+mod tests;
+
+use std::sync::Arc;
+
+use axum::{
+    Router,
+    body::Bytes,
+    extract::{DefaultBodyLimit, Extension, Path, State},
+    response::Response,
+    routing::post,
+};
+use serde::Deserialize;
+use serde_json::Value;
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, UserId},
+    messaging::collaboration::{
+        ClearSessionRefusal, HardStopRuntimeRefusal, RuntimeControlAdmission, RuntimeControlPort,
+        RuntimeControlTarget, StartRuntimeRefusal, check_runtime_control_admission,
+        clear_conversation_runtime_session, hard_stop_conversation_runtime,
+        start_conversation_runtime,
+    },
+};
+
+use wire::{
+    admission_refusal, clear_session_refusal, clear_session_success, hard_stop_refusal,
+    internal_error, invalid_target, legacy_stop_refusal, operation_success, start_refusal,
+};
+
+pub const START_PATH: &str = "/api/channels/{id}/agents/{aid}/start";
+pub const HARD_STOP_PATH: &str = "/api/channels/{id}/agents/{aid}/stop";
+pub const CLEAR_SESSION_PATH: &str = "/api/channels/{id}/agents/{aid}/clear-session";
+
+struct StateInner<A, P> {
+    admission: A,
+    provider: P,
+}
+
+struct RuntimeControlState<A, P>(Arc<StateInner<A, P>>);
+
+impl<A, P> Clone for RuntimeControlState<A, P> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+pub fn router<A, P>(admission: A, provider: P) -> Router
+where
+    A: RuntimeControlAdmission + Send + Sync + 'static,
+    P: RuntimeControlPort + Send + Sync + 'static,
+{
+    let state = RuntimeControlState(Arc::new(StateInner {
+        admission,
+        provider,
+    }));
+    Router::new()
+        .route(START_PATH, post(start::<A, P>))
+        .route(HARD_STOP_PATH, post(hard_stop::<A, P>))
+        .route(CLEAR_SESSION_PATH, post(clear_session::<A, P>))
+        // The published legacy stop contract has no body-size refusal. It only
+        // inspects two keys, so the route owns no hidden Axum default limit.
+        .layer(DefaultBodyLimit::disable())
+        .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct RuntimePath {
+    id: String,
+    aid: String,
+}
+
+struct InvalidTarget;
+
+fn target(path: RuntimePath, actor: UserId) -> Result<RuntimeControlTarget, InvalidTarget> {
+    let conversation = ConversationId::parse(path.id).map_err(|_| InvalidTarget)?;
+    let agent = AgentId::parse(path.aid).map_err(|_| InvalidTarget)?;
+    Ok(RuntimeControlTarget::new(actor, conversation, agent))
+}
+
+async fn start<A, P>(
+    State(state): State<RuntimeControlState<A, P>>,
+    principal: Option<Extension<UserId>>,
+    Path(path): Path<RuntimePath>,
+) -> Response
+where
+    A: RuntimeControlAdmission,
+    P: RuntimeControlPort,
+{
+    let Some(Extension(actor)) = principal else {
+        return internal_error_message("runtime-control route reached without its human principal");
+    };
+    let target = match target(path, actor) {
+        Ok(target) => target,
+        Err(InvalidTarget) => return invalid_target(),
+    };
+    match start_conversation_runtime(&state.0.admission, &state.0.provider, target).await {
+        Ok(Ok(_)) => operation_success(),
+        Ok(Err(StartRuntimeRefusal::Admission(refusal))) => admission_refusal(refusal),
+        Ok(Err(StartRuntimeRefusal::Provider(refusal))) => start_refusal(refusal),
+        Err(failure) => {
+            tracing::error!(
+                error_chain = %crate::error::describe(&failure),
+                "conversation runtime start failed"
+            );
+            internal_error()
+        }
+    }
+}
+
+async fn hard_stop<A, P>(
+    State(state): State<RuntimeControlState<A, P>>,
+    principal: Option<Extension<UserId>>,
+    Path(path): Path<RuntimePath>,
+    body: Bytes,
+) -> Response
+where
+    A: RuntimeControlAdmission,
+    P: RuntimeControlPort,
+{
+    let Some(Extension(actor)) = principal else {
+        return internal_error_message("runtime-control route reached without its human principal");
+    };
+    let target = match target(path, actor) {
+        Ok(target) => target,
+        Err(InvalidTarget) => return invalid_target(),
+    };
+    if legacy_stop_body(&body) {
+        // TS performs all five product checks before it inspects this legacy
+        // body. Run the same one-snapshot admission, but construct no provider
+        // command for a request that must be refused.
+        return match check_runtime_control_admission(&state.0.admission, &target).await {
+            Ok(Some(refusal)) => admission_refusal(refusal),
+            Ok(None) => legacy_stop_refusal(),
+            Err(failure) => {
+                tracing::error!(
+                    error_chain = %crate::error::describe(&failure),
+                    "conversation runtime-stop admission failed"
+                );
+                internal_error()
+            }
+        };
+    }
+    match hard_stop_conversation_runtime(&state.0.admission, &state.0.provider, target).await {
+        Ok(Ok(_)) => operation_success(),
+        Ok(Err(HardStopRuntimeRefusal::Admission(refusal))) => admission_refusal(refusal),
+        Ok(Err(HardStopRuntimeRefusal::Provider(refusal))) => hard_stop_refusal(refusal),
+        Err(failure) => {
+            tracing::error!(
+                error_chain = %crate::error::describe(&failure),
+                "conversation runtime hard-stop failed"
+            );
+            internal_error()
+        }
+    }
+}
+
+async fn clear_session<A, P>(
+    State(state): State<RuntimeControlState<A, P>>,
+    principal: Option<Extension<UserId>>,
+    Path(path): Path<RuntimePath>,
+) -> Response
+where
+    A: RuntimeControlAdmission,
+    P: RuntimeControlPort,
+{
+    let Some(Extension(actor)) = principal else {
+        return internal_error_message("runtime-control route reached without its human principal");
+    };
+    let target = match target(path, actor) {
+        Ok(target) => target,
+        Err(InvalidTarget) => return invalid_target(),
+    };
+    match clear_conversation_runtime_session(&state.0.admission, &state.0.provider, target.clone())
+        .await
+    {
+        Ok(Ok(outcome)) => clear_session_success(&outcome),
+        Ok(Err(ClearSessionRefusal::Admission(refusal))) => admission_refusal(refusal),
+        Ok(Err(ClearSessionRefusal::Provider(refusal))) => clear_session_refusal(refusal, &target),
+        Err(failure) => {
+            tracing::error!(
+                error_chain = %crate::error::describe(&failure),
+                "conversation runtime clear-session failed"
+            );
+            internal_error()
+        }
+    }
+}
+
+fn legacy_stop_body(body: &[u8]) -> bool {
+    let value =
+        serde_json::from_slice::<Value>(body).unwrap_or_else(|_| Value::Object(Default::default()));
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.get("mode").and_then(Value::as_str) == Some("soft") || object.contains_key("directive")
+}
+
+fn internal_error_message(message: &'static str) -> Response {
+    tracing::error!("{message}");
+    internal_error()
+}
