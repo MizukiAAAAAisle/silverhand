@@ -1,6 +1,11 @@
 {
   "base": "08d5e4de4ea7a975428d1db706891d231207e4fb",
   "routes": [
+    { "family": "conversation", "source": "routes/workspaces.ts", "method": "GET", "path": "/api/workspaces/:id/channels" },
+    { "family": "conversation", "source": "routes/workspaces.ts", "method": "GET", "path": "/api/workspaces/:id/channels/archived" },
+    { "family": "conversation", "source": "routes/workspaces.ts", "method": "GET", "path": "/api/archived-channels" },
+    { "family": "conversation", "source": "routes/workspaces.ts", "method": "POST", "path": "/api/workspaces/:id/channels" },
+
     { "family": "conversation", "source": "routes/conversations.ts", "method": "GET", "path": "/api/workspaces/:id/message-unread" },
     { "family": "conversation", "source": "routes/conversations.ts", "method": "GET", "path": "/api/message-unread-summary" },
     { "family": "conversation", "source": "routes/conversations.ts", "method": "GET", "path": "/api/channels/:id/message-unread" },
@@ -77,7 +82,7 @@
       "publisher_sources": ["services/channel-service.ts", "application/conversation-member.ts"],
       "consumer_sources": ["apps/desktop/src/renderer/features/channels/useViewerChannelRemovalSync.ts", "apps/desktop/src/renderer/features/attention/hooks.ts", "apps/desktop/src/renderer/features/saved/hooks.ts"],
       "cold_authorities": ["GET /api/workspaces/:id/channels", "GET /api/workspaces/:id/channels/archived", "GET /api/attention/badges", "GET /api/attention/modes", "GET /api/saved"],
-      "integration_owner": "#2193 for workspace/membership mutations; #2194 owns the typed event projector"
+      "integration_owner": "#2194 owns channel mutations and the typed projector; #2193 cross-domain membership UoWs consume the effect port"
     },
     {
       "kind": "attention_pref_changed",
@@ -94,14 +99,6 @@
       "consumer_sources": ["apps/desktop/src/renderer/features/saved/hooks.ts"],
       "cold_authorities": ["GET /api/saved"],
       "integration_owner": "#2194"
-    },
-    {
-      "kind": "conversation_members_changed",
-      "scope": "conversation-side",
-      "publisher_sources": ["application/conversation-member.ts"],
-      "consumer_sources": ["apps/desktop/src/renderer/features/conversations/useConversationMembers.ts"],
-      "cold_authorities": ["GET /api/conversations/:id/members"],
-      "integration_owner": "#2193 for membership mutations/read face; #2194 owns the typed event projector"
     },
     {
       "kind": "attachment_changed",

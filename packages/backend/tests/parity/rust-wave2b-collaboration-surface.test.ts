@@ -17,7 +17,7 @@ type Registration = {
 };
 
 const FAMILY_COUNTS = {
-  conversation: 29,
+  conversation: 33,
   direct_pair_initiation: 1,
   attention: 7,
   notifications: 3,
@@ -29,6 +29,7 @@ const FAMILY_COUNTS = {
 } as const;
 
 const ROUTE_SOURCES = [
+  'routes/workspaces.ts',
   'routes/conversations.ts',
   'routes/direct-pairs.ts',
   'routes/attention.ts',
@@ -40,7 +41,14 @@ const ROUTE_SOURCES = [
   'routes/internal-agent/conversation-routes.ts',
 ] as const;
 
-const WAVE1_REGISTRATIONS = new Set([
+const OUT_OF_LANE_REGISTRATIONS = new Set([
+  'routes/workspaces.ts|GET|/api/workspaces',
+  'routes/workspaces.ts|GET|/api/workspaces/name-availability',
+  'routes/workspaces.ts|POST|/api/workspaces',
+  'routes/workspaces.ts|GET|/api/workspaces/:id',
+  'routes/workspaces.ts|PATCH|/api/workspaces/:id',
+  'routes/workspaces.ts|PATCH|/api/workspaces/:id/archive',
+  'routes/workspaces.ts|DELETE|/api/workspaces/:id',
   'routes/conversations.ts|POST|/api/channels/:id/messages',
   'routes/direct-pairs.ts|GET|/api/direct-pairs',
   'routes/internal-agent/message-routes.ts|POST|/internal/agents/:aid/send-message',
@@ -136,10 +144,12 @@ function sourceContains(relativePath: string, needle: string): boolean {
 }
 
 describe('Rust Wave 2B collaboration surface', () => {
-  it('is exactly the 60 TS registrations left after the three Wave 1 doors', () => {
+  it('is exactly the 64 TS registrations after governance and Wave 1 exclusions', () => {
     const all = ROUTE_SOURCES.flatMap(sourceRegistrations);
-    expect(all).toHaveLength(63);
-    const owned = all.filter(route => !WAVE1_REGISTRATIONS.has(routeKey(route)));
+    expect(all).toHaveLength(74);
+    const owned = all.filter(
+      route => !OUT_OF_LANE_REGISTRATIONS.has(routeKey(route)),
+    );
     expect(owned.map(routeKey).sort()).toEqual(
       (surface.routes as Registration[]).map(routeKey).sort(),
     );
@@ -153,7 +163,7 @@ describe('Rust Wave 2B collaboration surface', () => {
       ]),
     );
     expect(actualCounts).toEqual(FAMILY_COUNTS);
-    expect(surface.routes).toHaveLength(60);
+    expect(surface.routes).toHaveLength(64);
     expect(
       surface.routes.some(
         route =>
@@ -162,11 +172,10 @@ describe('Rust Wave 2B collaboration surface', () => {
     ).toBe(false);
   });
 
-  it('pins the six product events to real producers, consumers and cold authorities', () => {
+  it('pins the five product events to real producers, consumers and cold authorities', () => {
     expect(surface.events.map(event => event.kind).sort()).toEqual([
       'attachment_changed',
       'attention_pref_changed',
-      'conversation_members_changed',
       'message_reaction_changed',
       'saved_changed',
       'workspace_channels_changed',
