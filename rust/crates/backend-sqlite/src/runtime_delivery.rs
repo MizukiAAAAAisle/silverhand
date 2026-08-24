@@ -16,6 +16,13 @@ use silverhand_backend_core::{
         RuntimePlacement, RuntimeRoster, RuntimeSessionSpec, RuntimeSpawnPlan, RuntimeWorkspaceRef,
         classify_delivery_instruction, runtime_scope_for,
     },
+    runtime_event::{
+        CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, ProjectRuntimeStatus,
+        RefineRuntimeToolCallInput, RefinedRuntimeActivity, RuntimeActivityCommitResult,
+        RuntimeActivityFact, RuntimeActivityPayload, RuntimeConsumedCommitResult,
+        RuntimeExitCommitResult, RuntimeExitDisposition, RuntimeToolCallInputCommitResult,
+        StampRuntimePresence, UpsertRuntimeTextActivity,
+    },
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
@@ -350,7 +357,9 @@ impl SqliteRuntimeDeliveryStore {
         delivery_ids: Vec<InboxDeliveryId>,
         outcome: Settlement,
         observed_at_ms: i64,
-    ) -> Result<InboxSettlementDisposition, PersistenceFailure> {
+        commit_activity: bool,
+        presence_at_ms: Option<i64>,
+    ) -> Result<(InboxSettlementDisposition, Option<i64>, Vec<UserId>), PersistenceFailure> {
         if delivery_ids.is_empty()
             || delivery_ids.iter().copied().collect::<HashSet<_>>().len() != delivery_ids.len()
         {
@@ -363,7 +372,7 @@ impl SqliteRuntimeDeliveryStore {
             .map_err(persistence)?;
         if !principal_is_current(&mut tx, &host_id, &principal).await? {
             tx.commit().await.map_err(persistence)?;
-            return Ok(InboxSettlementDisposition::Stale);
+            return Ok((InboxSettlementDisposition::Stale, None, Vec::new()));
         }
         let mut already_delivered = 0_usize;
         for id in &delivery_ids {
@@ -378,7 +387,7 @@ impl SqliteRuntimeDeliveryStore {
             .map_err(persistence)?;
             let Some(row) = row else {
                 tx.commit().await.map_err(persistence)?;
-                return Ok(InboxSettlementDisposition::Stale);
+                return Ok((InboxSettlementDisposition::Stale, None, Vec::new()));
             };
             let row_conversation: String = row.try_get("conversation_id").map_err(persistence)?;
             let row_agent: String = row.try_get("agent_id").map_err(persistence)?;
@@ -388,7 +397,7 @@ impl SqliteRuntimeDeliveryStore {
             if row_conversation != conversation.as_str() || row_agent != principal.agent().as_str()
             {
                 tx.commit().await.map_err(persistence)?;
-                return Ok(InboxSettlementDisposition::Stale);
+                return Ok((InboxSettlementDisposition::Stale, None, Vec::new()));
             }
             if delivered_at.is_some() && matches!(outcome, Settlement::Consumed) {
                 already_delivered += 1;
@@ -396,17 +405,18 @@ impl SqliteRuntimeDeliveryStore {
             }
             if failed_at.is_some() || row_owner.as_deref() != Some(owner.as_str()) {
                 tx.commit().await.map_err(persistence)?;
-                return Ok(InboxSettlementDisposition::Stale);
+                return Ok((InboxSettlementDisposition::Stale, None, Vec::new()));
             }
         }
         if already_delivered == delivery_ids.len() {
             tx.commit().await.map_err(persistence)?;
-            return Ok(InboxSettlementDisposition::Duplicate);
+            return Ok((InboxSettlementDisposition::Duplicate, None, Vec::new()));
         }
         if already_delivered != 0 {
             return Err(PersistenceFailure::from_source(PartialSettlementInvariant));
         }
 
+        let delivery_count = delivery_ids.len();
         for id in delivery_ids {
             let (sql, failed_reason) = match outcome {
                 Settlement::Consumed => (
@@ -462,8 +472,34 @@ impl SqliteRuntimeDeliveryStore {
                 return Err(PersistenceFailure::from_source(InboxSettlementInvariant));
             }
         }
+        let (activity_id, presence_viewers) =
+            if commit_activity && matches!(outcome, Settlement::Consumed) {
+                let viewers = stamp_agent_presence(
+                    &mut tx,
+                    principal.agent(),
+                    presence_at_ms.unwrap_or(observed_at_ms),
+                )
+                .await?;
+                let payload = serde_json::json!({ "count": delivery_count }).to_string();
+                let id = insert_activity_row(
+                    &mut tx,
+                    conversation.as_str(),
+                    principal.agent().as_str(),
+                    "message_received",
+                    Some(&payload),
+                    observed_at_ms,
+                )
+                .await?;
+                (Some(id), viewers)
+            } else {
+                (None, Vec::new())
+            };
         tx.commit().await.map_err(persistence)?;
-        Ok(InboxSettlementDisposition::Applied)
+        Ok((
+            InboxSettlementDisposition::Applied,
+            activity_id,
+            presence_viewers,
+        ))
     }
 }
 
@@ -575,8 +611,11 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
             delivery_ids,
             Settlement::Consumed,
             observed_at_ms,
+            false,
+            None,
         )
         .await
+        .map(|(disposition, _, _)| disposition)
     }
 
     async fn settle_failed(
@@ -597,8 +636,11 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
             delivery_ids,
             Settlement::Failed(reason),
             observed_at_ms,
+            false,
+            None,
         )
         .await
+        .map(|(disposition, _, _)| disposition)
     }
 
     async fn release_owner(&self, owner: DeliveryLeaseOwner) -> Result<u64, PersistenceFailure> {
@@ -616,10 +658,655 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
     }
 }
 
+impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
+    async fn current_principal(
+        &self,
+        scope: RuntimeScope,
+    ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+        let mut tx = self.pool.begin().await.map_err(persistence)?;
+        let row = match &scope {
+            RuntimeScope::ConversationSlot { agent, source } => sqlx::query(
+                "SELECT generation, claimed_by_daemon_instance_id
+                   FROM agent_runtime_slots
+                  WHERE agent_id = ? AND conversation_id = ?",
+            )
+            .bind(agent.as_str())
+            .bind(source.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(persistence)?,
+            RuntimeScope::AgentSlot { agent } => sqlx::query(
+                "SELECT generation, claimed_by_daemon_instance_id
+                   FROM agent_runtime_slots
+                  WHERE agent_id = ? AND conversation_id IS NULL",
+            )
+            .bind(agent.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(persistence)?,
+        };
+        let Some(row) = row else {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        };
+        let generation = RuntimeGeneration::new(row.try_get("generation").map_err(persistence)?)
+            .map_err(PersistenceFailure::from_source)?;
+        let daemon = row
+            .try_get::<Option<String>, _>("claimed_by_daemon_instance_id")
+            .map_err(persistence)?
+            .map(DaemonInstanceId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(daemon.map(|daemon| {
+            RuntimePrincipal::for_scope(
+                scope,
+                silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+                    generation, daemon,
+                ),
+            )
+        }))
+    }
+
+    async fn commit_exit(
+        &self,
+        event: CommitRuntimeExit,
+    ) -> Result<RuntimeExitCommitResult, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        let principal = event.principal();
+        let row = current_slot_row(&mut tx, principal).await?;
+        let Some(row) = row else {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(RuntimeExitCommitResult::new(
+                RuntimeExitDisposition::Stale,
+                None,
+            ));
+        };
+        let slot_id: i64 = row.try_get("id").map_err(persistence)?;
+        let generation = RuntimeGeneration::new(row.try_get("generation").map_err(persistence)?)
+            .map_err(PersistenceFailure::from_source)?;
+        let daemon = row
+            .try_get::<Option<String>, _>("claimed_by_daemon_instance_id")
+            .map_err(persistence)?
+            .map(DaemonInstanceId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)?;
+        if generation != principal.custody().generation()
+            || daemon.as_ref() != Some(principal.custody().daemon_instance())
+        {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(RuntimeExitCommitResult::new(
+                RuntimeExitDisposition::Stale,
+                None,
+            ));
+        }
+        let changed = sqlx::query(
+            "UPDATE agent_runtime_slots
+                SET claimed_by_daemon_instance_id = NULL,
+                    observed_status = ?, observed_pid = NULL
+              WHERE id = ? AND generation = ? AND claimed_by_daemon_instance_id = ?",
+        )
+        .bind(event.status().as_str())
+        .bind(slot_id)
+        .bind(generation.as_i64())
+        .bind(principal.custody().daemon_instance().as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(persistence)?
+        .rows_affected();
+        if changed != 1 {
+            return Err(PersistenceFailure::from_source(RuntimeExitInvariant));
+        }
+        insert_runtime_projection_event(
+            &mut tx,
+            slot_id,
+            principal,
+            "generation_finalized",
+            event.status().as_str(),
+            None,
+            event.observed_at().as_unix_millis(),
+        )
+        .await?;
+        let lease_cleanup = match principal {
+            RuntimePrincipal::ConversationSlot { agent, source, .. } => sqlx::query(
+                "UPDATE conversation_inboxes
+                        SET in_flight_owner = NULL, in_flight_at = NULL
+                      WHERE conversation_id = ? AND agent_id = ?
+                        AND in_flight_owner IS NOT NULL
+                        AND delivered_at IS NULL AND failed_at IS NULL",
+            )
+            .bind(source.as_str())
+            .bind(agent.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(persistence)?
+            .rows_affected(),
+            RuntimePrincipal::AgentSlot { agent, .. } => sqlx::query(
+                "UPDATE conversation_inboxes
+                        SET in_flight_owner = NULL, in_flight_at = NULL
+                      WHERE agent_id = ? AND in_flight_owner IS NOT NULL
+                        AND delivered_at IS NULL AND failed_at IS NULL",
+            )
+            .bind(agent.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(persistence)?
+            .rows_affected(),
+        };
+        let _ = lease_cleanup;
+        let activity_id = if let Some(activity) = event.pending_activity() {
+            Some(insert_activity(&mut tx, activity).await?)
+        } else {
+            None
+        };
+        tx.commit().await.map_err(persistence)?;
+        Ok(RuntimeExitCommitResult::new(
+            RuntimeExitDisposition::Applied,
+            activity_id,
+        ))
+    }
+
+    async fn commit_consumed(
+        &self,
+        event: CommitRuntimeConsumed,
+    ) -> Result<RuntimeConsumedCommitResult, PersistenceFailure> {
+        let (disposition, activity_id, presence_viewers) = self
+            .settle(
+                event.host_id().to_owned(),
+                event.principal().clone(),
+                event.conversation().clone(),
+                event.owner().clone(),
+                event.delivery_ids().to_vec(),
+                Settlement::Consumed,
+                event.observed_at().as_unix_millis(),
+                true,
+                Some(event.presence_at().as_unix_millis()),
+            )
+            .await?;
+        Ok(RuntimeConsumedCommitResult::new(
+            disposition,
+            activity_id,
+            presence_viewers,
+        ))
+    }
+
+    async fn project_status(
+        &self,
+        event: ProjectRuntimeStatus,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        let Some(row) = current_slot_row(&mut tx, event.principal()).await? else {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(false);
+        };
+        let slot_id: i64 = row.try_get("id").map_err(persistence)?;
+        let generation = RuntimeGeneration::new(row.try_get("generation").map_err(persistence)?)
+            .map_err(PersistenceFailure::from_source)?;
+        let daemon = row
+            .try_get::<Option<String>, _>("claimed_by_daemon_instance_id")
+            .map_err(persistence)?
+            .map(DaemonInstanceId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)?;
+        if generation != event.principal().custody().generation()
+            || daemon.as_ref() != Some(event.principal().custody().daemon_instance())
+        {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(false);
+        }
+        let changed = sqlx::query(
+            "UPDATE agent_runtime_slots
+                SET observed_status = ?,
+                    cli_session_id = COALESCE(?, cli_session_id)
+              WHERE id = ? AND generation = ? AND claimed_by_daemon_instance_id = ?",
+        )
+        .bind(event.status().as_str())
+        .bind(event.cli_session_id())
+        .bind(slot_id)
+        .bind(generation.as_i64())
+        .bind(event.principal().custody().daemon_instance().as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(persistence)?
+        .rows_affected();
+        if changed != 1 {
+            return Err(PersistenceFailure::from_source(RuntimeProjectionInvariant));
+        }
+        insert_runtime_projection_event(
+            &mut tx,
+            slot_id,
+            event.principal(),
+            "projection_updated",
+            event.status().as_str(),
+            event.cli_session_id(),
+            event.observed_at().as_unix_millis(),
+        )
+        .await?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(true)
+    }
+
+    async fn record_activity(
+        &self,
+        principal: RuntimePrincipal,
+        event: RuntimeActivityFact,
+        presence_at: silverhand_backend_core::runtime_credential::RuntimeEventTime,
+    ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        if !principal_is_current_in_tx(&mut tx, &principal).await? {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        }
+        let viewers =
+            stamp_agent_presence(&mut tx, event.agent(), presence_at.as_unix_millis()).await?;
+        let id = insert_activity(&mut tx, &event).await?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(Some(RuntimeActivityCommitResult::new(id, viewers)))
+    }
+
+    async fn upsert_text_activity(
+        &self,
+        event: UpsertRuntimeTextActivity,
+    ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        if !principal_is_current_in_tx(&mut tx, event.principal()).await? {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        }
+        let viewers = stamp_agent_presence(
+            &mut tx,
+            event.event().agent(),
+            event.presence_at().as_unix_millis(),
+        )
+        .await?;
+        let id = if let Some(previous_id) = event.previous_event_id() {
+            let payload = activity_payload_json(event.event().payload())?;
+            let changed = sqlx::query(
+                "UPDATE conversation_events
+                    SET payload = ?
+                  WHERE id = ? AND conversation_id = ? AND agent_id = ? AND kind = ?",
+            )
+            .bind(payload)
+            .bind(previous_id)
+            .bind(event.event().conversation().as_str())
+            .bind(event.event().agent().as_str())
+            .bind(event.event().kind().as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(persistence)?
+            .rows_affected();
+            if changed != 1 {
+                return Err(PersistenceFailure::from_source(RuntimeActivityInvariant));
+            }
+            previous_id
+        } else {
+            insert_activity(&mut tx, event.event()).await?
+        };
+        tx.commit().await.map_err(persistence)?;
+        Ok(Some(RuntimeActivityCommitResult::new(id, viewers)))
+    }
+
+    async fn refine_tool_call_input(
+        &self,
+        event: RefineRuntimeToolCallInput,
+    ) -> Result<Option<RuntimeToolCallInputCommitResult>, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        if !principal_is_current_in_tx(&mut tx, event.principal()).await? {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        }
+        let viewers =
+            stamp_agent_presence(&mut tx, event.agent(), event.observed_at().as_unix_millis())
+                .await?;
+        let Some(row) = sqlx::query(
+            "SELECT id, payload, created_at
+               FROM conversation_events
+              WHERE conversation_id = ? AND agent_id = ? AND kind = 'tool_call'
+                AND json_extract(payload, '$.tool_call_id') = ?
+              ORDER BY id DESC LIMIT 1",
+        )
+        .bind(event.conversation().as_str())
+        .bind(event.agent().as_str())
+        .bind(event.tool_call_id())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(persistence)?
+        else {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(Some(RuntimeToolCallInputCommitResult::new(None, viewers)));
+        };
+        let id: i64 = row.try_get("id").map_err(persistence)?;
+        let created_at: i64 = row.try_get("created_at").map_err(persistence)?;
+        let payload: Option<String> = row.try_get("payload").map_err(persistence)?;
+        let mut payload = payload
+            .as_deref()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)?
+            .unwrap_or_else(|| serde_json::json!({}));
+        let object = payload
+            .as_object_mut()
+            .ok_or_else(|| PersistenceFailure::from_source(RuntimeActivityInvariant))?;
+        object.insert(
+            "input".to_owned(),
+            serde_json::from_str(event.input_json()).map_err(PersistenceFailure::from_source)?,
+        );
+        let payload_json =
+            serde_json::to_string(&payload).map_err(PersistenceFailure::from_source)?;
+        let changed = sqlx::query("UPDATE conversation_events SET payload = ? WHERE id = ?")
+            .bind(&payload_json)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(persistence)?
+            .rows_affected();
+        if changed != 1 {
+            return Err(PersistenceFailure::from_source(RuntimeActivityInvariant));
+        }
+        tx.commit().await.map_err(persistence)?;
+        Ok(Some(RuntimeToolCallInputCommitResult::new(
+            Some(RefinedRuntimeActivity::new(
+                id,
+                payload_json,
+                silverhand_backend_core::runtime_credential::RuntimeEventTime::from_unix_millis(
+                    created_at,
+                ),
+            )),
+            viewers,
+        )))
+    }
+
+    async fn stamp_presence(
+        &self,
+        event: StampRuntimePresence,
+    ) -> Result<Option<Vec<UserId>>, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        if !principal_is_current_in_tx(&mut tx, event.principal()).await? {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        }
+        let viewers =
+            stamp_agent_presence(&mut tx, event.agent(), event.observed_at().as_unix_millis())
+                .await?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(Some(viewers))
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Settlement {
     Consumed,
     Failed(RuntimeDeliveryFailureReason),
+}
+
+async fn current_slot_row(
+    tx: &mut Transaction<'_, Sqlite>,
+    principal: &RuntimePrincipal,
+) -> Result<Option<sqlx::sqlite::SqliteRow>, PersistenceFailure> {
+    match principal {
+        RuntimePrincipal::ConversationSlot { agent, source, .. } => sqlx::query(
+            "SELECT id, generation, claimed_by_daemon_instance_id
+               FROM agent_runtime_slots
+              WHERE agent_id = ? AND conversation_id = ?",
+        )
+        .bind(agent.as_str())
+        .bind(source.as_str())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(persistence),
+        RuntimePrincipal::AgentSlot { agent, .. } => sqlx::query(
+            "SELECT id, generation, claimed_by_daemon_instance_id
+               FROM agent_runtime_slots
+              WHERE agent_id = ? AND conversation_id IS NULL",
+        )
+        .bind(agent.as_str())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(persistence),
+    }
+}
+
+async fn principal_is_current_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    principal: &RuntimePrincipal,
+) -> Result<bool, PersistenceFailure> {
+    let Some(row) = current_slot_row(tx, principal).await? else {
+        return Ok(false);
+    };
+    let generation = RuntimeGeneration::new(row.try_get("generation").map_err(persistence)?)
+        .map_err(PersistenceFailure::from_source)?;
+    let daemon = row
+        .try_get::<Option<String>, _>("claimed_by_daemon_instance_id")
+        .map_err(persistence)?
+        .map(DaemonInstanceId::parse)
+        .transpose()
+        .map_err(PersistenceFailure::from_source)?;
+    Ok(generation == principal.custody().generation()
+        && daemon.as_ref() == Some(principal.custody().daemon_instance()))
+}
+
+async fn stamp_agent_presence(
+    tx: &mut Transaction<'_, Sqlite>,
+    agent: &AgentId,
+    observed_at: i64,
+) -> Result<Vec<UserId>, PersistenceFailure> {
+    const PRESENCE_AWAY_TTL_MS: i64 = 30 * 60_000;
+    let previous =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT last_activity_at FROM agents WHERE id = ?")
+            .bind(agent.as_str())
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(persistence)?
+            .ok_or_else(|| PersistenceFailure::from_source(RuntimeActivityInvariant))?;
+    let changed = sqlx::query(
+        "UPDATE agents
+            SET last_activity_at = CASE
+                WHEN last_activity_at IS NULL OR last_activity_at < ? THEN ?
+                ELSE last_activity_at END
+          WHERE id = ?",
+    )
+    .bind(observed_at)
+    .bind(observed_at)
+    .bind(agent.as_str())
+    .execute(&mut **tx)
+    .await
+    .map_err(persistence)?
+    .rows_affected();
+    if changed != 1 {
+        return Err(PersistenceFailure::from_source(RuntimeActivityInvariant));
+    }
+    let was_online = previous
+        .is_some_and(|previous| observed_at < previous.saturating_add(PRESENCE_AWAY_TTL_MS));
+    if was_online {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        "SELECT viewer_id FROM (
+             SELECT created_by_user_id AS viewer_id
+               FROM agents
+              WHERE id = ? AND materialization_status = 'active'
+                AND created_by_user_id IS NOT NULL
+             UNION
+             SELECT CASE
+                        WHEN endpoint_a_kind = 'agent' AND endpoint_a_id = ?
+                         AND endpoint_b_kind = 'human' THEN endpoint_b_id
+                        WHEN endpoint_b_kind = 'agent' AND endpoint_b_id = ?
+                         AND endpoint_a_kind = 'human' THEN endpoint_a_id
+                    END AS viewer_id
+               FROM conversations
+              WHERE placement_kind = 'direct_pair'
+                AND status = 'active'
+                AND ((endpoint_a_kind = 'agent' AND endpoint_a_id = ?
+                      AND endpoint_b_kind = 'human')
+                  OR (endpoint_b_kind = 'agent' AND endpoint_b_id = ?
+                      AND endpoint_a_kind = 'human'))
+             UNION
+             SELECT wu.user_id AS viewer_id
+               FROM workspace_members wm
+               JOIN workspace_users wu ON wu.workspace_id = wm.workspace_id
+               JOIN agents a ON a.id = wm.agent_id
+              WHERE wm.agent_id = ? AND a.materialization_status = 'active'
+         ) WHERE viewer_id IS NOT NULL ORDER BY viewer_id",
+    )
+    .bind(agent.as_str())
+    .bind(agent.as_str())
+    .bind(agent.as_str())
+    .bind(agent.as_str())
+    .bind(agent.as_str())
+    .bind(agent.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(persistence)?;
+    rows.into_iter()
+        .map(|row| {
+            UserId::parse(row.try_get::<String, _>("viewer_id").map_err(persistence)?)
+                .map_err(PersistenceFailure::from_source)
+        })
+        .collect()
+}
+
+async fn insert_runtime_projection_event(
+    tx: &mut Transaction<'_, Sqlite>,
+    slot_id: i64,
+    principal: &RuntimePrincipal,
+    event_kind: &'static str,
+    status: &'static str,
+    cli_session_id: Option<&str>,
+    occurred_at: i64,
+) -> Result<(), PersistenceFailure> {
+    sqlx::query(
+        "INSERT INTO agent_runtime_events (
+            slot_id, agent_id, conversation_id, generation, event_kind,
+            daemon_instance_id, observed_status, observed_pid, cli_session_id, occurred_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+    )
+    .bind(slot_id)
+    .bind(principal.agent().as_str())
+    .bind(principal.source().map(ConversationId::as_str))
+    .bind(principal.custody().generation().as_i64())
+    .bind(event_kind)
+    .bind(
+        (event_kind != "generation_finalized")
+            .then(|| principal.custody().daemon_instance().as_str()),
+    )
+    .bind(status)
+    .bind(cli_session_id)
+    .bind(occurred_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(persistence)?;
+    Ok(())
+}
+
+async fn insert_activity(
+    tx: &mut Transaction<'_, Sqlite>,
+    event: &RuntimeActivityFact,
+) -> Result<i64, PersistenceFailure> {
+    let payload = activity_payload_json(event.payload())?;
+    insert_activity_row(
+        tx,
+        event.conversation().as_str(),
+        event.agent().as_str(),
+        event.kind().as_str(),
+        payload.as_deref(),
+        event.created_at().as_unix_millis(),
+    )
+    .await
+}
+
+async fn insert_activity_row(
+    tx: &mut Transaction<'_, Sqlite>,
+    conversation: &str,
+    agent: &str,
+    kind: &str,
+    payload: Option<&str>,
+    created_at: i64,
+) -> Result<i64, PersistenceFailure> {
+    let result = sqlx::query(
+        "INSERT INTO conversation_events (conversation_id, agent_id, kind, payload, created_at)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(conversation)
+    .bind(agent)
+    .bind(kind)
+    .bind(payload)
+    .bind(created_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(persistence)?;
+    Ok(result.last_insert_rowid())
+}
+
+fn activity_payload_json(
+    payload: &RuntimeActivityPayload,
+) -> Result<Option<String>, PersistenceFailure> {
+    let value = match payload {
+        RuntimeActivityPayload::None => return Ok(None),
+        RuntimeActivityPayload::Text { text } => serde_json::json!({ "text": text }),
+        RuntimeActivityPayload::ToolCall {
+            name,
+            input_json,
+            tool_call_id,
+        } => {
+            let input = serde_json::from_str::<serde_json::Value>(input_json)
+                .map_err(PersistenceFailure::from_source)?;
+            serde_json::json!({ "name": name, "input": input, "tool_call_id": tool_call_id })
+        }
+        RuntimeActivityPayload::ToolOutput {
+            name,
+            tool_call_id,
+            outcome,
+        } => {
+            serde_json::json!({ "name": name, "tool_call_id": tool_call_id, "outcome": outcome })
+        }
+        RuntimeActivityPayload::ApiResponse { status, message } => {
+            serde_json::json!({ "status": status, "message": message })
+        }
+        RuntimeActivityPayload::Error {
+            message,
+            code,
+            fatal,
+        } => {
+            serde_json::json!({ "message": message, "code": code, "fatal": fatal })
+        }
+        RuntimeActivityPayload::ParsedEventDropped {
+            parsed_kind,
+            encoded_bytes,
+            reason,
+        } => serde_json::json!({
+            "parsed_kind": parsed_kind,
+            "encoded_bytes": encoded_bytes,
+            "reason": reason,
+        }),
+        RuntimeActivityPayload::MessageReceived { count } => serde_json::json!({ "count": count }),
+    };
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(PersistenceFailure::from_source)
 }
 
 async fn principal_is_current(
@@ -1245,6 +1932,18 @@ struct PartialSettlementInvariant;
 #[derive(Debug, Error)]
 #[error("inbox settlement changed while the writer reservation was held")]
 struct InboxSettlementInvariant;
+
+#[derive(Debug, Error)]
+#[error("runtime exit changed while the writer reservation was held")]
+struct RuntimeExitInvariant;
+
+#[derive(Debug, Error)]
+#[error("runtime projection changed while the writer reservation was held")]
+struct RuntimeProjectionInvariant;
+
+#[derive(Debug, Error)]
+#[error("runtime activity agent changed while the writer reservation was held")]
+struct RuntimeActivityInvariant;
 
 #[cfg(test)]
 mod presentation_tests {

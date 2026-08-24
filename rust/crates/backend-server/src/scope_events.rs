@@ -24,9 +24,10 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use silverhand_backend_core::{
     auth::{AuthenticateHumanSession, SessionBearer},
-    identity::{ConversationId, UserId, WorkspaceId},
+    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         post_commit::{DirectLineInvalidation, EffectFailure},
@@ -203,10 +204,29 @@ enum ProductEvent {
     DirectPairsChanged {
         conversation_id: String,
     },
+    AgentActivity(Value),
+    AgentStatus(Value),
+    AgentInitTimeout(Value),
+    CompactionStale(Value),
+    AgentEvent(Value),
+    ConversationActivity(Value),
+    AgentPresenceChanged {
+        agent_id: String,
+    },
     #[cfg(test)]
     Test {
         value: String,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DaemonSideEvent {
+    AgentActivity(Value),
+    AgentStatus(Value),
+    AgentInitTimeout(Value),
+    CompactionStale(Value),
+    AgentEvent(Value),
+    ConversationActivity(Value),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -306,6 +326,37 @@ impl ScopeEventHub {
                 conversation_id: conversation.as_str().to_owned(),
             },
         )
+    }
+
+    pub(crate) fn publish_agent_presence_changed(
+        &self,
+        viewer: &UserId,
+        agent: &AgentId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::AgentPresenceChanged {
+                agent_id: agent.as_str().to_owned(),
+            },
+        )
+    }
+
+    pub(crate) fn publish_daemon_side(
+        &self,
+        conversation: &ConversationId,
+        event: DaemonSideEvent,
+    ) -> Result<(), ScopeEventHubError> {
+        let event = match event {
+            DaemonSideEvent::AgentActivity(payload) => ProductEvent::AgentActivity(payload),
+            DaemonSideEvent::AgentStatus(payload) => ProductEvent::AgentStatus(payload),
+            DaemonSideEvent::AgentInitTimeout(payload) => ProductEvent::AgentInitTimeout(payload),
+            DaemonSideEvent::CompactionStale(payload) => ProductEvent::CompactionStale(payload),
+            DaemonSideEvent::AgentEvent(payload) => ProductEvent::AgentEvent(payload),
+            DaemonSideEvent::ConversationActivity(payload) => {
+                ProductEvent::ConversationActivity(payload)
+            }
+        };
+        self.publish(EventScope::ConversationSide(conversation.clone()), event)
     }
 
     fn publish(&self, scope: EventScope, event: ProductEvent) -> Result<(), ScopeEventHubError> {

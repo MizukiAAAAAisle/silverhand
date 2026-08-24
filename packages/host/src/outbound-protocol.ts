@@ -16,6 +16,7 @@
 import { z } from 'zod';
 import {
   AgentRunStateSchema,
+  DAEMON_ADMISSION,
   McpProbeResultSchema,
   ParsedEventKindSchema,
   ParsedEventSchema,
@@ -635,7 +636,7 @@ export type OutboundHeartbeatFrame = z.infer<typeof OutboundHeartbeatFrameSchema
 export const OutboundReadyEventFrameSchema = HelloResultSchema.extend({
   direction: z.literal('daemon_to_server'),
   type: z.literal('event'),
-  kind: z.literal('ready'),
+  kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.ready),
   protocol_version: z.literal(OUTBOUND_PROTOCOL_VERSION),
   daemon_pid: z.number().int(),
   started_at: z.number().int(),
@@ -645,7 +646,7 @@ export const OutboundShuttingDownEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('shutting_down'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.shuttingDown),
     reason: z.string(),
   })
   .strict();
@@ -654,7 +655,7 @@ export const OutboundRuntimeStateEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_state'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeState),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -668,7 +669,7 @@ export const OutboundRuntimeOutputEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_output'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeOutput),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -682,7 +683,7 @@ export const OutboundRuntimeExitEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_exit'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeExit),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -697,7 +698,7 @@ export const OutboundRuntimeReadyForDrainEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_ready_for_drain'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeReadyForDrain),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -710,7 +711,7 @@ export const OutboundRuntimeDeliveryConsumedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_delivery_consumed'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeDeliveryConsumed),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -724,7 +725,7 @@ export const OutboundRuntimeDeliveryFailedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_delivery_failed'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeDeliveryFailed),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -744,7 +745,7 @@ export const OutboundRuntimeInitTimeoutEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_init_timeout'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeInitTimeout),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -764,7 +765,7 @@ export const OutboundRuntimeInitRetryingEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_init_retrying'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeInitRetrying),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -780,7 +781,7 @@ export const OutboundRuntimeInitCooldownEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_init_cooldown'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeInitCooldown),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -795,7 +796,7 @@ export const OutboundRuntimeCompactionStaleEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_compaction_stale'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeCompactionStale),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -808,7 +809,7 @@ export const OutboundRuntimeOutputDroppedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_output_dropped'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeOutputDropped),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -822,7 +823,7 @@ export const OutboundRuntimeOutputPausedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_output_paused'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeOutputPaused),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -833,7 +834,7 @@ export const OutboundRuntimeOutputResumedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_output_resumed'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeOutputResumed),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -844,7 +845,7 @@ export const OutboundRuntimeParsedEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_parsed_event'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeParsedEvent),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -858,7 +859,7 @@ export const OutboundRuntimeParsedEventDroppedFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_parsed_event_dropped'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeParsedEventDropped),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
@@ -880,7 +881,7 @@ export const OutboundRuntimeMessageStaleEventFrameSchema = z
   .object({
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
-    kind: z.literal('runtime_message_stale'),
+    kind: z.literal(DAEMON_ADMISSION.daemonEventKinds.runtimeMessageStale),
     runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),

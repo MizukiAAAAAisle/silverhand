@@ -32,13 +32,14 @@ use silverhand_backend_core::{
         },
     },
     persistence::PersistenceFailure,
-    runtime_credential::{RuntimeFinalStatus, RuntimePrincipal, RuntimeScope},
+    runtime_credential::{RuntimeEventTime, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope},
     runtime_delivery::{
         ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
         InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
         RuntimeDispatchTarget, RuntimeInboxCustodyPort, RuntimeMember, RuntimePlacement,
         RuntimeRoster, RuntimeSpawnPlan,
     },
+    runtime_event::{CommitRuntimeConsumed, DaemonEventDurablePort},
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -47,12 +48,17 @@ use tokio::{
 
 use crate::{
     bearer::strict_bearer_credential,
+    daemon_events::{
+        AgentRunStateWire, DaemonRuntimeEventOwner, HydratedRuntime, RuntimeEventDirective,
+        RuntimeProductEvent, decode_product_event,
+    },
     error,
     messaging::references::MarkdownReferencePositions,
     runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeStartFailure,
         RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport,
     },
+    scope_events::ScopeEventHub,
 };
 
 include!(concat!(env!("OUT_DIR"), "/daemon_admission.rs"));
@@ -115,24 +121,27 @@ pub struct DaemonDeliveryRuntime<C, D, H> {
     host_credentials: H,
     registry: DaemonRegistry,
     config: DaemonDeliveryConfig,
+    events: DaemonRuntimeEventOwner<D>,
 }
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     pub fn production(
         credentials: RuntimeCredentialAuthority<C>,
         data: D,
         host_credentials: H,
+        event_hub: ScopeEventHub,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         Self::new(
             credentials,
             data,
             host_credentials,
             DaemonDeliveryConfig::production(),
+            event_hub,
         )
     }
 
@@ -141,9 +150,11 @@ where
         data: D,
         host_credentials: H,
         config: DaemonDeliveryConfig,
+        event_hub: ScopeEventHub,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         Ok(Self {
             credentials,
+            events: DaemonRuntimeEventOwner::new(data.clone(), event_hub),
             data,
             host_credentials,
             registry: DaemonRegistry::new()?,
@@ -185,6 +196,13 @@ where
             .await
             .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         let status = RuntimeStatusResult::decode(result)
+            .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
+        let hydrated = status
+            .hydrated(attachment.daemon_instance.clone())
+            .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
+        self.events
+            .hydrate(hydrated)
+            .await
             .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         let persisted = self
             .data
@@ -313,7 +331,7 @@ pub struct DaemonDeliveryEffects<C, D, H> {
 impl<C, D, H> RuntimeStart for DaemonDeliveryEffects<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     async fn start(
@@ -331,7 +349,7 @@ where
 impl<C, D, H> RuntimeDelivery for DaemonDeliveryEffects<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     async fn deliver(
@@ -349,7 +367,7 @@ where
 impl<C, D, H> MainDelivery for DaemonDeliveryEffects<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     async fn deliver_to(
@@ -367,7 +385,7 @@ where
 impl<C, D, H> ReplyDelivery for DaemonDeliveryEffects<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     async fn deliver_to(
@@ -385,7 +403,7 @@ where
 impl<C, D, H> IdleStart for DaemonDeliveryEffects<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     async fn start_if_idle(
@@ -994,7 +1012,7 @@ async fn daemon_websocket<C, D, H>(
 ) -> Response
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     let Some(token) = strict_bearer_credential(&headers) else {
@@ -1046,7 +1064,7 @@ async fn connection<C, D, H>(
     mut commands: mpsc::Receiver<ConnectionControl>,
 ) where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     let mut pending: HashMap<String, PendingCommand> = HashMap::new();
@@ -1197,6 +1215,14 @@ async fn connection<C, D, H>(
                                 let _ = hydrate_control.send(ConnectionControl::Hydrated(result)).await;
                             });
                         }
+                        Ok(DaemonFrame::ShuttingDown(frame)) => {
+                            tracing::warn!(reason = %frame.reason, "daemon announced shutdown");
+                            let _ = socket.send(Message::Close(Some(CloseFrame {
+                                code: 1001,
+                                reason: "daemon_shutting_down".into(),
+                            }))).await;
+                            break;
+                        }
                         Ok(DaemonFrame::CommandResponse(CommandResponseFrame { id, kind, result, error })) => {
                             let Some((expected, response)) = pending.remove(&id) else { continue; };
                             if expected != kind {
@@ -1232,7 +1258,7 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             };
-                            settle_event(&runtime, &host_id, &connection_id, Some(instance), event, None).await;
+                            commit_consumed_event(&runtime, &host_id, &connection_id, instance, event).await;
                         }
                         Ok(DaemonFrame::DeliveryFailed(event)) => {
                             let Some(instance) = attached.as_ref() else {
@@ -1254,6 +1280,45 @@ async fn connection<C, D, H>(
                                 break;
                             };
                             finalize_runtime_event(&runtime, Some(instance), event).await;
+                        }
+                        Ok(DaemonFrame::Product(event)) => {
+                            let Some(instance) = attached.as_ref() else {
+                                let _ = socket.send(Message::Close(Some(CloseFrame {
+                                    code: 1008,
+                                    reason: "attachment_not_hydrated".into(),
+                                }))).await;
+                                break;
+                            };
+                            match runtime.events.handle(instance, event).await {
+                                Ok(RuntimeEventDirective::None) => {}
+                                Ok(RuntimeEventDirective::Drain { conversation, agent }) => {
+                                    let effect_runtime = runtime.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(cause) =
+                                            effect_runtime.deliver(&conversation, &agent).await
+                                        {
+                                            tracing::error!(
+                                                error_chain = %error::describe(&cause),
+                                                "daemon runtime drain effect failed"
+                                            );
+                                        }
+                                    });
+                                }
+                                Err(crate::daemon_events::DaemonRuntimeEventError::StaleRuntime) => {
+                                    tracing::warn!("dropped stale daemon runtime event");
+                                }
+                                Err(cause) => {
+                                    tracing::error!(
+                                        error_chain = %error::describe(&cause),
+                                        "daemon runtime event owner failed"
+                                    );
+                                    let _ = socket.send(Message::Close(Some(CloseFrame {
+                                        code: 1011,
+                                        reason: "runtime_event_owner_failed".into(),
+                                    }))).await;
+                                    break;
+                                }
+                            }
                         }
                         Ok(DaemonFrame::HeartbeatPing(frame)) => {
                             let response = json!({
@@ -1293,6 +1358,14 @@ async fn connection<C, D, H>(
     for (_, (_, response)) in pending {
         let _ = response.send(Err(CommandDispatchError::Ambiguous));
     }
+    if let Some(instance) = attached.as_ref().or(compatible.as_ref())
+        && let Err(cause) = runtime.events.detach_daemon(instance)
+    {
+        tracing::error!(
+            error_chain = %error::describe(&cause),
+            "daemon disconnect runtime projection cleanup failed"
+        );
+    }
     runtime.registry.remove(&host_id, &connection_id);
     if let Ok(owner) = DeliveryLeaseOwner::parse(connection_id)
         && let Err(cause) = runtime.data.release_owner(owner).await
@@ -1313,7 +1386,7 @@ async fn settle_event<C, D, H>(
     failure: Option<RuntimeDeliveryFailureReason>,
 ) where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     let Some(daemon) = attached else {
@@ -1386,13 +1459,102 @@ async fn settle_event<C, D, H>(
     }
 }
 
+async fn commit_consumed_event<C, D, H>(
+    runtime: &DaemonDeliveryRuntime<C, D, H>,
+    host_id: &str,
+    connection_id: &str,
+    daemon: &DaemonInstanceId,
+    event: DeliveryEvent,
+) where
+    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
+    H: HostCredentialLookup,
+{
+    let principal = match event.principal(daemon.clone()) {
+        Ok(principal) => principal,
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event identity decode failed");
+            return;
+        }
+    };
+    let owner = match DeliveryLeaseOwner::parse(connection_id.to_owned()) {
+        Ok(owner) => owner,
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event owner decode failed");
+            return;
+        }
+    };
+    let conversation = match event.conversation() {
+        Ok(conversation) => conversation,
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event conversation decode failed");
+            return;
+        }
+    };
+    let delivery_count = event.delivery_ids.len();
+    let delivery_ids = match event
+        .delivery_ids
+        .into_iter()
+        .map(InboxDeliveryId::parse)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(ids) => ids,
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event ids decode failed");
+            return;
+        }
+    };
+    let agent = principal.agent().clone();
+    let observed_at = event.ts;
+    let result = runtime
+        .events
+        .durable()
+        .commit_consumed(CommitRuntimeConsumed::new(
+            host_id.to_owned(),
+            principal,
+            conversation.clone(),
+            owner,
+            delivery_ids,
+            RuntimeEventTime::from_unix_millis(observed_at),
+            RuntimeEventTime::from_unix_millis(signed_unix_millis(SystemTime::now())),
+        ))
+        .await;
+    match result {
+        Ok(result)
+            if result.disposition()
+                == silverhand_backend_core::runtime_delivery::InboxSettlementDisposition::Applied =>
+        {
+            if let Some(activity_id) = result.activity_id()
+                && let Err(cause) = runtime.events.complete_consumed(
+                    &conversation,
+                    &agent,
+                    result.presence_viewers(),
+                    observed_at,
+                    delivery_count,
+                    activity_id,
+                )
+            {
+                tracing::error!(
+                    error_chain = %error::describe(&cause),
+                    "daemon consumed live projection failed after durable commit"
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(cause) => tracing::error!(
+            error_chain = %error::describe(&cause),
+            "daemon consumed durable commit failed"
+        ),
+    }
+}
+
 async fn finalize_runtime_event<C, D, H>(
     runtime: &DaemonDeliveryRuntime<C, D, H>,
     attached: Option<&DaemonInstanceId>,
     event: RuntimeExitEvent,
 ) where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
-    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
     let Some(daemon) = attached else {
@@ -1408,27 +1570,100 @@ async fn finalize_runtime_event<C, D, H>(
             return;
         }
     };
-    let status = if event.intentional || event.code == Some(0) {
-        RuntimeFinalStatus::Idle
-    } else {
-        RuntimeFinalStatus::Crashed
+    let commit = match runtime.events.prepare_exit(
+        principal.clone(),
+        event.code,
+        event.intentional,
+        event.ts,
+    ) {
+        Ok(commit) => commit,
+        Err(cause) => {
+            tracing::error!(
+                error_chain = %error::describe(&cause),
+                observed_at = event.ts,
+                "daemon runtime exit preparation failed"
+            );
+            return;
+        }
     };
-    if let Err(cause) = runtime.credentials.finalize(principal, status).await {
-        tracing::error!(
-            error_chain = %error::describe(&cause),
-            observed_at = event.ts,
-            "daemon runtime exit finalization failed"
-        );
+    match runtime
+        .credentials
+        .commit_daemon_exit(runtime.events.durable(), commit)
+        .await
+    {
+        Ok(result) => {
+            let conversation = match event.conversation() {
+                Ok(conversation) => conversation,
+                Err(cause) => {
+                    tracing::error!(
+                        error_chain = %error::describe(&cause),
+                        observed_at = event.ts,
+                        "daemon runtime exit post-commit coordinate decode failed"
+                    );
+                    return;
+                }
+            };
+            match runtime.events.complete_exit_state(
+                &principal,
+                &result,
+                conversation,
+                event.code,
+                event.intentional,
+            ) {
+                Ok(Some(effect)) => {
+                    if let Err(cause) = runtime.events.publish_exit(&effect) {
+                        tracing::error!(
+                            error_chain = %error::describe(&cause),
+                            observed_at = event.ts,
+                            "daemon runtime exit live projection failed after durable commit"
+                        );
+                    }
+                    if effect.should_respawn() {
+                        let effect_runtime = runtime.clone();
+                        let conversation = effect.conversation().clone();
+                        let agent = effect.agent().clone();
+                        let observed_at = event.ts;
+                        tokio::spawn(async move {
+                            if let Err(cause) = effect_runtime.deliver(&conversation, &agent).await
+                            {
+                                tracing::error!(
+                                    error_chain = %error::describe(&cause),
+                                    observed_at,
+                                    "daemon runtime exit pending-inbox respawn failed"
+                                );
+                            }
+                        });
+                    }
+                }
+                Ok(None) => {}
+                Err(cause) => {
+                    tracing::error!(
+                        error_chain = %error::describe(&cause),
+                        observed_at = event.ts,
+                        "daemon runtime exit process-state cleanup failed after durable commit"
+                    );
+                }
+            }
+        }
+        Err(cause) => {
+            tracing::error!(
+                error_chain = %error::describe(&cause),
+                observed_at = event.ts,
+                "daemon runtime exit durable commit failed"
+            );
+        }
     }
 }
 
 enum DaemonFrame {
     Ready(ReadyFrame),
+    ShuttingDown(ShuttingDownFrame),
     HeartbeatPing(HeartbeatPingFrame),
     HeartbeatPong(HeartbeatPongFrame),
     DeliveryConsumed(DeliveryEvent),
     DeliveryFailed(FailedDeliveryEvent),
     RuntimeExit(RuntimeExitEvent),
+    Product(RuntimeProductEvent),
     CommandResponse(CommandResponseFrame),
 }
 
@@ -1447,6 +1682,11 @@ struct ReadyFrame {
     protocol_version: u32,
     daemon_pid: i64,
     started_at: i64,
+}
+
+#[derive(Deserialize)]
+struct ShuttingDownFrame {
+    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -1494,6 +1734,14 @@ fn parse_daemon_frame(raw: &str) -> Result<DaemonFrame, DaemonFrameError> {
         (Some("event"), Some("ready")) if valid_ready_frame(&value) => {
             serde_json::from_value(value)
                 .map(DaemonFrame::Ready)
+                .map_err(DaemonFrameError::Json)
+        }
+        (Some("event"), Some("shutting_down"))
+            if exact_keys(&value, &["direction", "type", "kind", "reason"])
+                && value.get("reason").is_some_and(Value::is_string) =>
+        {
+            serde_json::from_value(value)
+                .map(DaemonFrame::ShuttingDown)
                 .map_err(DaemonFrameError::Json)
         }
         (Some("event"), Some("runtime_delivery_consumed"))
@@ -1562,6 +1810,11 @@ fn parse_daemon_frame(raw: &str) -> Result<DaemonFrame, DaemonFrameError> {
         {
             serde_json::from_value(value)
                 .map(DaemonFrame::RuntimeExit)
+                .map_err(DaemonFrameError::Json)
+        }
+        (Some("event"), Some(kind)) if OUTBOUND_DAEMON_EVENT_KINDS.contains(&kind) => {
+            decode_product_event(kind, &value)
+                .map(DaemonFrame::Product)
                 .map_err(DaemonFrameError::Json)
         }
         (Some("command_response"), Some(_))
@@ -1758,9 +2011,13 @@ impl RuntimeExitEvent {
             daemon,
         )
     }
+
+    fn conversation(&self) -> Result<ConversationId, EventIdentityError> {
+        ConversationId::parse(self.conversation_id.clone()).map_err(|_| EventIdentityError)
+    }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct RuntimeStatusResult {
     runtimes: Vec<RuntimeStatusRow>,
 }
@@ -1774,11 +2031,11 @@ impl RuntimeStatusResult {
     }
 
     fn active_principals(
-        self,
+        &self,
         daemon: DaemonInstanceId,
     ) -> Result<Vec<RuntimePrincipal>, EventIdentityError> {
         self.runtimes
-            .into_iter()
+            .iter()
             .filter_map(|row| {
                 if !row.has_valid_nullable_fields() {
                     return Some(Err(EventIdentityError));
@@ -1799,9 +2056,42 @@ impl RuntimeStatusResult {
             })
             .collect()
     }
+
+    fn hydrated(
+        &self,
+        daemon: DaemonInstanceId,
+    ) -> Result<Vec<HydratedRuntime>, EventIdentityError> {
+        self.runtimes
+            .iter()
+            .map(|row| {
+                if !row.has_valid_nullable_fields() {
+                    return Err(EventIdentityError);
+                }
+                let principal = principal_from_wire(
+                    &row.runtime_scope,
+                    &row.conversation_id,
+                    &row.agent_id,
+                    row.runtime_generation,
+                    daemon.clone(),
+                )?;
+                let run_state = if row.run_state.is_null() {
+                    None
+                } else {
+                    Some(
+                        serde_json::from_value::<AgentRunStateWire>(row.run_state.clone())
+                            .map_err(|_| EventIdentityError)?,
+                    )
+                };
+                Ok(HydratedRuntime {
+                    principal,
+                    run_state,
+                })
+            })
+            .collect()
+    }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct RuntimeStatusRow {
     runtime_scope: RuntimeScopeWire,
     conversation_id: String,
@@ -1888,7 +2178,7 @@ impl From<RuntimeDeliveryFailureReasonWire> for RuntimeDeliveryFailureReason {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum RuntimeScopeWire {
     Conversation {
@@ -2237,6 +2527,40 @@ mod tests {
             "error": { "code": "internal_error", "message": "hidden" },
         });
         assert!(parse_daemon_frame(&ambiguous_response.to_string()).is_err());
+    }
+
+    #[test]
+    fn rust_consumes_the_ts_first_exact_daemon_event_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../packages/host/tests/fixtures/outbound-daemon-events.json"
+        ))
+        .unwrap();
+        let valid = fixture["valid"].as_array().unwrap();
+        let valid_kinds = valid
+            .iter()
+            .map(|frame| frame["kind"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            valid_kinds,
+            OUTBOUND_DAEMON_EVENT_KINDS
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        for frame in valid {
+            assert!(
+                parse_daemon_frame(&frame.to_string()).is_ok(),
+                "valid fixture rejected: {}",
+                frame["kind"]
+            );
+        }
+        for test_case in fixture["invalid"].as_array().unwrap() {
+            assert!(
+                parse_daemon_frame(&test_case["frame"].to_string()).is_err(),
+                "invalid fixture accepted: {}",
+                test_case["name"]
+            );
+        }
     }
 
     #[test]

@@ -19,6 +19,31 @@ fn required_string<'a>(record: &'a Map<String, Value>, authority: &str, field: &
         .unwrap_or_else(|| panic!("{authority} field {field} must be a non-empty string"))
 }
 
+fn required_event_kinds(record: &Map<String, Value>) -> Vec<&str> {
+    let kinds = record
+        .get("daemonEventKinds")
+        .and_then(Value::as_object)
+        .expect("daemon admission field daemonEventKinds must be an object");
+    assert_eq!(
+        kinds.len(),
+        18,
+        "daemon event catalogue must contain 18 arms"
+    );
+    let mut values = kinds
+        .values()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .expect("daemon event kind must be a non-empty string")
+        })
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    values.dedup();
+    assert_eq!(values.len(), 18, "daemon event kinds must be unique");
+    values
+}
+
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"));
     let contract = manifest.join("../../../packages/shared/src/backend-admission.json");
@@ -70,15 +95,22 @@ fn main() {
     let outbound_protocol = required_u32(&record, "daemon admission", "outboundProtocolVersion");
     let path = required_string(&record, "daemon admission", "hostWebSocketPath");
     let update_required = required_string(&record, "daemon admission", "updateRequiredCloseReason");
+    let event_kinds = required_event_kinds(&record);
     assert!(
         path.starts_with('/'),
         "daemon WebSocket path must be absolute"
     );
+    let rendered_kinds = event_kinds
+        .iter()
+        .map(|kind| serde_json::to_string(kind).expect("quote daemon event kind"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let rendered = format!(
         "pub const HOST_PROTOCOL_VERSION: u32 = {host_protocol};\n\
          pub const OUTBOUND_PROTOCOL_VERSION: u32 = {outbound_protocol};\n\
          pub const HOST_WEBSOCKET_PATH: &str = {path};\n\
-         pub const UPDATE_REQUIRED_CLOSE_REASON: &str = {update_required};\n",
+         pub const UPDATE_REQUIRED_CLOSE_REASON: &str = {update_required};\n\
+         pub const OUTBOUND_DAEMON_EVENT_KINDS: [&str; 18] = [{rendered_kinds}];\n",
         path = serde_json::to_string(path).expect("quote daemon WebSocket path"),
         update_required =
             serde_json::to_string(update_required).expect("quote daemon update-required reason"),

@@ -1,12 +1,16 @@
 #[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
 mod current_schema;
+#[path = "support/log_capture.rs"]
+mod log_capture;
 
 use axum::http::StatusCode;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
+use log_capture::LogBuffer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
+    auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     messaging::{
         CreatedMessage, FromKind, MessageContent, MessageId, MessageSeq, ReferencePositions,
@@ -21,6 +25,12 @@ use silverhand_backend_core::{
         RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeDispatchTarget,
         RuntimeInboxCustodyPort,
     },
+    runtime_event::{
+        CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, ProjectRuntimeStatus,
+        RefineRuntimeToolCallInput, RuntimeActivityCommitResult, RuntimeActivityFact,
+        RuntimeConsumedCommitResult, RuntimeExitCommitResult, RuntimeToolCallInputCommitResult,
+        StampRuntimePresence, UpsertRuntimeTextActivity,
+    },
 };
 use silverhand_backend_server::{
     daemon_delivery::{
@@ -29,10 +39,16 @@ use silverhand_backend_server::{
         UPDATE_REQUIRED_CLOSE_REASON,
     },
     runtime_credential::RuntimeCredentialAuthority,
+    scope_events::{
+        AllowedOrigin, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
+        EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
+        router as scope_event_router,
+    },
 };
 use silverhand_backend_sqlite::{
-    host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
-    runtime_delivery::SqliteRuntimeDeliveryStore,
+    auth::SqliteSessionStore, host_runtime::SqliteHostRuntimeStore,
+    runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
+    scope_event::SqliteEventScopeAuthority,
 };
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::sync::{
@@ -42,12 +58,16 @@ use std::sync::{
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{
-        Message, client::IntoClientRequest, http::header::AUTHORIZATION,
+        Message,
+        client::IntoClientRequest,
+        http::header::{AUTHORIZATION, COOKIE, ORIGIN},
         protocol::frame::coding::CloseCode,
     },
 };
 
 const TOKEN: &str = "host-token";
+const SESSION_TOKEN: &str = "session-token";
+const EVENT_ORIGIN: &str = "http://desktop.test";
 const AGENT: &str = "agent-delivery";
 const CONVERSATION: &str = "conversation0001";
 
@@ -70,7 +90,17 @@ struct Fixture {
     effects: Effects,
     settlement_calls: Arc<AtomicUsize>,
     controller: DaemonDeliveryController,
+    event_controller: EventWebSocketController,
     server: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Clone)]
+struct FixedSessionClock;
+
+impl SessionClock for FixedSessionClock {
+    fn now_unix_millis(&self) -> i64 {
+        10_000
+    }
 }
 
 async fn fixture(name: &str) -> Fixture {
@@ -86,10 +116,27 @@ async fn fixture(name: &str) -> Fixture {
         settlement_calls: settlement_calls.clone(),
     };
     let hosts = SqliteHostRuntimeStore::open(&path).await.unwrap();
-    let runtime =
-        Runtime::production(RuntimeCredentialAuthority::production(custody), data, hosts).unwrap();
+    let event_hub = ScopeEventHub::production().unwrap();
+    let runtime = Runtime::production(
+        RuntimeCredentialAuthority::production(custody),
+        data,
+        hosts,
+        event_hub.clone(),
+    )
+    .unwrap();
     let effects = runtime.effects();
-    let (router, controller) = runtime.router();
+    let (daemon_router, controller) = runtime.router();
+    let sessions = HumanSessionAuthenticator::new(
+        SqliteSessionStore::open(&path).await.unwrap(),
+        FixedSessionClock,
+        SessionTtl::from_millis(60_000).unwrap(),
+    );
+    let scope_authority = SqliteEventScopeAuthority::open(&path).await.unwrap();
+    let event_config =
+        EventWebSocketConfig::production([AllowedOrigin::parse(EVENT_ORIGIN).unwrap()]).unwrap();
+    let (event_router, event_controller) =
+        scope_event_router(event_hub, sessions, scope_authority, event_config);
+    let router = daemon_router.merge(event_router);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -100,6 +147,7 @@ async fn fixture(name: &str) -> Fixture {
         effects,
         settlement_calls,
         controller,
+        event_controller,
         server,
     }
 }
@@ -204,11 +252,84 @@ impl RuntimeInboxCustodyPort for CountingRuntimeDeliveryStore {
     }
 }
 
+impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
+    async fn current_principal(
+        &self,
+        scope: RuntimeScope,
+    ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+        self.inner.current_principal(scope).await
+    }
+
+    async fn commit_exit(
+        &self,
+        event: CommitRuntimeExit,
+    ) -> Result<RuntimeExitCommitResult, PersistenceFailure> {
+        self.inner.commit_exit(event).await
+    }
+
+    async fn commit_consumed(
+        &self,
+        event: CommitRuntimeConsumed,
+    ) -> Result<RuntimeConsumedCommitResult, PersistenceFailure> {
+        self.settlement_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.commit_consumed(event).await
+    }
+
+    async fn project_status(
+        &self,
+        event: ProjectRuntimeStatus,
+    ) -> Result<bool, PersistenceFailure> {
+        self.inner.project_status(event).await
+    }
+
+    async fn record_activity(
+        &self,
+        principal: RuntimePrincipal,
+        event: RuntimeActivityFact,
+        presence_at: RuntimeEventTime,
+    ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
+        self.inner
+            .record_activity(principal, event, presence_at)
+            .await
+    }
+
+    async fn upsert_text_activity(
+        &self,
+        event: UpsertRuntimeTextActivity,
+    ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
+        self.inner.upsert_text_activity(event).await
+    }
+
+    async fn refine_tool_call_input(
+        &self,
+        event: RefineRuntimeToolCallInput,
+    ) -> Result<Option<RuntimeToolCallInputCommitResult>, PersistenceFailure> {
+        self.inner.refine_tool_call_input(event).await
+    }
+
+    async fn stamp_presence(
+        &self,
+        event: StampRuntimePresence,
+    ) -> Result<Option<Vec<UserId>>, PersistenceFailure> {
+        self.inner.stamp_presence(event).await
+    }
+}
+
 async fn seed(db: &mut SqliteConnection) {
     sqlx::query(
         "INSERT INTO users (id, name, display_name, created_at, updated_at)
          VALUES ('user-1', 'user-1', 'User One', 1, 1)",
     )
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO auth_sessions (
+            id, user_id, token_hash, created_at, last_used_at, revoked_at,
+            user_agent, ip_first_seen
+         ) VALUES ('session-1', 'user-1', ?, 1, 9_500, NULL, NULL, NULL)",
+    )
+    .bind(token_hash(SESSION_TOKEN))
     .execute(&mut *db)
     .await
     .unwrap();
@@ -256,6 +377,13 @@ async fn seed(db: &mut SqliteConnection) {
     .await
     .unwrap();
     sqlx::query(
+        "INSERT INTO workspace_users (workspace_id, user_id, joined_at, role)
+         VALUES ('workspace-1', 'user-1', 1, 'owner')",
+    )
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO conversations (
             id, workspace_id, placement_kind, roster_policy, title, title_key,
             status, created_at, updated_at
@@ -272,6 +400,14 @@ async fn seed(db: &mut SqliteConnection) {
     )
     .bind(CONVERSATION)
     .bind(AGENT)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_users (conversation_id, user_id, joined_at)
+         VALUES (?, 'user-1', 1)",
+    )
+    .bind(CONVERSATION)
     .execute(&mut *db)
     .await
     .unwrap();
@@ -325,6 +461,43 @@ fn token_hash(raw: &str) -> String {
 
 async fn connect(address: std::net::SocketAddr) -> Socket {
     connect_with_token(address, TOKEN).await.unwrap()
+}
+
+async fn connect_conversation_side(address: std::net::SocketAddr) -> Socket {
+    connect_event_scope(address, &format!("conversation-side:{CONVERSATION}")).await
+}
+
+async fn connect_event_scope(address: std::net::SocketAddr, scope: &str) -> Socket {
+    let mut request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert(ORIGIN, EVENT_ORIGIN.parse().unwrap());
+    request.headers_mut().insert(
+        COOKIE,
+        format!("{EVENT_WS_SESSION_COOKIE}={SESSION_TOKEN}")
+            .parse()
+            .unwrap(),
+    );
+    request
+        .headers_mut()
+        .insert(DESKTOP_API_EPOCH_HEADER, "3".parse().unwrap());
+    let (mut socket, _) = connect_async(request).await.unwrap();
+    assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+    socket
+        .send(Message::Text(
+            json!({
+                "type": "subscribe",
+                "scope": scope,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut socket).await["type"], "subscribed");
+    socket
 }
 
 async fn connect_with_token(
@@ -389,13 +562,17 @@ fn runtime_scope() -> RuntimeScope {
 }
 
 async fn next_json(socket: &mut Socket) -> Value {
-    loop {
-        match socket.next().await.unwrap().unwrap() {
-            Message::Text(text) => return serde_json::from_str(&text).unwrap(),
-            Message::Ping(payload) => socket.send(Message::Pong(payload)).await.unwrap(),
-            other => panic!("unexpected daemon frame: {other:?}"),
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match socket.next().await.unwrap().unwrap() {
+                Message::Text(text) => return serde_json::from_str(&text).unwrap(),
+                Message::Ping(payload) => socket.send(Message::Pong(payload)).await.unwrap(),
+                other => panic!("unexpected daemon frame: {other:?}"),
+            }
         }
-    }
+    })
+    .await
+    .expect("expected websocket JSON frame")
 }
 
 async fn respond(socket: &mut Socket, command: &Value, result: Value) {
@@ -1005,7 +1182,10 @@ async fn runtime_exit_finalizes_only_the_exact_generation_and_never_its_successo
     .await;
     first.await.unwrap().unwrap();
 
-    send_runtime_exit(&mut socket, 1, false, 111).await;
+    // Keep this fixture focused on exact-generation finalization. A crash exit
+    // now owns an automatic pending-inbox respawn effect, so use an intentional
+    // exit here before explicitly claiming the successor below.
+    send_runtime_exit(&mut socket, 1, true, 111).await;
     let mut db = open(&fixture.path).await;
     wait_for_slot_daemon(&mut db, None).await;
 
@@ -1234,4 +1414,903 @@ async fn wait_for_inbox_state(
     })
     .await
     .unwrap();
+}
+
+fn product_frame(kind: &str, generation: Option<i64>, fields: Value) -> Value {
+    let mut frame = serde_json::Map::from_iter([
+        ("direction".to_owned(), json!("daemon_to_server")),
+        ("type".to_owned(), json!("event")),
+        ("kind".to_owned(), json!(kind)),
+        (
+            "runtime_scope".to_owned(),
+            json!({
+                "kind": "conversation",
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+            }),
+        ),
+        ("conversation_id".to_owned(), json!(CONVERSATION)),
+        ("agent_id".to_owned(), json!(AGENT)),
+    ]);
+    if let Some(generation) = generation {
+        frame.insert("runtime_generation".to_owned(), json!(generation));
+    }
+    frame.extend(fields.as_object().unwrap().clone());
+    Value::Object(frame)
+}
+
+async fn send_product(socket: &mut Socket, frame: Value) {
+    socket
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn hydrated_product_frames_reach_durable_live_and_coordinator_owners_once() {
+    let fixture = fixture("daemon-product-events.sqlite").await;
+    let mut live = connect_conversation_side(fixture.address).await;
+    let mut presence = connect_event_scope(fixture.address, "viewer:user-1").await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    let run_state = json!({
+        "runId": "run-1",
+        "agentId": AGENT,
+        "conversationId": CONVERSATION,
+        "status": "thinking",
+        "startedAt": 10,
+        "updatedAt": 11,
+        "lastActivityAt": 11,
+    });
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_state",
+            Some(generation),
+            json!({ "state": run_state, "ts": 11 }),
+        ),
+    )
+    .await;
+    let state_live = next_json(&mut live).await;
+    assert_eq!(state_live["kind"], "agent_activity");
+    assert_eq!(state_live["payload"]["runId"], "run-1");
+
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_init_timeout",
+            Some(generation),
+            json!({
+                "timeout_reason": "silence",
+                "elapsed_ms": 10,
+                "timeout_ms": 20,
+                "retrying": true,
+                "retry_attempt": 0,
+                "max_retries": 2,
+                "cooldown_until": 30,
+                "ts": 12,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(next_json(&mut live).await["kind"], "agent_init_timeout");
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_init_retrying",
+            Some(generation),
+            json!({
+                "retry_attempt": 1,
+                "max_retries": 2,
+                "delay_ms": 5,
+                "ts": 13,
+            }),
+        ),
+    )
+    .await;
+    let retry_live = next_json(&mut live).await;
+    assert_eq!(retry_live["kind"], "agent_status");
+    assert_eq!(retry_live["payload"]["status"], "starting");
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_init_cooldown",
+            Some(generation),
+            json!({
+                "cooldown_until": 30,
+                "attempts_exhausted": 2,
+                "ts": 13,
+            }),
+        ),
+    )
+    .await;
+    let cooldown_live = next_json(&mut live).await;
+    assert_eq!(cooldown_live["kind"], "agent_status");
+    assert_eq!(cooldown_live["payload"]["status"], "crashed");
+    assert_eq!(cooldown_live["payload"]["reason"], "init_cooldown");
+
+    // A later daemon run-state snapshot is the positive recovery gate: it
+    // clears the exhausted-init marker, so the final unintentional exit below
+    // is again eligible for the pending-inbox respawn.
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_state",
+            Some(generation),
+            json!({ "state": run_state, "ts": 13 }),
+        ),
+    )
+    .await;
+    assert_eq!(next_json(&mut live).await["kind"], "agent_activity");
+
+    for (kind, parsed, ts) in [
+        (
+            "runtime_parsed_event",
+            json!({ "kind": "thinking", "text": "first " }),
+            14,
+        ),
+        (
+            "runtime_parsed_event",
+            json!({ "kind": "thinking", "text": "second" }),
+            15,
+        ),
+    ] {
+        send_product(
+            &mut daemon,
+            product_frame(
+                kind,
+                Some(generation),
+                json!({ "parsed": parsed, "ts": ts }),
+            ),
+        )
+        .await;
+        if ts == 14 {
+            let presence_frame = next_json(&mut presence).await;
+            assert_eq!(presence_frame["kind"], "agent_presence_changed");
+            assert_eq!(presence_frame["payload"], json!({ "agent_id": AGENT }));
+            assert_eq!(presence_frame["scope"], "viewer:user-1");
+        }
+        assert_eq!(next_json(&mut live).await["kind"], "agent_event");
+        assert_eq!(next_json(&mut live).await["kind"], "conversation_activity");
+    }
+    let mut db = open(&fixture.path).await;
+    let thinking = sqlx::query(
+        "SELECT id, payload FROM conversation_events
+          WHERE conversation_id = ? AND agent_id = ? AND kind = 'thinking'",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(thinking.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(thinking[0].get("payload")).unwrap()["text"],
+        "first second"
+    );
+
+    let oversized = "x".repeat(700);
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": {
+                    "kind": "tool_call",
+                    "name": "Bash",
+                    "input": { "command": oversized },
+                    "toolCallId": "tool-1",
+                },
+                "ts": 16,
+            }),
+        ),
+    )
+    .await;
+    let tool_live = next_json(&mut live).await;
+    assert_eq!(tool_live["kind"], "agent_event");
+    assert!(
+        tool_live["payload"]["event"]["input"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("<truncated 200 chars>")
+    );
+    let tool_activity = next_json(&mut live).await;
+    assert_eq!(tool_activity["kind"], "conversation_activity");
+    let tool_id = tool_activity["payload"]["id"].as_i64().unwrap();
+    sqlx::query("UPDATE agents SET last_activity_at = NULL WHERE id = ?")
+        .bind(AGENT)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": {
+                    "kind": "tool_call_input",
+                    "toolCallId": "tool-1",
+                    "input": { "command": "refined" },
+                },
+                "ts": 17,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        next_json(&mut presence).await["kind"],
+        "agent_presence_changed"
+    );
+    assert_eq!(next_json(&mut live).await["kind"], "agent_event");
+    let refined = next_json(&mut live).await;
+    assert_eq!(refined["kind"], "conversation_activity");
+    assert_eq!(refined["payload"]["id"], tool_id);
+    assert_eq!(refined["payload"]["payload"]["input"]["command"], "refined");
+
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": {
+                    "kind": "input_lifecycle",
+                    "commandUuid": "command-1",
+                    "state": "started",
+                },
+                "ts": 18,
+            }),
+        ),
+    )
+    .await;
+    sqlx::query("UPDATE agents SET last_activity_at = NULL WHERE id = ?")
+        .bind(AGENT)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": { "kind": "unknown", "raw": "future event" },
+                "ts": 19,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        next_json(&mut presence).await["kind"],
+        "agent_presence_changed"
+    );
+    assert_eq!(next_json(&mut live).await["kind"], "agent_event");
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_message_stale",
+            Some(generation),
+            json!({ "ts": 20 }),
+        ),
+    )
+    .await;
+    let after_diagnostic = next_json(&mut live).await;
+    assert_eq!(after_diagnostic["kind"], "conversation_activity");
+    assert_eq!(after_diagnostic["payload"]["kind"], "message_stale");
+
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_ready_for_drain",
+            Some(generation),
+            json!({ "ts": 21 }),
+        ),
+    )
+    .await;
+    let ready_live = next_json(&mut live).await;
+    assert_eq!(ready_live["kind"], "agent_status");
+    assert_eq!(ready_live["payload"]["status"], "active");
+    let drain = next_json(&mut daemon).await;
+    assert_eq!(drain["kind"], "runtime_deliver");
+    respond(
+        &mut daemon,
+        &drain,
+        json!({ "disposition": "admitted", "pid": 7, "started_at": 100 }),
+    )
+    .await;
+
+    send_runtime_exit(&mut daemon, generation, false, 22).await;
+    let exit_live = next_json(&mut live).await;
+    assert_eq!(exit_live["kind"], "agent_status");
+    assert_eq!(exit_live["payload"]["status"], "crashed");
+    assert_eq!(exit_live["payload"]["run_state"]["runId"], "run-1");
+    let respawn = next_json(&mut daemon).await;
+    assert_eq!(respawn["kind"], "runtime_deliver");
+    assert_eq!(respawn["params"]["runtime_generation"], generation + 1);
+    respond(
+        &mut daemon,
+        &respawn,
+        json!({ "disposition": "admitted", "pid": 8, "started_at": 200 }),
+    )
+    .await;
+
+    let statuses =
+        sqlx::query_scalar::<_, String>("SELECT event_kind FROM agent_runtime_events ORDER BY id")
+            .fetch_all(&mut db)
+            .await
+            .unwrap();
+    assert!(statuses.iter().any(|kind| kind == "projection_updated"));
+    assert!(statuses.iter().any(|kind| kind == "generation_finalized"));
+
+    live.close(None).await.unwrap();
+    presence.close(None).await.unwrap();
+    daemon.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn hydrated_run_state_is_the_cold_authority_and_session_init_drains_once() {
+    let fixture = fixture("daemon-hydrated-run-state.sqlite").await;
+    let mut first_daemon = connect(fixture.address).await;
+    complete_attachment(&mut first_daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut first_daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut first_daemon,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+    first_daemon.close(None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while fixture.controller.active_connection_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let hydrated_run_state = json!({
+        "runId": "hydrated-run",
+        "agentId": AGENT,
+        "conversationId": CONVERSATION,
+        "status": "waiting",
+        "startedAt": 10,
+        "updatedAt": 11,
+        "lastActivityAt": 11,
+    });
+    let mut live = connect_conversation_side(fixture.address).await;
+    let mut daemon = connect(fixture.address).await;
+    send_ready(&mut daemon, OUTBOUND_PROTOCOL_VERSION).await;
+    let status = next_json(&mut daemon).await;
+    assert_eq!(status["kind"], "runtime_status");
+    respond(
+        &mut daemon,
+        &status,
+        json!({
+            "runtimes": [{
+                "runtime_scope": {
+                    "kind": "conversation",
+                    "conversation_id": CONVERSATION,
+                    "agent_id": AGENT,
+                },
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+                "runtime_generation": generation,
+                "pid": 7,
+                "phase": "ready",
+                "run_state": hydrated_run_state,
+                "started_at": 100,
+            }]
+        }),
+    )
+    .await;
+    wait_for_attachment(&fixture.controller).await;
+
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({
+                "parsed": { "kind": "session_init", "sessionId": "cli-session-1" },
+                "ts": 20,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(next_json(&mut live).await["kind"], "agent_event");
+    let activity = next_json(&mut live).await;
+    assert_eq!(activity["kind"], "conversation_activity");
+    assert_eq!(activity["payload"]["kind"], "session_init");
+    let projected = next_json(&mut live).await;
+    assert_eq!(projected["kind"], "agent_status");
+    assert_eq!(projected["payload"]["status"], "active");
+    assert_eq!(projected["payload"]["cli_session_id"], "cli-session-1");
+
+    let drain = next_json(&mut daemon).await;
+    assert_eq!(drain["kind"], "runtime_deliver");
+    assert_eq!(drain["params"]["runtime_generation"], generation);
+    respond(
+        &mut daemon,
+        &drain,
+        json!({ "disposition": "admitted", "pid": 7, "started_at": 100 }),
+    )
+    .await;
+
+    send_runtime_exit(&mut daemon, generation, true, 30).await;
+    let exit = next_json(&mut live).await;
+    assert_eq!(exit["kind"], "agent_status");
+    assert_eq!(exit["payload"]["status"], "idle");
+    assert_eq!(
+        exit["payload"]["run_state"],
+        json!({
+            "runId": "hydrated-run",
+            "agentId": AGENT,
+            "conversationId": CONVERSATION,
+            "status": "waiting",
+            "startedAt": 10,
+            "updatedAt": 11,
+            "lastActivityAt": 11,
+            "terminalReason": null,
+            "activitySnippet": null,
+            "activitySnippetKind": null,
+            "toolCallCounts": null,
+            "compacting": null,
+            "compactingSince": null,
+            "compactionStale": null,
+            "detail": null,
+        })
+    );
+
+    let mut db = open(&fixture.path).await;
+    let projections = sqlx::query(
+        "SELECT event_kind, cli_session_id
+           FROM agent_runtime_events
+          ORDER BY id",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    assert!(projections.iter().any(|row| {
+        row.get::<String, _>("event_kind") == "projection_updated"
+            && row.get::<Option<String>, _>("cli_session_id").as_deref() == Some("cli-session-1")
+    }));
+    assert!(
+        projections
+            .iter()
+            .any(|row| row.get::<String, _>("event_kind") == "generation_finalized")
+    );
+
+    live.close(None).await.unwrap();
+    daemon.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn output_arms_are_typed_diagnostics_and_never_business_projection() {
+    let fixture = fixture("daemon-output-diagnostics.sqlite").await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    for frame in [
+        product_frame(
+            "runtime_output",
+            None,
+            json!({ "stream": "stdout", "chunk": "hello", "ts": 30 }),
+        ),
+        product_frame(
+            "runtime_output_dropped",
+            None,
+            json!({ "dropped_count": 2, "bytes_dropped": 100, "since_ts": 30 }),
+        ),
+        product_frame("runtime_output_paused", None, json!({})),
+        product_frame("runtime_output_resumed", None, json!({})),
+    ] {
+        send_product(&mut daemon, frame).await;
+    }
+    daemon
+        .send(Message::Text(
+            json!({
+                "direction": "daemon_to_server",
+                "type": "heartbeat",
+                "kind": "ping",
+                "ts": 31,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut daemon).await["kind"], "pong");
+
+    let diagnostics = logs
+        .events()
+        .into_iter()
+        .filter_map(|event| event["fields"]["runtime_event"].as_str().map(str::to_owned))
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        diagnostics,
+        std::collections::HashSet::from([
+            "runtime_output".to_owned(),
+            "runtime_output_dropped".to_owned(),
+            "runtime_output_paused".to_owned(),
+            "runtime_output_resumed".to_owned(),
+        ])
+    );
+    let mut db = open(&fixture.path).await;
+    let activity_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversation_events")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(activity_count, 0);
+    let status: String = sqlx::query_scalar(
+        "SELECT observed_status FROM agent_runtime_slots
+          WHERE conversation_id = ? AND agent_id = ?",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(status, "starting");
+
+    daemon.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn stale_generation_events_cannot_change_or_publish_successor_state() {
+    let fixture = fixture("daemon-stale-successor.sqlite").await;
+    let mut live = connect_conversation_side(fixture.address).await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+
+    let effects = fixture.effects.clone();
+    let first = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let first_command = next_json(&mut daemon).await;
+    respond(
+        &mut daemon,
+        &first_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    first.await.unwrap().unwrap();
+    send_runtime_exit(&mut daemon, 1, true, 40).await;
+    assert_eq!(next_json(&mut live).await["kind"], "agent_status");
+    let mut db = open(&fixture.path).await;
+    wait_for_slot_daemon(&mut db, None).await;
+
+    let effects = fixture.effects.clone();
+    let successor = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let successor_command = next_json(&mut daemon).await;
+    assert_eq!(successor_command["params"]["runtime_generation"], 2);
+    respond(
+        &mut daemon,
+        &successor_command,
+        json!({ "started": true, "pid": 8, "started_at": 200 }),
+    )
+    .await;
+    successor.await.unwrap().unwrap();
+
+    for (generation, run_id, ts) in [(1, "stale-run", 41), (2, "successor-run", 42)] {
+        send_product(
+            &mut daemon,
+            product_frame(
+                "runtime_state",
+                Some(generation),
+                json!({
+                    "state": {
+                        "runId": run_id,
+                        "agentId": AGENT,
+                        "conversationId": CONVERSATION,
+                        "status": "thinking",
+                        "startedAt": ts,
+                        "updatedAt": ts,
+                        "lastActivityAt": ts,
+                    },
+                    "ts": ts,
+                }),
+            ),
+        )
+        .await;
+    }
+    let only_state = next_json(&mut live).await;
+    assert_eq!(only_state["kind"], "agent_activity");
+    assert_eq!(only_state["payload"]["runId"], "successor-run");
+
+    for (generation, retry_attempt, ts) in [(1, 1, 43), (2, 2, 44)] {
+        send_product(
+            &mut daemon,
+            product_frame(
+                "runtime_init_retrying",
+                Some(generation),
+                json!({
+                    "retry_attempt": retry_attempt,
+                    "max_retries": 3,
+                    "delay_ms": 5,
+                    "ts": ts,
+                }),
+            ),
+        )
+        .await;
+    }
+    let only_status = next_json(&mut live).await;
+    assert_eq!(only_status["kind"], "agent_status");
+    assert_eq!(only_status["payload"]["retry_attempt"], 2);
+    let projected_generation: i64 = sqlx::query_scalar(
+        "SELECT generation FROM agent_runtime_slots
+          WHERE conversation_id = ? AND agent_id = ?",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(projected_generation, 2);
+
+    live.close(None).await.unwrap();
+    daemon.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn durable_owner_failure_closes_once_with_a_safe_wire_and_full_operator_chain() {
+    let fixture = fixture("daemon-owner-failure.sqlite").await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let command = next_json(&mut daemon).await;
+    let generation = command["params"]["runtime_generation"].as_i64().unwrap();
+    respond(
+        &mut daemon,
+        &command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql("DROP TABLE agent_runtime_events")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    send_product(
+        &mut daemon,
+        product_frame(
+            "runtime_init_retrying",
+            Some(generation),
+            json!({
+                "retry_attempt": 1,
+                "max_retries": 2,
+                "delay_ms": 5,
+                "ts": 300,
+            }),
+        ),
+    )
+    .await;
+    let close = daemon.next().await.unwrap().unwrap();
+    let Message::Close(Some(close)) = close else {
+        panic!("durable owner failure must close the daemon connection")
+    };
+    assert_eq!(close.code, CloseCode::Error);
+    assert_eq!(close.reason, "runtime_event_owner_failed");
+
+    let owner_failures = logs
+        .events()
+        .into_iter()
+        .filter(|event| event["fields"]["message"] == "daemon runtime event owner failed")
+        .collect::<Vec<_>>();
+    assert_eq!(owner_failures.len(), 1);
+    let chain = owner_failures[0]["fields"]["error_chain"].as_str().unwrap();
+    assert!(chain.contains("daemon runtime event persistence failed"));
+    assert!(chain.contains("no such table: agent_runtime_events"));
+    assert!(!chain.contains(TOKEN));
+
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn daemon_shutdown_clears_only_its_process_projection_before_reattach() {
+    let fixture = fixture("daemon-shutdown-projection.sqlite").await;
+    let mut live = connect_conversation_side(fixture.address).await;
+    let mut first_daemon = connect(fixture.address).await;
+    complete_attachment(&mut first_daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let command = next_json(&mut first_daemon).await;
+    respond(
+        &mut first_daemon,
+        &command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+    send_product(
+        &mut first_daemon,
+        product_frame(
+            "runtime_state",
+            Some(1),
+            json!({
+                "state": {
+                    "runId": "old-run",
+                    "agentId": AGENT,
+                    "conversationId": CONVERSATION,
+                    "status": "thinking",
+                    "startedAt": 50,
+                    "updatedAt": 50,
+                    "lastActivityAt": 50,
+                },
+                "ts": 50,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(next_json(&mut live).await["payload"]["runId"], "old-run");
+    first_daemon
+        .send(Message::Text(
+            json!({
+                "direction": "daemon_to_server",
+                "type": "event",
+                "kind": "shutting_down",
+                "reason": "requested",
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        first_daemon.next().await.unwrap().unwrap(),
+        Message::Close(_)
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while fixture.controller.active_connection_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let mut second_daemon = connect(fixture.address).await;
+    complete_attachment(&mut second_daemon, &fixture.controller).await;
+    let mut db = open(&fixture.path).await;
+    wait_for_slot_daemon(&mut db, None).await;
+    let effects = fixture.effects.clone();
+    let successor = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let successor_command = next_json(&mut second_daemon).await;
+    assert_eq!(successor_command["params"]["runtime_generation"], 2);
+    respond(
+        &mut second_daemon,
+        &successor_command,
+        json!({ "started": true, "pid": 8, "started_at": 200 }),
+    )
+    .await;
+    successor.await.unwrap().unwrap();
+    send_runtime_exit(&mut second_daemon, 2, true, 60).await;
+    let exit = next_json(&mut live).await;
+    assert_eq!(exit["kind"], "agent_status");
+    assert!(exit["payload"]["run_state"].is_null());
+
+    live.close(None).await.unwrap();
+    second_daemon.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
 }

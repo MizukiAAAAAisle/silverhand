@@ -26,6 +26,9 @@ use silverhand_backend_core::{
         ClaimRuntimeCustody, FinalizeRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime,
         RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
     },
+    runtime_event::{
+        CommitRuntimeExit, DaemonEventDurablePort, RuntimeExitCommitResult, RuntimeExitDisposition,
+    },
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
@@ -412,6 +415,23 @@ where
     ) -> Result<bool, PersistenceFailure> {
         let _scope_guard = self.scope_guards.acquire(&principal.scope()).await;
         self.finalize_locked(principal, status).await
+    }
+
+    pub(crate) async fn commit_daemon_exit<P>(
+        &self,
+        durable: &P,
+        event: CommitRuntimeExit,
+    ) -> Result<RuntimeExitCommitResult, PersistenceFailure>
+    where
+        P: DaemonEventDurablePort,
+    {
+        let principal = event.principal().clone();
+        let _scope_guard = self.scope_guards.acquire(&principal.scope()).await;
+        let disposition = durable.commit_exit(event).await?;
+        if disposition.disposition() == RuntimeExitDisposition::Applied {
+            self.tokens.write().await.revoke_for(&principal);
+        }
+        Ok(disposition)
     }
 
     async fn finalize_locked(

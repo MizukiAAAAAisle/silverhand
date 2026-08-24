@@ -6,6 +6,10 @@ use silverhand_backend_core::{
         ClaimPendingInbox, DeliveryLeaseOwner, InboxSettlementDisposition,
         RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeInboxCustodyPort,
     },
+    runtime_event::{
+        CommitRuntimeConsumed, CommitRuntimeExit, DaemonEventDurablePort, RuntimeActivityFact,
+        RuntimeActivityKind, RuntimeActivityPayload, RuntimeExitDisposition, RuntimeObservedStatus,
+    },
 };
 use silverhand_backend_sqlite::{
     runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
@@ -703,5 +707,271 @@ async fn successor_custody_rejects_stale_settlement_and_disconnect_releases_exac
             .await
             .unwrap(),
         3
+    );
+}
+
+#[tokio::test]
+async fn consumed_settlement_and_non_replayable_activity_are_one_root_transaction() {
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-1").await;
+    let conversation = ConversationId::parse(CONVERSATION).unwrap();
+    let lease_owner = owner("owner-combined-consumed");
+    let ClaimPendingInbox::Claimed(batch) = fixture
+        .delivery
+        .claim_pending(
+            "host-1".into(),
+            principal.clone(),
+            conversation.clone(),
+            lease_owner.clone(),
+            100,
+            1_000,
+            &NoReferences,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("pending rows must be claimed")
+    };
+    let input = CommitRuntimeConsumed::new(
+        "host-1".into(),
+        principal.clone(),
+        conversation.clone(),
+        lease_owner.clone(),
+        batch.delivery_ids(),
+        RuntimeEventTime::from_unix_millis(200),
+        RuntimeEventTime::from_unix_millis(201),
+    );
+
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql(
+        "CREATE TRIGGER fail_message_received_activity
+         BEFORE INSERT ON conversation_events
+         WHEN NEW.kind = 'message_received'
+         BEGIN SELECT RAISE(ABORT, 'activity-failure'); END;",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    assert!(
+        fixture
+            .delivery
+            .commit_consumed(input.clone())
+            .await
+            .is_err()
+    );
+    let row = sqlx::query(
+        "SELECT
+             (SELECT COUNT(delivered_at) FROM conversation_inboxes) AS delivered,
+             (SELECT COUNT(in_flight_owner) FROM conversation_inboxes) AS leased,
+             (SELECT last_activity_at FROM agents WHERE id = ?) AS last_activity",
+    )
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<i64, _>("delivered"), 0);
+    assert_eq!(row.get::<i64, _>("leased"), 3);
+    assert!(row.get::<Option<i64>, _>("last_activity").is_none());
+    sqlx::raw_sql("DROP TRIGGER fail_message_received_activity;")
+        .execute(&mut db)
+        .await
+        .unwrap();
+
+    let applied = fixture
+        .delivery
+        .commit_consumed(input.clone())
+        .await
+        .unwrap();
+    assert_eq!(applied.disposition(), InboxSettlementDisposition::Applied);
+    assert!(applied.activity_id().is_some());
+    let duplicate = fixture.delivery.commit_consumed(input).await.unwrap();
+    assert_eq!(
+        duplicate.disposition(),
+        InboxSettlementDisposition::Duplicate
+    );
+    assert!(duplicate.activity_id().is_none());
+
+    let row = sqlx::query(
+        "SELECT
+             (SELECT COUNT(*) FROM conversation_inboxes WHERE delivered_at = 200) AS delivered,
+             (SELECT COUNT(*) FROM conversation_events WHERE kind = 'message_received') AS activities,
+             (SELECT last_activity_at FROM agents WHERE id = ?) AS last_activity",
+    )
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<i64, _>("delivered"), 3);
+    assert_eq!(row.get::<i64, _>("activities"), 1);
+    assert_eq!(row.get::<i64, _>("last_activity"), 201);
+}
+
+#[tokio::test]
+async fn exit_finalization_status_activity_and_lease_cleanup_are_one_root_transaction() {
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-exit").await;
+    let conversation = ConversationId::parse(CONVERSATION).unwrap();
+    let lease_owner = owner("owner-exit");
+    let ClaimPendingInbox::Claimed(_) = fixture
+        .delivery
+        .claim_pending(
+            "host-1".into(),
+            principal.clone(),
+            conversation.clone(),
+            lease_owner.clone(),
+            100,
+            1_000,
+            &NoReferences,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("pending rows must be claimed")
+    };
+    let pending = RuntimeActivityFact::new(
+        conversation,
+        AgentId::parse(AGENT).unwrap(),
+        RuntimeActivityKind::Text,
+        RuntimeActivityPayload::Text {
+            text: "last fragment".into(),
+        },
+        RuntimeEventTime::from_unix_millis(300),
+    );
+    let input = CommitRuntimeExit::new(
+        principal.clone(),
+        RuntimeObservedStatus::Crashed,
+        RuntimeEventTime::from_unix_millis(300),
+        Some(pending),
+    );
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql(
+        "CREATE TRIGGER fail_runtime_finalize_event
+         BEFORE INSERT ON agent_runtime_events
+         WHEN NEW.event_kind = 'generation_finalized'
+         BEGIN SELECT RAISE(ABORT, 'finalize-failure'); END;",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    assert!(fixture.delivery.commit_exit(input.clone()).await.is_err());
+    let row = sqlx::query(
+        "SELECT
+             (SELECT claimed_by_daemon_instance_id FROM agent_runtime_slots
+               WHERE conversation_id = ? AND agent_id = ?) AS daemon,
+             (SELECT COUNT(in_flight_owner) FROM conversation_inboxes) AS leased,
+             (SELECT COUNT(*) FROM conversation_events WHERE kind = 'text') AS activities",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("daemon"), "daemon-exit");
+    assert_eq!(row.get::<i64, _>("leased"), 3);
+    assert_eq!(row.get::<i64, _>("activities"), 0);
+    sqlx::raw_sql("DROP TRIGGER fail_runtime_finalize_event;")
+        .execute(&mut db)
+        .await
+        .unwrap();
+
+    let applied = fixture.delivery.commit_exit(input.clone()).await.unwrap();
+    assert_eq!(applied.disposition(), RuntimeExitDisposition::Applied);
+    assert!(applied.activity_id().is_some());
+    let stale = fixture.delivery.commit_exit(input).await.unwrap();
+    assert_eq!(stale.disposition(), RuntimeExitDisposition::Stale);
+    let row = sqlx::query(
+        "SELECT
+             (SELECT claimed_by_daemon_instance_id FROM agent_runtime_slots
+               WHERE conversation_id = ? AND agent_id = ?) AS daemon,
+             (SELECT observed_status FROM agent_runtime_slots
+               WHERE conversation_id = ? AND agent_id = ?) AS status,
+             (SELECT COUNT(in_flight_owner) FROM conversation_inboxes) AS leased,
+             (SELECT COUNT(*) FROM conversation_events WHERE kind = 'text') AS activities,
+             (SELECT COUNT(*) FROM agent_runtime_events
+               WHERE event_kind = 'generation_finalized') AS finalized",
+    )
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .bind(AGENT)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert!(
+        row.try_get::<Option<String>, _>("daemon")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(row.get::<String, _>("status"), "crashed");
+    assert_eq!(row.get::<i64, _>("leased"), 0);
+    assert_eq!(row.get::<i64, _>("activities"), 1);
+    assert_eq!(row.get::<i64, _>("finalized"), 1);
+}
+
+#[tokio::test]
+async fn presence_audience_is_emitted_only_on_deterministic_away_to_online_edges() {
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-presence").await;
+    let fact = |created_at| {
+        RuntimeActivityFact::new(
+            ConversationId::parse(CONVERSATION).unwrap(),
+            AgentId::parse(AGENT).unwrap(),
+            RuntimeActivityKind::Text,
+            RuntimeActivityPayload::Text {
+                text: format!("presence-{created_at}"),
+            },
+            RuntimeEventTime::from_unix_millis(created_at),
+        )
+    };
+
+    let first = fixture
+        .delivery
+        .record_activity(
+            principal.clone(),
+            fact(1_000),
+            RuntimeEventTime::from_unix_millis(1_000),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first
+            .presence_viewers()
+            .iter()
+            .map(|viewer| viewer.as_str())
+            .collect::<Vec<_>>(),
+        ["user-1"]
+    );
+
+    let continuous = fixture
+        .delivery
+        .record_activity(
+            principal.clone(),
+            fact(2_000),
+            RuntimeEventTime::from_unix_millis(2_000),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(continuous.presence_viewers().is_empty());
+
+    let recovered_at = 2_000 + 30 * 60_000;
+    let recovered = fixture
+        .delivery
+        .record_activity(
+            principal,
+            fact(recovered_at),
+            RuntimeEventTime::from_unix_millis(recovered_at),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        recovered
+            .presence_viewers()
+            .iter()
+            .map(|viewer| viewer.as_str())
+            .collect::<Vec<_>>(),
+        ["user-1"]
     );
 }
