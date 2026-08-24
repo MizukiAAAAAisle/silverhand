@@ -12,6 +12,35 @@ use crate::{
     agent_lifecycle::MaterializationStatus, identity::HostId, teardown::facts::AgentTeardownFacts,
 };
 
+/// What teardown a row's CURRENT stage owes.
+///
+/// One total rule, consumed by both axes: the single-agent path dispatches on it
+/// before it takes any lock, and the computer cascade classifies each of its
+/// agents with it under the lock. A new materialization stage therefore states its
+/// teardown obligation once, here, instead of being silently admitted by whichever
+/// axis happens not to mention it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TeardownBranch {
+    /// Nothing may be torn down: a reserve → flip transaction is in flight and a
+    /// teardown would race it.
+    Refused,
+    /// Delete the row and stop. A failed row has no dependents, no runtime child
+    /// and no host-local tree.
+    RowOnly,
+    /// The full destructive sequence: stop the children, purge the host-local
+    /// tree, cascade the rows.
+    Full,
+}
+
+/// The branch a stage owes. Exhaustive by construction.
+pub fn teardown_branch(status: MaterializationStatus) -> TeardownBranch {
+    match status {
+        MaterializationStatus::PendingMaterialization => TeardownBranch::Refused,
+        MaterializationStatus::Failed => TeardownBranch::RowOnly,
+        MaterializationStatus::Active => TeardownBranch::Full,
+    }
+}
+
 /// What the caller already did, in the only two shapes that exist.
 ///
 /// A closed sum rather than a stage plus an optional host, so the two unsound
@@ -103,6 +132,22 @@ mod tests {
             failed_code: None,
             deletion_started_at: None,
         }
+    }
+
+    #[test]
+    fn every_stage_states_the_teardown_it_owes() {
+        assert_eq!(
+            teardown_branch(MaterializationStatus::PendingMaterialization),
+            TeardownBranch::Refused
+        );
+        assert_eq!(
+            teardown_branch(MaterializationStatus::Failed),
+            TeardownBranch::RowOnly
+        );
+        assert_eq!(
+            teardown_branch(MaterializationStatus::Active),
+            TeardownBranch::Full
+        );
     }
 
     #[test]

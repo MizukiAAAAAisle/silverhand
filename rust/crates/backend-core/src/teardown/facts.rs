@@ -92,22 +92,38 @@ pub struct AgentTeardownCommitted {
     pub capture: AgentTeardownCapture,
 }
 
-/// How a computer's lifecycle is managed. Only a user-managed computer can be
-/// deleted by a user request, so this is the fact the pre-flight refusal reads
-/// and the conditional row delete re-states.
+/// Where a computer record came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProvisioningSource {
+    /// The app installed itself on this machine.
+    AppInstall,
+    /// A user invited this machine and holds its lifecycle.
     UserInvite,
-    Managed,
+    /// The platform created it.
+    System,
 }
 
-/// The computer facts the pre-flight refusals read: who owns it, and whether its
-/// lifecycle is user-managed at all.
+/// Whether a computer is the machine the control plane runs on or one attached to
+/// it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostKind {
+    Local,
+    Remote,
+}
+
+/// The computer facts the pre-flight refusals read: who owns it, and the two
+/// halves of "is this lifecycle the user's to end".
+///
+/// Both halves are projected RAW rather than pre-combined into one deletable flag,
+/// because the combination is a rule — see
+/// [`crate::teardown::cascade::computer_lifecycle_refusal`] — and an adapter that
+/// collapsed them would hold that rule where no test of this layer can see it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComputerTeardownFacts {
     pub id: HostId,
     /// Absent for a computer with no owner, which no user request may delete.
     pub user_id: Option<UserId>,
+    pub kind: HostKind,
     pub provisioning_source: ProvisioningSource,
 }
 

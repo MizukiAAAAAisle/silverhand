@@ -8,10 +8,14 @@
 //!
 //! Both cascades must read before they write — one purges host-local files, which
 //! may not run inside a write lock, and one answers a refusal without taking a
-//! write lock to say no. Those pre-lock reads are HINTS; the authoritative facts
-//! are re-read under the mechanism and judged by
-//! [`eligibility::eligibility_moved`].
+//! write lock to say no. Those pre-lock reads are HINTS ([`read`]); the
+//! authoritative facts are re-read under the one write boundary ([`write`]) and
+//! judged there by [`eligibility::eligibility_moved`] and
+//! [`cascade::cascade_refusal`].
 
+pub mod cascade;
 pub mod eligibility;
 pub mod facts;
 pub mod intent;
+pub mod read;
+pub mod write;
